@@ -1,5 +1,5 @@
 pkg := "github.com/nugget/thane-ai-agent/internal/buildinfo"
-version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
+version := env("THANE_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo "dev"`)
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 git_branch := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown"`
 build_time := `date -u '+%Y-%m-%dT%H:%M:%SZ'`
@@ -11,6 +11,11 @@ host_os := if os() == "macos" { "darwin" } else { os() }
 host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "amd64" } else { arch() }
 thane-home := home_directory() / "Thane"
 install-prefix := if os() == "macos" { env("INSTALL_PREFIX", thane-home) } else { env("INSTALL_PREFIX", "/usr/local") }
+release-dir := "dist/release"
+codesign-identity := env("THANE_CODESIGN_IDENTITY", "-")
+codesign-options := env("THANE_CODESIGN_OPTIONS", "runtime")
+codesign-timestamp := env("THANE_CODESIGN_TIMESTAMP", "true")
+notary-profile := env("THANE_NOTARY_PROFILE", "")
 
 # List available recipes
 default:
@@ -27,20 +32,57 @@ generate:
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
-build target_os=host_os target_arch=host_arch: generate
+build target_os=host_os target_arch=host_arch cc="": generate
     @mkdir -p dist
-    GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    @if [ -n "{{cc}}" ]; then export CC="{{cc}}"; fi; \
+    CGO_ENABLED=1 GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
-    @if [ "{{target_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
+    @if [ "{{target_os}}" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
 
 # Build for all release targets
 [group('build')]
 build-all:
-    just build linux amd64
-    just build linux arm64
     just build darwin amd64
     just build darwin arm64
+    just build-linux-docker amd64
+    just build-linux-docker arm64
+
+# Build a Linux binary through Docker Buildx so CGO-backed SQLite builds
+# stay usable even on non-Linux hosts without local cross-compilers.
+[group('build')]
+build-linux-docker target_arch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_arch="{{target_arch}}"
+    export_dir="dist/docker-export/linux-${target_arch}"
+    binary="dist/thane-linux-${target_arch}"
+
+    rm -rf "$export_dir"
+    mkdir -p "$export_dir" dist
+
+    docker buildx build \
+        --platform "linux/${target_arch}" \
+        --target artifact \
+        --build-arg THANE_VERSION="{{version}}" \
+        --build-arg BUILD_COMMIT="{{git_commit}}" \
+        --build-arg BUILD_BRANCH="{{git_branch}}" \
+        --build-arg BUILD_TIME="{{build_time}}" \
+        --output "type=local,dest=${export_dir}" \
+        .
+
+    install -m 755 "$export_dir/thane" "$binary"
+    echo "Built $binary via Docker Buildx"
+
+# Build a local container image for the current checkout
+[group('build')]
+container tag="thane:dev":
+    docker build \
+        --build-arg THANE_VERSION="{{version}}" \
+        --build-arg BUILD_COMMIT="{{git_commit}}" \
+        --build-arg BUILD_BRANCH="{{git_branch}}" \
+        --build-arg BUILD_TIME="{{build_time}}" \
+        -t {{tag}} .
 
 # Build and show version
 [group('build')]
@@ -276,6 +318,48 @@ deploy:
         git checkout "$current_branch"
     fi
 
+# Build, optionally sign/notarize, and atomically copy a binary to a remote host
+[group('deploy')]
+deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_arch cc="" restart_cmd="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host="{{host}}"
+    remote_bin="{{remote_bin}}"
+    target_os="{{target_os}}"
+    target_arch="{{target_arch}}"
+    cc="{{cc}}"
+    restart_cmd="{{restart_cmd}}"
+    binary="dist/thane-${target_os}-${target_arch}"
+    version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+
+    test -n "$host" || { echo "host is required"; exit 1; }
+
+    if [ -n "$cc" ]; then
+        THANE_VERSION="$version" just build "$target_os" "$target_arch" "$cc"
+    else
+        THANE_VERSION="$version" just build "$target_os" "$target_arch"
+    fi
+
+    if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
+        just macos-sign "$binary"
+        if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
+            if [ -n "$cc" ]; then
+                archive="$(just --quiet release-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
+            else
+                archive="$(just --quiet release-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
+            fi
+            echo "Notarized archive ready: $archive"
+        fi
+    fi
+
+    temp_bin="${remote_bin}.new"
+    scp -p "$binary" "${host}:${temp_bin}"
+    ssh "$host" "mv '$temp_bin' '$remote_bin'"
+    if [ -n "$restart_cmd" ]; then
+        ssh "$host" "$restart_cmd"
+    fi
+    echo "Deployed $binary to ${host}:${remote_bin}"
+
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
@@ -333,9 +417,192 @@ loops-ng-persistence base_url="http://127.0.0.1:8080":
 
 # --- Release ---
 
-# Tag and publish a GitHub release (usage: just release 0.2.0)
+# Sign a macOS binary with either Developer ID or ad-hoc identity
 [group('release-engineering')]
-release tag:
-    git tag -a "v{{tag}}" -m "Release v{{tag}}"
-    git push origin "v{{tag}}"
-    gh release create "v{{tag}}" --generate-notes --title "v{{tag}}"
+macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test "{{host_os}}" = "darwin" || { echo "macos-sign requires a macOS host"; exit 1; }
+
+    binary="{{binary}}"
+    identity="{{identity}}"
+    options="{{options}}"
+    timestamp="{{timestamp}}"
+
+    args=(codesign --force --sign "$identity")
+    if [ "$identity" != "-" ] && [ -n "$options" ]; then
+        args+=(--options "$options")
+    fi
+    if [ "$identity" != "-" ] && [ "$timestamp" = "true" ]; then
+        args+=(--timestamp)
+    fi
+    args+=("$binary")
+
+    "${args[@]}"
+    codesign --verify --verbose=2 "$binary"
+    codesign -dv --verbose=4 "$binary"
+
+# Submit a packaged macOS archive to Apple's notary service
+[group('release-engineering')]
+[macos]
+macos-notarize archive profile=notary-profile:
+    test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
+    test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
+    xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
+
+# Build and package a release archive for a single target
+[group('release-engineering')]
+release-archive version target_os=host_os target_arch=host_arch cc="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    target_os="{{target_os}}"
+    target_arch="{{target_arch}}"
+    cc="{{cc}}"
+    binary="dist/thane-${target_os}-${target_arch}"
+
+    version="${version#v}"
+    if [ -n "$cc" ]; then
+        THANE_VERSION="v${version}" just build "$target_os" "$target_arch" "$cc"
+    else
+        THANE_VERSION="v${version}" just build "$target_os" "$target_arch"
+    fi
+
+    if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
+        just macos-sign "$binary"
+    fi
+
+    archive="$(scripts/package-release.sh "$version" "$target_os" "$target_arch" "$binary" "{{release-dir}}")"
+
+    if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ] && [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
+        just macos-notarize "$archive"
+    fi
+
+    printf '%s\n' "$archive"
+
+# Generate SHA-256 checksums for packaged release archives
+[group('release-engineering')]
+release-checksums version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    output="{{release-dir}}/thane_${version}_checksums.txt"
+
+    cd "{{release-dir}}"
+    shopt -s nullglob
+    archives=(./*.tar.gz ./*.zip)
+    if [ "${#archives[@]}" -eq 0 ]; then
+        echo "No release archives found in {{release-dir}}" >&2
+        exit 1
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${archives[@]}" > "$(basename "$output")"
+    else
+        shasum -a 256 "${archives[@]}" > "$(basename "$output")"
+    fi
+
+    printf '%s\n' "$output"
+
+# Build a local release snapshot for the current target and emit checksums
+[group('release-engineering')]
+release-snapshot version target_os=host_os target_arch=host_arch cc="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{cc}}" ]; then
+        just release-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+    else
+        just release-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
+    fi
+    just release-checksums "{{version}}"
+
+# Build and package a Linux release archive through Docker Buildx.
+# This keeps the local dress rehearsal able to produce Linux artifacts
+# even on non-Linux hosts with CGO enabled.
+[group('release-engineering')]
+release-archive-linux-docker version target_arch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    target_arch="{{target_arch}}"
+
+    version="${version#v}"
+    THANE_VERSION="v${version}" just build-linux-docker "$target_arch"
+
+    archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
+    printf '%s\n' "$archive"
+
+# Run the full local release dress rehearsal, including local signing
+# and optional Apple notarization when configured, but stop before any
+# GitHub publication steps such as tag push, release upload, or
+# container publishing.
+[group('release-engineering')]
+release-breakpoint version target_os=host_os target_arch=host_arch cc="" container_tag="thane:release-breakpoint":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    target_os="{{target_os}}"
+    target_arch="{{target_arch}}"
+    cc="{{cc}}"
+    container_tag="{{container_tag}}"
+
+    version="${version#v}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+        echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
+        exit 1
+    fi
+
+    test -z "$(git status --short)" || { echo "Worktree must be clean before a release breakpoint run"; exit 1; }
+
+    just ci
+
+    if [ -n "$cc" ]; then
+        just release-archive "v${version}" "$target_os" "$target_arch" "$cc"
+    else
+        just release-archive "v${version}" "$target_os" "$target_arch"
+    fi
+    just release-archive-linux-docker "v${version}" amd64
+    just release-archive-linux-docker "v${version}" arm64
+    just release-checksums "v${version}"
+
+    just container "$container_tag"
+    docker run --rm "$container_tag" version
+
+    echo ""
+    echo "Local release breakpoint complete."
+    echo "  Archives/checksums: {{release-dir}}/"
+    echo "  Included archives: {{target_os}}/{{target_arch}}, linux/amd64, linux/arm64"
+    echo "  Container smoke tag: $container_tag"
+    echo ""
+    echo "Nothing was tagged, pushed, or published to GitHub."
+    echo "If THANE_NOTARY_PROFILE was set, Apple notarization was completed during this run."
+    echo "Next off-machine step when ready:"
+    echo "  just release v${version}"
+
+# Tag main for release and let GitHub Actions publish assets and containers
+[group('release-engineering')]
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    tag="v${version}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+        echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
+        exit 1
+    fi
+
+    test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
+    test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main"; exit 1; }
+
+    git fetch origin main --tags
+    test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
+    ! git rev-parse "$tag" >/dev/null 2>&1 || { echo "Tag already exists: $tag"; exit 1; }
+
+    just ci
+    git tag -a "$tag" -m "Release $tag"
+    git push origin "$tag"
+    echo "Pushed $tag. GitHub Actions will build release archives, attach them to the GitHub release, and publish the container image."

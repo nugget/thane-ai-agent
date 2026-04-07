@@ -11,7 +11,7 @@
 
 Your home already generates thousands of data points every hour — temperature sensors, motion detectors, door states, power draws. **Thane** is an AI agent that actually understands them. It knows an open garage door for two hours is unusual, that someone in the kitchen at 2am doesn't want bright lights, and that the dryer finishing three hours ago but still drawing power is worth mentioning. It learns your home, your preferences, and your routines through conversation — and it remembers.
 
-Everything runs on your hardware, behind your firewall. Thane works with any model runner that speaks a standard inference API — local or cloud, your choice. Written in Go. Single binary. No Python, no containers, no accounts to create.
+Everything runs on your hardware, behind your firewall. Thane works with any model runner that speaks a standard inference API — local or cloud, your choice. Written in Go. Single binary first, with an optional container image. No Python, no accounts to create.
 
 ## What Makes Thane Different
 
@@ -38,6 +38,10 @@ just serve
 Point Home Assistant's Ollama integration at `http://thane-host:11434`, select model `thane:latest`, and start talking.
 
 **[Your First Thane](docs/operating/guide.md)** — Complete onboarding guide with hardware, models, and deployment.
+
+## Releases
+
+Every tagged release publishes release archives on GitHub plus a multi-arch container image on `ghcr.io/nugget/thane-ai-agent`. Release assets include SHA-256 checksums, and GitHub build provenance attestations are emitted for both archives and the container image.
 
 ## Documentation
 

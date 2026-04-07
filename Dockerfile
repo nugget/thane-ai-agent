@@ -1,43 +1,87 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-bookworm AS builder
 
 WORKDIR /build
 
 # Install build dependencies (including CGO for SQLite)
-RUN apk add --no-cache git ca-certificates gcc musl-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gcc \
+        git \
+        libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy go mod files first for layer caching
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download
 
 # Copy source
 COPY . .
 
+ARG TARGETOS=linux
+ARG TARGETARCH
+ARG THANE_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_BRANCH=unknown
+ARG BUILD_TIME=unknown
+
 # Build with CGO for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o thane ./cmd/thane
+RUN test -n "${TARGETARCH}" || (echo "TARGETARCH build argument must be set" >&2; exit 1) && \
+    CGO_ENABLED=1 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+    go build -trimpath -tags "sqlite_fts5" \
+      -ldflags="-s -w \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.Version=${THANE_VERSION} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitCommit=${BUILD_COMMIT} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitBranch=${BUILD_BRANCH} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.BuildTime=${BUILD_TIME}" \
+      -o /out/thane ./cmd/thane
 
-# Runtime stage
-FROM alpine:3.20
+FROM scratch AS artifact
 
-# Labels for Home Assistant Add-on
+COPY --from=builder /out/thane /thane
+
+FROM debian:bookworm-slim
+
+ARG THANE_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 LABEL \
+    org.opencontainers.image.title="Thane" \
+    org.opencontainers.image.description="Autonomous AI agent for Home Assistant" \
+    org.opencontainers.image.authors="David McNett (https://github.com/nugget)" \
+    org.opencontainers.image.url="https://github.com/nugget/thane-ai-agent" \
+    org.opencontainers.image.source="https://github.com/nugget/thane-ai-agent" \
+    org.opencontainers.image.documentation="https://github.com/nugget/thane-ai-agent/tree/main/docs" \
+    org.opencontainers.image.vendor="nugget" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.version="${THANE_VERSION}" \
+    org.opencontainers.image.ref.name="${THANE_VERSION}" \
+    org.opencontainers.image.revision="${BUILD_COMMIT}" \
+    org.opencontainers.image.created="${BUILD_TIME}" \
+    org.opencontainers.image.base.name="docker.io/library/debian:bookworm-slim" \
     io.hass.name="Thane" \
-    io.hass.description="Autonomous AI Agent for Home Assistant" \
-    io.hass.version="0.1.0" \
+    io.hass.description="Autonomous AI agent for Home Assistant" \
+    io.hass.version="${THANE_VERSION}" \
     io.hass.type="addon" \
-    io.hass.arch="aarch64|amd64|armv7"
+    io.hass.arch="aarch64|amd64"
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        tzdata \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN adduser -D -H -s /sbin/nologin thane
+RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin thane
 
 # Copy binary from builder
-COPY --from=builder /build/thane /usr/local/bin/thane
+COPY --from=builder /out/thane /usr/local/bin/thane
 
 # Create data directories
 RUN mkdir -p /data /config && chown -R thane:thane /data /config
+
+WORKDIR /data
 
 USER thane
 

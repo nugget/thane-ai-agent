@@ -8,9 +8,20 @@ easy to roll back.
 
 - [ ] `just ci`
 - [ ] `just build`
+- [ ] `just release-snapshot <version>` for at least the primary operator target
 - [ ] Generated files are committed, especially [`examples/config.example.yaml`](../examples/config.example.yaml)
 - [ ] New exported Go types/functions read cleanly in Go Doc form
 - [ ] Logs for new code paths use inherited/component loggers instead of ad hoc `slog.Default()` where request or subsystem context matters
+
+## Artifact Publication
+
+- [ ] Release tag created with `just release <version>` from a clean, up-to-date `main`
+- [ ] GitHub release workflow finishes green for Linux and macOS archives
+- [ ] GitHub release workflow publishes the GHCR multi-arch container image
+- [ ] GitHub release includes archive assets plus `thane_<version>_checksums.txt`
+- [ ] GitHub build provenance attestations are available for the archives and container image
+- [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
+- [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized macOS archive
 
 ## Documentation Audit
 
