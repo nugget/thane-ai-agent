@@ -1,0 +1,43 @@
+name: Feature Request
+description: Propose a new capability or enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Opportunity
+      description: What's missing, limited, or could be better? Why does this matter?
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Proposed Approach
+      description: >
+        How should this work? Include design direction, relevant packages
+        or interfaces, and any architectural considerations.
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and Non-Goals
+      description: >
+        What's in scope for this issue? Equally important: what's explicitly
+        out of scope? Non-goals prevent scope creep.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know this is done? Be specific.
+    validations:
+      required: false
+  - type: textarea
+    id: related
+    attributes:
+      label: Related Issues
+      description: "Link related issues with Refs #NNN."
+    validations:
+      required: false
