@@ -132,11 +132,3 @@ particularly useful:
 - **`thane:trigger`** — Cheapest option for HA automations calling Thane
 - **`thane:ops`** — Direct tool access when you need the primary model to
   see HA state firsthand
-
-## macOS Note
-
-If running Thane as a launchd service on macOS, you must grant **Local
-Network** permission in System Settings > Privacy & Security > Local Network.
-Without this, macOS silently blocks unsigned binaries from accessing LAN
-hosts like Home Assistant. See
-[issue #53](https://github.com/nugget/thane-ai-agent/issues/53).
