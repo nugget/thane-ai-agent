@@ -1,8 +1,3 @@
-// Package summarizer provides a background worker that generates session
-// metadata (titles, tags, summaries) for archived sessions that lack it.
-// This decouples metadata generation from session lifecycle events,
-// ensuring summaries are always produced even when sessions end during
-// process shutdown.
 package memory
 
 import (
@@ -18,7 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-// Config controls the summarizer worker behavior.
+// SummarizerConfig controls the summarizer worker behavior.
 type SummarizerConfig struct {
 	// Interval between periodic scans for unsummarized sessions.
 	// Default: 5 minutes.
@@ -51,7 +46,7 @@ type SummarizerConfig struct {
 	IdleTimeout time.Duration
 }
 
-// DefaultConfig returns sensible defaults for the summarizer worker.
+// DefaultSummarizerConfig returns sensible defaults for the summarizer worker.
 func DefaultSummarizerConfig() SummarizerConfig {
 	return SummarizerConfig{
 		Interval:     5 * time.Minute,
@@ -85,8 +80,9 @@ const maxTranscriptBytes = 8000
 // Parameters: conversationID, sessionID, endedAt, topics (tags).
 type InteractionCallback func(conversationID string, sessionID string, endedAt time.Time, topics []string)
 
-// Worker periodically scans for unsummarized sessions and generates
-// metadata using an LLM via the model router.
+// SummarizerWorker periodically scans for unsummarized sessions and
+// generates metadata (title, tags, summaries) using an LLM via the
+// model router.
 type SummarizerWorker struct {
 	store         *ArchiveStore
 	llmClient     llm.Client
@@ -100,7 +96,8 @@ type SummarizerWorker struct {
 	done   chan struct{}
 }
 
-// New creates a summarizer worker. Call Start to begin processing.
+// NewSummarizerWorker creates a summarizer worker. Call Start to begin
+// processing.
 func NewSummarizerWorker(store *ArchiveStore, llmClient llm.Client, rtr *router.Router, logger *slog.Logger, cfg SummarizerConfig) *SummarizerWorker {
 	cfg.applyDefaults()
 	return &SummarizerWorker{

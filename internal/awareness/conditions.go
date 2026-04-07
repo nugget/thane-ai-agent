@@ -1,7 +1,7 @@
-// Package conditions generates the "Current Conditions" section of the
-// system prompt. This gives the agent real-time awareness of when and
-// where it's running — information that affects every decision (e.g.,
-// "should I wake the user at 3am?").
+// Package awareness provides system prompt context providers that give the
+// agent real-time environmental awareness — current conditions, state
+// changes, and watched entities. This information affects every decision
+// (e.g., "should I wake the user at 3am?").
 //
 // The section is placed early in the system prompt (after persona and
 // inject files, before talents) because models attend more strongly to

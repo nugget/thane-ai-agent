@@ -1,7 +1,3 @@
-// Package episodic provides context injection of episodic memory into
-// the agent's system prompt. It combines curated daily memory files
-// with recency-graded conversation history from the session archive,
-// giving the agent continuity across sessions.
 package memory
 
 import (
@@ -33,7 +29,7 @@ type ArchiveReader interface {
 	GetSessionTranscript(sessionID string) ([]Message, error)
 }
 
-// Config holds configuration for the episodic memory provider.
+// EpisodicConfig holds configuration for the episodic memory provider.
 type EpisodicConfig struct {
 	// Timezone is the IANA timezone string (e.g. "America/Chicago").
 	Timezone string
@@ -54,11 +50,9 @@ type EpisodicConfig struct {
 	SessionGapMinutes int
 }
 
-// Provider implements the agent.ContextProvider interface for episodic
-//
-//	It injects daily memory notes and recent conversation history
-//
-// into the system prompt.
+// EpisodicProvider implements the agent.ContextProvider interface for
+// episodic memory. It injects daily memory notes and recent conversation
+// history into the system prompt.
 type EpisodicProvider struct {
 	archive       ArchiveReader
 	logger        *slog.Logger
@@ -70,7 +64,7 @@ type EpisodicProvider struct {
 	nowFunc       func() time.Time // injectable for testing; defaults to time.Now
 }
 
-// NewProvider creates an episodic memory context provider.
+// NewEpisodicProvider creates an episodic memory context provider.
 func NewEpisodicProvider(archive ArchiveReader, logger *slog.Logger, cfg EpisodicConfig) *EpisodicProvider {
 	return &EpisodicProvider{
 		archive:       archive,

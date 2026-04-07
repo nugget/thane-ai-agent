@@ -1,4 +1,3 @@
-// Package llm provides LLM client implementations.
 package llm
 
 import (

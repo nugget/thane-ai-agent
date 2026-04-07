@@ -1,4 +1,3 @@
-// Package homeassistant provides clients for the Home Assistant API.
 package homeassistant
 
 import (

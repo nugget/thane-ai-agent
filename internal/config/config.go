@@ -94,8 +94,15 @@ func FindConfig(explicit string) (string, error) {
 	return "", fmt.Errorf("no config file found (searched: %v)", DefaultSearchPaths())
 }
 
-// Config is the top-level configuration for the Thane agent. It maps
-// directly to the YAML config file structure.
+// Config is the top-level configuration structure for the Thane agent,
+// loaded from a single YAML file via [Load]. The struct hierarchy maps
+// directly to the YAML key hierarchy; the generated example config
+// (examples/config.example.yaml) is derived from these struct definitions
+// and their field comments via `go generate ./internal/config`.
+//
+// After [Load] returns, all fields carry usable values -- callers never
+// need empty-string checks or fallback logic. See [Config.applyDefaults]
+// for the defaulting rules and [Config.Validate] for consistency checks.
 type Config struct {
 	// Listen configures the primary HTTP API server (OpenAI-compatible).
 	Listen ListenConfig `yaml:"listen"`

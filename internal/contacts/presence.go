@@ -1,5 +1,3 @@
-// Package person tracks presence state for configured household members
-// and provides context injection into the agent's system prompt.
 package contacts
 
 import (

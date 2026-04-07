@@ -1,7 +1,3 @@
-// Package statewindow maintains a rolling window of Home Assistant state
-// changes and injects them into the agent's system prompt. The window
-// uses a circular buffer with dual eviction: count-based (buffer
-// capacity) and age-based (configurable max age applied at read time).
 package awareness
 
 import (

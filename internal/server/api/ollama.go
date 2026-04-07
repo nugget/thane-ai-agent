@@ -1,10 +1,3 @@
-// Package api implements the Ollama-compatible HTTP API endpoints.
-// This allows Thane to be used as a drop-in replacement for Ollama
-// in Home Assistant's native Ollama integration.
-//
-// The Ollama-compatible API can be served either:
-// - On a dedicated port via OllamaServer (recommended for HA integration)
-// - Embedded in the main server via RegisterOllamaRoutes (for single-port setups)
 package api
 
 import (

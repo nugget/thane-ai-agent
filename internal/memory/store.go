@@ -22,7 +22,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Store is the interface for memory storage.
+// MemoryStore is the interface for memory storage backends (in-memory
+// and SQLite). Both [Store] and [SQLiteStore] satisfy it.
 type MemoryStore interface {
 	GetMessages(conversationID string) []Message
 	AddMessage(conversationID, role, content string) error
@@ -58,8 +59,8 @@ type Conversation struct {
 	UpdatedAt time.Time             `json:"updated_at"`
 }
 
-// Store manages conversation memory.
-// Currently in-memory; will add SQLite persistence later.
+// Store is an in-memory conversation memory backend. For persistent
+// storage see [SQLiteStore].
 type Store struct {
 	mu            sync.RWMutex
 	conversations map[string]*Conversation
