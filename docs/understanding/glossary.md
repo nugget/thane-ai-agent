@@ -7,9 +7,12 @@ discussing Thane, use these terms consistently.
 
 ### Agent Loop
 
-The core reasoning cycle that runs once per request or event. Each iteration:
-context assembly, tag activation, planning, tool execution, response shaping.
-The loop runs up to ten iterations per request before forcing a final response.
+The universal execution primitive. Every piece of work — conversations,
+delegations, background watchers — runs as a loop with the same reasoning
+cycle: context assembly, tag activation, planning, tool execution, response.
+Three operation modes: *request/reply* (one-shot, up to ten iterations),
+*background task* (detached, result delivered later), and *service*
+(persistent, polling or event-driven). A registry tracks all active loops.
 See [The Agent Loop](agent-loop.md).
 
 ### Capability Tag

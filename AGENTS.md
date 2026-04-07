@@ -85,9 +85,11 @@ on GitHub Actions to catch what you could have caught locally.
 
 - **Dual-port**: Port 8080 (native OpenAI-compatible API + web dashboard)
   and port 11434 (Ollama-compatible API for HA integration).
-- **Agent loop**: Iterates up to 10 times per request. Each iteration:
-  LLM call, tool execution, repeat or respond. On exhaustion, a final
-  `tools=nil` call forces a text response.
+- **Agent loop**: The universal execution primitive. Three modes:
+  *request/reply* (one-shot conversations, up to 10 iterations),
+  *background tasks* (detached delegation), and *services* (persistent
+  autonomous loops — polling or event-driven). A registry tracks all
+  active loops.
 - **Delegation**: Orchestrator model plans; small local models execute
   tool-heavy work at zero API cost.
 - **Model routing**: Scores models on quality, speed, and cost. Routing

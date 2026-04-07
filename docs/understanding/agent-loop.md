@@ -1,12 +1,38 @@
 # The Agent Loop
 
-The agent loop is Thane's core reasoning cycle. Every request — whether from
-a user typing in the dashboard, a Home Assistant voice command, an MQTT wake
-subscription, or a scheduled task — enters the same loop.
+The loop is Thane's universal execution primitive. Every piece of work —
+a user conversation, a background watcher, a delegation task — runs as a
+loop with the same core reasoning cycle.
 
-## The Cycle
+## Loop Operations
 
-Each request runs through up to ten iterations:
+Loops come in three modes:
+
+**Request/Reply** — A user asks, the agent reasons and responds, the loop
+ends. This is what drives conversations through the API and Home Assistant.
+One-shot, synchronous, bounded.
+
+**Background Task** — A detached task whose result is delivered later
+through a non-blocking path (injected into a conversation, sent to a
+channel, or delivered via notification). Delegation runs in this mode —
+the orchestrator spawns a background loop for the delegate, continues
+reasoning, and picks up the result when it's ready.
+
+**Service** — A persistent loop that runs continuously alongside the main
+agent. Services come in two flavors: *polling* services iterate on a
+randomized sleep schedule (metacognitive reflection, ego maintenance),
+while *event-driven* services block until an external event arrives (MQTT
+wake subscriptions that fire when a topic receives a message). Both run
+autonomously, observe the environment, and act when something is worth
+responding to.
+
+A **loop registry** tracks all active loops, enforces concurrency limits,
+and coordinates graceful shutdown. The registry provides operational
+visibility into what's running, health status, and resource consumption.
+
+## The Reasoning Cycle
+
+Each loop iteration runs through the same steps:
 
 ### 1. Context Assembly
 
@@ -105,11 +131,19 @@ Tags activated during a conversation persist for the duration of that
 session. A request that starts by activating `email` doesn't need to
 reactivate it on subsequent turns. Tags reset when the session closes.
 
-## Iteration Budget
+## Iteration Budgets
 
-The loop runs a maximum of ten iterations per request. Each iteration is
+**Request/reply loops** run a maximum of ten iterations. Each iteration is
 one LLM call plus tool execution. This prevents runaway tool-call chains
-while giving the agent enough room for multi-step reasoning.
+while giving the agent enough room for multi-step reasoning. On exhaustion,
+a final `tools=nil` call forces a text response.
+
+**Service loops** iterate indefinitely on a randomized sleep schedule
+(bounded by `sleep_min` / `sleep_max`). They can optionally use a
+supervisor model — a frontier-quality model invoked probabilistically for
+periodic quality checks alongside the normal local model.
+
+**Background tasks** have configurable iteration and wall-clock limits.
 
 The agent sees its token budget in the context, so it can make informed
 decisions about when to checkpoint, delegate, or wrap up.
