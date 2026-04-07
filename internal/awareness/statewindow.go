@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Entry records a single state transition observed from the Home
+// StateWindowEntry records a single state transition observed from the Home
 // Assistant WebSocket event stream.
 type StateWindowEntry struct {
 	EntityID  string
@@ -18,7 +18,7 @@ type StateWindowEntry struct {
 	Timestamp time.Time
 }
 
-// Provider maintains a rolling window of recent state changes and
+// StateWindowProvider maintains a rolling window of recent state changes and
 // implements the agent.ContextProvider interface. It is safe for
 // concurrent use: HandleStateChange writes under a write lock while
 // GetContext reads under a read lock.
