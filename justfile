@@ -491,6 +491,48 @@ release-snapshot version target_os=host_os target_arch=host_arch cc="":
     fi
     just release-checksums "{{version}}"
 
+# Run the full local release dress rehearsal, but stop before any
+# off-machine publication steps such as notarization, tag push, or
+# GitHub release/container publishing.
+[group('release-engineering')]
+release-breakpoint version target_os=host_os target_arch=host_arch cc="" container_tag="thane:release-breakpoint":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    target_os="{{target_os}}"
+    target_arch="{{target_arch}}"
+    cc="{{cc}}"
+    container_tag="{{container_tag}}"
+
+    version="${version#v}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+        echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
+        exit 1
+    fi
+
+    test -z "$(git status --short)" || { echo "Worktree must be clean before a release breakpoint run"; exit 1; }
+
+    just ci
+
+    if [ -n "$cc" ]; then
+        THANE_NOTARY_PROFILE="" just release-snapshot "v${version}" "$target_os" "$target_arch" "$cc"
+    else
+        THANE_NOTARY_PROFILE="" just release-snapshot "v${version}" "$target_os" "$target_arch"
+    fi
+
+    just container "$container_tag"
+    docker run --rm "$container_tag" version
+
+    echo ""
+    echo "Local release breakpoint complete."
+    echo "  Archives/checksums: {{release-dir}}/"
+    echo "  Container smoke tag: $container_tag"
+    echo ""
+    echo "Nothing was pushed, tagged, notarized, or published."
+    echo "Next off-machine step when ready:"
+    echo "  just release v${version}"
+
 # Tag main for release and let GitHub Actions publish assets and containers
 [group('release-engineering')]
 release version:
