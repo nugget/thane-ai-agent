@@ -3,7 +3,7 @@ package toolcatalog
 var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"archive":       {Description: "Archive search and transcript retrieval across past conversations."},
 	"attachments":   {Description: "Attachment listing, search, and vision description tools."},
-	"awareness":     {Description: "Watchlist and live-context entity management tools."},
+	"awareness":     {Description: "Watchlist, scoped entity-subscription, and live-context management tools."},
 	"contacts":      {Description: "Structured contact-directory records and vCard administration tools."},
 	"development":   {Description: "Coarse entry point for software, repository, and code-change work. Usually leads to forge, files, web, or shell.", Menu: true},
 	"diagnostics":   {Description: "Logs, usage, version, and operational debugging tools."},
@@ -16,7 +16,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"homeassistant": {Description: "Alias for ha: Home Assistant state, control, registry, and automation tools."},
 	"interactive":   {Description: "Coarse entry point for interactive loop behavior and channel guidance. Usually leads to signal, owu, or owner context.", Menu: true},
 	"knowledge":     {Description: "Coarse entry point for kb articles, memory, dossiers, and document understanding. Usually leads to memory, files, or web.", Menu: true},
-	"loops":         {Description: "Loop definition inspection, policy, and launch tools."},
+	"loops":         {Description: "Loop definition inspection, policy, launch, and immediate trigger tools."},
 	"media":         {Description: "Coarse entry point for transcripts, feeds, and media analysis. Usually leads to media, feeds, attachments, or web.", Menu: true},
 	"memory":        {Description: "Persistent fact memory and working-memory tools."},
 	"models":        {Description: "Model registry inspection, routing, and policy tools."},

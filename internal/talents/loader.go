@@ -23,10 +23,12 @@ func NewLoader(dir string) *Loader {
 
 // Talent represents a parsed talent file with optional tag metadata.
 type Talent struct {
-	Name    string   // Filename without .md extension
-	Tags    []string // Tags from YAML frontmatter (nil = untagged)
-	Kind    string   // Optional frontmatter kind (for example entry_point)
-	Content string   // Markdown content (frontmatter stripped)
+	Name     string   // Filename without .md extension
+	Tags     []string // Tags from YAML frontmatter (nil = untagged)
+	Kind     string   // Optional frontmatter kind (for example entry_point)
+	Teaser   string   // Optional entry-point advertisement copy
+	NextTags []string // Optional suggested next capability tags
+	Content  string   // Markdown content (frontmatter stripped)
 }
 
 // Frontmatter captures the subset of markdown metadata Thane currently
@@ -78,7 +80,14 @@ func (l *Loader) Talents() ([]Talent, error) {
 		}
 		name := strings.TrimSuffix(f, ".md")
 		meta, content := ParseFrontmatterMetadata(string(data))
-		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content})
+		ts = append(ts, Talent{
+			Name:     name,
+			Tags:     meta.Tags,
+			Kind:     meta.Kind,
+			Teaser:   meta.Teaser,
+			NextTags: append([]string(nil), meta.NextTags...),
+			Content:  content,
+		})
 	}
 	return ts, nil
 }

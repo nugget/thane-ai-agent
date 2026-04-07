@@ -87,6 +87,13 @@ func (a *App) initAwareness(s *newState) error {
 	}
 
 	a.loop.Tools().SetWatchlistStore(watchlistStore)
+	a.loop.Tools().OnWatchlistTagAdded(func(tag string) {
+		if a.ha == nil || strings.TrimSpace(tag) == "" {
+			return
+		}
+		a.loop.RegisterTagContextProvider(tag,
+			awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger))
+	})
 
 	// --- State change window ---
 	// Maintains a rolling buffer of recent HA state changes, injected

@@ -301,6 +301,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"loop_definition_set":         {CanonicalID: "native:loop_definition_set", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"loop_definition_set_policy":  {CanonicalID: "native:loop_definition_set_policy", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"loop_definition_summary":     {CanonicalID: "native:loop_definition_summary", Source: NativeToolSource, DefaultTags: []string{"loops"}},
+	"loop_trigger_run":            {CanonicalID: "native:loop_trigger_run", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"macos_calendar_events":       {CanonicalID: "native:macos_calendar_events", Source: NativeToolSource, DefaultTags: []string{"platform"}},
 	"media_feeds":                 {CanonicalID: "native:media_feeds", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"media_follow":                {CanonicalID: "native:media_follow", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
@@ -333,6 +334,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"web_fetch":                   {CanonicalID: "native:web_fetch", Source: NativeToolSource, DefaultTags: []string{"web"}},
 	"web_search":                  {CanonicalID: "native:web_search", Source: NativeToolSource, DefaultTags: []string{"web"}},
 	"add_context_entity":          {CanonicalID: "native:add_context_entity", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
+	"list_context_entities":       {CanonicalID: "native:list_context_entities", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
 	"remove_context_entity":       {CanonicalID: "native:remove_context_entity", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
 }
 

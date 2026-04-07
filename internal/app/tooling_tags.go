@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -145,4 +146,50 @@ func buildCapabilitySurface(
 	}
 
 	return toolcatalog.SortCapabilitySurface(surface)
+}
+
+func talentMenuHints(parsed []talents.Talent) map[string]agent.KBMenuHint {
+	hints := make(map[string]agent.KBMenuHint)
+	for _, t := range parsed {
+		if strings.TrimSpace(t.Kind) != "entry_point" {
+			continue
+		}
+		if strings.TrimSpace(t.Teaser) == "" && len(t.NextTags) == 0 {
+			continue
+		}
+		for _, tag := range t.Tags {
+			if _, exists := hints[tag]; exists {
+				continue
+			}
+			hints[tag] = agent.KBMenuHint{
+				Teaser:   strings.TrimSpace(t.Teaser),
+				NextTags: append([]string(nil), t.NextTags...),
+			}
+		}
+	}
+	return hints
+}
+
+func mergeMenuHints(preferred, fallback map[string]agent.KBMenuHint) map[string]agent.KBMenuHint {
+	if len(preferred) == 0 && len(fallback) == 0 {
+		return nil
+	}
+	merged := make(map[string]agent.KBMenuHint, len(preferred)+len(fallback))
+	for tag, hint := range fallback {
+		merged[tag] = agent.KBMenuHint{
+			Teaser:   strings.TrimSpace(hint.Teaser),
+			NextTags: append([]string(nil), hint.NextTags...),
+		}
+	}
+	for tag, hint := range preferred {
+		current := merged[tag]
+		if strings.TrimSpace(hint.Teaser) != "" {
+			current.Teaser = strings.TrimSpace(hint.Teaser)
+		}
+		if len(hint.NextTags) > 0 {
+			current.NextTags = append([]string(nil), hint.NextTags...)
+		}
+		merged[tag] = current
+	}
+	return merged
 }

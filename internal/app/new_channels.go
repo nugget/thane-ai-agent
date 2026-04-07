@@ -321,6 +321,7 @@ func (a *App) initChannels(s *newState) error {
 	})
 	a.loop.Tools().ConfigureLoopDefinitionTools(tools.LoopDefinitionToolDeps{
 		Registry:         a.loopDefinitionRegistry,
+		ActiveLoops:      a.loopRegistry,
 		View:             a.loopDefinitionView,
 		PersistSpec:      a.persistLoopDefinition,
 		DeleteSpec:       a.deletePersistedLoopDefinition,

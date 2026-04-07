@@ -5,7 +5,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -104,4 +106,64 @@ func resolvedToolNames(resolved map[string]config.CapabilityTagConfig, tag strin
 		return nil
 	}
 	return spec.Tools
+}
+
+func TestTalentMenuHints_UsesEntryPointMetadata(t *testing.T) {
+	hints := talentMenuHints([]talents.Talent{
+		{Name: "foundation", Content: "always on"},
+		{
+			Name:     "operations-entry-point",
+			Tags:     []string{"operations"},
+			Kind:     "entry_point",
+			Teaser:   "Activate when the next move is about runtime state.",
+			NextTags: []string{"diagnostics", "loops"},
+			Content:  "body",
+		},
+		{
+			Name:    "operations-doctrine",
+			Tags:    []string{"operations"},
+			Content: "body",
+		},
+	})
+
+	hint, ok := hints["operations"]
+	if !ok {
+		t.Fatal("operations hint missing")
+	}
+	if hint.Teaser != "Activate when the next move is about runtime state." {
+		t.Fatalf("teaser = %q", hint.Teaser)
+	}
+	if !slices.Equal(hint.NextTags, []string{"diagnostics", "loops"}) {
+		t.Fatalf("next_tags = %v", hint.NextTags)
+	}
+}
+
+func TestMergeMenuHints_PrefersTalentMetadataButFallsBackToKB(t *testing.T) {
+	merged := mergeMenuHints(
+		map[string]agent.KBMenuHint{
+			"operations": {
+				Teaser: "Activate when runtime state is the question.",
+			},
+		},
+		map[string]agent.KBMenuHint{
+			"operations": {
+				Teaser:   "Older kb teaser",
+				NextTags: []string{"diagnostics", "models"},
+			},
+			"knowledge": {
+				Teaser:   "KB-only teaser",
+				NextTags: []string{"files"},
+			},
+		},
+	)
+
+	if merged["operations"].Teaser != "Activate when runtime state is the question." {
+		t.Fatalf("operations teaser = %q", merged["operations"].Teaser)
+	}
+	if !slices.Equal(merged["operations"].NextTags, []string{"diagnostics", "models"}) {
+		t.Fatalf("operations next_tags = %v", merged["operations"].NextTags)
+	}
+	if merged["knowledge"].Teaser != "KB-only teaser" {
+		t.Fatalf("knowledge teaser = %q", merged["knowledge"].Teaser)
+	}
 }

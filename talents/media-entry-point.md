@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [media]
+teaser: "Activate when the object is media itself: a transcript, feed, attachment, or a media source that still needs finding."
+next_tags: [media, feeds, attachments, web]
 ---
 
 # Media Entry Point

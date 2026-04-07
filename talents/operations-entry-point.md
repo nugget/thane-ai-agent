@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [operations]
+teaser: "Activate when the next move is about Thane's own runtime: logs, routing, schedules, loops, platform state, or system health."
+next_tags: [diagnostics, models, scheduler, loops, session, mqtt, ha, platform]
 ---
 
 # Operations Entry Point
@@ -17,7 +19,8 @@ Choose the next move deliberately:
   `models`.
 - If the work is about scheduled tasks or timing policy, activate
   `scheduler`.
-- If you need loop definitions, loop policy, or loop launches, activate
+- If you need loop definitions, loop policy, loop launches, or you need
+  to tap a sleeping service loop with one-shot context, activate
   `loops`.
 - If the operational question is really about session boundaries,
   resets, splits, checkpoints, or carry-forward, activate `session`.

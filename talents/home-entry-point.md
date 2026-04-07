@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [home]
+teaser: "Activate when the next move affects the home itself: HA state, devices, rooms, automations, or household interruptions."
+next_tags: [ha, notifications, awareness]
 ---
 
 # Home Entry Point

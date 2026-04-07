@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [development]
+teaser: "Activate when the next move is about code, repository state, checked-out files, or the web around them."
+next_tags: [forge, files, web, shell]
 ---
 
 # Development Entry Point

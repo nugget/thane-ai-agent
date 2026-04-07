@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [knowledge]
+teaser: "Activate when the real question is where the truth lives: local docs, prior sessions, durable memory, or the web."
+next_tags: [files, web, memory, archive]
 ---
 
 # Knowledge Entry Point

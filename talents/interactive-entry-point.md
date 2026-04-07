@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [interactive]
+teaser: "Activate when pacing, live channel behavior, or the shape of an ongoing conversation is itself part of the work."
+next_tags: [signal, owu, session, owner]
 ---
 
 # Interactive Entry Point

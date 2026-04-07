@@ -112,11 +112,11 @@ func (p *WatchlistTagProvider) TagContext(ctx context.Context) (string, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "### Watched Entities (%s)\n\n", p.tag)
 
-	for _, e := range entities {
-		state, err := p.ha.GetState(ctx, e.EntityID)
+	for _, sub := range entities {
+		state, err := p.ha.GetState(ctx, sub.EntityID)
 		if err != nil {
 			p.logger.Warn("failed to fetch tagged entity state",
-				"entity_id", e.EntityID, "tag", p.tag, "error", err)
+				"entity_id", sub.EntityID, "tag", p.tag, "error", err)
 			continue
 		}
 
