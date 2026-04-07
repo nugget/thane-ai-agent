@@ -491,16 +491,24 @@ release-write-checksums version:
 
     cd "{{release-dir}}"
     shopt -s nullglob
-    archives=(./*.tar.gz ./*.zip)
+    archives=("./thane_${version}_"*.tar.gz "./thane_${version}_"*.zip)
     if [ "${#archives[@]}" -eq 0 ]; then
-        echo "No release archives found in {{release-dir}}" >&2
+        echo "No release archives found for version ${version} in {{release-dir}}" >&2
+        exit 1
+    fi
+    if [ "${#archives[@]}" -ne 4 ]; then
+        echo "Expected 4 release archives for version ${version}, found ${#archives[@]} in {{release-dir}}" >&2
+        printf '  %s\n' "${archives[@]}" >&2
         exit 1
     fi
 
+    sorted_archives="$(printf '%s\n' "${archives[@]#./}" | LC_ALL=C sort)"
+    rm -f "$(basename "$output")"
+
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "${archives[@]}" > "$(basename "$output")"
+        printf '%s\n' "$sorted_archives" | xargs sha256sum > "$(basename "$output")"
     else
-        shasum -a 256 "${archives[@]}" > "$(basename "$output")"
+        printf '%s\n' "$sorted_archives" | xargs shasum -a 256 > "$(basename "$output")"
     fi
 
     printf '%s\n' "$output"
@@ -539,6 +547,7 @@ release-github-check version:
     version="{{version}}"
     version="${version#v}"
     metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
+    checksum_path="{{release-dir}}/thane_${version}_checksums.txt"
     assets=(
         "{{release-dir}}/thane_${version}_darwin_amd64.zip"
         "{{release-dir}}/thane_${version}_darwin_arm64.zip"
@@ -577,6 +586,28 @@ release-github-check version:
         echo "Run 'just prepare-release ${version}' on the macOS release workstation before publishing." >&2
         exit 1
     fi
+
+    checksum_assets="$(awk '{print $NF}' "$checksum_path" | LC_ALL=C sort)"
+    expected_checksum_assets=(
+        "thane_${version}_darwin_amd64.zip"
+        "thane_${version}_darwin_arm64.zip"
+        "thane_${version}_linux_amd64.tar.gz"
+        "thane_${version}_linux_arm64.tar.gz"
+    )
+    checksum_asset_count="$(printf '%s\n' "$checksum_assets" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+    if [ "$checksum_asset_count" -ne "${#expected_checksum_assets[@]}" ]; then
+        echo "Checksum file $checksum_path should describe ${#expected_checksum_assets[@]} release archives, found ${checksum_asset_count} entries." >&2
+        printf '  %s\n' "$checksum_assets" >&2
+        exit 1
+    fi
+
+    for expected_asset in "${expected_checksum_assets[@]}"; do
+        if ! printf '%s\n' "$checksum_assets" | grep -Fxq "$expected_asset"; then
+            echo "Checksum file $checksum_path is missing expected asset: $expected_asset" >&2
+            exit 1
+        fi
+    done
 
 [doc("Building block: create or update the GitHub release from prepared assets")]
 [group('release-engineering')]
@@ -664,6 +695,13 @@ prepare-release version container_tag="thane:prepare-release":
 
     test "{{host_os}}" = "darwin" || { echo "prepare-release must run on a macOS release workstation"; exit 1; }
     test -z "$(git status --short)" || { echo "Worktree must be clean before a prepare-release run"; exit 1; }
+
+    mkdir -p "{{release-dir}}"
+    rm -f \
+        "{{release-dir}}/thane_${version}_"*.zip \
+        "{{release-dir}}/thane_${version}_"*.tar.gz \
+        "{{release-dir}}/thane_${version}_checksums.txt" \
+        "{{release-dir}}/.thane_${version}_prepared.env"
 
     just ci
 
