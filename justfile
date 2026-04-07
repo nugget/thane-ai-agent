@@ -341,12 +341,12 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
     fi
 
     if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
-        just macos-sign "$binary"
+        just release-sign-macos "$binary"
         if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
             if [ -n "$cc" ]; then
-                archive="$(just --quiet release-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
+                archive="$(just --quiet release-build-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
             else
-                archive="$(just --quiet release-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
+                archive="$(just --quiet release-build-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
             fi
             echo "Notarized archive ready: $archive"
         fi
@@ -417,9 +417,9 @@ loops-ng-persistence base_url="http://127.0.0.1:8080":
 
 # --- Release ---
 
-# Sign a macOS binary with either Developer ID or ad-hoc identity
+[doc("Building block: sign a macOS binary")]
 [group('release-engineering')]
-macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
+release-sign-macos binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
     #!/usr/bin/env bash
     set -euo pipefail
     test "{{host_os}}" = "darwin" || { echo "macos-sign requires a macOS host"; exit 1; }
@@ -442,17 +442,17 @@ macos-sign binary identity=codesign-identity options=codesign-options timestamp=
     codesign --verify --verbose=2 "$binary"
     codesign -dv --verbose=4 "$binary"
 
-# Submit a packaged macOS archive to Apple's notary service
+[doc("Building block: notarize a packaged macOS archive")]
 [group('release-engineering')]
 [macos]
-macos-notarize archive profile=notary-profile:
+release-notarize-macos archive profile=notary-profile:
     test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
     test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
     xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
 
-# Build and package a release archive for a single target
+[doc("Building block: build one release archive for a target")]
 [group('release-engineering')]
-release-archive version target_os=host_os target_arch=host_arch cc="":
+release-build-archive version target_os=host_os target_arch=host_arch cc="":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -469,20 +469,20 @@ release-archive version target_os=host_os target_arch=host_arch cc="":
     fi
 
     if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
-        just macos-sign "$binary"
+        just release-sign-macos "$binary"
     fi
 
     archive="$(scripts/package-release.sh "$version" "$target_os" "$target_arch" "$binary" "{{release-dir}}")"
 
     if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ] && [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
-        just macos-notarize "$archive"
+        just release-notarize-macos "$archive"
     fi
 
     printf '%s\n' "$archive"
 
-# Generate SHA-256 checksums for packaged release archives
+[doc("Building block: write checksums for prepared archives")]
 [group('release-engineering')]
-release-checksums version:
+release-write-checksums version:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -505,23 +505,21 @@ release-checksums version:
 
     printf '%s\n' "$output"
 
-# Build a local release snapshot for the current target and emit checksums
+[doc("Building block: build one local snapshot archive")]
 [group('release-engineering')]
-release-snapshot version target_os=host_os target_arch=host_arch cc="":
+release-build-snapshot version target_os=host_os target_arch=host_arch cc="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{cc}}" ]; then
-        just release-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+        just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
     else
-        just release-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
+        just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
     fi
-    just release-checksums "{{version}}"
+    just release-write-checksums "{{version}}"
 
-# Build and package a Linux release archive through Docker Buildx.
-# This keeps the local dress rehearsal able to produce Linux artifacts
-# even on non-Linux hosts with CGO enabled.
+[doc("Building block: build one Linux archive via Docker Buildx")]
 [group('release-engineering')]
-release-archive-linux-docker version target_arch:
+release-build-linux-archive version target_arch:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -533,9 +531,9 @@ release-archive-linux-docker version target_arch:
     archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
 
-# Verify that the locally prepared release payload is ready to upload.
+[doc("Building block: validate GitHub auth and prepared assets")]
 [group('release-engineering')]
-release-upload-validate version:
+release-github-check version:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -569,13 +567,13 @@ release-upload-validate version:
     done
 
     if [ "$missing" -ne 0 ]; then
-        echo "Run 'just release-breakpoint ${version}' on the macOS release workstation before uploading assets." >&2
+        echo "Run 'just prepare-release ${version}' on the macOS release workstation before uploading assets." >&2
         exit 1
     fi
 
-# Create or update the GitHub release from locally prepared archives.
+[doc("Building block: create or update the GitHub release from prepared assets")]
 [group('release-engineering')]
-release-upload version:
+release-github-upload version:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -590,7 +588,7 @@ release-upload version:
         "{{release-dir}}/thane_${version}_checksums.txt"
     )
 
-    just --quiet release-upload-validate "$version"
+    just --quiet release-github-check "$version"
     export GH_TOKEN="${THANE_GH_TOKEN}"
 
     create_args=("${tag}" --verify-tag --title "${tag}" --generate-notes)
@@ -635,12 +633,9 @@ release-upload version:
         gh release edit "$tag" --draft=false
     fi
 
-# Run the full local release dress rehearsal, including local signing
-# and optional Apple notarization when configured, but stop before any
-# GitHub publication steps such as tag push, release upload, or
-# container publishing.
+[doc("Operator path: build, sign/notarize, package, checksum, and smoke-test the release locally")]
 [group('release-engineering')]
-release-breakpoint version container_tag="thane:release-breakpoint":
+prepare-release version container_tag="thane:prepare-release":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -653,22 +648,22 @@ release-breakpoint version container_tag="thane:release-breakpoint":
         exit 1
     fi
 
-    test "{{host_os}}" = "darwin" || { echo "release-breakpoint must run on a macOS release workstation"; exit 1; }
-    test -z "$(git status --short)" || { echo "Worktree must be clean before a release breakpoint run"; exit 1; }
+    test "{{host_os}}" = "darwin" || { echo "prepare-release must run on a macOS release workstation"; exit 1; }
+    test -z "$(git status --short)" || { echo "Worktree must be clean before a prepare-release run"; exit 1; }
 
     just ci
 
-    just release-archive "v${version}" darwin amd64
-    just release-archive "v${version}" darwin arm64
-    just release-archive-linux-docker "v${version}" amd64
-    just release-archive-linux-docker "v${version}" arm64
-    just release-checksums "v${version}"
+    just release-build-archive "v${version}" darwin amd64
+    just release-build-archive "v${version}" darwin arm64
+    just release-build-linux-archive "v${version}" amd64
+    just release-build-linux-archive "v${version}" arm64
+    just release-write-checksums "v${version}"
 
     just container "$container_tag"
     docker run --rm "$container_tag" version
 
     echo ""
-    echo "Local release breakpoint complete."
+    echo "Local release preparation complete."
     echo "  Archives/checksums: {{release-dir}}/"
     echo "  Included archives: darwin/amd64, darwin/arm64, linux/amd64, linux/arm64"
     echo "  Container smoke tag: $container_tag"
@@ -676,12 +671,11 @@ release-breakpoint version container_tag="thane:release-breakpoint":
     echo "Nothing was tagged, pushed, or uploaded to GitHub."
     echo "If THANE_NOTARY_PROFILE was set, Apple notarization was completed during this run."
     echo "Next off-machine step when ready:"
-    echo "  just release v${version}"
+    echo "  just publish-release v${version}"
 
-# Tag main for release, upload locally prepared release assets, and let
-# GitHub Actions publish the container image.
+[doc("Operator path: tag main and publish prepared release assets to GitHub")]
 [group('release-engineering')]
-release version:
+publish-release version:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
@@ -697,7 +691,7 @@ release version:
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
     test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main"; exit 1; }
 
-    just --quiet release-upload-validate "$tag"
+    just --quiet release-github-check "$tag"
 
     git fetch origin main --tags
     test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
@@ -710,7 +704,7 @@ release version:
 
         git push origin "$tag"
         echo "Tag $tag already exists at the current commit. Treating release as idempotent."
-        just release-upload "$tag"
+        just release-github-upload "$tag"
         echo "Uploaded local release archives/checksums. GitHub Actions can publish or republish the container image separately."
         exit 0
     fi
@@ -718,5 +712,46 @@ release version:
     just ci
     git tag -a "$tag" -m "Release $tag"
     git push origin "$tag"
-    just release-upload "$tag"
+    just release-github-upload "$tag"
     echo "Pushed $tag, uploaded local release archives/checksums, and triggered GitHub Actions to publish the container image."
+
+[private]
+macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
+    just release-sign-macos "{{binary}}" "{{identity}}" "{{options}}" "{{timestamp}}"
+
+[private]
+[macos]
+macos-notarize archive profile=notary-profile:
+    just release-notarize-macos "{{archive}}" "{{profile}}"
+
+[private]
+release-archive version target_os=host_os target_arch=host_arch cc="":
+    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+
+[private]
+release-checksums version:
+    just release-write-checksums "{{version}}"
+
+[private]
+release-snapshot version target_os=host_os target_arch=host_arch cc="":
+    just release-build-snapshot "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+
+[private]
+release-archive-linux-docker version target_arch:
+    just release-build-linux-archive "{{version}}" "{{target_arch}}"
+
+[private]
+release-upload-validate version:
+    just release-github-check "{{version}}"
+
+[private]
+release-upload version:
+    just release-github-upload "{{version}}"
+
+[private]
+release-breakpoint version container_tag="thane:release-breakpoint":
+    just prepare-release "{{version}}" "{{container_tag}}"
+
+[private]
+release version:
+    just publish-release "{{version}}"

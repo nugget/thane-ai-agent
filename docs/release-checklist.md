@@ -8,15 +8,15 @@ easy to roll back.
 
 - [ ] `just ci`
 - [ ] `just build`
-- [ ] `just release-snapshot <version>` for at least the primary operator target
+- [ ] `just release-build-snapshot <version>` for at least the primary operator target
 - [ ] Generated files are committed, especially [`examples/config.example.yaml`](../examples/config.example.yaml)
 - [ ] New exported Go types/functions read cleanly in Go Doc form
 - [ ] Logs for new code paths use inherited/component loggers instead of ad hoc `slog.Default()` where request or subsystem context matters
 
 ## Artifact Publication
 
-- [ ] `just release-breakpoint <version>` completes on the macOS release workstation
-- [ ] Release tag created with `just release <version>` from a clean, up-to-date `main`
+- [ ] `just prepare-release <version>` completes on the macOS release workstation
+- [ ] Release tag created with `just publish-release <version>` from a clean, up-to-date `main`
 - [ ] Local release upload publishes the four archives plus `thane_<version>_checksums.txt` to the GitHub release
 - [ ] GitHub release workflow publishes the GHCR multi-arch container image
 - [ ] GitHub build provenance attestations are available for the container image
