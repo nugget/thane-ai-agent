@@ -16,11 +16,12 @@ easy to roll back.
 ## Artifact Publication
 
 - [ ] `just prepare-release <version>` completes on the macOS release workstation
+- [ ] Prepared release metadata matches the commit being published
 - [ ] Release tag created with `just publish-release <version>` from a clean, up-to-date `main`
 - [ ] Local release upload publishes the four archives plus `thane_<version>_checksums.txt` to the GitHub release
 - [ ] GitHub release workflow publishes the GHCR multi-arch container image
 - [ ] GitHub build provenance attestations are available for the container image
-- [ ] GitHub release token is set explicitly (`THANE_GH_TOKEN`) for the intended automation identity
+- [ ] GitHub release token is set explicitly (`THANE_GH_TOKEN`) for tag creation and release upload
 - [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
 - [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized macOS archive
 

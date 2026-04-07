@@ -538,6 +538,7 @@ release-github-check version:
     set -euo pipefail
     version="{{version}}"
     version="${version#v}"
+    metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
     assets=(
         "{{release-dir}}/thane_${version}_darwin_amd64.zip"
         "{{release-dir}}/thane_${version}_darwin_arm64.zip"
@@ -571,14 +572,21 @@ release-github-check version:
         exit 1
     fi
 
+    if [ ! -f "$metadata_path" ]; then
+        echo "Missing release metadata: $metadata_path" >&2
+        echo "Run 'just prepare-release ${version}' on the macOS release workstation before publishing." >&2
+        exit 1
+    fi
+
 [doc("Building block: create or update the GitHub release from prepared assets")]
 [group('release-engineering')]
-release-github-upload version:
+release-github-upload version target_commit="":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    target_commit="{{target_commit}}"
     release_exists=0
     assets=(
         "{{release-dir}}/thane_${version}_darwin_amd64.zip"
@@ -591,9 +599,14 @@ release-github-upload version:
     just --quiet release-github-check "$version"
     export GH_TOKEN="${THANE_GH_TOKEN}"
 
-    create_args=("${tag}" --verify-tag --title "${tag}" --generate-notes)
+    create_args=("${tag}" --title "${tag}" --generate-notes)
     if printf '%s' "$version" | grep -q -- '-'; then
         create_args+=(--prerelease)
+    fi
+    if [ -n "$target_commit" ]; then
+        create_args+=(--target "$target_commit")
+    else
+        create_args+=(--verify-tag)
     fi
 
     if gh release view "$tag" >/dev/null 2>&1; then
@@ -640,6 +653,7 @@ prepare-release version container_tag="thane:prepare-release":
     set -euo pipefail
     version="{{version}}"
     container_tag="{{container_tag}}"
+    metadata_path=""
 
     version="${version#v}"
 
@@ -662,9 +676,16 @@ prepare-release version container_tag="thane:prepare-release":
     just container "$container_tag"
     docker run --rm "$container_tag" version
 
+    metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
+    printf 'THANE_RELEASE_PREPARED_VERSION=%s\n' "$version" > "$metadata_path"
+    printf 'THANE_RELEASE_PREPARED_COMMIT=%s\n' "$(git rev-parse HEAD)" >> "$metadata_path"
+    printf 'THANE_RELEASE_PREPARED_BRANCH=%s\n' "$(git rev-parse --abbrev-ref HEAD)" >> "$metadata_path"
+    printf 'THANE_RELEASE_PREPARED_AT=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$metadata_path"
+
     echo ""
     echo "Local release preparation complete."
     echo "  Archives/checksums: {{release-dir}}/"
+    echo "  Release metadata: $metadata_path"
     echo "  Included archives: darwin/amd64, darwin/arm64, linux/amd64, linux/arm64"
     echo "  Container smoke tag: $container_tag"
     echo ""
@@ -673,7 +694,7 @@ prepare-release version container_tag="thane:prepare-release":
     echo "Next off-machine step when ready:"
     echo "  just publish-release v${version}"
 
-[doc("Operator path: tag main and publish prepared release assets to GitHub")]
+[doc("Operator path: create the release tag and publish prepared assets to GitHub")]
 [group('release-engineering')]
 publish-release version:
     #!/usr/bin/env bash
@@ -681,8 +702,11 @@ publish-release version:
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
+    repo=""
     head_commit="$(git rev-parse HEAD)"
     force_release="${THANE_RELEASE_FORCE:-false}"
+    remote_tag_commit=""
 
     if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
@@ -692,8 +716,26 @@ publish-release version:
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
 
     just --quiet release-github-check "$tag"
+    export GH_TOKEN="${THANE_GH_TOKEN}"
+    . "$metadata_path"
 
-    git fetch origin main --tags
+    test "${THANE_RELEASE_PREPARED_VERSION:-}" = "$version" || {
+        echo "Prepared release metadata version is '${THANE_RELEASE_PREPARED_VERSION:-}', expected '${version}'." >&2
+        echo "Run 'just prepare-release ${version}' before publishing." >&2
+        exit 1
+    }
+    test -n "${THANE_RELEASE_PREPARED_COMMIT:-}" || {
+        echo "Prepared release metadata is missing THANE_RELEASE_PREPARED_COMMIT." >&2
+        echo "Run 'just prepare-release ${version}' before publishing." >&2
+        exit 1
+    }
+    test "$THANE_RELEASE_PREPARED_COMMIT" = "$head_commit" || {
+        echo "Prepared release assets were built from ${THANE_RELEASE_PREPARED_COMMIT}, but current HEAD is ${head_commit}." >&2
+        echo "Run 'just prepare-release ${version}' from this commit before publishing." >&2
+        exit 1
+    }
+
+    git fetch origin main
     if [ "$force_release" = "true" ]; then
         echo "THANE_RELEASE_FORCE=true: bypassing main-branch and origin/main release guards for release-engineering testing."
     else
@@ -701,25 +743,33 @@ publish-release version:
         test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release (or set THANE_RELEASE_FORCE=true for releng testing)"; exit 1; }
     fi
 
-    if git rev-parse "$tag" >/dev/null 2>&1; then
-        tag_commit="$(git rev-parse "$tag^{commit}")"
-        if [ "$tag_commit" != "$head_commit" ]; then
-            echo "Tag already exists but points to $tag_commit; expected $head_commit" >&2
+    repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+    if remote_tag_type="$(gh api "repos/${repo}/git/ref/tags/${tag}" --jq '.object.type' 2>/dev/null)"; then
+        remote_tag_sha="$(gh api "repos/${repo}/git/ref/tags/${tag}" --jq '.object.sha')"
+        if [ "$remote_tag_type" = "tag" ]; then
+            remote_tag_commit="$(gh api "repos/${repo}/git/tags/${remote_tag_sha}" --jq '.object.sha')"
+        elif [ "$remote_tag_type" = "commit" ]; then
+            remote_tag_commit="$remote_tag_sha"
+        else
+            echo "Unsupported remote tag object type for $tag: $remote_tag_type" >&2
+            exit 1
+        fi
+    fi
+
+    if [ -n "$remote_tag_commit" ]; then
+        if [ "$remote_tag_commit" != "$head_commit" ]; then
+            echo "Remote tag $tag already exists but points to $remote_tag_commit; expected $head_commit" >&2
             exit 1
         fi
 
-        git push origin "$tag"
-        echo "Tag $tag already exists at the current commit. Treating release as idempotent."
+        echo "Remote tag $tag already exists at the current commit. Treating publish as idempotent."
         just release-github-upload "$tag"
         echo "Uploaded local release archives/checksums. GitHub Actions can publish or republish the container image separately."
         exit 0
     fi
 
-    just ci
-    git tag -a "$tag" -m "Release $tag"
-    git push origin "$tag"
-    just release-github-upload "$tag"
-    echo "Pushed $tag, uploaded local release archives/checksums, and triggered GitHub Actions to publish the container image."
+    just release-github-upload "$tag" "$head_commit"
+    echo "Created $tag via the GitHub release API, uploaded local release archives/checksums, and triggered GitHub Actions to publish the container image."
 
 [private]
 macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
