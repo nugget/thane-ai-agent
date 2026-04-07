@@ -576,6 +576,7 @@ release-upload version:
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    release_exists=0
     assets=(
         "{{release-dir}}/thane_${version}_darwin_amd64.zip"
         "{{release-dir}}/thane_${version}_darwin_arm64.zip"
@@ -591,11 +592,42 @@ release-upload version:
         create_args+=(--prerelease)
     fi
 
-    if ! gh release view "$tag" >/dev/null 2>&1; then
-        gh release create "${create_args[@]}"
+    if gh release view "$tag" >/dev/null 2>&1; then
+        release_exists=1
+    fi
+
+    if [ "$release_exists" -eq 0 ]; then
+        gh release create "${create_args[@]}" "${assets[@]}"
+        exit 0
+    fi
+
+    is_immutable="$(gh release view "$tag" --json isImmutable --jq '.isImmutable')"
+    if [ "$is_immutable" = "true" ]; then
+        remote_assets="$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+        missing_remote=0
+        for asset in "${assets[@]}"; do
+            asset_name="$(basename "$asset")"
+            if ! printf '%s\n' "$remote_assets" | grep -Fxq "$asset_name"; then
+                echo "Immutable release $tag is missing asset: $asset_name" >&2
+                missing_remote=1
+            fi
+        done
+
+        if [ "$missing_remote" -ne 0 ]; then
+            echo "Release $tag is already published and immutable, so the missing assets cannot be repaired in place." >&2
+            echo "Cut a new version instead." >&2
+            exit 1
+        fi
+
+        echo "Release $tag is already published and immutable with the expected assets. Treating upload as idempotent."
+        exit 0
     fi
 
     gh release upload "$tag" "${assets[@]}" --clobber
+
+    if [ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" = "true" ]; then
+        gh release edit "$tag" --draft=false
+    fi
 
 # Run the full local release dress rehearsal, including local signing
 # and optional Apple notarization when configured, but stop before any
