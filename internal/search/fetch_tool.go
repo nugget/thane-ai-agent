@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// ToolHandler returns a function compatible with the tools.Tool Handler
+// FetchToolHandler returns a function compatible with the tools.Tool Handler
 // signature. It wraps the Fetcher for use as an agent tool.
 func FetchToolHandler(f *Fetcher) func(ctx context.Context, args map[string]any) (string, error) {
 	return func(ctx context.Context, args map[string]any) (string, error) {
@@ -35,7 +35,7 @@ func FetchToolHandler(f *Fetcher) func(ctx context.Context, args map[string]any)
 	}
 }
 
-// ToolDefinition returns the JSON Schema parameters for the web_fetch tool.
+// FetchToolDefinition returns the JSON Schema parameters for the web_fetch tool.
 func FetchToolDefinition() map[string]any {
 	return map[string]any{
 		"type": "object",

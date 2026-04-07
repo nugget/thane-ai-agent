@@ -399,7 +399,7 @@ func (c *OllamaClient) Ping(ctx context.Context) error {
 	return nil
 }
 
-// ListModels returns available models.
+// ListModelInfos returns available models.
 func (c *OllamaClient) ListModelInfos(ctx context.Context) ([]OllamaModelInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/tags", nil)
 	if err != nil {
