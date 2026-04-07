@@ -1,4 +1,3 @@
-// Package api implements the OpenAI-compatible HTTP API.
 package api
 
 import (

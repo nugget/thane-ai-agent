@@ -1,4 +1,3 @@
-// Package tools provides file operation tools for the agent.
 package tools
 
 import (

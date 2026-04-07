@@ -12,6 +12,15 @@ easy to roll back.
 - [ ] New exported Go types/functions read cleanly in Go Doc form
 - [ ] Logs for new code paths use inherited/component loggers instead of ad hoc `slog.Default()` where request or subsystem context matters
 
+## Documentation Audit
+
+- [ ] **README.md** — Accurate description of current capabilities
+- [ ] **docs/understanding/** — Architecture, philosophy, and design docs reflect actual implementation
+- [ ] **docs/operating/** — Getting started, integration, and deployment guides reflect current reality
+- [ ] **docs/reference/** — Tools, CLI, and API docs accurate
+- [ ] **config.example.yaml** — Includes all current config options with documentation
+- [ ] **CONTRIBUTING.md** — Still accurate for current development workflow
+
 ## Config and Migration Review
 
 - [ ] Start from the repo example config instead of editing an old production file in place

@@ -1,10 +1,3 @@
-// Package logging provides structured log output and indexing.
-//
-// ContentWriter persists request-level content (system prompts, tool
-// call arguments/results, and message bodies) to the log index
-// database (logs.db) for later inspection via the web dashboard and
-// API. Content retention is gated by the logging.retain_content
-// config flag.
 package logging
 
 import (

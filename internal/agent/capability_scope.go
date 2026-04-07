@@ -1,11 +1,3 @@
-// Package agent provides the core agent loop implementation.
-//
-// This file implements per-Run capability scoping. Each Run() call
-// creates a capabilityScope seeded with always-active and channel-pinned
-// tags and global lenses, stored in the context. Tool handlers
-// (activate_capability, deactivate_capability) mutate the scope via
-// context, giving each
-// conversation its own isolated capability state.
 package agent
 
 import (

@@ -1,10 +1,22 @@
 # AGENTS.md
 
-Instructions for AI coding agents working on the Thane codebase.
+Welcome. Thane is an autonomous AI agent written in Go that connects
+language models to Home Assistant, turning thousands of real-time sensor
+readings into coherent environmental awareness. It runs on local models
+optionally augmented by cloud models for complex reasoning.
+Single binary, SQLite storage, no runtime dependencies.
+
+If you're here to understand the project, start with
+[docs/understanding/philosophy.md](docs/understanding/philosophy.md).
+For the full documentation suite, see [docs/](docs/).
+
+Everything below is what you need to contribute code.
 
 ## Build & Test
 
-All workflows go through [just](https://just.systems/). Don't call `go` tools directly.
+All workflows go through [just](https://just.systems/). Never call `go`
+tools directly — the justfile handles build tags, cross-compilation, code
+signing, and version injection.
 
 ```bash
 just build              # Build for current platform → dist/
@@ -14,85 +26,163 @@ just lint               # golangci-lint v2
 just fmt-check          # gofmt check
 ```
 
-`just ci` must pass before pushing. No exceptions.
-
-## Project Structure
-
-```
-cmd/thane/              Main binary (CLI, server setup, wiring)
-internal/
-  agent/                Agent loop (context assembly → planning → tool execution → response)
-  api/                  HTTP API server (OpenAI-compatible + Ollama-compatible)
-  httpkit/              Centralized HTTP client construction (all outbound HTTP goes through here)
-  homeassistant/        HA REST + WebSocket client
-  llm/                  LLM providers (Anthropic, Ollama) and model routing
-  search/               Web search providers (SearXNG, Brave) with pluggable interface
-  fetch/                Web page content extraction
-  memory/               Conversation storage and compaction (SQLite)
-  facts/                Semantic fact store with embeddings
-  checkpoint/           State snapshot and restore
-  embeddings/           Embedding generation via Ollama
-  tools/                Tool registry and implementations (HA, shell, files, search, fetch)
-  config/               Configuration loading and validation
-  talents/              Markdown-based agent behavior guidance
-  web/                  Built-in web chat UI
-  buildinfo/            Version injection via ldflags
-  router/               Model selection routing
-  scheduler/            Time-based task scheduling
-  ingest/               Markdown document ingestion
-```
+`just ci` must pass locally before every push. No exceptions. Don't rely
+on GitHub Actions to catch what you could have caught locally.
 
 ## Code Conventions
 
-- **Go 1.24+** required
-- **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
-- **Model-facing changes**: If you are changing tool implementations, tool outputs, tool schemas, tool descriptions, or any context emitted for later model consumption, read [`docs/model-facing-context.md`](docs/model-facing-context.md) and [`docs/model-facing-tools.md`](docs/model-facing-tools.md) first. Apply those conventions while doing the work; do not treat them as a later cleanup pass.
-- **All HTTP clients** must use `httpkit.NewClient()` / `httpkit.NewTransport()` — never construct `http.Client{}` directly
-- **Prefer the standard library**. Third-party module imports are expensive — they add supply chain risk, version churn, and transitive dependencies. If `net/http`, `encoding/json`, `crypto/tls`, or another stdlib package can do the job, use it. Only reach for an external module when the stdlib genuinely can't.
-- **Contract structs**: Any exported request/response/spec/config struct, or any other struct that defines a stable cross-package, model-facing, API-facing, or persistence-facing contract, should carry explicit well-known serialization tags. Use `json` tags by default, add `yaml` tags when the type is config- or file-facing, prefer stable `snake_case` names, and mark runtime-only fields with `json:"-"` / `yaml:"-"` as appropriate.
-- **GoDoc-first data models**: Write contract structs so their external shape is obvious in GoDoc. Keep field names, tags, ordering, and comments intentional enough that readers do not have to infer the serialized form from Go casing rules or implementation details.
-- **Error handling**: Always drain response bodies (`httpkit.DrainAndClose`), bound error reads (`httpkit.ReadErrorBody`)
-- **Tests**: Table-driven where possible, always with `-race`
-- **Logging**: Structured via `slog`. Include relevant context fields (method, URL, entity_id, etc.)
-- **Tool registration**: Use `tools.Register()` with JSON schema parameters
-- **Provider pattern**: New integrations implement a provider interface (see `search.Provider`)
+- **Go 1.24+** required. Build requires `-tags "sqlite_fts5"` (the
+  justfile handles this).
+- **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`,
+  `test:`, `chore:`.
+- **All HTTP clients** must use `httpkit.NewClient()` /
+  `httpkit.NewTransport()` — never construct `http.Client{}` directly.
+  httpkit is the single source of truth for outbound HTTP: retry
+  transport, User-Agent injection, connection pool management.
+- **Prefer the standard library**. Third-party imports add supply chain
+  risk, version churn, and transitive deps. Use stdlib when it can do the
+  job.
+- **Context propagation**: Always pass the caller's `ctx` through to
+  downstream calls. Never use `context.Background()` inside a handler
+  that receives `ctx` — it breaks cancellation and deadline enforcement.
+- **Error handling**: Always drain response bodies
+  (`httpkit.DrainAndClose`), bound error reads
+  (`httpkit.ReadErrorBody`).
+- **Timestamp parsing**: Use `database.ParseTimestamp()` for SQLite TEXT
+  columns. Never raw `time.Parse` for stored timestamps.
+- **Timestamps in model context**: Any timestamp shown to the model must
+  use exact-second deltas (`-120s`, `+3600s`) via
+  `awareness.FormatDeltaOnly()`. Models are poor at timestamp arithmetic.
+  Storage and logs keep absolute timestamps.
+- **String truncation**: Never truncate by byte index (`s[:n]`) — use
+  `[]rune` or `truncateUTF8` in `internal/tools` to avoid splitting
+  multi-byte characters.
+- **Contract structs**: Exported structs that define cross-package,
+  model-facing, API-facing, or persistence-facing contracts need explicit
+  serialization tags (`json`, `yaml` where config-facing, `snake_case`
+  names, `-` for runtime-only fields).
+- **Model-facing changes**: If touching tool implementations, schemas,
+  descriptions, or any context consumed by models, read
+  [docs/model-facing-context.md](docs/model-facing-context.md) and
+  [docs/model-facing-tools.md](docs/model-facing-tools.md) first. Apply
+  those conventions during the work, not as a cleanup pass.
+- **Tests**: Table-driven where possible, always with `-race`.
+- **Logging**: Structured via `slog`. INFO = operator story, DEBUG = deep
+  troubleshooting, WARN = degraded, ERROR = broken. Include relevant
+  context fields.
+- **Tool result sizes**: Cap output (search: 16 KB, transcripts: 32 KB).
+  Watch for unbounded data returns.
+- **Config defaults**: Set in `applyDefaults()`, not struct tags.
+- **Go doc comments**: GoDoc is a primary audience for this codebase.
+  Every exported symbol gets a doc comment starting with its name that
+  reads as a complete sentence. Every package gets `// Package foo ...`.
+  Write comments that help a reader understand *why*, not just *what* —
+  the signature already says what.
+- **Provider pattern**: New integrations implement a provider interface
+  (see `search.Provider`).
 
-## Architecture Notes
+## Architecture at a Glance
 
-- **Dual-port**: Port 8080 (native OpenAI API) + port 11434 (Ollama-compatible for HA)
-- **Agent loop**: Iterates up to 10 times per request. Each iteration: LLM call → tool execution → repeat or respond. On exhaustion, makes a final `tools=nil` call to force a text response.
-- **httpkit**: Single source of truth for outbound HTTP. Includes retry transport for transient errors, User-Agent injection, and connection pool management. All 7 HTTP client packages route through it.
-- **Model routing**: Selects between local (Ollama) and cloud (Anthropic) models based on task complexity.
-- **Checkpoint/restore**: Conversations survive restarts via SQLite-backed state snapshots.
+- **Dual-port**: Port 8080 (native OpenAI-compatible API + web dashboard)
+  and port 11434 (Ollama-compatible API for HA integration).
+- **Agent loop**: Iterates up to 10 times per request. Each iteration:
+  LLM call, tool execution, repeat or respond. On exhaustion, a final
+  `tools=nil` call forces a text response.
+- **Delegation**: Orchestrator model plans; small local models execute
+  tool-heavy work at zero API cost.
+- **Model routing**: Scores models on quality, speed, and cost. Routing
+  hints (quality floor, speed preference, local-only) propagate through
+  delegation.
+- **Capability tags**: Tools and talents grouped by semantic tags. Sessions
+  start minimal; tags activate on demand, creating delegation pressure by
+  architecture.
+- **Memory**: SQLite-backed semantic facts with embeddings, conversation
+  history with compaction, session archives with FTS5 search.
+- **connwatch**: Background health monitoring for external services (HA,
+  Ollama, email) with exponential backoff reconnection.
+- **Checkpoint/restore**: Conversations survive restarts via SQLite state
+  snapshots.
 
-## Things to Watch For
+See [docs/understanding/architecture.md](docs/understanding/architecture.md)
+for the full picture.
 
-- **macOS Local Network Privacy**: launchd-launched binaries need explicit permission to access LAN hosts (System Settings → Privacy & Security → Local Network). Internet targets work without it. This was a tricky diagnosis (issue #53).
-- **Branch protection**: `main` requires PRs with verified signatures. No direct pushes.
-- **Version injection**: Uses build-time `ldflags`, not hardcoded strings. The justfile handles this.
-- **Config discovery**: Auto-searches `./config.yaml`, `~/Thane/config.yaml`, `~/.config/thane/config.yaml`, and system paths.
-- **Pre-existing test**: `TestFindConfig_SearchPath` may find a real config file if `~/Thane/config.yaml` exists on the build host.
+## Gotchas
 
-## Security Considerations
+- **macOS Local Network Privacy**: launchd-launched binaries need explicit
+  Local Network permission to reach LAN hosts like HA
+  ([issue #53](https://github.com/nugget/thane-ai-agent/issues/53)).
+- **Branch protection**: `main` requires PRs with verified commit
+  signatures. No direct pushes.
+- **Version injection**: Build-time `ldflags`, not hardcoded. The justfile
+  handles this.
+- **Config discovery**: Auto-searches `./config.yaml`,
+  `~/Thane/config.yaml`, `~/.config/thane/config.yaml`, and system paths.
+- **Pre-existing test**: `TestFindConfig_SearchPath` may find a real
+  config if `~/Thane/config.yaml` exists on the build host.
+- **macOS code signing**: The justfile ad-hoc signs macOS builds. No
+  Gatekeeper quarantine during development.
 
-- **Shell exec** is gated by config (`shell_exec.enabled`) with denied patterns and optional allowed prefixes
-- **File tools** are sandboxed to the configured workspace directory
-- **HA tokens** and **API keys** live in `config.yaml` — keep it `chmod 600`
-- **httpkit** never disables TLS verification by default (`WithTLSInsecureSkipVerify` is opt-in)
+## Security
 
-## GitHub Collaboration
+- **Shell exec** gated by config with denied patterns and allowed prefixes
+- **File tools** sandboxed to the configured workspace directory
+- **Tokens and API keys** in `config.yaml` — keep it `chmod 600`
+- **httpkit** never disables TLS verification by default
 
-Leave pull requests as clean and reflective of reality as you can. Open
-review threads, stale PR descriptions, and unchecked test-plan items all
-signal unfinished work to the next reader.
+## Contributing
 
-**When addressing review feedback:**
-1. Fix the issue in a commit
-2. Reply to the thread with the fixing commit hash and a one-line explanation
-3. Resolve the conversation
-4. If a comment is intentionally deferred (out of scope, follow-up issue), say so explicitly before resolving — don't silently close without context
+### Issues
 
-**PR hygiene:**
-- Keep the PR description accurate as scope changes
-- Check off test plan items as they are verified
-- Leave unresolved only the threads that still need real work or a decision
+Use the issue templates when filing bugs or feature requests. Good issues
+include: what's happening (or what should happen), why it matters, and
+concrete acceptance criteria. Link related issues with `Refs #NNN`.
+
+### Pull Requests
+
+- **All commits must be signed.** Configure your signing key before your
+  first commit. PRs with unsigned commits will not merge.
+- Run `just ci` locally before pushing.
+- Keep PRs focused — one logical change per PR.
+- Use conventional commit format for PR titles and commits.
+- Reference issues: `Refs #NNN` or `Closes #NNN` in commit bodies.
+- **Update docs in the same PR.** If your change affects behavior that's
+  documented — tool descriptions, configuration options, API surface,
+  architectural patterns, CLI flags, deployment — update the relevant
+  docs before requesting review. Documentation that drifts from code is
+  worse than no documentation. When in doubt, check `docs/` and
+  `AGENTS.md` for anything your change might invalidate. GoDoc counts
+  as documentation: exported symbols, package comments, and type
+  definitions are a primary interface for anyone reading this codebase.
+- The PR template will guide you through the description and test plan.
+
+### Common Review Feedback
+
+These are the patterns that most often come up in review. Getting them
+right on the first pass saves everyone a round trip:
+
+- **Context propagation** — Don't use `context.Background()` where a `ctx`
+  is available. Goroutines need context timeouts.
+- **Unbounded data** — Tool results must be capped. Don't return full
+  entity lists or raw transcripts without size limits.
+- **Model-facing changes** — Read the model-facing docs before touching
+  tool schemas or prompt content. This is not optional.
+- **Race conditions** — Shared state needs mutex guards. Tests run with
+  `-race`; they will catch you.
+- **Silent failures** — If something can fail, log it. Debug-level is fine,
+  but silent drops waste debugging time later.
+
+### Review Culture
+
+Leave PRs clean and reflective of reality. Open review threads, stale
+descriptions, and unchecked test-plan items signal unfinished work.
+
+When addressing review feedback: fix the issue, reply to the thread with
+the commit hash and a one-line explanation, then resolve the conversation.
+If deferring, say why before resolving.
+
+## Further Reading
+
+- [docs/](docs/) — Full documentation index
+- [docs/understanding/philosophy.md](docs/understanding/philosophy.md) — Why Thane exists
+- [docs/understanding/architecture.md](docs/understanding/architecture.md) — System design
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and workflow

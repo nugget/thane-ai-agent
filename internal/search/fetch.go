@@ -1,6 +1,3 @@
-// Package fetch provides web page fetching and content extraction.
-// It downloads a URL's HTML and extracts readable text content,
-// stripping navigation, ads, and other boilerplate.
 package search
 
 import (

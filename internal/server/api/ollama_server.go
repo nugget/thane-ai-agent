@@ -1,6 +1,3 @@
-// Package api implements the Ollama-compatible HTTP API as a separate server.
-// This allows Thane to expose an Ollama-compatible API on port 11434 for
-// Home Assistant integration, while keeping the native API on port 8080.
 package api
 
 import (

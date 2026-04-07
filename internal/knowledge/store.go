@@ -1,4 +1,6 @@
-// Package facts provides long-term memory storage for learned information.
+// Package knowledge provides long-term semantic memory — facts the agent
+// learns through conversation and ingestion, stored with optional embeddings
+// for natural-language recall.
 package knowledge
 
 import (

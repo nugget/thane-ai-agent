@@ -1,4 +1,3 @@
-// Package embeddings provides vector embedding generation via Ollama.
 package knowledge
 
 import (
