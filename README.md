@@ -62,7 +62,7 @@ Point Home Assistant's Ollama integration at `http://thane-host:11434`, select m
 
 ## Name
 
-**Thane** — A Scottish term for a landholder who managed an estate on behalf of the crown. Your home automation estate deserves a capable steward.
+**Thane** — A Scottish term for a landholder who managed an estate on behalf of the crown. Your home automation estate deserves a capable steward. ([Project History](docs/history.md))
 
 ## Contributing
 

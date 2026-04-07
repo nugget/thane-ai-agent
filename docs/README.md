@@ -74,8 +74,9 @@ complete onboarding guide for Home Assistant users.
 - **[Model-Facing Tools](model-facing-tools.md)** — Guidance for naming, shaping, and erroring internal tools
 - **[Dashboard Graph Visual Grammar](dashboard-graph-visual-grammar.md)** — Visual language for the dashboard's force-directed graph
 
-## Contributing
+## Project
 
+- **[History](history.md)** — Timeline from first commit to v0.9.0
 - **[Contributing](../CONTRIBUTING.md)** — Development workflow and
   guidelines
 - **[Release Checklist](release-checklist.md)** — Version bump process
