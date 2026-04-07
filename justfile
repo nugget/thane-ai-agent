@@ -43,10 +43,36 @@ build target_os=host_os target_arch=host_arch cc="": generate
 # Build for all release targets
 [group('build')]
 build-all:
-    just build linux amd64
-    just build linux arm64
     just build darwin amd64
     just build darwin arm64
+    just build-linux-docker amd64
+    just build-linux-docker arm64
+
+# Build a Linux binary through Docker Buildx so CGO-backed SQLite builds
+# stay usable even on non-Linux hosts without local cross-compilers.
+[group('build')]
+build-linux-docker target_arch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_arch="{{target_arch}}"
+    export_dir="dist/docker-export/linux-${target_arch}"
+    binary="dist/thane-linux-${target_arch}"
+
+    rm -rf "$export_dir"
+    mkdir -p "$export_dir" dist
+
+    docker buildx build \
+        --platform "linux/${target_arch}" \
+        --target artifact \
+        --build-arg THANE_VERSION="{{version}}" \
+        --build-arg BUILD_COMMIT="{{git_commit}}" \
+        --build-arg BUILD_BRANCH="{{git_branch}}" \
+        --build-arg BUILD_TIME="{{build_time}}" \
+        --output "type=local,dest=${export_dir}" \
+        .
+
+    install -m 755 "$export_dir/thane" "$binary"
+    echo "Built $binary via Docker Buildx"
 
 # Build a local container image for the current checkout
 [group('build')]
@@ -500,24 +526,11 @@ release-archive-linux-docker version target_arch:
     set -euo pipefail
     version="{{version}}"
     target_arch="{{target_arch}}"
-    export_dir="dist/docker-export/linux-${target_arch}"
-    binary="$export_dir/thane"
 
     version="${version#v}"
-    rm -rf "$export_dir"
-    mkdir -p "$export_dir"
+    THANE_VERSION="v${version}" just build-linux-docker "$target_arch"
 
-    docker buildx build \
-        --platform "linux/${target_arch}" \
-        --target artifact \
-        --build-arg THANE_VERSION="v${version}" \
-        --build-arg BUILD_COMMIT="{{git_commit}}" \
-        --build-arg BUILD_BRANCH="{{git_branch}}" \
-        --build-arg BUILD_TIME="{{build_time}}" \
-        --output "type=local,dest=${export_dir}" \
-        .
-
-    archive="$(scripts/package-release.sh "$version" linux "$target_arch" "$binary" "{{release-dir}}")"
+    archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
 
 # Run the full local release dress rehearsal, including local signing

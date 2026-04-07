@@ -109,6 +109,8 @@ docker run --rm \
 Container conventions:
 
 - Put your config at `/config/config.yaml`
-- Persist Thane state under `/data`
+- The container runs with `/data` as its working directory, so the default `data_dir: ./db` persists to `/data/db`
+- If you override `data_dir`, set it explicitly to a path under `/data` if you want state on the mounted volume
+- Ensure the mounted `/data` path is writable by the non-root `thane` user before first boot
 - Publish `8080` for the native API and dashboard
 - Publish `11434` for the Ollama-compatible Home Assistant endpoint
