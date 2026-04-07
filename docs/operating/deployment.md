@@ -30,7 +30,9 @@ macOS silently blocks unsigned binaries from accessing LAN hosts. This was
 a tricky diagnosis — see
 [issue #53](https://github.com/nugget/thane-ai-agent/issues/53). The
 justfile ad-hoc signs macOS builds (`codesign -s -`) to reduce friction,
-but the Local Network permission still needs manual approval.
+and the release recipes can use a Developer ID certificate plus
+`notarytool` when `THANE_CODESIGN_IDENTITY` and `THANE_NOTARY_PROFILE`
+are configured. The Local Network permission still needs manual approval.
 
 ### macOS Companion App
 
@@ -87,8 +89,26 @@ just build darwin amd64       # macOS Intel
 just build-all                # All release targets
 ```
 
-## Future: Docker
+The public GitHub release workflow builds native archives for the
+supported Linux and macOS targets, attaches them to the tagged release,
+emits SHA-256 checksums, and publishes a multi-arch container image.
 
-For operators who don't already run Home Assistant, a future release will
-include a managed HA instance in a Docker container alongside Thane.
-This is on the roadmap but not yet implemented.
+## Container
+
+Thane also ships as a multi-arch container image on GHCR:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -p 11434:11434 \
+  -v "$PWD/config:/config" \
+  -v thane-data:/data \
+  ghcr.io/nugget/thane-ai-agent:latest serve
+```
+
+Container conventions:
+
+- Put your config at `/config/config.yaml`
+- Persist Thane state under `/data`
+- Publish `8080` for the native API and dashboard
+- Publish `11434` for the Ollama-compatible Home Assistant endpoint

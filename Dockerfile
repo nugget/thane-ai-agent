@@ -1,5 +1,4 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -8,24 +7,49 @@ RUN apk add --no-cache git ca-certificates gcc musl-dev
 
 # Copy go mod files first for layer caching
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download
 
 # Copy source
 COPY . .
 
-# Build with CGO for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o thane ./cmd/thane
+ARG TARGETOS=linux
+ARG TARGETARCH
+ARG THANE_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_BRANCH=unknown
+ARG BUILD_TIME=unknown
 
-# Runtime stage
+# Build with CGO for SQLite support
+RUN CGO_ENABLED=1 GOOS="${TARGETOS}" GOARCH="${TARGETARCH:-amd64}" \
+    go build -trimpath -tags "sqlite_fts5" \
+      -ldflags="-s -w \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.Version=${THANE_VERSION} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitCommit=${BUILD_COMMIT} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitBranch=${BUILD_BRANCH} \
+        -X github.com/nugget/thane-ai-agent/internal/buildinfo.BuildTime=${BUILD_TIME}" \
+      -o /out/thane ./cmd/thane
+
 FROM alpine:3.20
 
-# Labels for Home Assistant Add-on
+ARG THANE_VERSION=dev
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+
 LABEL \
+    org.opencontainers.image.title="Thane" \
+    org.opencontainers.image.description="Autonomous AI agent for Home Assistant" \
+    org.opencontainers.image.url="https://github.com/nugget/thane-ai-agent" \
+    org.opencontainers.image.source="https://github.com/nugget/thane-ai-agent" \
+    org.opencontainers.image.documentation="https://github.com/nugget/thane-ai-agent/tree/main/docs" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.version="${THANE_VERSION}" \
+    org.opencontainers.image.revision="${BUILD_COMMIT}" \
+    org.opencontainers.image.created="${BUILD_TIME}" \
     io.hass.name="Thane" \
-    io.hass.description="Autonomous AI Agent for Home Assistant" \
-    io.hass.version="0.1.0" \
+    io.hass.description="Autonomous AI agent for Home Assistant" \
+    io.hass.version="${THANE_VERSION}" \
     io.hass.type="addon" \
-    io.hass.arch="aarch64|amd64|armv7"
+    io.hass.arch="aarch64|amd64"
 
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata
@@ -34,7 +58,7 @@ RUN apk add --no-cache ca-certificates tzdata
 RUN adduser -D -H -s /sbin/nologin thane
 
 # Copy binary from builder
-COPY --from=builder /build/thane /usr/local/bin/thane
+COPY --from=builder /out/thane /usr/local/bin/thane
 
 # Create data directories
 RUN mkdir -p /data /config && chown -R thane:thane /data /config
