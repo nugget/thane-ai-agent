@@ -15,11 +15,11 @@ easy to roll back.
 
 ## Artifact Publication
 
+- [ ] `just release-breakpoint <version>` completes on the macOS release workstation
 - [ ] Release tag created with `just release <version>` from a clean, up-to-date `main`
-- [ ] GitHub release workflow finishes green for Linux and macOS archives
+- [ ] Local release upload publishes the four archives plus `thane_<version>_checksums.txt` to the GitHub release
 - [ ] GitHub release workflow publishes the GHCR multi-arch container image
-- [ ] GitHub release includes archive assets plus `thane_<version>_checksums.txt`
-- [ ] GitHub build provenance attestations are available for the archives and container image
+- [ ] GitHub build provenance attestations are available for the container image
 - [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
 - [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized macOS archive
 
