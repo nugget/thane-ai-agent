@@ -21,7 +21,7 @@ const DefaultMaxBytes int64 = 5 * 1024 * 1024
 // DefaultMaxChars is the default character limit for extracted text.
 const DefaultMaxChars = 50000
 
-// Result holds the fetched and extracted content from a URL.
+// FetchResult holds the fetched and extracted content from a URL.
 type FetchResult struct {
 	URL         string `json:"url"`
 	Title       string `json:"title,omitempty"`
@@ -38,7 +38,7 @@ type Fetcher struct {
 	maxBytes int64
 }
 
-// New creates a Fetcher with default settings.
+// NewFetcher creates a Fetcher with default settings.
 func NewFetcher() *Fetcher {
 	return &Fetcher{
 		client: httpkit.NewClient(
