@@ -1,6 +1,3 @@
-// Package watchlist manages a dynamic set of Home Assistant entities whose
-// state is injected into the agent's system prompt each turn. Entities are
-// persisted in SQLite so the watchlist survives restarts.
 package awareness
 
 import (

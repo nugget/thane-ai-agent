@@ -17,7 +17,7 @@ type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 }
 
-// Provider implements agent.ContextProvider by fetching live state for
+// WatchlistProvider implements agent.ContextProvider by fetching live state for
 // all watched entities and formatting them as a markdown block for
 // system prompt injection.
 type WatchlistProvider struct {
@@ -26,7 +26,7 @@ type WatchlistProvider struct {
 	logger *slog.Logger
 }
 
-// NewProvider creates a watchlist context provider.
+// NewWatchlistProvider creates a watchlist context provider.
 func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Logger) *WatchlistProvider {
 	if logger == nil {
 		logger = slog.Default()

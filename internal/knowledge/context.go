@@ -1,4 +1,3 @@
-// Package facts provides context injection for the agent loop.
 package knowledge
 
 import (

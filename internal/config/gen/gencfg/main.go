@@ -22,6 +22,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -138,41 +139,50 @@ func main() {
 // whitespace. Comments are stored verbatim as written in the Go source.
 func extractComments(dir string) (commentMap, error) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, nil, parser.ParseComments)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
+	var files []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
 
 	result := make(commentMap)
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				ts, ok := n.(*ast.TypeSpec)
-				if !ok {
-					return true
-				}
-				st, ok := ts.Type.(*ast.StructType)
-				if !ok {
-					return true
-				}
-
-				typeName := ts.Name.Name
-				if result[typeName] == nil {
-					result[typeName] = make(map[string]string)
-				}
-
-				for _, field := range st.Fields.List {
-					if field.Doc == nil || len(field.Names) == 0 {
-						continue
-					}
-					text := strings.TrimSpace(field.Doc.Text())
-					for _, name := range field.Names {
-						result[typeName][name.Name] = text
-					}
-				}
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok {
 				return true
-			})
-		}
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				return true
+			}
+
+			typeName := ts.Name.Name
+			if result[typeName] == nil {
+				result[typeName] = make(map[string]string)
+			}
+
+			for _, field := range st.Fields.List {
+				if field.Doc == nil || len(field.Names) == 0 {
+					continue
+				}
+				text := strings.TrimSpace(field.Doc.Text())
+				for _, name := range field.Names {
+					result[typeName][name.Name] = text
+				}
+			}
+			return true
+		})
 	}
 	return result, nil
 }

@@ -1,0 +1,36 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed Behavior
+      description: What happened? Include error messages or logs if available.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: >
+        How did you encounter this? Steps to reproduce, relevant config,
+        or the situation that triggered it. Include code paths or file
+        references if known.
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version, Thane version, Ollama version, relevant model info.
+      placeholder: "macOS 15.4, Go 1.24.4, Thane v0.8.4, Ollama 0.6.x"
+    validations:
+      required: false

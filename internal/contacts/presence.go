@@ -1,5 +1,3 @@
-// Package person tracks presence state for configured household members
-// and provides context injection into the agent's system prompt.
 package contacts
 
 import (
@@ -58,7 +56,7 @@ type PresenceTracker struct {
 	logger    *slog.Logger
 }
 
-// NewTracker creates a person tracker for the given entity IDs. All
+// NewPresenceTracker creates a person tracker for the given entity IDs. All
 // entities start in "Unknown" state until Initialize is called. The
 // timezone is an IANA location string (e.g., "America/Chicago"); an
 // empty or invalid timezone falls back to the system local timezone.

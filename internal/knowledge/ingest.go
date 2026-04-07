@@ -1,4 +1,3 @@
-// Package ingest handles importing documents into the fact store.
 package knowledge
 
 import (

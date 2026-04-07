@@ -1,3 +1,6 @@
+// Package toolcatalog provides compiled-in metadata for tools and capability
+// tags, and renders capability surface descriptions for model-facing context
+// and the web dashboard.
 package toolcatalog
 
 import (
@@ -49,11 +52,15 @@ type CapabilitySurface struct {
 	AdHoc        bool
 }
 
+// CapabilityContextSummary describes the optional context payload
+// associated with a capability entry (KB articles and live context).
 type CapabilityContextSummary struct {
 	KBArticles int  `json:"kb_articles,omitempty"`
 	Live       bool `json:"live,omitempty"`
 }
 
+// CapabilityCatalogEntry is the API/model-facing representation of one
+// capability in the full catalog view, including status and tool list.
 type CapabilityCatalogEntry struct {
 	Tag          string                    `json:"tag"`
 	Status       string                    `json:"status"`
@@ -68,6 +75,8 @@ type CapabilityCatalogEntry struct {
 	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
 
+// LoadedCapabilityEntry is the API/model-facing representation of one
+// currently loaded (active) capability in the session.
 type LoadedCapabilityEntry struct {
 	Tag          string                    `json:"tag"`
 	Description  string                    `json:"description,omitempty"`
@@ -78,6 +87,8 @@ type LoadedCapabilityEntry struct {
 	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
 
+// CapabilityActionTools lists the tool names the model should use for
+// capability lifecycle actions (activate, deactivate, reset, list).
 type CapabilityActionTools struct {
 	Activate   string `json:"activate"`
 	Deactivate string `json:"deactivate"`
@@ -86,12 +97,16 @@ type CapabilityActionTools struct {
 	Delegate   string `json:"delegate,omitempty"`
 }
 
+// CapabilityCatalogView is the top-level JSON-serializable view of the
+// full capability catalog including activation tool names.
 type CapabilityCatalogView struct {
 	Kind            string                   `json:"kind"`
 	ActivationTools CapabilityActionTools    `json:"activation_tools"`
 	Capabilities    []CapabilityCatalogEntry `json:"capabilities"`
 }
 
+// LoadedCapabilityView is the JSON-serializable view of the currently
+// loaded capabilities in a session.
 type LoadedCapabilityView struct {
 	Kind               string                  `json:"kind"`
 	LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
@@ -110,6 +125,8 @@ func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 	return tools
 }
 
+// BuildCapabilityCatalogView assembles the full capability catalog view
+// from resolved surface entries, ready for JSON serialization.
 func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate bool) CapabilityCatalogView {
 	view := CapabilityCatalogView{
 		Kind:            "capability_catalog",
@@ -152,6 +169,9 @@ func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate boo
 	return view
 }
 
+// BuildLoadedCapabilityEntries returns the loaded-capability entries for
+// the given active tags, enriched with descriptions and context from the
+// full surface.
 func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []string) []LoadedCapabilityEntry {
 	if len(activeTags) == 0 {
 		return []LoadedCapabilityEntry{}
@@ -192,6 +212,8 @@ func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []stri
 	return loaded
 }
 
+// BuildLoadedCapabilityView assembles the loaded-capability JSON view
+// for the given active tags.
 func BuildLoadedCapabilityView(entries []CapabilitySurface, activeTags []string, includeDelegate bool) LoadedCapabilityView {
 	_ = includeDelegate
 	return LoadedCapabilityView{

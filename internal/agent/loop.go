@@ -94,8 +94,9 @@ const maxEgoBytes = 16 * 1024
 // this threshold are truncated with a marker.
 const maxTagContextBytes = 64 * 1024
 
-// Response represents the agent's response.
-// Response is the result of a single agent Run() call.
+// Response is the result of a single agent Run() call. It contains the
+// model's final content, token usage counters, and metadata about which
+// tools and capability tags were active during execution.
 type Response struct {
 	Content                  string                              `json:"content"`
 	Model                    string                              `json:"model"`
@@ -120,7 +121,9 @@ type Response struct {
 	ActiveTags []string `json:"-"`
 }
 
-// MemoryStore is the interface for memory storage.
+// MemoryStore is the conversation memory backend required by the agent loop.
+// It manages per-conversation message history and token accounting so the
+// loop can build prompts and enforce context-window limits.
 type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
 	AddMessage(conversationID, role, content string) error
@@ -129,8 +132,10 @@ type MemoryStore interface {
 	Stats() map[string]any
 }
 
-// ToolCallRecorder optionally records tool call execution.
-// Implemented by stores that support tool call tracking.
+// ToolCallRecorder records tool call lifecycle events for observability.
+// When the memory store also implements this interface, the agent loop
+// calls RecordToolCall before execution and CompleteToolCall after,
+// enabling auditing and debugging of tool interactions.
 type ToolCallRecorder interface {
 	RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error
 	CompleteToolCall(toolCallID, result, errMsg string) error
@@ -2373,7 +2378,6 @@ func (l *Loop) MemoryStats() map[string]any {
 	return l.memory.Stats()
 }
 
-// GetTokenCount returns the estimated token count for a conversation.
 // GetHistory returns the conversation messages for a given conversation.
 func (l *Loop) GetHistory(conversationID string) []memory.Message {
 	return l.memory.GetMessages(conversationID)

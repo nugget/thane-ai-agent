@@ -1,3 +1,7 @@
+// Package models provides the normalized model catalog, live registry, and
+// runtime client wiring. The catalog is built from config at startup. The
+// registry merges catalog entries with live inventory from providers (Ollama,
+// Anthropic, LM Studio) and exposes the result to the router for scoring.
 package models
 
 import (

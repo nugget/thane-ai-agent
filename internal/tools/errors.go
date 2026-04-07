@@ -1,6 +1,3 @@
-// Package tools provides the tool registry and execution framework.
-//
-// This file defines sentinel error types for tool execution.
 package tools
 
 import "fmt"

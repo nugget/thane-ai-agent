@@ -1,4 +1,3 @@
-// Package tools provides shell execution capabilities for the agent.
 package tools
 
 import (
