@@ -33,32 +33,26 @@ But Thane is more than a chat endpoint:
 - It develops a **personality** shaped by a persona file you write and the
   conversations you have
 
-## Hardware: What You Need
+## Hardware & Models
 
-### The Minimum
+Thane itself is lightweight — ~114 MB of RAM in production. The hardware
+question is really about **which models you want to run and where**. See
+[Hardware Requirements](hardware.md) for platform details and minimum specs.
 
-Thane itself is lightweight — it's a single Go binary. The compute question
-is really about **which AI models you want to run**.
+### Model Options
 
-**Option A: Cloud-only (no GPU needed)**
-- Any machine that can run a Go binary (Raspberry Pi 4+, NAS, VM, your HA host)
-- An Anthropic API key (~$3/million input tokens for Claude Sonnet)
-- Good for: trying Thane without hardware investment
+**Cloud-only (no GPU needed):** Any machine that can run a Go binary plus
+an Anthropic API key. Good for trying Thane without hardware investment.
 
-**Option B: Local models (recommended)**
-- A machine with enough RAM for your chosen model (see below)
-- A local runner: [Ollama](https://ollama.ai/) or [LM Studio](https://lmstudio.ai/)
-- Good for: privacy, zero ongoing cost, real-time response
+**Local models:** A machine with enough RAM for your chosen model and a
+local runner ([Ollama](https://ollama.ai/) or
+[LM Studio](https://lmstudio.ai/)). Good for privacy and zero ongoing cost.
 
-**Option C: Hybrid (what we actually recommend)**
-- Local runner (Ollama or LM Studio) for fast, cheap delegation tasks
-- Cloud API key for complex reasoning when needed
-- Thane's router picks the right model automatically
+**Hybrid (what we actually recommend):** Local runner for fast, cheap
+delegation tasks plus a cloud API key for complex reasoning. Thane's router
+picks the right model automatically.
 
 ### Model Sizing
-
-AI models are measured in parameters (7B, 20B, 70B, etc.). Bigger is
-smarter but hungrier:
 
 | Model Size | RAM Needed | Speed | Quality | Good For |
 |-----------|-----------|-------|---------|----------|
@@ -73,20 +67,11 @@ enough to follow precise instructions.
 
 **For conversation** (where you're talking to Thane directly): bigger is
 noticeably better. The difference between a 20B and 70B model in
-conversation quality is significant — the larger model holds context better,
-catches nuance, and makes fewer mistakes.
+conversation quality is significant.
 
 **Our setup:** 20B local for delegation, Claude Opus (cloud) for
 conversation. The local model handles 90%+ of tool calls at zero cost; the
 cloud model provides the intelligence for orchestration and conversation.
-
-### Where to Run Ollama
-
-- **Same host as HA:** Works, but large models compete for resources
-- **Dedicated machine:** A used desktop with 32GB+ RAM runs 20B-32B models well
-- **Apple Silicon Mac:** Excellent for Ollama — unified memory means a Mac
-  Mini with 32GB runs 32B models at good speed
-- **NVIDIA GPU:** Best performance-per-dollar for 70B+ models
 
 ## Deployment
 

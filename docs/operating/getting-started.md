@@ -119,7 +119,8 @@ Run `just` with no arguments to see all available recipes.
 
 ## Next Steps
 
-- [Your First Thane](guide.md) — full onboarding guide with hardware, models, and relationship building
+- [Your First Thane](guide.md) — full onboarding guide with models and relationship building
+- [Hardware Requirements](hardware.md) — platform support and minimum specs
 - [Home Assistant](homeassistant.md) — detailed HA integration and protocols
 - [Configuration](configuration.md) — config organized by concern
 - [Deployment](deployment.md) — service installation for macOS and Linux

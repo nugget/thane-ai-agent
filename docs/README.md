@@ -46,6 +46,8 @@ complete onboarding guide for Home Assistant users.
   by concern
 - **[Routing Profiles](operating/routing-profiles.md)** — Model selection
   presets (`thane:latest`, `thane:premium`, `thane:ops`, etc.)
+- **[Hardware Requirements](operating/hardware.md)** — Platform support,
+  production observations, minimum specs
 - **[Deployment](operating/deployment.md)** — Service installation for
   macOS and Linux
 
