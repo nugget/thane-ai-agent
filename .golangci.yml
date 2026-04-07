@@ -1,6 +1,10 @@
 version: "2"
 linters:
+  enable:
+    - godoclint
   settings:
+    godoclint:
+      require-pkg-doc: true
     errcheck:
       check-type-assertions: true
     staticcheck:
