@@ -49,98 +49,6 @@ jobs:
       - name: Run CI gate
         run: just ci
 
-  build-archives:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: validate
-    runs-on: ${{ matrix.runner }}
-
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            artifact_name: release-linux-amd64
-            cc: ''
-            apt_packages: ''
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: arm64
-            artifact_name: release-linux-arm64
-            cc: aarch64-linux-gnu-gcc
-            apt_packages: gcc-aarch64-linux-gnu
-          - runner: macos-13
-            goos: darwin
-            goarch: amd64
-            artifact_name: release-darwin-amd64
-            cc: ''
-            apt_packages: ''
-          - runner: macos-15
-            goos: darwin
-            goarch: arm64
-            artifact_name: release-darwin-arm64
-            cc: ''
-            apt_packages: ''
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install just
-        uses: extractions/setup-just@v4
-
-      - name: Install Linux cross compiler
-        if: runner.os == 'Linux' && matrix.apt_packages != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt_packages }}
-
-      - name: Build release archive
-        shell: bash
-        run: |
-          if [ -n "${{ matrix.cc }}" ]; then
-            just release-archive "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}" "${{ matrix.cc }}"
-          else
-            just release-archive "${GITHUB_REF_NAME}" "${{ matrix.goos }}" "${{ matrix.goarch }}"
-          fi
-
-      - name: Locate release archive
-        id: archive
-        shell: bash
-        run: |
-          shopt -s nullglob
-          archives=(dist/release/*)
-          if [ "${#archives[@]}" -ne 1 ]; then
-            echo "expected exactly one archive, found ${#archives[@]}" >&2
-            printf '%s\n' "${archives[@]}"
-            exit 1
-          fi
-          echo "path=${archives[0]}" >> "$GITHUB_OUTPUT"
-
-      - name: Attest archive provenance
-        uses: actions/attest-build-provenance@v3
-        with:
-          subject-path: ${{ steps.archive.outputs.path }}
-
-      - name: Upload release archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ steps.archive.outputs.path }}
-          if-no-files-found: error
-
   container:
     needs: validate
     runs-on: ubuntu-latest
@@ -155,6 +63,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Generate embedded build inputs
+        run: just generate
 
       - name: Capture build metadata
         id: build_meta
@@ -216,39 +135,3 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-
-  publish:
-    needs:
-      - build-archives
-      - container
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Install just
-        uses: extractions/setup-just@v4
-
-      - name: Download release archives
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: dist/release
-          merge-multiple: true
-
-      - name: Generate release checksums
-        run: just release-checksums "${GITHUB_REF_NAME}"
-
-      - name: Create or update GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --title "${GITHUB_REF_NAME}" --generate-notes
-          fi
-          gh release upload "${GITHUB_REF_NAME}" dist/release/* --clobber
