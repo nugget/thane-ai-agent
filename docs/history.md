@@ -228,7 +228,7 @@ As of v0.9.0:
 
 ## Who Built This
 
-Thane is built collaboratively by David McNett and a rotating cast of
+Thane is built collaboratively by nugget and a rotating cast of
 AI coding agents — Claude Code, OpenAI Codex, GitHub Copilot, and
 Thane itself (via the `thane-developer` and `thane-agent` commit
 identities). The git log is a genuine record of human-AI pair
