@@ -548,6 +548,18 @@ release-upload-validate version:
         "{{release-dir}}/thane_${version}_checksums.txt"
     )
 
+    if [ -z "${THANE_GH_TOKEN:-}" ]; then
+        echo "Set THANE_GH_TOKEN to a GitHub token for the intended release identity before uploading release assets." >&2
+        exit 1
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "GitHub CLI (gh) is required for release uploads" >&2
+        exit 1
+    fi
+
+    GH_TOKEN="${THANE_GH_TOKEN}" gh api user --jq '.login' >/dev/null
+
     missing=0
     for asset in "${assets[@]}"; do
         if [ ! -f "$asset" ]; then
@@ -560,13 +572,6 @@ release-upload-validate version:
         echo "Run 'just release-breakpoint ${version}' on the macOS release workstation before uploading assets." >&2
         exit 1
     fi
-
-    if ! command -v gh >/dev/null 2>&1; then
-        echo "GitHub CLI (gh) is required for release uploads" >&2
-        exit 1
-    fi
-
-    gh auth status >/dev/null
 
 # Create or update the GitHub release from locally prepared archives.
 [group('release-engineering')]
@@ -586,6 +591,7 @@ release-upload version:
     )
 
     just --quiet release-upload-validate "$version"
+    export GH_TOKEN="${THANE_GH_TOKEN}"
 
     create_args=("${tag}" --verify-tag --title "${tag}" --generate-notes)
     if printf '%s' "$version" | grep -q -- '-'; then
