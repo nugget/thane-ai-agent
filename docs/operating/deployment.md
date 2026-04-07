@@ -32,6 +32,13 @@ a tricky diagnosis — see
 justfile ad-hoc signs macOS builds (`codesign -s -`) to reduce friction,
 but the Local Network permission still needs manual approval.
 
+### macOS Companion App
+
+A native macOS companion app is in early development at
+[thane-agent-macos](https://github.com/nugget/thane-agent-macos). The
+companion app aims to simplify deployment on macOS — managing the Thane
+process, handling permissions, and providing a native menu bar presence.
+
 ## Linux
 
 systemd with dedicated service user and full security hardening:
