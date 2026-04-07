@@ -89,9 +89,11 @@ just build darwin amd64       # macOS Intel
 just build-all                # All release targets
 ```
 
-The public GitHub release workflow builds native archives for the
-supported Linux and macOS targets, attaches them to the tagged release,
-emits SHA-256 checksums, and publishes a multi-arch container image.
+Release archives are prepared on a local macOS release workstation with the
+`just` release recipes. That keeps Developer ID signing and Apple notarization
+in local control while still producing Linux `amd64` and `arm64` artifacts for
+GitHub Releases. The tagged GitHub workflow publishes the multi-arch container
+image and its provenance attestation.
 
 ## Container
 

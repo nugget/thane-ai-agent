@@ -533,18 +533,79 @@ release-archive-linux-docker version target_arch:
     archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
 
+# Verify that the locally prepared release payload is ready to upload.
+[group('release-engineering')]
+release-upload-validate version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    assets=(
+        "{{release-dir}}/thane_${version}_darwin_amd64.zip"
+        "{{release-dir}}/thane_${version}_darwin_arm64.zip"
+        "{{release-dir}}/thane_${version}_linux_amd64.tar.gz"
+        "{{release-dir}}/thane_${version}_linux_arm64.tar.gz"
+        "{{release-dir}}/thane_${version}_checksums.txt"
+    )
+
+    missing=0
+    for asset in "${assets[@]}"; do
+        if [ ! -f "$asset" ]; then
+            echo "Missing release asset: $asset" >&2
+            missing=1
+        fi
+    done
+
+    if [ "$missing" -ne 0 ]; then
+        echo "Run 'just release-breakpoint ${version}' on the macOS release workstation before uploading assets." >&2
+        exit 1
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "GitHub CLI (gh) is required for release uploads" >&2
+        exit 1
+    fi
+
+    gh auth status >/dev/null
+
+# Create or update the GitHub release from locally prepared archives.
+[group('release-engineering')]
+release-upload version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    tag="v${version}"
+    assets=(
+        "{{release-dir}}/thane_${version}_darwin_amd64.zip"
+        "{{release-dir}}/thane_${version}_darwin_arm64.zip"
+        "{{release-dir}}/thane_${version}_linux_amd64.tar.gz"
+        "{{release-dir}}/thane_${version}_linux_arm64.tar.gz"
+        "{{release-dir}}/thane_${version}_checksums.txt"
+    )
+
+    just --quiet release-upload-validate "$version"
+
+    create_args=("${tag}" --verify-tag --title "${tag}" --generate-notes)
+    if printf '%s' "$version" | grep -q -- '-'; then
+        create_args+=(--prerelease)
+    fi
+
+    if ! gh release view "$tag" >/dev/null 2>&1; then
+        gh release create "${create_args[@]}"
+    fi
+
+    gh release upload "$tag" "${assets[@]}" --clobber
+
 # Run the full local release dress rehearsal, including local signing
 # and optional Apple notarization when configured, but stop before any
 # GitHub publication steps such as tag push, release upload, or
 # container publishing.
 [group('release-engineering')]
-release-breakpoint version target_os=host_os target_arch=host_arch cc="" container_tag="thane:release-breakpoint":
+release-breakpoint version container_tag="thane:release-breakpoint":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
-    target_os="{{target_os}}"
-    target_arch="{{target_arch}}"
-    cc="{{cc}}"
     container_tag="{{container_tag}}"
 
     version="${version#v}"
@@ -554,15 +615,13 @@ release-breakpoint version target_os=host_os target_arch=host_arch cc="" contain
         exit 1
     fi
 
+    test "{{host_os}}" = "darwin" || { echo "release-breakpoint must run on a macOS release workstation"; exit 1; }
     test -z "$(git status --short)" || { echo "Worktree must be clean before a release breakpoint run"; exit 1; }
 
     just ci
 
-    if [ -n "$cc" ]; then
-        just release-archive "v${version}" "$target_os" "$target_arch" "$cc"
-    else
-        just release-archive "v${version}" "$target_os" "$target_arch"
-    fi
+    just release-archive "v${version}" darwin amd64
+    just release-archive "v${version}" darwin arm64
     just release-archive-linux-docker "v${version}" amd64
     just release-archive-linux-docker "v${version}" arm64
     just release-checksums "v${version}"
@@ -573,15 +632,16 @@ release-breakpoint version target_os=host_os target_arch=host_arch cc="" contain
     echo ""
     echo "Local release breakpoint complete."
     echo "  Archives/checksums: {{release-dir}}/"
-    echo "  Included archives: {{target_os}}/{{target_arch}}, linux/amd64, linux/arm64"
+    echo "  Included archives: darwin/amd64, darwin/arm64, linux/amd64, linux/arm64"
     echo "  Container smoke tag: $container_tag"
     echo ""
-    echo "Nothing was tagged, pushed, or published to GitHub."
+    echo "Nothing was tagged, pushed, or uploaded to GitHub."
     echo "If THANE_NOTARY_PROFILE was set, Apple notarization was completed during this run."
     echo "Next off-machine step when ready:"
     echo "  just release v${version}"
 
-# Tag main for release and let GitHub Actions publish assets and containers
+# Tag main for release, upload locally prepared release assets, and let
+# GitHub Actions publish the container image.
 [group('release-engineering')]
 release version:
     #!/usr/bin/env bash
@@ -599,6 +659,8 @@ release version:
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
     test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main"; exit 1; }
 
+    just --quiet release-upload-validate "$tag"
+
     git fetch origin main --tags
     test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
     if git rev-parse "$tag" >/dev/null 2>&1; then
@@ -610,11 +672,13 @@ release version:
 
         git push origin "$tag"
         echo "Tag $tag already exists at the current commit. Treating release as idempotent."
-        echo "If the prior GitHub release workflow failed, rerun or repair it separately."
+        just release-upload "$tag"
+        echo "Uploaded local release archives/checksums. GitHub Actions can publish or republish the container image separately."
         exit 0
     fi
 
     just ci
     git tag -a "$tag" -m "Release $tag"
     git push origin "$tag"
-    echo "Pushed $tag. GitHub Actions will build release archives, attach them to the GitHub release, and publish the container image."
+    just release-upload "$tag"
+    echo "Pushed $tag, uploaded local release archives/checksums, and triggered GitHub Actions to publish the container image."
