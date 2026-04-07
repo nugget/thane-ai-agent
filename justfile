@@ -589,6 +589,7 @@ release version:
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    head_commit="$(git rev-parse HEAD)"
 
     if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
@@ -599,8 +600,19 @@ release version:
     test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main"; exit 1; }
 
     git fetch origin main --tags
-    test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
-    ! git rev-parse "$tag" >/dev/null 2>&1 || { echo "Tag already exists: $tag"; exit 1; }
+    test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        tag_commit="$(git rev-parse "$tag^{commit}")"
+        if [ "$tag_commit" != "$head_commit" ]; then
+            echo "Tag already exists but points to $tag_commit; expected $head_commit" >&2
+            exit 1
+        fi
+
+        git push origin "$tag"
+        echo "Tag $tag already exists at the current commit. Treating release as idempotent."
+        echo "If the prior GitHub release workflow failed, rerun or repair it separately."
+        exit 0
+    fi
 
     just ci
     git tag -a "$tag" -m "Release $tag"
