@@ -4,7 +4,9 @@
 
 - **[Go](https://go.dev/) 1.24+** — for building from source
 - **[just](https://just.systems/)** — command runner (replaces Makefiles)
-- **[Ollama](https://ollama.ai/)** — local model inference, at least one model pulled
+- **At least one model provider** — [Ollama](https://ollama.ai/),
+  [LM Studio](https://lmstudio.ai/), or an
+  [Anthropic](https://www.anthropic.com/) API key
 - **[Home Assistant](https://www.home-assistant.io/)** — with a long-lived access token
 - **MQTT broker** — typically the Mosquitto add-on in Home Assistant
 
@@ -13,6 +15,9 @@ how Thane perceives and acts in the physical world. MQTT is the telemetry
 bus — how Thane publishes its own state as HA-discoverable entities. See
 [Philosophy: Why Home Assistant](../understanding/philosophy.md#why-home-assistant)
 for the reasoning.
+
+> **Future:** Self-managed Home Assistant in a Docker container is on the
+> roadmap for operators who don't already run HA.
 
 ## Build
 
@@ -39,10 +44,6 @@ persona. Edit `~/Thane/config.yaml` for your setup.
 **Required settings:**
 
 ```yaml
-models:
-  ollama_url: http://localhost:11434
-  default: your-preferred-model
-
 homeassistant:
   url: http://homeassistant.local:8123
   token: your_long_lived_access_token
@@ -51,12 +52,25 @@ mqtt:
   broker: tcp://homeassistant.local:1883
 ```
 
-**Optional cloud model support:**
+**Model providers** (configure at least one):
 
 ```yaml
+# Local models via Ollama (recommended for delegation)
+models:
+  ollama_url: http://localhost:11434
+
+# Local models via LM Studio
+models:
+  lmstudio_url: http://localhost:1234
+
+# Cloud models via Anthropic
 anthropic:
   api_key: sk-ant-...
 ```
+
+Most operators run a local provider for delegation (cheap, fast tool
+execution) and optionally add Anthropic for complex reasoning. See
+[Your First Thane](guide.md) for hardware and model sizing guidance.
 
 See [Configuration](configuration.md) for a guide by concern, or
 `examples/config.example.yaml` for the full field reference.
@@ -75,13 +89,9 @@ just serve
 ```
 
 The server starts three listeners:
-- `http://localhost:8080` — Native API (OpenAI-compatible) + web dashboard
+- `http://localhost:8080` — Native API (OpenAI-compatible) + operational dashboard
 - `http://localhost:11434` — Ollama-compatible API (for Home Assistant)
 - `http://localhost:8843` — CardDAV server (for contact sync)
-
-## Web Chat
-
-Thane includes a built-in web chat interface at `http://localhost:8080/chat`.
 
 ## Connect to Home Assistant
 

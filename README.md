@@ -9,9 +9,9 @@
 
 > An autonomous AI agent that learns, remembers, and acts.
 
-**Thane** connects language models to Home Assistant, transforming thousands of real-time sensor readings into coherent awareness. The AI doesn't just read values — it understands that an open garage door for two hours is unusual, that someone in the kitchen at 2am might not want bright lights, and that the dryer finishing three hours ago but still drawing power is worth mentioning. Persistent memory means it learns your home, your preferences, and your routines over time.
+Your home already generates thousands of data points every hour — temperature sensors, motion detectors, door states, power draws. **Thane** is an AI agent that actually understands them. It knows an open garage door for two hours is unusual, that someone in the kitchen at 2am doesn't want bright lights, and that the dryer finishing three hours ago but still drawing power is worth mentioning. It learns your home, your preferences, and your routines through conversation — and it remembers.
 
-Your data stays on your hardware, behind your firewall. Thane runs entirely on local models via Ollama — cloud models are available for complex reasoning but nothing requires them. Single binary, written in Go. No Python environments, no dependency hell, no accounts to create.
+Everything runs on your hardware, behind your firewall. Thane works with any model runner that speaks a standard inference API — local or cloud, your choice. Written in Go. Single binary. No Python, no containers, no accounts to create.
 
 ## What Makes Thane Different
 
@@ -19,7 +19,7 @@ Your data stays on your hardware, behind your firewall. Thane runs entirely on l
 
 **Memory that persists.** Tell it once that you like the lights dim after 10pm and it just knows. Facts, preferences, routines — all learned through natural conversation and remembered across restarts.
 
-**Private by architecture.** Everything runs locally. Every conversation, every fact, every contact lives in SQLite on your machine. Privacy is structural, not a policy promise.
+**Private by architecture.** Every conversation, every fact, every contact lives in SQLite on your machine. Cloud models are available but nothing requires them. Privacy is structural, not a policy promise.
 
 **Smart about cost.** The frontier model thinks; a small free local model does the work. Delegation keeps 90%+ of tool calls at zero API cost.
 

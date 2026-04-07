@@ -45,13 +45,13 @@ is really about **which AI models you want to run**.
 - An Anthropic API key (~$3/million input tokens for Claude Sonnet)
 - Good for: trying Thane without hardware investment
 
-**Option B: Local models via Ollama (recommended)**
+**Option B: Local models (recommended)**
 - A machine with enough RAM for your chosen model (see below)
-- Ollama installed and running
+- A local runner: [Ollama](https://ollama.ai/) or [LM Studio](https://lmstudio.ai/)
 - Good for: privacy, zero ongoing cost, real-time response
 
 **Option C: Hybrid (what we actually recommend)**
-- Local Ollama for fast, cheap delegation tasks
+- Local runner (Ollama or LM Studio) for fast, cheap delegation tasks
 - Cloud API key for complex reasoning when needed
 - Thane's router picks the right model automatically
 
@@ -295,8 +295,8 @@ to replicate. It feels less like a tool and more like a knowledgeable helper.
 ## Common Questions
 
 **Q: Is my data sent to the cloud?**
-Only if you configure a cloud model (Anthropic, etc.). With Ollama-only
-setup, everything stays local. Even with cloud models, Thane only sends
+Only if you configure a cloud provider (Anthropic, etc.). With local-only
+setup, everything stays on your hardware. Even with cloud models, Thane only sends
 conversation context — not your full HA state or credentials.
 
 **Q: Can Thane break my HA setup?**

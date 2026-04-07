@@ -6,8 +6,9 @@
 
 ### Local-First, Cloud-Optional
 
-Thane runs entirely on Ollama. Every conversation stays on your hardware.
-Cloud models are available for complex reasoning, but nothing requires them.
+Thane can run entirely on local model runners. Every conversation stays on
+your hardware. Cloud models are available for complex reasoning, but
+nothing requires them.
 
 ### Memory as Foundation
 

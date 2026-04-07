@@ -3,7 +3,7 @@
 Welcome. Thane is an autonomous AI agent written in Go that connects
 language models to Home Assistant, turning thousands of real-time sensor
 readings into coherent environmental awareness. It runs on local models
-via Ollama, optionally augmented by cloud models for complex reasoning.
+optionally augmented by cloud models for complex reasoning.
 Single binary, SQLite storage, no runtime dependencies.
 
 If you're here to understand the project, start with

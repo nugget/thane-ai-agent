@@ -76,22 +76,28 @@ you have a chatbot. With it, you have awareness.
 Your data stays on your hardware, behind your firewall. This isn't a
 compromise — it's the design intent.
 
-Thane runs entirely on local models via Ollama. Every conversation, every
-fact it learns, every contact it manages lives in SQLite databases on your
-machine. Cloud models are available for complex reasoning when you want them,
-but nothing requires them. There is no telemetry, no phone-home, no account
-to create.
+Thane works with any model runner that speaks a standard inference API.
+Every conversation, every fact it learns, every contact it manages lives
+in SQLite databases on your machine. Cloud models are available when you
+want them, but nothing requires them. There is no telemetry, no
+phone-home, no account to create.
+
+Interoperability is the philosophy. Rather than coupling to a single
+provider, Thane speaks the protocols the ecosystem already uses —
+OpenAI-compatible chat completions, Ollama's API, and LM Studio's
+extensions. As new runners and providers emerge, they slot in without
+architectural changes.
 
 The local-first architecture means privacy is structural, not a policy
-promise. There's no trust decision about what a vendor does with your data
-because your data never leaves your network. The code is open. The databases
-are SQLite files you can inspect with any tool. The configuration is a YAML
-file on your filesystem.
+promise. There's no trust decision about what a vendor does with your
+data because your data never leaves your network. The code is open. The
+databases are SQLite files you can inspect with any tool. The
+configuration is a YAML file on your filesystem.
 
 For operators who want the intelligence of frontier models without
 compromising privacy, Thane's hybrid routing sends only the conversation
-context needed for a specific request — not your full home state, not your
-credentials, not your history. And even that is opt-in.
+context needed for a specific request — not your full home state, not
+your credentials, not your history. And even that is opt-in.
 
 ## The Core Insight
 

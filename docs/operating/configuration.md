@@ -47,7 +47,7 @@ anthropic:
 ```
 
 Optional. Enables cloud models for complex reasoning. Without this, Thane
-runs entirely on local Ollama models.
+runs entirely on local models.
 
 ## Home Assistant
 
