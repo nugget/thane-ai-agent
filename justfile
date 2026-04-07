@@ -682,6 +682,7 @@ publish-release version:
     version="${version#v}"
     tag="v${version}"
     head_commit="$(git rev-parse HEAD)"
+    force_release="${THANE_RELEASE_FORCE:-false}"
 
     if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
@@ -689,12 +690,17 @@ publish-release version:
     fi
 
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
-    test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main"; exit 1; }
 
     just --quiet release-github-check "$tag"
 
     git fetch origin main --tags
-    test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release"; exit 1; }
+    if [ "$force_release" = "true" ]; then
+        echo "THANE_RELEASE_FORCE=true: bypassing main-branch and origin/main release guards for release-engineering testing."
+    else
+        test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "Release tags must be cut from main (or set THANE_RELEASE_FORCE=true for releng testing)"; exit 1; }
+        test "$head_commit" = "$(git rev-parse origin/main)" || { echo "Local main must match origin/main before release (or set THANE_RELEASE_FORCE=true for releng testing)"; exit 1; }
+    fi
+
     if git rev-parse "$tag" >/dev/null 2>&1; then
         tag_commit="$(git rev-parse "$tag^{commit}")"
         if [ "$tag_commit" != "$head_commit" ]; then
