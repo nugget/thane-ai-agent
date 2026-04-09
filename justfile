@@ -13,6 +13,7 @@ thane-home := home_directory() / "Thane"
 install-prefix := if os() == "macos" { env("INSTALL_PREFIX", thane-home) } else { env("INSTALL_PREFIX", "/usr/local") }
 release-dir := "dist/release"
 codesign-identity := env("THANE_CODESIGN_IDENTITY", "-")
+installer-identity := env("THANE_INSTALLER_IDENTITY", "")
 codesign-options := env("THANE_CODESIGN_OPTIONS", "runtime")
 codesign-timestamp := env("THANE_CODESIGN_TIMESTAMP", "true")
 notary-profile := env("THANE_NOTARY_PROFILE", "")
@@ -442,15 +443,29 @@ release-sign-macos binary identity=codesign-identity options=codesign-options ti
     codesign --verify --verbose=2 "$binary"
     codesign -dv --verbose=4 "$binary"
 
-[doc("Building block: notarize a packaged macOS archive")]
+[doc("Building block: notarize a packaged macOS release artifact")]
 [group('release-engineering')]
 [macos]
 release-notarize-macos archive profile=notary-profile:
     test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
+    test -n "{{installer-identity}}" || (echo "Notarization of macOS installer packages requires THANE_INSTALLER_IDENTITY to name a Developer ID Installer certificate" && exit 1)
     test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
     xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
 
-[doc("Building block: build one release archive for a target")]
+[doc("Building block: package a macOS binary as a signed flat installer product archive")]
+[group('release-engineering')]
+[macos]
+release-package-macos-pkg version target_arch binary installer_identity=installer-identity:
+    scripts/package-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{binary}}" "{{release-dir}}" "{{installer_identity}}"
+
+[doc("Building block: staple and validate a notarized macOS installer package")]
+[group('release-engineering')]
+[macos]
+release-staple-macos archive:
+    xcrun stapler staple "{{archive}}"
+    xcrun stapler validate "{{archive}}"
+
+[doc("Building block: build one release artifact for a target")]
 [group('release-engineering')]
 release-build-archive version target_os=host_os target_arch=host_arch cc="":
     #!/usr/bin/env bash
@@ -468,19 +483,25 @@ release-build-archive version target_os=host_os target_arch=host_arch cc="":
         THANE_VERSION="v${version}" just build "$target_os" "$target_arch"
     fi
 
-    if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
+    if [ "$target_os" = "darwin" ]; then
+        test "{{host_os}}" = "darwin" || { echo "release-build-archive for darwin targets requires a macOS host"; exit 1; }
         just release-sign-macos "$binary"
-    fi
-
-    archive="$(scripts/package-release.sh "$version" "$target_os" "$target_arch" "$binary" "{{release-dir}}")"
-
-    if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ] && [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
-        just release-notarize-macos "$archive"
+        if [ -n "${THANE_NOTARY_PROFILE:-}" ] && { [ -z "{{installer-identity}}" ] || [ "{{installer-identity}}" = "-" ]; }; then
+            echo "Set THANE_INSTALLER_IDENTITY to a Developer ID Installer certificate before notarizing macOS release packages." >&2
+            exit 1
+        fi
+        archive="$(just --quiet release-package-macos-pkg "v${version}" "$target_arch" "$binary" | tail -n 1)"
+        if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
+            just release-notarize-macos "$archive"
+            just release-staple-macos "$archive"
+        fi
+    else
+        archive="$(scripts/package-release.sh "$version" "$target_os" "$target_arch" "$binary" "{{release-dir}}")"
     fi
 
     printf '%s\n' "$archive"
 
-[doc("Building block: write checksums for prepared archives")]
+[doc("Building block: write checksums for prepared release artifacts")]
 [group('release-engineering')]
 release-write-checksums version:
     #!/usr/bin/env bash
@@ -491,13 +512,13 @@ release-write-checksums version:
 
     cd "{{release-dir}}"
     shopt -s nullglob
-    archives=("./thane_${version}_"*.tar.gz "./thane_${version}_"*.zip)
+    archives=("./thane_${version}_"*.tar.gz "./thane_${version}_"*.pkg)
     if [ "${#archives[@]}" -eq 0 ]; then
-        echo "No release archives found for version ${version} in {{release-dir}}" >&2
+        echo "No release artifacts found for version ${version} in {{release-dir}}" >&2
         exit 1
     fi
     if [ "${#archives[@]}" -ne 4 ]; then
-        echo "Expected 4 release archives for version ${version}, found ${#archives[@]} in {{release-dir}}" >&2
+        echo "Expected 4 release artifacts for version ${version}, found ${#archives[@]} in {{release-dir}}" >&2
         printf '  %s\n' "${archives[@]}" >&2
         exit 1
     fi
@@ -549,8 +570,8 @@ release-github-check version:
     metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
     checksum_path="{{release-dir}}/thane_${version}_checksums.txt"
     assets=(
-        "{{release-dir}}/thane_${version}_darwin_amd64.zip"
-        "{{release-dir}}/thane_${version}_darwin_arm64.zip"
+        "{{release-dir}}/thane_${version}_darwin_amd64.pkg"
+        "{{release-dir}}/thane_${version}_darwin_arm64.pkg"
         "{{release-dir}}/thane_${version}_linux_amd64.tar.gz"
         "{{release-dir}}/thane_${version}_linux_arm64.tar.gz"
         "{{release-dir}}/thane_${version}_checksums.txt"
@@ -589,15 +610,15 @@ release-github-check version:
 
     checksum_assets="$(awk '{print $NF}' "$checksum_path" | LC_ALL=C sort)"
     expected_checksum_assets=(
-        "thane_${version}_darwin_amd64.zip"
-        "thane_${version}_darwin_arm64.zip"
+        "thane_${version}_darwin_amd64.pkg"
+        "thane_${version}_darwin_arm64.pkg"
         "thane_${version}_linux_amd64.tar.gz"
         "thane_${version}_linux_arm64.tar.gz"
     )
     checksum_asset_count="$(printf '%s\n' "$checksum_assets" | sed '/^$/d' | wc -l | tr -d ' ')"
 
     if [ "$checksum_asset_count" -ne "${#expected_checksum_assets[@]}" ]; then
-        echo "Checksum file $checksum_path should describe ${#expected_checksum_assets[@]} release archives, found ${checksum_asset_count} entries." >&2
+        echo "Checksum file $checksum_path should describe ${#expected_checksum_assets[@]} release artifacts, found ${checksum_asset_count} entries." >&2
         printf '  %s\n' "$checksum_assets" >&2
         exit 1
     fi
@@ -620,8 +641,8 @@ release-github-upload version target_commit="":
     target_commit="{{target_commit}}"
     release_exists=0
     assets=(
-        "{{release-dir}}/thane_${version}_darwin_amd64.zip"
-        "{{release-dir}}/thane_${version}_darwin_arm64.zip"
+        "{{release-dir}}/thane_${version}_darwin_amd64.pkg"
+        "{{release-dir}}/thane_${version}_darwin_arm64.pkg"
         "{{release-dir}}/thane_${version}_linux_amd64.tar.gz"
         "{{release-dir}}/thane_${version}_linux_arm64.tar.gz"
         "{{release-dir}}/thane_${version}_checksums.txt"
@@ -698,7 +719,7 @@ prepare-release version container_tag="thane:prepare-release":
 
     mkdir -p "{{release-dir}}"
     rm -f \
-        "{{release-dir}}/thane_${version}_"*.zip \
+        "{{release-dir}}/thane_${version}_"*.pkg \
         "{{release-dir}}/thane_${version}_"*.tar.gz \
         "{{release-dir}}/thane_${version}_checksums.txt" \
         "{{release-dir}}/.thane_${version}_prepared.env"
@@ -722,13 +743,13 @@ prepare-release version container_tag="thane:prepare-release":
 
     echo ""
     echo "Local release preparation complete."
-    echo "  Archives/checksums: {{release-dir}}/"
+    echo "  Release artifacts/checksums: {{release-dir}}/"
     echo "  Release metadata: $metadata_path"
-    echo "  Included archives: darwin/amd64, darwin/arm64, linux/amd64, linux/arm64"
+    echo "  Included release artifacts: darwin/amd64 pkg, darwin/arm64 pkg, linux/amd64 tar.gz, linux/arm64 tar.gz"
     echo "  Container smoke tag: $container_tag"
     echo ""
     echo "Nothing was tagged, pushed, or uploaded to GitHub."
-    echo "If THANE_NOTARY_PROFILE was set, Apple notarization was completed during this run."
+    echo "If THANE_NOTARY_PROFILE was set, Apple notarization and stapling were completed during this run."
     echo "Next off-machine step when ready:"
     echo "  just publish-release v${version}"
 
@@ -802,12 +823,12 @@ publish-release version:
 
         echo "Remote tag $tag already exists at the current commit. Treating publish as idempotent."
         just release-github-upload "$tag"
-        echo "Uploaded local release archives/checksums. GitHub Actions can publish or republish the container image separately."
+        echo "Uploaded local release artifacts/checksums. GitHub Actions can publish or republish the container image separately."
         exit 0
     fi
 
     just release-github-upload "$tag" "$head_commit"
-    echo "Created $tag via the GitHub release API, uploaded local release archives/checksums, and triggered GitHub Actions to publish the container image."
+    echo "Created $tag via the GitHub release API, uploaded local release artifacts/checksums, and triggered GitHub Actions to publish the container image."
 
 [private]
 macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
@@ -817,6 +838,11 @@ macos-sign binary identity=codesign-identity options=codesign-options timestamp=
 [macos]
 macos-notarize archive profile=notary-profile:
     just release-notarize-macos "{{archive}}" "{{profile}}"
+
+[private]
+[macos]
+macos-staple archive:
+    just release-staple-macos "{{archive}}"
 
 [private]
 release-archive version target_os=host_os target_arch=host_arch cc="":

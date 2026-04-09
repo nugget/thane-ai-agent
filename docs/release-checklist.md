@@ -25,6 +25,7 @@ easy to roll back.
 - [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
 - [ ] macOS installer signing credentials are set (`THANE_INSTALLER_IDENTITY`) if shipping signed `.pkg` artifacts
 - [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized/stapled macOS installer package
+- [ ] macOS installer packages inspect cleanly (`pkgutil --check-signature`, distribution metadata, install domain, and architecture gating all match the intended release)
 
 ## Documentation Audit
 
