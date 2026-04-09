@@ -41,7 +41,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown body content to write. Omit only when you want to preserve the existing body while normalizing metadata.",
+					"description": "Markdown body content to write. Omit to preserve the existing body; pass an empty string to intentionally clear it.",
 				},
 			},
 			"required": []string{"ref"},
@@ -53,14 +53,13 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			}
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
-			body, _ := args["body"].(string)
 			return dt.Write(ctx, documents.WriteArgs{
 				Ref:         ref,
 				Title:       title,
 				Description: description,
 				Tags:        documentStringSliceArg(args["tags"]),
 				Frontmatter: documentFrontmatterArg(args["frontmatter"]),
-				Body:        body,
+				Body:        optionalStringArg(args, "body"),
 			})
 		},
 	})
@@ -257,6 +256,15 @@ func numericValue(v any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func optionalStringArg(args map[string]any, key string) *string {
+	v, ok := args[key]
+	if !ok {
+		return nil
+	}
+	s, _ := v.(string)
+	return &s
 }
 
 func documentStringSliceArg(v any) []string {

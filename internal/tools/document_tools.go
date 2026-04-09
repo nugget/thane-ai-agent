@@ -15,7 +15,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_read",
-		Description: "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Use before changing a document when you need the full current state.",
+		Description: "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Large documents may be truncated by tool output limits, so use `doc_outline` plus `doc_section` when you need to navigate or read larger documents in full.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -32,7 +32,7 @@ type WriteArgs struct {
 	Description string              `json:"description,omitempty"`
 	Tags        []string            `json:"tags,omitempty"`
 	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
-	Body        string              `json:"body"`
+	Body        *string             `json:"body,omitempty"`
 }
 
 // EditArgs updates part of a managed document without leaving the
@@ -116,22 +116,22 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	}
 
 	existed := false
-	var existingBody string
 	var existingRecord *DocumentRecord
 	if _, err := os.Stat(absPath); err == nil {
 		existed = true
-		record, _, body, readErr := s.readDocumentFile(absPath, root, relPath)
+		record, _, _, readErr := s.readDocumentFile(absPath, root, relPath)
 		if readErr != nil {
 			return nil, readErr
 		}
 		existingRecord = record
-		existingBody = body
 	}
 
 	now := time.Now()
-	body := args.Body
-	if body == "" && existingRecord != nil {
-		body = existingBody
+	body := ""
+	if args.Body != nil {
+		body = *args.Body
+	} else if existingRecord != nil {
+		body = existingRecord.Body
 	}
 	meta := mergeDocumentFrontmatter(existingRecord, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 	raw := renderDocument(meta, body)
@@ -345,7 +345,9 @@ func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string
 	if err := s.upsertFile(ctx, root, relPath); err != nil {
 		return fmt.Errorf("refresh indexed document: %w", err)
 	}
+	s.refreshMu.Lock()
 	s.lastRefresh = time.Now()
+	s.refreshMu.Unlock()
 	return nil
 }
 

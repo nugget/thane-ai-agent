@@ -1,9 +1,15 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/documents"
 )
 
 func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {
@@ -51,4 +57,82 @@ func TestDocumentFrontmatterArgSupportsStringsAndArrays(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("documentFrontmatterArg(...) = %#v, want %#v", got, want)
 	}
+}
+
+func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	writeTool := reg.Get("doc_write")
+	if writeTool == nil {
+		t.Fatal("doc_write not registered")
+	}
+
+	_, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":   "kb:notes/handler.md",
+		"title": "Handler",
+		"body":  "Original body.",
+	})
+	if err != nil {
+		t.Fatalf("initial doc_write: %v", err)
+	}
+	before, err := store.Read(context.Background(), "kb:notes/handler.md")
+	if err != nil {
+		t.Fatalf("Read after initial doc_write: %v", err)
+	}
+
+	_, err = writeTool.Handler(context.Background(), map[string]any{
+		"ref":   "kb:notes/handler.md",
+		"title": "Handler Renamed",
+	})
+	if err != nil {
+		t.Fatalf("metadata-only doc_write: %v", err)
+	}
+	record, err := store.Read(context.Background(), "kb:notes/handler.md")
+	if err != nil {
+		t.Fatalf("Read after metadata-only doc_write: %v", err)
+	}
+	if record.Body != before.Body {
+		t.Fatalf("body after omitted-body doc_write = %q, want %q preserved", record.Body, before.Body)
+	}
+
+	_, err = writeTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:notes/handler.md",
+		"body": "",
+	})
+	if err != nil {
+		t.Fatalf("empty-body doc_write: %v", err)
+	}
+	record, err = store.Read(context.Background(), "kb:notes/handler.md")
+	if err != nil {
+		t.Fatalf("Read after empty-body doc_write: %v", err)
+	}
+	if record.Body != "" {
+		t.Fatalf("body after explicit empty-body doc_write = %q, want empty body", record.Body)
+	}
+}
+
+func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
+	t.Helper()
+
+	rootDir := t.TempDir()
+	kbDir := filepath.Join(rootDir, "kb")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+
+	reg := NewEmptyRegistry()
+	RegisterDocumentTools(reg, documents.NewTools(store))
+	return reg, store
 }

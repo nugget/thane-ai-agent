@@ -21,7 +21,7 @@ func TestStoreWriteAndReadManagedDocument(t *testing.T) {
 		Title:       "Intro",
 		Description: "Welcome note",
 		Tags:        []string{"meta", "index"},
-		Body:        "# Intro\n\nHelpful body.",
+		Body:        stringPtr("# Intro\n\nHelpful body."),
 	})
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -59,7 +59,7 @@ func TestStoreEditUpsertSectionPreservesCreated(t *testing.T) {
 	_, err := store.Write(ctx, WriteArgs{
 		Ref:   "kb:system.md",
 		Title: "System",
-		Body:  "# System\n\nBase body.",
+		Body:  stringPtr("# System\n\nBase body."),
 	})
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -103,7 +103,7 @@ func TestStoreJournalUpdatePrunesOldWindows(t *testing.T) {
 	_, err := store.Write(ctx, WriteArgs{
 		Ref:   "kb:metacog/journal.md",
 		Title: "Metacog Journal",
-		Body: strings.Join([]string{
+		Body: stringPtr(strings.Join([]string{
 			"## 2000-01-01",
 			"",
 			"- old one",
@@ -111,7 +111,7 @@ func TestStoreJournalUpdatePrunesOldWindows(t *testing.T) {
 			"## 2000-01-02",
 			"",
 			"- old two",
-		}, "\n"),
+		}, "\n")),
 	})
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -165,4 +165,58 @@ func newMutationStore(t *testing.T) (*Store, string) {
 		t.Fatalf("NewStore: %v", err)
 	}
 	return store, kbDir
+}
+
+func TestStoreWritePreservesOrClearsBodyByIntent(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:   "kb:notes/body.md",
+		Title: "Body",
+		Body:  stringPtr("Original body."),
+	})
+	if err != nil {
+		t.Fatalf("initial Write: %v", err)
+	}
+	before, err := store.Read(ctx, "kb:notes/body.md")
+	if err != nil {
+		t.Fatalf("Read after initial Write: %v", err)
+	}
+
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:   "kb:notes/body.md",
+		Title: "Body Renamed",
+	})
+	if err != nil {
+		t.Fatalf("metadata-only Write: %v", err)
+	}
+	record, err := store.Read(ctx, "kb:notes/body.md")
+	if err != nil {
+		t.Fatalf("Read after metadata-only Write: %v", err)
+	}
+	if record.Body != before.Body {
+		t.Fatalf("body after omitted-body write = %q, want %q preserved", record.Body, before.Body)
+	}
+
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:  "kb:notes/body.md",
+		Body: stringPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("clear-body Write: %v", err)
+	}
+	record, err = store.Read(ctx, "kb:notes/body.md")
+	if err != nil {
+		t.Fatalf("Read after clear-body Write: %v", err)
+	}
+	if record.Body != "" {
+		t.Fatalf("body after explicit empty-body write = %q, want empty body", record.Body)
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
