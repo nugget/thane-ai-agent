@@ -76,7 +76,7 @@ What it does:
 - checks the package signature on the remote host
 - installs it into `CurrentUserHomeDirectory`
 - restarts the launch agent
-- verifies the installed binary with `~/Thane/bin/thane version`
+- polls the remote Thane API until `/v1/version` reports the expected build version
 
 This path assumes the remote host is also macOS Tahoe and that Thane is run
 from a dedicated account whose normal home-scoped install location is
@@ -93,6 +93,7 @@ Useful variants:
 just build-macos-pkg
 just deploy-macos-pkg aimee@pocket.hollowoak.net arm64
 just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng 'launchctl kickstart -k gui/$(id -u)/info.nugget.thane'
+just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng '' http://127.0.0.1:18080/v1/version 90
 ```
 
 ## Why Pkg-Based Deploys

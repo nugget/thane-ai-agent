@@ -68,7 +68,7 @@ easy to roll back.
 - [ ] One Home Assistant request succeeds if HA is production-critical
 - [ ] One scheduler/background loop completes after restart
 - [ ] Dashboard, request viewer, and registry windows load cleanly enough for incident response
-- [ ] If a live host was used for pkg validation, `just deploy-macos-pkg user@host` completed and `~/Thane/bin/thane version` on that host reports the intended build
+- [ ] If a live host was used for pkg validation, `just deploy-macos-pkg user@host` completed and the target Thane API reported the intended build version after restart
 
 ## Log Review
 

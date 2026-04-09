@@ -369,11 +369,11 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
 build-macos-pkg version="" target_arch=host_arch output_dir=pkg-dir:
     scripts/releng/build-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{output_dir}}" true
 
-[doc("Operator path: build a signed macOS pkg, install it on a remote Tahoe host via SSH, and restart Thane there")]
+[doc("Operator path: build a signed macOS pkg, install it on a remote Tahoe host via SSH, restart Thane there, and verify the live API version")]
 [group('deploy')]
 [macos]
-deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" restart_cmd="":
-    scripts/releng/deploy-macos-pkg.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{restart_cmd}}"
+deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" restart_cmd="" verify_url="http://127.0.0.1:8080/v1/version" verify_timeout_seconds="60":
+    scripts/releng/deploy-macos-pkg.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{restart_cmd}}" "{{verify_url}}" "{{verify_timeout_seconds}}"
 
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
