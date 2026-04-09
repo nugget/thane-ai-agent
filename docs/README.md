@@ -26,7 +26,7 @@ complete onboarding guide for Home Assistant users.
 - **[Context Layers](understanding/context-layers.md)** — How the system
   prompt is assembled from persona, talents, knowledge, and session state
 - **[Document Roots](understanding/document-roots.md)** — How `paths:`
-  becomes named local corpora that the model can rediscover and browse
+  becomes named local document collections that Thane can keep track of
 - **[Trust Architecture](understanding/trust-architecture.md)** — Safety
   through structural enforcement, not prompt compliance
 - **[Glossary](understanding/glossary.md)** — Canonical definitions for

@@ -1,8 +1,10 @@
 # Document Roots
 
-Thane treats local markdown corpora as **managed document roots**.
+When Thane works well, your documents feel easy to refer to and easy to
+find again.
 
-A document root is just a named path prefix from config:
+That starts with **document roots**: named directories in config that
+tell Thane which local collections matter.
 
 ```yaml
 paths:
@@ -11,103 +13,59 @@ paths:
   dossiers: ~/Vaults/private-dossiers
 ```
 
-Each entry does two jobs at once:
+Each entry gives a directory a stable identity. Instead of treating your
+files as one anonymous pile, Thane can understand that some notes live
+in a knowledge base, some are scratch work, and some belong to a more
+private long-form collection.
 
-- it creates a semantic reference prefix such as `kb:network/vlans.md`
-- it defines a local corpus that the `documents` capability can browse,
-  search, and reopen without knowing the exact path in advance
+## Why This Helps
 
-This is one of the core design ideas in Thane: local corpora should be
-named, rooted, and discoverable by the model, not treated as anonymous
-filesystem blobs.
+The point is not to make you think about implementation details. The
+point is to make everyday use feel smoother.
 
-## What Counts As A Root
+Good document roots help when:
 
-Any configured `paths:` entry that exists on disk is eligible.
+- you want Thane to keep track of a body of notes over time
+- you have several different kinds of material and want them kept
+  distinct
+- you create something today and want to be able to find it again later
+- you want to refer to a collection by name instead of by fragile paths
 
-That means users can add their own document roots without code changes.
-If you want Thane to reason over a new corpus, give it a prefix in
-config and point it at a directory.
+If you give a directory a stable root, Thane has a better chance of
+finding the right thing without you needing to remember the exact file
+location yourself.
 
-Examples:
+## What To Put In A Root
 
-- `kb:` for curated reference material
-- `generated:` for reports or model-produced durable outputs
-- `scratchpad:` for low-integrity working notes
-- `dossiers:` for long-form private reference documents
-- `research:` for imported project notes or external vault mirrors
+A document root should be a coherent collection, not just a convenient
+folder.
 
-The `core:` root is special. It is always derived from
-`{workspace.path}/core` and is not configured manually.
+Good examples:
 
-## Why This Exists
+- `kb:` for durable reference material
+- `scratchpad:` for rough working notes
+- `generated:` for reports and other machine-produced outputs
+- `dossiers:` for long-form background material on people, projects, or
+  places
+- `research:` for a project-specific note collection
 
-Without roots, the model has two bad choices:
+Less good examples:
 
-- brute-force file walking
-- guessing paths from memory
+- a giant home directory with unrelated files mixed together
+- a temporary folder that changes shape constantly
+- a directory whose contents you do not actually want Thane treating as
+  part of its working world
 
-Document roots give it a better path:
+The cleaner the boundary, the easier it is for Thane to stay oriented.
 
-1. identify the corpus
-2. browse or search within that root
-3. inspect an outline or section
-4. move to raw file reads or edits only when necessary
+## Adding Your Own Roots
 
-That is the purpose of the `documents` capability.
+You do not need any special indexing section or separate feature flag.
 
-## `documents` vs `files`
+If a directory is listed in `paths:` and exists on disk, it becomes one
+of Thane's managed local document collections.
 
-These capabilities are related, but they are not the same.
-
-- `documents` is for rediscovery and navigation
-- `files` is for direct raw reads and edits
-
-Use `documents` when the truth is local but the exact path has drifted
-out of mind. Use `files` when the document is already known and you need
-its raw content or need to modify it.
-
-Examples:
-
-- “Find the article about VLANs I wrote last month.”
-  This is `documents`.
-- “Read `kb:network/vlans.md`.”
-  This is `files`.
-- “Update the IoT section in `kb:network/vlans.md`.”
-  This is `files`.
-
-## What Gets Indexed
-
-The first document-provider slice indexes markdown files under each
-managed root and extracts:
-
-- title
-- summary
-- tags / frontmatter values
-- heading outline
-- per-section content boundaries
-- outbound markdown and wiki links
-
-This is enough for the model to recover a document it already created,
-find related material in the same root, and retrieve the right section
-without flooding context with whole-file reads.
-
-## Operator Guidance
-
-If you want a corpus to be usable as a first-class local knowledge
-surface:
-
-- give it a stable prefix in `paths:`
-- keep the directory rooted and coherent
-- prefer markdown files for now
-- use frontmatter tags when you want a local vocabulary the model can
-  discover via `doc_values`
-
-If the directory exists and is configured as a path root, Thane can
-treat it as a document corpus. You do not need a separate “enable
-indexing” switch.
-
-## Example
+Example:
 
 ```yaml
 workspace:
@@ -120,11 +78,35 @@ paths:
   research: ~/Work/research-notes
 ```
 
-With that config, the model can use semantic refs like:
+With a setup like this, you can gradually build several stable document
+collections without changing code or teaching Thane a new subsystem each
+time.
 
-- `kb:network/vlans.md`
-- `dossiers:people/alice.md`
-- `research:mcp/indexing-notes.md`
+## A Few Practical Guidelines
 
-And when it does not remember the exact path, it can still rediscover
-those corpora through the `documents` capability.
+- Prefer a small number of well-named roots over dozens of tiny ones.
+- Keep each root internally coherent.
+- Markdown is the best-supported format today.
+- If a collection matters enough that you want Thane to reuse it later,
+  give it a root instead of leaving it buried in a generic folder.
+- If a root is very high integrity or operationally sensitive, be
+  deliberate about how you want it managed and edited.
+
+## Special Case: `core`
+
+The `core:` root is reserved.
+
+It always comes from `{workspace.path}/core` and is not configured
+manually in `paths:`. That is where Thane's always-on identity and core
+reference files live.
+
+## The Human-Level Rule
+
+If you find yourself thinking:
+
+- “this directory is part of Thane's long-term world”
+- “I want to be able to refer to this collection by name”
+- “I do not want this to get lost just because the exact path slips my
+  mind”
+
+then it probably wants to be a document root.

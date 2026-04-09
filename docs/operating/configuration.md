@@ -166,18 +166,17 @@ paths:
   dossiers: ~/Vaults/private-dossiers
 ```
 
-`paths:` does more than create semantic prefixes. Each configured root
-that exists on disk also becomes part of Thane's managed local document
-corpus.
+Any directory listed in `paths:` becomes a named local collection that
+Thane can keep track of.
 
-That means custom roots automatically become available to the
-`documents` capability for rooted browse/search/section retrieval. You
-do not need a second indexing config block.
+This is how you teach Thane that a folder matters as part of its working
+world. You do not need a second indexing section or a separate enable
+switch.
 
-Use this for any local corpus you want the model to rediscover later:
+Good uses for custom roots:
 
 - knowledge bases
-- scratch work
+- scratch work you want to revisit
 - generated reports
 - dossiers
 - imported research notes
