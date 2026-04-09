@@ -159,10 +159,6 @@ type Spec struct {
 	// loops can set this to guarantee a reply.
 	FallbackContent string `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
 
-	// Outputs describe non-conversation observation targets such as the
-	// structured observation log, document journals, or MQTT topics.
-	Outputs []OutputTarget `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-
 	// Setup is called by the registry spawn helpers after [New] or
 	// [NewFromSpec] but before [Loop.Start].
 	Setup func(l *Loop) `yaml:"-" json:"-"`
@@ -262,7 +258,6 @@ func (s *Spec) ToConfig() Config {
 		Handler:                ns.Handler,
 		Hints:                  cloneStringMap(ns.Hints),
 		FallbackContent:        ns.FallbackContent,
-		Outputs:                cloneOutputTargets(ns.Outputs),
 		Setup:                  ns.Setup,
 		Metadata:               cloneStringMap(ns.Metadata),
 		ParentID:               ns.ParentID,

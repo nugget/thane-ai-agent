@@ -31,13 +31,17 @@ first becoming part of the persistent loop-definition registry. Reach
 for it when the loop is temporary, experimental, or tightly tied to the
 current moment.
 
-When a loop should leave a trail outside the current conversation, use
-configured output targets instead of making handlers invent their own
-delivery path. The built-in observation destinations are:
+For one-shot curiosity or side research, think in the same shape as a
+delegate:
 
-- structured observation log in the database
-- managed document journals
-- MQTT topics
+- use `operation: background_task`
+- set `completion: conversation` or `completion: channel`
+- let the result come back naturally when it is done
+
+When a loop should maintain durable state, do that inside the loop's own
+work with normal tools such as `doc_write`, `doc_edit`, or
+`doc_journal_update`. Do not invent a second persistence path when the
+document tools already express the artifact clearly.
 
 Prefer durable definitions for recurring services. Prefer ad hoc live
 spawns for temporary observers and one-off detached tasks.

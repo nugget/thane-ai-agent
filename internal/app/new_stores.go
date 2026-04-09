@@ -476,7 +476,6 @@ func (a *App) initStores(s *newState) error {
 	deps.launch = a.loopRegistry.Launch
 	deps.logger = logger
 	deps.eventBus = a.eventBus
-	deps.outputSink = a.loopTaskOutputSink()
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {

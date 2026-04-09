@@ -30,10 +30,7 @@ func newTestLoopRuntimeDeps(t *testing.T) *testLoopRuntimeDeps {
 		Task:       "Watch batteries.",
 		Operation:  looppkg.OperationService,
 		Completion: looppkg.CompletionNone,
-		Outputs: []looppkg.OutputTarget{
-			{Kind: looppkg.OutputTargetDocumentJournal, Ref: "generated:batteries/daily.md"},
-		},
-		Metadata: map[string]string{"category": "observer"},
+		Metadata:   map[string]string{"category": "observer"},
 	}, looppkg.Deps{Runner: runner})
 	if err != nil {
 		t.Fatalf("New(loopA): %v", err)
@@ -47,9 +44,6 @@ func newTestLoopRuntimeDeps(t *testing.T) *testLoopRuntimeDeps {
 		Task:       "Bridge MQTT events.",
 		Operation:  looppkg.OperationBackgroundTask,
 		Completion: looppkg.CompletionChannel,
-		Outputs: []looppkg.OutputTarget{
-			{Kind: looppkg.OutputTargetMQTTTopic, Topic: "thane/test/loops"},
-		},
 	}, looppkg.Deps{Runner: runner})
 	if err != nil {
 		t.Fatalf("New(loopB): %v", err)

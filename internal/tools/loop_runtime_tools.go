@@ -42,7 +42,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 			"properties": map[string]any{
 				"query": map[string]any{
 					"type":        "string",
-					"description": "Optional case-insensitive substring match against loop ID, name, parent ID, metadata values, and configured output refs/topics.",
+					"description": "Optional case-insensitive substring match against loop ID, name, parent ID, and metadata values.",
 				},
 				"state": map[string]any{
 					"type":        "string",
@@ -64,13 +64,13 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "spawn_loop",
-		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background tasks, or one-shot request/reply runs that do not belong in the durable loop-definition registry.",
+		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task with completion=conversation or completion=channel.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"launch": map[string]any{
 					"type":        "object",
-					"description": "Loops-ng launch object. Include spec, task, and any per-launch routing or completion overrides.",
+					"description": "Loops-ng launch object. Include spec, task, and any per-launch routing or completion overrides. The most common detached shape is a task plus spec.operation=background_task and spec.completion=conversation.",
 				},
 			},
 			"required": []string{"launch"},
@@ -231,11 +231,6 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 	}
 	if strings.Contains(strings.ToLower(status.ID), query) || strings.Contains(strings.ToLower(status.Name), query) || strings.Contains(strings.ToLower(status.ParentID), query) {
 		return true
-	}
-	for _, target := range status.Config.Outputs {
-		if strings.Contains(strings.ToLower(target.Ref), query) || strings.Contains(strings.ToLower(target.Topic), query) {
-			return true
-		}
 	}
 	for _, value := range status.Config.Metadata {
 		if strings.Contains(strings.ToLower(value), query) {

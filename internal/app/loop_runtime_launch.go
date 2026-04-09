@@ -16,14 +16,9 @@ func (a *App) launchLoop(ctx context.Context, launch looppkg.Launch) (looppkg.La
 	if dispatcher := a.ensureLoopCompletionDispatcher(); dispatcher != nil {
 		completionSink = dispatcher.Deliver
 	}
-	var outputSink looppkg.OutputSink
-	if outputs := a.ensureLoopOutputDispatcher(); outputs != nil {
-		outputSink = outputs.Deliver
-	}
 	return a.loopRegistry.Launch(ctx, launch, looppkg.Deps{
 		Runner:         runner,
 		CompletionSink: completionSink,
-		OutputSink:     outputSink,
 		Logger:         a.logger,
 		EventBus:       a.eventBus,
 	})

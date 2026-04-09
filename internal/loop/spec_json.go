@@ -30,7 +30,6 @@ type specJSON struct {
 	OnRetrigger            string            `json:"on_retrigger,omitempty"`
 	Hints                  map[string]string `json:"hints,omitempty"`
 	FallbackContent        string            `json:"fallback_content,omitempty"`
-	Outputs                []OutputTarget    `json:"outputs,omitempty"`
 	Metadata               map[string]string `json:"metadata,omitempty"`
 	ParentID               string            `json:"parent_id,omitempty"`
 }
@@ -62,7 +61,6 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		SupervisorQualityFloor: s.SupervisorQualityFloor,
 		Hints:                  s.Hints,
 		FallbackContent:        s.FallbackContent,
-		Outputs:                cloneOutputTargets(s.Outputs),
 		Metadata:               s.Metadata,
 		ParentID:               s.ParentID,
 	}
@@ -127,7 +125,6 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		OnRetrigger:            onRetrigger,
 		Hints:                  cloneStringMap(wire.Hints),
 		FallbackContent:        wire.FallbackContent,
-		Outputs:                cloneOutputTargets(wire.Outputs),
 		Metadata:               cloneStringMap(wire.Metadata),
 		ParentID:               wire.ParentID,
 	}

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -24,21 +23,5 @@ func (a *App) initLoopUsageStores(db *sql.DB) error {
 		return fmt.Errorf("initialize usage store: %w", err)
 	}
 	a.usageStore = usageStore
-
-	loopObservationStore, err := newLoopObservationStore(db)
-	if err != nil {
-		return fmt.Errorf("initialize loop observation store: %w", err)
-	}
-	a.loopObservationStore = loopObservationStore
 	return nil
-}
-
-func (a *App) loopTaskOutputSink() looppkg.OutputSink {
-	return func(ctx context.Context, delivery looppkg.OutputDelivery) error {
-		dispatcher := a.ensureLoopOutputDispatcher()
-		if dispatcher == nil {
-			return nil
-		}
-		return dispatcher.Deliver(ctx, delivery)
-	}
 }

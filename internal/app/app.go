@@ -24,7 +24,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/delegate"
-	"github.com/nugget/thane-ai-agent/internal/documents"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
@@ -86,7 +85,6 @@ type App struct {
 	loopDefinitionStore       *loopDefinitionStore
 	loopDefinitionPolicyStore *loopDefinitionPolicyStore
 	usageStore                *usage.Store
-	loopObservationStore      *loopObservationStore
 	schedStore                *scheduler.Store
 	sched                     *scheduler.Scheduler
 
@@ -149,9 +147,6 @@ type App struct {
 
 	// Media
 	mediaStore *media.MediaStore
-
-	// Managed documents and loop outputs
-	documentStore *documents.Store
 
 	// Service loop runtimes hydrated into built-in loops-ng definitions.
 	unifiPoller        *unifi.Poller

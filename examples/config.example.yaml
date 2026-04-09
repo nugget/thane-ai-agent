@@ -830,27 +830,6 @@ talents_dir: ./talents
 #       on_retrigger: 0
 #       hints: {}
 #       fallback_content: ""
-#       outputs:
-#         - kind: observation_log
-#           ref: ""
-#           topic: ""
-#           retain: false
-#           window: ""
-#           max_windows: 0
-#           title: ""
-#           description: ""
-#           tags: []
-#         - kind: document_journal
-#           ref: generated:loop-journals/office-watch.md
-#           topic: ""
-#           retain: false
-#           window: daily
-#           max_windows: 14
-#           title: Office Watch
-#           description: ""
-#           tags:
-#             - office
-#             - observer
 #       metadata:
 #         category: observer
 #       parent_id: ""

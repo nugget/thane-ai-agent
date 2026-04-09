@@ -36,7 +36,6 @@ type taskExecDeps struct {
 	launch        func(context.Context, looppkg.Launch, looppkg.Deps) (looppkg.LaunchResult, error)
 	runner        looppkg.Runner
 	eventBus      *events.Bus
-	outputSink    looppkg.OutputSink
 	logger        *slog.Logger
 	workspacePath string
 }
@@ -69,10 +68,9 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 
 	launch := buildScheduledTaskLaunch(ctx, task, exec, deps.workspacePath, deps.logger)
 	result, err := deps.launch(ctx, launch, looppkg.Deps{
-		Runner:     deps.runner,
-		Logger:     deps.logger,
-		EventBus:   deps.eventBus,
-		OutputSink: deps.outputSink,
+		Runner:   deps.runner,
+		Logger:   deps.logger,
+		EventBus: deps.eventBus,
 	})
 	if err != nil {
 		return fmt.Errorf("scheduled task %q: %w", task.Name, err)
