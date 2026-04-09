@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 )
 
-const maxToolResultBytes = 64 * 1024
+const (
+	maxToolResultBytes      = 16 * 1024
+	toolResultPreviewBudget = maxToolResultBytes - 512
+)
 
 // Tools exposes model-facing document navigation tools.
 type Tools struct {
@@ -142,7 +146,28 @@ func marshalToolResult(v any) (string, error) {
 		return "", fmt.Errorf("marshal document tool result: %w", err)
 	}
 	if len(data) > maxToolResultBytes {
-		return "", fmt.Errorf("document tool result too large (%d bytes > %d); narrow the request by lowering limit, specifying root/path_prefix, or selecting a section", len(data), maxToolResultBytes)
+		preview := truncateUTF8Bytes(data, toolResultPreviewBudget)
+		data, err = json.MarshalIndent(map[string]any{
+			"truncated":   true,
+			"bytes_total": len(data),
+			"bytes_shown": len(preview),
+			"note":        fmt.Sprintf("result exceeded %d bytes; narrow the request by lowering limit, specifying root/path_prefix, or selecting a section", maxToolResultBytes),
+			"preview":     preview,
+		}, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal truncated document tool result: %w", err)
+		}
 	}
 	return string(data), nil
+}
+
+func truncateUTF8Bytes(data []byte, maxBytes int) string {
+	if len(data) <= maxBytes {
+		return string(data)
+	}
+	truncated := data[:maxBytes]
+	for len(truncated) > 0 && !utf8.Valid(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return string(truncated)
 }

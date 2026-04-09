@@ -81,14 +81,31 @@ func splitFrontmatter(raw string) (map[string][]string, string) {
 	default:
 		return map[string][]string{}, raw
 	}
-	closeIdx := strings.Index(rest, "\n---")
+	closeIdx, closeLen := findFrontmatterClose(rest)
 	if closeIdx < 0 {
 		return map[string][]string{}, raw
 	}
 
 	meta := parseFrontmatterMap(rest[:closeIdx])
-	body := strings.TrimLeft(rest[closeIdx+4:], "\r\n")
+	body := strings.TrimLeft(rest[closeIdx+closeLen:], "\r\n")
 	return meta, body
+}
+
+func findFrontmatterClose(rest string) (int, int) {
+	lfIdx := strings.Index(rest, "\n---")
+	crlfIdx := strings.Index(rest, "\r\n---")
+	switch {
+	case lfIdx < 0 && crlfIdx < 0:
+		return -1, 0
+	case lfIdx < 0:
+		return crlfIdx, len("\r\n---")
+	case crlfIdx < 0:
+		return lfIdx, len("\n---")
+	case crlfIdx < lfIdx:
+		return crlfIdx, len("\r\n---")
+	default:
+		return lfIdx, len("\n---")
+	}
 }
 
 func parseFrontmatterMap(raw string) map[string][]string {

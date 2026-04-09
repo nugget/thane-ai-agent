@@ -62,9 +62,12 @@ func TestToolsSectionFailsWhenResultTooLarge(t *testing.T) {
 	}
 
 	tools := NewTools(store)
-	_, err = tools.Section(context.Background(), SectionArgs{Ref: "kb:large.md"})
-	if err == nil || !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("Section() error = %v, want size cap failure", err)
+	got, err := tools.Section(context.Background(), SectionArgs{Ref: "kb:large.md"})
+	if err != nil {
+		t.Fatalf("Section() error = %v, want truncated preview payload", err)
+	}
+	if !strings.Contains(got, `"truncated": true`) || !strings.Contains(got, `"preview":`) {
+		t.Fatalf("Section() = %s, want truncated preview envelope", got)
 	}
 }
 

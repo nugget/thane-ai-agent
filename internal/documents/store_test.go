@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/database"
@@ -294,6 +295,42 @@ func TestParseRefRejectsPathEscape(t *testing.T) {
 
 	if _, _, err := parseRef("kb:../secret.md"); err == nil || !strings.Contains(err.Error(), "escapes root") {
 		t.Fatalf("parseRef(path escape) error = %v, want escape rejection", err)
+	}
+}
+
+func TestSectionReturnsDocumentNotFoundForStaleIndexedFile(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	kbDir := filepath.Join(rootDir, "kb")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(kb): %v", err)
+	}
+
+	docPath := filepath.Join(kbDir, "stale.md")
+	writeFile(t, docPath, "# Stale\n\nSoon to be deleted.\n")
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	store.refreshInterval = time.Hour
+
+	if _, err := store.Outline(context.Background(), "kb:stale.md"); err != nil {
+		t.Fatalf("Outline before delete: %v", err)
+	}
+	if err := os.Remove(docPath); err != nil {
+		t.Fatalf("Remove(%q): %v", docPath, err)
+	}
+
+	if _, err := store.Section(context.Background(), "kb:stale.md", ""); err == nil || !strings.Contains(err.Error(), "document not found") {
+		t.Fatalf("Section(stale doc) error = %v, want document not found", err)
 	}
 }
 

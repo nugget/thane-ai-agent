@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -64,12 +65,18 @@ func (s *Store) Browse(ctx context.Context, root, prefix string, limit int) (*Br
 		return nil, fmt.Errorf("unknown document root %q", root)
 	}
 	prefix = trimPathPrefix(prefix)
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count
+	args := []any{root}
+	query := `SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count
 		 FROM indexed_documents
-		 WHERE root = ?
-		 ORDER BY rel_path`,
-		root,
+		 WHERE root = ?`
+	if prefix != "" {
+		query += ` AND (rel_path = ? OR rel_path LIKE ?)`
+		args = append(args, prefix, prefix+"/%")
+	}
+	query += ` ORDER BY rel_path`
+	rows, err := s.db.QueryContext(ctx,
+		query,
+		args...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("browse documents: %w", err)
@@ -147,13 +154,26 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 	q.Tags = dedupeSorted(q.Tags)
 
 	var args []any
+	var where []string
 	query := `SELECT root, rel_path, title, summary, tags_json, frontmatter_json, modified_at, word_count FROM indexed_documents`
 	if q.Root != "" {
 		if !rootExists(s.roots, q.Root) {
 			return nil, fmt.Errorf("unknown document root %q", q.Root)
 		}
-		query += ` WHERE root = ?`
+		where = append(where, "root = ?")
 		args = append(args, q.Root)
+	}
+	if q.PathPrefix != "" {
+		where = append(where, `(rel_path = ? OR rel_path LIKE ?)`)
+		args = append(args, q.PathPrefix, q.PathPrefix+"/%")
+	}
+	if q.Query != "" {
+		like := "%" + q.Query + "%"
+		where = append(where, `(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(rel_path) LIKE ? OR LOWER(tags_json) LIKE ?)`)
+		args = append(args, like, like, like, like)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY modified_at DESC, rel_path`
 
@@ -172,9 +192,6 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		var doc DocumentSummary
 		if err := scanDocument(rows, &doc); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
-		}
-		if q.PathPrefix != "" && doc.Path != q.PathPrefix && !strings.HasPrefix(doc.Path, q.PathPrefix+"/") {
-			continue
 		}
 		if !hasAllTags(doc.Tags, q.Tags) {
 			continue
@@ -269,10 +286,16 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 	}
 	absPath, err := s.resolveDocumentPath(root, relPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("document not found: %s", ref)
+		}
 		return nil, fmt.Errorf("resolve document: %w", err)
 	}
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("document not found: %s", ref)
+		}
 		return nil, fmt.Errorf("read document: %w", err)
 	}
 	meta, body := splitFrontmatter(string(raw))
