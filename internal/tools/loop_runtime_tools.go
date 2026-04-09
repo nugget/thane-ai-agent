@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 )
@@ -12,6 +13,30 @@ const (
 	defaultLoopStatusLimit = 25
 	maxLoopStatusLimit     = 200
 )
+
+type loopStatusView struct {
+	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
+	State              looppkg.State      `json:"state"`
+	Operation          looppkg.Operation  `json:"operation,omitempty"`
+	Completion         looppkg.Completion `json:"completion,omitempty"`
+	ParentID           string             `json:"parent_id,omitempty"`
+	StartedAt          time.Time          `json:"started_at"`
+	LastWakeAt         time.Time          `json:"last_wake_at,omitempty"`
+	Iterations         int                `json:"iterations"`
+	Attempts           int                `json:"attempts"`
+	TotalInputTokens   int                `json:"total_input_tokens"`
+	TotalOutputTokens  int                `json:"total_output_tokens"`
+	LastInputTokens    int                `json:"last_input_tokens,omitempty"`
+	LastOutputTokens   int                `json:"last_output_tokens,omitempty"`
+	LastError          string             `json:"last_error,omitempty"`
+	ConsecutiveErrors  int                `json:"consecutive_errors,omitempty"`
+	HandlerOnly        bool               `json:"handler_only,omitempty"`
+	EventDriven        bool               `json:"event_driven,omitempty"`
+	LastSupervisorIter int                `json:"last_supervisor_iter,omitempty"`
+	ActiveTags         []string           `json:"active_tags,omitempty"`
+	Metadata           map[string]string  `json:"metadata,omitempty"`
+}
 
 // LoopRuntimeToolDeps wires the live loop registry and ad hoc launch path
 // into the tool registry so the model can inspect and control currently
@@ -64,13 +89,13 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "spawn_loop",
-		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task with completion=conversation or completion=channel.",
+		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"launch": map[string]any{
 					"type":        "object",
-					"description": "Loops-ng launch object. Include spec, task, and any per-launch routing or completion overrides. The most common detached shape is a task plus spec.operation=background_task and spec.completion=conversation.",
+					"description": "Loops-ng launch object. Include spec, task, and any per-launch routing or completion overrides. The most common detached shape is a task plus spec.operation=background_task; completion may be omitted when the current conversation or channel context should decide the callback target.",
 				},
 			},
 			"required": []string{"launch"},
@@ -108,12 +133,12 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	limit := clampLoopListLimit(ldIntArg(args, "limit"), defaultLoopStatusLimit, maxLoopStatusLimit)
 
 	statuses := r.liveLoopRegistry.Statuses()
-	filtered := make([]looppkg.Status, 0, len(statuses))
+	filtered := make([]loopStatusView, 0, len(statuses))
 	for _, status := range statuses {
 		if !matchLoopStatus(status, query, state, operation) {
 			continue
 		}
-		filtered = append(filtered, status)
+		filtered = append(filtered, summarizeLoopStatus(status))
 		if len(filtered) >= limit {
 			break
 		}
@@ -147,18 +172,22 @@ func (r *Registry) handleSpawnLoop(ctx context.Context, args map[string]any) (st
 	if r.launchLoop == nil {
 		return "", fmt.Errorf("loop launch is not configured")
 	}
+	if _, ok := args["launch"]; !ok {
+		return "", fmt.Errorf("launch is required")
+	}
 	launch, err := decodeLoopLaunchArg(args, "launch")
 	if err != nil {
 		return "", fmt.Errorf("launch: %w", err)
 	}
-	launch = applyAdHocLoopLaunchContextDefaults(ctx, launch)
+	launch, completion := applyAdHocLoopLaunchContextDefaults(ctx, launch)
 	result, err := r.launchLoop(ctx, launch)
 	if err != nil {
 		return "", err
 	}
 	return ldMarshalToolJSON(map[string]any{
-		"status": "ok",
-		"result": result,
+		"status":     "ok",
+		"result":     result,
+		"completion": completion,
 	})
 }
 
@@ -238,4 +267,41 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 		}
 	}
 	return false
+}
+
+func summarizeLoopStatus(status looppkg.Status) loopStatusView {
+	return loopStatusView{
+		ID:                 status.ID,
+		Name:               status.Name,
+		State:              status.State,
+		Operation:          status.Config.Operation,
+		Completion:         status.Config.Completion,
+		ParentID:           status.ParentID,
+		StartedAt:          status.StartedAt,
+		LastWakeAt:         status.LastWakeAt,
+		Iterations:         status.Iterations,
+		Attempts:           status.Attempts,
+		TotalInputTokens:   status.TotalInputTokens,
+		TotalOutputTokens:  status.TotalOutputTokens,
+		LastInputTokens:    status.LastInputTokens,
+		LastOutputTokens:   status.LastOutputTokens,
+		LastError:          status.LastError,
+		ConsecutiveErrors:  status.ConsecutiveErrors,
+		HandlerOnly:        status.HandlerOnly,
+		EventDriven:        status.EventDriven,
+		LastSupervisorIter: status.LastSupervisorIter,
+		ActiveTags:         append([]string(nil), status.ActiveTags...),
+		Metadata:           cloneLoopMetadata(status.Config.Metadata),
+	}
+}
+
+func cloneLoopMetadata(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

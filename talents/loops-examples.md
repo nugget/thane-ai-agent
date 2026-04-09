@@ -16,7 +16,8 @@ that can return naturally when it is done.
 
 - Tool: `spawn_loop`
 - Shape: `operation: background_task`
-- Delivery: `completion: conversation` or `completion: channel`
+- Delivery: omit completion when the current conversation or channel
+  context should decide the callback target
 - Persistence: none beyond whatever documents the loop writes itself
 
 ```json
@@ -26,7 +27,6 @@ that can return naturally when it is done.
       "name": "research-current-issue",
       "task": "Investigate the current issue from multiple angles, keep concise notes in a managed document if needed, and report back with the strongest answer once the uncertainty has collapsed.",
       "operation": "background_task",
-      "completion": "conversation",
       "profile": {
         "mission": "background",
         "initial_tags": ["knowledge", "documents"],
@@ -37,9 +37,10 @@ that can return naturally when it is done.
 }
 ```
 
-If this is launched from the current interactive conversation, you
-usually do not need to set an explicit completion target. The runtime
-can infer the current conversation or channel context.
+If this is launched from the current interactive context, you usually do
+not need to set an explicit completion target. The runtime can infer the
+most natural callback path from the current conversation or channel
+origin.
 
 ## Pattern: Persistent Service With Supervisor Turns
 
@@ -138,7 +139,8 @@ decision boundary.
 
 - Tool: `spawn_loop`
 - Shape: `operation: background_task`
-- Delivery: `completion: conversation`
+- Delivery: usually omit completion and let the origin decide; set it
+  explicitly only when you need a non-default callback path
 - Prompting move: state clearly what should trigger a return turn
 
 ```json
@@ -148,7 +150,6 @@ decision boundary.
       "name": "policy-research",
       "task": "Research the current policy question thoroughly. Work independently while evidence gathering is straightforward. Return to the operator only when you have a strong answer, a short list of real options, or a blocking ambiguity that requires a human choice.",
       "operation": "background_task",
-      "completion": "conversation",
       "profile": {
         "mission": "background",
         "initial_tags": ["knowledge", "documents"],

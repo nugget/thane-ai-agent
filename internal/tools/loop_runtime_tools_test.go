@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 type noopLoopRunner struct{}
@@ -93,7 +94,7 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 		ActiveCount       int              `json:"active_count"`
 		MaxLoops          int              `json:"max_loops"`
 		RemainingCapacity int              `json:"remaining_capacity"`
-		Loops             []looppkg.Status `json:"loops"`
+		Loops             []map[string]any `json:"loops"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal loop_status: %v", err)
@@ -104,8 +105,11 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 	if got.ActiveCount != 2 || got.MaxLoops != 3 || got.RemainingCapacity != 1 {
 		t.Fatalf("counts = %#v, want active=2 max=3 remaining=1", got)
 	}
-	if len(got.Loops) != 1 || got.Loops[0].Name != "battery_watch" {
+	if len(got.Loops) != 1 || got.Loops[0]["name"] != "battery_watch" {
 		t.Fatalf("loops = %#v, want battery_watch only", got.Loops)
+	}
+	if _, ok := got.Loops[0]["config"]; ok {
+		t.Fatalf("loop_status should not return full config in compact view: %#v", got.Loops[0])
 	}
 
 	stopOut, err := deps.reg.Get("stop_loop").Handler(context.Background(), map[string]any{
@@ -148,8 +152,9 @@ func TestSpawnLoopAppliesConversationDefaults(t *testing.T) {
 	}
 
 	var got struct {
-		Status string               `json:"status"`
-		Result looppkg.LaunchResult `json:"result"`
+		Status     string               `json:"status"`
+		Result     looppkg.LaunchResult `json:"result"`
+		Completion map[string]any       `json:"completion"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal spawn_loop: %v", err)
@@ -162,5 +167,103 @@ func TestSpawnLoopAppliesConversationDefaults(t *testing.T) {
 	}
 	if deps.lastLaunch.ChannelBinding != nil {
 		t.Fatalf("ChannelBinding = %#v, want nil without channel context", deps.lastLaunch.ChannelBinding)
+	}
+	if got.Completion["mode"] != "conversation" {
+		t.Fatalf("completion mode = %#v, want conversation", got.Completion)
+	}
+}
+
+func TestSpawnLoopRequiresLaunch(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	if _, err := deps.reg.Get("spawn_loop").Handler(context.Background(), map[string]any{}); err == nil || err.Error() != "launch is required" {
+		t.Fatalf("spawn_loop missing launch err = %v, want launch is required", err)
+	}
+}
+
+func TestSpawnLoopInfersChannelCompletionFromSignalContext(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	ctx := WithConversationID(context.Background(), "signal-15551234567")
+	ctx = WithChannelBinding(ctx, &memory.ChannelBinding{
+		Channel: "signal",
+		Address: "+15551234567",
+	})
+	out, err := deps.reg.Get("spawn_loop").Handler(ctx, map[string]any{
+		"launch": map[string]any{
+			"spec": map[string]any{
+				"name":      "signal-detached",
+				"task":      "Research and report back later.",
+				"operation": "background_task",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("spawn_loop: %v", err)
+	}
+
+	var got struct {
+		Status     string               `json:"status"`
+		Result     looppkg.LaunchResult `json:"result"`
+		Completion struct {
+			Mode           looppkg.Completion               `json:"mode"`
+			ConversationID string                           `json:"conversation_id"`
+			Channel        *looppkg.CompletionChannelTarget `json:"channel"`
+			Inferred       bool                             `json:"inferred"`
+			Warnings       []string                         `json:"warnings"`
+		} `json:"completion"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal spawn_loop: %v", err)
+	}
+	if deps.lastLaunch.Spec.Completion != looppkg.CompletionChannel {
+		t.Fatalf("Completion = %q, want channel", deps.lastLaunch.Spec.Completion)
+	}
+	if deps.lastLaunch.CompletionChannel == nil || deps.lastLaunch.CompletionChannel.Channel != "signal" || deps.lastLaunch.CompletionChannel.Recipient != "+15551234567" {
+		t.Fatalf("CompletionChannel = %#v", deps.lastLaunch.CompletionChannel)
+	}
+	if !got.Completion.Inferred || got.Completion.Mode != looppkg.CompletionChannel {
+		t.Fatalf("completion = %#v, want inferred channel", got.Completion)
+	}
+}
+
+func TestSpawnLoopWarnsWhenSignalContextUsesConversationCompletion(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	ctx := WithConversationID(context.Background(), "signal-15551234567")
+	ctx = WithChannelBinding(ctx, &memory.ChannelBinding{
+		Channel: "signal",
+		Address: "+15551234567",
+	})
+	out, err := deps.reg.Get("spawn_loop").Handler(ctx, map[string]any{
+		"launch": map[string]any{
+			"spec": map[string]any{
+				"name":       "signal-conversation",
+				"task":       "Research and keep me posted here.",
+				"operation":  "background_task",
+				"completion": "conversation",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("spawn_loop: %v", err)
+	}
+
+	var got struct {
+		Completion struct {
+			Mode           looppkg.Completion `json:"mode"`
+			ConversationID string             `json:"conversation_id"`
+			Inferred       bool               `json:"inferred"`
+			Warnings       []string           `json:"warnings"`
+		} `json:"completion"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal spawn_loop: %v", err)
+	}
+	if got.Completion.Mode != looppkg.CompletionConversation || got.Completion.Inferred {
+		t.Fatalf("completion = %#v, want explicit conversation", got.Completion)
+	}
+	if len(got.Completion.Warnings) == 0 {
+		t.Fatalf("warnings = %#v, want channel guidance warning", got.Completion.Warnings)
 	}
 }

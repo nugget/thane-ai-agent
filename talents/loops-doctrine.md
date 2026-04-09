@@ -35,7 +35,8 @@ For one-shot curiosity or side research, think in the same shape as a
 delegate:
 
 - use `operation: background_task`
-- set `completion: conversation` or `completion: channel`
+- let completion default from the current origin when that is clearly
+  the right callback target
 - let the result come back naturally when it is done
 
 When a loop should maintain durable state, do that inside the loop's own
