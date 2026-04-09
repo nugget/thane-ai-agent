@@ -162,3 +162,26 @@ decision boundary.
 
 This is the most reliable way to get delegate-like behavior without
 flattening the parent loop into the entire investigation.
+
+## Pattern: Wake A Sleeping Service Loop With New Context
+
+Use this when a timer-driven service loop is already running and new
+information should reach its next iteration now instead of waiting for
+the normal sleep cycle.
+
+- Tool: `signal_loop`
+- Shape: one-shot signal envelope
+- Effect: wake now if the loop is sleeping, otherwise queue for the next
+  iteration
+- Persistence: none; use document tools inside the loop for durable state
+
+```json
+{
+  "name": "battery-watch",
+  "message": "The garage sensor reading is CPU temperature, not ambient. Treat prior spikes there as expected device heat unless another signal disagrees.",
+  "force_supervisor": true
+}
+```
+
+This is the right tool when the loop already exists and only needs a
+single corrective or time-sensitive nudge.

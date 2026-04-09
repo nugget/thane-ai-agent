@@ -25,11 +25,20 @@ now:
 - `loop_status`
 - `spawn_loop`
 - `stop_loop`
+- `signal_loop`
 
 `spawn_loop` is for ad hoc work that should start immediately without
 first becoming part of the persistent loop-definition registry. Reach
 for it when the loop is temporary, experimental, or tightly tied to the
 current moment.
+
+`signal_loop` is for an already-running timer-driven loop that needs a
+single tap on the shoulder:
+
+- wake a sleeping loop immediately with one-shot context
+- force the next iteration into supervisor mode when that is the real need
+- do not use it as a persistence mechanism; the signal is only for the
+  next iteration
 
 For one-shot curiosity or side research, think in the same shape as a
 delegate:

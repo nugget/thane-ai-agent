@@ -49,6 +49,8 @@ func (a *App) initStores(s *newState) error {
 	eventBus := events.New()
 	a.eventBus = eventBus
 
+	a.initMessageInfrastructure(logger)
+
 	// --- Loop registry ---
 	// Tracks all persistent background loops (metacognitive, pollers,
 	// watchers). Created early so component init blocks can register
