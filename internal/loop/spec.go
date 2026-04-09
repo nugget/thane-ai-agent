@@ -223,11 +223,10 @@ func (s *Spec) ValidatePersistable() error {
 }
 
 // ToConfig compiles the current engine-facing portion of a Spec
-// into today's [Config] shape. This is intentionally conservative:
-// loops-ng-specific fields such as [Spec.Operation] and
-// [Spec.Completion] are retained on the spec for future RunV2
-// wiring rather than forced into today's engine. [Spec.Profile] is
-// applied by [NewFromSpec] as per-iteration request shaping.
+// into today's [Config] shape. [Spec.Operation] and
+// [Spec.Completion] already flow through into the runtime config,
+// while [Spec.Profile] remains a request-shaping layer applied by
+// [NewFromSpec] rather than a field on [Config].
 func (s *Spec) ToConfig() Config {
 	if s == nil {
 		return Config{}
@@ -236,6 +235,8 @@ func (s *Spec) ToConfig() Config {
 	return Config{
 		Name:                   ns.Name,
 		Task:                   ns.Task,
+		Operation:              ns.Operation,
+		Completion:             ns.Completion,
 		Tags:                   append([]string(nil), ns.Tags...),
 		ExcludeTools:           append([]string(nil), ns.ExcludeTools...),
 		SleepMin:               ns.SleepMin,

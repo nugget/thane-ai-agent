@@ -1057,6 +1057,7 @@ func (l *Loop) run(ctx context.Context) {
 					Kind:      events.KindLoopIterationComplete,
 					Data:      eventData,
 				})
+
 			}
 
 			// Compute sleep after updating error state so backoff reflects

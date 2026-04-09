@@ -135,3 +135,48 @@ func applyLoopLaunchContextDefaults(ctx context.Context, def looppkg.DefinitionV
 	}
 	return launch
 }
+
+type loopCompletionDecision struct {
+	Mode           looppkg.Completion               `json:"mode,omitempty"`
+	ConversationID string                           `json:"conversation_id,omitempty"`
+	Channel        *looppkg.CompletionChannelTarget `json:"channel,omitempty"`
+	Inferred       bool                             `json:"inferred,omitempty"`
+	Reason         string                           `json:"reason,omitempty"`
+	Warnings       []string                         `json:"warnings,omitempty"`
+}
+
+func applyAdHocLoopLaunchContextDefaults(ctx context.Context, launch looppkg.Launch) (looppkg.Launch, loopCompletionDecision) {
+	var decision loopCompletionDecision
+	if launch.ChannelBinding == nil {
+		launch.ChannelBinding = ChannelBindingFromContext(ctx)
+	}
+	naturalMode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+	if launch.Spec.Operation == looppkg.OperationBackgroundTask && launch.Spec.Completion == "" {
+		launch.Spec.Completion = naturalMode
+		decision.Inferred = true
+		decision.Reason = "defaulted from current tool-call origin for detached background completion"
+	}
+	switch launch.Spec.Completion {
+	case looppkg.CompletionConversation:
+		if strings.TrimSpace(launch.CompletionConversationID) == "" {
+			launch.CompletionConversationID = conversationID
+		}
+		decision.Mode = looppkg.CompletionConversation
+		decision.ConversationID = launch.CompletionConversationID
+		if naturalMode == looppkg.CompletionChannel {
+			decision.Warnings = append(decision.Warnings, "conversation completion injects an internal callback into conversation memory; use channel completion when the result should arrive as a normal reply on the current interactive channel")
+		}
+	case looppkg.CompletionChannel:
+		if launch.CompletionChannel == nil {
+			launch.CompletionChannel = target
+		}
+		decision.Mode = looppkg.CompletionChannel
+		decision.Channel = looppkg.CloneCompletionChannelTarget(launch.CompletionChannel)
+		if launch.CompletionChannel == nil {
+			decision.Warnings = append(decision.Warnings, "channel completion was selected but the current context did not provide a routable channel target; set completion_channel explicitly if delivery must go to a specific channel endpoint")
+		}
+	case looppkg.CompletionNone, "":
+		decision.Mode = launch.Spec.Completion
+	}
+	return launch, decision
+}

@@ -233,6 +233,7 @@ func ExampleConfig() *Config {
 		},
 
 		Loops: LoopsConfig{
+			MaxRunning: 25,
 			Definitions: []looppkg.Spec{
 				{
 					Name:       "office_watch",

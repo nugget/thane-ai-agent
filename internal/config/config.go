@@ -1530,6 +1530,10 @@ type MetacognitiveRouterConfig struct {
 // LoopsConfig configures immutable loops-ng definitions loaded from the
 // config file.
 type LoopsConfig struct {
+	// MaxRunning caps the number of concurrently running loops across
+	// the live registry. Zero means unlimited.
+	MaxRunning int `yaml:"max_running"`
+
 	// Definitions is the set of config-defined loop specs. These specs
 	// are immutable at runtime; dynamic loop creation lives in the
 	// persistent overlay registry instead.
@@ -2162,6 +2166,9 @@ func (c *Config) CoreInjectFiles() []string {
 }
 
 func (c *Config) validateLoops() error {
+	if c.Loops.MaxRunning < 0 {
+		return fmt.Errorf("loops.max_running must be >= 0, got %d", c.Loops.MaxRunning)
+	}
 	if len(c.Loops.Definitions) == 0 {
 		return nil
 	}

@@ -153,6 +153,49 @@ func (r *Registry) ActiveCount() int {
 	return len(r.loops)
 }
 
+// MaxLoops returns the configured concurrency limit. Zero means
+// unlimited.
+func (r *Registry) MaxLoops() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.maxLoops
+}
+
+// FindByName returns all live loops with the exact given name.
+func (r *Registry) FindByName(name string) []*Loop {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var matches []*Loop
+	for _, l := range r.loops {
+		if l.config.Name == name {
+			matches = append(matches, l)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].id < matches[j].id
+	})
+	return matches
+}
+
+// StopLoopByName cancels one registered loop by exact name. It returns
+// an error when no loop matches or when the name is ambiguous.
+func (r *Registry) StopLoopByName(name string) error {
+	matches := r.FindByName(name)
+	switch len(matches) {
+	case 0:
+		return fmt.Errorf("loop named %q not found", name)
+	case 1:
+		return r.StopLoop(matches[0].id)
+	default:
+		ids := make([]string, 0, len(matches))
+		for _, l := range matches {
+			ids = append(ids, l.id)
+		}
+		return fmt.Errorf("loop name %q is ambiguous; retry with loop_id from %v", name, ids)
+	}
+}
+
 // ShutdownAll cancels all registered loops and waits for them to drain.
 // The provided context controls the maximum time to wait; if it expires,
 // remaining loops are abandoned. Returns the number of loops that were

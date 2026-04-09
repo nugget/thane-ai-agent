@@ -369,6 +369,10 @@ func (a *App) initChannels(s *newState) error {
 		Reconcile:        a.reconcileLoopDefinition,
 		LaunchDefinition: a.launchLoopDefinition,
 	})
+	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
+		Registry:   a.loopRegistry,
+		LaunchLoop: a.launchLoop,
+	})
 
 	// --- Log index query ---
 	// Expose the structured log index so the agent can query its own

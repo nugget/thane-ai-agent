@@ -84,6 +84,8 @@ type Registry struct {
 	deletePersistedLoopDefinitionPolicy        func(string) error
 	reconcileLoopDefinition                    func(context.Context, string) error
 	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
+	liveLoopRegistry                           *looppkg.Registry
+	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
 
 	contentResolver *ContentResolver
 }
