@@ -23,6 +23,10 @@ if [[ -z "$restart_cmd" ]]; then
     restart_cmd='launchctl kickstart -k gui/$(id -u)/info.nugget.thane'
 fi
 
+if ! [[ "$verify_timeout_seconds" =~ ^[0-9]+$ ]] || [[ "$verify_timeout_seconds" -le 0 ]]; then
+    die "verify-timeout-seconds must be a positive integer"
+fi
+
 cd "$repo_root"
 require_macos_host
 require_commands just ssh scp
