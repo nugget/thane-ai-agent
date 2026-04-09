@@ -101,6 +101,12 @@ avoid a machine-wide admin prompt, and carry first-party
 welcome/readme/license metadata for inspection. The tagged GitHub workflow
 publishes the multi-arch container image and its provenance attestation.
 
+For the human-facing operator workflows, see
+[Release Engineering](release-engineering.md). The preferred paths are:
+
+- `just release-github <version>` for real GitHub releases from a clean main checkout
+- `just deploy-macos-pkg user@host` for pkg-based live-host testing on another macOS Tahoe system
+
 ## Container
 
 Thane also ships as a multi-arch container image on GHCR:

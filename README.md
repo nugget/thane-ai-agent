@@ -49,7 +49,14 @@ workstation via `just`. Those macOS artifacts install `thane` into
 `~/Thane/bin`, carry first-party installer metadata for inspection, avoid a
 machine-wide admin prompt, and can be stapled cleanly after notarization.
 GitHub Actions publishes the tagged container image and its provenance
-attestation.
+attestation. The preferred operator workflows are:
+
+- `just release-github 0.9.0`
+- `just release-github 0.9.0 prerelease`
+- `just deploy-macos-pkg user@host`
+
+See [Release Engineering](docs/operating/release-engineering.md) for the full
+workflow and credential requirements.
 
 ## Documentation
 
@@ -65,6 +72,7 @@ attestation.
 - [Home Assistant](docs/operating/homeassistant.md) — HA integration setup
 - [Configuration](docs/operating/configuration.md) — Config guide by concern
 - [Deployment](docs/operating/deployment.md) — macOS and Linux service installation
+- [Release Engineering](docs/operating/release-engineering.md) — GitHub release and pkg-based live-host deployment workflows
 
 ### Extend It
 

@@ -12,6 +12,7 @@ host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "am
 thane-home := home_directory() / "Thane"
 install-prefix := if os() == "macos" { env("INSTALL_PREFIX", thane-home) } else { env("INSTALL_PREFIX", "/usr/local") }
 release-dir := "dist/release"
+pkg-dir := "dist/pkg"
 codesign-identity := env("THANE_CODESIGN_IDENTITY", "-")
 installer-identity := env("THANE_INSTALLER_IDENTITY", "")
 codesign-options := env("THANE_CODESIGN_OPTIONS", "runtime")
@@ -361,6 +362,18 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
     fi
     echo "Deployed $binary to ${host}:${remote_bin}"
 
+[doc("Operator path: build a signed macOS installer package from the current clean checkout")]
+[group('release-engineering')]
+[macos]
+build-macos-pkg version="" target_arch=host_arch output_dir=pkg-dir:
+    scripts/releng/build-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{output_dir}}" true
+
+[doc("Operator path: build a signed macOS pkg, install it on a remote Tahoe host via SSH, and restart Thane there")]
+[group('deploy')]
+[macos]
+deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" restart_cmd="":
+    scripts/releng/deploy-macos-pkg.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{restart_cmd}}"
+
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
@@ -455,8 +468,8 @@ release-notarize-macos archive profile=notary-profile:
 [doc("Building block: package a macOS binary as a signed flat installer product archive")]
 [group('release-engineering')]
 [macos]
-release-package-macos-pkg version target_arch binary installer_identity=installer-identity:
-    scripts/package-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{binary}}" "{{release-dir}}" "{{installer_identity}}"
+release-package-macos-pkg version target_arch binary output_dir=release-dir installer_identity=installer-identity:
+    scripts/package-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{binary}}" "{{output_dir}}" "{{installer_identity}}"
 
 [doc("Building block: staple and validate a notarized macOS installer package")]
 [group('release-engineering')]
@@ -632,14 +645,20 @@ release-github-check version:
 
 [doc("Building block: create or update the GitHub release from prepared assets")]
 [group('release-engineering')]
-release-github-upload version target_commit="":
+release-github-upload version target_commit="" release_kind="auto":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
     target_commit="{{target_commit}}"
+    release_kind="{{release_kind}}"
     release_exists=0
+    prerelease=0
+    release_id=""
+    current_prerelease=""
+    current_draft=""
+    is_immutable=""
     assets=(
         "{{release-dir}}/thane_${version}_darwin_amd64.pkg"
         "{{release-dir}}/thane_${version}_darwin_arm64.pkg"
@@ -651,9 +670,28 @@ release-github-upload version target_commit="":
     just --quiet release-github-check "$version"
     export GH_TOKEN="${THANE_GH_TOKEN}"
 
+    case "$release_kind" in
+        auto)
+            if printf '%s' "$version" | grep -q -- '-'; then
+                prerelease=1
+            fi
+            ;;
+        prerelease)
+            prerelease=1
+            ;;
+        release)
+            prerelease=0
+            ;;
+        *)
+            echo "release_kind must be one of: auto, prerelease, release" >&2
+            exit 1
+            ;;
+    esac
+
     create_args=("${tag}" --title "${tag}" --generate-notes)
-    if printf '%s' "$version" | grep -q -- '-'; then
+    if [ "$prerelease" -eq 1 ]; then
         create_args+=(--prerelease)
+        create_args+=(--latest=false)
     fi
     if [ -n "$target_commit" ]; then
         create_args+=(--target "$target_commit")
@@ -661,8 +699,12 @@ release-github-upload version target_commit="":
         create_args+=(--verify-tag)
     fi
 
-    if gh release view "$tag" >/dev/null 2>&1; then
+    if gh release view "$tag" --json id,isImmutable,isDraft,isPrerelease >/dev/null 2>&1; then
         release_exists=1
+        release_id="$(gh release view "$tag" --json id --jq '.id')"
+        current_prerelease="$(gh release view "$tag" --json isPrerelease --jq '.isPrerelease')"
+        current_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft')"
+        is_immutable="$(gh release view "$tag" --json isImmutable --jq '.isImmutable')"
     fi
 
     if [ "$release_exists" -eq 0 ]; then
@@ -670,7 +712,6 @@ release-github-upload version target_commit="":
         exit 0
     fi
 
-    is_immutable="$(gh release view "$tag" --json isImmutable --jq '.isImmutable')"
     if [ "$is_immutable" = "true" ]; then
         remote_assets="$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)"
         missing_remote=0
@@ -688,14 +729,36 @@ release-github-upload version target_commit="":
             exit 1
         fi
 
+        desired_prerelease="false"
+        if [ "$prerelease" -eq 1 ]; then
+            desired_prerelease="true"
+        fi
+        if [ "$current_prerelease" != "$desired_prerelease" ]; then
+            echo "Immutable release $tag already exists with prerelease=$current_prerelease; cannot change it to $desired_prerelease." >&2
+            exit 1
+        fi
+
         echo "Release $tag is already published and immutable with the expected assets. Treating upload as idempotent."
         exit 0
     fi
 
     gh release upload "$tag" "${assets[@]}" --clobber
 
-    if [ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" = "true" ]; then
+    if [ "$current_draft" = "true" ]; then
         gh release edit "$tag" --draft=false
+    fi
+
+    desired_prerelease=false
+    if [ "$prerelease" -eq 1 ]; then
+        desired_prerelease=true
+    fi
+    if [ "$current_prerelease" != "$desired_prerelease" ]; then
+        repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
+        gh api \
+            --method PATCH \
+            "repos/${repo}/releases/${release_id}" \
+            -F prerelease="${desired_prerelease}" \
+            >/dev/null
     fi
 
 [doc("Operator path: build, sign/notarize, package, checksum, and smoke-test the release locally")]
@@ -755,12 +818,13 @@ prepare-release version container_tag="thane:prepare-release":
 
 [doc("Operator path: create the release tag and publish prepared assets to GitHub")]
 [group('release-engineering')]
-publish-release version:
+publish-release version release_kind="auto":
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+    release_kind="{{release_kind}}"
     metadata_path="{{release-dir}}/.thane_${version}_prepared.env"
     repo=""
     head_commit="$(git rev-parse HEAD)"
@@ -822,13 +886,19 @@ publish-release version:
         fi
 
         echo "Remote tag $tag already exists at the current commit. Treating publish as idempotent."
-        just release-github-upload "$tag"
+        just release-github-upload "$tag" "" "$release_kind"
         echo "Uploaded local release artifacts/checksums. GitHub Actions can publish or republish the container image separately."
         exit 0
     fi
 
-    just release-github-upload "$tag" "$head_commit"
+    just release-github-upload "$tag" "$head_commit" "$release_kind"
     echo "Created $tag via the GitHub release API, uploaded local release artifacts/checksums, and triggered GitHub Actions to publish the container image."
+
+[doc("Operator path: build, notarize, and publish a GitHub release from a clean main checkout (release_kind: auto|prerelease|release)")]
+[group('release-engineering')]
+[macos]
+release-github version release_kind="auto" container_tag="thane:prepare-release":
+    scripts/releng/release-github.sh "{{version}}" "{{release_kind}}" "{{container_tag}}"
 
 [private]
 macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
@@ -865,13 +935,13 @@ release-upload-validate version:
     just release-github-check "{{version}}"
 
 [private]
-release-upload version:
-    just release-github-upload "{{version}}"
+release-upload version release_kind="auto":
+    just release-github-upload "{{version}}" "" "{{release_kind}}"
 
 [private]
 release-breakpoint version container_tag="thane:release-breakpoint":
     just prepare-release "{{version}}" "{{container_tag}}"
 
 [private]
-release version:
-    just publish-release "{{version}}"
+release version release_kind="auto":
+    just publish-release "{{version}}" "{{release_kind}}"
