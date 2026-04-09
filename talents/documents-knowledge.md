@@ -22,6 +22,9 @@ Trust these instincts:
   document before changing it
 - use `doc_write` to create or replace a managed document at a semantic
   ref like `kb:article.md`
+- add `journal_entry` to `doc_write` when the current document state
+  should also leave behind one fresh timestamped note in a standard
+  `Journal` section
 - use `doc_copy` when you want a new document to branch from an existing
   one without disturbing the source
 - use `doc_move` when a document should live at a new semantic ref but

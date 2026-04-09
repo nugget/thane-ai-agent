@@ -27,12 +27,13 @@ type DocumentRecord struct {
 
 // WriteArgs creates or replaces a whole managed document.
 type WriteArgs struct {
-	Ref         string              `json:"ref"`
-	Title       string              `json:"title,omitempty"`
-	Description string              `json:"description,omitempty"`
-	Tags        []string            `json:"tags,omitempty"`
-	Frontmatter map[string][]string `json:"frontmatter,omitempty"`
-	Body        *string             `json:"body,omitempty"`
+	Ref          string              `json:"ref"`
+	Title        string              `json:"title,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Tags         []string            `json:"tags,omitempty"`
+	Frontmatter  map[string][]string `json:"frontmatter,omitempty"`
+	Body         *string             `json:"body,omitempty"`
+	JournalEntry string              `json:"journal_entry,omitempty"`
 }
 
 // EditArgs updates part of a managed document without leaving the
@@ -133,6 +134,14 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	} else if existingRecord != nil {
 		body = existingRecord.Body
 	}
+	sectionName := ""
+	if strings.TrimSpace(args.JournalEntry) != "" {
+		body, err = upsertDocumentJournal(body, existingRecord, now, args.JournalEntry)
+		if err != nil {
+			return nil, err
+		}
+		sectionName = documentJournalHeading
+	}
 	meta := mergeDocumentFrontmatter(existingRecord, args.Title, args.Description, args.Tags, args.Frontmatter, now)
 	raw := renderDocument(meta, body)
 
@@ -143,7 +152,7 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	if err != nil {
 		return nil, err
 	}
-	return mutationResultFromRecord("doc_write", record, existed, "", ""), nil
+	return mutationResultFromRecord("doc_write", record, existed, sectionName, ""), nil
 }
 
 func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error) {

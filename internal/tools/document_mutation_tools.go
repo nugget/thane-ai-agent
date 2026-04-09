@@ -15,7 +15,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_write",
-		Description:          "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, so the model can think in documents instead of filesystem paths.",
+		Description:          "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths.",
 		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -46,6 +46,10 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 					"type":        "string",
 					"description": "Markdown body content to write. Omit to preserve the existing body; pass an empty string to intentionally clear it.",
 				},
+				"journal_entry": map[string]any{
+					"type":        "string",
+					"description": "Optional timestamped note to append under the managed `Journal` section while writing the current document state.",
+				},
 			},
 			"required": []string{"ref"},
 		},
@@ -57,12 +61,13 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
 			return dt.Write(ctx, documents.WriteArgs{
-				Ref:         ref,
-				Title:       title,
-				Description: description,
-				Tags:        documentStringSliceArg(args["tags"]),
-				Frontmatter: documentFrontmatterArg(args["frontmatter"]),
-				Body:        optionalStringArg(args, "body"),
+				Ref:          ref,
+				Title:        title,
+				Description:  description,
+				Tags:         documentStringSliceArg(args["tags"]),
+				Frontmatter:  documentFrontmatterArg(args["frontmatter"]),
+				Body:         optionalStringArg(args, "body"),
+				JournalEntry: stringArg(args, "journal_entry"),
 			})
 		},
 	})

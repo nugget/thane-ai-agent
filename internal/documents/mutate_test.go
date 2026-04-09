@@ -145,6 +145,79 @@ func TestStoreJournalUpdatePrunesOldWindows(t *testing.T) {
 	}
 }
 
+func TestStoreWriteWithJournalEntryMaintainsStandardJournalSection(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	result, err := store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Title:        "Metacog State",
+		Body:         stringPtr("# Current State\n\nAll systems nominal."),
+		JournalEntry: "Opened the first journal entry.",
+	})
+	if err != nil {
+		t.Fatalf("Write with journal entry: %v", err)
+	}
+	if result.Section != documentJournalHeading {
+		t.Fatalf("Write result = %#v, want section %q", result, documentJournalHeading)
+	}
+
+	record, err := store.Read(ctx, "kb:metacog/state.md")
+	if err != nil {
+		t.Fatalf("Read after journal write: %v", err)
+	}
+	if !strings.Contains(record.Body, "# Current State") {
+		t.Fatalf("body = %q, want main state body preserved", record.Body)
+	}
+	if !strings.Contains(record.Body, "## Journal") {
+		t.Fatalf("body = %q, want standard Journal section", record.Body)
+	}
+	if !strings.Contains(record.Body, "Opened the first journal entry.") {
+		t.Fatalf("body = %q, want journal entry content", record.Body)
+	}
+}
+
+func TestStoreWriteWithJournalEntryPreservesExistingJournalAcrossBodyReplacement(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Body:         stringPtr("# State\n\nOld summary."),
+		JournalEntry: "First note.",
+	})
+	if err != nil {
+		t.Fatalf("initial Write: %v", err)
+	}
+
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Body:         stringPtr("# State\n\nNew summary."),
+		JournalEntry: "Second note.",
+	})
+	if err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+
+	record, err := store.Read(ctx, "kb:metacog/state.md")
+	if err != nil {
+		t.Fatalf("Read after second Write: %v", err)
+	}
+	if !strings.Contains(record.Body, "New summary.") || strings.Contains(record.Body, "Old summary.") {
+		t.Fatalf("body = %q, want replaced main state body", record.Body)
+	}
+	if !strings.Contains(record.Body, "First note.") || !strings.Contains(record.Body, "Second note.") {
+		t.Fatalf("body = %q, want both journal entries preserved", record.Body)
+	}
+	if count := strings.Count(record.Body, "## Journal"); count != 1 {
+		t.Fatalf("body = %q, want one Journal section, got %d", record.Body, count)
+	}
+}
+
 func TestStoreDeleteRemovesManagedDocument(t *testing.T) {
 	t.Parallel()
 
