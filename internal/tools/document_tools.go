@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/nugget/thane-ai-agent/internal/documents"
 )
@@ -52,7 +54,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				return "", fmt.Errorf("root is required")
 			}
 			pathPrefix, _ := args["path_prefix"].(string)
-			limit := numericArg(args["limit"], 20)
+			limit := numericArg(args["limit"], 20, 100)
 			return dt.Browse(ctx, documents.BrowseArgs{
 				Root:       root,
 				PathPrefix: pathPrefix,
@@ -97,7 +99,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			pathPrefix, _ := args["path_prefix"].(string)
 			query, _ := args["query"].(string)
 			tags := documentStringSliceArg(args["tags"])
-			limit := numericArg(args["limit"], 20)
+			limit := numericArg(args["limit"], 20, 100)
 			return dt.Search(ctx, documents.SearchArgs{
 				Root:       root,
 				PathPrefix: pathPrefix,
@@ -184,17 +186,50 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				return "", fmt.Errorf("key is required")
 			}
 			root, _ := args["root"].(string)
-			limit := numericArg(args["limit"], 20)
+			limit := numericArg(args["limit"], 20, 100)
 			return dt.Values(ctx, documents.ValuesArgs{Root: root, Key: key, Limit: limit})
 		},
 	})
 }
 
-func numericArg(v any, def int) int {
-	if n, ok := v.(float64); ok {
-		return int(n)
+func numericArg(v any, def, max int) int {
+	n, ok := numericValue(v)
+	if !ok || n <= 0 {
+		return def
 	}
-	return def
+	if n > max {
+		return max
+	}
+	return n
+}
+
+func numericValue(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int8:
+		return int(n), true
+	case int16:
+		return int(n), true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i), true
+		}
+		if f, err := strconv.ParseFloat(string(n), 64); err == nil {
+			return int(f), true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
 }
 
 func documentStringSliceArg(v any) []string {

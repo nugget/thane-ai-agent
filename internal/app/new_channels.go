@@ -301,6 +301,10 @@ func (a *App) initChannels(s *newState) error {
 				return fmt.Errorf("create document index: %w", err)
 			}
 			tools.RegisterDocumentTools(a.loop.Tools(), documents.NewTools(docStore))
+			a.deferWorker("documents-index", func(ctx context.Context) error {
+				go docStore.RunRefresher(ctx)
+				return nil
+			})
 			roots := make([]string, 0, len(documentRoots))
 			for root := range documentRoots {
 				roots = append(roots, root)

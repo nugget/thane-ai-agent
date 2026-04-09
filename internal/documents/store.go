@@ -11,13 +11,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // RootSummary describes one indexed document root.
 type RootSummary struct {
 	Root          string   `json:"root"`
-	Path          string   `json:"path"`
+	Path          string   `json:"-"`
 	DocumentCount int      `json:"document_count"`
 	TopTags       []string `json:"top_tags,omitempty"`
 }
@@ -67,10 +68,15 @@ type SearchQuery struct {
 
 // Store indexes managed markdown roots into the primary Thane SQLite DB.
 type Store struct {
-	db     *sql.DB
-	roots  map[string]string
-	logger *slog.Logger
+	db              *sql.DB
+	roots           map[string]string
+	logger          *slog.Logger
+	refreshMu       sync.Mutex
+	lastRefresh     time.Time
+	refreshInterval time.Duration
 }
+
+const defaultRefreshInterval = 5 * time.Second
 
 // NewStore creates a document index store backed by db.
 func NewStore(db *sql.DB, roots map[string]string, logger *slog.Logger) (*Store, error) {
@@ -80,7 +86,12 @@ func NewStore(db *sql.DB, roots map[string]string, logger *slog.Logger) (*Store,
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &Store{db: db, roots: normalizeRoots(roots), logger: logger}
+	s := &Store{
+		db:              db,
+		roots:           normalizeRoots(roots),
+		logger:          logger,
+		refreshInterval: defaultRefreshInterval,
+	}
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate documents schema: %w", err)
 	}
@@ -140,17 +151,57 @@ func (s *Store) migrate() error {
 
 // Refresh incrementally refreshes all indexed roots.
 func (s *Store) Refresh(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.refreshInterval > 0 && !s.lastRefresh.IsZero() && time.Since(s.lastRefresh) < s.refreshInterval {
+		return nil
+	}
 	for root, dir := range s.roots {
 		if err := s.refreshRoot(ctx, root, dir); err != nil {
 			return err
 		}
 	}
+	s.lastRefresh = time.Now()
 	return nil
+}
+
+// RunRefresher keeps the index warm in the background using the store's
+// refresh interval. Errors are logged and retried on the next tick.
+func (s *Store) RunRefresher(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	refreshOnce := func() {
+		if err := s.Refresh(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("document refresh failed", "error", err)
+		}
+	}
+	refreshOnce()
+	if s.refreshInterval <= 0 {
+		<-ctx.Done()
+		return
+	}
+	ticker := time.NewTicker(s.refreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshOnce()
+		}
+	}
 }
 
 func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 	seen := make(map[string]bool)
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			s.logger.Warn("document scan skipped entry", "root", root, "path", path, "error", err)
 			return nil
@@ -169,6 +220,9 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		}
 		return nil
 	})
+	if walkErr != nil {
+		return fmt.Errorf("scan root %q: %w", root, walkErr)
+	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT rel_path FROM indexed_documents WHERE root = ?`, root)
 	if err != nil {

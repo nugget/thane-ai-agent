@@ -45,6 +45,10 @@ Primary trusted LAN notes.
 
 The isolated IoT section.
 `)
+	writeFile(t, filepath.Join(kbDir, "network", "routers.md"), `# Router Notes
+
+Operational notes about the edge router.
+`)
 	writeFile(t, filepath.Join(kbDir, "network", "unifi", "switches.md"), `---
 tags: [network, unifi]
 area: rack
@@ -57,6 +61,10 @@ Rack switch notes.
 ## Core Switch
 
 Details about the core switch.
+`)
+	writeFile(t, filepath.Join(kbDir, "network", "vpn", "firewall.md"), `# VPN Firewall
+
+Notes about the VPN firewall appliance.
 `)
 	writeFile(t, filepath.Join(kbDir, "notes", "cameras.md"), `# Camera Notes
 
@@ -94,19 +102,27 @@ Scratch thoughts about future loops.
 	if len(roots) != 2 {
 		t.Fatalf("len(roots) = %d, want 2", len(roots))
 	}
-	if roots[0].Root != "kb" || roots[0].DocumentCount != 3 {
-		t.Fatalf("roots[0] = %#v, want kb with 3 docs", roots[0])
+	if roots[0].Root != "kb" || roots[0].DocumentCount != 5 {
+		t.Fatalf("roots[0] = %#v, want kb with 5 docs", roots[0])
 	}
 
 	browse, err := store.Browse(ctx, "kb", "network", 20)
 	if err != nil {
 		t.Fatalf("Browse: %v", err)
 	}
-	if len(browse.Directories) != 1 || browse.Directories[0].PathPrefix != "network/unifi" {
-		t.Fatalf("browse.Directories = %#v, want network/unifi", browse.Directories)
+	if len(browse.Directories) != 2 || browse.Directories[0].PathPrefix != "network/unifi" || browse.Directories[1].PathPrefix != "network/vpn" {
+		t.Fatalf("browse.Directories = %#v, want network/unifi and network/vpn", browse.Directories)
 	}
-	if len(browse.Documents) != 1 || browse.Documents[0].Ref != "kb:network/vlans.md" {
-		t.Fatalf("browse.Documents = %#v, want kb:network/vlans.md", browse.Documents)
+	if len(browse.Documents) != 2 || browse.Documents[0].Ref != "kb:network/routers.md" || browse.Documents[1].Ref != "kb:network/vlans.md" {
+		t.Fatalf("browse.Documents = %#v, want network/routers.md and network/vlans.md", browse.Documents)
+	}
+
+	browseLimited, err := store.Browse(ctx, "kb", "network", 2)
+	if err != nil {
+		t.Fatalf("Browse(limit): %v", err)
+	}
+	if got := len(browseLimited.Directories) + len(browseLimited.Documents); got != 2 {
+		t.Fatalf("combined browse limit = %d, want 2 (dirs=%d docs=%d)", got, len(browseLimited.Directories), len(browseLimited.Documents))
 	}
 
 	results, err := store.Search(ctx, SearchQuery{
@@ -166,6 +182,9 @@ Scratch thoughts about future loops.
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}

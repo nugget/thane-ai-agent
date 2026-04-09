@@ -110,15 +110,8 @@ func (s *Store) Browse(ctx context.Context, root, prefix string, limit int) (*Br
 	sort.Slice(directories, func(i, j int) bool { return directories[i].PathPrefix < directories[j].PathPrefix })
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 
-	if limit <= 0 {
-		limit = 20
-	}
-	if len(docs) > limit {
-		docs = docs[:limit]
-	}
-	if len(directories) > limit {
-		directories = directories[:limit]
-	}
+	limit = clampLimit(limit, 20, 100)
+	directories, docs = limitBrowseResults(directories, docs, limit)
 
 	return &BrowseResult{
 		Root:        root,
@@ -133,12 +126,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 	if err := s.Refresh(ctx); err != nil {
 		return nil, err
 	}
-	if q.Limit <= 0 {
-		q.Limit = 20
-	}
-	if q.Limit > 100 {
-		q.Limit = 100
-	}
+	q.Limit = clampLimit(q.Limit, 20, 100)
 	q.Root = strings.TrimSuffix(strings.TrimSpace(q.Root), ":")
 	q.PathPrefix = trimPathPrefix(q.PathPrefix)
 	q.Query = strings.TrimSpace(strings.ToLower(q.Query))
@@ -357,7 +345,8 @@ func (s *Store) values(ctx context.Context, root, key string, limit int, refresh
 		return nil, err
 	}
 	values := asValueCounts(counts)
-	if limit > 0 && len(values) > limit {
+	limit = clampLimit(limit, 20, 100)
+	if len(values) > limit {
 		values = values[:limit]
 	}
 	return values, nil
@@ -411,4 +400,36 @@ func matchScore(doc DocumentSummary, query string) int {
 		}
 	}
 	return score
+}
+
+func clampLimit(limit, def, max int) int {
+	if limit <= 0 {
+		return def
+	}
+	if limit > max {
+		return max
+	}
+	return limit
+}
+
+func limitBrowseResults(directories []BrowseDirectory, docs []DocumentSummary, limit int) ([]BrowseDirectory, []DocumentSummary) {
+	limitedDirectories := make([]BrowseDirectory, 0, min(limit, len(directories)))
+	limitedDocs := make([]DocumentSummary, 0, min(limit, len(docs)))
+	for dirIdx, docIdx := 0, 0; len(limitedDirectories)+len(limitedDocs) < limit && (dirIdx < len(directories) || docIdx < len(docs)); {
+		switch {
+		case dirIdx >= len(directories):
+			limitedDocs = append(limitedDocs, docs[docIdx])
+			docIdx++
+		case docIdx >= len(docs):
+			limitedDirectories = append(limitedDirectories, directories[dirIdx])
+			dirIdx++
+		case directories[dirIdx].PathPrefix <= docs[docIdx].Path:
+			limitedDirectories = append(limitedDirectories, directories[dirIdx])
+			dirIdx++
+		default:
+			limitedDocs = append(limitedDocs, docs[docIdx])
+			docIdx++
+		}
+	}
+	return limitedDirectories, limitedDocs
 }
