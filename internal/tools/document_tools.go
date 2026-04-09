@@ -2,9 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/nugget/thane-ai-agent/internal/documents"
 )
@@ -14,6 +12,28 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	if r == nil || dt == nil {
 		return
 	}
+
+	r.Register(&Tool{
+		Name:        "doc_read",
+		Description: "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Large documents may be truncated by tool output limits, so use `doc_outline` plus `doc_section` when you need to navigate or read larger documents in full.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref": map[string]any{
+					"type":        "string",
+					"description": "Canonical document ref like `kb:network/vlans.md`.",
+				},
+			},
+			"required": []string{"ref"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			if ref == "" {
+				return "", fmt.Errorf("ref is required")
+			}
+			return dt.Read(ctx, documents.RefArgs{Ref: ref})
+		},
+	})
 
 	r.Register(&Tool{
 		Name:        "doc_roots",
@@ -190,58 +210,5 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			return dt.Values(ctx, documents.ValuesArgs{Root: root, Key: key, Limit: limit})
 		},
 	})
-}
-
-func numericArg(v any, def, max int) int {
-	n, ok := numericValue(v)
-	if !ok || n <= 0 {
-		return def
-	}
-	if n > max {
-		return max
-	}
-	return n
-}
-
-func numericValue(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int8:
-		return int(n), true
-	case int16:
-		return int(n), true
-	case int32:
-		return int(n), true
-	case int64:
-		return int(n), true
-	case float32:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case json.Number:
-		if i, err := n.Int64(); err == nil {
-			return int(i), true
-		}
-		if f, err := strconv.ParseFloat(string(n), 64); err == nil {
-			return int(f), true
-		}
-		return 0, false
-	default:
-		return 0, false
-	}
-}
-
-func documentStringSliceArg(v any) []string {
-	raw, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if s, ok := item.(string); ok && s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	registerDocumentMutationTools(r, dt)
 }

@@ -51,6 +51,20 @@ type ValuesArgs struct {
 	Limit int    `json:"limit,omitempty"`
 }
 
+func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	doc, err := t.store.Read(ctx, args.Ref)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(doc)
+}
+
 func (t *Tools) Roots(ctx context.Context) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -138,6 +152,48 @@ func (t *Tools) Values(ctx context.Context, args ValuesArgs) (string, error) {
 		"key":    args.Key,
 		"values": values,
 	})
+}
+
+func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	result, err := t.store.Write(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	result, err := t.store.Edit(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	result, err := t.store.JournalUpdate(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
 }
 
 func marshalToolResult(v any) (string, error) {
