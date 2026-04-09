@@ -80,7 +80,9 @@ worktree_dirty() {
 
 require_clean_worktree() {
     local context="${1:-operation}"
-    worktree_dirty && die "worktree must be clean before ${context}"
+    if worktree_dirty; then
+        die "worktree must be clean before ${context}"
+    fi
 }
 
 warn_if_dirty_worktree() {
