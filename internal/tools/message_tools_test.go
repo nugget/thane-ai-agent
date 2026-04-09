@@ -23,7 +23,7 @@ func (h *recordingMessageHandler) Deliver(_ context.Context, env messages.Envelo
 	}, nil
 }
 
-func TestConfigureMessageToolsRegistersSignalLoop(t *testing.T) {
+func TestConfigureMessageToolsRegistersNotifyLoop(t *testing.T) {
 	t.Parallel()
 
 	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -33,12 +33,12 @@ func TestConfigureMessageToolsRegistersSignalLoop(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.ConfigureMessageTools(MessageToolDeps{Bus: bus})
 
-	tool := reg.Get("signal_loop")
+	tool := reg.Get("notify_loop")
 	if tool == nil {
-		t.Fatal("signal_loop tool not registered")
+		t.Fatal("notify_loop tool not registered")
 	}
 	if _, ok := tool.Parameters["anyOf"]; !ok {
-		t.Fatal("signal_loop schema missing anyOf guardrail")
+		t.Fatal("notify_loop schema missing anyOf guardrail")
 	}
 
 	ctx := WithLoopID(context.Background(), "loop-parent-1")
@@ -53,7 +53,7 @@ func TestConfigureMessageToolsRegistersSignalLoop(t *testing.T) {
 		"priority":         "urgent",
 	})
 	if err != nil {
-		t.Fatalf("signal_loop: %v", err)
+		t.Fatalf("notify_loop: %v", err)
 	}
 
 	if handler.env.From.Kind != messages.IdentityLoop || handler.env.From.ID != "loop-parent-1" {
@@ -96,11 +96,11 @@ func TestSenderIdentityFromContextDefaultsToConversation(t *testing.T) {
 	}
 }
 
-func messagesPayload(raw any) (messages.LoopSignalPayload, error) {
+func messagesPayload(raw any) (messages.LoopNotifyPayload, error) {
 	switch got := raw.(type) {
-	case messages.LoopSignalPayload:
+	case messages.LoopNotifyPayload:
 		return got, nil
 	default:
-		return messages.LoopSignalPayload{}, fmt.Errorf("unexpected payload type %T", raw)
+		return messages.LoopNotifyPayload{}, fmt.Errorf("unexpected payload type %T", raw)
 	}
 }

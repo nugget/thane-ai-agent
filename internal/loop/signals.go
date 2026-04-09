@@ -11,30 +11,30 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/messages"
 )
 
-const maxPendingSignals = 32
+const maxPendingNotifications = 32
 
-type pendingSignal struct {
+type pendingNotify struct {
 	Envelope        messages.Envelope
 	ForceSupervisor bool
 }
 
-// SignalReceipt summarizes the effect of signaling a live loop.
-type SignalReceipt struct {
-	LoopID            string `json:"loop_id"`
-	LoopName          string `json:"loop_name"`
-	State             State  `json:"state"`
-	WokeImmediately   bool   `json:"woke_immediately,omitempty"`
-	QueuedForNextWake bool   `json:"queued_for_next_wake,omitempty"`
-	ForceSupervisor   bool   `json:"force_supervisor,omitempty"`
-	PendingSignals    int    `json:"pending_signals,omitempty"`
+// NotifyReceipt summarizes the effect of notifying a live loop.
+type NotifyReceipt struct {
+	LoopID               string `json:"loop_id"`
+	LoopName             string `json:"loop_name"`
+	State                State  `json:"state"`
+	WokeImmediately      bool   `json:"woke_immediately,omitempty"`
+	QueuedForNextWake    bool   `json:"queued_for_next_wake,omitempty"`
+	ForceSupervisor      bool   `json:"force_supervisor,omitempty"`
+	PendingNotifications int    `json:"pending_notifications,omitempty"`
 }
 
-type signalContextKey struct{}
+type notifyContextKey struct{}
 
-// SignalEnvelopesFromContext returns one-shot message envelopes delivered to
+// NotifyEnvelopesFromContext returns one-shot message envelopes delivered to
 // the current loop iteration, if any.
-func SignalEnvelopesFromContext(ctx context.Context) []messages.Envelope {
-	envs, _ := ctx.Value(signalContextKey{}).([]messages.Envelope)
+func NotifyEnvelopesFromContext(ctx context.Context) []messages.Envelope {
+	envs, _ := ctx.Value(notifyContextKey{}).([]messages.Envelope)
 	if len(envs) == 0 {
 		return nil
 	}
@@ -43,57 +43,57 @@ func SignalEnvelopesFromContext(ctx context.Context) []messages.Envelope {
 	return out
 }
 
-func withSignalEnvelopes(ctx context.Context, envs []messages.Envelope) context.Context {
+func withNotifyEnvelopes(ctx context.Context, envs []messages.Envelope) context.Context {
 	if len(envs) == 0 {
 		return ctx
 	}
 	cp := make([]messages.Envelope, len(envs))
 	copy(cp, envs)
-	return context.WithValue(ctx, signalContextKey{}, cp)
+	return context.WithValue(ctx, notifyContextKey{}, cp)
 }
 
-func decodeLoopSignalPayload(raw any) (messages.LoopSignalPayload, error) {
+func decodeLoopNotifyPayload(raw any) (messages.LoopNotifyPayload, error) {
 	switch got := raw.(type) {
 	case nil:
-		return messages.LoopSignalPayload{}, nil
-	case messages.LoopSignalPayload:
+		return messages.LoopNotifyPayload{}, nil
+	case messages.LoopNotifyPayload:
 		return got, nil
-	case *messages.LoopSignalPayload:
+	case *messages.LoopNotifyPayload:
 		if got == nil {
-			return messages.LoopSignalPayload{}, nil
+			return messages.LoopNotifyPayload{}, nil
 		}
 		return *got, nil
 	case map[string]any:
-		var payload messages.LoopSignalPayload
+		var payload messages.LoopNotifyPayload
 		// Generic decoded JSON payloads arrive as map[string]any.
 		blob, err := json.Marshal(got)
 		if err != nil {
-			return messages.LoopSignalPayload{}, fmt.Errorf("marshal loop signal payload: %w", err)
+			return messages.LoopNotifyPayload{}, fmt.Errorf("marshal loop notify payload: %w", err)
 		}
 		if err := json.Unmarshal(blob, &payload); err != nil {
-			return messages.LoopSignalPayload{}, fmt.Errorf("decode loop signal payload: %w", err)
+			return messages.LoopNotifyPayload{}, fmt.Errorf("decode loop notify payload: %w", err)
 		}
 		return payload, nil
 	default:
-		return messages.LoopSignalPayload{}, fmt.Errorf("unsupported loop signal payload %T", raw)
+		return messages.LoopNotifyPayload{}, fmt.Errorf("unsupported loop notify payload %T", raw)
 	}
 }
 
-func summarizeSignalEnvelopes(envs []messages.Envelope) string {
+func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 	if len(envs) == 0 {
 		return ""
 	}
-	type signalView struct {
+	type notifyView struct {
 		ID       string            `json:"id"`
 		From     messages.Identity `json:"from"`
 		Priority messages.Priority `json:"priority,omitempty"`
 		Scope    []string          `json:"scope,omitempty"`
 		Payload  map[string]any    `json:"payload,omitempty"`
 	}
-	views := make([]signalView, 0, len(envs))
+	views := make([]notifyView, 0, len(envs))
 	for _, env := range envs {
-		payload, _ := decodeLoopSignalPayload(env.Payload)
-		view := signalView{
+		payload, _ := decodeLoopNotifyPayload(env.Payload)
+		view := notifyView{
 			ID:       env.ID,
 			From:     env.From,
 			Priority: env.Priority,
@@ -112,40 +112,40 @@ func summarizeSignalEnvelopes(envs []messages.Envelope) string {
 	}
 	blob, err := json.Marshal(views)
 	if err != nil {
-		slog.Warn("loop: failed to summarize signal envelopes", "count", len(views), "error", err)
+		slog.Warn("loop: failed to summarize notify envelopes", "count", len(views), "error", err)
 		return ""
 	}
-	return "Signal envelopes for this run:\n" + string(blob)
+	return "Loop notifications for this run:\n" + string(blob)
 }
 
-func (l *Loop) enqueueSignal(env messages.Envelope) (SignalReceipt, error) {
-	payload, err := decodeLoopSignalPayload(env.Payload)
+func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
+	payload, err := decodeLoopNotifyPayload(env.Payload)
 	if err != nil {
-		return SignalReceipt{}, err
+		return NotifyReceipt{}, err
 	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.stopped || !l.started {
-		return SignalReceipt{}, fmt.Errorf("loop %q is not running", l.config.Name)
+		return NotifyReceipt{}, fmt.Errorf("loop %q is not running", l.config.Name)
 	}
 	if l.config.WaitFunc != nil {
-		return SignalReceipt{}, fmt.Errorf("loop %q is event-driven and cannot be interrupted by signal yet", l.config.Name)
+		return NotifyReceipt{}, fmt.Errorf("loop %q is event-driven and cannot be interrupted by notification yet", l.config.Name)
 	}
-	if len(l.pendingSignals) >= maxPendingSignals {
-		return SignalReceipt{}, fmt.Errorf("loop %q signal queue full (%d pending)", l.config.Name, len(l.pendingSignals))
+	if len(l.pendingNotifies) >= maxPendingNotifications {
+		return NotifyReceipt{}, fmt.Errorf("loop %q notify queue full (%d pending)", l.config.Name, len(l.pendingNotifies))
 	}
 
-	l.pendingSignals = append(l.pendingSignals, pendingSignal{
+	l.pendingNotifies = append(l.pendingNotifies, pendingNotify{
 		Envelope:        env,
 		ForceSupervisor: payload.ForceSupervisor,
 	})
-	receipt := SignalReceipt{
-		LoopID:          l.id,
-		LoopName:        l.config.Name,
-		State:           l.state,
-		ForceSupervisor: payload.ForceSupervisor,
-		PendingSignals:  len(l.pendingSignals),
+	receipt := NotifyReceipt{
+		LoopID:               l.id,
+		LoopName:             l.config.Name,
+		State:                l.state,
+		ForceSupervisor:      payload.ForceSupervisor,
+		PendingNotifications: len(l.pendingNotifies),
 	}
 	if l.state == StateSleeping {
 		select {
@@ -159,12 +159,12 @@ func (l *Loop) enqueueSignal(env messages.Envelope) (SignalReceipt, error) {
 	return receipt, nil
 }
 
-func (l *Loop) consumePendingSignals() ([]messages.Envelope, bool) {
+func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.pendingSignals) == 0 {
+	if len(l.pendingNotifies) == 0 {
 		// A concurrent wake can leave one coalesced token behind even after the
-		// corresponding signal was already consumed elsewhere; clear it so the
+		// corresponding notification was already consumed elsewhere; clear it so the
 		// next timer sleep is not interrupted spuriously.
 		select {
 		case <-l.wakeCh:
@@ -172,13 +172,13 @@ func (l *Loop) consumePendingSignals() ([]messages.Envelope, bool) {
 		}
 		return nil, false
 	}
-	envs := make([]messages.Envelope, 0, len(l.pendingSignals))
+	envs := make([]messages.Envelope, 0, len(l.pendingNotifies))
 	forceSupervisor := false
-	for _, sig := range l.pendingSignals {
+	for _, sig := range l.pendingNotifies {
 		envs = append(envs, sig.Envelope)
 		forceSupervisor = forceSupervisor || sig.ForceSupervisor
 	}
-	l.pendingSignals = nil
+	l.pendingNotifies = nil
 	select {
 	case <-l.wakeCh:
 	default:

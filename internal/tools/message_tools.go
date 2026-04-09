@@ -25,11 +25,11 @@ func (r *Registry) registerMessageTools() {
 		return
 	}
 	r.Register(&Tool{
-		Name: "signal_loop",
-		Description: "Send a one-shot signal envelope to a live timer-driven loop. " +
+		Name: "notify_loop",
+		Description: "Send a one-shot message envelope to a live timer-driven loop. " +
 			"Use this to tap a sleeping watcher with fresh context or force the next iteration " +
 			"to run in supervisor mode. If the loop is currently sleeping, it wakes immediately; " +
-			"if it is already processing, the signal is queued for the next iteration.",
+			"if it is already processing, the message is queued for the next iteration.",
 		Parameters: map[string]any{
 			"type": "object",
 			"anyOf": []any{
@@ -60,11 +60,11 @@ func (r *Registry) registerMessageTools() {
 				},
 			},
 		},
-		Handler: r.handleSignalLoop,
+		Handler: r.handleNotifyLoop,
 	})
 }
 
-func (r *Registry) handleSignalLoop(ctx context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleNotifyLoop(ctx context.Context, args map[string]any) (string, error) {
 	if r.messageBus == nil {
 		return "", fmt.Errorf("message bus is not configured")
 	}
@@ -84,7 +84,7 @@ func (r *Registry) handleSignalLoop(ctx context.Context, args map[string]any) (s
 		destination.Selector = messages.SelectorName
 	}
 
-	payload := messages.LoopSignalPayload{
+	payload := messages.LoopNotifyPayload{
 		Message:         strings.TrimSpace(ldStringArg(args, "message")),
 		ForceSupervisor: boolArg(args, "force_supervisor"),
 	}

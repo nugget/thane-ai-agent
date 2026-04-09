@@ -21,24 +21,24 @@ func (a *App) initMessageBus() {
 	}
 	route := &messages.LoopHandler{
 		ByID: func(ctx context.Context, id string, env messages.Envelope) (messages.DeliveryResult, error) {
-			receipt, err := a.loopRegistry.SignalLoop(ctx, id, env)
+			receipt, err := a.loopRegistry.NotifyLoop(ctx, id, env)
 			if err != nil {
 				return messages.DeliveryResult{}, err
 			}
-			return loopSignalDeliveryResult(receipt), nil
+			return loopNotifyDeliveryResult(receipt), nil
 		},
 		ByName: func(ctx context.Context, name string, env messages.Envelope) (messages.DeliveryResult, error) {
-			receipt, err := a.loopRegistry.SignalLoopByName(ctx, name, env)
+			receipt, err := a.loopRegistry.NotifyLoopByName(ctx, name, env)
 			if err != nil {
 				return messages.DeliveryResult{}, err
 			}
-			return loopSignalDeliveryResult(receipt), nil
+			return loopNotifyDeliveryResult(receipt), nil
 		},
 	}
 	a.messageBus.RegisterRoute(messages.DestinationLoop, route.Deliver)
 }
 
-func loopSignalDeliveryResult(receipt looppkg.SignalReceipt) messages.DeliveryResult {
+func loopNotifyDeliveryResult(receipt looppkg.NotifyReceipt) messages.DeliveryResult {
 	status := messages.DeliveryDelivered
 	if receipt.QueuedForNextWake {
 		status = messages.DeliveryQueued

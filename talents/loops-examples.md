@@ -169,8 +169,8 @@ Use this when a timer-driven service loop is already running and new
 information should reach its next iteration now instead of waiting for
 the normal sleep cycle.
 
-- Tool: `signal_loop`
-- Shape: one-shot signal envelope
+- Tool: `notify_loop`
+- Shape: one-shot loop notification
 - Effect: wake now if the loop is sleeping, otherwise queue for the next
   iteration
 - Persistence: none; use document tools inside the loop for durable state

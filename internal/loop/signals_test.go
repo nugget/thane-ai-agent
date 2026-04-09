@@ -9,7 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/messages"
 )
 
-func TestLoopSignalWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
+func TestLoopNotifyWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 	t.Parallel()
 
 	reqs := make(chan RunRequest, 1)
@@ -45,7 +45,7 @@ func TestLoopSignalWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 			Selector: messages.SelectorName,
 		},
 		Type: messages.TypeSignal,
-		Payload: messages.LoopSignalPayload{
+		Payload: messages.LoopNotifyPayload{
 			Message:         "The garage reading is CPU temperature, not ambient.",
 			ForceSupervisor: true,
 		},
@@ -54,9 +54,9 @@ func TestLoopSignalWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 		t.Fatalf("Normalize: %v", err)
 	}
 
-	receipt, err := l.enqueueSignal(env)
+	receipt, err := l.enqueueNotify(env)
 	if err != nil {
-		t.Fatalf("enqueueSignal: %v", err)
+		t.Fatalf("enqueueNotify: %v", err)
 	}
 	if !receipt.WokeImmediately {
 		t.Fatalf("receipt = %#v, want woke_immediately", receipt)
@@ -68,7 +68,7 @@ func TestLoopSignalWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 			t.Fatalf("supervisor hint = %q, want true", req.Hints["supervisor"])
 		}
 		content := req.Messages[0].Content
-		if !strings.Contains(content, "Signal envelopes for this run:") {
+		if !strings.Contains(content, "Loop notifications for this run:") {
 			t.Fatalf("task content missing signal prefix: %q", content)
 		}
 		if !strings.Contains(content, "garage reading is CPU temperature") {
@@ -86,7 +86,7 @@ func TestLoopSignalWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 	}
 }
 
-func TestLoopSignalRejectsEventDrivenLoop(t *testing.T) {
+func TestLoopNotifyRejectsEventDrivenLoop(t *testing.T) {
 	t.Parallel()
 
 	waitCh := make(chan struct{})
@@ -125,12 +125,12 @@ func TestLoopSignalRejectsEventDrivenLoop(t *testing.T) {
 		t.Fatalf("Normalize: %v", err)
 	}
 
-	if _, err := l.enqueueSignal(env); err == nil || !strings.Contains(err.Error(), "event-driven") {
-		t.Fatalf("enqueueSignal err = %v, want event-driven rejection", err)
+	if _, err := l.enqueueNotify(env); err == nil || !strings.Contains(err.Error(), "event-driven") {
+		t.Fatalf("enqueueNotify err = %v, want event-driven rejection", err)
 	}
 }
 
-func TestLoopSignalQueueBounded(t *testing.T) {
+func TestLoopNotifyQueueBounded(t *testing.T) {
 	t.Parallel()
 
 	l, err := New(Config{
@@ -158,13 +158,13 @@ func TestLoopSignalQueueBounded(t *testing.T) {
 		t.Fatalf("Normalize: %v", err)
 	}
 
-	for i := 0; i < maxPendingSignals; i++ {
-		if _, err := l.enqueueSignal(env); err != nil {
-			t.Fatalf("enqueueSignal(%d): %v", i, err)
+	for i := 0; i < maxPendingNotifications; i++ {
+		if _, err := l.enqueueNotify(env); err != nil {
+			t.Fatalf("enqueueNotify(%d): %v", i, err)
 		}
 	}
-	if _, err := l.enqueueSignal(env); err == nil || !strings.Contains(err.Error(), "queue full") {
-		t.Fatalf("enqueueSignal overflow err = %v, want queue-full rejection", err)
+	if _, err := l.enqueueNotify(env); err == nil || !strings.Contains(err.Error(), "queue full") {
+		t.Fatalf("enqueueNotify overflow err = %v, want queue-full rejection", err)
 	}
 }
 

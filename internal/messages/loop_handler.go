@@ -5,25 +5,25 @@ import (
 	"fmt"
 )
 
-// LoopSignalByID delivers one signal envelope to a live loop identified by ID.
-type LoopSignalByID func(context.Context, string, Envelope) (DeliveryResult, error)
+// LoopNotifyByID delivers one notification envelope to a live loop identified by ID.
+type LoopNotifyByID func(context.Context, string, Envelope) (DeliveryResult, error)
 
-// LoopSignalByName delivers one signal envelope to a live loop identified by exact name.
-type LoopSignalByName func(context.Context, string, Envelope) (DeliveryResult, error)
+// LoopNotifyByName delivers one notification envelope to a live loop identified by exact name.
+type LoopNotifyByName func(context.Context, string, Envelope) (DeliveryResult, error)
 
 // LoopHandler routes loop-destination envelopes into the live loop registry.
 type LoopHandler struct {
-	ByID   LoopSignalByID
-	ByName LoopSignalByName
+	ByID   LoopNotifyByID
+	ByName LoopNotifyByName
 }
 
-// Deliver sends one signal envelope to a live loop.
+// Deliver sends one notification envelope to a live loop.
 func (h *LoopHandler) Deliver(ctx context.Context, env Envelope) (DeliveryResult, error) {
 	if h == nil || (h.ByID == nil && h.ByName == nil) {
 		return DeliveryResult{}, fmt.Errorf("loop message route is not configured")
 	}
 	if env.Type != TypeSignal {
-		return DeliveryResult{}, fmt.Errorf("loop route only supports signal envelopes for live loops, got %q", env.Type)
+		return DeliveryResult{}, fmt.Errorf("loop route only supports loop notifications (signal envelopes), got %q", env.Type)
 	}
 
 	var (

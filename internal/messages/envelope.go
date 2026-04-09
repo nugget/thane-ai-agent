@@ -184,8 +184,8 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 	return e, nil
 }
 
-// LoopSignalPayload is the first concrete signal payload shape.
-type LoopSignalPayload struct {
+// LoopNotifyPayload is the first concrete loop-notification payload shape.
+type LoopNotifyPayload struct {
 	Message         string `json:"message,omitempty"`
 	ForceSupervisor bool   `json:"force_supervisor,omitempty"`
 }

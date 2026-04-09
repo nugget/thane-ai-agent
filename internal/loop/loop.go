@@ -245,9 +245,9 @@ type Loop struct {
 	// iteration. Buffered size 1 coalesces multiple wake requests.
 	wakeCh chan struct{}
 
-	// pendingSignals are one-shot envelopes injected into the next
+	// pendingNotifies are one-shot envelopes injected into the next
 	// iteration prompt or handler context.
-	pendingSignals []pendingSignal
+	pendingNotifies []pendingNotify
 }
 
 // New creates a loop with the given configuration and dependencies.
@@ -787,7 +787,7 @@ func (l *Loop) run(ctx context.Context) {
 			}
 		}
 
-		signals, forceSupervisor := l.consumePendingSignals()
+		signals, forceSupervisor := l.consumePendingNotifies()
 
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
@@ -839,7 +839,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
-			handlerCtx = withSignalEnvelopes(handlerCtx, signals)
+			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
 					noOp = true
@@ -1290,7 +1290,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 	if l.requestInstructions != "" {
 		task = "Instructions: " + l.requestInstructions + "\n\n" + task
 	}
-	if signalSummary := summarizeSignalEnvelopes(signals); signalSummary != "" {
+	if signalSummary := summarizeNotifyEnvelopes(signals); signalSummary != "" {
 		task = signalSummary + "\n\n" + task
 	}
 
