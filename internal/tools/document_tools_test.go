@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -30,5 +31,24 @@ func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {
 				t.Fatalf("numericArg(%v, %d, %d) = %d, want %d", tc.in, tc.def, tc.max, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDocumentFrontmatterArgSupportsStringsAndArrays(t *testing.T) {
+	t.Parallel()
+
+	got := documentFrontmatterArg(map[string]any{
+		"title": "Notebook",
+		"tags":  []any{"alpha", "beta"},
+		"blank": "",
+		"skip":  []any{1, "ok"},
+	})
+	want := map[string][]string{
+		"title": {"Notebook"},
+		"tags":  {"alpha", "beta"},
+		"skip":  {"ok"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("documentFrontmatterArg(...) = %#v, want %#v", got, want)
 	}
 }

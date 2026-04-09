@@ -110,21 +110,43 @@ func findFrontmatterClose(rest string) (int, int) {
 
 func parseFrontmatterMap(raw string) map[string][]string {
 	meta := make(map[string][]string)
+	pendingKey := ""
 	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		line = strings.TrimRight(line, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		m := frontmatterKeyRE.FindStringSubmatch(line)
+		if pendingKey != "" && strings.HasPrefix(trimmed, "-") {
+			value := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")), `"'`)
+			if value != "" {
+				meta[pendingKey] = append(meta[pendingKey], value)
+			}
+			continue
+		}
+		m := frontmatterKeyRE.FindStringSubmatch(trimmed)
 		if len(m) != 3 {
+			pendingKey = ""
 			continue
 		}
 		key := strings.TrimSpace(strings.ToLower(m[1]))
 		value := parseFrontmatterValue(m[2])
 		if len(value) == 0 {
+			pendingKey = key
+			if _, ok := meta[key]; !ok {
+				meta[key] = nil
+			}
 			continue
 		}
 		meta[key] = value
+		pendingKey = ""
+	}
+	for key, values := range meta {
+		if len(values) == 0 {
+			delete(meta, key)
+			continue
+		}
+		meta[key] = dedupeSorted(values)
 	}
 	return meta
 }
