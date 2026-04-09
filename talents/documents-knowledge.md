@@ -22,8 +22,17 @@ Trust these instincts:
   document before changing it
 - use `doc_write` to create or replace a managed document at a semantic
   ref like `kb:article.md`
+- use `doc_copy` when you want a new document to branch from an existing
+  one without disturbing the source
+- use `doc_move` when a document should live at a new semantic ref but
+  remain the same document in the corpus
+- use `doc_delete` when a managed document should leave the corpus
 - use `doc_edit` for section-aware updates, body appends, and metadata
   changes without falling back to raw filesystem paths
+- use `doc_copy_section` when one section should be curated into another
+  document but still remain in the source
+- use `doc_move_section` when one section should relocate into another
+  document and disappear from the source
 - use `doc_journal_update` for recurring loop notes or rolling journals
   when the tool should own timestamps and window hygiene for you
 - move to `files` only when the task is truly about raw filesystem work

@@ -196,6 +196,94 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	return marshalToolResult(result)
 }
 
+func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	result, err := t.store.Delete(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	if args.DestinationRef == "" {
+		return "", fmt.Errorf("destination_ref is required")
+	}
+	result, err := t.store.Move(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) Copy(ctx context.Context, args CopyArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	if args.DestinationRef == "" {
+		return "", fmt.Errorf("destination_ref is required")
+	}
+	result, err := t.store.Copy(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) CopySection(ctx context.Context, args SectionTransferArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	if args.Section == "" {
+		return "", fmt.Errorf("section is required")
+	}
+	if args.DestinationRef == "" {
+		return "", fmt.Errorf("destination_ref is required")
+	}
+	result, err := t.store.CopySection(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
+func (t *Tools) MoveSection(ctx context.Context, args SectionTransferArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	if args.Section == "" {
+		return "", fmt.Errorf("section is required")
+	}
+	if args.DestinationRef == "" {
+		return "", fmt.Errorf("destination_ref is required")
+	}
+	result, err := t.store.MoveSection(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(result)
+}
+
 func marshalToolResult(v any) (string, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

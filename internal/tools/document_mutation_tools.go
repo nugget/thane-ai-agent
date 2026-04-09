@@ -11,6 +11,8 @@ import (
 )
 
 func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
+	registerDocumentLifecycleTools(r, dt)
+
 	r.Register(&Tool{
 		Name:                 "doc_write",
 		Description:          "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, so the model can think in documents instead of filesystem paths.",

@@ -345,9 +345,7 @@ func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string
 	if err := s.upsertFile(ctx, root, relPath); err != nil {
 		return fmt.Errorf("refresh indexed document: %w", err)
 	}
-	s.refreshMu.Lock()
-	s.lastRefresh = time.Now()
-	s.refreshMu.Unlock()
+	s.touchLastRefresh(time.Now())
 	return nil
 }
 

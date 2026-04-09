@@ -205,6 +205,26 @@ func deleteDocumentSection(body, selector string) (string, string, error) {
 	return strings.Trim(strings.Join(out, "\n"), "\n"), target.Heading, nil
 }
 
+func extractDocumentSection(body, selector string) (Section, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return Section{}, fmt.Errorf("section is required")
+	}
+	target, found := findSection(parseSections(trimDocumentBody(body)), selector, "")
+	if !found {
+		return Section{}, fmt.Errorf("section %q not found", selector)
+	}
+	return target, nil
+}
+
+func sectionBodyContent(sec Section) string {
+	lines := strings.Split(sec.Content, "\n")
+	if len(lines) <= 1 {
+		return ""
+	}
+	return strings.Trim(strings.Join(lines[1:], "\n"), "\n")
+}
+
 func findSection(sections []Section, selector, heading string) (Section, bool) {
 	targets := make([]string, 0, 2)
 	if selector != "" {
