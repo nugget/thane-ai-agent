@@ -181,8 +181,8 @@ Good uses for custom roots:
 - dossiers
 - imported research notes
 
-See [Document Roots](../understanding/document-roots.md) for the model
-and architecture view.
+See [Document Roots](../understanding/document-roots.md) for the fuller
+operator guide.
 
 ## Persona & Talents
 
