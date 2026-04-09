@@ -290,6 +290,83 @@ func TestStoreMoveRenamesManagedDocument(t *testing.T) {
 	}
 }
 
+func TestStoreMoveRestoresOverwrittenDestinationWhenSourceRemovalFails(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	srcDir := filepath.Join(rootDir, "src")
+	dstDir := filepath.Join(rootDir, "dst")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll src: %v", err)
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll dst: %v", err)
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store, err := NewStore(db, map[string]string{"src": srcDir, "dst": dstDir}, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:   "src:notes/source.md",
+		Title: "Source",
+		Body:  stringPtr("Source body."),
+	})
+	if err != nil {
+		t.Fatalf("Write source: %v", err)
+	}
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:   "dst:notes/existing.md",
+		Title: "Existing",
+		Body:  stringPtr("Existing destination body."),
+	})
+	if err != nil {
+		t.Fatalf("Write destination: %v", err)
+	}
+
+	sourceParent := filepath.Join(srcDir, "notes")
+	if err := os.Chmod(sourceParent, 0o555); err != nil {
+		t.Fatalf("Chmod readonly source parent: %v", err)
+	}
+	defer func() { _ = os.Chmod(sourceParent, 0o755) }()
+
+	_, err = store.Move(ctx, MoveArgs{
+		Ref:            "src:notes/source.md",
+		DestinationRef: "dst:notes/existing.md",
+		Overwrite:      true,
+	})
+	if err == nil {
+		t.Fatal("Move overwrite = nil, want source removal failure")
+	}
+	if !strings.Contains(err.Error(), "remove source document") {
+		t.Fatalf("Move overwrite error = %v, want remove source document", err)
+	}
+
+	record, err := store.Read(ctx, "dst:notes/existing.md")
+	if err != nil {
+		t.Fatalf("Read destination after failed move: %v", err)
+	}
+	if !strings.Contains(record.Body, "Existing destination body.") {
+		t.Fatalf("destination body after failed move = %q, want original destination restored", record.Body)
+	}
+
+	source, err := store.Read(ctx, "src:notes/source.md")
+	if err != nil {
+		t.Fatalf("Read source after failed move: %v", err)
+	}
+	if !strings.Contains(source.Body, "Source body.") {
+		t.Fatalf("source body after failed move = %q, want original source preserved", source.Body)
+	}
+}
+
 func TestStoreCopyDuplicatesManagedDocument(t *testing.T) {
 	t.Parallel()
 

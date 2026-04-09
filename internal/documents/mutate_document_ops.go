@@ -160,8 +160,16 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 	}
 
 	destinationExists := false
+	var originalDestinationRaw []byte
 	if _, err := os.Stat(dstAbsPath); err == nil {
 		destinationExists = true
+		originalDestinationRaw, err = os.ReadFile(dstAbsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("destination document disappeared during move: %s", args.DestinationRef)
+			}
+			return nil, fmt.Errorf("read destination document for rollback: %w", err)
+		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("check destination document: %w", err)
 	}
@@ -173,8 +181,17 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 		return nil, err
 	}
 	if err := os.Remove(srcAbsPath); err != nil {
-		_ = os.Remove(dstAbsPath)
-		_ = s.deleteIndexedDocument(ctx, dstRoot, dstRelPath)
+		if destinationExists {
+			if restoreErr := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(originalDestinationRaw)); restoreErr != nil {
+				if os.IsNotExist(err) {
+					return nil, fmt.Errorf("document not found: %s (rollback restore failed: %v)", args.Ref, restoreErr)
+				}
+				return nil, fmt.Errorf("remove source document: %w (rollback restore failed: %v)", err, restoreErr)
+			}
+		} else {
+			_ = os.Remove(dstAbsPath)
+			_ = s.deleteIndexedDocument(ctx, dstRoot, dstRelPath)
+		}
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}

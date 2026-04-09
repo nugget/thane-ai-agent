@@ -108,7 +108,7 @@ func (s *Store) transferSection(ctx context.Context, action string, args Section
 	}
 	if removeSource && srcRoot == dstRoot && srcRelPath == dstRelPath {
 		if strings.EqualFold(destinationHeading, sourceSection.Heading) || slugify(destinationHeading) == sourceSection.Slug {
-			return nil, fmt.Errorf("move_section cannot target the same section in the same document; use doc_edit to rename or restructure it in place")
+			return nil, fmt.Errorf("doc_move_section cannot target the same section in the same document; use doc_edit to rename or restructure it in place")
 		}
 	}
 
