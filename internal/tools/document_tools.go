@@ -17,7 +17,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_roots",
-		Description: "List indexed markdown roots and their document counts. Use first when the answer probably lives in a managed document corpus but you do not yet know which root to browse.",
+		Description: "List indexed markdown roots with helpful corpus summaries such as document counts, total size, last modification, top tags, top directories, and recent example documents. Use first when the answer probably lives in a managed document corpus but you do not yet know which root to browse.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

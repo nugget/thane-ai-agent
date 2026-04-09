@@ -18,9 +18,17 @@ func (s *Store) Roots(ctx context.Context) ([]RootSummary, error) {
 	}
 	summaries := make([]RootSummary, 0, len(s.roots))
 	for _, root := range s.indexedRoots() {
-		var count int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM indexed_documents WHERE root = ?`, root).Scan(&count); err != nil {
-			return nil, fmt.Errorf("count documents for root %q: %w", root, err)
+		summary := RootSummary{
+			Root: root,
+			Path: s.roots[root],
+		}
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(word_count), 0), COALESCE(MAX(modified_at), '')
+			 FROM indexed_documents
+			 WHERE root = ?`,
+			root,
+		).Scan(&summary.DocumentCount, &summary.TotalSizeBytes, &summary.TotalWordCount, &summary.LastModifiedAt); err != nil {
+			return nil, fmt.Errorf("summarize documents for root %q: %w", root, err)
 		}
 		topTags, err := s.values(ctx, root, "tags", 8, false)
 		if err != nil {
@@ -30,12 +38,18 @@ func (s *Store) Roots(ctx context.Context) ([]RootSummary, error) {
 		for _, tag := range topTags {
 			tagValues = append(tagValues, tag.Value)
 		}
-		summaries = append(summaries, RootSummary{
-			Root:          root,
-			Path:          s.roots[root],
-			DocumentCount: count,
-			TopTags:       tagValues,
-		})
+		summary.TopTags = tagValues
+		topDirectories, err := s.topDirectories(ctx, root, 5)
+		if err != nil {
+			return nil, err
+		}
+		summary.TopDirectories = topDirectories
+		recentDocuments, err := s.recentDocuments(ctx, root, 3)
+		if err != nil {
+			return nil, err
+		}
+		summary.RecentDocuments = recentDocuments
+		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }

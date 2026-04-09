@@ -18,10 +18,23 @@ import (
 
 // RootSummary describes one indexed document root.
 type RootSummary struct {
-	Root          string   `json:"root"`
-	Path          string   `json:"-"`
-	DocumentCount int      `json:"document_count"`
-	TopTags       []string `json:"top_tags,omitempty"`
+	Root            string             `json:"root"`
+	Path            string             `json:"-"`
+	DocumentCount   int                `json:"document_count"`
+	TotalSizeBytes  int64              `json:"total_size_bytes"`
+	TotalWordCount  int                `json:"total_word_count"`
+	LastModifiedAt  string             `json:"last_modified_at,omitempty"`
+	TopTags         []string           `json:"top_tags,omitempty"`
+	TopDirectories  []BrowseDirectory  `json:"top_directories,omitempty"`
+	RecentDocuments []RootDocumentHint `json:"recent_documents,omitempty"`
+}
+
+// RootDocumentHint is a compact example document attached to a root summary.
+type RootDocumentHint struct {
+	Ref        string `json:"ref"`
+	Path       string `json:"path"`
+	Title      string `json:"title"`
+	ModifiedAt string `json:"modified_at"`
 }
 
 // DocumentSummary is the compact search/browse view of a document.

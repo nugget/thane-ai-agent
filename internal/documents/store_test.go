@@ -106,6 +106,18 @@ Scratch thoughts about future loops.
 	if roots[0].Root != "kb" || roots[0].DocumentCount != 5 {
 		t.Fatalf("roots[0] = %#v, want kb with 5 docs", roots[0])
 	}
+	if roots[0].TotalWordCount <= 0 || roots[0].TotalSizeBytes <= 0 {
+		t.Fatalf("roots[0] aggregate stats = %#v, want non-zero totals", roots[0])
+	}
+	if roots[0].LastModifiedAt == "" {
+		t.Fatalf("roots[0].LastModifiedAt = empty, want timestamp")
+	}
+	if len(roots[0].TopDirectories) != 2 || roots[0].TopDirectories[0].PathPrefix != "network" {
+		t.Fatalf("roots[0].TopDirectories = %#v, want network/notes summary", roots[0].TopDirectories)
+	}
+	if len(roots[0].RecentDocuments) == 0 || !strings.HasPrefix(roots[0].RecentDocuments[0].Ref, "kb:") {
+		t.Fatalf("roots[0].RecentDocuments = %#v, want canonical root refs", roots[0].RecentDocuments)
+	}
 
 	browse, err := store.Browse(ctx, "kb", "network", 20)
 	if err != nil {

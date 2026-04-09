@@ -2,6 +2,7 @@ package documents
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,22 @@ func TestToolsRootsOmitAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Roots: %v", err)
 	}
-	if strings.Contains(got, `"path"`) {
-		t.Fatalf("Roots() leaked filesystem path: %s", got)
+	var payload struct {
+		Roots []map[string]any `json:"roots"`
+	}
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(Roots()) error: %v", err)
+	}
+	if len(payload.Roots) == 0 {
+		t.Fatalf("Roots() returned no roots: %s", got)
+	}
+	if _, ok := payload.Roots[0]["path"]; ok {
+		t.Fatalf("Roots() leaked root filesystem path: %s", got)
+	}
+	for _, want := range []string{`"total_size_bytes"`, `"last_modified_at"`, `"top_directories"`, `"recent_documents"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Roots() = %s, want field %s", got, want)
+		}
 	}
 }
 
@@ -68,6 +83,10 @@ tags: [test]
 # Test Note
 
 Helpful note.
+`)
+	writeFile(t, filepath.Join(kbDir, "network", "nested.md"), `# Nested Note
+
+Helpful nested note.
 `)
 
 	db, err := database.OpenMemory()
