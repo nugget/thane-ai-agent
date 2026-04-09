@@ -20,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/media"
+	"github.com/nugget/thane-ai-agent/internal/messages"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	routepkg "github.com/nugget/thane-ai-agent/internal/router"
@@ -86,6 +87,7 @@ type Registry struct {
 	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	liveLoopRegistry                           *looppkg.Registry
 	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
+	messageBus                                 *messages.Bus
 
 	contentResolver *ContentResolver
 }

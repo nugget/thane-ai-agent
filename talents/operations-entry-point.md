@@ -18,9 +18,10 @@ Choose the next move deliberately:
 - If the work is about scheduled tasks or timing policy, activate
   `scheduler`.
 - If you need live loop status, loop stops, ad hoc loop spawns, durable
-  loop definitions, loop policy, or a detached research task that
-  should report back later, activate `loops`. That branch also carries
-  concrete loop-launch recipes when you need a known-good pattern.
+  loop definitions, loop policy, detached research that should report
+  back later, or a one-shot signal to a sleeping service loop, activate
+  `loops`. That branch also carries concrete loop-launch recipes when
+  you need a known-good pattern.
 - If the operational question is really about session boundaries,
   resets, splits, checkpoints, or carry-forward, activate `session`.
 - If the work is MQTT plumbing or wake subscriptions, activate `mqtt`.

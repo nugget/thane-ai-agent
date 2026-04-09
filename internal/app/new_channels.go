@@ -373,6 +373,10 @@ func (a *App) initChannels(s *newState) error {
 		Registry:   a.loopRegistry,
 		LaunchLoop: a.launchLoop,
 	})
+	a.initMessageBus()
+	a.loop.Tools().ConfigureMessageTools(tools.MessageToolDeps{
+		Bus: a.messageBus,
+	})
 
 	// --- Log index query ---
 	// Expose the structured log index so the agent can query its own

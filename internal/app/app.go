@@ -34,6 +34,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/messages"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
@@ -169,6 +170,9 @@ type App struct {
 
 	// Event bus
 	eventBus *events.Bus
+
+	// Inter-component message bus
+	messageBus *messages.Bus
 
 	// Email manager (for Close on shutdown)
 	emailMgr *email.Manager

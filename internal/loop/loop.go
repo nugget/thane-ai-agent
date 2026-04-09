@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/messages"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
@@ -239,6 +240,14 @@ type Loop struct {
 
 	// consecutiveErrors tracks sequential failures for backoff.
 	consecutiveErrors int
+
+	// wakeCh interrupts timer sleep when a signal is queued for the next
+	// iteration. Buffered size 1 coalesces multiple wake requests.
+	wakeCh chan struct{}
+
+	// pendingNotifies are one-shot envelopes injected into the next
+	// iteration prompt or handler context.
+	pendingNotifies []pendingNotify
 }
 
 // New creates a loop with the given configuration and dependencies.
@@ -272,6 +281,7 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 		config: cfg,
 		deps:   deps,
 		state:  StatePending,
+		wakeCh: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -673,7 +683,7 @@ func (l *Loop) run(ctx context.Context) {
 			"duration", initialSleep.Round(time.Second),
 		)
 
-		if !sleepCtx(ctx, initialSleep) {
+		if !l.sleep(ctx, initialSleep) {
 			logger.Debug("loop stopped during initial sleep",
 				"phase", "initial_sleep",
 			)
@@ -750,7 +760,7 @@ func (l *Loop) run(ctx context.Context) {
 					"consecutive_errors", consecutiveErrors,
 					"backoff", backoff.Round(time.Second),
 				)
-				if !sleepCtx(ctx, backoff) {
+				if !l.sleep(ctx, backoff) {
 					logger.Debug("loop stopped during wait backoff",
 						"phase", "wait_backoff",
 						"backoff", backoff.Round(time.Second),
@@ -777,6 +787,8 @@ func (l *Loop) run(ctx context.Context) {
 			}
 		}
 
+		signals, forceSupervisor := l.consumePendingNotifies()
+
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
 		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
@@ -786,7 +798,7 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
-		isSupervisor := l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb
+		isSupervisor := forceSupervisor || (l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb)
 
 		iterLog := logger.With(
 			"conversation_id", convID,
@@ -810,11 +822,12 @@ func (l *Loop) run(ctx context.Context) {
 			Source:    events.SourceLoop,
 			Kind:      events.KindLoopIterationStart,
 			Data: map[string]any{
-				"loop_id":         l.id,
-				"loop_name":       l.config.Name,
-				"conversation_id": convID,
-				"supervisor":      isSupervisor,
-				"attempt":         attemptCount + 1,
+				"loop_id":          l.id,
+				"loop_name":        l.config.Name,
+				"conversation_id":  convID,
+				"supervisor":       isSupervisor,
+				"attempt":          attemptCount + 1,
+				"signal_envelopes": len(signals),
 			},
 		})
 		iterLog.Debug("loop iteration starting")
@@ -826,6 +839,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
+			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
 					noOp = true
@@ -905,7 +919,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
 			}
 			l.mu.Unlock()
-			result, err = l.iterate(iterCtx, isSupervisor, convID)
+			result, err = l.iterate(iterCtx, isSupervisor, convID, signals)
 		}
 
 		// Clear in-flight state after iteration completes.
@@ -1124,7 +1138,7 @@ func (l *Loop) run(ctx context.Context) {
 
 			iterLog.Debug("loop sleeping", "duration", sleep.Round(time.Second))
 
-			if !sleepCtx(ctx, sleep) {
+			if !l.sleep(ctx, sleep) {
 				logger.Debug("loop stopped during sleep",
 					"phase", "sleep",
 				)
@@ -1233,7 +1247,7 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 
 // iterate performs a single loop iteration: build prompt and run the
 // LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*IterationResult, error) {
+func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, signals []messages.Envelope) (*IterationResult, error) {
 	iterStart := time.Now()
 
 	// Build routing hints.
@@ -1275,6 +1289,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 
 	if l.requestInstructions != "" {
 		task = "Instructions: " + l.requestInstructions + "\n\n" + task
+	}
+	if signalSummary := summarizeNotifyEnvelopes(signals); signalSummary != "" {
+		task = signalSummary + "\n\n" + task
 	}
 
 	// Merge loops-ng profile hints over loop-generated defaults.
@@ -1515,18 +1532,5 @@ func (l *Loop) setState(s State) {
 func (l *Loop) publishEvent(e events.Event) {
 	if l.deps.EventBus != nil {
 		l.deps.EventBus.Publish(e)
-	}
-}
-
-// sleepCtx sleeps for d or until ctx is cancelled. Returns false if
-// cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
 	}
 }

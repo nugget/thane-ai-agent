@@ -319,6 +319,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"loop_definition_summary":     {CanonicalID: "native:loop_definition_summary", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"spawn_loop":                  {CanonicalID: "native:spawn_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"stop_loop":                   {CanonicalID: "native:stop_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
+	"notify_loop":                 {CanonicalID: "native:notify_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"macos_calendar_events":       {CanonicalID: "native:macos_calendar_events", Source: NativeToolSource, DefaultTags: []string{"platform"}},
 	"media_feeds":                 {CanonicalID: "native:media_feeds", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"media_follow":                {CanonicalID: "native:media_follow", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
