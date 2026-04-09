@@ -12,8 +12,9 @@ import (
 
 func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 	r.Register(&Tool{
-		Name:        "doc_write",
-		Description: "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, so the model can think in documents instead of filesystem paths.",
+		Name:                 "doc_write",
+		Description:          "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, so the model can think in documents instead of filesystem paths.",
+		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -65,8 +66,9 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 	})
 
 	r.Register(&Tool{
-		Name:        "doc_edit",
-		Description: "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations.",
+		Name:                 "doc_edit",
+		Description:          "Edit a managed markdown document without leaving semantic refs behind. Supports metadata-only updates, whole-body replacement, body append/prepend, and section-aware upsert/delete operations.",
+		ContentResolveExempt: []string{"ref", "mode", "section", "heading", "level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -145,8 +147,9 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 	})
 
 	r.Register(&Tool{
-		Name:        "doc_journal_update",
-		Description: "Append a timestamped note into a rolling managed journal document. The tool creates the document if needed, keeps created/updated timestamps current, groups entries by day/week/month window headings, and prunes older windows for you.",
+		Name:                 "doc_journal_update",
+		Description:          "Append a timestamped note into a rolling managed journal document. The tool creates the document if needed, keeps created/updated timestamps current, groups entries by day/week/month window headings, and prunes older windows for you.",
+		ContentResolveExempt: []string{"ref", "window", "max_windows", "heading_level", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

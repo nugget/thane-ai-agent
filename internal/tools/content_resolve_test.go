@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/documents"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/paths"
 )
@@ -415,6 +416,78 @@ func TestContentResolver_Execute_Integration(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "test_tool") {
 			t.Errorf("error = %q, want it to contain tool name 'test_tool'", err.Error())
+		}
+	})
+
+	t.Run("document_tool_preserves_semantic_ref", func(t *testing.T) {
+		cr, _, kbDir := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		if err := os.WriteFile(filepath.Join(kbDir, "ideas.md"), []byte("# Ideas\n\nUseful note."), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		db, err := database.OpenMemory()
+		if err != nil {
+			t.Fatalf("OpenMemory: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+
+		store, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+		if err != nil {
+			t.Fatalf("documents.NewStore: %v", err)
+		}
+
+		reg := NewEmptyRegistry()
+		reg.SetContentResolver(cr)
+		RegisterDocumentTools(reg, documents.NewTools(store))
+
+		got, err := reg.Execute(ctx, "doc_section", `{"ref":"kb:ideas.md"}`)
+		if err != nil {
+			t.Fatalf("Execute doc_section: %v", err)
+		}
+		if !strings.Contains(got, `"ref": "kb:ideas.md"`) {
+			t.Fatalf("doc_section result = %s, want semantic ref preserved", got)
+		}
+		if !strings.Contains(got, "Useful note.") {
+			t.Fatalf("doc_section result = %s, want document content", got)
+		}
+	})
+
+	t.Run("document_write_resolves_body_content_without_rewriting_ref", func(t *testing.T) {
+		cr, tfs, kbDir := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		_, err := tfs.Create(ctx, "conv-1", "draft", "Draft body from temp")
+		if err != nil {
+			t.Fatalf("Create temp: %v", err)
+		}
+
+		db, err := database.OpenMemory()
+		if err != nil {
+			t.Fatalf("OpenMemory: %v", err)
+		}
+		t.Cleanup(func() { db.Close() })
+
+		store, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+		if err != nil {
+			t.Fatalf("documents.NewStore: %v", err)
+		}
+
+		reg := NewEmptyRegistry()
+		reg.SetContentResolver(cr)
+		RegisterDocumentTools(reg, documents.NewTools(store))
+
+		if _, err := reg.Execute(ctx, "doc_write", `{"ref":"kb:new.md","title":"New","body":"temp:draft"}`); err != nil {
+			t.Fatalf("Execute doc_write: %v", err)
+		}
+
+		record, err := store.Read(ctx, "kb:new.md")
+		if err != nil {
+			t.Fatalf("Read written document: %v", err)
+		}
+		if !strings.Contains(record.Body, "Draft body from temp") {
+			t.Fatalf("written body = %q, want resolved temp content", record.Body)
 		}
 	})
 }

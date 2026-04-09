@@ -14,8 +14,9 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	}
 
 	r.Register(&Tool{
-		Name:        "doc_read",
-		Description: "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Large documents may be truncated by tool output limits, so use `doc_outline` plus `doc_section` when you need to navigate or read larger documents in full.",
+		Name:                 "doc_read",
+		Description:          "Read one managed markdown document by semantic ref like `kb:article.md`. Returns frontmatter, body, outline, and derived metadata in one payload. Large documents may be truncated by tool output limits, so use `doc_outline` plus `doc_section` when you need to navigate or read larger documents in full.",
+		ContentResolveExempt: []string{"ref"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -131,8 +132,9 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	})
 
 	r.Register(&Tool{
-		Name:        "doc_outline",
-		Description: "Return the heading tree for one indexed markdown document. Use after doc_search or doc_browse when you know the document ref and need the structural map before reading a section.",
+		Name:                 "doc_outline",
+		Description:          "Return the heading tree for one indexed markdown document. Use after doc_search or doc_browse when you know the document ref and need the structural map before reading a section.",
+		ContentResolveExempt: []string{"ref"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -153,8 +155,9 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	})
 
 	r.Register(&Tool{
-		Name:        "doc_section",
-		Description: "Return one named section from an indexed markdown document by heading text or slug. If `section` is omitted, returns the full document body without frontmatter.",
+		Name:                 "doc_section",
+		Description:          "Return one named section from an indexed markdown document by heading text or slug. If `section` is omitted, returns the full document body without frontmatter.",
+		ContentResolveExempt: []string{"ref", "section"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
