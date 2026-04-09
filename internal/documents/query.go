@@ -248,22 +248,21 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 	if err != nil {
 		return nil, err
 	}
-	var absPath string
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT abs_path FROM indexed_documents WHERE root = ? AND rel_path = ?`,
-		root, relPath,
-	).Scan(&absPath); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("document not found: %s", ref)
-		}
-		return nil, fmt.Errorf("lookup document path: %w", err)
+	if exists, err := s.documentExists(ctx, root, relPath); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, fmt.Errorf("document not found: %s", ref)
+	}
+	absPath, err := s.resolveDocumentPath(root, relPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve document: %w", err)
 	}
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("read document: %w", err)
 	}
-	_, body := splitFrontmatter(string(raw))
-	doc := parseMarkdownDocument(relPath, string(raw))
+	meta, body := splitFrontmatter(string(raw))
+	doc := parseMarkdownDocumentParts(relPath, meta, body)
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
 		lineCount := len(strings.Split(body, "\n"))

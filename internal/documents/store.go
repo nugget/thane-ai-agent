@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -197,8 +198,12 @@ func (s *Store) RunRefresher(ctx context.Context) {
 }
 
 func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
+	scanDir, err := s.resolveRootPath(root)
+	if err != nil {
+		return err
+	}
 	seen := make(map[string]bool)
-	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(scanDir, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -206,16 +211,19 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 			s.logger.Warn("document scan skipped entry", "root", root, "path", path, "error", err)
 			return nil
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
 		if d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(scanDir, path)
 		if err != nil {
 			return nil
 		}
 		rel = filepath.ToSlash(filepath.Clean(rel))
 		seen[rel] = true
-		if err := s.upsertFile(ctx, root, rel, path); err != nil {
+		if err := s.upsertFile(ctx, root, rel); err != nil {
 			s.logger.Warn("document index skipped file", "root", root, "path", path, "error", err)
 		}
 		return nil
@@ -248,7 +256,11 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 	return rows.Err()
 }
 
-func (s *Store) upsertFile(ctx context.Context, root, relPath, absPath string) error {
+func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
+	absPath, err := s.resolveDocumentPath(root, relPath)
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return err
@@ -348,6 +360,9 @@ func parseRef(ref string) (root string, relPath string, err error) {
 	}
 	root = strings.TrimSuffix(strings.TrimSpace(parts[0]), ":")
 	relPath = filepath.ToSlash(strings.TrimPrefix(filepath.Clean(strings.TrimSpace(parts[1])), "./"))
+	if relPath == "" || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return "", "", fmt.Errorf("invalid ref %q; path escapes root", ref)
+	}
 	return root, relPath, nil
 }
 
@@ -396,4 +411,51 @@ func trimPathPrefix(prefix string) string {
 		return ""
 	}
 	return prefix
+}
+
+func (s *Store) resolveRootPath(root string) (string, error) {
+	dir, ok := s.roots[strings.TrimSuffix(strings.TrimSpace(root), ":")]
+	if !ok || strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("unknown document root %q", root)
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", root, err)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(absDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("document root %q does not exist", root)
+		}
+		return "", fmt.Errorf("resolve root %q: %w", root, err)
+	}
+	return filepath.Clean(resolvedDir), nil
+}
+
+func (s *Store) resolveDocumentPath(root, relPath string) (string, error) {
+	rootPath, err := s.resolveRootPath(root)
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.Clean(filepath.Join(rootPath, filepath.FromSlash(relPath)))
+	if !pathWithinRoot(rootPath, candidate) {
+		return "", fmt.Errorf("document path %q escapes root %q", relPath, root)
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve document path %q: %w", relPath, err)
+	}
+	resolved = filepath.Clean(resolved)
+	if !pathWithinRoot(rootPath, resolved) {
+		return "", fmt.Errorf("document path %q resolves outside root %q", relPath, root)
+	}
+	return resolved, nil
+}
+
+func pathWithinRoot(rootPath, targetPath string) bool {
+	rel, err := filepath.Rel(rootPath, targetPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

@@ -37,6 +37,10 @@ type Section struct {
 
 func parseMarkdownDocument(name, raw string) parsedDocument {
 	meta, body := splitFrontmatter(raw)
+	return parseMarkdownDocumentParts(name, meta, body)
+}
+
+func parseMarkdownDocumentParts(name string, meta map[string][]string, body string) parsedDocument {
 	sections := parseSections(body)
 	title := firstValue(meta, "title")
 	if title == "" {

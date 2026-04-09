@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -177,6 +178,110 @@ Scratch thoughts about future loops.
 	}
 	if len(values) == 0 || values[0].Value != "network" || values[0].Count != 2 {
 		t.Fatalf("values = %#v, want network count 2 first", values)
+	}
+}
+
+func TestDocumentStoreSkipsSymlinkedMarkdownOutsideRoot(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior varies on Windows")
+	}
+
+	rootDir := t.TempDir()
+	kbDir := filepath.Join(rootDir, "kb")
+	outsideDir := filepath.Join(rootDir, "outside")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(kb): %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+
+	writeFile(t, filepath.Join(kbDir, "inside.md"), "# Inside\n\nSafe document.\n")
+	outsidePath := filepath.Join(outsideDir, "secret.md")
+	writeFile(t, outsidePath, "# Secret\n\nDo not index me.\n")
+	if err := os.Symlink(outsidePath, filepath.Join(kbDir, "escaped.md")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	results, err := store.Search(context.Background(), SearchQuery{
+		Root:  "kb",
+		Query: "secret",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Search() indexed symlinked outside document: %#v", results)
+	}
+
+	roots, err := store.Roots(context.Background())
+	if err != nil {
+		t.Fatalf("Roots: %v", err)
+	}
+	if len(roots) != 1 || roots[0].DocumentCount != 1 {
+		t.Fatalf("Roots() = %#v, want exactly 1 in-root document", roots)
+	}
+}
+
+func TestResolveDocumentPathRejectsEscapes(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior varies on Windows")
+	}
+
+	rootDir := t.TempDir()
+	kbDir := filepath.Join(rootDir, "kb")
+	outsideDir := filepath.Join(rootDir, "outside")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(kb): %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+
+	outsidePath := filepath.Join(outsideDir, "secret.md")
+	writeFile(t, outsidePath, "# Secret\n")
+	if err := os.Symlink(outsidePath, filepath.Join(kbDir, "escaped.md")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	if _, err := store.resolveDocumentPath("kb", "../secret.md"); err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("resolveDocumentPath(../secret.md) error = %v, want escape rejection", err)
+	}
+	if _, err := store.resolveDocumentPath("kb", "escaped.md"); err == nil || !strings.Contains(err.Error(), "outside root") {
+		t.Fatalf("resolveDocumentPath(escaped.md) error = %v, want outside-root rejection", err)
+	}
+}
+
+func TestParseRefRejectsPathEscape(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := parseRef("kb:../secret.md"); err == nil || !strings.Contains(err.Error(), "escapes root") {
+		t.Fatalf("parseRef(path escape) error = %v, want escape rejection", err)
 	}
 }
 
