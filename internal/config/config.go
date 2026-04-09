@@ -147,6 +147,8 @@ type Config struct {
 	// the documents capability. Any configured root that exists on disk is
 	// eligible for indexed browse/search/section retrieval via doc_* tools,
 	// so users can add their own custom corpora here without code changes.
+	// See docs/understanding/document-roots.md for the operator-facing
+	// contract; keep that document in sync with changes here.
 	//
 	// Typical prefixes are:
 	//   - kb:         curated knowledge / indexed documents
