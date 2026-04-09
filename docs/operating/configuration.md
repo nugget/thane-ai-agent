@@ -154,6 +154,37 @@ data_dir: ~/Thane/data
 Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
 `~/Thane/data`.
 
+## Document Roots
+
+```yaml
+workspace:
+  path: ~/Thane
+
+paths:
+  kb: ~/Thane/knowledge
+  scratchpad: ~/Thane/scratchpad
+  dossiers: ~/Vaults/private-dossiers
+```
+
+`paths:` does more than create semantic prefixes. Each configured root
+that exists on disk also becomes part of Thane's managed local document
+corpus.
+
+That means custom roots automatically become available to the
+`documents` capability for rooted browse/search/section retrieval. You
+do not need a second indexing config block.
+
+Use this for any local corpus you want the model to rediscover later:
+
+- knowledge bases
+- scratch work
+- generated reports
+- dossiers
+- imported research notes
+
+See [Document Roots](../understanding/document-roots.md) for the model
+and architecture view.
+
 ## Persona & Talents
 
 ```yaml
