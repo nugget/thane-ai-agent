@@ -56,7 +56,8 @@ run just release-sign-macos "$binary"
 
 mkdir -p "$output_dir"
 step "Packaging signed installer product"
-pkg_path="$(just --quiet release-package-macos-pkg "$version" "$target_arch" "$binary" "$output_dir" | tail -n 1)"
+pkg_path="$(just release-package-macos-pkg "$version" "$target_arch" "$binary" "$output_dir" | tail -n 1)"
+[[ -n "$pkg_path" ]] || die "release-package-macos-pkg did not report an artifact path"
 
 step "Package ready: $pkg_path"
 printf '%s\n' "$pkg_path"

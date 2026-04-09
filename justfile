@@ -346,10 +346,11 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
         just release-sign-macos "$binary"
         if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
             if [ -n "$cc" ]; then
-                archive="$(just --quiet release-build-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
+                archive="$(just release-build-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
             else
-                archive="$(just --quiet release-build-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
+                archive="$(just release-build-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
             fi
+            test -n "$archive" || { echo "release-build-archive did not report an artifact path" >&2; exit 1; }
             echo "Notarized archive ready: $archive"
         fi
     fi
@@ -503,7 +504,8 @@ release-build-archive version target_os=host_os target_arch=host_arch cc="":
             echo "Set THANE_INSTALLER_IDENTITY to a Developer ID Installer certificate before notarizing macOS release packages." >&2
             exit 1
         fi
-        archive="$(just --quiet release-package-macos-pkg "v${version}" "$target_arch" "$binary" | tail -n 1)"
+        archive="$(just release-package-macos-pkg "v${version}" "$target_arch" "$binary" | tail -n 1)"
+        test -n "$archive" || { echo "release-package-macos-pkg did not report an artifact path" >&2; exit 1; }
         if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
             just release-notarize-macos "$archive"
             just release-staple-macos "$archive"
