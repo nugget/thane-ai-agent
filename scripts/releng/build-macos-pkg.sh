@@ -26,6 +26,7 @@ case "$target_arch" in
 esac
 
 version="${version_input:-$(git_describe_version)}"
+build_version="v${version#v}"
 
 case "$version" in
     dev) warn "using fallback version label 'dev' because git describe did not find a tag" ;;
@@ -45,13 +46,14 @@ esac
 section "Build macOS installer package"
 step "Branch: $(git rev-parse --abbrev-ref HEAD)"
 step "Version: $version"
+step "Embedded build version: $build_version"
 step "Architecture: $target_arch"
 step "Output directory: $output_dir"
 step "Signing required: $require_signed"
 
 binary="dist/thane-darwin-${target_arch}"
 
-run env THANE_VERSION="$version" just build darwin "$target_arch"
+run env THANE_VERSION="$build_version" just build darwin "$target_arch"
 run just release-sign-macos "$binary"
 
 mkdir -p "$output_dir"

@@ -462,7 +462,7 @@ release-sign-macos binary identity=codesign-identity options=codesign-options ti
 [macos]
 release-notarize-macos archive profile=notary-profile:
     test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
-    test -n "{{installer-identity}}" || (echo "Notarization of macOS installer packages requires THANE_INSTALLER_IDENTITY to name a Developer ID Installer certificate" && exit 1)
+    test -n "{{installer-identity}}" && test "{{installer-identity}}" != "-" || (echo "Notarization of macOS installer packages requires THANE_INSTALLER_IDENTITY to name a Developer ID Installer certificate" && exit 1)
     test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
     xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
 
@@ -786,6 +786,7 @@ prepare-release version container_tag="thane:prepare-release":
     rm -f \
         "{{release-dir}}/thane_${version}_"*.pkg \
         "{{release-dir}}/thane_${version}_"*.tar.gz \
+        "{{release-dir}}/thane_${version}_"*.zip \
         "{{release-dir}}/thane_${version}_checksums.txt" \
         "{{release-dir}}/.thane_${version}_prepared.env"
 

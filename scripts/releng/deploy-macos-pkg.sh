@@ -15,7 +15,11 @@ host="$1"
 target_arch="${2:-arm64}"
 version_input="${3:-}"
 remote_pkg_dir="${4:-/tmp/thane-releng}"
-restart_cmd="${5:-launchctl kickstart -k gui/\$(id -u)/info.nugget.thane}"
+restart_cmd="${5:-}"
+
+if [[ -z "$restart_cmd" ]]; then
+    restart_cmd='launchctl kickstart -k gui/$(id -u)/info.nugget.thane'
+fi
 
 cd "$repo_root"
 require_macos_host
