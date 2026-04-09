@@ -67,12 +67,21 @@ while (( SECONDS < deadline )); do
         ssh "$host" /usr/bin/python3 - "$verify_url" <<'PY'
 import json
 import sys
+import urllib.error
 import urllib.request
 
 url = sys.argv[1]
-with urllib.request.urlopen(url, timeout=5) as resp:
-    data = json.load(resp)
-print(data.get("version", ""))
+try:
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        data = json.load(resp)
+except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+version = str(data.get("version", "")).strip()
+if not version:
+    raise SystemExit(1)
+
+print(version)
 PY
     )"; then
         remote_version="${remote_version//$'\r'/}"
