@@ -138,9 +138,13 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 	if e.To.Kind == "" {
 		return Envelope{}, fmt.Errorf("messages: to.kind is required")
 	}
-	if strings.TrimSpace(e.To.Target) == "" {
+	e.From.Name = strings.TrimSpace(e.From.Name)
+	e.From.ID = strings.TrimSpace(e.From.ID)
+	target := strings.TrimSpace(e.To.Target)
+	if target == "" {
 		return Envelope{}, fmt.Errorf("messages: to.target is required")
 	}
+	e.To.Target = target
 	switch e.To.Kind {
 	case DestinationLoop:
 		if e.To.Selector == "" {
@@ -170,6 +174,12 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 	}
 	if len(e.Scope) > 0 {
 		e.Scope = append([]string(nil), e.Scope...)
+	}
+	if len(e.Signature) > 0 {
+		e.Signature = append([]byte(nil), e.Signature...)
+	}
+	if len(e.SignerCert) > 0 {
+		e.SignerCert = append([]byte(nil), e.SignerCert...)
 	}
 	return e, nil
 }

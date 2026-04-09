@@ -6,10 +6,10 @@ import (
 )
 
 // LoopSignalByID delivers one signal envelope to a live loop identified by ID.
-type LoopSignalByID func(context.Context, string, Envelope) (any, error)
+type LoopSignalByID func(context.Context, string, Envelope) (DeliveryResult, error)
 
 // LoopSignalByName delivers one signal envelope to a live loop identified by exact name.
-type LoopSignalByName func(context.Context, string, Envelope) (any, error)
+type LoopSignalByName func(context.Context, string, Envelope) (DeliveryResult, error)
 
 // LoopHandler routes loop-destination envelopes into the live loop registry.
 type LoopHandler struct {
@@ -23,12 +23,12 @@ func (h *LoopHandler) Deliver(ctx context.Context, env Envelope) (DeliveryResult
 		return DeliveryResult{}, fmt.Errorf("loop message route is not configured")
 	}
 	if env.Type != TypeSignal {
-		return DeliveryResult{}, fmt.Errorf("loop route only supports signal envelopes, got %q", env.Type)
+		return DeliveryResult{}, fmt.Errorf("loop route only supports signal envelopes for live loops, got %q", env.Type)
 	}
 
 	var (
-		details any
-		err     error
+		result DeliveryResult
+		err    error
 	)
 	switch env.To.Selector {
 	case SelectorID:
@@ -36,23 +36,24 @@ func (h *LoopHandler) Deliver(ctx context.Context, env Envelope) (DeliveryResult
 			err = fmt.Errorf("loop-id signaling is not configured")
 			break
 		}
-		details, err = h.ByID(ctx, env.To.Target, env)
+		result, err = h.ByID(ctx, env.To.Target, env)
 	case "", SelectorName:
 		if h.ByName == nil {
 			err = fmt.Errorf("loop-name signaling is not configured")
 			break
 		}
-		details, err = h.ByName(ctx, env.To.Target, env)
+		result, err = h.ByName(ctx, env.To.Target, env)
 	default:
 		err = fmt.Errorf("unsupported loop selector %q", env.To.Selector)
 	}
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	status := DeliveryDelivered
-	return DeliveryResult{
-		Route:   "loop",
-		Status:  status,
-		Details: details,
-	}, nil
+	if result.Route == "" {
+		result.Route = "loop"
+	}
+	if result.Status == "" {
+		result.Status = DeliveryDelivered
+	}
+	return result, nil
 }

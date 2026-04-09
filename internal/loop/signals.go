@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/messages"
 )
+
+const maxPendingSignals = 32
 
 type pendingSignal struct {
 	Envelope        messages.Envelope
@@ -62,11 +65,13 @@ func decodeLoopSignalPayload(raw any) (messages.LoopSignalPayload, error) {
 		return *got, nil
 	case map[string]any:
 		var payload messages.LoopSignalPayload
-		if msg, ok := got["message"].(string); ok {
-			payload.Message = msg
+		// Generic decoded JSON payloads arrive as map[string]any.
+		blob, err := json.Marshal(got)
+		if err != nil {
+			return messages.LoopSignalPayload{}, fmt.Errorf("marshal loop signal payload: %w", err)
 		}
-		if force, ok := got["force_supervisor"].(bool); ok {
-			payload.ForceSupervisor = force
+		if err := json.Unmarshal(blob, &payload); err != nil {
+			return messages.LoopSignalPayload{}, fmt.Errorf("decode loop signal payload: %w", err)
 		}
 		return payload, nil
 	default:
@@ -107,6 +112,7 @@ func summarizeSignalEnvelopes(envs []messages.Envelope) string {
 	}
 	blob, err := json.Marshal(views)
 	if err != nil {
+		slog.Warn("loop: failed to summarize signal envelopes", "count", len(views), "error", err)
 		return ""
 	}
 	return "Signal envelopes for this run:\n" + string(blob)
@@ -125,6 +131,9 @@ func (l *Loop) enqueueSignal(env messages.Envelope) (SignalReceipt, error) {
 	}
 	if l.config.WaitFunc != nil {
 		return SignalReceipt{}, fmt.Errorf("loop %q is event-driven and cannot be interrupted by signal yet", l.config.Name)
+	}
+	if len(l.pendingSignals) >= maxPendingSignals {
+		return SignalReceipt{}, fmt.Errorf("loop %q signal queue full (%d pending)", l.config.Name, len(l.pendingSignals))
 	}
 
 	l.pendingSignals = append(l.pendingSignals, pendingSignal{
@@ -154,6 +163,9 @@ func (l *Loop) consumePendingSignals() ([]messages.Envelope, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.pendingSignals) == 0 {
+		// A concurrent wake can leave one coalesced token behind even after the
+		// corresponding signal was already consumed elsewhere; clear it so the
+		// next timer sleep is not interrupted spuriously.
 		select {
 		case <-l.wakeCh:
 		default:

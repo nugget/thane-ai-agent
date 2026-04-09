@@ -32,6 +32,10 @@ func (r *Registry) registerMessageTools() {
 			"if it is already processing, the signal is queued for the next iteration.",
 		Parameters: map[string]any{
 			"type": "object",
+			"anyOf": []any{
+				map[string]any{"required": []string{"loop_id"}},
+				map[string]any{"required": []string{"name"}},
+			},
 			"properties": map[string]any{
 				"loop_id": map[string]any{
 					"type":        "string",
@@ -114,6 +118,9 @@ func senderIdentityFromContext(ctx context.Context) messages.Identity {
 	case source == "delegate":
 		return messages.Identity{Kind: messages.IdentityDelegate, Name: source}
 	default:
+		if source == "" {
+			source = "conversation"
+		}
 		return messages.Identity{Kind: messages.IdentityCore, Name: source}
 	}
 }

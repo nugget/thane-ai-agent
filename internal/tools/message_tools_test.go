@@ -37,6 +37,9 @@ func TestConfigureMessageToolsRegistersSignalLoop(t *testing.T) {
 	if tool == nil {
 		t.Fatal("signal_loop tool not registered")
 	}
+	if _, ok := tool.Parameters["anyOf"]; !ok {
+		t.Fatal("signal_loop schema missing anyOf guardrail")
+	}
 
 	ctx := WithLoopID(context.Background(), "loop-parent-1")
 	ctx = WithHints(ctx, map[string]string{
@@ -78,6 +81,18 @@ func TestConfigureMessageToolsRegistersSignalLoop(t *testing.T) {
 	}
 	if got.Status != "ok" {
 		t.Fatalf("status = %q, want ok", got.Status)
+	}
+}
+
+func TestSenderIdentityFromContextDefaultsToConversation(t *testing.T) {
+	t.Parallel()
+
+	got := senderIdentityFromContext(context.Background())
+	if got.Kind != messages.IdentityCore {
+		t.Fatalf("kind = %q, want core", got.Kind)
+	}
+	if got.Name != "conversation" {
+		t.Fatalf("name = %q, want conversation", got.Name)
 	}
 }
 

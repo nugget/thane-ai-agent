@@ -9,7 +9,9 @@ import (
 
 // SignalLoop delivers one signal envelope to a live loop by ID.
 func (r *Registry) SignalLoop(ctx context.Context, id string, env messages.Envelope) (SignalReceipt, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return SignalReceipt{}, err
+	}
 	l := r.Get(id)
 	if l == nil {
 		return SignalReceipt{}, fmt.Errorf("loop %q not found", id)
@@ -19,7 +21,9 @@ func (r *Registry) SignalLoop(ctx context.Context, id string, env messages.Envel
 
 // SignalLoopByName delivers one signal envelope to a live loop by exact name.
 func (r *Registry) SignalLoopByName(ctx context.Context, name string, env messages.Envelope) (SignalReceipt, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return SignalReceipt{}, err
+	}
 	matches := r.FindByName(name)
 	switch len(matches) {
 	case 0:

@@ -130,6 +130,44 @@ func TestLoopSignalRejectsEventDrivenLoop(t *testing.T) {
 	}
 }
 
+func TestLoopSignalQueueBounded(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "queue-bounded",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	env, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   l.Name(),
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+
+	for i := 0; i < maxPendingSignals; i++ {
+		if _, err := l.enqueueSignal(env); err != nil {
+			t.Fatalf("enqueueSignal(%d): %v", i, err)
+		}
+	}
+	if _, err := l.enqueueSignal(env); err == nil || !strings.Contains(err.Error(), "queue full") {
+		t.Fatalf("enqueueSignal overflow err = %v, want queue-full rejection", err)
+	}
+}
+
 func waitForLoopState(t *testing.T, l *Loop, want State) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
