@@ -130,7 +130,7 @@ jobs:
             BUILD_TIME=${{ steps.build_meta.outputs.build_time }}
 
       - name: Attest container image
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
