@@ -24,10 +24,11 @@ fi
 
 cd "$repo_root"
 require_macos_host
-require_commands just ssh scp
+require_commands just ssh scp xcrun
 require_clean_worktree "building and deploying a macOS pkg"
 require_real_codesign_identity
 require_real_installer_identity
+require_notary_profile
 
 version="${version_input:-$(git_describe_version)}"
 expected_version="v${version#v}"
@@ -36,6 +37,11 @@ section "Build macOS installer package"
 pkg_path="$("$script_dir/build-macos-pkg.sh" "$version" "$target_arch" "dist/pkg" true | tail -n 1)"
 pkg_name="$(basename "$pkg_path")"
 remote_pkg_path="${remote_pkg_dir}/${pkg_name}"
+
+section "Notarize macOS installer package"
+step "Submitting $pkg_name with keychain profile: ${THANE_NOTARY_PROFILE}"
+run just release-notarize-macos "$pkg_path" "${THANE_NOTARY_PROFILE}"
+run just release-staple-macos "$pkg_path"
 
 section "Deploy package to remote host"
 step "Remote host: $host"

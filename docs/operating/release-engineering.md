@@ -71,7 +71,9 @@ just deploy-macos-pkg aimee@pocket.hollowoak.net
 What it does:
 
 - requires a clean checkout
+- requires `THANE_NOTARY_PROFILE`
 - builds a signed macOS installer package from the current branch
+- notarizes and staples that package before deployment
 - copies the `.pkg` to the remote host over SSH
 - checks the package signature on the remote host
 - installs it into `CurrentUserHomeDirectory`
@@ -86,6 +88,7 @@ Required environment for this path:
 
 - `THANE_CODESIGN_IDENTITY`
 - `THANE_INSTALLER_IDENTITY`
+- `THANE_NOTARY_PROFILE`
 
 Useful variants:
 
