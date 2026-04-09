@@ -57,7 +57,11 @@ func loggingAuditFunc(logger *slog.Logger) AuditFunc {
 			logger.Warn("message envelope delivery failed", fields...)
 			return
 		}
-		logger.Info("message envelope delivered", fields...)
+		msg := "message envelope delivered"
+		if result != nil && result.Status == DeliveryQueued {
+			msg = "message envelope queued"
+		}
+		logger.Info(msg, fields...)
 	}
 }
 

@@ -135,6 +135,11 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 	if e.From.Kind == "" {
 		return Envelope{}, fmt.Errorf("messages: from.kind is required")
 	}
+	switch e.From.Kind {
+	case IdentityCore, IdentityLoop, IdentityDelegate, IdentitySystem:
+	default:
+		return Envelope{}, fmt.Errorf("messages: unsupported identity kind %q", e.From.Kind)
+	}
 	if e.To.Kind == "" {
 		return Envelope{}, fmt.Errorf("messages: to.kind is required")
 	}

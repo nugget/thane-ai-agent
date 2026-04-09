@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,5 +36,21 @@ func TestEnvelopeNormalizeTrimsTargetAndClonesBinaryFields(t *testing.T) {
 	}
 	if got.SignerCert[0] != 4 {
 		t.Fatalf("signer_cert = %v, want cloned data", got.SignerCert)
+	}
+}
+
+func TestEnvelopeNormalizeRejectsUnsupportedIdentityKind(t *testing.T) {
+	t.Parallel()
+
+	_, err := (Envelope{
+		From: Identity{Kind: IdentityKind("typo")},
+		To: Destination{
+			Kind:   DestinationLoop,
+			Target: "battery-watch",
+		},
+		Type: TypeSignal,
+	}).Normalize(time.Now())
+	if err == nil || !strings.Contains(err.Error(), "unsupported identity kind") {
+		t.Fatalf("Normalize err = %v, want unsupported identity kind", err)
 	}
 }

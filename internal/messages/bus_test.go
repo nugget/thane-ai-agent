@@ -1,9 +1,11 @@
 package messages
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +68,33 @@ func TestBusSendRejectsMissingRoute(t *testing.T) {
 	})
 	if err == nil || err.Error() == "" {
 		t.Fatal("expected missing-route error")
+	}
+}
+
+func TestLoggingAuditFuncUsesQueuedMessage(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	audit := loggingAuditFunc(logger)
+	env := Envelope{
+		ID:   "m_123",
+		Type: TypeSignal,
+		From: Identity{Kind: IdentityCore, Name: "conversation"},
+		To: Destination{
+			Kind:     DestinationLoop,
+			Target:   "battery-watch",
+			Selector: SelectorName,
+		},
+		Priority: PriorityNormal,
+	}
+	audit(context.Background(), env, &DeliveryResult{Route: "loop", Status: DeliveryQueued}, nil)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "message envelope queued") {
+		t.Fatalf("log = %q, want queued message", logged)
+	}
+	if strings.Contains(logged, "message envelope delivered") {
+		t.Fatalf("log = %q, should not claim delivered", logged)
 	}
 }
