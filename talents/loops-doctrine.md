@@ -45,3 +45,7 @@ document tools already express the artifact clearly.
 
 Prefer durable definitions for recurring services. Prefer ad hoc live
 spawns for temporary observers and one-off detached tasks.
+
+Loop authoring is rare and high leverage. When you need it, copy a
+known-good pattern from the examples below and adapt it minimally
+instead of rebuilding the launch shape from memory.
