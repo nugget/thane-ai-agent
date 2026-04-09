@@ -30,9 +30,11 @@ macOS silently blocks unsigned binaries from accessing LAN hosts. This was
 a tricky diagnosis — see
 [issue #53](https://github.com/nugget/thane-ai-agent/issues/53). The
 justfile ad-hoc signs macOS builds (`codesign -s -`) to reduce friction,
-and the release recipes can use a Developer ID certificate plus
-`notarytool` when `THANE_CODESIGN_IDENTITY` and `THANE_NOTARY_PROFILE`
-are configured. The Local Network permission still needs manual approval.
+and the release recipes can use a Developer ID Application certificate,
+a Developer ID Installer certificate, `notarytool`, and `stapler` when
+`THANE_CODESIGN_IDENTITY`, `THANE_INSTALLER_IDENTITY`, and
+`THANE_NOTARY_PROFILE` are configured. The Local Network permission still
+needs manual approval.
 
 ### macOS Companion App
 
@@ -89,11 +91,11 @@ just build darwin amd64       # macOS Intel
 just build-all                # All release targets
 ```
 
-Release archives are prepared on a local macOS release workstation with the
-`just` release recipes. That keeps Developer ID signing and Apple notarization
-in local control while still producing Linux `amd64` and `arm64` artifacts for
-GitHub Releases. The tagged GitHub workflow publishes the multi-arch container
-image and its provenance attestation.
+Release artifacts are prepared on a local macOS release workstation with the
+`just` release recipes. That keeps Developer ID signing, installer packaging,
+Apple notarization, and stapling in local control while still producing Linux
+`amd64` and `arm64` artifacts for GitHub Releases. The tagged GitHub workflow
+publishes the multi-arch container image and its provenance attestation.
 
 ## Container
 

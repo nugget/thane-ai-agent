@@ -41,11 +41,12 @@ Point Home Assistant's Ollama integration at `http://thane-host:11434`, select m
 
 ## Releases
 
-Tagged releases publish locally prepared archives on GitHub plus a multi-arch
-container image on `ghcr.io/nugget/thane-ai-agent`. The intended release path
-is to build, sign, notarize, and upload the macOS and Linux archives from a
-local release workstation via `just`, while GitHub Actions publishes the tagged
-container image and its provenance attestation.
+Tagged releases publish locally prepared release artifacts on GitHub plus a
+multi-arch container image on `ghcr.io/nugget/thane-ai-agent`. The intended
+release path is to build, sign, notarize, staple, and upload the macOS
+installer packages alongside the Linux tarballs from a local release
+workstation via `just`, while GitHub Actions publishes the tagged container
+image and its provenance attestation.
 
 ## Documentation
 
