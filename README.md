@@ -46,9 +46,10 @@ multi-arch container image on `ghcr.io/nugget/thane-ai-agent`. The intended
 release path is to build, sign, notarize, staple, and upload the macOS
 installer product archives alongside the Linux tarballs from a local release
 workstation via `just`. Those macOS artifacts install `thane` into
-`/usr/local/bin`, carry first-party installer metadata for inspection, and
-can be stapled cleanly after notarization. GitHub Actions publishes the
-tagged container image and its provenance attestation.
+`~/Thane/bin`, carry first-party installer metadata for inspection, avoid a
+machine-wide admin prompt, and can be stapled cleanly after notarization.
+GitHub Actions publishes the tagged container image and its provenance
+attestation.
 
 ## Documentation
 

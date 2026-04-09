@@ -95,8 +95,9 @@ Release artifacts are prepared on a local macOS release workstation with the
 `just` release recipes. That keeps Developer ID signing, installer packaging,
 Apple notarization, and stapling in local control while still producing Linux
 `amd64` and `arm64` artifacts for GitHub Releases. The macOS artifacts are
-flat installer product archives that install `thane` into `/usr/local/bin`,
-advertise the intended CPU family to Installer, and carry first-party
+flat installer product archives that install `thane` into `~/Thane/bin` for
+the current macOS account, advertise the intended CPU family to Installer,
+avoid a machine-wide admin prompt, and carry first-party
 welcome/readme/license metadata for inspection. The tagged GitHub workflow
 publishes the multi-arch container image and its provenance attestation.
 

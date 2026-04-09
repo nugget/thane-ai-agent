@@ -58,8 +58,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$payload_root/usr/local/bin" "$localized_resources"
-install -m 755 "$binary_path" "$payload_root/usr/local/bin/thane"
+mkdir -p "$payload_root/Thane/bin" "$localized_resources"
+install -m 755 "$binary_path" "$payload_root/Thane/bin/thane"
 if command -v xattr >/dev/null 2>&1; then
     xattr -cr "$payload_root"
 fi
@@ -76,7 +76,7 @@ cat >"$requirements_plist" <<EOF
         <string>${host_arch}</string>
     </array>
     <key>home</key>
-    <false/>
+    <true/>
 </dict>
 </plist>
 EOF
@@ -84,19 +84,19 @@ EOF
 cat >"$localized_resources/welcome.txt" <<EOF
 Welcome to Thane
 
-This installer places the thane command-line binary in /usr/local/bin so it
-is available to local users from a normal shell.
+This installer places the thane command-line binary in ~/Thane/bin for the
+current macOS account without requiring a machine-wide install.
 EOF
 
 cat >"$localized_resources/readme.txt" <<EOF
 Thane ${version} for ${arch_label}
 
-This package installs thane to /usr/local/bin/thane and is intended for
-local-system installation.
+This package installs thane to ~/Thane/bin/thane for the current macOS
+account.
 
 After installation, run:
 
-  thane version
+  ~/Thane/bin/thane version
 
 to confirm the installed build.
 EOF
@@ -124,22 +124,45 @@ productbuild --synthesize \
     "$distribution_path" >&2
 
 # Add first-party installer metadata so the final product archive is richer to
-# inspect and clearly constrained to the system domain on the intended CPU
-# family.
-distribution_tmp="${distribution_path}.tmp"
-awk '
-    /<installer-gui-script minSpecVersion="1">/ {
-        print
-        print "    <title>Thane Command-Line Agent</title>"
-        print "    <welcome file=\"welcome.txt\" mime-type=\"text/plain\"/>"
-        print "    <readme file=\"readme.txt\" mime-type=\"text/plain\"/>"
-        print "    <license file=\"LICENSE.txt\" mime-type=\"text/plain\"/>"
-        print "    <domains enable_anywhere=\"false\" enable_currentUserHome=\"false\" enable_localSystem=\"true\"/>"
-        next
-    }
-    { print }
-' "$distribution_path" >"$distribution_tmp"
-mv "$distribution_tmp" "$distribution_path"
+# inspect and explicitly models Thane's normal macOS install shape: current
+# user home only, no machine-wide admin install, and one binary under
+# ~/Thane/bin for the chosen account.
+/usr/bin/python3 - "$distribution_path" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+path = Path(sys.argv[1])
+tree = ET.parse(path)
+root = tree.getroot()
+
+for tag in ("title", "welcome", "readme", "license", "domains"):
+    for node in list(root.findall(tag)):
+        root.remove(node)
+
+metadata = [
+    ET.Element("title"),
+    ET.Element("welcome", {"file": "welcome.txt", "mime-type": "text/plain"}),
+    ET.Element("readme", {"file": "readme.txt", "mime-type": "text/plain"}),
+    ET.Element("license", {"file": "LICENSE.txt", "mime-type": "text/plain"}),
+    ET.Element(
+        "domains",
+        {
+            "enable_anywhere": "false",
+            "enable_currentUserHome": "true",
+            "enable_localSystem": "false",
+        },
+    ),
+]
+metadata[0].text = "Thane Command-Line Agent"
+
+for node in reversed(metadata):
+    root.insert(0, node)
+
+if hasattr(ET, "indent"):
+    ET.indent(tree, space="    ")
+tree.write(path, encoding="utf-8", xml_declaration=True)
+PY
 
 productbuild_args=(
     productbuild
