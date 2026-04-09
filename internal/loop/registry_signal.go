@@ -7,7 +7,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/messages"
 )
 
-// NotifyLoop delivers one notification envelope to a live loop by ID.
+// NotifyLoop delivers one inter-loop process notification to a live loop by ID.
+// This is loop-runtime control messaging, not Signal-channel transport.
 func (r *Registry) NotifyLoop(ctx context.Context, id string, env messages.Envelope) (NotifyReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return NotifyReceipt{}, err
@@ -19,7 +20,9 @@ func (r *Registry) NotifyLoop(ctx context.Context, id string, env messages.Envel
 	return l.enqueueNotify(env)
 }
 
-// NotifyLoopByName delivers one notification envelope to a live loop by exact name.
+// NotifyLoopByName delivers one inter-loop process notification to a live loop
+// by exact name. This is loop-runtime control messaging, not Signal-channel
+// transport.
 func (r *Registry) NotifyLoopByName(ctx context.Context, name string, env messages.Envelope) (NotifyReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return NotifyReceipt{}, err

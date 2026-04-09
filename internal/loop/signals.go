@@ -11,7 +11,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/messages"
 )
 
-const maxPendingNotifications = 32
+// maxPendingNotifications bounds how many one-shot inter-loop notifications a
+// live loop may queue while it is busy or sleeping. enqueueNotify rejects new
+// notifications once this cap is reached so a runaway caller cannot grow the
+// in-memory pending-notify slice without bound before the loop gets a chance
+// to drain it on the next iteration.
+const maxPendingNotifications = 8
 
 type pendingNotify struct {
 	Envelope        messages.Envelope
