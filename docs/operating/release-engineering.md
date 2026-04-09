@@ -75,7 +75,7 @@ What it does:
 - copies the `.pkg` to the remote host over SSH
 - checks the package signature on the remote host
 - installs it into `CurrentUserHomeDirectory`
-- restarts the launch agent
+- lets the target-side binary watcher react to the new install
 - polls the remote Thane API until `/v1/version` reports the expected build version
 
 This path assumes the remote host is also macOS Tahoe and that Thane is run
@@ -92,8 +92,8 @@ Useful variants:
 ```bash
 just build-macos-pkg
 just deploy-macos-pkg aimee@pocket.hollowoak.net arm64
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng 'launchctl kickstart -k gui/$(id -u)/info.nugget.thane'
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng '' http://127.0.0.1:18080/v1/version 90
+just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng
+just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng http://127.0.0.1:18080/v1/version 90
 ```
 
 ## Why Pkg-Based Deploys

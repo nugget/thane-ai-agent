@@ -7,21 +7,16 @@ repo_root="$(cd "$script_dir/../.." && pwd)"
 # shellcheck source=./common.sh
 source "$script_dir/common.sh"
 
-if [[ $# -lt 1 || $# -gt 7 ]]; then
-    die "usage: $0 <user@host> [target-arch] [version] [remote-pkg-dir] [restart-cmd] [verify-url] [verify-timeout-seconds]"
+if [[ $# -lt 1 || $# -gt 6 ]]; then
+    die "usage: $0 <user@host> [target-arch] [version] [remote-pkg-dir] [verify-url] [verify-timeout-seconds]"
 fi
 
 host="$1"
 target_arch="${2:-arm64}"
 version_input="${3:-}"
 remote_pkg_dir="${4:-/tmp/thane-releng}"
-restart_cmd="${5:-}"
-verify_url="${6:-http://127.0.0.1:8080/v1/version}"
-verify_timeout_seconds="${7:-60}"
-
-if [[ -z "$restart_cmd" ]]; then
-    restart_cmd='launchctl kickstart -k gui/$(id -u)/info.nugget.thane'
-fi
+verify_url="${5:-http://127.0.0.1:8080/v1/version}"
+verify_timeout_seconds="${6:-60}"
 
 if ! [[ "$verify_timeout_seconds" =~ ^[0-9]+$ ]] || [[ "$verify_timeout_seconds" -le 0 ]]; then
     die "verify-timeout-seconds must be a positive integer"
@@ -54,11 +49,6 @@ run scp -p "$pkg_path" "${host}:${remote_pkg_path}"
 run ssh "$host" "pkgutil --check-signature '$remote_pkg_path'"
 
 run ssh "$host" "installer -pkg '$remote_pkg_path' -target CurrentUserHomeDirectory"
-
-if [[ -n "$restart_cmd" ]]; then
-    run ssh "$host" "$restart_cmd"
-fi
-
 run ssh "$host" "rm -f '$remote_pkg_path'"
 
 section "Verify remote live version"
