@@ -456,6 +456,9 @@ func (s *Store) resolveDocumentPath(root, relPath string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", os.ErrNotExist
+		}
 		return "", fmt.Errorf("resolve document path %q: %w", relPath, err)
 	}
 	resolved = filepath.Clean(resolved)

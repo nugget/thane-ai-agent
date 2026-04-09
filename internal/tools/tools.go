@@ -31,16 +31,17 @@ import (
 
 // Tool represents a callable tool.
 type Tool struct {
-	Name               string                                                         `json:"name"`
-	Description        string                                                         `json:"description"`
-	Parameters         map[string]any                                                 `json:"parameters"`
-	Handler            func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
-	AlwaysAvailable    bool                                                           `json:"-"` // Survives capability tag filtering.
-	SkipContentResolve bool                                                           `json:"-"` // Exempt from prefix-to-content resolution.
-	CanonicalID        string                                                         `json:"-"`
-	Source             string                                                         `json:"-"`
-	Origin             string                                                         `json:"-"`
-	DefaultTags        []string                                                       `json:"-"`
+	Name                 string                                                         `json:"name"`
+	Description          string                                                         `json:"description"`
+	Parameters           map[string]any                                                 `json:"parameters"`
+	Handler              func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
+	AlwaysAvailable      bool                                                           `json:"-"` // Survives capability tag filtering.
+	SkipContentResolve   bool                                                           `json:"-"` // Exempt from prefix-to-content resolution.
+	ContentResolveExempt []string                                                       `json:"-"` // Top-level arg keys that must remain literal during content resolution.
+	CanonicalID          string                                                         `json:"-"`
+	Source               string                                                         `json:"-"`
+	Origin               string                                                         `json:"-"`
+	DefaultTags          []string                                                       `json:"-"`
 }
 
 // Registry holds available tools.
@@ -1045,8 +1046,35 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 	// always error on failure (missing label or unconfigured store);
 	// path prefix failures pass through silently.
 	if !tool.SkipContentResolve && r.contentResolver != nil && args != nil {
-		if err := r.contentResolver.ResolveArgs(ctx, args); err != nil {
+		resolveArgs := args
+		filtered := false
+		if len(tool.ContentResolveExempt) > 0 {
+			exempt := make(map[string]struct{}, len(tool.ContentResolveExempt))
+			for _, key := range tool.ContentResolveExempt {
+				key = strings.TrimSpace(key)
+				if key != "" {
+					exempt[key] = struct{}{}
+				}
+			}
+			if len(exempt) > 0 {
+				filteredArgs := make(map[string]any, len(args))
+				for key, value := range args {
+					if _, skip := exempt[key]; skip {
+						continue
+					}
+					filteredArgs[key] = value
+				}
+				resolveArgs = filteredArgs
+				filtered = true
+			}
+		}
+		if err := r.contentResolver.ResolveArgs(ctx, resolveArgs); err != nil {
 			return "", fmt.Errorf("%s: %w", name, err)
+		}
+		if filtered {
+			for key, value := range resolveArgs {
+				args[key] = value
+			}
 		}
 	}
 

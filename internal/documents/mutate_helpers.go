@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+const (
+	documentJournalHeading = "Journal"
+	documentJournalLevel   = 2
+)
+
 func cloneFrontmatter(in map[string][]string) map[string][]string {
 	if len(in) == 0 {
 		return map[string][]string{}
@@ -205,6 +210,26 @@ func deleteDocumentSection(body, selector string) (string, string, error) {
 	return strings.Trim(strings.Join(out, "\n"), "\n"), target.Heading, nil
 }
 
+func extractDocumentSection(body, selector string) (Section, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return Section{}, fmt.Errorf("section is required")
+	}
+	target, found := findSection(parseSections(trimDocumentBody(body)), selector, "")
+	if !found {
+		return Section{}, fmt.Errorf("section %q not found", selector)
+	}
+	return target, nil
+}
+
+func sectionBodyContent(sec Section) string {
+	lines := strings.Split(sec.Content, "\n")
+	if len(lines) <= 1 {
+		return ""
+	}
+	return strings.Trim(strings.Join(lines[1:], "\n"), "\n")
+}
+
 func findSection(sections []Section, selector, heading string) (Section, bool) {
 	targets := make([]string, 0, 2)
 	if selector != "" {
@@ -329,6 +354,44 @@ func appendJournalEntryBody(existing, entry string) string {
 		return entry
 	}
 	return existing + "\n" + entry
+}
+
+func upsertDocumentJournal(body string, existing *DocumentRecord, now time.Time, entry string) (string, error) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return trimDocumentBody(body), nil
+	}
+
+	journalContent := ""
+	if existing != nil {
+		journalContent = currentSectionBody(existing.Body, documentJournalHeading)
+	}
+	if candidate := currentSectionBody(body, documentJournalHeading); candidate != "" {
+		journalContent = candidate
+	}
+
+	cleanBody, err := deleteDocumentSectionIfPresent(body, documentJournalHeading)
+	if err != nil {
+		return "", err
+	}
+
+	journalContent = appendJournalEntryBody(journalContent, formatJournalEntry(now, entry))
+	updatedBody, _, err := upsertDocumentSection(cleanBody, documentJournalHeading, documentJournalHeading, documentJournalLevel, journalContent)
+	if err != nil {
+		return "", err
+	}
+	return updatedBody, nil
+}
+
+func deleteDocumentSectionIfPresent(body, selector string) (string, error) {
+	if _, found := findSection(parseSections(trimDocumentBody(body)), selector, ""); !found {
+		return trimDocumentBody(body), nil
+	}
+	updated, _, err := deleteDocumentSection(body, selector)
+	if err != nil {
+		return "", err
+	}
+	return updated, nil
 }
 
 func pruneJournalWindows(body string, level int, window string, maxWindows int) string {

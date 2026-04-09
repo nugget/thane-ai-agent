@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/database"
@@ -109,6 +110,36 @@ func TestDocWriteHandlerPreservesOrClearsBodyByIntent(t *testing.T) {
 	}
 	if record.Body != "" {
 		t.Fatalf("body after explicit empty-body doc_write = %q, want empty body", record.Body)
+	}
+}
+
+func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	writeTool := reg.Get("doc_write")
+	if writeTool == nil {
+		t.Fatal("doc_write not registered")
+	}
+
+	_, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":           "kb:notes/journaled.md",
+		"body":          "# State\n\nWorking through it.",
+		"journal_entry": "Captured the first checkpoint.",
+	})
+	if err != nil {
+		t.Fatalf("doc_write with journal_entry: %v", err)
+	}
+
+	record, err := store.Read(context.Background(), "kb:notes/journaled.md")
+	if err != nil {
+		t.Fatalf("Read after journaled doc_write: %v", err)
+	}
+	if !strings.Contains(record.Body, "## Journal") {
+		t.Fatalf("body = %q, want Journal section", record.Body)
+	}
+	if !strings.Contains(record.Body, "Captured the first checkpoint.") {
+		t.Fatalf("body = %q, want journal entry content", record.Body)
 	}
 }
 

@@ -145,6 +145,381 @@ func TestStoreJournalUpdatePrunesOldWindows(t *testing.T) {
 	}
 }
 
+func TestStoreWriteWithJournalEntryMaintainsStandardJournalSection(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	result, err := store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Title:        "Metacog State",
+		Body:         stringPtr("# Current State\n\nAll systems nominal."),
+		JournalEntry: "Opened the first journal entry.",
+	})
+	if err != nil {
+		t.Fatalf("Write with journal entry: %v", err)
+	}
+	if result.Section != documentJournalHeading {
+		t.Fatalf("Write result = %#v, want section %q", result, documentJournalHeading)
+	}
+
+	record, err := store.Read(ctx, "kb:metacog/state.md")
+	if err != nil {
+		t.Fatalf("Read after journal write: %v", err)
+	}
+	if !strings.Contains(record.Body, "# Current State") {
+		t.Fatalf("body = %q, want main state body preserved", record.Body)
+	}
+	if !strings.Contains(record.Body, "## Journal") {
+		t.Fatalf("body = %q, want standard Journal section", record.Body)
+	}
+	if !strings.Contains(record.Body, "Opened the first journal entry.") {
+		t.Fatalf("body = %q, want journal entry content", record.Body)
+	}
+}
+
+func TestStoreWriteWithJournalEntryPreservesExistingJournalAcrossBodyReplacement(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Body:         stringPtr("# State\n\nOld summary."),
+		JournalEntry: "First note.",
+	})
+	if err != nil {
+		t.Fatalf("initial Write: %v", err)
+	}
+
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:          "kb:metacog/state.md",
+		Body:         stringPtr("# State\n\nNew summary."),
+		JournalEntry: "Second note.",
+	})
+	if err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+
+	record, err := store.Read(ctx, "kb:metacog/state.md")
+	if err != nil {
+		t.Fatalf("Read after second Write: %v", err)
+	}
+	if !strings.Contains(record.Body, "New summary.") || strings.Contains(record.Body, "Old summary.") {
+		t.Fatalf("body = %q, want replaced main state body", record.Body)
+	}
+	if !strings.Contains(record.Body, "First note.") || !strings.Contains(record.Body, "Second note.") {
+		t.Fatalf("body = %q, want both journal entries preserved", record.Body)
+	}
+	if count := strings.Count(record.Body, "## Journal"); count != 1 {
+		t.Fatalf("body = %q, want one Journal section, got %d", record.Body, count)
+	}
+}
+
+func TestStoreDeleteRemovesManagedDocument(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:   "kb:notes/delete-me.md",
+		Title: "Delete Me",
+		Body:  stringPtr("Gone soon."),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	result, err := store.Delete(ctx, DeleteArgs{Ref: "kb:notes/delete-me.md"})
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if result.DeletedRef != "kb:notes/delete-me.md" {
+		t.Fatalf("Delete result = %#v, want deleted ref", result)
+	}
+
+	if _, err := os.Stat(filepath.Join(kbDir, "notes", "delete-me.md")); !os.IsNotExist(err) {
+		t.Fatalf("deleted file stat err = %v, want not exist", err)
+	}
+	if _, err := store.Read(ctx, "kb:notes/delete-me.md"); err == nil || !strings.Contains(err.Error(), "document not found") {
+		t.Fatalf("Read after Delete error = %v, want document not found", err)
+	}
+}
+
+func TestStoreMoveRenamesManagedDocument(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:   "kb:notes/source.md",
+		Title: "Source",
+		Body:  stringPtr("Move this."),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	result, err := store.Move(ctx, MoveArgs{
+		Ref:            "kb:notes/source.md",
+		DestinationRef: "kb:archive/moved.md",
+	})
+	if err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if result.ToRef != "kb:archive/moved.md" || result.FromRef != "kb:notes/source.md" {
+		t.Fatalf("Move result = %#v, want moved refs", result)
+	}
+
+	if _, err := store.Read(ctx, "kb:notes/source.md"); err == nil || !strings.Contains(err.Error(), "document not found") {
+		t.Fatalf("Read source after Move error = %v, want document not found", err)
+	}
+	record, err := store.Read(ctx, "kb:archive/moved.md")
+	if err != nil {
+		t.Fatalf("Read moved doc: %v", err)
+	}
+	if !strings.Contains(record.Body, "Move this.") {
+		t.Fatalf("moved body = %q, want preserved content", record.Body)
+	}
+	if _, err := os.Stat(filepath.Join(kbDir, "archive", "moved.md")); err != nil {
+		t.Fatalf("moved file stat err = %v", err)
+	}
+}
+
+func TestStoreMoveRestoresOverwrittenDestinationWhenSourceRemovalFails(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	srcDir := filepath.Join(rootDir, "src")
+	dstDir := filepath.Join(rootDir, "dst")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll src: %v", err)
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll dst: %v", err)
+	}
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store, err := NewStore(db, map[string]string{"src": srcDir, "dst": dstDir}, nil)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:   "src:notes/source.md",
+		Title: "Source",
+		Body:  stringPtr("Source body."),
+	})
+	if err != nil {
+		t.Fatalf("Write source: %v", err)
+	}
+	_, err = store.Write(ctx, WriteArgs{
+		Ref:   "dst:notes/existing.md",
+		Title: "Existing",
+		Body:  stringPtr("Existing destination body."),
+	})
+	if err != nil {
+		t.Fatalf("Write destination: %v", err)
+	}
+
+	sourceParent := filepath.Join(srcDir, "notes")
+	if err := os.Chmod(sourceParent, 0o555); err != nil {
+		t.Fatalf("Chmod readonly source parent: %v", err)
+	}
+	defer func() { _ = os.Chmod(sourceParent, 0o755) }()
+
+	_, err = store.Move(ctx, MoveArgs{
+		Ref:            "src:notes/source.md",
+		DestinationRef: "dst:notes/existing.md",
+		Overwrite:      true,
+	})
+	if err == nil {
+		t.Fatal("Move overwrite = nil, want source removal failure")
+	}
+	if !strings.Contains(err.Error(), "remove source document") {
+		t.Fatalf("Move overwrite error = %v, want remove source document", err)
+	}
+
+	record, err := store.Read(ctx, "dst:notes/existing.md")
+	if err != nil {
+		t.Fatalf("Read destination after failed move: %v", err)
+	}
+	if !strings.Contains(record.Body, "Existing destination body.") {
+		t.Fatalf("destination body after failed move = %q, want original destination restored", record.Body)
+	}
+
+	source, err := store.Read(ctx, "src:notes/source.md")
+	if err != nil {
+		t.Fatalf("Read source after failed move: %v", err)
+	}
+	if !strings.Contains(source.Body, "Source body.") {
+		t.Fatalf("source body after failed move = %q, want original source preserved", source.Body)
+	}
+}
+
+func TestStoreCopyDuplicatesManagedDocument(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:   "kb:notes/original.md",
+		Title: "Original",
+		Body:  stringPtr("Copy this."),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	result, err := store.Copy(ctx, CopyArgs{
+		Ref:            "kb:notes/original.md",
+		DestinationRef: "kb:notes/copied.md",
+	})
+	if err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+	if result.ToRef != "kb:notes/copied.md" || result.FromRef != "kb:notes/original.md" {
+		t.Fatalf("Copy result = %#v, want copied refs", result)
+	}
+
+	original, err := store.Read(ctx, "kb:notes/original.md")
+	if err != nil {
+		t.Fatalf("Read original: %v", err)
+	}
+	copied, err := store.Read(ctx, "kb:notes/copied.md")
+	if err != nil {
+		t.Fatalf("Read copied: %v", err)
+	}
+	if original.Body != copied.Body {
+		t.Fatalf("copied body = %q, want %q", copied.Body, original.Body)
+	}
+	if _, err := os.Stat(filepath.Join(kbDir, "notes", "copied.md")); err != nil {
+		t.Fatalf("copied file stat err = %v", err)
+	}
+}
+
+func TestStoreCopySectionCreatesDestinationDocument(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref: "kb:source.md",
+		Body: stringPtr(strings.Join([]string{
+			"# Source",
+			"",
+			"## Ideas",
+			"",
+			"Alpha idea.",
+			"",
+			"## Notes",
+			"",
+			"Keep me here.",
+		}, "\n")),
+	})
+	if err != nil {
+		t.Fatalf("Write source: %v", err)
+	}
+
+	result, err := store.CopySection(ctx, SectionTransferArgs{
+		Ref:                "kb:source.md",
+		Section:            "Ideas",
+		DestinationRef:     "kb:ideas.md",
+		DestinationSection: "Copied Ideas",
+		DestinationLevel:   3,
+	})
+	if err != nil {
+		t.Fatalf("CopySection: %v", err)
+	}
+	if result.DestinationSection != "Copied Ideas" || result.DestinationLevel != 3 {
+		t.Fatalf("CopySection result = %#v, want renamed section at level 3", result)
+	}
+
+	source, err := store.Read(ctx, "kb:source.md")
+	if err != nil {
+		t.Fatalf("Read source: %v", err)
+	}
+	if !strings.Contains(source.Body, "## Ideas") {
+		t.Fatalf("source body = %q, want original section preserved", source.Body)
+	}
+
+	destination, err := store.Read(ctx, "kb:ideas.md")
+	if err != nil {
+		t.Fatalf("Read destination: %v", err)
+	}
+	if !strings.Contains(destination.Body, "### Copied Ideas") || !strings.Contains(destination.Body, "Alpha idea.") {
+		t.Fatalf("destination body = %q, want copied section content", destination.Body)
+	}
+}
+
+func TestStoreMoveSectionRemovesSourceSection(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref: "kb:source.md",
+		Body: stringPtr(strings.Join([]string{
+			"# Source",
+			"",
+			"## Move Me",
+			"",
+			"Shift this section.",
+			"",
+			"## Keep Me",
+			"",
+			"Still here.",
+		}, "\n")),
+	})
+	if err != nil {
+		t.Fatalf("Write source: %v", err)
+	}
+
+	result, err := store.MoveSection(ctx, SectionTransferArgs{
+		Ref:            "kb:source.md",
+		Section:        "Move Me",
+		DestinationRef: "kb:dest.md",
+	})
+	if err != nil {
+		t.Fatalf("MoveSection: %v", err)
+	}
+	if result.SourceSection != "Move Me" || result.DestinationSection != "Move Me" {
+		t.Fatalf("MoveSection result = %#v, want moved section metadata", result)
+	}
+
+	source, err := store.Read(ctx, "kb:source.md")
+	if err != nil {
+		t.Fatalf("Read source: %v", err)
+	}
+	if strings.Contains(source.Body, "## Move Me") {
+		t.Fatalf("source body = %q, want moved section removed", source.Body)
+	}
+	if !strings.Contains(source.Body, "## Keep Me") {
+		t.Fatalf("source body = %q, want remaining sections preserved", source.Body)
+	}
+
+	destination, err := store.Read(ctx, "kb:dest.md")
+	if err != nil {
+		t.Fatalf("Read destination: %v", err)
+	}
+	if !strings.Contains(destination.Body, "## Move Me") || !strings.Contains(destination.Body, "Shift this section.") {
+		t.Fatalf("destination body = %q, want moved section content", destination.Body)
+	}
+}
+
 func newMutationStore(t *testing.T) (*Store, string) {
 	t.Helper()
 
