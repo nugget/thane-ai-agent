@@ -160,10 +160,18 @@ workspace:
 # the configured directory). Supports ~ expansion at resolver
 # construction time.
 # 
+# These prefixes also define the managed local document roots used by
+# the documents capability. Any configured root that exists on disk is
+# eligible for indexed browse/search/section retrieval via doc_* tools,
+# so users can add their own custom corpora here without code changes.
+# See docs/understanding/document-roots.md for the operator-facing
+# contract; keep that document in sync with changes here.
+# 
 # Typical prefixes are:
 #   - kb:         curated knowledge / indexed documents
 #   - generated:  model-produced durable outputs (reports, dailies)
 #   - scratchpad: low-integrity writable work area
+#   - dossiers:   private dossiers or long-form reference material
 # 
 # The core: prefix is reserved and always derived from
 # {workspace.path}/core; it is not configured here.

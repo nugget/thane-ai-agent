@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/documents"
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -273,6 +276,43 @@ func (a *App) initChannels(s *newState) error {
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.
 	a.initFileTools(s)
+
+	// --- Indexed document roots ---
+	// Model-facing corpus navigation over managed markdown roots. This
+	// complements raw file tools by giving the model rooted discovery,
+	// structured search, and section retrieval when the exact path is not
+	// yet known.
+	if s.resolver != nil {
+		documentRoots := make(map[string]string)
+		for _, root := range s.resolver.Prefixes() {
+			absPath, err := s.resolver.Resolve(root + ":")
+			if err != nil {
+				continue
+			}
+			info, err := os.Stat(absPath)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			documentRoots[root] = absPath
+		}
+		if len(documentRoots) > 0 {
+			docStore, err := documents.NewStore(a.mem.DB(), documentRoots, a.logger.With("component", "documents"))
+			if err != nil {
+				return fmt.Errorf("create document index: %w", err)
+			}
+			tools.RegisterDocumentTools(a.loop.Tools(), documents.NewTools(docStore))
+			a.deferWorker("documents-index", func(ctx context.Context) error {
+				go docStore.RunRefresher(ctx)
+				return nil
+			})
+			roots := make([]string, 0, len(documentRoots))
+			for root := range documentRoots {
+				roots = append(roots, root)
+			}
+			sort.Strings(roots)
+			a.logger.Info("document index enabled", "roots", roots)
+		}
+	}
 
 	// --- Temp file store ---
 	// Provides create_temp_file tool for orchestrator-delegate data passing.
