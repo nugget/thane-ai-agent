@@ -19,7 +19,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
-	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 const (
@@ -54,7 +53,7 @@ func (a *App) initStores(s *newState) error {
 	// Tracks all persistent background loops (metacognitive, pollers,
 	// watchers). Created early so component init blocks can register
 	// loops before the web dashboard is wired up.
-	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
+	loopRegistry := a.newLoopRegistry(logger)
 	a.loopRegistry = loopRegistry
 
 	baseDefinitions, err := a.buildLoopDefinitionBaseSpecs()
@@ -467,11 +466,9 @@ func (a *App) initStores(s *newState) error {
 	// Persistent token usage and cost recording for attribution and
 	// analysis. Append-only SQLite store, queried via the cost_summary tool.
 	// Shares the main thane.db connection.
-	usageStore, err := usage.NewStore(mem.DB())
-	if err != nil {
-		return fmt.Errorf("initialize usage store: %w", err)
+	if err := a.initLoopUsageStores(mem.DB()); err != nil {
+		return err
 	}
-	a.usageStore = usageStore
 
 	// Task execution dependencies. The runner reads a.loop at call time
 	// (not capture time) so it sees the loop constructed by initAgentLoop.
@@ -479,6 +476,7 @@ func (a *App) initStores(s *newState) error {
 	deps.launch = a.loopRegistry.Launch
 	deps.logger = logger
 	deps.eventBus = a.eventBus
+	deps.outputSink = a.loopTaskOutputSink()
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {

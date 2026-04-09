@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
@@ -77,5 +78,18 @@ func ReportConversationID(ctx context.Context, conversationID string) map[string
 		return summary
 	}
 	summary["conversation_id"] = conversationID
+	return summary
+}
+
+// ReportObservation records the handler-generated observation text for the
+// current iteration so built-in loop output targets can fan it out to
+// journals, MQTT, or the structured observation log without each handler
+// inventing its own dispatch path.
+func ReportObservation(ctx context.Context, content string) map[string]any {
+	summary := IterationSummary(ctx)
+	if summary == nil || strings.TrimSpace(content) == "" {
+		return summary
+	}
+	summary["observation"] = content
 	return summary
 }

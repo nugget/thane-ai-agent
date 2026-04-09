@@ -128,6 +128,13 @@ type Config struct {
 	// the loop should observe, check, or do on each wake.
 	Task string
 
+	// Operation describes the runtime pattern expected for the loop.
+	Operation Operation
+
+	// Completion describes how results should be delivered back to a
+	// caller, conversation, or channel.
+	Completion Completion
+
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
 	// tags (plus always-active tags).
@@ -237,6 +244,10 @@ type Config struct {
 	// content. Interactive loops can set this to guarantee a reply.
 	FallbackContent string
 
+	// Outputs describe non-conversation observation targets such as the
+	// structured observation log, document journals, or MQTT topics.
+	Outputs []OutputTarget
+
 	// Setup is called by [Registry.SpawnLoop] after [New] but before
 	// [Loop.Start]. Use it to register tools or perform other setup
 	// that requires a *Loop reference before the goroutine launches.
@@ -305,6 +316,11 @@ func (c *Config) validate() error {
 	}
 	if c.SupervisorProb < 0 || c.SupervisorProb > 1 {
 		return fmt.Errorf("loop: SupervisorProb must be in [0, 1], got %v", c.SupervisorProb)
+	}
+	for i, target := range c.Outputs {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("loop: outputs[%d]: %w", i, err)
+		}
 	}
 	return nil
 }

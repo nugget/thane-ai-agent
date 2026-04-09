@@ -778,6 +778,9 @@ talents_dir: ./talents
 #
 # (optional) Loops configures immutable loop definitions loaded from the config
 # loops:
+#   MaxRunning caps the number of concurrently running loops across
+#   the live registry. Zero means unlimited.
+#   max_running: 25
 #   Definitions is the set of config-defined loop specs. These specs
 #   are immutable at runtime; dynamic loop creation lives in the
 #   persistent overlay registry instead.
@@ -827,6 +830,27 @@ talents_dir: ./talents
 #       on_retrigger: 0
 #       hints: {}
 #       fallback_content: ""
+#       outputs:
+#         - kind: observation_log
+#           ref: ""
+#           topic: ""
+#           retain: false
+#           window: ""
+#           max_windows: 0
+#           title: ""
+#           description: ""
+#           tags: []
+#         - kind: document_journal
+#           ref: generated:loop-journals/office-watch.md
+#           topic: ""
+#           retain: false
+#           window: daily
+#           max_windows: 14
+#           title: Office Watch
+#           description: ""
+#           tags:
+#             - office
+#             - observer
 #       metadata:
 #         category: observer
 #       parent_id: ""

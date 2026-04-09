@@ -174,6 +174,27 @@ func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state
 	return nil
 }
 
+// PublishTopic publishes an arbitrary payload to a concrete MQTT topic.
+// Safe for concurrent use from any goroutine.
+func (p *Publisher) PublishTopic(ctx context.Context, topic string, payload []byte, retain bool) error {
+	cm := p.getCM()
+	if cm == nil {
+		return fmt.Errorf("mqtt publisher not started")
+	}
+	if strings.TrimSpace(topic) == "" {
+		return fmt.Errorf("mqtt topic is required")
+	}
+	if _, err := cm.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     0,
+		Retain:  retain,
+	}); err != nil {
+		return fmt.Errorf("publish topic %s: %w", topic, err)
+	}
+	return nil
+}
+
 // Connect establishes the MQTT broker connection, publishes discovery
 // configs, and configures subscriptions. It does not start the periodic
 // publish loop — use [Publisher.PublishStates] in a loop infrastructure

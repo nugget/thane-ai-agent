@@ -120,6 +120,7 @@ const recentConvIDsCap = 10
 // recentIterationsCap is the maximum number of completed iteration
 // snapshots retained for the dashboard timeline.
 const recentIterationsCap = 10
+const detachedOutputTimeout = 10 * time.Second
 
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
@@ -130,6 +131,9 @@ type Deps struct {
 	// CompletionSink receives detached completion deliveries such as
 	// background-task results injected into conversations.
 	CompletionSink CompletionSink
+	// OutputSink receives structured observation deliveries emitted by
+	// successful loop iterations to configured output targets.
+	OutputSink OutputSink
 	// Logger for loop operations. Defaults to slog.Default().
 	Logger *slog.Logger
 	// EventBus publishes loop lifecycle events. Nil disables events.
@@ -440,6 +444,7 @@ func (l *Loop) Status() Status {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
 	}
+	cfgCopy.Outputs = cloneOutputTargets(l.config.Outputs)
 	if l.config.Hints != nil {
 		cfgCopy.Hints = make(map[string]string, len(l.config.Hints))
 		for k, v := range l.config.Hints {
@@ -1057,6 +1062,26 @@ func (l *Loop) run(ctx context.Context) {
 					Kind:      events.KindLoopIterationComplete,
 					Data:      eventData,
 				})
+
+				if observationContent := observationContentForIteration(result, handlerSummary, l.lastResponseSnapshot()); observationContent != "" || len(handlerSummary) > 0 {
+					l.dispatchOutputsAsync(Observation{
+						Timestamp:      time.Now().UTC(),
+						LoopID:         l.id,
+						LoopName:       l.config.Name,
+						Operation:      effectiveOperation(l.config.Operation),
+						Iteration:      snap.Number,
+						ConversationID: convID,
+						RequestID:      result.RequestID,
+						Model:          result.Model,
+						Content:        observationContent,
+						Summary:        cloneStringAnyMap(handlerSummary),
+						InputTokens:    result.InputTokens,
+						OutputTokens:   result.OutputTokens,
+						Supervisor:     result.Supervisor,
+						Metadata:       cloneStringMap(l.config.Metadata),
+						ActiveTags:     append([]string(nil), result.ActiveTags...),
+					})
+				}
 			}
 
 			// Compute sleep after updating error state so backoff reflects

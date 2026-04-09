@@ -135,3 +135,22 @@ func applyLoopLaunchContextDefaults(ctx context.Context, def looppkg.DefinitionV
 	}
 	return launch
 }
+
+func applyAdHocLoopLaunchContextDefaults(ctx context.Context, launch looppkg.Launch) looppkg.Launch {
+	if launch.ChannelBinding == nil {
+		launch.ChannelBinding = ChannelBindingFromContext(ctx)
+	}
+	switch launch.Spec.Completion {
+	case looppkg.CompletionConversation:
+		if strings.TrimSpace(launch.CompletionConversationID) == "" {
+			_, conversationID, _ := LoopCompletionTargetFromContext(ctx)
+			launch.CompletionConversationID = conversationID
+		}
+	case looppkg.CompletionChannel:
+		if launch.CompletionChannel == nil {
+			_, _, target := LoopCompletionTargetFromContext(ctx)
+			launch.CompletionChannel = target
+		}
+	}
+	return launch
+}

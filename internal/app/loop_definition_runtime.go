@@ -30,6 +30,7 @@ type loopDefinitionRuntime struct {
 	loops        *looppkg.Registry
 	runner       looppkg.Runner
 	completion   looppkg.CompletionSink
+	outputs      looppkg.OutputSink
 	hydrate      func(looppkg.Spec) (looppkg.Spec, error)
 	logger       *slog.Logger
 	eventBus     *events.Bus
@@ -44,10 +45,17 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 	}
 	dispatcher := a.ensureLoopCompletionDispatcher()
 	return &loopDefinitionRuntime{
-		definitions:  a.loopDefinitionRegistry,
-		loops:        a.loopRegistry,
-		runner:       &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface},
-		completion:   dispatcher.Deliver,
+		definitions: a.loopDefinitionRegistry,
+		loops:       a.loopRegistry,
+		runner:      &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface},
+		completion:  dispatcher.Deliver,
+		outputs: func(ctx context.Context, delivery looppkg.OutputDelivery) error {
+			outputs := a.ensureLoopOutputDispatcher()
+			if outputs == nil {
+				return nil
+			}
+			return outputs.Deliver(ctx, delivery)
+		},
 		hydrate:      a.hydrateLoopDefinitionSpec,
 		logger:       a.logger,
 		eventBus:     a.eventBus,
@@ -65,6 +73,7 @@ func (r *loopDefinitionRuntime) deps() looppkg.Deps {
 	return looppkg.Deps{
 		Runner:         r.runner,
 		CompletionSink: r.completion,
+		OutputSink:     r.outputs,
 		Logger:         logger,
 		EventBus:       r.eventBus,
 	}

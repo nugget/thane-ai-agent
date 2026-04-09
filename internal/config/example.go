@@ -233,6 +233,7 @@ func ExampleConfig() *Config {
 		},
 
 		Loops: LoopsConfig{
+			MaxRunning: 25,
 			Definitions: []looppkg.Spec{
 				{
 					Name:       "office_watch",
@@ -260,6 +261,19 @@ func ExampleConfig() *Config {
 					SleepMax:     10 * time.Minute,
 					SleepDefault: 5 * time.Minute,
 					Jitter:       looppkg.Float64Ptr(0.2),
+					Outputs: []looppkg.OutputTarget{
+						{
+							Kind: looppkg.OutputTargetObservationLog,
+						},
+						{
+							Kind:       looppkg.OutputTargetDocumentJournal,
+							Ref:        "generated:loop-journals/office-watch.md",
+							Window:     "daily",
+							MaxWindows: 14,
+							Title:      "Office Watch",
+							Tags:       []string{"office", "observer"},
+						},
+					},
 					Metadata: map[string]string{
 						"category": "observer",
 					},

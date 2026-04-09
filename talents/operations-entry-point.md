@@ -17,8 +17,8 @@ Choose the next move deliberately:
   `models`.
 - If the work is about scheduled tasks or timing policy, activate
   `scheduler`.
-- If you need loop definitions, loop policy, or loop launches, activate
-  `loops`.
+- If you need live loop status, loop stops, ad hoc loop spawns, durable
+  loop definitions, or loop policy, activate `loops`.
 - If the operational question is really about session boundaries,
   resets, splits, checkpoints, or carry-forward, activate `session`.
 - If the work is MQTT plumbing or wake subscriptions, activate `mqtt`.
