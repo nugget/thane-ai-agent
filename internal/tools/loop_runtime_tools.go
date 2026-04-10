@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -294,9 +295,9 @@ func parseNextSleepDurationArg(args map[string]any) (time.Duration, string, erro
 	case int64:
 		durStr = fmt.Sprintf("%dm", v)
 	case float32:
-		durStr = fmt.Sprintf("%gm", v)
+		durStr = strconv.FormatFloat(float64(v), 'f', -1, 64) + "m"
 	case float64:
-		durStr = fmt.Sprintf("%gm", v)
+		durStr = strconv.FormatFloat(v, 'f', -1, 64) + "m"
 	default:
 		return 0, "", fmt.Errorf("duration must be a Go duration string or a numeric minute count")
 	}

@@ -29,9 +29,9 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 			Code: "service_default_cadence",
 			Message: fmt.Sprintf(
 				"Service loop omits sleep_min, sleep_max, sleep_default, and jitter. It will use engine defaults of sleep_min=%s, sleep_max=%s, sleep_default=%s, jitter=%.1f. Natural-language timing in task text does not schedule the loop.",
-				DefaultSleepMin,
-				DefaultSleepMax,
-				DefaultSleepDefault,
+				DefaultSleepMin.String(),
+				DefaultSleepMax.String(),
+				DefaultSleepDefault.String(),
 				DefaultJitter,
 			),
 		})
@@ -41,9 +41,9 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 			Message: fmt.Sprintf(
 				"Service loop leaves %s implicit. Omitted timing fields fall back to sleep_min=%s, sleep_max=%s, sleep_default=%s, jitter=%.1f.",
 				quotedFieldList(missingSleep),
-				DefaultSleepMin,
-				DefaultSleepMax,
-				DefaultSleepDefault,
+				DefaultSleepMin.String(),
+				DefaultSleepMax.String(),
+				DefaultSleepDefault.String(),
 				DefaultJitter,
 			),
 		})

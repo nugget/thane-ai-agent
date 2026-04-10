@@ -154,6 +154,34 @@ func TestSetNextSleepClampsNumericMinutes(t *testing.T) {
 	}
 }
 
+func TestSetNextSleepAcceptsLargeFloatMinutesWithoutScientificNotation(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	live := deps.live.GetByName("battery_watch")
+	if live == nil {
+		t.Fatal("battery_watch loop missing")
+	}
+
+	ctx := WithLoopID(context.Background(), live.ID())
+	out, err := deps.reg.Get("set_next_sleep").Handler(ctx, map[string]any{
+		"duration": 1000000.0,
+	})
+	if err != nil {
+		t.Fatalf("set_next_sleep: %v", err)
+	}
+
+	var got struct {
+		Requested string `json:"requested"`
+		Applied   string `json:"applied"`
+		Clamped   bool   `json:"clamped"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal set_next_sleep: %v", err)
+	}
+	if got.Requested != "1000000m" || got.Applied != "30m0s" || !got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=1000000m applied=30m0s clamped=true", got)
+	}
+}
+
 func TestSetNextSleepRequiresCurrentLoopContext(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 
