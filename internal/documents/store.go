@@ -71,15 +71,6 @@ type ValueCount struct {
 	Count int    `json:"count"`
 }
 
-// SearchQuery filters document search results.
-type SearchQuery struct {
-	Root       string
-	PathPrefix string
-	Query      string
-	Tags       []string
-	Limit      int
-}
-
 // Store indexes managed markdown roots into the primary Thane SQLite DB.
 type Store struct {
 	db              *sql.DB
