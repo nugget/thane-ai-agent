@@ -13,6 +13,7 @@ Think of loops in two layers:
 Use the definition tools when the work is about a loop you want to keep,
 edit, pause, reactivate, or relaunch later:
 
+- `loop_definition_lint`
 - `loop_definition_list`
 - `loop_definition_get`
 - `loop_definition_set`
@@ -23,6 +24,7 @@ Use the live runtime tools when the work is about what is running right
 now:
 
 - `loop_status`
+- `set_next_sleep`
 - `spawn_loop`
 - `stop_loop`
 - `notify_loop`
@@ -40,6 +42,14 @@ single tap on the shoulder:
 - do not use it as a persistence mechanism; the notification is only for the
   next iteration
 
+`set_next_sleep` is for the loop that is already running right now:
+
+- call it from inside a timer-driven service loop
+- ask for the next wake duration in plain duration syntax like `15m`
+- the runtime clamps the request to the loop's configured sleep bounds
+- use it when the loop has learned something that should change its
+  next attention cycle
+
 For one-shot curiosity or side research, think in the same shape as a
 delegate:
 
@@ -55,6 +65,23 @@ document tools already express the artifact clearly.
 
 Prefer durable definitions for recurring services. Prefer ad hoc live
 spawns for temporary observers and one-off detached tasks.
+
+Natural-language timing in `task` does not schedule a service loop.
+Words like hourly, daily, or every night do nothing on their own. For
+service loops, set `sleep_min`, `sleep_max`, `sleep_default`, and
+`jitter` deliberately.
+
+Before saving or replacing a durable service definition, use
+`loop_definition_lint` or inspect the warnings returned by definition
+views. This is especially important when:
+
+- the task text mentions a cadence
+- the loop should use its own tagged tools directly
+- fixed cadence matters more than jitter
+
+Tagged service loops often want `profile.delegation_gating: "disabled"`
+so the loop can use its own domain tools directly instead of falling
+back into delegation-first orchestration.
 
 Loop authoring is rare and high leverage. When you need it, copy a
 known-good pattern from the examples below and adapt it minimally

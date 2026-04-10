@@ -48,7 +48,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_summary",
-		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, policy state, and live runtime state, plus the known loop definition names.",
+		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, policy state, live runtime state, warning totals, and the known loop definition names.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -58,7 +58,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_list",
-		Description: "List persistent loop definitions with compact structured fields and optional filters. Use this to discover available service, background_task, and request_reply definitions, along with their effective policy and current live runtime state, before modifying them.",
+		Description: "List persistent loop definitions with compact structured fields, authoring warnings, and optional filters. Use this to discover available service, background_task, and request_reply definitions, along with their effective policy and current live runtime state, before modifying them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -106,7 +106,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_get",
-		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name, including its current live runtime state when available.",
+		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name, including authoring warnings and its current live runtime state when available.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -121,8 +121,24 @@ func (r *Registry) registerLoopDefinitionTools() {
 	})
 
 	r.Register(&Tool{
+		Name:        "loop_definition_lint",
+		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted cadence fields or delegation-first gating.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"spec": map[string]any{
+					"type":        "object",
+					"description": "Candidate loop definition spec to validate and inspect before saving.",
+				},
+			},
+			"required": []string{"spec"},
+		},
+		Handler: r.handleLoopDefinitionLint,
+	})
+
+	r.Register(&Tool{
 		Name:        "loop_definition_set",
-		Description: "Create or replace one dynamic loop definition in the persistent loops-ng overlay. This cannot modify config-owned definitions. The spec uses human-facing strings for durations and retrigger mode.",
+		Description: "Create or replace one dynamic loop definition in the persistent loops-ng overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

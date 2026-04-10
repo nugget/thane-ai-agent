@@ -19,9 +19,11 @@ Choose the next move deliberately:
   `scheduler`.
 - If you need live loop status, loop stops, ad hoc loop spawns, durable
   loop definitions, loop policy, detached research that should report
-  back later, or a one-shot signal to a sleeping service loop, activate
-  `loops`. That branch also carries concrete loop-launch recipes when
-  you need a known-good pattern.
+  back later, a one-shot signal to a sleeping service loop, or help
+  linting and authoring a reliable persistent service definition,
+  activate `loops`. That branch also carries concrete loop-launch
+  recipes and service-loop authoring guardrails when you need a
+  known-good pattern.
 - If the operational question is really about session boundaries,
   resets, splits, checkpoints, or carry-forward, activate `session`.
 - If the work is MQTT plumbing or wake subscriptions, activate `mqtt`.

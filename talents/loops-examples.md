@@ -9,6 +9,40 @@ Use these as trusted launch patterns. Do not improvise the whole
 loops-ng contract from scratch unless the situation truly demands it.
 Start from the closest recipe and change only what matters.
 
+## Pattern: Lint A Durable Service Definition Before Saving It
+
+Use this when you are about to create or replace a persistent service
+loop and want to see the effective defaults and authoring warnings
+first.
+
+- Tool: `loop_definition_lint`
+- Use this before `loop_definition_set`
+- Pay special attention to omitted sleep fields, delegation gating, and
+  warnings about task text that mentions a cadence
+
+```json
+{
+  "spec": {
+    "name": "county-burn-ban-monitor",
+    "enabled": true,
+    "task": "Check the county burn ban source hourly and keep the Home Assistant helper aligned with the current restriction state.",
+    "operation": "service",
+    "completion": "none",
+    "tags": ["web", "ha"],
+    "sleep_min": "1h",
+    "sleep_max": "1h",
+    "sleep_default": "1h",
+    "jitter": 0,
+    "profile": {
+      "mission": "background",
+      "delegation_gating": "disabled",
+      "initial_tags": ["home"],
+      "instructions": "Use direct domain tools. Keep durable notes only when they materially improve future iterations."
+    }
+  }
+}
+```
+
 ## Pattern: Detached Research That Reports Back Later
 
 Use this when the current turn would benefit from a side investigation
@@ -73,8 +107,9 @@ pass.
       "supervisor_context": "Supervisor turn. Step back from individual readings, look for cross-device patterns or weak assumptions, and decide whether anything now deserves escalation or a sharper hypothesis.",
       "profile": {
         "mission": "background",
+        "delegation_gating": "disabled",
         "initial_tags": ["home", "knowledge", "documents"],
-        "instructions": "Maintain one durable state document. Use the journal when something materially changes."
+        "instructions": "Maintain one durable state document. Use the journal when something materially changes. Call set_next_sleep when the next wake should be meaningfully shorter or longer than the default cycle."
       }
     }
   }
@@ -83,6 +118,8 @@ pass.
 
 Put the main prompt in `launch.spec.task`, not top-level `launch.task`,
 when you want `supervisor_context` to apply cleanly.
+Words like hourly or daily inside `task` do not schedule the loop. The
+sleep fields above are the real cadence.
 
 ## Pattern: Durable Named Service You Can Pause And Resume
 
@@ -90,11 +127,12 @@ Use this when the loop should survive beyond the current moment as a
 stored definition that can be inspected, paused, resumed, or relaunched
 later.
 
-1. Create or replace the definition with `loop_definition_set`.
-2. Use `loop_definition_set_policy(state=\"active\")` to keep it
+1. Lint the definition with `loop_definition_lint`.
+2. Create or replace the definition with `loop_definition_set`.
+3. Use `loop_definition_set_policy(state=\"active\")` to keep it
    running, `paused` to stop without forgetting it, and `inactive` to
    disable it.
-3. Use `loop_definition_get`, `loop_definition_list`, and `loop_status`
+4. Use `loop_definition_get`, `loop_definition_list`, and `loop_status`
    to inspect it later.
 
 ```json
@@ -116,8 +154,9 @@ later.
     "supervisor_context": "Supervisor turn. Step back from individual readings, look for cross-device patterns or weak assumptions, and decide whether anything now deserves escalation or a sharper hypothesis.",
     "profile": {
       "mission": "background",
+      "delegation_gating": "disabled",
       "initial_tags": ["home", "knowledge", "documents"],
-      "instructions": "Maintain one durable state document. Use the journal when something materially changes."
+      "instructions": "Maintain one durable state document. Use the journal when something materially changes. Call set_next_sleep when the next wake should be meaningfully shorter or longer than the default cycle."
     }
   }
 }
@@ -130,6 +169,10 @@ important part is the lifecycle:
 - pause it
 - resume it
 - inspect it later
+
+If the loop should use its own tagged tools directly, remember
+`profile.delegation_gating: "disabled"`. That is a common service-loop
+need.
 
 ## Pattern: Background Loop With Operator Turns
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -27,11 +28,14 @@ func newTestLoopRuntimeDeps(t *testing.T) *testLoopRuntimeDeps {
 	live := looppkg.NewRegistry(looppkg.WithMaxLoops(3))
 	runner := noopLoopRunner{}
 	loopA, err := looppkg.New(looppkg.Config{
-		Name:       "battery_watch",
-		Task:       "Watch batteries.",
-		Operation:  looppkg.OperationService,
-		Completion: looppkg.CompletionNone,
-		Metadata:   map[string]string{"category": "observer"},
+		Name:         "battery_watch",
+		Task:         "Watch batteries.",
+		Operation:    looppkg.OperationService,
+		Completion:   looppkg.CompletionNone,
+		SleepMin:     2 * time.Minute,
+		SleepMax:     30 * time.Minute,
+		SleepDefault: 10 * time.Minute,
+		Metadata:     map[string]string{"category": "observer"},
 	}, looppkg.Deps{Runner: runner})
 	if err != nil {
 		t.Fatalf("New(loopA): %v", err)
@@ -71,10 +75,135 @@ func newTestLoopRuntimeDeps(t *testing.T) *testLoopRuntimeDeps {
 
 func TestConfigureLoopRuntimeTools_RegistersTools(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
-	for _, name := range []string{"loop_status", "spawn_loop", "stop_loop"} {
+	for _, name := range []string{"loop_status", "set_next_sleep", "spawn_loop", "stop_loop"} {
 		if deps.reg.Get(name) == nil {
 			t.Fatalf("%s tool not registered", name)
 		}
+	}
+}
+
+func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	live := deps.live.GetByName("battery_watch")
+	if live == nil {
+		t.Fatal("battery_watch loop missing")
+	}
+
+	ctx := WithLoopID(context.Background(), live.ID())
+	out, err := deps.reg.Get("set_next_sleep").Handler(ctx, map[string]any{
+		"duration": "5m",
+		"reason":   "quiet monitoring interval",
+	})
+	if err != nil {
+		t.Fatalf("set_next_sleep: %v", err)
+	}
+
+	var got struct {
+		Status       string `json:"status"`
+		LoopName     string `json:"loop_name"`
+		Requested    string `json:"requested"`
+		Applied      string `json:"applied"`
+		Clamped      bool   `json:"clamped"`
+		SleepMin     string `json:"sleep_min"`
+		SleepMax     string `json:"sleep_max"`
+		SleepDefault string `json:"sleep_default"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal set_next_sleep: %v", err)
+	}
+	if got.Status != "ok" || got.LoopName != "battery_watch" {
+		t.Fatalf("response = %#v", got)
+	}
+	if got.Requested != "5m" || got.Applied != "5m0s" || got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=5m applied=5m0s clamped=false", got)
+	}
+	if got.SleepMin != "2m0s" || got.SleepMax != "30m0s" || got.SleepDefault != "10m0s" {
+		t.Fatalf("bounds = %#v, want 2m/30m/10m", got)
+	}
+	if got.Reason != "quiet monitoring interval" {
+		t.Fatalf("reason = %q, want quiet monitoring interval", got.Reason)
+	}
+}
+
+func TestSetNextSleepClampsNumericMinutes(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	live := deps.live.GetByName("battery_watch")
+	if live == nil {
+		t.Fatal("battery_watch loop missing")
+	}
+
+	ctx := WithLoopID(context.Background(), live.ID())
+	out, err := deps.reg.Get("set_next_sleep").Handler(ctx, map[string]any{
+		"duration": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("set_next_sleep: %v", err)
+	}
+
+	var got struct {
+		Requested string `json:"requested"`
+		Applied   string `json:"applied"`
+		Clamped   bool   `json:"clamped"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal set_next_sleep: %v", err)
+	}
+	if got.Requested != "1m" || got.Applied != "2m0s" || !got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=1m applied=2m0s clamped=true", got)
+	}
+}
+
+func TestSetNextSleepAcceptsLargeFloatMinutesWithoutScientificNotation(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	live := deps.live.GetByName("battery_watch")
+	if live == nil {
+		t.Fatal("battery_watch loop missing")
+	}
+
+	ctx := WithLoopID(context.Background(), live.ID())
+	out, err := deps.reg.Get("set_next_sleep").Handler(ctx, map[string]any{
+		"duration": 1000000.0,
+	})
+	if err != nil {
+		t.Fatalf("set_next_sleep: %v", err)
+	}
+
+	var got struct {
+		Requested string `json:"requested"`
+		Applied   string `json:"applied"`
+		Clamped   bool   `json:"clamped"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal set_next_sleep: %v", err)
+	}
+	if got.Requested != "1000000m" || got.Applied != "30m0s" || !got.Clamped {
+		t.Fatalf("sleep response = %#v, want requested=1000000m applied=30m0s clamped=true", got)
+	}
+}
+
+func TestSetNextSleepRequiresCurrentLoopContext(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	if _, err := deps.reg.Get("set_next_sleep").Handler(context.Background(), map[string]any{
+		"duration": "5m",
+	}); err == nil || err.Error() != "set_next_sleep can only be called from a running timer-driven service loop" {
+		t.Fatalf("err = %v, want loop-context error", err)
+	}
+}
+
+func TestSetNextSleepRejectsNonServiceLoops(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+	live := deps.live.GetByName("mqtt_bridge")
+	if live == nil {
+		t.Fatal("mqtt_bridge loop missing")
+	}
+
+	ctx := WithLoopID(context.Background(), live.ID())
+	if _, err := deps.reg.Get("set_next_sleep").Handler(ctx, map[string]any{
+		"duration": "5m",
+	}); err == nil || err.Error() != `set_next_sleep is only available to service loops; current loop "mqtt_bridge" uses "background_task"` {
+		t.Fatalf("err = %v, want non-service error", err)
 	}
 }
 

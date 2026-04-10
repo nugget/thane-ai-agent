@@ -36,20 +36,23 @@ type DefinitionView struct {
 	DefinitionSnapshot `yaml:",inline"`
 	Eligibility        DefinitionEligibilityStatus `yaml:"eligibility,omitempty" json:"eligibility"`
 	Runtime            DefinitionRuntimeStatus     `yaml:"runtime,omitempty" json:"runtime"`
+	Warnings           []DefinitionWarning         `yaml:"warnings,omitempty" json:"warnings,omitempty"`
 }
 
 // DefinitionRegistryView is the effective combined view of stored loop
 // definitions plus their current live runtime state.
 type DefinitionRegistryView struct {
-	Generation         int64            `yaml:"generation,omitempty" json:"generation"`
-	UpdatedAt          time.Time        `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
-	ConfigDefinitions  int              `yaml:"config_definitions,omitempty" json:"config_definitions"`
-	OverlayDefinitions int              `yaml:"overlay_definitions,omitempty" json:"overlay_definitions"`
-	RunningDefinitions int              `yaml:"running_definitions,omitempty" json:"running_definitions"`
-	ByPolicyState      map[string]int   `yaml:"by_policy_state,omitempty" json:"by_policy_state,omitempty"`
-	ByEligibilityState map[string]int   `yaml:"by_eligibility_state,omitempty" json:"by_eligibility_state,omitempty"`
-	ByRuntimeState     map[string]int   `yaml:"by_runtime_state,omitempty" json:"by_runtime_state,omitempty"`
-	Definitions        []DefinitionView `yaml:"definitions,omitempty" json:"definitions,omitempty"`
+	Generation              int64            `yaml:"generation,omitempty" json:"generation"`
+	UpdatedAt               time.Time        `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
+	ConfigDefinitions       int              `yaml:"config_definitions,omitempty" json:"config_definitions"`
+	OverlayDefinitions      int              `yaml:"overlay_definitions,omitempty" json:"overlay_definitions"`
+	RunningDefinitions      int              `yaml:"running_definitions,omitempty" json:"running_definitions"`
+	DefinitionsWithWarnings int              `yaml:"definitions_with_warnings,omitempty" json:"definitions_with_warnings,omitempty"`
+	WarningCount            int              `yaml:"warning_count,omitempty" json:"warning_count,omitempty"`
+	ByPolicyState           map[string]int   `yaml:"by_policy_state,omitempty" json:"by_policy_state,omitempty"`
+	ByEligibilityState      map[string]int   `yaml:"by_eligibility_state,omitempty" json:"by_eligibility_state,omitempty"`
+	ByRuntimeState          map[string]int   `yaml:"by_runtime_state,omitempty" json:"by_runtime_state,omitempty"`
+	Definitions             []DefinitionView `yaml:"definitions,omitempty" json:"definitions,omitempty"`
 }
 
 // BuildDefinitionRegistryView combines the durable definition snapshot
@@ -77,6 +80,7 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 
 	for _, def := range snapshot.Definitions {
 		eligibility := def.Spec.Conditions.Evaluate(now)
+		warnings := BuildDefinitionWarnings(def.Spec)
 		status, ok := runtime[def.Name]
 		if ok && status.Running {
 			view.RunningDefinitions++
@@ -95,10 +99,15 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 		} else {
 			view.ByEligibilityState[definitionEligibilityStateIneligible]++
 		}
+		if len(warnings) > 0 {
+			view.DefinitionsWithWarnings++
+			view.WarningCount += len(warnings)
+		}
 		view.Definitions = append(view.Definitions, DefinitionView{
 			DefinitionSnapshot: def,
 			Eligibility:        eligibility,
 			Runtime:            status,
+			Warnings:           warnings,
 		})
 	}
 
