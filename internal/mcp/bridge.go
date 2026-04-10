@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -64,6 +65,16 @@ func BridgeTools(ctx context.Context, client *Client, serverName string, registr
 			}
 		} else if excludeSet[td.Name] {
 			continue
+		}
+
+		schema, removedKeywords := llm.StripTopLevelCompositionKeywords(td.InputSchema)
+		if len(removedKeywords) > 0 {
+			logger.Info("sanitized MCP tool schema for provider compatibility",
+				"server", serverName,
+				"mcp_name", td.Name,
+				"removed_keywords", removedKeywords,
+			)
+			td.InputSchema = schema
 		}
 
 		name := ToolName(serverName, td.Name)

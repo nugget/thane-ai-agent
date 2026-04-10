@@ -260,6 +260,54 @@ func TestBridgeTools_HandlerProxiesCallTool(t *testing.T) {
 	}
 }
 
+func TestBridgeTools_SanitizesTopLevelCompositionKeywords(t *testing.T) {
+	mt := newMockTransport()
+	mt.addResponse("tools/list", toolsListResult{
+		Tools: []ToolDefinition{
+			{
+				Name:        "notify_state",
+				Description: "Notify on state changes",
+				InputSchema: map[string]any{
+					"type": "object",
+					"anyOf": []any{
+						map[string]any{"required": []any{"entity_id"}},
+						map[string]any{"required": []any{"area_id"}},
+					},
+					"properties": map[string]any{
+						"entity_id": map[string]any{"type": "string"},
+						"area_id":   map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	})
+
+	client := NewClient("ha", mt, nil)
+	registry := tools.NewEmptyRegistry()
+
+	if _, err := BridgeTools(context.Background(), client, "ha", registry, BridgeOptions{}, slog.Default()); err != nil {
+		t.Fatalf("BridgeTools: %v", err)
+	}
+
+	tool := registry.Get("mcp_ha_notify_state")
+	if tool == nil {
+		t.Fatal("tool not found")
+	}
+	if _, ok := tool.Parameters["anyOf"]; ok {
+		t.Fatalf("top-level anyOf should be removed from bridged schema: %#v", tool.Parameters)
+	}
+	props, ok := tool.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties type = %T, want map[string]any", tool.Parameters["properties"])
+	}
+	if _, ok := props["entity_id"]; !ok {
+		t.Fatalf("entity_id missing from sanitized schema: %#v", props)
+	}
+	if _, ok := props["area_id"]; !ok {
+		t.Fatalf("area_id missing from sanitized schema: %#v", props)
+	}
+}
+
 func TestBridgeTools_MetadataOverrides(t *testing.T) {
 	mt := newMockTransport()
 	mt.addResponse("tools/list", toolsListResult{
