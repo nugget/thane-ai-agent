@@ -63,9 +63,11 @@ func TestStripTopLevelCompositionKeywords_FastPathReturnsOriginalWhenNoTopLevelC
 	if got["properties"] == nil {
 		t.Fatalf("properties missing from fast-path schema: %#v", got)
 	}
+	// The fast path returns the original map when no top-level
+	// sanitization is required, so mutating got should also mutate in.
 	got["title"] = "mutated"
 	if _, ok := in["title"]; !ok {
-		t.Fatalf("fast-path should return original schema when no sanitize is needed")
+		t.Fatalf("expected fast-path to return the original schema map")
 	}
 }
 

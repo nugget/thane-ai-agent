@@ -44,22 +44,25 @@ func StripTopLevelCompositionKeywords(schema map[string]any) (map[string]any, []
 	if properties == nil {
 		properties = make(map[string]any)
 	}
-	objectish := false
 	for _, variant := range variants {
 		if variant == nil {
 			continue
 		}
+		// Hoist the first variant-level title/description when the root
+		// schema doesn't already define one. This preserves some helpful
+		// human-facing metadata without trying to reconcile conflicting
+		// variant descriptions.
 		if desc, ok := variant["description"].(string); ok && strings.TrimSpace(desc) != "" && strings.TrimSpace(schemaStringValue(cloned["description"])) == "" {
 			cloned["description"] = desc
 		}
 		if title, ok := variant["title"].(string); ok && strings.TrimSpace(title) != "" && strings.TrimSpace(schemaStringValue(cloned["title"])) == "" {
 			cloned["title"] = title
 		}
-		if tp, ok := variant["type"].(string); ok && tp == "object" {
-			objectish = true
-		}
 		if variantProps, ok := variant["properties"].(map[string]any); ok {
-			objectish = true
+			// First-wins on duplicate property keys. This keeps the
+			// sanitizer deterministic for the current compatibility use
+			// case, where variants usually share the same property schema
+			// and differ only in required-field groups.
 			for key, value := range variantProps {
 				if _, exists := properties[key]; !exists {
 					properties[key] = value
@@ -69,10 +72,6 @@ func StripTopLevelCompositionKeywords(schema map[string]any) (map[string]any, []
 	}
 	if len(properties) > 0 {
 		cloned["properties"] = properties
-		objectish = true
-	}
-	if _, ok := cloned["type"]; !ok && objectish {
-		cloned["type"] = "object"
 	}
 	if _, ok := cloned["type"]; !ok {
 		cloned["type"] = "object"
