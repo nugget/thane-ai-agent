@@ -607,6 +607,8 @@ func convertToolsToAnthropic(tools []map[string]any) []anthropicTool {
 
 		if params == nil {
 			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		} else if schema, ok := params.(map[string]any); ok {
+			params, _ = llm.StripTopLevelCompositionKeywords(schema)
 		}
 
 		result = append(result, anthropicTool{
