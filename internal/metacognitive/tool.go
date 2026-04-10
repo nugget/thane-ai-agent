@@ -17,9 +17,9 @@ import (
 const minStateContentLen = 50
 
 // RegisterTools registers metacognitive-specific tools on the given
-// registry: set_next_sleep and update_metacognitive_state. The LLM
-// calls these during iterations to control sleep timing and persist
-// its state file.
+// registry. Sleep control now comes from the native loops-ng
+// set_next_sleep tool; this function only adds the metacognitive
+// state-file mutation tool.
 //
 // stateFilePath is the resolved absolute path to the state file (either
 // inside the provenance store or the workspace, depending on config).
@@ -28,70 +28,10 @@ const minStateContentLen = 50
 // (auto-committed with SSH signatures). When nil, files are written
 // directly via os.WriteFile (backward compatible).
 //
-// Tool handlers capture theLoop via closure to communicate with the
-// running loop goroutine (e.g., setting sleep durations, reading the
-// current conversation ID).
+// Tool handlers capture theLoop via closure to read the current
+// conversation ID while persisting state updates.
 func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, stateFilePath string, store ProvenanceWriter) {
 	statePath := stateFilePath
-
-	registry.Register(&tools.Tool{
-		Name: "set_next_sleep",
-		Description: "Set how long the metacognitive loop should sleep before the next iteration. " +
-			"Call this at the end of your analysis to control your attention cycle. " +
-			"Short sleep (2–5m) for active situations needing monitoring. " +
-			"Long sleep (15–30m) for quiet periods. " +
-			"If you don't call this, a default sleep duration is used.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"duration": map[string]any{
-					"type":        "string",
-					"description": "Sleep duration as a Go duration string (e.g., '5m', '15m', '2m30s'). Clamped to configured min/max bounds.",
-				},
-				"reason": map[string]any{
-					"type":        "string",
-					"description": "Brief explanation of why this duration was chosen (logged for debugging).",
-				},
-			},
-			"required": []string{"duration"},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			durStr, _ := args["duration"].(string)
-			if durStr == "" {
-				// Local models often pass integers meaning minutes.
-				if numVal, ok := args["duration"].(float64); ok {
-					durStr = fmt.Sprintf("%dm", int(numVal))
-				}
-			}
-			if durStr == "" {
-				return "", fmt.Errorf("duration is required")
-			}
-
-			d, err := time.ParseDuration(durStr)
-			if err != nil {
-				return "", fmt.Errorf("invalid duration %q: %w", durStr, err)
-			}
-
-			reason, _ := args["reason"].(string)
-
-			// Clamp to configured bounds.
-			if d < cfg.MinSleep {
-				d = cfg.MinSleep
-			}
-			if d > cfg.MaxSleep {
-				d = cfg.MaxSleep
-			}
-
-			theLoop.SetNextSleep(d)
-			logging.Logger(ctx).Info("metacognitive sleep set",
-				"duration", d.Round(time.Second),
-				"reason", reason,
-			)
-
-			return fmt.Sprintf("Next sleep set to %s (bounds: %s–%s).",
-				d, cfg.MinSleep, cfg.MaxSleep), nil
-		},
-	})
 
 	registry.Register(&tools.Tool{
 		Name: "update_metacognitive_state",

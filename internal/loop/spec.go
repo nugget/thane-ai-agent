@@ -263,6 +263,16 @@ func (s *Spec) ToConfig() Config {
 	}
 }
 
+// EffectiveConfig returns the engine-facing configuration for this spec
+// with loop runtime defaults applied. This is useful for inspection,
+// linting, and warning surfaces that need to explain what a partially
+// specified definition will actually do at runtime.
+func (s *Spec) EffectiveConfig() Config {
+	cfg := s.ToConfig()
+	cfg.applyDefaults()
+	return cfg
+}
+
 func (s *Spec) profileRequest() Request {
 	if s == nil {
 		return Request{}

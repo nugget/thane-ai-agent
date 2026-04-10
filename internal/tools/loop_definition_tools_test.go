@@ -107,6 +107,7 @@ func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
 		"loop_definition_summary",
 		"loop_definition_list",
 		"loop_definition_get",
+		"loop_definition_lint",
 		"loop_definition_set",
 		"loop_definition_delete",
 		"loop_definition_set_policy",
@@ -118,6 +119,95 @@ func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
 	}
 	if deps.reg.loopDefinitionRegistry != deps.defs {
 		t.Fatal("loop definition registry dependency was not stored")
+	}
+}
+
+func TestLoopDefinitionGetIncludesWarnings(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	out, err := deps.reg.Get("loop_definition_get").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_get: %v", err)
+	}
+
+	var got struct {
+		Definition looppkg.DefinitionView `json:"definition"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if len(got.Definition.Warnings) == 0 {
+		t.Fatal("expected authoring warnings on metacog_like definition")
+	}
+	if got.Definition.Warnings[0].Code != "service_default_cadence" {
+		t.Fatalf("warning code = %q, want service_default_cadence", got.Definition.Warnings[0].Code)
+	}
+}
+
+func TestLoopDefinitionLintReportsServiceWarnings(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	out, err := deps.reg.Get("loop_definition_lint").Handler(context.Background(), map[string]any{
+		"spec": map[string]any{
+			"name":      "comal_burn_ban_monitor",
+			"task":      "Check the county burn ban webpage hourly and update Home Assistant.",
+			"operation": "service",
+			"tags":      []any{"web", "ha"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_lint: %v", err)
+	}
+
+	var got struct {
+		Status          string                      `json:"status"`
+		Valid           bool                        `json:"valid"`
+		Warnings        []looppkg.DefinitionWarning `json:"warnings"`
+		DefaultedFields []string                    `json:"defaulted_fields"`
+		Effective       struct {
+			Operation        looppkg.Operation `json:"operation"`
+			SleepMin         string            `json:"sleep_min"`
+			SleepMax         string            `json:"sleep_max"`
+			SleepDefault     string            `json:"sleep_default"`
+			Jitter           float64           `json:"jitter"`
+			DelegationGating string            `json:"delegation_gating"`
+		} `json:"effective"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal lint response: %v", err)
+	}
+	if got.Status != "ok" || !got.Valid {
+		t.Fatalf("lint response = %#v, want status ok and valid true", got)
+	}
+	if got.Effective.Operation != looppkg.OperationService {
+		t.Fatalf("operation = %q, want service", got.Effective.Operation)
+	}
+	if got.Effective.SleepMin != "30s" || got.Effective.SleepMax != "5m0s" || got.Effective.SleepDefault != "1m0s" {
+		t.Fatalf("effective sleep = %#v, want 30s/5m/1m", got.Effective)
+	}
+	if got.Effective.Jitter != looppkg.DefaultJitter {
+		t.Fatalf("effective jitter = %v, want %v", got.Effective.Jitter, looppkg.DefaultJitter)
+	}
+	if len(got.Warnings) < 3 {
+		t.Fatalf("warnings = %#v, want at least cadence/task/delegation warnings", got.Warnings)
+	}
+	codes := make(map[string]bool, len(got.Warnings))
+	for _, warning := range got.Warnings {
+		codes[warning.Code] = true
+	}
+	for _, code := range []string{
+		"service_default_cadence",
+		"task_mentions_cadence_without_explicit_sleep",
+		"service_delegation_gating_enabled",
+	} {
+		if !codes[code] {
+			t.Fatalf("warning codes = %#v, want %q", codes, code)
+		}
+	}
+	if len(got.DefaultedFields) != 4 {
+		t.Fatalf("defaulted_fields = %#v, want sleep_min/sleep_max/sleep_default/jitter", got.DefaultedFields)
 	}
 }
 

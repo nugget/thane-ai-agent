@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 )
 
@@ -85,6 +86,31 @@ func (r *Registry) registerLoopRuntimeTools() {
 			},
 		},
 		Handler: r.handleLoopStatus,
+	})
+
+	r.Register(&Tool{
+		Name:            "set_next_sleep",
+		AlwaysAvailable: true,
+		Description:     "Request the next sleep duration for the current running timer-driven service loop. This is the native loops-ng sleep-control tool used by persistent background services such as metacog-style loops. The requested duration is clamped to the loop's configured sleep_min and sleep_max bounds.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"duration": map[string]any{
+					"description": "Requested next sleep duration. Prefer a Go duration string like \"15m\" or \"1h\". Numeric values are also accepted and interpreted as minutes for tolerant local-model compatibility.",
+					"anyOf": []map[string]any{
+						{"type": "string"},
+						{"type": "number"},
+						{"type": "integer"},
+					},
+				},
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Optional short explanation of why this duration was chosen. Logged for operator visibility.",
+				},
+			},
+			"required": []string{"duration"},
+		},
+		Handler: r.handleSetNextSleep,
 	})
 
 	r.Register(&Tool{
@@ -168,6 +194,68 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	})
 }
 
+func (r *Registry) handleSetNextSleep(ctx context.Context, args map[string]any) (string, error) {
+	if r.liveLoopRegistry == nil {
+		return "", fmt.Errorf("live loop registry is not configured")
+	}
+	loopID := strings.TrimSpace(LoopIDFromContext(ctx))
+	if loopID == "" {
+		return "", fmt.Errorf("set_next_sleep can only be called from a running timer-driven service loop")
+	}
+	live := r.liveLoopRegistry.Get(loopID)
+	if live == nil {
+		return "", fmt.Errorf("current loop %q not found", loopID)
+	}
+
+	status := live.Status()
+	if status.Config.Operation != looppkg.OperationService {
+		return "", fmt.Errorf("set_next_sleep is only available to service loops; current loop %q uses %q", status.Name, status.Config.Operation)
+	}
+	if status.EventDriven {
+		return "", fmt.Errorf("set_next_sleep is unavailable for event-driven service loops; current loop %q waits for events instead of sleeping on a timer", status.Name)
+	}
+
+	requested, requestedText, err := parseNextSleepDurationArg(args)
+	if err != nil {
+		return "", err
+	}
+	applied := requested
+	if applied < status.Config.SleepMin {
+		applied = status.Config.SleepMin
+	}
+	if applied > status.Config.SleepMax {
+		applied = status.Config.SleepMax
+	}
+	reason := ldStringArg(args, "reason")
+	clamped := applied != requested
+	live.SetNextSleep(applied)
+
+	logging.Logger(ctx).Info(
+		"loop next sleep set",
+		"loop_id", status.ID,
+		"loop_name", status.Name,
+		"requested", requested.Round(time.Second),
+		"applied", applied.Round(time.Second),
+		"sleep_min", status.Config.SleepMin,
+		"sleep_max", status.Config.SleepMax,
+		"reason", reason,
+		"clamped", clamped,
+	)
+
+	return ldMarshalToolJSON(map[string]any{
+		"status":        "ok",
+		"loop_id":       status.ID,
+		"loop_name":     status.Name,
+		"requested":     requestedText,
+		"applied":       applied.String(),
+		"clamped":       clamped,
+		"sleep_min":     status.Config.SleepMin.String(),
+		"sleep_max":     status.Config.SleepMax.String(),
+		"sleep_default": status.Config.SleepDefault.String(),
+		"reason":        reason,
+	})
+}
+
 func (r *Registry) handleSpawnLoop(ctx context.Context, args map[string]any) (string, error) {
 	if r.launchLoop == nil {
 		return "", fmt.Errorf("loop launch is not configured")
@@ -189,6 +277,37 @@ func (r *Registry) handleSpawnLoop(ctx context.Context, args map[string]any) (st
 		"result":     result,
 		"completion": completion,
 	})
+}
+
+func parseNextSleepDurationArg(args map[string]any) (time.Duration, string, error) {
+	raw, ok := args["duration"]
+	if !ok {
+		return 0, "", fmt.Errorf("duration is required")
+	}
+
+	var durStr string
+	switch v := raw.(type) {
+	case string:
+		durStr = strings.TrimSpace(v)
+	case int:
+		durStr = fmt.Sprintf("%dm", v)
+	case int64:
+		durStr = fmt.Sprintf("%dm", v)
+	case float32:
+		durStr = fmt.Sprintf("%gm", v)
+	case float64:
+		durStr = fmt.Sprintf("%gm", v)
+	default:
+		return 0, "", fmt.Errorf("duration must be a Go duration string or a numeric minute count")
+	}
+	if durStr == "" {
+		return 0, "", fmt.Errorf("duration is required")
+	}
+	d, err := time.ParseDuration(durStr)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid duration %q: %w", durStr, err)
+	}
+	return d, durStr, nil
 }
 
 func (r *Registry) handleStopLoop(_ context.Context, args map[string]any) (string, error) {
