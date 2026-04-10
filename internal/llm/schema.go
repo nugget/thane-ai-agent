@@ -20,6 +20,9 @@ func StripTopLevelCompositionKeywords(schema map[string]any) (map[string]any, []
 	if schema == nil {
 		return nil, nil
 	}
+	if !hasTopLevelCompositionKeywords(schema) {
+		return schema, nil
+	}
 
 	cloned := cloneSchemaMap(schema)
 	var removed []string
@@ -125,4 +128,13 @@ func schemaVariants(raw any) []map[string]any {
 func schemaStringValue(raw any) string {
 	value, _ := raw.(string)
 	return value
+}
+
+func hasTopLevelCompositionKeywords(schema map[string]any) bool {
+	for _, keyword := range topLevelCompositionKeywords {
+		if _, ok := schema[keyword]; ok {
+			return true
+		}
+	}
+	return false
 }

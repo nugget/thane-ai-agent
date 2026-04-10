@@ -41,6 +41,34 @@ func TestStripTopLevelCompositionKeywords_PreservesNestedComposition(t *testing.
 	}
 }
 
+func TestStripTopLevelCompositionKeywords_FastPathReturnsOriginalWhenNoTopLevelComposition(t *testing.T) {
+	t.Parallel()
+
+	in := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"duration": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{"type": "number"},
+				},
+			},
+		},
+	}
+
+	got, removed := StripTopLevelCompositionKeywords(in)
+	if len(removed) != 0 {
+		t.Fatalf("removed = %#v, want nil", removed)
+	}
+	if got["properties"] == nil {
+		t.Fatalf("properties missing from fast-path schema: %#v", got)
+	}
+	got["title"] = "mutated"
+	if _, ok := in["title"]; !ok {
+		t.Fatalf("fast-path should return original schema when no sanitize is needed")
+	}
+}
+
 func TestStripTopLevelCompositionKeywords_MergesVariantProperties(t *testing.T) {
 	t.Parallel()
 
