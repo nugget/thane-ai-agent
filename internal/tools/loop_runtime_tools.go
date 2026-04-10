@@ -90,9 +90,8 @@ func (r *Registry) registerLoopRuntimeTools() {
 	})
 
 	r.Register(&Tool{
-		Name:            "set_next_sleep",
-		AlwaysAvailable: true,
-		Description:     "Request the next sleep duration for the current running timer-driven service loop. This is the native loops-ng sleep-control tool used by persistent background services such as metacog-style loops. The requested duration is clamped to the loop's configured sleep_min and sleep_max bounds.",
+		Name:        "set_next_sleep",
+		Description: "Request the next sleep duration for the current running timer-driven service loop. This is the native loops-ng sleep-control tool used by persistent background services such as metacog-style loops. The requested duration is clamped to the loop's configured sleep_min and sleep_max bounds.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

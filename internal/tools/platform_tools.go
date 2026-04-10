@@ -53,8 +53,7 @@ func (r *Registry) registerPlatformTools() {
 	}
 
 	r.Register(&Tool{
-		Name:            "macos_calendar_events",
-		AlwaysAvailable: true,
+		Name: "macos_calendar_events",
 		Description: "List calendar events from a connected macOS platform host. " +
 			"Use this for upcoming availability, scheduled meetings, and calendar context when a macOS provider is connected to Thane.",
 		Parameters: map[string]any{

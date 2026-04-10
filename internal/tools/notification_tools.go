@@ -227,7 +227,6 @@ func (r *Registry) registerGenericNotificationTools() {
 			"future). The system selects the target using the recipient's contact facts. " +
 			"Use this for informing people about events, updates, or anything that needs " +
 			"their attention. This is fire-and-forget — no response tracking.",
-		AlwaysAvailable: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -262,7 +261,6 @@ func (r *Registry) registerGenericNotificationTools() {
 			"callback routing — you will receive a callback when they respond or on " +
 			"timeout. The system selects the delivery channel using the recipient's " +
 			"contact facts.",
-		AlwaysAvailable: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
