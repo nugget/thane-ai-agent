@@ -125,6 +125,61 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 	}
 }
 
+func TestConvertToolsToAnthropic_StripsTopLevelCompositionKeywords(t *testing.T) {
+	tools := []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "notify_loop",
+				"description": "Notify a loop",
+				"parameters": map[string]any{
+					"type": "object",
+					"anyOf": []any{
+						map[string]any{"required": []any{"loop_id"}},
+						map[string]any{"required": []any{"name"}},
+					},
+					"properties": map[string]any{
+						"loop_id": map[string]any{"type": "string"},
+						"name":    map[string]any{"type": "string"},
+						"duration": map[string]any{
+							"anyOf": []any{
+								map[string]any{"type": "string"},
+								map[string]any{"type": "number"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := convertToolsToAnthropic(tools)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(result))
+	}
+	schema, ok := result[0].InputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("InputSchema type = %T, want map[string]any", result[0].InputSchema)
+	}
+	if _, ok := schema["anyOf"]; ok {
+		t.Fatalf("top-level anyOf should be removed for Anthropic: %#v", schema)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties type = %T, want map[string]any", schema["properties"])
+	}
+	if _, ok := props["loop_id"]; !ok {
+		t.Fatalf("loop_id missing from sanitized schema: %#v", props)
+	}
+	duration, ok := props["duration"].(map[string]any)
+	if !ok {
+		t.Fatalf("duration type = %T, want map[string]any", props["duration"])
+	}
+	if _, ok := duration["anyOf"]; !ok {
+		t.Fatalf("nested anyOf should be preserved: %#v", duration)
+	}
+}
+
 func TestConvertFromAnthropic(t *testing.T) {
 	resp := &anthropicResponse{
 		Model: "claude-opus-4-20250514",
