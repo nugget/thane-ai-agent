@@ -241,6 +241,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"doc_delete":                  {CanonicalID: "native:doc_delete", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_edit":                    {CanonicalID: "native:doc_edit", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_journal_update":          {CanonicalID: "native:doc_journal_update", Source: NativeToolSource, DefaultTags: []string{"documents"}},
+	"doc_links":                   {CanonicalID: "native:doc_links", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_move":                    {CanonicalID: "native:doc_move", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_move_section":            {CanonicalID: "native:doc_move_section", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_outline":                 {CanonicalID: "native:doc_outline", Source: NativeToolSource, DefaultTags: []string{"documents"}},

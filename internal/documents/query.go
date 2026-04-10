@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Roots returns the current indexed root summaries.
@@ -152,6 +154,11 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 	q.PathPrefix = trimPathPrefix(q.PathPrefix)
 	q.Query = strings.TrimSpace(strings.ToLower(q.Query))
 	q.Tags = dedupeSorted(q.Tags)
+	q.Frontmatter = normalizeSearchFrontmatter(q.Frontmatter)
+	q.FrontmatterKeys = dedupeSorted(q.FrontmatterKeys)
+	if q.ModifiedAfter != nil && q.ModifiedBefore != nil && q.ModifiedAfter.After(*q.ModifiedBefore) {
+		return nil, fmt.Errorf("modified_after must be earlier than modified_before")
+	}
 
 	var args []any
 	var where []string
@@ -171,6 +178,14 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		like := "%" + q.Query + "%"
 		where = append(where, `(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(rel_path) LIKE ? OR LOWER(tags_json) LIKE ?)`)
 		args = append(args, like, like, like, like)
+	}
+	if q.ModifiedAfter != nil {
+		where = append(where, `modified_at >= ?`)
+		args = append(args, q.ModifiedAfter.UTC().Format(time.RFC3339Nano))
+	}
+	if q.ModifiedBefore != nil {
+		where = append(where, `modified_at <= ?`)
+		args = append(args, q.ModifiedBefore.UTC().Format(time.RFC3339Nano))
 	}
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
@@ -196,6 +211,12 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		if !hasAllTags(doc.Tags, q.Tags) {
 			continue
 		}
+		if !hasFrontmatterKeys(doc.Frontmatter, q.FrontmatterKeys) {
+			continue
+		}
+		if !matchesFrontmatter(doc.Frontmatter, q.Frontmatter) {
+			continue
+		}
 		score := matchScore(doc, q.Query)
 		if q.Query != "" && score == 0 {
 			continue
@@ -208,8 +229,8 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].score == matches[j].score {
-			ti, _ := time.Parse(time.RFC3339Nano, matches[i].doc.ModifiedAt)
-			tj, _ := time.Parse(time.RFC3339Nano, matches[j].doc.ModifiedAt)
+			ti, _ := database.ParseTimestamp(matches[i].doc.ModifiedAt)
+			tj, _ := database.ParseTimestamp(matches[j].doc.ModifiedAt)
 			if ti.Equal(tj) {
 				return matches[i].doc.Ref < matches[j].doc.Ref
 			}

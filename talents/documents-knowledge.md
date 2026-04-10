@@ -15,7 +15,11 @@ Trust these instincts:
   more than free-text search
 - use `doc_values` to discover the local vocabulary before you guess at
   tags or frontmatter filters
-- use `doc_search` to narrow once you know the root, topic, or tag set
+- use `doc_search` to narrow once you know the root, topic, tag set,
+  frontmatter shape, or modified-time window
+- use `doc_links` when the important question is relationship structure:
+  what this document points to, what already points here, or whether a
+  concept is already connected elsewhere in the corpus
 - use `doc_outline` before `doc_section` when the document is known but
   the relevant part is not
 - use `doc_read` when you need the full current state of one managed
