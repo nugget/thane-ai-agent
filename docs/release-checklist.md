@@ -9,21 +9,27 @@ easy to roll back.
 - [ ] `just ci`
 - [ ] `just build`
 - [ ] `just release-build-snapshot <version>` for at least the primary operator target
+- [ ] Preferred operator path chosen up front:
+  - [ ] `just release-github <version> [auto|prerelease|release]` for a real published release
+  - [ ] `just deploy-macos-pkg user@host` for live-host pkg testing without cutting a release
 - [ ] Generated files are committed, especially [`examples/config.example.yaml`](../examples/config.example.yaml)
 - [ ] New exported Go types/functions read cleanly in Go Doc form
 - [ ] Logs for new code paths use inherited/component loggers instead of ad hoc `slog.Default()` where request or subsystem context matters
 
 ## Artifact Publication
 
-- [ ] `just prepare-release <version>` completes on the macOS release workstation
+- [ ] `just release-github <version>` completes on the macOS Tahoe release workstation
 - [ ] Prepared release metadata matches the commit being published
-- [ ] Release tag created with `just publish-release <version>` from a clean, up-to-date `main`
-- [ ] Local release upload publishes the four archives plus a version-scoped `thane_<version>_checksums.txt` to the GitHub release
+- [ ] Release tag created from a clean, up-to-date `main`
+- [ ] Local release upload publishes the two macOS `.pkg` files, the two Linux tarballs, and a version-scoped `thane_<version>_checksums.txt` to the GitHub release
 - [ ] GitHub release workflow publishes the GHCR multi-arch container image
 - [ ] GitHub build provenance attestations are available for the container image
 - [ ] GitHub release token is set explicitly (`THANE_GH_TOKEN`) for tag creation and release upload
 - [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
-- [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized macOS archive
+- [ ] macOS installer signing credentials are set (`THANE_INSTALLER_IDENTITY`) if shipping signed `.pkg` artifacts
+- [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized/stapled macOS installer package
+- [ ] macOS installer packages inspect cleanly (`pkgutil --check-signature`, distribution metadata, current-user-home install domain, and architecture gating all match the intended release)
+- [ ] If a manual breakpoint was needed, `just prepare-release <version>` and `just publish-release <version> [auto|prerelease|release]` were used intentionally instead of by habit
 
 ## Documentation Audit
 
@@ -62,6 +68,7 @@ easy to roll back.
 - [ ] One Home Assistant request succeeds if HA is production-critical
 - [ ] One scheduler/background loop completes after restart
 - [ ] Dashboard, request viewer, and registry windows load cleanly enough for incident response
+- [ ] If a live host was used for pkg validation, `just deploy-macos-pkg user@host` completed and the target Thane API reported the intended build version after restart
 
 ## Log Review
 

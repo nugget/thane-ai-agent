@@ -52,6 +52,8 @@ complete onboarding guide for Home Assistant users.
   production observations, minimum specs
 - **[Deployment](operating/deployment.md)** — Service installation for
   macOS and Linux
+- **[Release Engineering](operating/release-engineering.md)** — Preferred
+  macOS Tahoe workflows for GitHub releases and pkg-based live-host deploys
 
 ## Reference
 
