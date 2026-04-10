@@ -366,8 +366,8 @@ func TestSendNotification_Registered(t *testing.T) {
 	if tool == nil {
 		t.Fatal("send_notification tool not registered")
 	}
-	if !tool.AlwaysAvailable {
-		t.Error("send_notification should be AlwaysAvailable")
+	if tool.AlwaysAvailable {
+		t.Error("send_notification should rely on capability tags instead of AlwaysAvailable")
 	}
 }
 
@@ -377,8 +377,8 @@ func TestRequestHumanDecision_Registered(t *testing.T) {
 	if tool == nil {
 		t.Fatal("request_human_decision tool not registered")
 	}
-	if !tool.AlwaysAvailable {
-		t.Error("request_human_decision should be AlwaysAvailable")
+	if tool.AlwaysAvailable {
+		t.Error("request_human_decision should rely on capability tags instead of AlwaysAvailable")
 	}
 }
 
