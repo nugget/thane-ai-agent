@@ -408,6 +408,11 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	// Tagged tools
 	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
+	reg.Register(&Tool{Name: "loop_status", Description: "Inspect running loops"})
+	reg.Register(&Tool{Name: "set_next_sleep", Description: "Adjust service loop sleep"})
+	reg.Register(&Tool{Name: "send_notification", Description: "Send a notification"})
+	reg.Register(&Tool{Name: "request_human_decision", Description: "Request a decision"})
+	reg.Register(&Tool{Name: "macos_calendar_events", Description: "Read macOS calendar events"})
 	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability,
 	// list_loaded_capabilities, and reset_capabilities)
 	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
@@ -418,8 +423,12 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
 	reg.SetTagIndex(map[string][]string{
-		"ha":  {"get_state"},
-		"web": {"web_search"},
+		"ha":            {"get_state"},
+		"web":           {"web_search"},
+		"core":          {"loop_status"},
+		"loops":         {"loop_status", "set_next_sleep"},
+		"notifications": {"send_notification", "request_human_decision"},
+		"platform":      {"macos_calendar_events"},
 	})
 
 	tests := []struct {
@@ -444,12 +453,26 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 			name:    "always-available tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
 			wantIn:  []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
-			wantOut: []string{"get_state", "web_search", "plain_untagged"},
+			wantOut: []string{"get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "plain_untagged"},
+		},
+		{
+			name:   "core filter does not leak tagged non-core tools",
+			tags:   []string{"core"},
+			wantIn: []string{"loop_status", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
+			wantOut: []string{
+				"get_state",
+				"web_search",
+				"set_next_sleep",
+				"send_notification",
+				"request_human_decision",
+				"macos_calendar_events",
+				"plain_untagged",
+			},
 		},
 		{
 			name:   "nil tags returns everything",
 			tags:   nil,
-			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities", "plain_untagged"},
+			wantIn: []string{"get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities", "plain_untagged"},
 		},
 	}
 
@@ -467,51 +490,6 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestRegistryFilterByTags_DoesNotLeakTaggedToolsIntoCore(t *testing.T) {
-	reg := NewEmptyRegistry()
-	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "list_loaded_capabilities", Description: "List loaded tags", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "reset_capabilities", Description: "Reset capability state", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "loop_status", Description: "Inspect running loops"})
-	reg.Register(&Tool{Name: "set_next_sleep", Description: "Adjust service loop sleep"})
-	reg.Register(&Tool{Name: "send_notification", Description: "Send a notification"})
-	reg.Register(&Tool{Name: "request_human_decision", Description: "Request a decision"})
-	reg.Register(&Tool{Name: "macos_calendar_events", Description: "Read macOS calendar events"})
-
-	reg.SetTagIndex(map[string][]string{
-		"core":          {"loop_status"},
-		"loops":         {"loop_status", "set_next_sleep"},
-		"notifications": {"send_notification", "request_human_decision"},
-		"platform":      {"macos_calendar_events"},
-	})
-
-	filtered := reg.FilterByTags([]string{"core"})
-
-	for _, name := range []string{
-		"activate_capability",
-		"deactivate_capability",
-		"list_loaded_capabilities",
-		"reset_capabilities",
-		"loop_status",
-	} {
-		if filtered.Get(name) == nil {
-			t.Fatalf("core-filtered registry should contain %q", name)
-		}
-	}
-
-	for _, name := range []string{
-		"set_next_sleep",
-		"send_notification",
-		"request_human_decision",
-		"macos_calendar_events",
-	} {
-		if filtered.Get(name) != nil {
-			t.Fatalf("core-filtered registry should not contain %q", name)
-		}
 	}
 }
 
