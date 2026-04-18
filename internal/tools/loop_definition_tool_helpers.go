@@ -62,7 +62,102 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 	if err := json.Unmarshal(data, &launch); err != nil {
 		return looppkg.Launch{}, err
 	}
+	if err := validateLoopLaunchOverrides(launch); err != nil {
+		return looppkg.Launch{}, err
+	}
 	return launch, nil
+}
+
+// validateLoopLaunchOverrides catches common mistakes where a caller
+// placed a routing override inside the opaque metadata map instead of
+// the corresponding top-level Launch field. Metadata is informational
+// tagging only; it does not influence routing, tool selection, or
+// budgets. Returning an actionable error here is preferable to silently
+// ignoring the override and letting the caller misinterpret the run.
+func validateLoopLaunchOverrides(launch looppkg.Launch) error {
+	if len(launch.Metadata) == 0 {
+		return nil
+	}
+	if model, ok := launch.Metadata["model"]; ok && strings.TrimSpace(model) != "" && strings.TrimSpace(launch.Model) == "" {
+		return fmt.Errorf(
+			"launch.metadata.model=%q is opaque tagging and does not override the model; "+
+				"use the top-level launch.model field (e.g. \"launch\": {\"model\": %q})",
+			model, model)
+	}
+	return nil
+}
+
+// loopLaunchOverrideProperties returns the JSON-schema property set for
+// the per-launch override fields accepted by both
+// [Registry.handleLoopDefinitionLaunch] and [Registry.handleSpawnLoop].
+// Exposing a typed schema lets the model see the real field names and
+// their behavior rather than guessing at an opaque object — the
+// disaster mode we most care about is putting a `model` override inside
+// `metadata`, where it has no effect on routing.
+func loopLaunchOverrideProperties() map[string]any {
+	return map[string]any{
+		"model": map[string]any{
+			"type":        "string",
+			"description": "Override the model for this launch (e.g. \"claude-sonnet-4-5\", \"gpt-oss:120b\"). This is the field the router reads. metadata.model is NOT read by the router and does not change the model.",
+		},
+		"task": map[string]any{
+			"type":        "string",
+			"description": "Override the task text for this launch. Applied only when the stored spec does not already supply a task.",
+		},
+		"allowed_tools": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Restrict this launch's effective tool set to the listed tools (intersected with capability gating).",
+		},
+		"exclude_tools": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Remove specific tools from this launch's effective tool set.",
+		},
+		"initial_tags": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Preload these capability tags so the child loop starts with them active.",
+		},
+		"hints": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "string"},
+			"description":          "Free-form string/string routing or context hints. Use named top-level fields (model, allowed_tools, etc.) for well-known behavior overrides; hints are for softer signals.",
+		},
+		"max_iterations": map[string]any{
+			"type":        "integer",
+			"description": "Cap the number of tool-call iterations for this launch.",
+		},
+		"max_output_tokens": map[string]any{
+			"type":        "integer",
+			"description": "Cap the model's output tokens per call for this launch.",
+		},
+		"system_prompt": map[string]any{
+			"type":        "string",
+			"description": "Override the system prompt for this launch.",
+		},
+		"skip_context": map[string]any{
+			"type":        "boolean",
+			"description": "Skip context providers (awareness, archive prewarm, etc.) for this launch.",
+		},
+		"skip_tag_filter": map[string]any{
+			"type":        "boolean",
+			"description": "Disable tag-based tool filtering for this launch. Use with care.",
+		},
+		"conversation_id": map[string]any{
+			"type":        "string",
+			"description": "Bind this launch to a specific conversation ID instead of deriving one.",
+		},
+		"completion_conversation_id": map[string]any{
+			"type":        "string",
+			"description": "When spec.completion=\"conversation\", deliver the final result to this conversation ID.",
+		},
+		"metadata": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "string"},
+			"description":          "Opaque string/string tags attached to the launched loop for correlation or audit. NOT used for routing, tools, budgets, or any runtime behavior. To override the model use top-level \"model\". To override tools use \"allowed_tools\" / \"exclude_tools\". To override budgets use \"max_iterations\" / \"max_output_tokens\".",
+		},
+	}
 }
 
 func findLoopDefinition(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
