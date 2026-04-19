@@ -86,7 +86,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query, and tags. Returns compact document summaries with canonical refs like `kb:article.md`, not full bodies.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md`, not full bodies.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -109,6 +109,36 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 						"type": "string",
 					},
 				},
+				"frontmatter": map[string]any{
+					"type":        "object",
+					"description": "Optional frontmatter filters. Each key must match, and each value may be either one required string or an array of acceptable strings for that key.",
+					"additionalProperties": map[string]any{
+						"anyOf": []any{
+							map[string]any{"type": "string"},
+							map[string]any{
+								"type": "array",
+								"items": map[string]any{
+									"type": "string",
+								},
+							},
+						},
+					},
+				},
+				"frontmatter_keys": map[string]any{
+					"type":        "array",
+					"description": "Optional frontmatter keys that must be present on each matching document.",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+				"modified_after": map[string]any{
+					"type":        "string",
+					"description": "Optional lower bound on modified time. Accepts RFC3339 timestamps or signed deltas like `-604800s`.",
+				},
+				"modified_before": map[string]any{
+					"type":        "string",
+					"description": "Optional upper bound on modified time. Accepts RFC3339 timestamps or signed deltas like `-3600s`.",
+				},
 				"limit": map[string]any{
 					"type":        "integer",
 					"description": "Maximum number of results to return (default 20, max 100).",
@@ -120,13 +150,21 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			pathPrefix, _ := args["path_prefix"].(string)
 			query, _ := args["query"].(string)
 			tags := documentStringSliceArg(args["tags"])
+			frontmatter := documentFrontmatterArg(args["frontmatter"])
+			frontmatterKeys := documentStringSliceArg(args["frontmatter_keys"])
+			modifiedAfter, _ := args["modified_after"].(string)
+			modifiedBefore, _ := args["modified_before"].(string)
 			limit := numericArg(args["limit"], 20, 100)
 			return dt.Search(ctx, documents.SearchArgs{
-				Root:       root,
-				PathPrefix: pathPrefix,
-				Query:      query,
-				Tags:       tags,
-				Limit:      limit,
+				Root:            root,
+				PathPrefix:      pathPrefix,
+				Query:           query,
+				Tags:            tags,
+				Frontmatter:     frontmatter,
+				FrontmatterKeys: frontmatterKeys,
+				ModifiedAfter:   modifiedAfter,
+				ModifiedBefore:  modifiedBefore,
+				Limit:           limit,
 			})
 		},
 	})
@@ -179,6 +217,35 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			}
 			section, _ := args["section"].(string)
 			return dt.Section(ctx, documents.SectionArgs{Ref: ref, Section: section})
+		},
+	})
+
+	r.Register(&Tool{
+		Name:                 "doc_links",
+		Description:          "Return outgoing links, backlinks, or both for one indexed markdown document. Use this when the important question is relationship structure rather than raw content.",
+		ContentResolveExempt: []string{"ref"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref": map[string]any{
+					"type":        "string",
+					"description": "Canonical document ref like `kb:network/vlans.md`.",
+				},
+				"mode": map[string]any{
+					"type":        "string",
+					"enum":        []string{"both", "outgoing", "backlinks"},
+					"description": "Which link directions to return. Default: `both`.",
+				},
+			},
+			"required": []string{"ref"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			if ref == "" {
+				return "", fmt.Errorf("ref is required")
+			}
+			mode, _ := args["mode"].(string)
+			return dt.Links(ctx, documents.LinksArgs{Ref: ref, Mode: mode})
 		},
 	})
 

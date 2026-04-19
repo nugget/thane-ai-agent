@@ -143,6 +143,63 @@ func TestDocWriteHandlerAppendsJournalEntry(t *testing.T) {
 	}
 }
 
+func TestDocumentSearchAndLinksHandlersSupportStructuredNavigation(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+
+	if _, err := store.Write(context.Background(), documents.WriteArgs{
+		Ref:   "kb:network/vlans.md",
+		Title: "VLAN Guide",
+		Tags:  []string{"network", "vlans"},
+		Frontmatter: map[string][]string{
+			"status": {"active"},
+		},
+		Body: stringPtr("# VLAN Guide\n\nReference for the home network VLAN layout.\n"),
+	}); err != nil {
+		t.Fatalf("store.Write(vlans): %v", err)
+	}
+	if _, err := store.Write(context.Background(), documents.WriteArgs{
+		Ref:   "kb:notes/cameras.md",
+		Title: "Camera Notes",
+		Body:  stringPtr("# Camera Notes\n\nSee the [trusted VLAN notes](../network/vlans.md#trusted).\n"),
+	}); err != nil {
+		t.Fatalf("store.Write(cameras): %v", err)
+	}
+
+	searchTool := reg.Get("doc_search")
+	if searchTool == nil {
+		t.Fatal("doc_search not registered")
+	}
+	searchOut, err := searchTool.Handler(context.Background(), map[string]any{
+		"root":             "kb",
+		"frontmatter":      map[string]any{"status": "active"},
+		"modified_after":   "-3600s",
+		"frontmatter_keys": []any{},
+	})
+	if err != nil {
+		t.Fatalf("doc_search: %v", err)
+	}
+	if !strings.Contains(searchOut, `"ref": "kb:network/vlans.md"`) {
+		t.Fatalf("doc_search output = %s, want vlans document", searchOut)
+	}
+
+	linksTool := reg.Get("doc_links")
+	if linksTool == nil {
+		t.Fatal("doc_links not registered")
+	}
+	linksOut, err := linksTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:network/vlans.md",
+		"mode": "backlinks",
+	})
+	if err != nil {
+		t.Fatalf("doc_links: %v", err)
+	}
+	if !strings.Contains(linksOut, `"ref": "kb:notes/cameras.md"`) || !strings.Contains(linksOut, `"targets": [`) {
+		t.Fatalf("doc_links output = %s, want cameras backlink with target list", linksOut)
+	}
+}
+
 func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 	t.Helper()
 
@@ -166,4 +223,8 @@ func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 	reg := NewEmptyRegistry()
 	RegisterDocumentTools(reg, documents.NewTools(store))
 	return reg, store
+}
+
+func stringPtr(s string) *string {
+	return &s
 }

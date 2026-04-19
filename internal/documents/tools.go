@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 	"unicode/utf8"
+
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 const (
@@ -22,35 +25,51 @@ func NewTools(store *Store) *Tools {
 	return &Tools{store: store}
 }
 
+// BrowseArgs requests one rooted browse step through an indexed corpus.
 type BrowseArgs struct {
 	Root       string `json:"root"`
 	PathPrefix string `json:"path_prefix,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
 }
 
+// SearchArgs requests structured document search over indexed roots.
 type SearchArgs struct {
-	Root       string   `json:"root,omitempty"`
-	PathPrefix string   `json:"path_prefix,omitempty"`
-	Query      string   `json:"query,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	Limit      int      `json:"limit,omitempty"`
+	Root            string              `json:"root,omitempty"`
+	PathPrefix      string              `json:"path_prefix,omitempty"`
+	Query           string              `json:"query,omitempty"`
+	Tags            []string            `json:"tags,omitempty"`
+	Frontmatter     map[string][]string `json:"frontmatter,omitempty"`
+	FrontmatterKeys []string            `json:"frontmatter_keys,omitempty"`
+	ModifiedAfter   string              `json:"modified_after,omitempty"`
+	ModifiedBefore  string              `json:"modified_before,omitempty"`
+	Limit           int                 `json:"limit,omitempty"`
 }
 
+// RefArgs identifies one managed document by canonical semantic ref.
 type RefArgs struct {
 	Ref string `json:"ref"`
 }
 
+// SectionArgs selects one document section by ref and optional heading.
 type SectionArgs struct {
 	Ref     string `json:"ref"`
 	Section string `json:"section,omitempty"`
 }
 
+// ValuesArgs requests observed values for one frontmatter key.
 type ValuesArgs struct {
 	Root  string `json:"root,omitempty"`
 	Key   string `json:"key"`
 	Limit int    `json:"limit,omitempty"`
 }
 
+// LinksArgs requests outgoing links, backlinks, or both for one document.
+type LinksArgs struct {
+	Ref  string `json:"ref"`
+	Mode string `json:"mode,omitempty"`
+}
+
+// Read returns one indexed document payload.
 func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -65,6 +84,7 @@ func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 	return marshalToolResult(doc)
 }
 
+// Roots returns summaries of the indexed document roots.
 func (t *Tools) Roots(ctx context.Context) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -78,6 +98,7 @@ func (t *Tools) Roots(ctx context.Context) (string, error) {
 	})
 }
 
+// Browse returns one rooted browse step through an indexed corpus.
 func (t *Tools) Browse(ctx context.Context, args BrowseArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -92,19 +113,59 @@ func (t *Tools) Browse(ctx context.Context, args BrowseArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// Search returns compact summaries for documents matching the structured filters.
 func (t *Tools) Search(ctx context.Context, args SearchArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
 	}
-	results, err := t.store.Search(ctx, SearchQuery(args))
+	query := SearchQuery{
+		Root:            args.Root,
+		PathPrefix:      args.PathPrefix,
+		Query:           args.Query,
+		Tags:            args.Tags,
+		Frontmatter:     args.Frontmatter,
+		FrontmatterKeys: args.FrontmatterKeys,
+		Limit:           clampLimit(args.Limit, 20, 100),
+	}
+	now := nowUTC()
+	if args.ModifiedAfter != "" {
+		bound, err := awareness.ParseTimeOrDelta(args.ModifiedAfter, now)
+		if err != nil {
+			return "", fmt.Errorf("modified_after must be RFC3339 or signed delta like -604800s: %w", err)
+		}
+		query.ModifiedAfter = &bound
+	}
+	if args.ModifiedBefore != "" {
+		bound, err := awareness.ParseTimeOrDelta(args.ModifiedBefore, now)
+		if err != nil {
+			return "", fmt.Errorf("modified_before must be RFC3339 or signed delta like -3600s: %w", err)
+		}
+		query.ModifiedBefore = &bound
+	}
+	if query.ModifiedAfter != nil && query.ModifiedBefore != nil && query.ModifiedAfter.After(*query.ModifiedBefore) {
+		return "", fmt.Errorf("modified_after must be earlier than modified_before")
+	}
+	results, err := t.store.Search(ctx, query)
 	if err != nil {
 		return "", err
 	}
 	return marshalToolResult(map[string]any{
+		"filters": map[string]any{
+			"root":             args.Root,
+			"path_prefix":      args.PathPrefix,
+			"query":            args.Query,
+			"tags":             args.Tags,
+			"frontmatter":      args.Frontmatter,
+			"frontmatter_keys": args.FrontmatterKeys,
+			"modified_after":   args.ModifiedAfter,
+			"modified_before":  args.ModifiedBefore,
+			"limit":            query.Limit,
+		},
 		"results": results,
 	})
 }
 
+// Outline returns the heading tree for one indexed document.
 func (t *Tools) Outline(ctx context.Context, args RefArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -122,6 +183,7 @@ func (t *Tools) Outline(ctx context.Context, args RefArgs) (string, error) {
 	})
 }
 
+// Section returns one named section, or the whole body when no selector is given.
 func (t *Tools) Section(ctx context.Context, args SectionArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -139,6 +201,7 @@ func (t *Tools) Section(ctx context.Context, args SectionArgs) (string, error) {
 	})
 }
 
+// Values returns observed frontmatter values for one key.
 func (t *Tools) Values(ctx context.Context, args ValuesArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -154,6 +217,22 @@ func (t *Tools) Values(ctx context.Context, args ValuesArgs) (string, error) {
 	})
 }
 
+// Links returns outgoing links, backlinks, or both for one indexed document.
+func (t *Tools) Links(ctx context.Context, args LinksArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	if args.Ref == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	links, err := t.store.Links(ctx, args.Ref, args.Mode)
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(links)
+}
+
+// Write creates or replaces one managed document.
 func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -168,6 +247,7 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// Edit applies one structured edit to a managed document.
 func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -182,6 +262,7 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// JournalUpdate appends one journal-window entry to a managed document.
 func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -196,6 +277,7 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	return marshalToolResult(result)
 }
 
+// Delete removes one managed document.
 func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -210,6 +292,7 @@ func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// Move relocates one managed document to a new semantic ref.
 func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -227,6 +310,7 @@ func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// Copy clones one managed document to a new semantic ref.
 func (t *Tools) Copy(ctx context.Context, args CopyArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -244,6 +328,7 @@ func (t *Tools) Copy(ctx context.Context, args CopyArgs) (string, error) {
 	return marshalToolResult(result)
 }
 
+// CopySection copies one section into another managed document.
 func (t *Tools) CopySection(ctx context.Context, args SectionTransferArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -264,6 +349,7 @@ func (t *Tools) CopySection(ctx context.Context, args SectionTransferArgs) (stri
 	return marshalToolResult(result)
 }
 
+// MoveSection moves one section into another managed document.
 func (t *Tools) MoveSection(ctx context.Context, args SectionTransferArgs) (string, error) {
 	if t == nil || t.store == nil {
 		return "", fmt.Errorf("document index not configured")
@@ -314,4 +400,8 @@ func truncateUTF8Bytes(data []byte, maxBytes int) string {
 		truncated = truncated[:len(truncated)-1]
 	}
 	return string(truncated)
+}
+
+func nowUTC() time.Time {
+	return time.Now().UTC()
 }
