@@ -113,15 +113,23 @@ func (r *Registry) registerLoopRuntimeTools() {
 		Handler: r.handleSetNextSleep,
 	})
 
+	spawnLoopLaunchProperties := loopLaunchOverrideProperties()
+	spawnLoopLaunchProperties["spec"] = map[string]any{
+		"type":        "object",
+		"description": "Ad-hoc loop spec (name, task, operation, completion, sleep settings, etc.). Required.",
+	}
+
 	r.Register(&Tool{
 		Name:        "spawn_loop",
-		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context.",
+		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context. Model routing and tool filtering go in the top-level launch fields (model, allowed_tools, etc.) — NOT inside launch.metadata.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"launch": map[string]any{
 					"type":        "object",
-					"description": "Loops-ng launch object. Include spec, task, and any per-launch routing or completion overrides. The most common detached shape is a task plus spec.operation=background_task; completion may be omitted when the current conversation or channel context should decide the callback target.",
+					"description": "Loops-ng launch object. Must include spec. The most common detached shape is a task plus spec.operation=background_task; completion may be omitted when the current conversation or channel context should decide the callback target.",
+					"properties":  spawnLoopLaunchProperties,
+					"required":    []string{"spec"},
 				},
 			},
 			"required": []string{"launch"},

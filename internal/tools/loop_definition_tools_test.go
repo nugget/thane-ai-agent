@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -358,6 +359,44 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 	if launchResp.Result.LoopID != "loop-123" {
 		t.Fatalf("launch loop_id = %q, want loop-123", launchResp.Result.LoopID)
+	}
+}
+
+func TestLoopDefinitionLaunchRoutesTopLevelModelOverride(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"model": "claude-sonnet-4-5",
+		},
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+	if deps.lastLaunch.Model != "claude-sonnet-4-5" {
+		t.Fatalf("lastLaunch.Model = %q, want claude-sonnet-4-5", deps.lastLaunch.Model)
+	}
+}
+
+func TestLoopDefinitionLaunchRejectsModelInsideMetadata(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"metadata": map[string]any{
+				"model": "claude-sonnet-4-5",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for metadata.model override, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "launch.model") {
+		t.Fatalf("error = %q, want guidance pointing from metadata.model to launch.model", err.Error())
+	}
+	if deps.lastLaunch.Model != "" {
+		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
 	}
 }
 

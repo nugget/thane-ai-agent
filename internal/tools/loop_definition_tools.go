@@ -199,7 +199,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_launch",
-		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
+		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. Model routing, tool filtering, and iteration caps go in the top-level launch fields (model, allowed_tools, max_iterations, etc.) — NOT inside launch.metadata, which is opaque tagging only. When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -209,7 +209,8 @@ func (r *Registry) registerLoopDefinitionTools() {
 				},
 				"launch": map[string]any{
 					"type":        "object",
-					"description": "Optional per-launch overrides using the loops-ng launch contract. The stored definition spec is used automatically.",
+					"description": "Optional per-launch overrides applied on top of the stored definition spec. The stored spec is used automatically; these fields override selected aspects for this one launch.",
+					"properties":  loopLaunchOverrideProperties(),
 				},
 			},
 			"required": []string{"name"},
