@@ -2,7 +2,10 @@ package awareness
 
 import (
 	"database/sql"
+	"encoding/json"
+	"slices"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -104,5 +107,240 @@ func TestStore_RemoveNonExistent(t *testing.T) {
 	// Removing a non-existent entity should be a no-op.
 	if err := store.Remove("sensor.does_not_exist"); err != nil {
 		t.Fatalf("remove non-existent: %v", err)
+	}
+}
+
+func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
+	store := setupTestStore(t)
+
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus", "interactive", "battery_focus"}, []int{600, 3600}, 300); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !slices.Equal(ids, []string{"sensor.battery"}) {
+		t.Fatalf("List() = %v, want [sensor.battery]", ids)
+	}
+
+	untagged, err := store.ListUntagged()
+	if err != nil {
+		t.Fatalf("ListUntagged: %v", err)
+	}
+	if len(untagged) != 0 {
+		t.Fatalf("ListUntagged() = %v, want empty", untagged)
+	}
+
+	tags, err := store.DistinctTags()
+	if err != nil {
+		t.Fatalf("DistinctTags: %v", err)
+	}
+	if !slices.Equal(tags, []string{"battery_focus", "interactive"}) {
+		t.Fatalf("DistinctTags() = %v, want [battery_focus interactive]", tags)
+	}
+
+	batteryFocus, err := store.ListByTag("battery_focus")
+	if err != nil {
+		t.Fatalf("ListByTag(battery_focus): %v", err)
+	}
+	if len(batteryFocus) != 1 {
+		t.Fatalf("ListByTag(battery_focus) len = %d, want 1", len(batteryFocus))
+	}
+	if batteryFocus[0].Scope != "battery_focus" {
+		t.Fatalf("scope = %q, want battery_focus", batteryFocus[0].Scope)
+	}
+	if !slices.Equal(batteryFocus[0].History, []int{600, 3600}) {
+		t.Fatalf("history = %v, want [600 3600]", batteryFocus[0].History)
+	}
+	if batteryFocus[0].ExpiresAt == nil {
+		t.Fatal("expected expiration to be set")
+	}
+}
+
+func TestStore_RemoveWithScopesPreservesOtherSubscriptions(t *testing.T) {
+	store := setupTestStore(t)
+
+	if err := store.Add("sensor.battery"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	if err := store.RemoveWithScopes("sensor.battery", []string{"battery_focus"}); err != nil {
+		t.Fatalf("RemoveWithScopes: %v", err)
+	}
+
+	untagged, err := store.ListUntagged()
+	if err != nil {
+		t.Fatalf("ListUntagged: %v", err)
+	}
+	if !slices.Equal(untagged, []string{"sensor.battery"}) {
+		t.Fatalf("ListUntagged() = %v, want [sensor.battery]", untagged)
+	}
+
+	scoped, err := store.ListByTag("battery_focus")
+	if err != nil {
+		t.Fatalf("ListByTag: %v", err)
+	}
+	if len(scoped) != 0 {
+		t.Fatalf("ListByTag(battery_focus) = %v, want empty", scoped)
+	}
+}
+
+func TestStore_ListSubscriptionsSkipsExpiredAndCleansUp(t *testing.T) {
+	store := setupTestStore(t)
+
+	wire := watchlistOptionsWire{
+		ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}
+	optsJSON, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal options: %v", err)
+	}
+
+	if _, err := store.db.Exec(
+		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options) VALUES (?, ?, ?)`,
+		"sensor.expired_battery", "battery_focus", string(optsJSON),
+	); err != nil {
+		t.Fatalf("insert expired subscription: %v", err)
+	}
+
+	subs, err := store.ListSubscriptions("")
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Fatalf("ListSubscriptions() = %v, want empty after cleanup", subs)
+	}
+
+	count, err := store.subscriptionCount()
+	if err != nil {
+		t.Fatalf("subscriptionCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("subscriptionCount() = %d, want 0 after cleanup", count)
+	}
+}
+
+func TestStore_MigratesLegacyRowsIntoScopedSubscriptions(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE watched_entities (
+			entity_id TEXT PRIMARY KEY,
+			added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			tags      TEXT NOT NULL DEFAULT '',
+			options   TEXT NOT NULL DEFAULT '{}'
+		)
+	`)
+	if err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO watched_entities (entity_id, tags, options) VALUES (?, ?, ?)`,
+		"sensor.battery", "battery_focus,interactive", `{"history":[600]}`,
+	); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	store, err := NewWatchlistStore(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	tags, err := store.DistinctTags()
+	if err != nil {
+		t.Fatalf("DistinctTags: %v", err)
+	}
+	if !slices.Equal(tags, []string{"battery_focus", "interactive"}) {
+		t.Fatalf("DistinctTags() = %v, want [battery_focus interactive]", tags)
+	}
+
+	subs, err := store.ListByTag("battery_focus")
+	if err != nil {
+		t.Fatalf("ListByTag: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("ListByTag(battery_focus) len = %d, want 1", len(subs))
+	}
+	if !slices.Equal(subs[0].History, []int{600}) {
+		t.Fatalf("history = %v, want [600]", subs[0].History)
+	}
+}
+
+func TestStore_MigratesLegacyRowsEvenWhenNormalizedRowsExist(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE watched_entities (
+			entity_id TEXT PRIMARY KEY,
+			added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			tags      TEXT NOT NULL DEFAULT '',
+			options   TEXT NOT NULL DEFAULT '{}'
+		)
+	`)
+	if err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE watched_entity_subscriptions (
+			entity_id TEXT NOT NULL,
+			scope     TEXT NOT NULL DEFAULT '',
+			added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			options   TEXT NOT NULL DEFAULT '{}',
+			PRIMARY KEY (scope, entity_id)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("create normalized table: %v", err)
+	}
+
+	if _, err := db.Exec(
+		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options) VALUES (?, ?, ?)`,
+		"sensor.existing", "", `{}`,
+	); err != nil {
+		t.Fatalf("insert normalized row: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO watched_entities (entity_id, tags, options) VALUES (?, ?, ?)`,
+		"sensor.battery", "battery_focus", `{"history":[600]}`,
+	); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	store, err := NewWatchlistStore(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !slices.Equal(ids, []string{"sensor.existing", "sensor.battery"}) {
+		t.Fatalf("List() = %v, want [sensor.existing sensor.battery]", ids)
+	}
+
+	subs, err := store.ListByTag("battery_focus")
+	if err != nil {
+		t.Fatalf("ListByTag: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("ListByTag(battery_focus) len = %d, want 1", len(subs))
+	}
+	if subs[0].EntityID != "sensor.battery" {
+		t.Fatalf("entity_id = %q, want sensor.battery", subs[0].EntityID)
 	}
 }

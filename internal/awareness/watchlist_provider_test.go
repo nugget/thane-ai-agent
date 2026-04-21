@@ -3,6 +3,7 @@ package awareness
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -15,8 +16,10 @@ import (
 
 // fakeHA implements StateGetter for testing.
 type fakeHA struct {
-	states map[string]*homeassistant.State
-	err    error // returned for any entity not in states
+	states  map[string]*homeassistant.State
+	history map[string][]homeassistant.State
+	err     error // returned for any entity not in states
+	histErr error
 }
 
 func (f *fakeHA) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
@@ -27,6 +30,14 @@ func (f *fakeHA) GetState(_ context.Context, entityID string) (*homeassistant.St
 		return nil, f.err
 	}
 	return nil, errors.New("entity not found")
+}
+
+func (f *fakeHA) GetStateHistory(_ context.Context, entityID string, _ time.Time, _ time.Time) ([]homeassistant.State, error) {
+	if f.histErr != nil {
+		return nil, f.histErr
+	}
+	history := f.history[entityID]
+	return append([]homeassistant.State(nil), history...), nil
 }
 
 func setupTestProvider(t *testing.T, ha StateGetter) (*WatchlistProvider, *WatchlistStore) {
@@ -205,4 +216,139 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 	if strings.Contains(got, `"name"`) {
 		t.Error("name should be omitted when no friendly_name")
 	}
+}
+
+func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
+	now := time.Now().UTC().Round(time.Second)
+	ha := &fakeHA{
+		states: map[string]*homeassistant.State{
+			"sensor.office_temperature": {
+				EntityID:    "sensor.office_temperature",
+				State:       "72.4",
+				LastChanged: now,
+				Attributes: map[string]any{
+					"friendly_name":       "Office Temperature",
+					"unit_of_measurement": "°F",
+					"device_class":        "temperature",
+				},
+			},
+		},
+		history: map[string][]homeassistant.State{
+			"sensor.office_temperature": {
+				{EntityID: "sensor.office_temperature", State: "70.1", LastChanged: now.Add(-26 * time.Hour)},
+				{EntityID: "sensor.office_temperature", State: "71.0", LastChanged: now.Add(-23 * time.Hour)},
+				{EntityID: "sensor.office_temperature", State: "71.8", LastChanged: now.Add(-6 * time.Hour)},
+				{EntityID: "sensor.office_temperature", State: "72.0", LastChanged: now.Add(-90 * time.Minute)},
+			},
+		},
+	}
+
+	p, store := setupTestProvider(t, ha)
+	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	payload := decodeWatchlistPayload(t, got)
+	history, ok := payload["history"].([]any)
+	if !ok || len(history) != 1 {
+		t.Fatalf("history = %#v, want one summary", payload["history"])
+	}
+	summary, ok := history[0].(map[string]any)
+	if !ok {
+		t.Fatalf("history[0] = %#v, want object", history[0])
+	}
+	if summary["kind"] != "numeric" {
+		t.Fatalf("kind = %#v, want numeric", summary["kind"])
+	}
+	if summary["lookback"] != "-86400s" {
+		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	}
+	if summary["trend"] != "rising" {
+		t.Fatalf("trend = %#v, want rising", summary["trend"])
+	}
+	if summary["value_delta"] != "+2.3" {
+		t.Fatalf("value_delta = %#v, want +2.3", summary["value_delta"])
+	}
+	if summary["sample_count"] != float64(5) {
+		t.Fatalf("sample_count = %#v, want 5", summary["sample_count"])
+	}
+}
+
+func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
+	now := time.Now().UTC().Round(time.Second)
+	ha := &fakeHA{
+		states: map[string]*homeassistant.State{
+			"binary_sensor.front_door": {
+				EntityID:    "binary_sensor.front_door",
+				State:       "off",
+				LastChanged: now,
+				Attributes: map[string]any{
+					"friendly_name": "Front Door",
+				},
+			},
+		},
+		history: map[string][]homeassistant.State{
+			"binary_sensor.front_door": {
+				{EntityID: "binary_sensor.front_door", State: "off", LastChanged: now.Add(-25 * time.Hour)},
+				{EntityID: "binary_sensor.front_door", State: "on", LastChanged: now.Add(-20 * time.Hour)},
+				{EntityID: "binary_sensor.front_door", State: "off", LastChanged: now.Add(-2 * time.Hour)},
+			},
+		},
+	}
+
+	p, store := setupTestProvider(t, ha)
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	payload := decodeWatchlistPayload(t, got)
+	history, ok := payload["history"].([]any)
+	if !ok || len(history) != 1 {
+		t.Fatalf("history = %#v, want one summary", payload["history"])
+	}
+	summary, ok := history[0].(map[string]any)
+	if !ok {
+		t.Fatalf("history[0] = %#v, want object", history[0])
+	}
+	if summary["kind"] != "discrete" {
+		t.Fatalf("kind = %#v, want discrete", summary["kind"])
+	}
+	if summary["lookback"] != "-86400s" {
+		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	}
+	if summary["change_count"] != float64(2) {
+		t.Fatalf("change_count = %#v, want 2", summary["change_count"])
+	}
+	if summary["end_state"] != "off" {
+		t.Fatalf("end_state = %#v, want off", summary["end_state"])
+	}
+	if summary["recent_states_truncated"] != false {
+		t.Fatalf("recent_states_truncated = %#v, want false", summary["recent_states_truncated"])
+	}
+}
+
+func decodeWatchlistPayload(t *testing.T, got string) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("unexpected watchlist context: %q", got)
+	}
+
+	payloadLine := strings.TrimSpace(lines[len(lines)-1])
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadLine), &payload); err != nil {
+		t.Fatalf("unmarshal payload %q: %v", payloadLine, err)
+	}
+	return payload
 }

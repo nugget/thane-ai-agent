@@ -325,19 +325,21 @@ func roundState(state, deviceClass string) string {
 		return state // non-numeric, pass through
 	}
 
-	var places int
+	places := statePrecision(deviceClass)
+	return roundFloat(f, places)
+}
+
+func statePrecision(deviceClass string) int {
 	switch deviceClass {
 	case "temperature":
-		places = 1
+		return 1
 	case "humidity", "battery":
-		places = 0
+		return 0
 	case "power", "energy", "voltage", "current":
-		places = 1
+		return 1
 	default:
-		places = 2
+		return 2
 	}
-
-	return roundFloat(f, places)
 }
 
 // roundFloat formats a float to the given decimal places, stripping

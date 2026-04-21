@@ -10,11 +10,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 )
 
-// StateGetter abstracts the Home Assistant REST client for fetching
-// entity state. Using an interface keeps the provider testable without
-// a real HA instance.
+// StateGetter abstracts the Home Assistant client methods the watchlist
+// providers need. Using an interface keeps the providers testable without a
+// real HA instance.
 type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
+	GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
 }
 
 // WatchlistProvider implements agent.ContextProvider by fetching live state for
@@ -50,11 +51,11 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 	// Only emit untagged entities in the always-on context provider.
 	// Tagged entities are emitted through WatchlistTagProvider when
 	// their capability tag is active.
-	ids, err := p.store.ListUntagged()
+	subs, err := p.store.ListUntaggedSubscriptions()
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}
-	if len(ids) == 0 {
+	if len(subs) == 0 {
 		return "", nil
 	}
 
@@ -63,18 +64,8 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 	var sb strings.Builder
 	sb.WriteString("### Watched Entities\n\n")
 
-	for _, id := range ids {
-		state, err := p.ha.GetState(ctx, id)
-		if err != nil {
-			p.logger.Warn("failed to fetch watched entity state",
-				"entity_id", id,
-				"error", err,
-			)
-			fmt.Fprintf(&sb, "- **%s**: unavailable\n", id)
-			continue
-		}
-
-		sb.WriteString(formatEntityContext(state, now))
+	for _, sub := range subs {
+		sb.WriteString(p.renderSubscriptionContext(ctx, sub, now))
 		sb.WriteByte('\n')
 	}
 
@@ -113,16 +104,73 @@ func (p *WatchlistTagProvider) TagContext(ctx context.Context) (string, error) {
 	fmt.Fprintf(&sb, "### Watched Entities (%s)\n\n", p.tag)
 
 	for _, e := range entities {
-		state, err := p.ha.GetState(ctx, e.EntityID)
-		if err != nil {
-			p.logger.Warn("failed to fetch tagged entity state",
-				"entity_id", e.EntityID, "tag", p.tag, "error", err)
-			continue
-		}
-
-		sb.WriteString(formatEntityContext(state, now))
+		sb.WriteString(p.renderSubscriptionContext(ctx, e, now))
 		sb.WriteByte('\n')
 	}
 
 	return sb.String(), nil
+}
+
+func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time) string {
+	state, err := p.ha.GetState(ctx, sub.EntityID)
+	if err != nil {
+		p.logger.Warn("failed to fetch watched entity state",
+			"entity_id", sub.EntityID,
+			"error", err,
+		)
+		return fmt.Sprintf("- **%s**: unavailable", sub.EntityID)
+	}
+
+	content := formatEntityContext(state, now)
+	if len(sub.History) == 0 {
+		return content
+	}
+
+	summaries, truncated, err := buildWatchlistHistorySummaries(ctx, p.ha, state, sub.History, now)
+	if err != nil {
+		p.logger.Warn("failed to fetch watched entity history",
+			"entity_id", sub.EntityID,
+			"history", sub.History,
+			"error", err,
+		)
+		return content
+	}
+	if len(summaries) == 0 && !truncated {
+		return content
+	}
+
+	return mergeHistoryIntoEntityContext(content, summaries, truncated)
+}
+
+func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time) string {
+	state, err := p.ha.GetState(ctx, sub.EntityID)
+	if err != nil {
+		p.logger.Warn("failed to fetch tagged entity state",
+			"entity_id", sub.EntityID,
+			"tag", p.tag,
+			"error", err,
+		)
+		return ""
+	}
+
+	content := formatEntityContext(state, now)
+	if len(sub.History) == 0 {
+		return content
+	}
+
+	summaries, truncated, err := buildWatchlistHistorySummaries(ctx, p.ha, state, sub.History, now)
+	if err != nil {
+		p.logger.Warn("failed to fetch tagged entity history",
+			"entity_id", sub.EntityID,
+			"tag", p.tag,
+			"history", sub.History,
+			"error", err,
+		)
+		return content
+	}
+	if len(summaries) == 0 && !truncated {
+		return content
+	}
+
+	return mergeHistoryIntoEntityContext(content, summaries, truncated)
 }

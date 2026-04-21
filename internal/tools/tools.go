@@ -47,28 +47,29 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools           map[string]*Tool
-	tagIndex        map[string][]string // tag → tool names
-	ha              *homeassistant.Client
-	scheduler       *scheduler.Scheduler
-	factTools       *knowledge.Tools
-	contactTools    *contacts.Tools
-	emailTools      *email.Tools
-	mqttSubTools    *mqtt.Tools
-	notifier        *notifications.Sender
-	notifRecords    *notifications.RecordStore
-	notifRouter     *notifications.NotificationRouter
-	notifDispatcher CallbackDispatcher
-	platformCaller  platformCallFunc
-	forgeTools      forgeHandler
-	fileTools       *FileTools
-	shellExec       *ShellExec
-	attachmentTools *attachments.Tools
-	watchlistStore  *awareness.WatchlistStore
-	tempFileStore   *TempFileStore
-	usageStore      *usage.Store
-	lensStore       *LensStore
-	logIndexDB      *sql.DB
+	tools                 map[string]*Tool
+	tagIndex              map[string][]string // tag → tool names
+	ha                    *homeassistant.Client
+	scheduler             *scheduler.Scheduler
+	factTools             *knowledge.Tools
+	contactTools          *contacts.Tools
+	emailTools            *email.Tools
+	mqttSubTools          *mqtt.Tools
+	notifier              *notifications.Sender
+	notifRecords          *notifications.RecordStore
+	notifRouter           *notifications.NotificationRouter
+	notifDispatcher       CallbackDispatcher
+	platformCaller        platformCallFunc
+	forgeTools            forgeHandler
+	fileTools             *FileTools
+	shellExec             *ShellExec
+	attachmentTools       *attachments.Tools
+	watchlistStore        *awareness.WatchlistStore
+	watchlistTagRegistrar func(string)
+	tempFileStore         *TempFileStore
+	usageStore            *usage.Store
+	lensStore             *LensStore
+	logIndexDB            *sql.DB
 
 	modelRegistry                              *models.Registry
 	modelRouter                                *routepkg.Router

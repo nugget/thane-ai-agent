@@ -16,6 +16,7 @@ Tools marked `always` are available regardless of tag state.
 | `list_entities` | Browse entities by domain or pattern |
 | `call_service` | Direct HA service invocation |
 | `add_context_entity` | Add entity to the state watchlist |
+| `list_context_entities` | List live context watchlist subscriptions |
 | `remove_context_entity` | Remove entity from the state watchlist |
 | `ha_notify` | HA companion app push notification |
 
