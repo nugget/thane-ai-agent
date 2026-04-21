@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +101,48 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 		},
 	})
 	return deps
+}
+
+func sharedLoopLaunchSchemaKeys() []string {
+	typ := reflect.TypeOf(looppkg.Launch{})
+	keys := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		switch name {
+		case "", "-", "spec":
+			continue
+		default:
+			keys = append(keys, name)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func schemaProperties(t *testing.T, schema map[string]any) map[string]any {
+	t.Helper()
+
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %#v, want map[string]any", schema["properties"])
+	}
+	return props
+}
+
+func schemaObjectProperty(t *testing.T, schema map[string]any, key string) map[string]any {
+	t.Helper()
+
+	props := schemaProperties(t, schema)
+	raw, ok := props[key]
+	if !ok {
+		t.Fatalf("schema missing %q property", key)
+	}
+	child, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("schema property %q = %#v, want map[string]any", key, raw)
+	}
+	return child
 }
 
 func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
@@ -358,6 +403,83 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 	if launchResp.Result.LoopID != "loop-123" {
 		t.Fatalf("launch loop_id = %q, want loop-123", launchResp.Result.LoopID)
+	}
+}
+
+func TestLoopDefinitionLaunchRoutesTopLevelModelOverride(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"model": "claude-sonnet-4-5",
+		},
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+	if deps.lastLaunch.Model != "claude-sonnet-4-5" {
+		t.Fatalf("lastLaunch.Model = %q, want claude-sonnet-4-5", deps.lastLaunch.Model)
+	}
+}
+
+func TestLoopDefinitionLaunchSchemaExposesSharedLaunchFields(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	tool := deps.reg.Get("loop_definition_launch")
+	if tool == nil {
+		t.Fatal("loop_definition_launch tool not registered")
+	}
+
+	launchSchema := schemaObjectProperty(t, tool.Parameters, "launch")
+	launchProps := schemaProperties(t, launchSchema)
+
+	for _, key := range sharedLoopLaunchSchemaKeys() {
+		if _, ok := launchProps[key]; !ok {
+			t.Errorf("launch schema missing %q", key)
+		}
+	}
+
+	if got := schemaObjectProperty(t, launchSchema, "run_timeout")["type"]; got != "string" {
+		t.Fatalf("run_timeout.type = %#v, want string", got)
+	}
+	if got := schemaObjectProperty(t, launchSchema, "tool_timeout")["type"]; got != "string" {
+		t.Fatalf("tool_timeout.type = %#v, want string", got)
+	}
+
+	completionProps := schemaProperties(t, schemaObjectProperty(t, launchSchema, "completion_channel"))
+	for _, key := range []string{"channel", "recipient", "conversation_id"} {
+		if _, ok := completionProps[key]; !ok {
+			t.Errorf("completion_channel schema missing %q", key)
+		}
+	}
+
+	channelBindingProps := schemaProperties(t, schemaObjectProperty(t, launchSchema, "channel_binding"))
+	for _, key := range []string{"channel", "address", "contact_id", "contact_name", "trust_zone", "link_source", "is_owner"} {
+		if _, ok := channelBindingProps[key]; !ok {
+			t.Errorf("channel_binding schema missing %q", key)
+		}
+	}
+}
+
+func TestLoopDefinitionLaunchRejectsModelInsideMetadata(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"metadata": map[string]any{
+				"model": "claude-sonnet-4-5",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for metadata.model override, got nil")
+	}
+	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "launch.model") {
+		t.Fatalf("error = %q, want guidance pointing from metadata.model to launch.model", err.Error())
+	}
+	if deps.lastLaunch.Model != "" {
+		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
 	}
 }
 
