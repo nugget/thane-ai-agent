@@ -7,6 +7,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/documents"
 )
 
+const (
+	defaultDocLinksLimit    = 20
+	maxDocLinksLimit        = 100
+	defaultPerBacklinkLimit = 10
+	maxPerBacklinkLimit     = 50
+)
+
 // RegisterDocumentTools adds indexed document navigation tools to the registry.
 func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	if r == nil || dt == nil {
@@ -222,7 +229,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_links",
-		Description:          "Return outgoing links, backlinks, or both for one indexed markdown document. Use this when the important question is relationship structure rather than raw content.",
+		Description:          "Return outgoing links, backlinks, or both for one indexed markdown document. Use this when the important question is relationship structure rather than raw content. Results are bounded so the output stays usable; raise `limit` or `per_backlink_limit` when you need a wider graph.",
 		ContentResolveExempt: []string{"ref"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -236,6 +243,14 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 					"enum":        []string{"both", "outgoing", "backlinks"},
 					"description": "Which link directions to return. Default: `both`.",
 				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": fmt.Sprintf("Maximum outgoing links or backlink source documents to return (default %d, max %d).", defaultDocLinksLimit, maxDocLinksLimit),
+				},
+				"per_backlink_limit": map[string]any{
+					"type":        "integer",
+					"description": fmt.Sprintf("Maximum distinct raw target strings to include per backlink entry (default %d, max %d).", defaultPerBacklinkLimit, maxPerBacklinkLimit),
+				},
 			},
 			"required": []string{"ref"},
 		},
@@ -245,7 +260,14 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				return "", fmt.Errorf("ref is required")
 			}
 			mode, _ := args["mode"].(string)
-			return dt.Links(ctx, documents.LinksArgs{Ref: ref, Mode: mode})
+			limit := numericArg(args["limit"], defaultDocLinksLimit, maxDocLinksLimit)
+			perBacklinkLimit := numericArg(args["per_backlink_limit"], defaultPerBacklinkLimit, maxPerBacklinkLimit)
+			return dt.Links(ctx, documents.LinksArgs{
+				Ref:              ref,
+				Mode:             mode,
+				Limit:            limit,
+				PerBacklinkLimit: perBacklinkLimit,
+			})
 		},
 	})
 

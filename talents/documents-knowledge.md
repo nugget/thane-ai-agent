@@ -19,7 +19,8 @@ Trust these instincts:
   frontmatter shape, or modified-time window
 - use `doc_links` when the important question is relationship structure:
   what this document points to, what already points here, or whether a
-  concept is already connected elsewhere in the corpus
+  concept is already connected elsewhere in the corpus; add `limit` or
+  `per_backlink_limit` when the graph is broad
 - use `doc_outline` before `doc_section` when the document is known but
   the relevant part is not
 - use `doc_read` when you need the full current state of one managed

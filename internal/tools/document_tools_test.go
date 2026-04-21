@@ -200,6 +200,95 @@ func TestDocumentSearchAndLinksHandlersSupportStructuredNavigation(t *testing.T)
 	}
 }
 
+func TestDocumentLinksHandlerSupportsLimitsAndTruncation(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+
+	for _, doc := range []documents.WriteArgs{
+		{
+			Ref:   "kb:network/vlans.md",
+			Title: "VLAN Guide",
+			Body:  stringPtr("# VLAN Guide\n\nReference for the home network VLAN layout.\n"),
+		},
+		{
+			Ref:   "kb:notes/routers.md",
+			Title: "Router Notes",
+			Body:  stringPtr("# Router Notes\n\nSee [[VLAN Guide]].\n"),
+		},
+		{
+			Ref:   "kb:notes/switches.md",
+			Title: "Switch Notes",
+			Body:  stringPtr("# Switch Notes\n\nSee [[VLAN Guide]].\n"),
+		},
+		{
+			Ref:   "kb:notes/cameras.md",
+			Title: "Camera Notes",
+			Body:  stringPtr("# Camera Notes\n\nSee [trusted](../network/vlans.md#trusted), [iot](../network/vlans.md#iot), and [[VLAN Guide]].\n"),
+		},
+	} {
+		if _, err := store.Write(context.Background(), doc); err != nil {
+			t.Fatalf("store.Write(%s): %v", doc.Ref, err)
+		}
+	}
+
+	linksTool := reg.Get("doc_links")
+	if linksTool == nil {
+		t.Fatal("doc_links not registered")
+	}
+
+	backlinksOut, err := linksTool.Handler(context.Background(), map[string]any{
+		"ref":                "kb:network/vlans.md",
+		"mode":               "backlinks",
+		"limit":              2,
+		"per_backlink_limit": 1,
+	})
+	if err != nil {
+		t.Fatalf("doc_links(backlinks): %v", err)
+	}
+
+	var backlinks documents.LinksResult
+	if err := json.Unmarshal([]byte(backlinksOut), &backlinks); err != nil {
+		t.Fatalf("unmarshal backlinks output: %v", err)
+	}
+	if backlinks.Ref != "kb:network/vlans.md" || backlinks.Limit != 2 || backlinks.PerBacklinkLimit != 1 {
+		t.Fatalf("backlinks result = %#v, want canonical ref and echoed limits", backlinks)
+	}
+	if len(backlinks.Backlinks) != 2 || !backlinks.BacklinksTruncated {
+		t.Fatalf("backlinks = %#v, want 2 truncated backlink sources", backlinks.Backlinks)
+	}
+	foundCameras := false
+	for _, backlink := range backlinks.Backlinks {
+		if backlink.Ref != "kb:notes/cameras.md" {
+			continue
+		}
+		foundCameras = true
+		if len(backlink.Targets) != 1 || !backlink.TargetsTruncated {
+			t.Fatalf("camera backlink = %#v, want 1 truncated target", backlink)
+		}
+	}
+	if !foundCameras {
+		t.Fatalf("backlinks = %#v, want cameras backlink present", backlinks.Backlinks)
+	}
+
+	outgoingOut, err := linksTool.Handler(context.Background(), map[string]any{
+		"ref":   "kb:notes/cameras.md",
+		"mode":  "outgoing",
+		"limit": 2,
+	})
+	if err != nil {
+		t.Fatalf("doc_links(outgoing): %v", err)
+	}
+
+	var outgoing documents.LinksResult
+	if err := json.Unmarshal([]byte(outgoingOut), &outgoing); err != nil {
+		t.Fatalf("unmarshal outgoing output: %v", err)
+	}
+	if len(outgoing.Outgoing) != 2 || !outgoing.OutgoingTruncated {
+		t.Fatalf("outgoing = %#v, want 2 truncated outgoing links", outgoing.Outgoing)
+	}
+}
+
 func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 	t.Helper()
 

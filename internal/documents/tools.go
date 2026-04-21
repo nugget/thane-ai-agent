@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	maxToolResultBytes      = 16 * 1024
-	toolResultPreviewBudget = maxToolResultBytes - 512
+	maxToolResultBytes         = 16 * 1024
+	toolResultPreviewBudget    = maxToolResultBytes - 512
+	defaultDocLinksLimit       = 20
+	maxDocLinksLimit           = 100
+	defaultBacklinkTargetLimit = 10
+	maxBacklinkTargetLimit     = 50
 )
 
 // Tools exposes model-facing document navigation tools.
@@ -65,8 +69,10 @@ type ValuesArgs struct {
 
 // LinksArgs requests outgoing links, backlinks, or both for one document.
 type LinksArgs struct {
-	Ref  string `json:"ref"`
-	Mode string `json:"mode,omitempty"`
+	Ref              string `json:"ref"`
+	Mode             string `json:"mode,omitempty"`
+	Limit            int    `json:"limit,omitempty"`
+	PerBacklinkLimit int    `json:"per_backlink_limit,omitempty"`
 }
 
 // Read returns one indexed document payload.
@@ -225,7 +231,13 @@ func (t *Tools) Links(ctx context.Context, args LinksArgs) (string, error) {
 	if args.Ref == "" {
 		return "", fmt.Errorf("ref is required")
 	}
-	links, err := t.store.Links(ctx, args.Ref, args.Mode)
+	links, err := t.store.Links(
+		ctx,
+		args.Ref,
+		args.Mode,
+		clampPositiveLimit(args.Limit, defaultDocLinksLimit, maxDocLinksLimit),
+		clampPositiveLimit(args.PerBacklinkLimit, defaultBacklinkTargetLimit, maxBacklinkTargetLimit),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -404,4 +416,14 @@ func truncateUTF8Bytes(data []byte, maxBytes int) string {
 
 func nowUTC() time.Time {
 	return time.Now().UTC()
+}
+
+func clampPositiveLimit(limit int, def int, max int) int {
+	if limit <= 0 {
+		return def
+	}
+	if limit > max {
+		return max
+	}
+	return limit
 }

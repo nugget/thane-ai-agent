@@ -27,7 +27,7 @@ type documentIndex struct {
 }
 
 // Links returns outgoing links, backlinks, or both for one indexed document.
-func (s *Store) Links(ctx context.Context, ref string, mode string) (*LinksResult, error) {
+func (s *Store) Links(ctx context.Context, ref string, mode string, limit int, perBacklinkLimit int) (*LinksResult, error) {
 	if err := s.Refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -39,37 +39,55 @@ func (s *Store) Links(ctx context.Context, ref string, mode string) (*LinksResul
 	if err != nil {
 		return nil, err
 	}
-	index, err := s.loadDocumentIndex(ctx)
+	includeLinks := mode != "outgoing"
+	index, err := s.loadDocumentIndex(ctx, includeLinks)
 	if err != nil {
 		return nil, err
 	}
-	entry, ok := index.byRef[makeRef(root, relPath)]
+	canonicalRef := makeRef(root, relPath)
+	entry, ok := index.byRef[canonicalRef]
 	if !ok {
 		return nil, fmt.Errorf("document not found: %s", ref)
 	}
+	if mode == "outgoing" {
+		links, err := s.loadDocumentLinks(ctx, entry.Root, entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		entry.Links = links
+	}
 
 	result := &LinksResult{
-		Ref:  ref,
-		Mode: mode,
+		Ref:              entry.Ref,
+		Mode:             mode,
+		Limit:            limit,
+		PerBacklinkLimit: perBacklinkLimit,
 	}
 	if mode != "backlinks" {
-		result.Outgoing = make([]DocumentLink, 0, len(entry.Links))
+		outgoing := make([]DocumentLink, 0, len(entry.Links))
 		for _, target := range entry.Links {
-			result.Outgoing = append(result.Outgoing, resolveDocumentLink(index, entry, target))
+			outgoing = append(outgoing, resolveDocumentLink(index, entry, target))
 		}
+		if limit > 0 && len(outgoing) > limit {
+			result.OutgoingTruncated = true
+			outgoing = outgoing[:limit]
+		}
+		result.Outgoing = outgoing
 	}
 	if mode != "outgoing" {
-		result.Backlinks = backlinksForRef(index, entry.Ref)
+		result.Backlinks, result.BacklinksTruncated = backlinksForRef(index, entry.Ref, limit, perBacklinkLimit)
 	}
 	return result, nil
 }
 
-func (s *Store) loadDocumentIndex(ctx context.Context) (*documentIndex, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT root, rel_path, title, modified_at, links_json
+func (s *Store) loadDocumentIndex(ctx context.Context, includeLinks bool) (*documentIndex, error) {
+	query := `SELECT root, rel_path, title, modified_at FROM indexed_documents ORDER BY root, rel_path`
+	if includeLinks {
+		query = `SELECT root, rel_path, title, modified_at, links_json
 		 FROM indexed_documents
-		 ORDER BY root, rel_path`,
-	)
+		 ORDER BY root, rel_path`
+	}
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query document link index: %w", err)
 	}
@@ -91,12 +109,19 @@ func (s *Store) loadDocumentIndex(ctx context.Context) (*documentIndex, error) {
 			modifiedAt string
 			linksJSON  string
 		)
-		if err := rows.Scan(&root, &relPath, &title, &modifiedAt, &linksJSON); err != nil {
+		if includeLinks {
+			if err := rows.Scan(&root, &relPath, &title, &modifiedAt, &linksJSON); err != nil {
+				return nil, fmt.Errorf("scan document link index: %w", err)
+			}
+		} else if err := rows.Scan(&root, &relPath, &title, &modifiedAt); err != nil {
 			return nil, fmt.Errorf("scan document link index: %w", err)
 		}
 		var links []string
-		if err := json.Unmarshal([]byte(linksJSON), &links); err != nil {
-			links = nil
+		if includeLinks {
+			links, err = decodeDocumentLinks(root, relPath, linksJSON)
+			if err != nil {
+				return nil, err
+			}
 		}
 		entry := documentIndexEntry{
 			Root:       root,
@@ -122,9 +147,29 @@ func (s *Store) loadDocumentIndex(ctx context.Context) (*documentIndex, error) {
 	return index, nil
 }
 
-func backlinksForRef(index *documentIndex, targetRef string) []Backlink {
+func (s *Store) loadDocumentLinks(ctx context.Context, root string, relPath string) ([]string, error) {
+	var linksJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT links_json FROM indexed_documents WHERE root = ? AND rel_path = ?`,
+		root, relPath,
+	).Scan(&linksJSON)
+	if err != nil {
+		return nil, fmt.Errorf("query document links for %s/%s: %w", root, relPath, err)
+	}
+	return decodeDocumentLinks(root, relPath, linksJSON)
+}
+
+func decodeDocumentLinks(root string, relPath string, linksJSON string) ([]string, error) {
+	var links []string
+	if err := json.Unmarshal([]byte(linksJSON), &links); err != nil {
+		return nil, fmt.Errorf("unmarshal document links for %s/%s: %w", root, relPath, err)
+	}
+	return links, nil
+}
+
+func backlinksForRef(index *documentIndex, targetRef string, limit int, perBacklinkLimit int) ([]Backlink, bool) {
 	if index == nil {
-		return nil
+		return nil, false
 	}
 	bySource := make(map[string]*Backlink)
 	for _, entry := range index.byRef {
@@ -150,11 +195,15 @@ func backlinksForRef(index *documentIndex, targetRef string) []Backlink {
 		}
 	}
 	if len(bySource) == 0 {
-		return nil
+		return nil, false
 	}
 	out := make([]Backlink, 0, len(bySource))
 	for _, backlink := range bySource {
 		backlink.Targets = dedupeSorted(backlink.Targets)
+		if perBacklinkLimit > 0 && len(backlink.Targets) > perBacklinkLimit {
+			backlink.Targets = backlink.Targets[:perBacklinkLimit]
+			backlink.TargetsTruncated = true
+		}
 		out = append(out, *backlink)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -165,7 +214,12 @@ func backlinksForRef(index *documentIndex, targetRef string) []Backlink {
 		}
 		return ti.After(tj)
 	})
-	return out
+	truncated := false
+	if limit > 0 && len(out) > limit {
+		truncated = true
+		out = out[:limit]
+	}
+	return out, truncated
 }
 
 func resolveDocumentLink(index *documentIndex, source documentIndexEntry, rawTarget string) DocumentLink {

@@ -14,19 +14,24 @@ type DocumentLink struct {
 
 // Backlink is one indexed document that links to another document.
 type Backlink struct {
-	Ref        string   `json:"ref"`
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	ModifiedAt string   `json:"modified_at"`
-	Targets    []string `json:"targets,omitempty"`
+	Ref              string   `json:"ref"`
+	Path             string   `json:"path"`
+	Title            string   `json:"title"`
+	ModifiedAt       string   `json:"modified_at"`
+	Targets          []string `json:"targets,omitempty"`
+	TargetsTruncated bool     `json:"targets_truncated,omitempty"`
 }
 
 // LinksResult is the outgoing/backlink view for one indexed document.
 type LinksResult struct {
-	Ref       string         `json:"ref"`
-	Mode      string         `json:"mode"`
-	Outgoing  []DocumentLink `json:"outgoing,omitempty"`
-	Backlinks []Backlink     `json:"backlinks,omitempty"`
+	Ref                string         `json:"ref"`
+	Mode               string         `json:"mode"`
+	Limit              int            `json:"limit,omitempty"`
+	PerBacklinkLimit   int            `json:"per_backlink_limit,omitempty"`
+	Outgoing           []DocumentLink `json:"outgoing,omitempty"`
+	OutgoingTruncated  bool           `json:"outgoing_truncated,omitempty"`
+	Backlinks          []Backlink     `json:"backlinks,omitempty"`
+	BacklinksTruncated bool           `json:"backlinks_truncated,omitempty"`
 }
 
 // SearchQuery filters document search results.
