@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
@@ -138,6 +139,42 @@ func (c *Client) GetState(ctx context.Context, entityID string) (*State, error) 
 		return nil, err
 	}
 	return &state, nil
+}
+
+// GetStateHistory retrieves recorder-backed state history for one entity across
+// a time window. The result is sorted in Home Assistant's returned order, which
+// is typically chronological.
+func (c *Client) GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]State, error) {
+	if entityID == "" {
+		return nil, nil
+	}
+
+	query := url.Values{}
+	query.Set("filter_entity_id", entityID)
+	query.Set("end_time", endTime.UTC().Format(time.RFC3339))
+	query.Set("no_attributes", "1")
+	query.Set("significant_changes_only", "0")
+
+	path := "/api/history/period/" + startTime.UTC().Format(time.RFC3339)
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	var payload [][]State
+	if err := c.get(ctx, path, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload) == 0 {
+		return nil, nil
+	}
+
+	states := append([]State(nil), payload[0]...)
+	for i := range states {
+		if states[i].EntityID == "" {
+			states[i].EntityID = entityID
+		}
+	}
+	return states, nil
 }
 
 // CallService calls a Home Assistant service.
