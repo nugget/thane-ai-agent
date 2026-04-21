@@ -243,6 +243,105 @@ func TestLogsQuery_ResultTruncation(t *testing.T) {
 	}
 }
 
+func TestLogsQuery_ZeroResultPatternHint(t *testing.T) {
+	db := openLogTestDB(t)
+	now := time.Now()
+
+	// Seed an entry whose loop_name is "personality-test" but whose
+	// message text does not contain that string. pattern="personality-test"
+	// must return zero rows; the loop_name filter must return one.
+	insertTestLogEntry(t, db, now.Add(-5*time.Second), "INFO", "loop started", "loop-aaa", "personality-test", "loop")
+
+	r := NewEmptyRegistry()
+	r.SetLogIndexDB(db)
+	tool := r.Get("logs_query")
+
+	t.Run("pattern-only zero-result emits hint", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"pattern": "personality-test",
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":0`) {
+			t.Fatalf("expected returned:0 for pattern matching no message text, got: %s", result)
+		}
+		if !strings.Contains(result, `"hint"`) {
+			t.Errorf("expected hint field steering toward attribute filters, got: %s", result)
+		}
+		if !strings.Contains(result, "loop_name") {
+			t.Errorf("hint should mention loop_name as an alternative, got: %s", result)
+		}
+	})
+
+	t.Run("loop_name filter returns the row", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_name": "personality-test",
+			"since":     "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":1`) {
+			t.Errorf("expected returned:1 via loop_name, got: %s", result)
+		}
+	})
+
+	t.Run("pattern with attribute filter omits hint even when empty", func(t *testing.T) {
+		// Attribute filter combined with pattern may legitimately
+		// return zero rows — the caller clearly knew which attribute
+		// they wanted, so do not second-guess.
+		result, err := tool.Handler(nil, map[string]any{
+			"pattern":   "does-not-match",
+			"loop_name": "personality-test",
+			"since":     "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":0`) {
+			t.Fatalf("expected returned:0, got: %s", result)
+		}
+		if strings.Contains(result, `"hint"`) {
+			t.Errorf("hint should not appear when an attribute filter is already combined, got: %s", result)
+		}
+	})
+
+	t.Run("pattern with subsystem filter also omits hint", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"pattern":   "does-not-match",
+			"subsystem": "loop",
+			"since":     "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":0`) {
+			t.Fatalf("expected returned:0, got: %s", result)
+		}
+		if strings.Contains(result, `"hint"`) {
+			t.Errorf("hint should not appear when subsystem is already filtered, got: %s", result)
+		}
+	})
+
+	t.Run("non-empty result has no hint", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"pattern": "loop started",
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":1`) {
+			t.Fatalf("expected returned:1 when pattern actually matches message text, got: %s", result)
+		}
+		if strings.Contains(result, `"hint"`) {
+			t.Errorf("hint should not appear when rows were returned, got: %s", result)
+		}
+	})
+}
+
 func TestParseTimeOrDuration(t *testing.T) {
 	tests := []struct {
 		name  string

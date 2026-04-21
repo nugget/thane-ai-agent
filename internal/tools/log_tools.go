@@ -29,9 +29,15 @@ func (r *Registry) registerLogsQuery() {
 	r.Register(&Tool{
 		Name: "logs_query",
 		Description: "Query the structured log index for debugging and forensics. " +
-			"Filter by session, conversation, request ID, subsystem, tool, model, " +
-			"log level (minimum severity), time range, and message pattern. " +
-			"Returns matching entries as JSON.",
+			"Returns matching entries as JSON. " +
+			"Prefer attribute filters over `pattern` whenever you can name the target: " +
+			"use `loop_name` or `loop_id` for a specific loop, " +
+			"`session_id` / `conversation_id` / `request_id` for a correlation ID, " +
+			"`tool` for a tool name, `model` for a model name, " +
+			"`subsystem` to scope by subsystem. " +
+			"`pattern` is a substring search on the log message text only — " +
+			"it does NOT search attribute fields, so `pattern=\"my-loop\"` will miss every entry " +
+			"whose loop_name is \"my-loop\" unless that literal string appears in the message text.",
 		AlwaysAvailable: true,
 		Parameters: map[string]any{
 			"type": "object",
@@ -67,7 +73,7 @@ func (r *Registry) registerLogsQuery() {
 				},
 				"loop_name": map[string]any{
 					"type":        "string",
-					"description": "Filter by loop name (e.g., \"metacognitive\", \"signal-parent\", \"email-poller\").",
+					"description": "Filter by loop name (e.g., \"metacognitive\", \"signal-parent\", \"email-poller\"). Use this — not `pattern` — to find all entries for a named loop.",
 				},
 				"level": map[string]any{
 					"type":        "string",
@@ -84,7 +90,7 @@ func (r *Registry) registerLogsQuery() {
 				},
 				"pattern": map[string]any{
 					"type":        "string",
-					"description": "Text search in log message (substring match).",
+					"description": "Substring match against the log message text only. Does NOT search attribute fields like loop_name, loop_id, session_id, request_id, conversation_id, tool, model, or subsystem — those have dedicated filter parameters. Use `pattern` for phrases that actually appear in the human-readable message (e.g. \"illegal tool call\", \"connection refused\"), not for IDs or names.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -219,6 +225,13 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		included++
 	}
 
+	// hint is emitted when a pattern-only search returns zero rows. That
+	// pattern almost always means the caller reached for `pattern` when
+	// they should have used one of the dedicated attribute filters — a
+	// common failure mode for models that do not realize `pattern`
+	// matches message text only.
+	hint := zeroResultPatternHint(params, returned)
+
 	// Build final JSON with a hard cap enforcement. The entry
 	// collection above uses an estimated budget; this final pass
 	// guarantees the output never exceeds maxLogsResultBytes.
@@ -233,6 +246,9 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 	sb.WriteString("]")
 	if truncated {
 		fmt.Fprintf(&sb, `,"truncated":true,"note":"showing %d of %d returned entries (byte limit). Narrow filters for more targeted results."`, included, returned)
+	}
+	if hint != "" {
+		writeJSONStringField(&sb, "hint", hint)
 	}
 	sb.WriteString("}")
 
@@ -256,12 +272,56 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 			}
 			rebuild.WriteString("]")
 			fmt.Fprintf(&rebuild, `,"truncated":true,"note":"showing %d of %d returned entries (byte limit). Narrow filters for more targeted results."`, included, returned)
+			if hint != "" {
+				writeJSONStringField(&rebuild, "hint", hint)
+			}
 			rebuild.WriteString("}")
 			out = rebuild.String()
 		}
 	}
 
 	return out, nil
+}
+
+// zeroResultPatternHint returns a short hint when a query that relied
+// on `pattern` alone returned zero rows. Models frequently use
+// `pattern=\"<loop-name>\"` or `pattern=\"<request-id>\"` and get an
+// empty result because `pattern` matches the log message text only,
+// not attribute columns. Pointing them at the dedicated attribute
+// filters is the recovery path.
+func zeroResultPatternHint(params logging.QueryParams, returned int) string {
+	if returned > 0 || strings.TrimSpace(params.Pattern) == "" {
+		return ""
+	}
+	if params.SessionID != "" || params.ConversationID != "" || params.RequestID != "" ||
+		params.Subsystem != "" || params.Tool != "" || params.Model != "" ||
+		params.LoopID != "" || params.LoopName != "" {
+		// Caller already combined pattern with an attribute filter, so
+		// the empty result is legitimately empty — do not second-guess.
+		return ""
+	}
+	return "pattern matches log message text only and returned no rows. " +
+		"If you are searching for a loop, session, request, or conversation, " +
+		"use the matching attribute filter instead: " +
+		"loop_name / loop_id / session_id / conversation_id / request_id / tool / model / subsystem."
+}
+
+// writeJSONStringField appends a JSON string field to an existing
+// object body. The caller is responsible for the surrounding braces
+// and any leading comma separator concerns are handled internally.
+func writeJSONStringField(sb *strings.Builder, key, value string) {
+	sb.WriteByte(',')
+	enc, err := json.Marshal(key)
+	if err != nil {
+		return
+	}
+	sb.Write(enc)
+	sb.WriteByte(':')
+	valEnc, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	sb.Write(valEnc)
 }
 
 // stringArg extracts a string value from the args map.
