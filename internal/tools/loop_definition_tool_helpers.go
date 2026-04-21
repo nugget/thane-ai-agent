@@ -87,6 +87,64 @@ func validateLoopLaunchOverrides(launch looppkg.Launch) error {
 	return nil
 }
 
+func loopCompletionChannelTargetProperty() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Explicit detached channel delivery target when spec.completion=\"channel\". If omitted, the current origin context may infer one automatically.",
+		"properties": map[string]any{
+			"channel": map[string]any{
+				"type":        "string",
+				"description": "Channel integration name such as \"signal\" or \"owu\".",
+			},
+			"recipient": map[string]any{
+				"type":        "string",
+				"description": "Recipient or address for integrations that route by recipient (for example a Signal phone number).",
+			},
+			"conversation_id": map[string]any{
+				"type":        "string",
+				"description": "Channel-native conversation or thread ID for integrations that route by conversation.",
+			},
+		},
+	}
+}
+
+func loopChannelBindingProperty() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Typed channel identity bound to the launched loop. If omitted, the current tool-call channel binding is inherited when available.",
+		"properties": map[string]any{
+			"channel": map[string]any{
+				"type":        "string",
+				"description": "Channel integration name (for example \"signal\").",
+			},
+			"address": map[string]any{
+				"type":        "string",
+				"description": "Channel address or sender identity bound to this loop.",
+			},
+			"contact_id": map[string]any{
+				"type":        "string",
+				"description": "Resolved internal contact ID for this channel identity, when known.",
+			},
+			"contact_name": map[string]any{
+				"type":        "string",
+				"description": "Resolved display name for the bound contact, when known.",
+			},
+			"trust_zone": map[string]any{
+				"type":        "string",
+				"description": "Trust classification attached to this channel identity.",
+			},
+			"link_source": map[string]any{
+				"type":        "string",
+				"description": "How this channel binding was established.",
+			},
+			"is_owner": map[string]any{
+				"type":        "boolean",
+				"description": "Whether this bound identity belongs to the owner/self side of the conversation.",
+			},
+		},
+	}
+}
+
 // loopLaunchOverrideProperties returns the JSON-schema property set for
 // the per-launch override fields accepted by both
 // [Registry.handleLoopDefinitionLaunch] and [Registry.handleSpawnLoop].
@@ -103,6 +161,10 @@ func loopLaunchOverrideProperties() map[string]any {
 		"task": map[string]any{
 			"type":        "string",
 			"description": "Override the task text for this launch. Applied only when the stored spec does not already supply a task.",
+		},
+		"parent_id": map[string]any{
+			"type":        "string",
+			"description": "Associate this launch with a parent loop ID for parent/child tracking.",
 		},
 		"allowed_tools": map[string]any{
 			"type":        "array",
@@ -148,14 +210,36 @@ func loopLaunchOverrideProperties() map[string]any {
 			"type":        "string",
 			"description": "Bind this launch to a specific conversation ID instead of deriving one.",
 		},
+		"channel_binding": loopChannelBindingProperty(),
+		"run_timeout": map[string]any{
+			"type":        "string",
+			"description": "For request_reply launches, stop waiting after this wall-clock duration and return a timeout error. Use a Go duration string like \"30s\" or \"2m\".",
+		},
 		"completion_conversation_id": map[string]any{
 			"type":        "string",
 			"description": "When spec.completion=\"conversation\", deliver the final result to this conversation ID.",
 		},
+		"completion_channel": loopCompletionChannelTargetProperty(),
 		"metadata": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{"type": "string"},
 			"description":          "Opaque string/string tags attached to the launched loop for correlation or audit. NOT used for routing, tools, budgets, or any runtime behavior. To override the model use top-level \"model\". To override tools use \"allowed_tools\" / \"exclude_tools\". To override budgets use \"max_iterations\" / \"max_output_tokens\".",
+		},
+		"fallback_content": map[string]any{
+			"type":        "string",
+			"description": "Static fallback reply used if the nested agent run produces no content but the launch still needs a last-resort response.",
+		},
+		"tool_timeout": map[string]any{
+			"type":        "string",
+			"description": "Per-tool-call timeout for nested agent tool executions inside this loop. Use a Go duration string like \"30s\" or \"2m\".",
+		},
+		"usage_role": map[string]any{
+			"type":        "string",
+			"description": "Usage attribution role label recorded on model and tool usage for this launch (for example \"delegate\").",
+		},
+		"usage_task_name": map[string]any{
+			"type":        "string",
+			"description": "Usage attribution task label recorded on model and tool usage for this launch (for example \"general\").",
 		},
 	}
 }

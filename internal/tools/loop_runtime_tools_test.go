@@ -82,6 +82,26 @@ func TestConfigureLoopRuntimeTools_RegistersTools(t *testing.T) {
 	}
 }
 
+func TestSpawnLoopSchemaExposesSharedLaunchFields(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	tool := deps.reg.Get("spawn_loop")
+	if tool == nil {
+		t.Fatal("spawn_loop tool not registered")
+	}
+
+	launchSchema := schemaObjectProperty(t, tool.Parameters, "launch")
+	launchProps := schemaProperties(t, launchSchema)
+	if _, ok := launchProps["spec"]; !ok {
+		t.Fatal("spawn_loop launch schema missing spec")
+	}
+	for _, key := range sharedLoopLaunchSchemaKeys() {
+		if _, ok := launchProps[key]; !ok {
+			t.Errorf("spawn_loop launch schema missing %q", key)
+		}
+	}
+}
+
 func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 	live := deps.live.GetByName("battery_watch")
