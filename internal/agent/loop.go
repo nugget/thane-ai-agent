@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/iterate"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -1122,10 +1123,45 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
+	runStarted := time.Now()
+	defer func() {
+		attrs := []any{
+			"kind", events.KindRequestComplete,
+			"ok", err == nil,
+			"elapsed_ms", time.Since(runStarted).Milliseconds(),
+			"skip_context", req.SkipContext,
+		}
+		if !req.SkipContext {
+			attrs = append(attrs, "context_tokens", l.memory.GetTokenCount(convID))
+		}
+		if resp != nil {
+			attrs = append(attrs,
+				"model", resp.Model,
+				"input_tokens", resp.InputTokens,
+				"output_tokens", resp.OutputTokens,
+				"cache_creation_input_tokens", resp.CacheCreationInputTokens,
+				"cache_read_input_tokens", resp.CacheReadInputTokens,
+				"iterations", resp.Iterations,
+				"finish_reason", resp.FinishReason,
+				"exhausted", resp.Exhausted,
+			)
+			if len(resp.ToolsUsed) > 0 {
+				attrs = append(attrs, "tools_used", resp.ToolsUsed)
+			}
+		}
+		if err != nil {
+			log.Warn("request complete", append(attrs, "error", err.Error())...)
+			return
+		}
+		log.Info("request complete", attrs...)
+	}()
 
-	log.Info("agent loop started",
-		"messages", len(req.Messages),
+	log.Info("request start",
+		"kind", events.KindRequestStart,
+		"message_count", len(req.Messages),
 		"mission", req.Hints["mission"],
+		"skip_context", req.SkipContext,
+		"max_iterations", req.MaxIterations,
 	)
 
 	// Always use Thane's memory as the source of truth.
@@ -1204,8 +1240,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			liteModel = l.model
 		}
 
-		log.Info("lightweight completion (skip context)",
-			"model", liteModel, "messages", len(req.Messages),
+		log.Info("llm call",
+			"kind", events.KindLLMCall,
+			"iteration", 0,
+			"model", liteModel,
+			"message_count", len(req.Messages),
+			"skip_context", true,
 		)
 
 		var llmMessages []llm.Message
@@ -1230,11 +1270,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			l.router.RecordOutcome(liteDecision.RequestID, time.Since(startTime).Milliseconds(), llmResp.InputTokens+llmResp.OutputTokens, true)
 		}
 
-		log.Info("lightweight completion done",
+		log.Info("llm response",
+			"kind", events.KindLLMResponse,
+			"iteration", 0,
 			"model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
-			"elapsed", time.Since(startTime).Round(time.Second),
+			"tool_calls", len(llmResp.Message.ToolCalls),
+			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
 		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
@@ -1509,6 +1552,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Optional per-tool timeout wrapper for request-scoped runs such as
 	// delegates. Cancelled after each tool completes.
 	var currentToolCancel context.CancelFunc
+	var currentToolStart time.Time
+	var currentToolCallID string
 
 	maxIterations := 50
 	if req.MaxIterations > 0 {
@@ -1684,8 +1729,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				iterMsgTokens += len(m.Content) / 4
 			}
 			iterLog.Info("llm call",
+				"kind", events.KindLLMCall,
+				"iteration", i,
 				"model", currentModel,
-				"msgs", len(msgs),
+				"message_count", len(msgs),
 				"est_tokens", iterMsgTokens,
 				"system_tokens", systemTokens,
 			)
@@ -1727,6 +1774,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",
+				"kind", events.KindLLMResponse,
+				"iteration", i,
 				"model", llmResp.Model,
 				"input_tokens", llmResp.InputTokens,
 				"output_tokens", llmResp.OutputTokens,
@@ -1760,6 +1809,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if req.ToolTimeout > 0 {
 				toolCtx, currentToolCancel = context.WithTimeout(toolCtx, req.ToolTimeout)
 			}
+			currentToolStart = time.Now()
+			currentToolCallID = toolCallIDStr
+			logging.Logger(toolCtx).Info("tool call",
+				"kind", events.KindToolCall,
+				"iteration", i,
+				"tool", tc.Function.Name,
+				"tool_call_id", toolCallIDStr,
+			)
 
 			// Record tool call start.
 			if hasRecorder {
@@ -1790,6 +1847,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				currentToolCancel()
 				currentToolCancel = nil
 			}
+			durationMS := int64(0)
+			if !currentToolStart.IsZero() {
+				durationMS = time.Since(currentToolStart).Milliseconds()
+			}
+			currentToolStart = time.Time{}
+			toolCallIDStr := tools.ToolCallIDFromContext(iterCtx)
+			if toolCallIDStr == "" {
+				toolCallIDStr = currentToolCallID
+			}
+			currentToolCallID = ""
 			if stream != nil {
 				doneData := map[string]any{
 					"active_tags":     activeTagList(),
@@ -1803,9 +1870,27 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					Data:       doneData,
 				})
 			}
+			toolLog := logging.Logger(iterCtx)
+			if errMsg != "" {
+				toolLog.Warn("tool done",
+					"kind", events.KindToolDone,
+					"tool", toolName,
+					"tool_call_id", toolCallIDStr,
+					"ok", false,
+					"duration_ms", durationMS,
+					"error", errMsg,
+				)
+			} else {
+				toolLog.Info("tool done",
+					"kind", events.KindToolDone,
+					"tool", toolName,
+					"tool_call_id", toolCallIDStr,
+					"ok", true,
+					"duration_ms", durationMS,
+				)
+			}
 			// Record tool call completion.
 			if hasRecorder {
-				toolCallIDStr := tools.ToolCallIDFromContext(iterCtx)
 				if toolCallIDStr != "" {
 					if err := recorder.CompleteToolCall(toolCallIDStr, result, errMsg); err != nil {
 						logging.Logger(iterCtx).Warn("failed to complete tool call record", "error", err)
@@ -1876,17 +1961,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		latency := time.Since(startTime).Milliseconds()
 		l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
 	}
-
-	elapsed := time.Since(startTime)
-	log.Info("agent loop completed",
-		"model", iterResult.Model,
-		"input_tokens", iterResult.InputTokens,
-		"output_tokens", iterResult.OutputTokens,
-		"exhausted", iterResult.Exhausted,
-		"exhaust_reason", iterResult.ExhaustReason,
-		"elapsed", elapsed.Round(time.Second),
-		"context_tokens", l.memory.GetTokenCount(convID),
-	)
 
 	// For exhausted runs, store the forced text in memory.
 	if iterResult.Exhausted && iterResult.Content != "" {

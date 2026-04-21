@@ -13,6 +13,7 @@ import (
 	"time"
 
 	libcarddav "github.com/emersion/go-webdav/carddav"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
 // Server wraps a CardDAV handler with HTTP server lifecycle, Basic
@@ -222,11 +223,16 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		s.logger.Info("carddav request",
+		rw := logging.NewAccessResponseWriter(w)
+		next.ServeHTTP(rw, r)
+		s.logger.Info("request handled",
+			"kind", "http_access",
+			"server", "carddav",
 			"method", r.Method,
 			"path", r.URL.Path,
-			"duration", time.Since(start).Round(time.Millisecond),
+			"status", rw.StatusCode(),
+			"response_bytes", rw.BytesWritten(),
+			"duration_ms", time.Since(start).Milliseconds(),
 		)
 	})
 }

@@ -310,8 +310,8 @@ type Config struct {
 	// Local/Ollama models not listed here default to $0.
 	Pricing map[string]PricingEntry `yaml:"pricing"`
 
-	// Logging configures log output, rotation, and format. Thane manages
-	// its own log files — no external logrotate required.
+	// Logging configures Thane's filesystem datasets, stdout policy, and
+	// queryable request/log retention.
 	Logging LoggingConfig `yaml:"logging"`
 
 	// LogLevel is deprecated; use Logging.Level instead.
@@ -329,28 +329,42 @@ type PricingEntry struct {
 	OutputPerMillion float64 `yaml:"output_per_million"`
 }
 
-// LoggingConfig configures Thane's self-managed log output. When Dir is
-// set, Thane writes structured log files directly (no external logrotate
-// needed). Logs are rotated daily; old files are never deleted.
+// LoggingConfig configures Thane's structured filesystem log datasets,
+// stdout policy, and SQLite-backed log/query retention.
 type LoggingConfig struct {
-	// Dir is the directory for log files. Relative paths are resolved
-	// from the working directory (typically ~/Thane). Defaults to "logs"
-	// when omitted. Set to an explicit empty string (dir: "") to disable
-	// file logging (output goes to stdout only).
+	// Root is the directory where Thane writes category-partitioned JSONL
+	// datasets and logs.db. Relative paths are resolved from the working
+	// directory (typically ~/Thane). Defaults to "logs" when omitted.
+	// Set to an explicit empty string (root: "") to disable filesystem
+	// logging entirely.
+	Root *string `yaml:"root"`
+
+	// Dir is the deprecated alias for Root. It is kept for backwards
+	// compatibility with older configs.
 	Dir *string `yaml:"dir"`
 
-	// Level sets the minimum log level. Valid values: trace, debug,
-	// info, warn, error. Default: info.
+	// Level sets the minimum level retained in the structured datasets and
+	// SQLite log index. Valid values: trace, debug, info, warn, error.
+	// Default: info.
 	Level string `yaml:"level"`
 
-	// Format sets the log output format. "json" produces one JSON
-	// object per line; "text" produces human-readable key=value pairs.
-	// Default: json.
+	// Format sets the stdout log format fallback when stdout.format is
+	// omitted. "json" produces one JSON object per line; "text" produces
+	// human-readable key=value pairs. Default: json.
 	Format string `yaml:"format"`
 
-	// Compress enables gzip compression of rotated log files.
-	// Default: true.
+	// Compress is retained for backwards compatibility with the legacy
+	// daily-rotated thane.log path. Structured datasets are not currently
+	// gzip-compressed at write time.
 	Compress *bool `yaml:"compress"`
+
+	// Stdout configures the operator-facing stdout surface separately from
+	// the structured filesystem datasets.
+	Stdout LoggingStdoutConfig `yaml:"stdout"`
+
+	// Datasets controls which structured filesystem datasets are written
+	// under Root.
+	Datasets LoggingDatasetsConfig `yaml:"datasets"`
 
 	// RetentionDays controls how many days DEBUG and TRACE log index
 	// entries are kept. Entries at INFO and above are kept indefinitely.
@@ -377,19 +391,61 @@ type LoggingConfig struct {
 
 	// ContentArchiveDir is the directory where monthly JSONL archive
 	// files are written. Relative paths are resolved from the working
-	// directory. Defaults to {log_dir}/archive when unset.
+	// directory. Defaults to {logging.root}/archive when unset.
 	ContentArchiveDir *string `yaml:"content_archive_dir"`
 }
 
-// DirPath returns the resolved log directory path. When Dir is nil
-// (omitted in YAML), it returns the default "logs". When Dir is an
-// explicit empty string, it returns "" which signals that file logging
-// is disabled.
-func (l LoggingConfig) DirPath() string {
-	if l.Dir == nil {
-		return "logs"
+// LoggingStdoutConfig configures the operator-facing stdout stream.
+type LoggingStdoutConfig struct {
+	// Enabled controls whether Thane writes operator-facing logs to
+	// stdout. Default: true.
+	Enabled *bool `yaml:"enabled"`
+
+	// Level sets the minimum stdout log level. When empty, it falls back
+	// to Logging.Level.
+	Level string `yaml:"level"`
+
+	// Format sets stdout formatting. When empty, it falls back to
+	// Logging.Format.
+	Format string `yaml:"format"`
+}
+
+// LoggingDatasetsConfig configures the initial structured JSONL datasets
+// written under logging.root.
+type LoggingDatasetsConfig struct {
+	Events    LoggingDatasetConfig `yaml:"events"`
+	Requests  LoggingDatasetConfig `yaml:"requests"`
+	Access    LoggingDatasetConfig `yaml:"access"`
+	Loops     LoggingDatasetConfig `yaml:"loops"`
+	Delegates LoggingDatasetConfig `yaml:"delegates"`
+	Envelopes LoggingDatasetConfig `yaml:"envelopes"`
+}
+
+// LoggingDatasetConfig controls one structured JSONL dataset.
+type LoggingDatasetConfig struct {
+	// Enabled controls whether the dataset is written. When omitted, each
+	// dataset uses its built-in default.
+	Enabled *bool `yaml:"enabled"`
+}
+
+// RootPath returns the resolved logging root. When Root is nil and Dir is
+// also nil, it returns the default "logs". When either is an explicit empty
+// string, it returns "" which signals that filesystem logging is disabled.
+func (l LoggingConfig) RootPath() string {
+	if l.Root != nil {
+		return *l.Root
 	}
-	return *l.Dir
+	if l.Dir != nil {
+		return *l.Dir
+	}
+	return "logs"
+}
+
+// DirPath returns the resolved logging root path. It is kept as a
+// compatibility alias for older callers that still speak in terms of a
+// log directory rather than dataset root.
+func (l LoggingConfig) DirPath() string {
+	return l.RootPath()
 }
 
 // RetentionDaysDuration returns the retention period for low-level log
@@ -422,7 +478,7 @@ func (l LoggingConfig) ContentMaxLength() int {
 
 // ContentArchiveDirPath returns the resolved archive directory path.
 // When ContentArchiveDir is nil (unset in YAML), it falls back to
-// logDir/archive where logDir is the caller-supplied log directory.
+// logDir/archive where logDir is the caller-supplied logging root.
 func (l LoggingConfig) ContentArchiveDirPath(logDir string) string {
 	if l.ContentArchiveDir != nil && *l.ContentArchiveDir != "" {
 		return *l.ContentArchiveDir
@@ -451,6 +507,61 @@ func (l LoggingConfig) CompressEnabled() bool {
 		return true
 	}
 	return *l.Compress
+}
+
+// StdoutEnabled returns whether the operator-facing stdout stream is on.
+// Defaults to true when stdout.enabled is omitted.
+func (l LoggingConfig) StdoutEnabled() bool {
+	if l.Stdout.Enabled == nil {
+		return true
+	}
+	return *l.Stdout.Enabled
+}
+
+// StdoutLevelValue returns the configured stdout level or falls back to
+// the dataset/index level.
+func (l LoggingConfig) StdoutLevelValue() string {
+	if strings.TrimSpace(l.Stdout.Level) != "" {
+		return l.Stdout.Level
+	}
+	return l.Level
+}
+
+// StdoutFormatValue returns the configured stdout format or falls back to
+// the logging default format.
+func (l LoggingConfig) StdoutFormatValue() string {
+	if strings.TrimSpace(l.Stdout.Format) != "" {
+		return l.Stdout.Format
+	}
+	return l.Format
+}
+
+// DatasetEnabled reports whether a named structured dataset should be
+// written under logging.root.
+func (l LoggingConfig) DatasetEnabled(dataset string) bool {
+	switch dataset {
+	case "events":
+		return datasetEnabled(l.Datasets.Events, true)
+	case "requests":
+		return datasetEnabled(l.Datasets.Requests, true)
+	case "access":
+		return datasetEnabled(l.Datasets.Access, false)
+	case "loops":
+		return datasetEnabled(l.Datasets.Loops, true)
+	case "delegates":
+		return datasetEnabled(l.Datasets.Delegates, true)
+	case "envelopes":
+		return datasetEnabled(l.Datasets.Envelopes, true)
+	default:
+		return false
+	}
+}
+
+func datasetEnabled(cfg LoggingDatasetConfig, defaultValue bool) bool {
+	if cfg.Enabled == nil {
+		return defaultValue
+	}
+	return *cfg.Enabled
 }
 
 // DeprecatedFieldsUsed reports whether the legacy top-level log_level or
@@ -1604,13 +1715,20 @@ func (c *Config) applyDefaults() {
 		c.Logging.Format = c.LogFormat
 	}
 
-	// Dir uses a *string — nil defaults to "logs" via DirPath().
-	// Explicit empty string disables file logging.
+	// Root/Dir use *string pointers — nil defaults to "logs" via
+	// RootPath()/DirPath(). Explicit empty string disables filesystem
+	// logging entirely.
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
 	if c.Logging.Format == "" {
 		c.Logging.Format = "json"
+	}
+	if c.Logging.Stdout.Level == "" {
+		c.Logging.Stdout.Level = c.Logging.Level
+	}
+	if c.Logging.Stdout.Format == "" {
+		c.Logging.Stdout.Format = c.Logging.Format
 	}
 	if c.Logging.Compress == nil {
 		v := true
@@ -1866,11 +1984,22 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("logging.level: %w", err)
 		}
 	}
+	if c.Logging.Stdout.Level != "" {
+		if _, err := ParseLogLevel(c.Logging.Stdout.Level); err != nil {
+			return fmt.Errorf("logging.stdout.level: %w", err)
+		}
+	}
 	switch c.Logging.Format {
 	case "text", "json", "":
 		// valid
 	default:
 		return fmt.Errorf("logging.format %q invalid (expected text or json)", c.Logging.Format)
+	}
+	switch c.Logging.Stdout.Format {
+	case "text", "json", "":
+		// valid
+	default:
+		return fmt.Errorf("logging.stdout.format %q invalid (expected text or json)", c.Logging.Stdout.Format)
 	}
 	if c.LogLevel != "" {
 		if _, err := ParseLogLevel(c.LogLevel); err != nil {

@@ -220,7 +220,8 @@ service-install: install
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
     echo "  Data:    $THANE_HOME/db/"
-    echo "  Logs:    $THANE_HOME/logs/thane.log  (rotated daily)"
+    echo "  Logs:    $THANE_HOME/logs/{events,requests,access,loops,delegates,envelopes}/YYYY-MM-DD/HH.jsonl"
+    echo "           $THANE_HOME/logs/logs.db"
     echo "  Crashes: $THANE_HOME/crash.log       (pre-init errors only)"
     echo ""
     echo "Next steps:"
@@ -383,7 +384,15 @@ serve: build
 # Tail live service logs (default: dev workdir)
 [group('operations')]
 logs workdir="./Thane":
-    tail -f {{workdir}}/logs/thane.log
+    #!/usr/bin/env bash
+    set -euo pipefail
+    latest="$(find {{workdir}}/logs/events -type f -name '*.jsonl' 2>/dev/null | sort | tail -n 1)"
+    if [ -z "$latest" ]; then
+        echo "No events dataset files found under {{workdir}}/logs/events"
+        exit 1
+    fi
+    echo "Tailing $latest"
+    tail -F "$latest"
 
 # Live smoke test for loops-ng loop definition registry behavior against a running dev instance
 [group('operations')]

@@ -26,12 +26,20 @@ import (
 // on any change to this file or to the Config struct definitions.
 func ExampleConfig() *Config {
 	// Pointer helpers — needed for optional *T fields.
+	logRoot := "logs"
 	logDir := "logs"
 	compress := true
 	retentionDays := 7
 	maxContent := 4096
 	archiveDays := 90
 	sessionIdle := 30
+	stdoutEnabled := true
+	eventsEnabled := true
+	requestsEnabled := true
+	accessEnabled := false
+	loopsEnabled := true
+	delegatesEnabled := true
+	envelopesEnabled := true
 
 	return &Config{
 		// ── Required / always-shown sections ──────────────────────────────
@@ -126,10 +134,20 @@ func ExampleConfig() *Config {
 		},
 
 		Logging: LoggingConfig{
-			Dir:                &logDir,
-			Level:              "info",
-			Format:             "json",
-			Compress:           &compress,
+			Root:     &logRoot,
+			Dir:      &logDir,
+			Level:    "info",
+			Format:   "json",
+			Compress: &compress,
+			Stdout:   LoggingStdoutConfig{Enabled: &stdoutEnabled},
+			Datasets: LoggingDatasetsConfig{
+				Events:    LoggingDatasetConfig{Enabled: &eventsEnabled},
+				Requests:  LoggingDatasetConfig{Enabled: &requestsEnabled},
+				Access:    LoggingDatasetConfig{Enabled: &accessEnabled},
+				Loops:     LoggingDatasetConfig{Enabled: &loopsEnabled},
+				Delegates: LoggingDatasetConfig{Enabled: &delegatesEnabled},
+				Envelopes: LoggingDatasetConfig{Enabled: &envelopesEnabled},
+			},
 			RetentionDays:      &retentionDays,
 			RetainContent:      false,
 			MaxContentLength:   &maxContent,

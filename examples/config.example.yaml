@@ -850,24 +850,69 @@ talents_dir: ./talents
 #     input_per_million: 15.0
 #     output_per_million: 75.0
 #
-# Logging configures log output, rotation, and format. Thane manages
-# its own log files — no external logrotate required.
+# Logging configures Thane's filesystem datasets, stdout policy, and
+# queryable request/log retention.
 logging:
-  # Dir is the directory for log files. Relative paths are resolved
-  # from the working directory (typically ~/Thane). Defaults to "logs"
-  # when omitted. Set to an explicit empty string (dir: "") to disable
-  # file logging (output goes to stdout only).
+  # Root is the directory where Thane writes category-partitioned JSONL
+  # datasets and logs.db. Relative paths are resolved from the working
+  # directory (typically ~/Thane). Defaults to "logs" when omitted.
+  # Set to an explicit empty string (root: "") to disable filesystem
+  # logging entirely.
+  root: logs
+  # Dir is the deprecated alias for Root. It is kept for backwards
+  # compatibility with older configs.
   dir: logs
-  # Level sets the minimum log level. Valid values: trace, debug,
-  # info, warn, error. Default: info.
+  # Level sets the minimum level retained in the structured datasets and
+  # SQLite log index. Valid values: trace, debug, info, warn, error.
+  # Default: info.
   level: info
-  # Format sets the log output format. "json" produces one JSON
-  # object per line; "text" produces human-readable key=value pairs.
-  # Default: json.
+  # Format sets the stdout log format fallback when stdout.format is
+  # omitted. "json" produces one JSON object per line; "text" produces
+  # human-readable key=value pairs. Default: json.
   format: json
-  # Compress enables gzip compression of rotated log files.
-  # Default: true.
+  # Compress is retained for backwards compatibility with the legacy
+  # daily-rotated thane.log path. Structured datasets are not currently
+  # gzip-compressed at write time.
   compress: true
+  # Stdout configures the operator-facing stdout surface separately from
+  # the structured filesystem datasets.
+  stdout:
+    # Enabled controls whether Thane writes operator-facing logs to
+    # stdout. Default: true.
+    enabled: true
+    # Level sets the minimum stdout log level. When empty, it falls back
+    # to Logging.Level.
+    level: ""
+    # Format sets stdout formatting. When empty, it falls back to
+    # Logging.Format.
+    format: ""
+  # Datasets controls which structured filesystem datasets are written
+  # under Root.
+  datasets:
+    events:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: true
+    requests:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: true
+    access:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: false
+    loops:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: true
+    delegates:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: true
+    envelopes:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: true
   # RetentionDays controls how many days DEBUG and TRACE log index
   # entries are kept. Entries at INFO and above are kept indefinitely.
   # Default: 7. Set to 0 to disable pruning (keep everything).
@@ -889,7 +934,7 @@ logging:
   content_archive_days: 90
   # ContentArchiveDir is the directory where monthly JSONL archive
   # files are written. Relative paths are resolved from the working
-  # directory. Defaults to {log_dir}/archive when unset.
+  # directory. Defaults to {logging.root}/archive when unset.
   content_archive_dir: ""
 
 #

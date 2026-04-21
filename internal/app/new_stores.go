@@ -50,6 +50,7 @@ func (a *App) initStores(s *newState) error {
 	a.eventBus = eventBus
 
 	a.initMessageInfrastructure(logger)
+	a.initDatasetSinks()
 
 	// --- Loop registry ---
 	// Tracks all persistent background loops (metacognitive, pollers,
