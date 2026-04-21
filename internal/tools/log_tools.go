@@ -294,7 +294,7 @@ func zeroResultPatternHint(params logging.QueryParams, returned int) string {
 		return ""
 	}
 	if params.SessionID != "" || params.ConversationID != "" || params.RequestID != "" ||
-		params.Tool != "" || params.Model != "" ||
+		params.Subsystem != "" || params.Tool != "" || params.Model != "" ||
 		params.LoopID != "" || params.LoopName != "" {
 		// Caller already combined pattern with an attribute filter, so
 		// the empty result is legitimately empty — do not second-guess.

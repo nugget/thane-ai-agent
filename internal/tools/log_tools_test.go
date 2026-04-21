@@ -308,6 +308,23 @@ func TestLogsQuery_ZeroResultPatternHint(t *testing.T) {
 		}
 	})
 
+	t.Run("pattern with subsystem filter also omits hint", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"pattern":   "does-not-match",
+			"subsystem": "loop",
+			"since":     "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"returned":0`) {
+			t.Fatalf("expected returned:0, got: %s", result)
+		}
+		if strings.Contains(result, `"hint"`) {
+			t.Errorf("hint should not appear when subsystem is already filtered, got: %s", result)
+		}
+	})
+
 	t.Run("non-empty result has no hint", func(t *testing.T) {
 		result, err := tool.Handler(nil, map[string]any{
 			"pattern": "loop started",
