@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -69,15 +70,6 @@ type BrowseResult struct {
 type ValueCount struct {
 	Value string `json:"value"`
 	Count int    `json:"count"`
-}
-
-// SearchQuery filters document search results.
-type SearchQuery struct {
-	Root       string
-	PathPrefix string
-	Query      string
-	Tags       []string
-	Limit      int
 }
 
 // Store indexes managed markdown roots into the primary Thane SQLite DB.
@@ -372,7 +364,9 @@ func parseRef(ref string) (root string, relPath string, err error) {
 		return "", "", fmt.Errorf("invalid ref %q; expected root:path.md", ref)
 	}
 	root = strings.TrimSuffix(strings.TrimSpace(parts[0]), ":")
-	relPath = filepath.ToSlash(strings.TrimPrefix(filepath.Clean(strings.TrimSpace(parts[1])), "./"))
+	relPath = strings.TrimSpace(parts[1])
+	relPath = strings.ReplaceAll(relPath, "\\", "/")
+	relPath = strings.TrimPrefix(path.Clean(strings.TrimPrefix(relPath, "./")), "./")
 	if relPath == "" || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
 		return "", "", fmt.Errorf("invalid ref %q; path escapes root", ref)
 	}
