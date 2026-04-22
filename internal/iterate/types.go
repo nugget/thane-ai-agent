@@ -27,12 +27,12 @@ type IterationRecord struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	CacheReadInputTokens       int
-	ToolCallIDs              []string
-	ToolsOffered             []string
-	StartedAt                time.Time
-	DurationMs               int64
-	HasToolCalls             bool
-	BreakReason              string
+	ToolCallIDs                []string
+	ToolsOffered               []string
+	StartedAt                  time.Time
+	DurationMs                 int64
+	HasToolCalls               bool
+	BreakReason                string
 }
 
 // Result is the outcome of an [Engine.Run] execution.

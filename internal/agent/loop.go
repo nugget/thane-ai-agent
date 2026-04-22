@@ -826,6 +826,11 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 	return result
 }
 
+// promptSectionCacheTTL maps a system-prompt section name to its
+// Anthropic cache TTL. See docs/anthropic-caching.md for the policy,
+// the decision tree for adding new sections, and why volatile
+// sections must return "" rather than a short TTL (they'd churn the
+// cache instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
 	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":

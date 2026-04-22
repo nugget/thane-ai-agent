@@ -495,12 +495,12 @@ func TestComputeDetailedCostForIdentityWithTTL_ChargesFiveMinuteAndOneHour(t *te
 	// Opus pricing: input $15/MTok, output $75/MTok.
 	// 5m write multiplier: 1.25×. 1h: 2.0×. Read: 0.1×.
 	got := ComputeDetailedCostForIdentityWithTTL(identity,
-		1_000_000,   // uncached input
-		2_000_000,   // total cache writes (5m + 1h attributed)
-		1_000_000,   // 5m bucket
-		1_000_000,   // 1h bucket
-		1_000_000,   // cache reads
-		100_000,     // output
+		1_000_000, // uncached input
+		2_000_000, // total cache writes (5m + 1h attributed)
+		1_000_000, // 5m bucket
+		1_000_000, // 1h bucket
+		1_000_000, // cache reads
+		100_000,   // output
 		pricing,
 	)
 	want := 15.0 /* uncached input */ +
@@ -528,7 +528,7 @@ func TestComputeDetailedCostForIdentityWithTTL_UnattributedFallsBackTo5m(t *test
 		0,         // no uncached input
 		1_000_000, // total writes
 		0, 0,      // no attribution
-		0, 0,      // no reads, no output
+		0, 0, // no reads, no output
 		pricing,
 	)
 	want := 15.0 * 1.25

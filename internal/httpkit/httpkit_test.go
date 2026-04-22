@@ -474,11 +474,10 @@ func TestRetryTransport_NoRetryWithoutGetBody(t *testing.T) {
 // After the list is exhausted it returns 200. Used to exercise
 // status-based retry behavior.
 type statusRoundTripper struct {
-	statuses    []int
-	calls       int
-	retryAfter  string // if set, included on the first response
-	bodyReadCt  *int   // if non-nil, increments on each body read
-	recordCalls bool
+	statuses   []int
+	calls      int
+	retryAfter string // if set, included on the first response
+	bodyReadCt *int   // if non-nil, increments on each body read
 }
 
 func (s *statusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {

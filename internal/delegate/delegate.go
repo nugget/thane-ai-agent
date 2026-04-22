@@ -1216,30 +1216,30 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 // so recordCompletion and archiveSession inherit trace fields (request_id,
 // session_id, conversation_id, subsystem, delegate_id, profile).
 type completionRecord struct {
-	log              *slog.Logger
-	delegateID       string
-	conversationID   string
-	archiveSessionID string
-	task             string
-	guidance         string
-	profileName      string
-	model            string
-	totalIter        int
-	maxIter          int
-	totalInput          int
-	totalOutput         int
-	totalCacheCreate    int
-	totalCacheCreate5m  int
-	totalCacheCreate1h  int
-	totalCacheRead      int
-	exhausted        bool
-	exhaustReason    string
-	startTime        time.Time
-	messages         []llm.Message
-	resultContent    string
-	errMsg           string
-	toolCalls        []ToolCallOutcome
-	iterations       []iterate.IterationRecord
+	log                *slog.Logger
+	delegateID         string
+	conversationID     string
+	archiveSessionID   string
+	task               string
+	guidance           string
+	profileName        string
+	model              string
+	totalIter          int
+	maxIter            int
+	totalInput         int
+	totalOutput        int
+	totalCacheCreate   int
+	totalCacheCreate5m int
+	totalCacheCreate1h int
+	totalCacheRead     int
+	exhausted          bool
+	exhaustReason      string
+	startTime          time.Time
+	messages           []llm.Message
+	resultContent      string
+	errMsg             string
+	toolCalls          []ToolCallOutcome
+	iterations         []iterate.IterationRecord
 }
 
 // retainContent captures request-level content for a delegate execution.
