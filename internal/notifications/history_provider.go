@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // HistoryProvider injects a compact JSON summary of recent
@@ -96,7 +96,7 @@ func (p *HistoryProvider) GetContext(_ context.Context, _ string) (string, error
 	summaries := make([]historySummary, len(records))
 	for i, r := range records {
 		s := historySummary{
-			Sent:      awareness.FormatDeltaOnly(r.CreatedAt, now),
+			Sent:      promptfmt.FormatDeltaOnly(r.CreatedAt, now),
 			Channel:   r.Channel,
 			Recipient: r.Recipient,
 			Title:     r.Title,

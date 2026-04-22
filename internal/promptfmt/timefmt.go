@@ -1,4 +1,4 @@
-package awareness
+package promptfmt
 
 import (
 	"fmt"

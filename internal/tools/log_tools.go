@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // SetLogIndexDB adds the logs_query tool to the registry so the agent
@@ -186,7 +186,7 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 
 	for _, e := range entries {
 		je := jsonEntry{
-			Timestamp:      awareness.FormatDeltaOnly(e.Timestamp, now),
+			Timestamp:      promptfmt.FormatDeltaOnly(e.Timestamp, now),
 			Level:          e.Level,
 			Msg:            e.Msg,
 			RequestID:      e.RequestID,

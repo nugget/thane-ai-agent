@@ -1,4 +1,4 @@
-package awareness
+package agent
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // LoopSnapshot is a subset of loop.Status relevant to channel overview.
@@ -130,7 +132,7 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 		e := channelEntry{
 			Channel: subsystem,
 			State:   l.State,
-			LoopID:  shortID(l.ID),
+			LoopID:  promptfmt.ShortIDPrefix(l.ID),
 		}
 
 		// Skip parent loops (no per-conversation identity).
@@ -187,7 +189,7 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 
 		// Exact-second delta per issue #458.
 		if !l.LastWakeAt.IsZero() {
-			e.LastActivity = FormatDeltaOnly(l.LastWakeAt, now)
+			e.LastActivity = promptfmt.FormatDeltaOnly(l.LastWakeAt, now)
 		}
 
 		entries = append(entries, e)
@@ -204,16 +206,6 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 	}
 
 	return "### Channel Overview\n\n" + string(data) + "\n", nil
-}
-
-// shortID returns the first 8 runes of an ID for compact display.
-// Uses rune-aware truncation per CLAUDE.md guidance.
-func shortID(id string) string {
-	runes := []rune(id)
-	if len(runes) > 8 {
-		return string(runes[:8])
-	}
-	return id
 }
 
 // cleanLoopName strips the "owu/" prefix from OWU loop names to get

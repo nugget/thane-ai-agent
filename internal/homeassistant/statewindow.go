@@ -1,4 +1,4 @@
-package awareness
+package homeassistant
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // StateWindowEntry records a single state transition observed from the Home
@@ -121,7 +123,7 @@ func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, e
 			Entity: e.EntityID,
 			From:   e.OldState,
 			To:     e.NewState,
-			Ago:    FormatDeltaOnly(e.Timestamp, now),
+			Ago:    promptfmt.FormatDeltaOnly(e.Timestamp, now),
 		})
 	}
 

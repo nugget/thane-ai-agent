@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 const (
@@ -69,14 +70,14 @@ func mergeHistoryIntoEntityContext(base string, summaries []map[string]any, trun
 		if truncated {
 			payload["history_truncated"] = true
 		}
-		return marshalCompact(payload)
+		return promptfmt.MarshalCompact(payload)
 	}
 
 	fallback := map[string]any{"history": summaries}
 	if truncated {
 		fallback["history_truncated"] = true
 	}
-	return base + "\n" + marshalCompact(fallback)
+	return base + "\n" + promptfmt.MarshalCompact(fallback)
 }
 
 func normalizeHistoryOffsets(offsets []int) ([]int, bool) {
@@ -264,7 +265,7 @@ func formatSignedFloat(value float64, places int) string {
 
 func historyLookbackDelta(offsetSeconds int) string {
 	base := time.Unix(0, 0).UTC()
-	return FormatDeltaOnly(base.Add(-time.Duration(offsetSeconds)*time.Second), base)
+	return promptfmt.FormatDeltaOnly(base.Add(-time.Duration(offsetSeconds)*time.Second), base)
 }
 
 func historyPrecision(current *homeassistant.State) int {

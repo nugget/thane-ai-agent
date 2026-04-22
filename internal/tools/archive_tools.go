@@ -9,8 +9,8 @@ import (
 
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.
@@ -170,7 +170,7 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 				}
 				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
 					title,
-					awareness.FormatDelta(s.StartedAt, now),
+					promptfmt.FormatDelta(s.StartedAt, now),
 					s.MessageCount,
 					endInfo,
 				))
@@ -304,7 +304,7 @@ func formatSearchResults(results []memory.SearchResult) string {
 
 		// The match itself (highlighted)
 		sb.WriteString(fmt.Sprintf(">>> [%s] %s: %s\n",
-			awareness.FormatDeltaOnly(r.Match.Timestamp, now),
+			promptfmt.FormatDeltaOnly(r.Match.Timestamp, now),
 			r.Match.Role,
 			r.Match.Content,
 		))
@@ -322,7 +322,7 @@ func formatSearchResults(results []memory.SearchResult) string {
 
 func formatArchiveMessage(m memory.Message, now time.Time) string {
 	return fmt.Sprintf("    [%s] %s: %s\n",
-		awareness.FormatDeltaOnly(m.Timestamp, now),
+		promptfmt.FormatDeltaOnly(m.Timestamp, now),
 		m.Role,
 		truncate(m.Content, 500),
 	)

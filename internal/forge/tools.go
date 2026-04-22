@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // Tools holds forge tool dependencies. Each Handle* method takes the
@@ -412,8 +412,8 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 		Comments:  issue.CommentCount,
 		Labels:    issue.Labels,
 		Assignees: issue.Assignees,
-		Created:   awareness.FormatDeltaOnly(issue.CreatedAt, now),
-		Updated:   awareness.FormatDeltaOnly(issue.UpdatedAt, now),
+		Created:   promptfmt.FormatDeltaOnly(issue.CreatedAt, now),
+		Updated:   promptfmt.FormatDeltaOnly(issue.UpdatedAt, now),
 		URL:       issue.URL,
 	}
 
@@ -591,8 +591,8 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 		Assignees:          pr.Assignees,
 		RequestedReviewers: pr.RequestedReviewers,
 		Mergeable:          pr.Mergeable,
-		Created:            awareness.FormatDeltaOnly(pr.CreatedAt, now),
-		Updated:            awareness.FormatDeltaOnly(pr.UpdatedAt, now),
+		Created:            promptfmt.FormatDeltaOnly(pr.CreatedAt, now),
+		Updated:            promptfmt.FormatDeltaOnly(pr.UpdatedAt, now),
 		URL:                pr.URL,
 	}
 
@@ -741,7 +741,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 			SHA:     c.SHA,
 			Message: msg,
 			Author:  c.Author,
-			Date:    awareness.FormatDeltaOnly(c.Date, now),
+			Date:    promptfmt.FormatDeltaOnly(c.Date, now),
 		})
 	}
 
@@ -784,7 +784,7 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 			Body:   r.Body,
 		}
 		if !r.SubmittedAt.IsZero() {
-			entry.Date = awareness.FormatDeltaOnly(r.SubmittedAt, now)
+			entry.Date = promptfmt.FormatDeltaOnly(r.SubmittedAt, now)
 		}
 		for _, c := range r.InlineComments {
 			entry.InlineComments = append(entry.InlineComments, prReviewInlineComment{
