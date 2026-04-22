@@ -9,8 +9,8 @@ import (
 
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.

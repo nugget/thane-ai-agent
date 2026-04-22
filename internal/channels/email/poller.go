@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 const (

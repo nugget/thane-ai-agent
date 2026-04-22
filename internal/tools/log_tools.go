@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // SetLogIndexDB adds the logs_query tool to the registry so the agent
