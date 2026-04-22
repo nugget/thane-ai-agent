@@ -469,3 +469,164 @@ func TestRetryTransport_NoRetryWithoutGetBody(t *testing.T) {
 		t.Fatalf("expected 1 call (no retry), got %d", ft.calls)
 	}
 }
+
+// statusRoundTripper returns the given statuses in order across calls.
+// After the list is exhausted it returns 200. Used to exercise
+// status-based retry behavior.
+type statusRoundTripper struct {
+	statuses    []int
+	calls       int
+	retryAfter  string // if set, included on the first response
+	bodyReadCt  *int   // if non-nil, increments on each body read
+	recordCalls bool
+}
+
+func (s *statusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	idx := s.calls
+	s.calls++
+	status := http.StatusOK
+	if idx < len(s.statuses) {
+		status = s.statuses[idx]
+	}
+
+	body := io.NopCloser(strings.NewReader("payload"))
+	if s.bodyReadCt != nil {
+		body = &countingReadCloser{r: strings.NewReader("payload"), closed: s.bodyReadCt}
+	}
+
+	resp := &http.Response{
+		StatusCode: status,
+		Body:       body,
+		Header:     make(http.Header),
+	}
+	if idx == 0 && s.retryAfter != "" {
+		resp.Header.Set("Retry-After", s.retryAfter)
+	}
+	return resp, nil
+}
+
+type countingReadCloser struct {
+	r      io.Reader
+	closed *int
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) { return c.r.Read(p) }
+func (c *countingReadCloser) Close() error {
+	*c.closed++
+	return nil
+}
+
+func TestRetryTransport_RetriesOn429ThenSucceeds(t *testing.T) {
+	rt := &retryTransport{
+		base:          &statusRoundTripper{statuses: []int{http.StatusTooManyRequests}},
+		count:         2,
+		delay:         10 * time.Millisecond,
+		retryStatuses: map[int]bool{http.StatusTooManyRequests: true},
+	}
+
+	req, _ := http.NewRequest("POST", "http://example.com", strings.NewReader("body"))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("body")), nil }
+
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if calls := rt.base.(*statusRoundTripper).calls; calls != 2 {
+		t.Errorf("expected 2 calls (1 throttle + 1 success), got %d", calls)
+	}
+}
+
+func TestRetryTransport_RetriesOn5xxThenSucceeds(t *testing.T) {
+	rt := &retryTransport{
+		base: &statusRoundTripper{
+			statuses: []int{http.StatusBadGateway, http.StatusServiceUnavailable},
+		},
+		count: 3,
+		delay: 10 * time.Millisecond,
+		retryStatuses: map[int]bool{
+			http.StatusBadGateway:         true,
+			http.StatusServiceUnavailable: true,
+		},
+	}
+
+	req, _ := http.NewRequest("POST", "http://example.com", strings.NewReader("body"))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("body")), nil }
+
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestRetryTransport_DoesNotRetryUnlistedStatus(t *testing.T) {
+	rt := &retryTransport{
+		base:          &statusRoundTripper{statuses: []int{http.StatusBadRequest}},
+		count:         2,
+		delay:         10 * time.Millisecond,
+		retryStatuses: map[int]bool{http.StatusTooManyRequests: true},
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (no retry for non-listed status)", resp.StatusCode)
+	}
+	if calls := rt.base.(*statusRoundTripper).calls; calls != 1 {
+		t.Errorf("expected 1 call, got %d", calls)
+	}
+}
+
+func TestRetryTransport_StatusRetryClosesPriorBody(t *testing.T) {
+	closes := 0
+	rt := &retryTransport{
+		base: &statusRoundTripper{
+			statuses:   []int{http.StatusTooManyRequests},
+			bodyReadCt: &closes,
+		},
+		count:         2,
+		delay:         1 * time.Millisecond,
+		retryStatuses: map[int]bool{http.StatusTooManyRequests: true},
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	if _, err := rt.RoundTrip(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if closes < 1 {
+		t.Errorf("prior response body was never closed (close count = %d)", closes)
+	}
+}
+
+func TestRetryTransport_HonorsRetryAfterSeconds(t *testing.T) {
+	rt := &retryTransport{
+		base: &statusRoundTripper{
+			statuses:   []int{http.StatusTooManyRequests},
+			retryAfter: "0", // zero-second Retry-After, keeps the test fast
+		},
+		count:         2,
+		delay:         1 * time.Hour, // would make the test hang if not overridden
+		retryStatuses: map[int]bool{http.StatusTooManyRequests: true},
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	done := make(chan struct{})
+	go func() {
+		_, _ = rt.RoundTrip(req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("RoundTrip did not honor Retry-After: 0 (waited on configured 1h delay instead)")
+	}
+}

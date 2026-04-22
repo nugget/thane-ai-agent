@@ -40,14 +40,26 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 	t := httpkit.NewTransport()
 	t.ResponseHeaderTimeout = 120 * time.Second
 
+	providerLogger := logger.With("provider", "anthropic")
 	return &AnthropicClient{
 		apiKey: apiKey,
-		logger: logger.With("provider", "anthropic"),
+		logger: providerLogger,
 		httpClient: httpkit.NewClient(
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
 			httpkit.WithTimeout(0),
 			httpkit.WithTransport(t),
+			// Retry transient connection failures (matches the Ollama
+			// and LMStudio clients) plus transient Anthropic-side HTTP
+			// statuses: 429 for rate limiting, 500/502/503/504 for
+			// upstream hiccups. Streaming is safe — retryTransport
+			// only retries while the response body is still unread;
+			// once RoundTrip returns the body to the caller, a
+			// mid-stream failure propagates to the agent loop as a
+			// normal error.
+			httpkit.WithRetry(3, 2*time.Second),
+			httpkit.WithRetryOnStatus(429, 500, 502, 503, 504),
+			httpkit.WithLogger(providerLogger),
 		),
 	}
 }
