@@ -74,6 +74,30 @@ type ChatResponse struct {
 	EvalDuration  time.Duration
 }
 
+// CacheHitRate returns the fraction of cache-eligible input tokens on
+// this response that were served from cache, in [0, 1]. Zero when
+// there were no cache-eligible tokens at all. Matches the
+// Anthropic-recommended observability metric:
+// cache_read / (cache_read + cache_creation).
+//
+// Exposed on ChatResponse (and as [CacheHitRate] for bare counts) so
+// providers and loggers can surface the metric without importing the
+// usage package, which would cycle.
+func (r *ChatResponse) CacheHitRate() float64 {
+	return CacheHitRate(r.CacheReadInputTokens, r.CacheCreationInputTokens)
+}
+
+// CacheHitRate returns the cache-read share for a single interaction's
+// token counts, in [0, 1]. Zero when both counts are zero so callers
+// never have to guard against division by zero.
+func CacheHitRate(cacheReadInputTokens, cacheCreationInputTokens int) float64 {
+	denom := cacheReadInputTokens + cacheCreationInputTokens
+	if denom <= 0 {
+		return 0
+	}
+	return float64(cacheReadInputTokens) / float64(denom)
+}
+
 // StreamEvent represents a single event in a streaming response.
 // Consumers switch on Kind to determine what data is available.
 type StreamEvent struct {

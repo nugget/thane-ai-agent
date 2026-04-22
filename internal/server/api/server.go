@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -262,6 +263,12 @@ type SessionStatsSnapshot struct {
 	TotalOutputTokens             int64                    `json:"total_output_tokens"`
 	TotalCacheCreationInputTokens int64                    `json:"total_cache_creation_input_tokens"`
 	TotalCacheReadInputTokens     int64                    `json:"total_cache_read_input_tokens"`
+	// CacheHitRate is cache_read / (cache_read + cache_creation) over
+	// the session so far, expressed as a fraction in [0, 1]. Exposed
+	// to the dashboard so operators can see at a glance whether
+	// prompt caching is actually saving tokens (cold start = near
+	// zero, warm session = high).
+	CacheHitRate                  float64                  `json:"cache_hit_rate"`
 	TotalRequests                 int64                    `json:"total_requests"`
 	EstimatedCostUSD              float64                  `json:"estimated_cost_usd"`
 	ReportedBalance               float64                  `json:"reported_balance_usd,omitempty"`
@@ -284,6 +291,7 @@ func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 		TotalOutputTokens:             s.TotalOutputTokens,
 		TotalCacheCreationInputTokens: s.TotalCacheCreationInputTokens,
 		TotalCacheReadInputTokens:     s.TotalCacheReadInputTokens,
+		CacheHitRate:                  llm.CacheHitRate(int(s.TotalCacheReadInputTokens), int(s.TotalCacheCreationInputTokens)),
 		TotalRequests:                 s.TotalRequests,
 		EstimatedCostUSD:              s.EstimatedCostUSD,
 		ReportedBalance:               s.ReportedBalance,

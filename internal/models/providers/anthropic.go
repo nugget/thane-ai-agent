@@ -289,6 +289,7 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"output_tokens", result.OutputTokens,
 		"cache_creation_input_tokens", result.CacheCreationInputTokens,
 		"cache_read_input_tokens", result.CacheReadInputTokens,
+		"cache_hit_rate", result.CacheHitRate(),
 		"tool_calls", len(result.Message.ToolCalls),
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
@@ -421,6 +422,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"output_tokens", resp.OutputTokens,
 		"cache_creation_input_tokens", resp.CacheCreationInputTokens,
 		"cache_read_input_tokens", resp.CacheReadInputTokens,
+		"cache_hit_rate", resp.CacheHitRate(),
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
 	)

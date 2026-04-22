@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
@@ -61,6 +62,18 @@ type Summary struct {
 	TotalCacheCreationInputTokens int64   `json:"total_cache_creation_input_tokens"`
 	TotalCacheReadInputTokens     int64   `json:"total_cache_read_input_tokens"`
 	TotalCostUSD                  float64 `json:"total_cost_usd"`
+}
+
+// CacheHitRate returns the fraction of cache-eligible input tokens that
+// were served from cache in this summary, as a value in [0, 1]. Zero
+// when there were no cache-eligible tokens at all (empty window, or
+// caching disabled). Useful for spotting cold-session spikes and
+// validating that prompt-caching policy is actually working.
+//
+// Formula matches the Anthropic-recommended observability metric:
+// cache_read / (cache_read + cache_creation).
+func (s Summary) CacheHitRate() float64 {
+	return llm.CacheHitRate(int(s.TotalCacheReadInputTokens), int(s.TotalCacheCreationInputTokens))
 }
 
 // GroupedSummary pairs a grouping key (model name, role, task name)
