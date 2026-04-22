@@ -183,9 +183,6 @@ func (a *App) initLogging(augmentedDirs []string) error {
 	if depLevel, depFormat := cfg.DeprecatedFieldsUsed(); depLevel || depFormat {
 		logger.Warn("log_level/log_format are deprecated; use logging.level/logging.format instead")
 	}
-	if cfg.DeprecatedLoggingCompressSet() {
-		logger.Warn("logging.compress is deprecated and has no effect; structured datasets are not gzipped at write time")
-	}
 
 	return nil
 }

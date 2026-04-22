@@ -137,8 +137,6 @@ func ExampleConfig() *Config {
 			Dir:    &logDir,
 			Level:  "info",
 			Format: "json",
-			// Compress is deprecated and omitted intentionally; see
-			// LoggingConfig.Compress doc.
 			Stdout: LoggingStdoutConfig{Enabled: &stdoutEnabled},
 			Datasets: LoggingDatasetsConfig{
 				Events:    LoggingDatasetConfig{Enabled: &eventsEnabled},

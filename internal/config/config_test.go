@@ -576,9 +576,6 @@ func TestApplyDefaults_Logging(t *testing.T) {
 	if got := cfg.Logging.StdoutFormatValue(); got != "json" {
 		t.Errorf("Logging.StdoutFormatValue() = %q, want %q", got, "json")
 	}
-	if !cfg.Logging.CompressEnabled() {
-		t.Error("Logging.CompressEnabled() = false, want true")
-	}
 	if !cfg.Logging.DatasetEnabled("events") {
 		t.Error("Logging.DatasetEnabled(events) = false, want true")
 	}
@@ -741,26 +738,6 @@ func TestValidate_DelegateZeroKeepsDefaults(t *testing.T) {
 	}
 }
 
-func TestLoggingConfig_CompressEnabled(t *testing.T) {
-	tests := []struct {
-		name     string
-		compress *bool
-		want     bool
-	}{
-		{"nil defaults to true", nil, true},
-		{"explicit true", boolPtr(true), true},
-		{"explicit false", boolPtr(false), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lc := LoggingConfig{Compress: tt.compress}
-			if got := lc.CompressEnabled(); got != tt.want {
-				t.Errorf("CompressEnabled() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLoggingConfig_RootPath(t *testing.T) {
 	tests := []struct {
 		name string
@@ -855,7 +832,5 @@ func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
 		t.Error("expected format=false on fresh config, got true")
 	}
 }
-
-func boolPtr(b bool) *bool { return &b }
 
 func strPtr(s string) *string { return &s }
