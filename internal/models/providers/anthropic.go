@@ -162,6 +162,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	anthropicMsgs, systemPrompt := convertToAnthropic(messages)
 	anthropicTools := convertToolsToAnthropic(tools)
 	systemPayload := anthropicSystemPayload(messages, systemPrompt)
+
+	// Enforce Anthropic cache-breakpoint guards (≤4 total, per-model
+	// minimum cached-prefix length) on the assembled blocks+tools.
+	// Runs below the model minimum and excess breakpoints are silently
+	// ignored by the API, so we drop them here and warn instead.
+	if blocks, ok := systemPayload.([]anthropicContent); ok {
+		applyCacheBreakpointGuards(blocks, anthropicTools, model, c.logger)
+	}
 	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
 	c.logger.Debug("preparing request",
@@ -445,6 +453,131 @@ func anthropicSystemBlocks(sections []llm.PromptSection) []anthropicContent {
 		}
 	}
 	return blocks
+}
+
+// maxAnthropicCacheBreakpoints is the Anthropic-enforced per-request
+// limit on cache_control markers across system blocks, tools, and
+// messages. Exceeding it causes the API to reject the request, so
+// [applyCacheBreakpointGuards] silently drops excess breakpoints and
+// warns via slog rather than letting the request fail.
+const maxAnthropicCacheBreakpoints = 4
+
+// estimatedCharsPerToken is the coarse text-to-token ratio Anthropic
+// publishes for English prose. Used to check per-run prefix lengths
+// against the model-specific minimum cacheable tokens.
+const estimatedCharsPerToken = 4
+
+// minCacheablePrefixTokens returns the minimum token count a cached
+// prefix must reach for the Anthropic API to actually cache it. Runs
+// below this threshold are silently processed as uncached, which is
+// indistinguishable from a cache miss in the usage response — hence
+// the guard surfaces them as warnings.
+//
+// Values track the published per-family minimums (Sonnet 1024, Opus
+// 4096, Haiku 4096). Unknown models default to the strictest minimum
+// so we never advertise caching we can't confirm.
+func minCacheablePrefixTokens(model string) int {
+	lower := strings.ToLower(model)
+	switch {
+	case strings.Contains(lower, "opus"):
+		return 4096
+	case strings.Contains(lower, "haiku"):
+		return 4096
+	case strings.Contains(lower, "sonnet"):
+		return 1024
+	default:
+		return 4096
+	}
+}
+
+// applyCacheBreakpointGuards enforces the Anthropic per-request cache
+// breakpoint cap (≤4) and the per-model minimum cached-prefix length
+// across system blocks and the tool cache. Both are silent-failure
+// modes in the raw API: under-minimum runs are processed uncached
+// without any signal, and over-the-cap breakpoint counts cause a
+// request rejection.
+//
+// The guard policy:
+//
+//  1. For each system block that carries a cache_control, compute the
+//     prefix length through that block. If the prefix is below the
+//     model-specific minimum, strip cache_control and warn. The block
+//     itself remains; only the breakpoint is removed.
+//  2. Count surviving system breakpoints plus the one blanket tool
+//     cache (if any). If the total still exceeds 4, drop the tool
+//     cache first — it is an undifferentiated "cache the last tool"
+//     policy, whereas system breakpoints reflect deliberate
+//     per-section TTL choices.
+//  3. If still over the cap, drop trailing system breakpoints (the
+//     earliest runs typically cover the largest stable prefix, so
+//     dropping from the tail minimizes the loss).
+func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, logger *slog.Logger) {
+	minTokens := minCacheablePrefixTokens(model)
+
+	// Step 1: strip under-minimum breakpoints from system blocks.
+	prefixChars := 0
+	for i := range blocks {
+		prefixChars += len(blocks[i].Text)
+		if blocks[i].CacheControl == nil {
+			continue
+		}
+		if prefixChars/estimatedCharsPerToken < minTokens {
+			logger.Warn("dropping under-minimum Anthropic cache breakpoint",
+				"model", model,
+				"block_index", i,
+				"prefix_chars", prefixChars,
+				"prefix_tokens_estimate", prefixChars/estimatedCharsPerToken,
+				"min_tokens", minTokens,
+				"ttl", blocks[i].CacheControl.TTL,
+			)
+			blocks[i].CacheControl = nil
+		}
+	}
+
+	// Step 2: count surviving breakpoints.
+	systemBreakpoints := 0
+	for i := range blocks {
+		if blocks[i].CacheControl != nil {
+			systemBreakpoints++
+		}
+	}
+	toolBreakpoint := 0
+	if n := len(tools); n > 0 && tools[n-1].CacheControl != nil {
+		toolBreakpoint = 1
+	}
+
+	total := systemBreakpoints + toolBreakpoint
+	if total <= maxAnthropicCacheBreakpoints {
+		return
+	}
+
+	// Step 3: drop the tool breakpoint first.
+	if toolBreakpoint > 0 {
+		logger.Warn("dropping tool cache breakpoint to fit Anthropic 4-breakpoint cap",
+			"system_breakpoints", systemBreakpoints,
+			"total_requested", total,
+			"max", maxAnthropicCacheBreakpoints,
+		)
+		tools[len(tools)-1].CacheControl = nil
+		total--
+		if total <= maxAnthropicCacheBreakpoints {
+			return
+		}
+	}
+
+	// Step 4: drop trailing system breakpoints until we fit.
+	excess := total - maxAnthropicCacheBreakpoints
+	for i := len(blocks) - 1; i >= 0 && excess > 0; i-- {
+		if blocks[i].CacheControl == nil {
+			continue
+		}
+		logger.Warn("dropping trailing system cache breakpoint to fit Anthropic 4-breakpoint cap",
+			"block_index", i,
+			"ttl", blocks[i].CacheControl.TTL,
+		)
+		blocks[i].CacheControl = nil
+		excess--
+	}
 }
 
 type promptCacheRun struct {

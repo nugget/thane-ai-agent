@@ -2,6 +2,7 @@ package providers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -358,6 +359,130 @@ func TestAnthropicPromptCacheControl_SuppressedBySectionCacheBreakpoints(t *test
 	ctrl := anthropicPromptCacheControl("fallback", []anthropicMessage{{Role: "user", Content: "check"}}, nil, explicit)
 	if ctrl != nil {
 		t.Fatalf("request-level cache_control = %+v, want nil when explicit system block caching is present", ctrl)
+	}
+}
+
+func TestMinCacheablePrefixTokens(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{"claude-sonnet-4-5", 1024},
+		{"claude-sonnet-4-20250514", 1024},
+		{"claude-opus-4-7", 4096},
+		{"claude-haiku-4-5", 4096},
+		{"unknown-model", 4096},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := minCacheablePrefixTokens(tt.model); got != tt.want {
+				t.Errorf("minCacheablePrefixTokens(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+// textBlock is a tiny helper for readable cache-guard test cases.
+func textBlock(text string, ttl string) anthropicContent {
+	b := anthropicContent{Type: "text", Text: text}
+	if ttl != "" {
+		b.CacheControl = &anthropicCacheControl{Type: "ephemeral", TTL: ttl}
+	}
+	return b
+}
+
+func TestApplyCacheBreakpointGuards_UnderMinimumRunsAreDropped(t *testing.T) {
+	// Sonnet minimum is 1024 tokens (≈4096 chars). Build two blocks:
+	// the first is way under; the second pushes the prefix over.
+	blocks := []anthropicContent{
+		textBlock(strings.Repeat("a", 400), "1h"),  // prefix ≈ 100 tokens — below min
+		textBlock(strings.Repeat("b", 4000), "1h"), // prefix ≈ 1100 tokens — above min
+	}
+	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", slog.Default())
+
+	if blocks[0].CacheControl != nil {
+		t.Error("under-minimum run should have cache_control stripped")
+	}
+	if blocks[1].CacheControl == nil {
+		t.Error("run above minimum should keep cache_control")
+	}
+}
+
+func TestApplyCacheBreakpointGuards_CapsAtFourBreakpointsDroppingTool(t *testing.T) {
+	// Four system breakpoints each above minimum, plus a tool cache.
+	// Total would be 5; the tool cache should drop.
+	body := strings.Repeat("x", 4100)
+	blocks := []anthropicContent{
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+	}
+	tools := []anthropicTool{
+		{Name: "t", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+	}
+
+	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", slog.Default())
+
+	if tools[0].CacheControl != nil {
+		t.Error("tool cache should be dropped when system fills the 4-breakpoint budget")
+	}
+	surviving := 0
+	for _, b := range blocks {
+		if b.CacheControl != nil {
+			surviving++
+		}
+	}
+	if surviving != 4 {
+		t.Errorf("surviving system breakpoints = %d, want 4", surviving)
+	}
+}
+
+func TestApplyCacheBreakpointGuards_DropsTrailingSystemWhenAboveCap(t *testing.T) {
+	// Five system breakpoints all above minimum and no tools. The
+	// trailing breakpoint should drop to fit the cap.
+	body := strings.Repeat("x", 4100)
+	blocks := []anthropicContent{
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+		textBlock(body, "1h"),
+	}
+
+	applyCacheBreakpointGuards(blocks, nil, "claude-sonnet-4-5", slog.Default())
+
+	if blocks[4].CacheControl != nil {
+		t.Error("trailing system breakpoint should drop when budget exhausted")
+	}
+	for i := 0; i < 4; i++ {
+		if blocks[i].CacheControl == nil {
+			t.Errorf("leading system breakpoint %d should survive", i)
+		}
+	}
+}
+
+func TestApplyCacheBreakpointGuards_AllowsTypicalThreeBreakpointConfig(t *testing.T) {
+	// Two system runs + one tool is the current policy shape — well
+	// under the cap, all above minimum. The guard should be a no-op.
+	body := strings.Repeat("x", 5000)
+	blocks := []anthropicContent{
+		textBlock(body, "1h"),
+		textBlock(body, "5m"),
+	}
+	tools := []anthropicTool{
+		{Name: "t", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+	}
+
+	applyCacheBreakpointGuards(blocks, tools, "claude-sonnet-4-5", slog.Default())
+
+	for i, b := range blocks {
+		if b.CacheControl == nil {
+			t.Errorf("system block %d cache_control should remain", i)
+		}
+	}
+	if tools[0].CacheControl == nil {
+		t.Error("tool cache_control should remain when under the 4-breakpoint cap")
 	}
 }
 
