@@ -141,8 +141,20 @@ func (a *App) initDelegation(s *newState) error {
 		// Warn about tools referenced in config but not registered.
 		// This catches typos, missing MCP servers, and tools gated by config
 		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
-		// Tools in s.deferredTools are registered by StartWorkers and are
-		// expected to be absent during New().
+		//
+		// Tools in s.deferredTools are legitimately absent at snapshot
+		// time. Two reasons:
+		//
+		//   1. Registered by a deferWorker closure that runs after New()
+		//      completes (e.g., Signal tools, which require the signal-cli
+		//      client to start).
+		//   2. Registered in initServers, which must run after this phase
+		//      because it depends on delegation outputs (capSurface,
+		//      notifCallbackDispatcher) — e.g., mqtt_wake_* tools.
+		//
+		// Both classes are tracked in new_channels.go so the warning
+		// suppressed here corresponds to a known late-registration path,
+		// not a missing tool.
 		for tag, tagCfg := range resolvedCapTags {
 			for _, toolName := range tagCfg.Tools {
 				if a.loop.Tools().Get(toolName) == nil && !s.deferredTools[toolName] {

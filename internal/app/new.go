@@ -41,9 +41,16 @@ import (
 //   - [initStores]     — data stores, HA client, connwatch, router, scheduler
 //   - [initAgentLoop]  — agent loop, path resolver, context injection
 //   - [initChannels]   — tools, email, forge, MCP, Signal, facts, contacts
-//   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
+//   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
+//
+// [initAwareness] runs before [initDelegation] so that the watchlist
+// tools registered via SetWatchlistStore land in the registry before
+// resolveCapabilityTags snapshots tag membership. Reversing this was
+// the root cause of issue #733: tools with baked-in default tags were
+// silently absent from their owning capability because the snapshot
+// had already been taken.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]models.ResourceHealthClient, modelRuntime *models.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
@@ -83,10 +90,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if err := a.initChannels(s); err != nil {
 		return nil, err
 	}
-	if err := a.initDelegation(s); err != nil {
+	if err := a.initAwareness(s); err != nil {
 		return nil, err
 	}
-	if err := a.initAwareness(s); err != nil {
+	if err := a.initDelegation(s); err != nil {
 		return nil, err
 	}
 	if err := a.initServers(s); err != nil {
