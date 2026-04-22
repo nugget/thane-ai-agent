@@ -72,7 +72,7 @@ func (a *App) initLogging(augmentedDirs []string) error {
 			a.indexDB.Close()
 			a.indexDB = nil
 		} else {
-			indexHandler := logging.NewIndexHandler(handler, a.indexDB, nil)
+			indexHandler := logging.NewIndexHandler(handler, a.indexDB)
 			a.onCloseErr("index-db", a.indexDB.Close)
 			handler = indexHandler
 			a.indexHandler = indexHandler
