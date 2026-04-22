@@ -15,6 +15,15 @@ func TestFormatNumber(t *testing.T) {
 		{200000, "200,000"},
 		{1234567, "1,234,567"},
 		{1000000000, "1,000,000,000"},
+		// Negative numbers: sign must live outside the grouping so the
+		// comma placement doesn't treat '-' as a digit (would previously
+		// produce "-,100" for -100).
+		{-1, "-1"},
+		{-100, "-100"},
+		{-999, "-999"},
+		{-1000, "-1,000"},
+		{-31200, "-31,200"},
+		{-1234567, "-1,234,567"},
 	}
 
 	for _, tt := range tests {
