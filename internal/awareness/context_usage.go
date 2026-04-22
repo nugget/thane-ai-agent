@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // ContextUsageInfo holds the data needed to render the context usage line
@@ -55,8 +57,8 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	if info.ContextWindow > 0 {
 		pct := float64(info.TokenCount) / float64(info.ContextWindow) * 100
 		parts = append(parts, fmt.Sprintf("%s/%s tokens (%.1f%%)",
-			formatNumber(info.TokenCount),
-			formatNumber(info.ContextWindow),
+			promptfmt.FormatNumber(info.TokenCount),
+			promptfmt.FormatNumber(info.ContextWindow),
 			pct))
 	}
 
@@ -92,10 +94,10 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	// Append IDs line when at least one identifier is available.
 	var ids []string
 	if info.ConversationID != "" {
-		ids = append(ids, "conv:"+truncateID(info.ConversationID))
+		ids = append(ids, "conv:"+promptfmt.ShortIDSuffix(info.ConversationID))
 	}
 	if info.SessionID != "" {
-		ids = append(ids, "session:"+truncateID(info.SessionID))
+		ids = append(ids, "session:"+promptfmt.ShortIDSuffix(info.SessionID))
 	}
 	if info.RequestID != "" {
 		ids = append(ids, "req:"+info.RequestID)
@@ -105,33 +107,4 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	}
 
 	return result
-}
-
-// truncateID returns the last 8 characters of an ID for display.
-// Returns the full ID if shorter than 8 characters.
-func truncateID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[len(id)-8:]
-}
-
-// formatNumber formats an integer with comma separators (e.g., 200000 → "200,000").
-func formatNumber(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var sb strings.Builder
-	remainder := len(s) % 3
-	if remainder > 0 {
-		sb.WriteString(s[:remainder])
-	}
-	for i := remainder; i < len(s); i += 3 {
-		if sb.Len() > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(s[i : i+3])
-	}
-	return sb.String()
 }

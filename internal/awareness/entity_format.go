@@ -1,15 +1,13 @@
 package awareness
 
 import (
-	"encoding/json"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // formatEntityContext returns a context line for an entity, choosing
@@ -58,7 +56,7 @@ func formatDefault(state *homeassistant.State, now time.Time) string {
 		State:       roundState(state.State, deviceClass),
 		Unit:        attrString(state.Attributes, "unit_of_measurement"),
 		DeviceClass: deviceClass,
-		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
 		dc.Name = name
@@ -66,9 +64,9 @@ func formatDefault(state *homeassistant.State, now time.Time) string {
 	// Include last_updated when it meaningfully differs from
 	// last_changed (attribute-only updates vs state changes).
 	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
-		dc.Updated = timefmt.FormatDeltaOnly(state.LastUpdated, now)
+		dc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
 	}
-	return marshalCompact(dc)
+	return promptfmt.MarshalCompact(dc)
 }
 
 // weatherContext is the JSON structure for weather entity context.
@@ -101,7 +99,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		WindSpeed:   roundAttr(state.Attributes["wind_speed"], 1),
 		WindBearing: roundAttr(state.Attributes["wind_bearing"], 0),
 		Pressure:    roundAttr(state.Attributes["pressure"], 0),
-		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 
 	// Extract forecast entries (HA returns []any of map[string]any).
@@ -128,7 +126,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 					dt, err = time.Parse(time.RFC3339, dtStr)
 				}
 				if err == nil {
-					fc.Delta = timefmt.FormatDeltaOnly(dt, now)
+					fc.Delta = promptfmt.FormatDeltaOnly(dt, now)
 				} else {
 					fc.Delta = dtStr
 				}
@@ -137,7 +135,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		}
 	}
 
-	return marshalCompact(wc)
+	return promptfmt.MarshalCompact(wc)
 }
 
 // climateContext is the JSON structure for climate entity context.
@@ -165,9 +163,9 @@ func formatClimate(state *homeassistant.State, now time.Time) string {
 		Humidity:    roundAttr(state.Attributes["current_humidity"], 0),
 		HVACMode:    attrString(state.Attributes, "hvac_mode"),
 		PresetMode:  attrString(state.Attributes, "preset_mode"),
-		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
-	return marshalCompact(cc)
+	return promptfmt.MarshalCompact(cc)
 }
 
 // lightContext is the JSON structure for light entity context.
@@ -187,9 +185,9 @@ func formatLight(state *homeassistant.State, now time.Time) string {
 		Brightness: normalizeBrightness(state.Attributes["brightness"]),
 		ColorTemp:  state.Attributes["color_temp_kelvin"],
 		RGBColor:   state.Attributes["rgb_color"],
-		Since:      timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:      promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
-	return marshalCompact(lc)
+	return promptfmt.MarshalCompact(lc)
 }
 
 // normalizeBrightness converts HA's 0-255 brightness to a 0-100
@@ -242,10 +240,10 @@ func formatPerson(state *homeassistant.State, now time.Time) string {
 	pc := personContext{
 		Entity: state.EntityID,
 		State:  state.State,
-		Since:  timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:  promptfmt.FormatDeltaOnly(state.LastChanged, now),
 		Source: attrString(state.Attributes, "source"),
 	}
-	return marshalCompact(pc)
+	return promptfmt.MarshalCompact(pc)
 }
 
 // sunContext is the JSON structure for the sun.sun entity.
@@ -266,26 +264,26 @@ func formatSun(state *homeassistant.State, now time.Time) string {
 		Entity:    state.EntityID,
 		State:     state.State,
 		Elevation: roundAttr(state.Attributes["elevation"], 1),
-		Since:     timefmt.FormatDeltaOnly(state.LastChanged, now),
+		Since:     promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 
 	// Delta-annotate next rising/setting times.
 	if rising, ok := state.Attributes["next_rising"].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, rising); err == nil {
-			sc.NextRise = timefmt.FormatDeltaOnly(t, now)
+			sc.NextRise = promptfmt.FormatDeltaOnly(t, now)
 		} else if t, err := time.Parse(time.RFC3339, rising); err == nil {
-			sc.NextRise = timefmt.FormatDeltaOnly(t, now)
+			sc.NextRise = promptfmt.FormatDeltaOnly(t, now)
 		}
 	}
 	if setting, ok := state.Attributes["next_setting"].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, setting); err == nil {
-			sc.NextSet = timefmt.FormatDeltaOnly(t, now)
+			sc.NextSet = promptfmt.FormatDeltaOnly(t, now)
 		} else if t, err := time.Parse(time.RFC3339, setting); err == nil {
-			sc.NextSet = timefmt.FormatDeltaOnly(t, now)
+			sc.NextSet = promptfmt.FormatDeltaOnly(t, now)
 		}
 	}
 
-	return marshalCompact(sc)
+	return promptfmt.MarshalCompact(sc)
 }
 
 // PersonPresenceContext is the JSON structure emitted by the
@@ -311,11 +309,11 @@ func FormatPersonPresence(entityID, name, state string, since time.Time, room, r
 		Entity: entityID,
 		Name:   name,
 		State:  displayState,
-		Since:  timefmt.FormatDeltaOnly(since, now),
+		Since:  promptfmt.FormatDeltaOnly(since, now),
 		Room:   room,
 		RoomSr: roomSource,
 	}
-	return marshalCompact(pc)
+	return promptfmt.MarshalCompact(pc)
 }
 
 // roundState rounds a numeric state string to appropriate precision
@@ -367,14 +365,4 @@ func roundAttr(v any, places int) any {
 	default:
 		return v
 	}
-}
-
-// marshalCompact returns compact JSON for a struct, falling back to
-// fmt.Sprintf on marshal error (should never happen with these types).
-func marshalCompact(v any) string {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Sprintf("%v", v)
-	}
-	return string(data)
 }
