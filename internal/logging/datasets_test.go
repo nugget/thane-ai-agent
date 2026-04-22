@@ -201,8 +201,60 @@ func TestDatasetRecordFromOperationalEvent(t *testing.T) {
 	if record.DelegateID != "deleg_123" {
 		t.Errorf("delegate_id = %q, want %q", record.DelegateID, "deleg_123")
 	}
+	// ok=false without an explicit error field is a degraded outcome (WARN),
+	// not a hard failure.
 	if record.Severity != "WARN" {
 		t.Errorf("severity = %q, want %q", record.Severity, "WARN")
+	}
+}
+
+func TestDatasetRecordFromOperationalEvent_ErrorSeverity(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  string
+		data  map[string]any
+		level string
+	}{
+		{
+			name:  "kind contains error",
+			kind:  events.KindLoopError,
+			data:  map[string]any{"loop_id": "loop_a"},
+			level: "ERROR",
+		},
+		{
+			name:  "explicit error field",
+			kind:  events.KindComplete,
+			data:  map[string]any{"delegate_id": "deleg_b", "error": "boom"},
+			level: "ERROR",
+		},
+		{
+			name:  "ok false without error",
+			kind:  events.KindComplete,
+			data:  map[string]any{"delegate_id": "deleg_c", "ok": false},
+			level: "WARN",
+		},
+		{
+			name:  "ok true",
+			kind:  events.KindComplete,
+			data:  map[string]any{"delegate_id": "deleg_d", "ok": true},
+			level: "INFO",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record, ok := DatasetRecordFromOperationalEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceDelegate,
+				Kind:      tt.kind,
+				Data:      tt.data,
+			})
+			if !ok {
+				t.Fatal("DatasetRecordFromOperationalEvent() = false, want true")
+			}
+			if record.Severity != tt.level {
+				t.Errorf("severity = %q, want %q", record.Severity, tt.level)
+			}
+		})
 	}
 }
 

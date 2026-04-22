@@ -213,14 +213,20 @@ func DatasetRecordFromOperationalEvent(event events.Event) (DatasetRecord, bool)
 }
 
 func severityForOperationalEvent(event events.Event) string {
+	// Error-bearing events graduate to ERROR so forensic consumers can
+	// filter them cleanly. A kind containing "error" (e.g. loop_error,
+	// delegate_error) or an explicit non-nil error field both signal a
+	// failure mode, not just a degraded outcome.
 	lowerKind := strings.ToLower(event.Kind)
 	if strings.Contains(lowerKind, "error") {
-		return "WARN"
-	}
-	if ok, exists := event.Data["ok"].(bool); exists && !ok {
-		return "WARN"
+		return "ERROR"
 	}
 	if errValue, exists := event.Data["error"]; exists && errValue != nil {
+		return "ERROR"
+	}
+	// An explicit ok=false without an error field is a degraded outcome
+	// rather than a hard failure (e.g. a tool returning unsuccessful).
+	if ok, exists := event.Data["ok"].(bool); exists && !ok {
 		return "WARN"
 	}
 	return "INFO"
