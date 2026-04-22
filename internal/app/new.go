@@ -52,8 +52,14 @@ import (
 //     and watchlist tools registered in initAwareness — must be in the
 //     registry before finalizeCapabilityTags runs so the snapshot
 //     reflects the complete catalog. The finalizer is deliberately last.
-//   - Tools whose handlers bind during deferWorker execution (Signal)
-//     remain genuinely deferred and are tracked in s.deferredTools.
+//   - Subsystems whose backing runtime starts asynchronously (Signal)
+//     declare their tools up front via tools.Provider and return
+//     tools.ErrUnavailable from the handler until Bind is called. Those
+//     tools DO appear in the snapshot; they are not in s.deferredTools.
+//   - s.deferredTools is a narrow remaining escape hatch for tool
+//     families whose handler is still registered inside a deferWorker
+//     closure (today: macos_calendar_events). New subsystems should use
+//     Provider + declared-but-unavailable instead of adding entries here.
 //   - initDelegation no longer takes a capability-tag snapshot; it
 //     creates the delegate executor without tag state and leaves
 //     alwaysActiveTags / SetTagContextFunc to the finalizer.

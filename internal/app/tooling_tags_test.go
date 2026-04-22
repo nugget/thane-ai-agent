@@ -134,9 +134,12 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 		t.Fatalf("new watchlist store: %v", err)
 	}
 
-	// Before registration: the awareness tag exists but the watchlist
-	// tools are absent from it because they haven't been registered
-	// yet. Record the baseline so we can show the delta.
+	// Precondition: without the provider registered, the three
+	// watchlist tools do not appear under the awareness tag. On an
+	// empty registry, resolveCapabilityTags may not even surface an
+	// "awareness" entry at all; either way the three tool names must
+	// be absent. Record the baseline so the post-registration check
+	// demonstrates a clean delta.
 	before := resolveCapabilityTags(reg, nil)
 	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
 		if slices.Contains(before["awareness"].Tools, name) {

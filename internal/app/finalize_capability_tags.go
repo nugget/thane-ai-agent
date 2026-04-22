@@ -22,10 +22,17 @@ import (
 // earlier phase are present in the registry when the snapshot is
 // taken.
 //
-// Genuinely late registrations (Signal tools bound by a deferWorker
-// after New() returns) remain in s.deferredTools and stay exempted
-// from the validation warning. Those are architecturally different —
-// their handlers bind to a runtime client that starts asynchronously.
+// Subsystems whose backing runtime binds asynchronously (Signal is
+// the canonical example) declare their tools up front via
+// tools.Provider and return tools.ErrUnavailable from the handler
+// until Bind is called. Those tools ARE in the snapshot and do NOT
+// belong in s.deferredTools — the registry sees them from initChannels
+// onwards.
+//
+// s.deferredTools is a narrow remaining exemption for tool families
+// whose handler is still registered inside a deferWorker closure
+// (today: macos_calendar_events). See the doc comment in new.go for
+// the ordering rules.
 func (a *App) finalizeCapabilityTags(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -61,10 +68,11 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// tool.
 	//
 	// Tools in s.deferredTools are registered by a deferWorker closure
-	// that runs after New() completes (e.g., Signal tools, which need
-	// the signal-cli client to start). Their handlers bind at worker
-	// startup, not in any init phase. That's architecturally distinct
-	// from "missing tool" and warrants the exemption.
+	// that runs after New() completes — today only macos_calendar_events.
+	// Provider-migrated subsystems (Signal, watchlist, mqtt_wake) are
+	// declared up front and never appear in deferredTools; their tools
+	// are visible here and only invocation would surface
+	// tools.ErrUnavailable until Bind supplies the runtime.
 	for tag, tagCfg := range resolvedCapTags {
 		for _, toolName := range tagCfg.Tools {
 			if a.loop.Tools().Get(toolName) == nil && !s.deferredTools[toolName] {
