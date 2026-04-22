@@ -90,3 +90,14 @@ func (w *AccessResponseWriter) ReadFrom(src io.Reader) (int64, error) {
 	}
 	return io.Copy(w, src)
 }
+
+// Unwrap returns the underlying [http.ResponseWriter]. This is the
+// convention [http.NewResponseController] uses to walk through
+// middleware wrappers to reach optional interfaces like
+// [http.ResponseController.SetReadDeadline] and
+// [http.ResponseController.SetWriteDeadline]. Without it, SSE and
+// other streaming handlers behind this middleware cannot adjust their
+// deadlines.
+func (w *AccessResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
