@@ -104,7 +104,7 @@ func (a *App) initAwareness(s *newState) error {
 			stateWindowLoc = parsed
 		}
 	}
-	stateWindowProvider := awareness.NewStateWindowProvider(
+	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
 		stateWindowLoc,
