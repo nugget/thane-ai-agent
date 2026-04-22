@@ -640,10 +640,14 @@ func (a *App) initChannels(s *newState) error {
 	// Deferred to StartWorkers because Start() spawns a subprocess and
 	// the entire tool/bridge/notification wiring depends on it running.
 	//
-	// deferredTools tracks tool names that will be registered by deferred
-	// workers. The capability-tag validation in initDelegation skips these
-	// names so it doesn't emit misleading "unregistered tool" warnings for
-	// tools that are simply not yet started.
+	// deferredTools tracks tool names whose handlers bind inside a
+	// deferWorker closure that runs AFTER New() returns. Capability-tag
+	// validation in [finalizeCapabilityTags] skips these names so the
+	// warning doesn't fire for tools whose registration is architecturally
+	// asynchronous — they appear in the registry once the worker client
+	// starts. Tools registered synchronously in any init phase land in
+	// the capability-tag snapshot naturally (finalizeCapabilityTags runs
+	// last) and never belong here.
 	s.deferredTools = make(map[string]bool)
 	if a.cfg.Platform.Configured() {
 		s.deferredTools["macos_calendar_events"] = true
@@ -838,14 +842,10 @@ func (a *App) initChannels(s *newState) error {
 		})
 	}
 
-	// Mark MQTT wake tools as deferred so capability tag validation in
-	// initDelegation doesn't warn — they're registered in initServers
-	// alongside the MQTT publisher.
-	if a.cfg.MQTT.Configured() {
-		s.deferredTools["mqtt_wake_list"] = true
-		s.deferredTools["mqtt_wake_add"] = true
-		s.deferredTools["mqtt_wake_remove"] = true
-	}
+	// MQTT wake tools (mqtt_wake_list/add/remove) are registered in
+	// initServers, which runs before finalizeCapabilityTags, so they
+	// land in the capability-tag snapshot naturally and don't need
+	// a deferredTools exemption. See #733.
 
 	return nil
 }

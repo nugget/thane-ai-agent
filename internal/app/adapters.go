@@ -921,11 +921,17 @@ func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.
 // systemStatusAdapter bridges [connwatch.Manager] and [buildinfo] to the
 // web package's [web.SystemStatusProvider] interface, keeping the web
 // package decoupled from connwatch and buildinfo.
+//
+// capSurface is a getter rather than a captured slice so the adapter
+// sees the current value at call time. The capability surface is
+// finalized in a late init phase (after initServers), so any consumer
+// that captured the slice at construction time would see an empty
+// snapshot.
 type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
 	modelRegistry *models.Registry
 	router        *router.Router
-	capSurface    []toolcatalog.CapabilitySurface
+	capSurface    func() []toolcatalog.CapabilitySurface
 }
 
 // Health returns the health state of all watched services.
@@ -976,10 +982,14 @@ func (a *systemStatusAdapter) RouterStats() *router.Stats {
 // CapabilityCatalog returns the runtime capability catalog used by the
 // agent prompt/tooling layer.
 func (a *systemStatusAdapter) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
-	if len(a.capSurface) == 0 {
+	var surface []toolcatalog.CapabilitySurface
+	if a.capSurface != nil {
+		surface = a.capSurface()
+	}
+	if len(surface) == 0 {
 		return nil
 	}
-	view := toolcatalog.BuildCapabilityCatalogView(a.capSurface, true)
+	view := toolcatalog.BuildCapabilityCatalogView(surface, true)
 	return &view
 }
 
@@ -987,10 +997,25 @@ func (a *systemStatusAdapter) CapabilityCatalog() *toolcatalog.CapabilityCatalog
 // between the loop package's request/response types and the agent
 // package's types. It lives in internal/app to avoid a circular import
 // between the loop and agent packages.
+//
+// capSurface is a getter so the adapter resolves the current capability
+// surface at call time rather than capturing a stale snapshot during
+// construction. Adapters can outlive the finalization of the surface.
 type loopAdapter struct {
 	agentLoop  *agent.Loop
 	router     *router.Router
-	capSurface []toolcatalog.CapabilitySurface
+	capSurface func() []toolcatalog.CapabilitySurface
+}
+
+// capSurfaceSnapshot resolves the current capability surface via the
+// getter, returning nil when no getter is configured. Takes the
+// snapshot once per Run so all references inside the request use a
+// consistent view even if the surface is concurrently re-finalized.
+func (a *loopAdapter) capSurfaceSnapshot() []toolcatalog.CapabilitySurface {
+	if a.capSurface == nil {
+		return nil
+	}
+	return a.capSurface()
 }
 
 // maxToolResultLen is the maximum tool result length forwarded to the
@@ -1005,6 +1030,8 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 
 	// Build an agent streaming callback that relays tool and LLM
 	// events through the loop's OnProgress callback.
+	capSurface := a.capSurfaceSnapshot()
+
 	var agentStream agent.StreamCallback
 	if req.OnProgress != nil {
 		agentStream = func(e agent.StreamEvent) {
@@ -1013,7 +1040,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 				if e.Response != nil {
 					activeTags, _ := e.Data["active_tags"].([]string)
 					effectiveTools, _ := e.Data["effective_tools"].([]string)
-					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(capSurface, activeTags)
 					data := map[string]any{
 						"model": e.Response.Model,
 						"tooling": looppkg.BuildToolingState(
@@ -1056,7 +1083,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 				activeTags, _ := e.Data["active_tags"].([]string)
 				effectiveTools, _ := e.Data["effective_tools"].([]string)
 				if len(activeTags) > 0 || len(effectiveTools) > 0 {
-					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(capSurface, activeTags)
 					data["active_tags"] = append([]string(nil), activeTags...)
 					data["effective_tools"] = append([]string(nil), effectiveTools...)
 					data["tooling"] = looppkg.BuildToolingState(
@@ -1092,7 +1119,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 
 	loadedCapabilities := append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...)
 	if len(loadedCapabilities) == 0 {
-		loadedCapabilities = toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, resp.ActiveTags)
+		loadedCapabilities = toolcatalog.BuildLoadedCapabilityEntries(capSurface, resp.ActiveTags)
 	}
 
 	// Use the routed model's context window if available, otherwise

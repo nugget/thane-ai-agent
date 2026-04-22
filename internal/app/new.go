@@ -37,20 +37,26 @@ import (
 //
 // Initialization is split into focused phases, each in its own file:
 //
-//   - [initLogging]    — logger, dataset writer, index DB, content writer
-//   - [initStores]     — data stores, HA client, connwatch, router, scheduler
-//   - [initAgentLoop]  — agent loop, path resolver, context injection
-//   - [initChannels]   — tools, email, forge, MCP, Signal, facts, contacts
-//   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
-//   - [initDelegation] — delegate executor, capability tags, lenses
-//   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
+//   - [initLogging]              — logger, dataset writer, index DB, content writer
+//   - [initStores]               — data stores, HA client, connwatch, router, scheduler
+//   - [initAgentLoop]            — agent loop, path resolver, context injection
+//   - [initChannels]             — tools, email, forge, MCP, Signal, facts, contacts
+//   - [initAwareness]            — context providers, watchlist, person tracker, state watcher
+//   - [initDelegation]           — delegate executor, notification routing, lenses, channel tags
+//   - [initServers]              — API server, checkpointer, MQTT, dashboard, metacognitive
+//   - [finalizeCapabilityTags]   — resolve capability tags from fully-assembled registry
 //
-// [initAwareness] runs before [initDelegation] so that the watchlist
-// tools registered via SetWatchlistStore land in the registry before
-// resolveCapabilityTags snapshots tag membership. Reversing this was
-// the root cause of issue #733: tools with baked-in default tags were
-// silently absent from their owning capability because the snapshot
-// had already been taken.
+// Phase ordering rules for tool visibility (see #733):
+//
+//   - Every global tool — including mqtt_wake_* registered in initServers
+//     and watchlist tools registered in initAwareness — must be in the
+//     registry before finalizeCapabilityTags runs so the snapshot
+//     reflects the complete catalog. The finalizer is deliberately last.
+//   - Tools whose handlers bind during deferWorker execution (Signal)
+//     remain genuinely deferred and are tracked in s.deferredTools.
+//   - initDelegation no longer takes a capability-tag snapshot; it
+//     creates the delegate executor without tag state and leaves
+//     alwaysActiveTags / SetTagContextFunc to the finalizer.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]models.ResourceHealthClient, modelRuntime *models.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
@@ -97,6 +103,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, err
 	}
 	if err := a.initServers(s); err != nil {
+		return nil, err
+	}
+	if err := a.finalizeCapabilityTags(s); err != nil {
 		return nil, err
 	}
 

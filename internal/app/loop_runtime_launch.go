@@ -11,7 +11,7 @@ func (a *App) launchLoop(ctx context.Context, launch looppkg.Launch) (looppkg.La
 	if a == nil || a.loopRegistry == nil || a.loop == nil {
 		return looppkg.LaunchResult{}, fmt.Errorf("loop launch is not configured")
 	}
-	runner := &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}
+	runner := &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()}
 	var completionSink looppkg.CompletionSink
 	if dispatcher := a.ensureLoopCompletionDispatcher(); dispatcher != nil {
 		completionSink = dispatcher.Deliver

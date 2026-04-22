@@ -499,7 +499,7 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurface},
+			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurfaceGetter()},
 			Logger:       logger,
 		}
 		if a.liveRequestStore != nil {
