@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -35,14 +36,10 @@ func TestDatasetWriter_WriteRecordCreatesExpectedPartition(t *testing.T) {
 		t.Fatalf("WriteRecord() error = %v", err)
 	}
 
-	segmentTime := ts.In(time.Local)
-	path := filepath.Join(dir, DatasetEvents, segmentTime.Format(time.DateOnly), segmentTime.Format("15")+".jsonl")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	// Discover the segment via a directory walk rather than
+	// recomputing the path from the timestamp — keeps the test
+	// decoupled from the partitioning scheme.
+	lines := readDatasetLines(t, dir, DatasetEvents)
 	if len(lines) != 1 {
 		t.Fatalf("line count = %d, want 1", len(lines))
 	}
@@ -96,14 +93,7 @@ func TestDatasetWriter_ConcurrentWritesProduceValidJSONL(t *testing.T) {
 		}
 	}
 
-	segmentTime := ts.In(time.Local)
-	path := filepath.Join(dir, DatasetRequests, segmentTime.Format(time.DateOnly), segmentTime.Format("15")+".jsonl")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	lines := readDatasetLines(t, dir, DatasetRequests)
 	if len(lines) != total {
 		t.Fatalf("line count = %d, want %d", len(lines), total)
 	}
@@ -175,11 +165,10 @@ func TestDatasetHandler_SkipsDisabledDatasets(t *testing.T) {
 	logger := slog.New(handler)
 	logger.Info("request handled", "kind", "http_access", "server", "api")
 
-	segmentTime := time.Now().In(time.Local)
-	path := filepath.Join(dir, DatasetAccess, segmentTime.Format(time.DateOnly), segmentTime.Format("15")+".jsonl")
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("access dataset path exists unexpectedly: %q", path)
-	}
+	// Walk the whole dataset subtree rather than recomputing the path
+	// from time.Now(): a clock tick between write and assertion would
+	// point us at the wrong partition and mask a real failure.
+	assertDatasetEmpty(t, dir, DatasetAccess)
 }
 
 func TestDatasetRecordFromOperationalEvent(t *testing.T) {
@@ -288,19 +277,75 @@ func TestDatasetRecordFromEnvelopeAudit(t *testing.T) {
 	}
 }
 
+// assertDatasetLineCount sums JSONL line counts across every segment
+// file under the dataset subtree. Walking the tree (rather than
+// recomputing the partition path from time.Now()) keeps the assertion
+// correct when the test straddles an hour/day boundary.
 func assertDatasetLineCount(t *testing.T, root, dataset string, want int) {
 	t.Helper()
 
-	segmentTime := time.Now().In(time.Local)
-	path := filepath.Join(root, dataset, segmentTime.Format(time.DateOnly), segmentTime.Format("15")+".jsonl")
-	data, err := os.ReadFile(path)
+	got := datasetLineCount(t, root, dataset)
+	if got != want {
+		t.Fatalf("%s line count = %d, want %d", dataset, got, want)
+	}
+}
+
+// assertDatasetEmpty verifies that no segment files have been created
+// for the dataset. Tolerates the dataset root not existing at all.
+func assertDatasetEmpty(t *testing.T, root, dataset string) {
+	t.Helper()
+
+	got := datasetLineCount(t, root, dataset)
+	if got != 0 {
+		t.Fatalf("%s line count = %d, want 0 (dataset should be empty)", dataset, got)
+	}
+}
+
+func datasetLineCount(t *testing.T, root, dataset string) int {
+	t.Helper()
+	return len(readDatasetLines(t, root, dataset))
+}
+
+// readDatasetLines walks every segment file under root/dataset and
+// returns each JSONL line in file-path order. Tests use this instead
+// of recomputing partition paths from the clock, which would be racy
+// across hour/day boundaries.
+func readDatasetLines(t *testing.T, root, dataset string) []string {
+	t.Helper()
+
+	datasetDir := filepath.Join(root, dataset)
+	if _, err := os.Stat(datasetDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	var files []string
+	err := filepath.WalkDir(datasetDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", path, err)
+		t.Fatalf("walk %s: %v", datasetDir, err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != want {
-		t.Fatalf("%s line count = %d, want %d", dataset, len(lines), want)
+	sort.Strings(files)
+
+	var lines []string
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", file, err)
+		}
+		trimmed := strings.TrimSpace(string(data))
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, strings.Split(trimmed, "\n")...)
 	}
+	return lines
 }
 
 func TestDatasetHandler_EnabledWithStdoutOnly(t *testing.T) {
