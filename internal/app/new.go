@@ -37,13 +37,32 @@ import (
 //
 // Initialization is split into focused phases, each in its own file:
 //
-//   - [initLogging]    — logger, dataset writer, index DB, content writer
-//   - [initStores]     — data stores, HA client, connwatch, router, scheduler
-//   - [initAgentLoop]  — agent loop, path resolver, context injection
-//   - [initChannels]   — tools, email, forge, MCP, Signal, facts, contacts
-//   - [initDelegation] — delegate executor, capability tags, lenses
-//   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
-//   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
+//   - [initLogging]              — logger, dataset writer, index DB, content writer
+//   - [initStores]               — data stores, HA client, connwatch, router, scheduler
+//   - [initAgentLoop]            — agent loop, path resolver, context injection
+//   - [initChannels]             — tools, email, forge, MCP, Signal, facts, contacts
+//   - [initAwareness]            — context providers, watchlist, person tracker, state watcher
+//   - [initDelegation]           — delegate executor, notification routing, lenses, channel tags
+//   - [initServers]              — API server, checkpointer, MQTT, dashboard, metacognitive
+//   - [finalizeCapabilityTags]   — resolve capability tags from fully-assembled registry
+//
+// Phase ordering rules for tool visibility (see #733):
+//
+//   - Every global tool — including mqtt_wake_* registered in initServers
+//     and watchlist tools registered in initAwareness — must be in the
+//     registry before finalizeCapabilityTags runs so the snapshot
+//     reflects the complete catalog. The finalizer is deliberately last.
+//   - Subsystems whose backing runtime starts asynchronously (Signal)
+//     declare their tools up front via tools.Provider and return
+//     tools.ErrUnavailable from the handler until Bind is called. Those
+//     tools DO appear in the snapshot; they are not in s.deferredTools.
+//   - s.deferredTools is a narrow remaining escape hatch for tool
+//     families whose handler is still registered inside a deferWorker
+//     closure (today: macos_calendar_events). New subsystems should use
+//     Provider + declared-but-unavailable instead of adding entries here.
+//   - initDelegation no longer takes a capability-tag snapshot; it
+//     creates the delegate executor without tag state and leaves
+//     alwaysActiveTags / SetTagContextFunc to the finalizer.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]models.ResourceHealthClient, modelRuntime *models.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
@@ -83,13 +102,16 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if err := a.initChannels(s); err != nil {
 		return nil, err
 	}
-	if err := a.initDelegation(s); err != nil {
-		return nil, err
-	}
 	if err := a.initAwareness(s); err != nil {
 		return nil, err
 	}
+	if err := a.initDelegation(s); err != nil {
+		return nil, err
+	}
 	if err := a.initServers(s); err != nil {
+		return nil, err
+	}
+	if err := a.finalizeCapabilityTags(s); err != nil {
 		return nil, err
 	}
 

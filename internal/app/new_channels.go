@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -640,17 +639,26 @@ func (a *App) initChannels(s *newState) error {
 	// Deferred to StartWorkers because Start() spawns a subprocess and
 	// the entire tool/bridge/notification wiring depends on it running.
 	//
-	// deferredTools tracks tool names that will be registered by deferred
-	// workers. The capability-tag validation in initDelegation skips these
-	// names so it doesn't emit misleading "unregistered tool" warnings for
-	// tools that are simply not yet started.
+	// deferredTools is now a narrow escape hatch for the macOS
+	// platform calendar tool, whose registration still happens inside
+	// a deferWorker closure. Signal used to live here too; it has
+	// since migrated to the tools.Provider async-binding pattern
+	// (see internal/channels/signal/tool_provider.go). Tools
+	// registered synchronously in any init phase land in the
+	// capability-tag snapshot naturally (finalizeCapabilityTags runs
+	// last) and never belong here. New subsystems should follow the
+	// Signal pattern rather than adding entries here.
 	s.deferredTools = make(map[string]bool)
 	if a.cfg.Platform.Configured() {
 		s.deferredTools["macos_calendar_events"] = true
 	}
 	if a.cfg.Signal.Configured() {
-		s.deferredTools["signal_send_message"] = true
-		s.deferredTools["signal_send_reaction"] = true
+		// Signal tools are declared at init time via the Provider so
+		// they appear in the capability-tag snapshot immediately. The
+		// handlers return tools.ErrUnavailable until Bind is called
+		// from the deferred worker below, once signal-cli has started.
+		signalToolProvider := sigcli.NewToolProvider()
+		a.loop.Tools().RegisterProvider(signalToolProvider)
 
 		signalArgs := append([]string{"-a", a.cfg.Signal.Account, "jsonRpc"}, a.cfg.Signal.Args...)
 		signalClient := sigcli.NewClient(a.cfg.Signal.Command, signalArgs, a.logger)
@@ -667,39 +675,6 @@ func (a *App) initChannels(s *newState) error {
 				})
 			}
 			a.onCloseErr("signal", signalClient.Close)
-
-			// Register signal_send_message tool so the agent can
-			// send messages during its tool loop.
-			a.loop.Tools().Register(&tools.Tool{
-				Name:        "signal_send_message",
-				Description: "Send a Signal message to a phone number. Use this to reply to the user's Signal message or initiate a new Signal conversation.",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"recipient": map[string]any{
-							"type":        "string",
-							"description": "Phone number including country code (e.g., +15551234567)",
-						},
-						"message": map[string]any{
-							"type":        "string",
-							"description": "Message text to send",
-						},
-					},
-					"required": []string{"recipient", "message"},
-				},
-				Handler: func(toolCtx context.Context, args map[string]any) (string, error) {
-					recipient, _ := args["recipient"].(string)
-					message, _ := args["message"].(string)
-					if recipient == "" || message == "" {
-						return "", fmt.Errorf("recipient and message are required")
-					}
-					_, err := signalClient.Send(toolCtx, recipient, message)
-					if err != nil {
-						return "", err
-					}
-					return fmt.Sprintf("Message sent to %s", recipient), nil
-				},
-			})
 
 			idleTimeout := time.Duration(a.cfg.Signal.SessionIdleMinutes) * time.Minute
 			var signalRotator sigcli.SessionRotator
@@ -743,71 +718,11 @@ func (a *App) initChannels(s *newState) error {
 			}
 			a.signalBridge = bridge
 
-			// Register signal_send_reaction tool so the agent can
-			// react to Signal messages with emoji.
-			a.loop.Tools().Register(&tools.Tool{
-				Name:        "signal_send_reaction",
-				Description: "React to a Signal message with an emoji. Use this to acknowledge messages or express reactions. The target_timestamp identifies which message to react to — use the [ts:...] value from the message, or \"latest\" to react to the most recent message from the recipient.",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"recipient": map[string]any{
-							"type":        "string",
-							"description": "Phone number including country code (e.g., +15551234567)",
-						},
-						"emoji": map[string]any{
-							"type":        "string",
-							"description": "Reaction emoji (e.g., 👍, ❤️, 😂)",
-						},
-						"target_author": map[string]any{
-							"type":        "string",
-							"description": "Phone number of the message author to react to",
-						},
-						"target_timestamp": map[string]any{
-							"type":        "string",
-							"description": "Timestamp of the message to react to (from [ts:...] tag) as a numeric string, or \"latest\" for the most recent inbound message from the recipient",
-						},
-					},
-					"required": []string{"recipient", "emoji", "target_author", "target_timestamp"},
-				},
-				Handler: func(toolCtx context.Context, args map[string]any) (string, error) {
-					recipient, _ := args["recipient"].(string)
-					emoji, _ := args["emoji"].(string)
-					targetAuthor, _ := args["target_author"].(string)
-
-					if recipient == "" || emoji == "" || targetAuthor == "" {
-						return "", fmt.Errorf("recipient, emoji, and target_author are required")
-					}
-
-					var targetTS int64
-					switch v := args["target_timestamp"].(type) {
-					case string:
-						if v == "latest" {
-							ts, ok := bridge.LastInboundTimestamp(recipient)
-							if !ok {
-								return "", fmt.Errorf("no recent inbound message from %s to react to", recipient)
-							}
-							targetTS = ts
-						} else {
-							// Accept numeric strings (LLMs often serialize large ints as strings).
-							n, err := strconv.ParseInt(v, 10, 64)
-							if err != nil {
-								return "", fmt.Errorf("target_timestamp must be a numeric string or \"latest\", got %q", v)
-							}
-							targetTS = n
-						}
-					case float64:
-						targetTS = int64(v)
-					default:
-						return "", fmt.Errorf("target_timestamp must be a string (numeric or \"latest\")")
-					}
-
-					if err := signalClient.SendReaction(toolCtx, recipient, emoji, targetAuthor, targetTS, false); err != nil {
-						return "", err
-					}
-					return fmt.Sprintf("Reacted with %s to message from %s", emoji, targetAuthor), nil
-				},
-			})
+			// Bind the declared Signal tools now that the client and
+			// bridge are ready. Invocations that happened before this
+			// point returned tools.ErrUnavailable; subsequent calls
+			// succeed.
+			signalToolProvider.Bind(signalClient, bridge)
 
 			a.connMgr.Watch(ctx, connwatch.WatcherConfig{
 				Name:    "signal",
@@ -838,14 +753,10 @@ func (a *App) initChannels(s *newState) error {
 		})
 	}
 
-	// Mark MQTT wake tools as deferred so capability tag validation in
-	// initDelegation doesn't warn — they're registered in initServers
-	// alongside the MQTT publisher.
-	if a.cfg.MQTT.Configured() {
-		s.deferredTools["mqtt_wake_list"] = true
-		s.deferredTools["mqtt_wake_add"] = true
-		s.deferredTools["mqtt_wake_remove"] = true
-	}
+	// MQTT wake tools (mqtt_wake_list/add/remove) are registered in
+	// initServers, which runs before finalizeCapabilityTags, so they
+	// land in the capability-tag snapshot naturally and don't need
+	// a deferredTools exemption. See #733.
 
 	return nil
 }

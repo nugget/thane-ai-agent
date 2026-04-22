@@ -56,6 +56,15 @@ import (
 // (file handler, index handler, level, format) for subsequent log lines.
 func (a *App) Logger() *slog.Logger { return a.logger }
 
+// capSurfaceGetter returns a closure that reads the current capability
+// surface at call time. Adapters use this instead of capturing the
+// slice at construction time because the surface is finalized in a
+// late init phase ([finalizeCapabilityTags]) that runs after most
+// adapters have already been wired.
+func (a *App) capSurfaceGetter() func() []toolcatalog.CapabilitySurface {
+	return func() []toolcatalog.CapabilitySurface { return a.capSurface }
+}
+
 // App holds all long-lived application state for the Thane server. It is
 // constructed by [New] and run by [App.Serve]. Fields map directly to the
 // subsystems initialized during startup.

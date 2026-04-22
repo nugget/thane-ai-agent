@@ -482,7 +482,7 @@ func (a *App) initStores(s *newState) error {
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		deps.runner = &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}
+		deps.runner = &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()}
 		return runScheduledTask(ctx, task, exec, deps)
 	}
 

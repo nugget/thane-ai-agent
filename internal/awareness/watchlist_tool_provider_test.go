@@ -1,4 +1,4 @@
-package tools
+package awareness
 
 import (
 	"context"
@@ -8,11 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	_ "modernc.org/sqlite"
+
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-func setupWatchlistRegistry(t *testing.T) (*Registry, *awareness.WatchlistStore) {
+func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -20,34 +21,63 @@ func setupWatchlistRegistry(t *testing.T) (*Registry, *awareness.WatchlistStore)
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := awareness.NewWatchlistStore(db)
+	store, err := NewWatchlistStore(db)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
 
-	r := NewEmptyRegistry()
-	r.SetWatchlistStore(store)
-	return r, store
+	var registered []string
+	p := NewWatchlistTools(WatchlistToolsConfig{
+		Store:        store,
+		TagRegistrar: func(tag string) { registered = append(registered, tag) },
+	})
+	return p, store, &registered
 }
 
-func TestSetWatchlistStore_RegistersTools(t *testing.T) {
-	r, _ := setupWatchlistRegistry(t)
+func TestWatchlistTools_NameAndToolList(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
 
-	if r.Get("add_context_entity") == nil {
-		t.Error("add_context_entity should be registered")
+	if got := p.Name(); got != "awareness.watchlist" {
+		t.Errorf("Name() = %q, want awareness.watchlist", got)
 	}
-	if r.Get("list_context_entities") == nil {
-		t.Error("list_context_entities should be registered")
+
+	got := p.Tools()
+	if len(got) != 3 {
+		t.Fatalf("Tools() returned %d tools, want 3", len(got))
 	}
-	if r.Get("remove_context_entity") == nil {
-		t.Error("remove_context_entity should be registered")
+
+	names := make([]string, 0, len(got))
+	for _, tool := range got {
+		names = append(names, tool.Name)
+		if tool.Handler == nil {
+			t.Errorf("tool %q has nil handler; provider contract requires non-nil", tool.Name)
+		}
+	}
+	want := []string{"add_context_entity", "list_context_entities", "remove_context_entity"}
+	slices.Sort(names)
+	slices.Sort(want)
+	if !slices.Equal(names, want) {
+		t.Errorf("tool names = %v, want %v", names, want)
+	}
+}
+
+func TestWatchlistTools_RegisterProviderAddsThreeTools(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	reg := tools.NewEmptyRegistry()
+	reg.RegisterProvider(p)
+
+	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
+		if reg.Get(name) == nil {
+			t.Errorf("%s should be registered", name)
+		}
 	}
 }
 
 func TestAddContextEntity_MissingEntityID(t *testing.T) {
-	r, _ := setupWatchlistRegistry(t)
+	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := r.handleAddContextEntity(context.Background(), map[string]any{})
+	_, err := p.handleAddContextEntity(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing entity_id")
 	}
@@ -57,9 +87,9 @@ func TestAddContextEntity_MissingEntityID(t *testing.T) {
 }
 
 func TestAddContextEntity_Success(t *testing.T) {
-	r, store := setupWatchlistRegistry(t)
+	p, store, _ := setupWatchlistProvider(t)
 
-	result, err := r.handleAddContextEntity(context.Background(), map[string]any{
+	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
 		"entity_id": "sensor.temperature",
 	})
 	if err != nil {
@@ -72,7 +102,6 @@ func TestAddContextEntity_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain 'watching'", result)
 	}
 
-	// Verify it was actually stored.
 	ids, err := store.List()
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -83,14 +112,9 @@ func TestAddContextEntity_Success(t *testing.T) {
 }
 
 func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
-	r, store := setupWatchlistRegistry(t)
+	p, store, registered := setupWatchlistProvider(t)
 
-	var registered []string
-	r.OnWatchlistTagAdded(func(tag string) {
-		registered = append(registered, tag)
-	})
-
-	result, err := r.handleAddContextEntity(context.Background(), map[string]any{
+	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
 		"entity_id":   "sensor.battery",
 		"tags":        []any{"battery_focus", "battery_focus"},
 		"history":     []any{60, 3600},
@@ -103,8 +127,8 @@ func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
 		t.Fatalf("result = %q, want TTL text", result)
 	}
 
-	if !slices.Equal(registered, []string{"battery_focus"}) {
-		t.Fatalf("registered tags = %v, want [battery_focus]", registered)
+	if !slices.Equal(*registered, []string{"battery_focus"}) {
+		t.Fatalf("registered tags = %v, want [battery_focus]", *registered)
 	}
 
 	subs, err := store.ListByTag("battery_focus")
@@ -122,19 +146,19 @@ func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
 	}
 }
 
-func TestParseTagArgs_IgnoresWhitespaceOnlyTags(t *testing.T) {
-	tags, err := parseTagArgs([]any{"battery_focus", "   ", "\t", " interactive "})
+func TestParseWatchlistTagArgs_IgnoresWhitespaceOnlyTags(t *testing.T) {
+	tags, err := parseWatchlistTagArgs([]any{"battery_focus", "   ", "\t", " interactive "})
 	if err != nil {
-		t.Fatalf("parseTagArgs: %v", err)
+		t.Fatalf("parseWatchlistTagArgs: %v", err)
 	}
 
 	if !slices.Equal(tags, []string{"battery_focus", "interactive"}) {
-		t.Fatalf("parseTagArgs() = %v, want [battery_focus interactive]", tags)
+		t.Fatalf("parseWatchlistTagArgs() = %v, want [battery_focus interactive]", tags)
 	}
 }
 
 func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
-	r, store := setupWatchlistRegistry(t)
+	p, store, _ := setupWatchlistProvider(t)
 
 	if err := store.Add("sensor.always_on"); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -143,7 +167,7 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
-	raw, err := r.handleListContextEntities(context.Background(), map[string]any{
+	raw, err := p.handleListContextEntities(context.Background(), map[string]any{
 		"tag": "battery_focus",
 	})
 	if err != nil {
@@ -177,9 +201,9 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 }
 
 func TestRemoveContextEntity_MissingEntityID(t *testing.T) {
-	r, _ := setupWatchlistRegistry(t)
+	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := r.handleRemoveContextEntity(context.Background(), map[string]any{})
+	_, err := p.handleRemoveContextEntity(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing entity_id")
 	}
@@ -189,14 +213,13 @@ func TestRemoveContextEntity_MissingEntityID(t *testing.T) {
 }
 
 func TestRemoveContextEntity_Success(t *testing.T) {
-	r, store := setupWatchlistRegistry(t)
+	p, store, _ := setupWatchlistProvider(t)
 
-	// Add first, then remove.
 	if err := store.Add("sensor.temperature"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
-	result, err := r.handleRemoveContextEntity(context.Background(), map[string]any{
+	result, err := p.handleRemoveContextEntity(context.Background(), map[string]any{
 		"entity_id": "sensor.temperature",
 	})
 	if err != nil {
@@ -206,7 +229,6 @@ func TestRemoveContextEntity_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain entity_id", result)
 	}
 
-	// Verify it was actually removed.
 	ids, err := store.List()
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -217,7 +239,7 @@ func TestRemoveContextEntity_Success(t *testing.T) {
 }
 
 func TestRemoveContextEntity_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) {
-	r, store := setupWatchlistRegistry(t)
+	p, store, _ := setupWatchlistProvider(t)
 
 	if err := store.Add("sensor.battery"); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -226,7 +248,7 @@ func TestRemoveContextEntity_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) 
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
-	result, err := r.handleRemoveContextEntity(context.Background(), map[string]any{
+	result, err := p.handleRemoveContextEntity(context.Background(), map[string]any{
 		"entity_id": "sensor.battery",
 		"tags":      []any{"battery_focus"},
 	})

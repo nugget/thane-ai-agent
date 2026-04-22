@@ -328,9 +328,8 @@ func (a *App) initServers(s *newState) error {
 		// base handler above.
 		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger, wakeDeps))
 
-		// Register MQTT wake subscription tools.
-		mqttTools := mqtt.NewTools(subStore)
-		a.loop.Tools().SetMQTTSubscriptionTools(mqttTools)
+		// Register MQTT wake subscription tools via the provider.
+		a.loop.Tools().RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore)))
 
 		// Defer MQTT connection to StartWorkers. The publisher object,
 		// tooling, and message handler are already wired above; this just
@@ -499,7 +498,7 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurface},
+			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurfaceGetter()},
 			Logger:       logger,
 		}
 		if a.liveRequestStore != nil {
