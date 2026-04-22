@@ -474,10 +474,10 @@ func TestRetryTransport_NoRetryWithoutGetBody(t *testing.T) {
 // After the list is exhausted it returns 200. Used to exercise
 // status-based retry behavior.
 type statusRoundTripper struct {
-	statuses   []int
-	calls      int
-	retryAfter string // if set, included on the first response
-	bodyReadCt *int   // if non-nil, increments on each body read
+	statuses    []int
+	calls       int
+	retryAfter  string // if set, included on the first response
+	bodyCloseCt *int   // if non-nil, increments on each body Close() call
 }
 
 func (s *statusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -489,8 +489,8 @@ func (s *statusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	body := io.NopCloser(strings.NewReader("payload"))
-	if s.bodyReadCt != nil {
-		body = &countingReadCloser{r: strings.NewReader("payload"), closed: s.bodyReadCt}
+	if s.bodyCloseCt != nil {
+		body = &countingReadCloser{r: strings.NewReader("payload"), closed: s.bodyCloseCt}
 	}
 
 	resp := &http.Response{
@@ -511,7 +511,7 @@ type countingReadCloser struct {
 
 func (c *countingReadCloser) Read(p []byte) (int, error) { return c.r.Read(p) }
 func (c *countingReadCloser) Close() error {
-	*c.closed++
+	(*c.closed)++
 	return nil
 }
 
@@ -588,8 +588,8 @@ func TestRetryTransport_StatusRetryClosesPriorBody(t *testing.T) {
 	closes := 0
 	rt := &retryTransport{
 		base: &statusRoundTripper{
-			statuses:   []int{http.StatusTooManyRequests},
-			bodyReadCt: &closes,
+			statuses:    []int{http.StatusTooManyRequests},
+			bodyCloseCt: &closes,
 		},
 		count:         2,
 		delay:         1 * time.Millisecond,
