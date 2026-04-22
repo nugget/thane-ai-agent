@@ -132,6 +132,11 @@ func TestDatasetHandler_RoutesDatasetsAndStdout(t *testing.T) {
 	logger.Info("request handled", "kind", "http_access", "server", "api")
 	logger.Warn("message envelope delivery failed", "component", "message_bus", "error", "boom")
 
+	// stdout fires for:
+	//   - "startup complete" (events, level info)
+	//   - "message envelope delivery failed" (events, level warn)
+	// It suppresses the request and access lines because those
+	// datasets are meant to live on disk, not pollute stdout.
 	stdoutLines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(stdoutLines) != 2 {
 		t.Fatalf("stdout lines = %d, want 2", len(stdoutLines))
@@ -143,9 +148,43 @@ func TestDatasetHandler_RoutesDatasetsAndStdout(t *testing.T) {
 		t.Error("stdout should not contain access dataset chatter")
 	}
 
-	assertDatasetLineCount(t, dir, DatasetEvents, 1)
+	// The bootstrap line and the message-bus warn both land in
+	// events — the loops/delegates/envelopes datasets are reserved
+	// for structured bus events written via the direct-sink path.
+	assertDatasetLineCount(t, dir, DatasetEvents, 2)
 	assertDatasetLineCount(t, dir, DatasetRequests, 1)
 	assertDatasetLineCount(t, dir, DatasetAccess, 1)
+}
+
+func TestDatasetHandler_StdoutFiresWhenDatasetWriteFails(t *testing.T) {
+	// Use a real writer backed by a non-existent root to trigger the
+	// error path. MkdirAll will succeed on /tmp/<tempdir>, but pointing
+	// OpenDatasetWriter at a file path (not a directory) makes the
+	// subsequent MkdirAll for the dataset subdirectory fail.
+	tmp := t.TempDir()
+	// Create a regular file where the logger will try to create a
+	// directory, causing WriteRecord's os.MkdirAll to fail.
+	blocker := filepath.Join(tmp, "root")
+	if err := os.WriteFile(blocker, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	writer := &DatasetWriter{root: blocker, active: make(map[string]datasetSegment)}
+
+	var stdout bytes.Buffer
+	handler := NewDatasetHandler(slog.NewJSONHandler(&stdout, nil), writer, DatasetHandlerOptions{
+		DatasetLevel:  slog.LevelInfo,
+		StdoutLevel:   slog.LevelInfo,
+		StdoutEnabled: true,
+		EventsEnabled: true,
+	})
+
+	err := handler.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelWarn, "boom", 0))
+	if err == nil {
+		t.Fatal("Handle() returned nil, want dataset-write error")
+	}
+	if stdout.Len() == 0 {
+		t.Error("stdout empty — write failure should not suppress operator output")
+	}
 }
 
 func TestDatasetHandler_SkipsDisabledDatasets(t *testing.T) {

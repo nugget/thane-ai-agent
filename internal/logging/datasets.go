@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"runtime"
 	"slices"
@@ -49,20 +50,26 @@ func (h *DatasetHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 // Handle routes one slog record into the configured dataset stream and stdout.
+// Both sinks are independent: a failure writing to the dataset file must not
+// suppress operator-facing stdout, so errors are aggregated and returned
+// together rather than short-circuiting.
 func (h *DatasetHandler) Handle(ctx context.Context, r slog.Record) error {
 	projection := h.projectRecord(r)
 	decision := classifyDataset(projection)
 
+	var writeErr error
 	if h.writer != nil && r.Level >= h.options.DatasetLevel && datasetWriteEnabled(h.options, decision.Dataset) {
 		if err := h.writer.WriteRecord(projection.toDatasetRecord(decision)); err != nil {
-			return err
+			writeErr = err
 		}
 	}
 
+	var stdoutErr error
 	if h.inner != nil && h.options.StdoutEnabled && stdoutShouldEmit(h.options, decision.Dataset, r.Level) && h.inner.Enabled(ctx, r.Level) {
-		return h.inner.Handle(ctx, r)
+		stdoutErr = h.inner.Handle(ctx, r)
 	}
-	return nil
+
+	return errors.Join(writeErr, stdoutErr)
 }
 
 // WithAttrs returns a derived handler with attrs applied to both sinks.
@@ -225,9 +232,14 @@ func classifyDataset(projection datasetProjection) datasetDecision {
 		return datasetDecision{Dataset: DatasetAccess, Kind: kind, Source: source}
 	case projection.Subsystem == SubsystemAgent && projection.RequestID != "":
 		return datasetDecision{Dataset: DatasetRequests, Kind: kind, Source: source}
-	case projection.Subsystem == SubsystemLoop || projection.Subsystem == SubsystemDelegate || projection.Component == "message_bus":
-		return datasetDecision{Dataset: "", Kind: kind, Source: source}
 	default:
+		// Everything else — including ad-hoc slog lines from loop,
+		// delegate, and message-bus components — lands in the events
+		// dataset. The loops/delegates/envelopes datasets are reserved
+		// for structured bus events written via the direct-sink path
+		// (see internal/app/logging_datasets.go), so this routing rule
+		// does not produce duplicates; it just keeps forensic slog
+		// lines from being silently dropped.
 		return datasetDecision{Dataset: DatasetEvents, Kind: kind, Source: source}
 	}
 }
