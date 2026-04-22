@@ -826,6 +826,11 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 	return result
 }
 
+// promptSectionCacheTTL maps a system-prompt section name to its
+// Anthropic cache TTL. See docs/anthropic-caching.md for the policy,
+// the decision tree for adding new sections, and why volatile
+// sections must return "" rather than a short TTL (they'd churn the
+// cache instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
 	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
@@ -1281,7 +1286,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
+		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheCreation5mInputTokens, llmResp.CacheCreation1hInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
 
 		return &Response{
 			Content:                  llmResp.Message.Content,
@@ -2024,7 +2029,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
 
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
+	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
 	// Content retention is fire-and-forget with a short deadline so it
@@ -2840,7 +2845,12 @@ func formatHistoryJSON(messages []memory.Message, tz string) string {
 // recordUsage persists a usage record for a completed LLM interaction.
 // No-op when usage recording is not configured. Errors are logged but
 // do not affect the caller.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheReadIn int, convID, sessionTag, requestID string) {
+//
+// cacheCreate5m and cacheCreate1h break down cacheCreateIn by TTL when
+// the provider exposes the breakdown (Anthropic). Pass 0/0 when the
+// provider doesn't attribute the writes; pricing falls back to the 5m
+// rate for the unattributed portion.
+func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn int, convID, sessionTag, requestID string) {
 	if l.usageStore == nil {
 		return
 	}
@@ -2864,23 +2874,25 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 	}
 
 	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
-	cost := usage.ComputeDetailedCostForIdentity(identity, totalIn, cacheCreateIn, cacheReadIn, totalOut, l.pricing)
+	cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, totalIn, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn, totalOut, l.pricing)
 	rec := usage.Record{
-		Timestamp:                time.Now(),
-		RequestID:                requestID,
-		SessionID:                sessionTag,
-		ConversationID:           convID,
-		Model:                    identity.Model,
-		UpstreamModel:            identity.UpstreamModel,
-		Resource:                 identity.Resource,
-		Provider:                 identity.Provider,
-		InputTokens:              totalIn,
-		OutputTokens:             totalOut,
-		CacheCreationInputTokens: cacheCreateIn,
-		CacheReadInputTokens:     cacheReadIn,
-		CostUSD:                  cost,
-		Role:                     role,
-		TaskName:                 taskName,
+		Timestamp:                  time.Now(),
+		RequestID:                  requestID,
+		SessionID:                  sessionTag,
+		ConversationID:             convID,
+		Model:                      identity.Model,
+		UpstreamModel:              identity.UpstreamModel,
+		Resource:                   identity.Resource,
+		Provider:                   identity.Provider,
+		InputTokens:                totalIn,
+		OutputTokens:               totalOut,
+		CacheCreationInputTokens:   cacheCreateIn,
+		CacheCreation5mInputTokens: cacheCreate5m,
+		CacheCreation1hInputTokens: cacheCreate1h,
+		CacheReadInputTokens:       cacheReadIn,
+		CostUSD:                    cost,
+		Role:                       role,
+		TaskName:                   taskName,
 	}
 
 	if err := l.usageStore.Record(ctx, rec); err != nil {

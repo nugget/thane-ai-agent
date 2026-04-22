@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
@@ -30,10 +31,18 @@ type Record struct {
 	InputTokens              int
 	OutputTokens             int
 	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	CostUSD                  float64
-	Role                     string // "interactive", "delegate", "scheduled", "auxiliary"
-	TaskName                 string // "email_poll", "periodic_reflection", etc. (empty for interactive)
+	// CacheCreation5mInputTokens and CacheCreation1hInputTokens break
+	// down the cache-write bucket by TTL when the provider exposes it
+	// (Anthropic). Their sum is ≤ CacheCreationInputTokens; any
+	// shortfall reflects writes the provider didn't attribute. When
+	// the breakdown is absent (both zero), cost computation treats the
+	// full CacheCreationInputTokens as 5m for the conservative default.
+	CacheCreation5mInputTokens int
+	CacheCreation1hInputTokens int
+	CacheReadInputTokens       int
+	CostUSD                    float64
+	Role                       string // "interactive", "delegate", "scheduled", "auxiliary"
+	TaskName                   string // "email_poll", "periodic_reflection", etc. (empty for interactive)
 }
 
 // ModelIdentity is the normalized usage-facing identity for a selected
@@ -53,6 +62,18 @@ type Summary struct {
 	TotalCacheCreationInputTokens int64   `json:"total_cache_creation_input_tokens"`
 	TotalCacheReadInputTokens     int64   `json:"total_cache_read_input_tokens"`
 	TotalCostUSD                  float64 `json:"total_cost_usd"`
+}
+
+// CacheHitRate returns the fraction of cache-eligible input tokens that
+// were served from cache in this summary, as a value in [0, 1]. Zero
+// when there were no cache-eligible tokens at all (empty window, or
+// caching disabled). Useful for spotting cold-session spikes and
+// validating that prompt-caching policy is actually working.
+//
+// Formula matches the Anthropic-recommended observability metric:
+// cache_read / (cache_read + cache_creation).
+func (s Summary) CacheHitRate() float64 {
+	return llm.CacheHitRate(int(s.TotalCacheReadInputTokens), int(s.TotalCacheCreationInputTokens))
 }
 
 // GroupedSummary pairs a grouping key (model name, role, task name)
@@ -120,6 +141,17 @@ func (s *Store) migrate() error {
 	if err := database.AddColumn(s.db, "usage_records", "cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// Per-TTL cache-write breakdown columns, added for #736. Rows
+	// written before this migration ran have NULL/0 in both buckets;
+	// ComputeDetailedCostForIdentity treats that as "unknown mix" and
+	// falls back to the 5m multiplier on the full total so historical
+	// cost numbers don't spike retroactively.
+	if err := database.AddColumn(s.db, "usage_records", "cache_creation_5m_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "cache_creation_1h_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -140,8 +172,9 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_records
 			(id, timestamp, request_id, session_id, conversation_id, model, upstream_model, resource, provider,
-			 input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 input_tokens, output_tokens, cache_creation_input_tokens, cache_creation_5m_input_tokens,
+			 cache_creation_1h_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
@@ -154,6 +187,8 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 		rec.InputTokens,
 		rec.OutputTokens,
 		rec.CacheCreationInputTokens,
+		rec.CacheCreation5mInputTokens,
+		rec.CacheCreation1hInputTokens,
 		rec.CacheReadInputTokens,
 		rec.CostUSD,
 		rec.Role,
@@ -320,7 +355,15 @@ func ResolveProvider(model string) string {
 }
 
 const (
-	anthropicCacheWriteMultiplier = 1.25
+	// Anthropic cache-write multipliers per TTL bucket (docs:
+	// platform.claude.com). 5m is the default; 1h is an opt-in that
+	// costs more to write in exchange for a longer hot window.
+	anthropicCacheWrite5mMultiplier = 1.25
+	anthropicCacheWrite1hMultiplier = 2.00
+	// Alias retained for legacy callers that haven't been updated to
+	// supply a TTL breakdown. Matches the 5m rate — the conservative
+	// default when the provider doesn't attribute the writes.
+	anthropicCacheWriteMultiplier = anthropicCacheWrite5mMultiplier
 	anthropicCacheReadMultiplier  = 0.10
 )
 
@@ -328,7 +371,22 @@ const (
 // identity using uncached input tokens, cache-write input tokens,
 // cache-read input tokens, and output tokens. Deployment-qualified IDs
 // fall back to upstream-model pricing when needed.
+//
+// Cache-write tokens are charged at the 5m rate (1.25× input) by
+// default. Callers that know the per-TTL split should use
+// [ComputeDetailedCostForIdentityWithTTL] instead to correctly charge
+// 1h writes at 2.0×.
 func ComputeDetailedCostForIdentity(identity ModelIdentity, inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
+	return ComputeDetailedCostForIdentityWithTTL(identity, inputTokens, cacheCreationInputTokens, 0, 0, cacheReadInputTokens, outputTokens, pricing)
+}
+
+// ComputeDetailedCostForIdentityWithTTL is the full-fidelity cost
+// function: callers supply the 5m/1h breakdown when the provider
+// exposes it. The unattributed portion of cacheCreationInputTokens
+// (that is, tokens not accounted for in the 5m or 1h buckets) is
+// charged at the 5m rate to avoid retroactive price spikes on legacy
+// records.
+func ComputeDetailedCostForIdentityWithTTL(identity ModelIdentity, inputTokens, cacheCreationTotal, cacheCreation5m, cacheCreation1h, cacheReadInputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
 	if len(pricing) == 0 {
 		return 0
 	}
@@ -343,7 +401,19 @@ func ComputeDetailedCostForIdentity(identity ModelIdentity, inputTokens, cacheCr
 			continue
 		}
 		cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
-		cost += float64(cacheCreationInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWriteMultiplier)
+
+		// Breakdown-aware cache-write pricing. Anything in
+		// cacheCreationTotal not attributed to 5m or 1h is charged at
+		// the 5m rate (conservative default, matches legacy records
+		// written before the breakdown columns existed).
+		attributed := cacheCreation5m + cacheCreation1h
+		unattributed := cacheCreationTotal - attributed
+		if unattributed < 0 {
+			unattributed = 0
+		}
+		cost += float64(cacheCreation5m+unattributed) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite5mMultiplier)
+		cost += float64(cacheCreation1h) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWrite1hMultiplier)
+
 		cost += float64(cacheReadInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheReadMultiplier)
 		cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
 		return cost

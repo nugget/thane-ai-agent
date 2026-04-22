@@ -19,18 +19,20 @@ const (
 // identical iterationRecord structs that were independently defined in
 // the agent and delegate packages.
 type IterationRecord struct {
-	Index                    int
-	Model                    string
-	InputTokens              int
-	OutputTokens             int
-	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	ToolCallIDs              []string
-	ToolsOffered             []string
-	StartedAt                time.Time
-	DurationMs               int64
-	HasToolCalls             bool
-	BreakReason              string
+	Index                      int
+	Model                      string
+	InputTokens                int
+	OutputTokens               int
+	CacheCreationInputTokens   int
+	CacheCreation5mInputTokens int
+	CacheCreation1hInputTokens int
+	CacheReadInputTokens       int
+	ToolCallIDs                []string
+	ToolsOffered               []string
+	StartedAt                  time.Time
+	DurationMs                 int64
+	HasToolCalls               bool
+	BreakReason                string
 }
 
 // Result is the outcome of an [Engine.Run] execution.
@@ -52,6 +54,13 @@ type Result struct {
 	// CacheCreationInputTokens is the cumulative prompt-cache write token
 	// count across all iterations when the provider reports it.
 	CacheCreationInputTokens int
+
+	// CacheCreation5mInputTokens and CacheCreation1hInputTokens break
+	// down cache-write tokens by TTL bucket when the provider exposes
+	// the split (Anthropic). The sum is ≤ CacheCreationInputTokens;
+	// any shortfall reflects writes the provider didn't attribute.
+	CacheCreation5mInputTokens int
+	CacheCreation1hInputTokens int
 
 	// CacheReadInputTokens is the cumulative prompt-cache read token
 	// count across all iterations when the provider reports it.

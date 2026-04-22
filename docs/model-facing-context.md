@@ -265,9 +265,15 @@ right track.
 
 Good places to look for existing patterns:
 
-- `internal/awareness/timefmt.go`
+- `internal/promptfmt/timefmt.go`
 - `internal/awareness/entity_format.go`
 - `internal/agent/tag_context.go`
 - `internal/forge/context.go`
 - `internal/notifications/history_provider.go`
 - `internal/agent/channel_provider.go`
+
+## Related
+
+- [`anthropic-caching.md`](anthropic-caching.md) — how the system
+  prompt sections map onto Anthropic cache TTLs, and the decision
+  tree for adding a new section without breaking the cache.

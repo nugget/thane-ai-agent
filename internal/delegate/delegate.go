@@ -495,7 +495,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	e.seedLiveRequestDetail(ctx, did, messages[0].Content, userMsg.String(), model, 0, messages)
 
 	startTime := time.Now()
-	var totalInput, totalOutput, totalCacheCreate, totalCacheRead int
+	var totalInput, totalOutput, totalCacheCreate, totalCacheCreate5m, totalCacheCreate1h, totalCacheRead int
 	var toolCalls []ToolCallOutcome
 
 	// Publish complete event on all exit paths so the dashboard removes
@@ -591,6 +591,8 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 			totalInput += resp.InputTokens
 			totalOutput += resp.OutputTokens
 			totalCacheCreate += resp.CacheCreationInputTokens
+			totalCacheCreate5m += resp.CacheCreation5mInputTokens
+			totalCacheCreate1h += resp.CacheCreation1hInputTokens
 			totalCacheRead += resp.CacheReadInputTokens
 			iterCount++
 		},
@@ -668,28 +670,30 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 				}
 			}
 			e.recordCompletion(&completionRecord{
-				log:              log,
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        iterCount,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				totalCacheCreate: totalCacheCreate,
-				totalCacheRead:   totalCacheRead,
-				exhausted:        true,
-				exhaustReason:    ExhaustWallClock,
-				startTime:        startTime,
-				messages:         archiveMsgs,
-				resultContent:    "Delegate was unable to complete the task within its time limit.",
-				errMsg:           err.Error(),
-				toolCalls:        toolCalls,
-				iterations:       partialIterations,
+				log:                log,
+				delegateID:         did,
+				conversationID:     convID,
+				archiveSessionID:   archiveSessionID,
+				task:               task,
+				guidance:           guidance,
+				profileName:        profile.Name,
+				model:              model,
+				totalIter:          iterCount,
+				maxIter:            maxIter,
+				totalInput:         totalInput,
+				totalOutput:        totalOutput,
+				totalCacheCreate:   totalCacheCreate,
+				totalCacheCreate5m: totalCacheCreate5m,
+				totalCacheCreate1h: totalCacheCreate1h,
+				totalCacheRead:     totalCacheRead,
+				exhausted:          true,
+				exhaustReason:      ExhaustWallClock,
+				startTime:          startTime,
+				messages:           archiveMsgs,
+				resultContent:      "Delegate was unable to complete the task within its time limit.",
+				errMsg:             err.Error(),
+				toolCalls:          toolCalls,
+				iterations:         partialIterations,
 			})
 			return &Result{
 				Content:                  "Delegate was unable to complete the task within its time limit.",
@@ -728,27 +732,29 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		e.retainContent(bgCtx, did, messages[0].Content, userMsg.String(), iterResult)
 	}()
 	e.recordCompletion(&completionRecord{
-		log:              log,
-		delegateID:       did,
-		conversationID:   convID,
-		archiveSessionID: archiveSessionID,
-		task:             task,
-		guidance:         guidance,
-		profileName:      profile.Name,
-		model:            iterResult.Model,
-		totalIter:        iterResult.IterationCount,
-		maxIter:          maxIter,
-		totalInput:       iterResult.InputTokens,
-		totalOutput:      iterResult.OutputTokens,
-		totalCacheCreate: iterResult.CacheCreationInputTokens,
-		totalCacheRead:   iterResult.CacheReadInputTokens,
-		exhausted:        exhausted,
-		exhaustReason:    exhaustReason,
-		startTime:        startTime,
-		messages:         iterResult.Messages,
-		resultContent:    iterResult.Content,
-		toolCalls:        toolCalls,
-		iterations:       iterResult.Iterations,
+		log:                log,
+		delegateID:         did,
+		conversationID:     convID,
+		archiveSessionID:   archiveSessionID,
+		task:               task,
+		guidance:           guidance,
+		profileName:        profile.Name,
+		model:              iterResult.Model,
+		totalIter:          iterResult.IterationCount,
+		maxIter:            maxIter,
+		totalInput:         iterResult.InputTokens,
+		totalOutput:        iterResult.OutputTokens,
+		totalCacheCreate:   iterResult.CacheCreationInputTokens,
+		totalCacheCreate5m: iterResult.CacheCreation5mInputTokens,
+		totalCacheCreate1h: iterResult.CacheCreation1hInputTokens,
+		totalCacheRead:     iterResult.CacheReadInputTokens,
+		exhausted:          exhausted,
+		exhaustReason:      exhaustReason,
+		startTime:          startTime,
+		messages:           iterResult.Messages,
+		resultContent:      iterResult.Content,
+		toolCalls:          toolCalls,
+		iterations:         iterResult.Iterations,
 	})
 	return &Result{
 		Content:                  iterResult.Content,
@@ -1210,28 +1216,30 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 // so recordCompletion and archiveSession inherit trace fields (request_id,
 // session_id, conversation_id, subsystem, delegate_id, profile).
 type completionRecord struct {
-	log              *slog.Logger
-	delegateID       string
-	conversationID   string
-	archiveSessionID string
-	task             string
-	guidance         string
-	profileName      string
-	model            string
-	totalIter        int
-	maxIter          int
-	totalInput       int
-	totalOutput      int
-	totalCacheCreate int
-	totalCacheRead   int
-	exhausted        bool
-	exhaustReason    string
-	startTime        time.Time
-	messages         []llm.Message
-	resultContent    string
-	errMsg           string
-	toolCalls        []ToolCallOutcome
-	iterations       []iterate.IterationRecord
+	log                *slog.Logger
+	delegateID         string
+	conversationID     string
+	archiveSessionID   string
+	task               string
+	guidance           string
+	profileName        string
+	model              string
+	totalIter          int
+	maxIter            int
+	totalInput         int
+	totalOutput        int
+	totalCacheCreate   int
+	totalCacheCreate5m int
+	totalCacheCreate1h int
+	totalCacheRead     int
+	exhausted          bool
+	exhaustReason      string
+	startTime          time.Time
+	messages           []llm.Message
+	resultContent      string
+	errMsg             string
+	toolCalls          []ToolCallOutcome
+	iterations         []iterate.IterationRecord
 }
 
 // retainContent captures request-level content for a delegate execution.
@@ -1294,22 +1302,24 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
 	if e.usageStore != nil {
 		identity := usage.ResolveModelIdentity(rec.model, e.currentModelCatalog())
-		cost := usage.ComputeDetailedCostForIdentity(identity, rec.totalInput, rec.totalCacheCreate, rec.totalCacheRead, rec.totalOutput, e.pricing)
+		cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, rec.totalInput, rec.totalCacheCreate, rec.totalCacheCreate5m, rec.totalCacheCreate1h, rec.totalCacheRead, rec.totalOutput, e.pricing)
 		usageRec := usage.Record{
-			Timestamp:                now,
-			RequestID:                rec.delegateID,
-			ConversationID:           rec.conversationID,
-			Model:                    identity.Model,
-			UpstreamModel:            identity.UpstreamModel,
-			Resource:                 identity.Resource,
-			Provider:                 identity.Provider,
-			InputTokens:              rec.totalInput,
-			OutputTokens:             rec.totalOutput,
-			CacheCreationInputTokens: rec.totalCacheCreate,
-			CacheReadInputTokens:     rec.totalCacheRead,
-			CostUSD:                  cost,
-			Role:                     "delegate",
-			TaskName:                 rec.profileName,
+			Timestamp:                  now,
+			RequestID:                  rec.delegateID,
+			ConversationID:             rec.conversationID,
+			Model:                      identity.Model,
+			UpstreamModel:              identity.UpstreamModel,
+			Resource:                   identity.Resource,
+			Provider:                   identity.Provider,
+			InputTokens:                rec.totalInput,
+			OutputTokens:               rec.totalOutput,
+			CacheCreationInputTokens:   rec.totalCacheCreate,
+			CacheCreation5mInputTokens: rec.totalCacheCreate5m,
+			CacheCreation1hInputTokens: rec.totalCacheCreate1h,
+			CacheReadInputTokens:       rec.totalCacheRead,
+			CostUSD:                    cost,
+			Role:                       "delegate",
+			TaskName:                   rec.profileName,
 		}
 		if err := e.usageStore.Record(context.Background(), usageRec); err != nil {
 			rec.log.Warn("failed to record delegate usage", "error", err)

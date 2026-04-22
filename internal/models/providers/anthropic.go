@@ -40,14 +40,26 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 	t := httpkit.NewTransport()
 	t.ResponseHeaderTimeout = 120 * time.Second
 
+	providerLogger := logger.With("provider", "anthropic")
 	return &AnthropicClient{
 		apiKey: apiKey,
-		logger: logger.With("provider", "anthropic"),
+		logger: providerLogger,
 		httpClient: httpkit.NewClient(
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
 			httpkit.WithTimeout(0),
 			httpkit.WithTransport(t),
+			// Retry transient connection failures (matches the Ollama
+			// and LMStudio clients) plus transient Anthropic-side HTTP
+			// statuses: 429 for rate limiting, 500/502/503/504 for
+			// upstream hiccups. Streaming is safe — retryTransport
+			// only retries while the response body is still unread;
+			// once RoundTrip returns the body to the caller, a
+			// mid-stream failure propagates to the agent loop as a
+			// normal error.
+			httpkit.WithRetry(3, 2*time.Second),
+			httpkit.WithRetryOnStatus(429, 500, 502, 503, 504),
+			httpkit.WithLogger(providerLogger),
 		),
 	}
 }
@@ -117,6 +129,20 @@ type anthropicUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	// CacheCreation breaks down cache-write tokens by TTL bucket so
+	// downstream pricing can apply the correct multiplier (5m writes
+	// are 1.25× base input, 1h writes are 2.0×). Older Anthropic
+	// responses omit this object; callers must treat absence as
+	// "unknown TTL mix" and fall back to CacheCreationInputTokens.
+	CacheCreation *anthropicCacheCreation `json:"cache_creation,omitempty"`
+}
+
+// anthropicCacheCreation mirrors the response shape Anthropic returns
+// under usage.cache_creation: a per-TTL breakdown of tokens that were
+// written into the cache on this turn.
+type anthropicCacheCreation struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens,omitempty"`
 }
 
 // SSE event types for streaming
@@ -150,6 +176,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	anthropicMsgs, systemPrompt := convertToAnthropic(messages)
 	anthropicTools := convertToolsToAnthropic(tools)
 	systemPayload := anthropicSystemPayload(messages, systemPrompt)
+
+	// Enforce Anthropic cache-breakpoint guards (≤4 total, per-model
+	// minimum cached-prefix length) on the assembled blocks+tools.
+	// Runs below the model minimum and excess breakpoints are silently
+	// ignored by the API, so we drop them here and warn instead.
+	if blocks, ok := systemPayload.([]anthropicContent); ok {
+		applyCacheBreakpointGuards(blocks, anthropicTools, model, c.logger)
+	}
 	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
 	c.logger.Debug("preparing request",
@@ -255,6 +289,7 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"output_tokens", result.OutputTokens,
 		"cache_creation_input_tokens", result.CacheCreationInputTokens,
 		"cache_read_input_tokens", result.CacheReadInputTokens,
+		"cache_hit_rate", result.CacheHitRate(),
 		"tool_calls", len(result.Message.ToolCalls),
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
@@ -373,6 +408,10 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
+	if bd := usage.CacheCreation; bd != nil {
+		resp.CacheCreation5mInputTokens = bd.Ephemeral5mInputTokens
+		resp.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
+	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
 	_ = stopReason
@@ -383,6 +422,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"output_tokens", resp.OutputTokens,
 		"cache_creation_input_tokens", resp.CacheCreationInputTokens,
 		"cache_read_input_tokens", resp.CacheReadInputTokens,
+		"cache_hit_rate", resp.CacheHitRate(),
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
 	)
@@ -433,6 +473,131 @@ func anthropicSystemBlocks(sections []llm.PromptSection) []anthropicContent {
 		}
 	}
 	return blocks
+}
+
+// maxAnthropicCacheBreakpoints is the Anthropic-enforced per-request
+// limit on cache_control markers across system blocks, tools, and
+// messages. Exceeding it causes the API to reject the request, so
+// [applyCacheBreakpointGuards] silently drops excess breakpoints and
+// warns via slog rather than letting the request fail.
+const maxAnthropicCacheBreakpoints = 4
+
+// estimatedCharsPerToken is the coarse text-to-token ratio Anthropic
+// publishes for English prose. Used to check per-run prefix lengths
+// against the model-specific minimum cacheable tokens.
+const estimatedCharsPerToken = 4
+
+// minCacheablePrefixTokens returns the minimum token count a cached
+// prefix must reach for the Anthropic API to actually cache it. Runs
+// below this threshold are silently processed as uncached, which is
+// indistinguishable from a cache miss in the usage response — hence
+// the guard surfaces them as warnings.
+//
+// Values track the published per-family minimums (Sonnet 1024, Opus
+// 4096, Haiku 4096). Unknown models default to the strictest minimum
+// so we never advertise caching we can't confirm.
+func minCacheablePrefixTokens(model string) int {
+	lower := strings.ToLower(model)
+	switch {
+	case strings.Contains(lower, "opus"):
+		return 4096
+	case strings.Contains(lower, "haiku"):
+		return 4096
+	case strings.Contains(lower, "sonnet"):
+		return 1024
+	default:
+		return 4096
+	}
+}
+
+// applyCacheBreakpointGuards enforces the Anthropic per-request cache
+// breakpoint cap (≤4) and the per-model minimum cached-prefix length
+// across system blocks and the tool cache. Both are silent-failure
+// modes in the raw API: under-minimum runs are processed uncached
+// without any signal, and over-the-cap breakpoint counts cause a
+// request rejection.
+//
+// The guard policy:
+//
+//  1. For each system block that carries a cache_control, compute the
+//     prefix length through that block. If the prefix is below the
+//     model-specific minimum, strip cache_control and warn. The block
+//     itself remains; only the breakpoint is removed.
+//  2. Count surviving system breakpoints plus the one blanket tool
+//     cache (if any). If the total still exceeds 4, drop the tool
+//     cache first — it is an undifferentiated "cache the last tool"
+//     policy, whereas system breakpoints reflect deliberate
+//     per-section TTL choices.
+//  3. If still over the cap, drop trailing system breakpoints (the
+//     earliest runs typically cover the largest stable prefix, so
+//     dropping from the tail minimizes the loss).
+func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, logger *slog.Logger) {
+	minTokens := minCacheablePrefixTokens(model)
+
+	// Step 1: strip under-minimum breakpoints from system blocks.
+	prefixChars := 0
+	for i := range blocks {
+		prefixChars += len(blocks[i].Text)
+		if blocks[i].CacheControl == nil {
+			continue
+		}
+		if prefixChars/estimatedCharsPerToken < minTokens {
+			logger.Warn("dropping under-minimum Anthropic cache breakpoint",
+				"model", model,
+				"block_index", i,
+				"prefix_chars", prefixChars,
+				"prefix_tokens_estimate", prefixChars/estimatedCharsPerToken,
+				"min_tokens", minTokens,
+				"ttl", blocks[i].CacheControl.TTL,
+			)
+			blocks[i].CacheControl = nil
+		}
+	}
+
+	// Step 2: count surviving breakpoints.
+	systemBreakpoints := 0
+	for i := range blocks {
+		if blocks[i].CacheControl != nil {
+			systemBreakpoints++
+		}
+	}
+	toolBreakpoint := 0
+	if n := len(tools); n > 0 && tools[n-1].CacheControl != nil {
+		toolBreakpoint = 1
+	}
+
+	total := systemBreakpoints + toolBreakpoint
+	if total <= maxAnthropicCacheBreakpoints {
+		return
+	}
+
+	// Step 3: drop the tool breakpoint first.
+	if toolBreakpoint > 0 {
+		logger.Warn("dropping tool cache breakpoint to fit Anthropic 4-breakpoint cap",
+			"system_breakpoints", systemBreakpoints,
+			"total_requested", total,
+			"max", maxAnthropicCacheBreakpoints,
+		)
+		tools[len(tools)-1].CacheControl = nil
+		total--
+		if total <= maxAnthropicCacheBreakpoints {
+			return
+		}
+	}
+
+	// Step 4: drop trailing system breakpoints until we fit.
+	excess := total - maxAnthropicCacheBreakpoints
+	for i := len(blocks) - 1; i >= 0 && excess > 0; i-- {
+		if blocks[i].CacheControl == nil {
+			continue
+		}
+		logger.Warn("dropping trailing system cache breakpoint to fit Anthropic 4-breakpoint cap",
+			"block_index", i,
+			"ttl", blocks[i].CacheControl.TTL,
+		)
+		blocks[i].CacheControl = nil
+		excess--
+	}
 }
 
 type promptCacheRun struct {
@@ -650,7 +815,7 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 		}
 	}
 
-	return &llm.ChatResponse{
+	out := &llm.ChatResponse{
 		Model: resp.Model,
 		Message: llm.Message{
 			Role:      resp.Role,
@@ -663,6 +828,11 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
 	}
+	if bd := resp.Usage.CacheCreation; bd != nil {
+		out.CacheCreation5mInputTokens = bd.Ephemeral5mInputTokens
+		out.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
+	}
+	return out
 }
 
 // (toolUseID removed — IDs are now carried on ToolCall.ID directly)

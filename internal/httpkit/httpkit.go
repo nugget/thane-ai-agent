@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -59,6 +60,7 @@ type clientConfig struct {
 	tlsInsecureSkipVerify bool
 	retryCount            int
 	retryDelay            time.Duration
+	retryStatuses         map[int]bool
 	logger                *slog.Logger
 }
 
@@ -125,6 +127,33 @@ func WithRetry(count int, delay time.Duration) ClientOption {
 	}
 }
 
+// WithRetryOnStatus extends [WithRetry] with HTTP-level retry: if the
+// server returns one of the listed statuses, the transport drains and
+// closes the response body and retries the request. Callers should
+// still set WithRetry to configure the backoff count/delay; this option
+// on its own has no effect.
+//
+// Typical use: cloud API clients opt in with 429 and 5xx to ride out
+// transient rate-limit / upstream hiccups without bubbling them up to
+// the agent loop. Local service clients (Ollama, LMStudio) don't need
+// this and should omit it.
+//
+// The retry honors the Retry-After response header when present; the
+// configured backoff delay is used only when the server doesn't supply
+// one.
+func WithRetryOnStatus(statuses ...int) ClientOption {
+	return func(c *clientConfig) {
+		if len(statuses) == 0 {
+			c.retryStatuses = nil
+			return
+		}
+		c.retryStatuses = make(map[int]bool, len(statuses))
+		for _, s := range statuses {
+			c.retryStatuses[s] = true
+		}
+	}
+}
+
 // WithLogger sets a logger for retry diagnostics.
 func WithLogger(l *slog.Logger) ClientOption {
 	return func(c *clientConfig) { c.logger = l }
@@ -184,10 +213,11 @@ func NewClient(opts ...ClientOption) *http.Client {
 
 	if cfg.retryCount > 0 {
 		rt = &retryTransport{
-			base:   rt,
-			count:  cfg.retryCount,
-			delay:  cfg.retryDelay,
-			logger: cfg.logger,
+			base:          rt,
+			count:         cfg.retryCount,
+			delay:         cfg.retryDelay,
+			retryStatuses: cfg.retryStatuses,
+			logger:        cfg.logger,
 		}
 	}
 
@@ -226,16 +256,59 @@ func DrainAndClose(rc io.ReadCloser, limit int64) {
 // retryTransport wraps a RoundTripper and retries on transient connection
 // errors. It only retries when the request body (if any) supports rewinding
 // via GetBody, ensuring safety for POST/PUT requests.
+//
+// When retryStatuses is non-empty, it additionally retries when the
+// server returns one of the listed HTTP statuses (typically 429 and
+// 5xx). Status-based retries drain and close the prior response body
+// before re-sending; Retry-After is honored when present, otherwise
+// the configured delay is used.
 type retryTransport struct {
-	base   http.RoundTripper
-	count  int
-	delay  time.Duration
-	logger *slog.Logger
+	base          http.RoundTripper
+	count         int
+	delay         time.Duration
+	retryStatuses map[int]bool
+	logger        *slog.Logger
+}
+
+func (t *retryTransport) shouldRetryStatus(resp *http.Response) bool {
+	if resp == nil || len(t.retryStatuses) == 0 {
+		return false
+	}
+	return t.retryStatuses[resp.StatusCode]
+}
+
+// retryAfterDelay extracts a delay from a response's Retry-After header,
+// parsing either a delta-seconds integer or an HTTP-date. Returns a
+// negative duration when the header is absent or unparseable so the
+// caller can distinguish "no header" from "header says wait zero" and
+// fall back to the configured backoff only in the former case.
+func retryAfterDelay(resp *http.Response) time.Duration {
+	if resp == nil {
+		return -1
+	}
+	v := resp.Header.Get("Retry-After")
+	if v == "" {
+		return -1
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if when, err := http.ParseTime(v); err == nil {
+		d := time.Until(when)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return -1
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
-	if err == nil || !isRetryableError(err) {
+	if err == nil && !t.shouldRetryStatus(resp) {
+		return resp, err
+	}
+	if err != nil && !isRetryableError(err) {
 		return resp, err
 	}
 
@@ -247,18 +320,45 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	for attempt := 1; attempt <= t.count; attempt++ {
 		lastErr := err // capture for success logging
+		statusRetry := err == nil && t.shouldRetryStatus(resp)
+
+		// Determine the backoff for this attempt. Default to the
+		// configured delay; let Retry-After win for HTTP-level retries
+		// when the server supplies one (including "Retry-After: 0").
+		wait := t.delay
+		if statusRetry {
+			if d := retryAfterDelay(resp); d >= 0 {
+				wait = d
+			}
+		}
+
 		if t.logger != nil {
-			t.logger.Debug("retrying request after transient error",
+			attrs := []any{
 				"method", req.Method,
 				"url", req.URL.String(),
 				"attempt", attempt,
 				"maxRetries", t.count,
-				"error", err,
-			)
+				"wait_ms", wait.Milliseconds(),
+			}
+			if statusRetry {
+				attrs = append(attrs, "status", resp.StatusCode)
+				t.logger.Debug("retrying request after transient HTTP status", attrs...)
+			} else {
+				attrs = append(attrs, "error", err)
+				t.logger.Debug("retrying request after transient error", attrs...)
+			}
 		}
 
-		// Wait before retry to allow ARP/route table to settle.
-		timer := time.NewTimer(t.delay)
+		// For status-based retries, drain and close the prior response
+		// body so the connection is returned to the pool before we
+		// re-dial.
+		if statusRetry {
+			DrainAndClose(resp.Body, 64*1024)
+			resp = nil
+		}
+
+		// Wait before retry.
+		timer := time.NewTimer(wait)
 		select {
 		case <-req.Context().Done():
 			timer.Stop()
@@ -277,15 +377,21 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		resp, err = t.base.RoundTrip(retryReq)
-		if err == nil || !isRetryableError(err) {
-			if err == nil && t.logger != nil {
-				t.logger.Info("request succeeded after retry",
+		switch {
+		case err == nil && !t.shouldRetryStatus(resp):
+			if t.logger != nil {
+				attrs := []any{
 					"method", req.Method,
 					"url", req.URL.String(),
-					"attempts", attempt+1, // total attempts including original
-					"last_error", lastErr.Error(),
-				)
+					"attempts", attempt + 1, // total attempts including original
+				}
+				if lastErr != nil {
+					attrs = append(attrs, "last_error", lastErr.Error())
+				}
+				t.logger.Info("request succeeded after retry", attrs...)
 			}
+			return resp, nil
+		case err != nil && !isRetryableError(err):
 			return resp, err
 		}
 	}
