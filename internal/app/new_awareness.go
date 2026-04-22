@@ -30,7 +30,7 @@ func (a *App) initAwareness(s *newState) error {
 	// current state before each LLM call.
 	contextProvider := agent.NewCompositeContextProvider()
 	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: a.contactStore, logger: logger}))
-	contextProvider.Add(awareness.NewChannelOverviewProvider(awareness.ChannelOverviewConfig{
+	contextProvider.Add(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
 		Phones: &contactPhoneResolver{store: a.contactStore},
 		Hints:  tools.HintsFromContext,

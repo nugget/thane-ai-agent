@@ -1,4 +1,4 @@
-package awareness
+package agent
 
 import (
 	"context"

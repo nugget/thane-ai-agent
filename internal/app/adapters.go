@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
@@ -715,7 +714,7 @@ func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string)
 	return err
 }
 
-// channelLoopAdapter bridges [awareness.ChannelLoopSource] to the loop
+// channelLoopAdapter bridges [agent.ChannelLoopSource] to the loop
 // registry, filtering for channel-category loops only.
 type channelLoopAdapter struct {
 	registry *looppkg.Registry
@@ -725,14 +724,14 @@ type channelLoopAdapter struct {
 // category=channel metadata (both parents and children). Consumers
 // that need only child loops should filter on channel-specific
 // identifiers (e.g., sender for signal, conversation_id for owu).
-func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
+func (a *channelLoopAdapter) ChannelLoops() []agent.LoopSnapshot {
 	statuses := a.registry.Statuses()
-	var result []awareness.LoopSnapshot
+	var result []agent.LoopSnapshot
 	for _, s := range statuses {
 		if s.Config.Metadata["category"] != "channel" {
 			continue
 		}
-		result = append(result, awareness.LoopSnapshot{
+		result = append(result, agent.LoopSnapshot{
 			ID:            s.ID,
 			Name:          s.Name,
 			State:         string(s.State),
