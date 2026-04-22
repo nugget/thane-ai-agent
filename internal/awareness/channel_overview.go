@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // LoopSnapshot is a subset of loop.Status relevant to channel overview.
@@ -187,7 +189,7 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 
 		// Exact-second delta per issue #458.
 		if !l.LastWakeAt.IsZero() {
-			e.LastActivity = FormatDeltaOnly(l.LastWakeAt, now)
+			e.LastActivity = timefmt.FormatDeltaOnly(l.LastWakeAt, now)
 		}
 
 		entries = append(entries, e)

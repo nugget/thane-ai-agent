@@ -1,4 +1,4 @@
-package awareness
+package timefmt
 
 import (
 	"testing"

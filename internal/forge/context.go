@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // ContextProvider injects forge account configuration and recent
@@ -91,7 +91,7 @@ func (p *ContextProvider) buildContext() (string, error) {
 					Account: op.Account,
 					Repo:    op.Repo,
 					Ref:     op.Ref,
-					Ago:     awareness.FormatDeltaOnly(op.Timestamp, now),
+					Ago:     timefmt.FormatDeltaOnly(op.Timestamp, now),
 				}
 			}
 		}

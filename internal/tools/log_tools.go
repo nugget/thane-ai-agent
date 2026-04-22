@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
@@ -186,7 +186,7 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 
 	for _, e := range entries {
 		je := jsonEntry{
-			Timestamp:      awareness.FormatDeltaOnly(e.Timestamp, now),
+			Timestamp:      timefmt.FormatDeltaOnly(e.Timestamp, now),
 			Level:          e.Level,
 			Msg:            e.Msg,
 			RequestID:      e.RequestID,

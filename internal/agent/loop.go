@@ -31,6 +31,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -168,7 +169,7 @@ type ContextProvider interface {
 // TagContextProvider supplies live-computed context for a capability tag.
 // Unlike static context files in [config.CapabilityTagConfig.Context],
 // providers generate fresh output each turn. Output should follow #458
-// conventions: delta-annotated timestamps via [awareness.FormatDelta],
+// conventions: delta-annotated timestamps via [timefmt.FormatDelta],
 // machine-first format, pre-computed relationships.
 type TagContextProvider interface {
 	// TagContext returns context to inject when the associated tag is active.
@@ -2683,7 +2684,7 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 		if m.Role == "system" || m.Role == "tool" {
 			continue
 		}
-		fmt.Fprintf(&b, "[%s] %s: %s\n", awareness.FormatDeltaOnly(m.Timestamp, now), m.Role, m.Content)
+		fmt.Fprintf(&b, "[%s] %s: %s\n", timefmt.FormatDeltaOnly(m.Timestamp, now), m.Role, m.Content)
 		if b.Len() > maxTranscriptBytes {
 			b.WriteString("\n... (truncated)\n")
 			break

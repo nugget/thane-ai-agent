@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 )
 
@@ -1400,7 +1400,7 @@ func summarizeAutomationActivity(times []time.Time, now time.Time) haAutomationA
 		if when.Before(weekCutoff) {
 			continue
 		}
-		summary.RecentActivations = append(summary.RecentActivations, awareness.FormatDeltaOnly(when, now))
+		summary.RecentActivations = append(summary.RecentActivations, timefmt.FormatDeltaOnly(when, now))
 		if len(summary.RecentActivations) >= maxAutomationRecentHits {
 			break
 		}
@@ -1817,10 +1817,10 @@ func formatAutomationLastTriggered(raw string, now time.Time) string {
 		return ""
 	}
 	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
-		return awareness.FormatDeltaOnly(ts, now)
+		return timefmt.FormatDeltaOnly(ts, now)
 	}
 	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return awareness.FormatDeltaOnly(ts, now)
+		return timefmt.FormatDeltaOnly(ts, now)
 	}
 	return raw
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // formatEntityContext returns a context line for an entity, choosing
@@ -57,7 +58,7 @@ func formatDefault(state *homeassistant.State, now time.Time) string {
 		State:       roundState(state.State, deviceClass),
 		Unit:        attrString(state.Attributes, "unit_of_measurement"),
 		DeviceClass: deviceClass,
-		Since:       FormatDeltaOnly(state.LastChanged, now),
+		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
 		dc.Name = name
@@ -65,7 +66,7 @@ func formatDefault(state *homeassistant.State, now time.Time) string {
 	// Include last_updated when it meaningfully differs from
 	// last_changed (attribute-only updates vs state changes).
 	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
-		dc.Updated = FormatDeltaOnly(state.LastUpdated, now)
+		dc.Updated = timefmt.FormatDeltaOnly(state.LastUpdated, now)
 	}
 	return marshalCompact(dc)
 }
@@ -100,7 +101,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		WindSpeed:   roundAttr(state.Attributes["wind_speed"], 1),
 		WindBearing: roundAttr(state.Attributes["wind_bearing"], 0),
 		Pressure:    roundAttr(state.Attributes["pressure"], 0),
-		Since:       FormatDeltaOnly(state.LastChanged, now),
+		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 
 	// Extract forecast entries (HA returns []any of map[string]any).
@@ -127,7 +128,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 					dt, err = time.Parse(time.RFC3339, dtStr)
 				}
 				if err == nil {
-					fc.Delta = FormatDeltaOnly(dt, now)
+					fc.Delta = timefmt.FormatDeltaOnly(dt, now)
 				} else {
 					fc.Delta = dtStr
 				}
@@ -164,7 +165,7 @@ func formatClimate(state *homeassistant.State, now time.Time) string {
 		Humidity:    roundAttr(state.Attributes["current_humidity"], 0),
 		HVACMode:    attrString(state.Attributes, "hvac_mode"),
 		PresetMode:  attrString(state.Attributes, "preset_mode"),
-		Since:       FormatDeltaOnly(state.LastChanged, now),
+		Since:       timefmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	return marshalCompact(cc)
 }
@@ -186,7 +187,7 @@ func formatLight(state *homeassistant.State, now time.Time) string {
 		Brightness: normalizeBrightness(state.Attributes["brightness"]),
 		ColorTemp:  state.Attributes["color_temp_kelvin"],
 		RGBColor:   state.Attributes["rgb_color"],
-		Since:      FormatDeltaOnly(state.LastChanged, now),
+		Since:      timefmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	return marshalCompact(lc)
 }
@@ -241,7 +242,7 @@ func formatPerson(state *homeassistant.State, now time.Time) string {
 	pc := personContext{
 		Entity: state.EntityID,
 		State:  state.State,
-		Since:  FormatDeltaOnly(state.LastChanged, now),
+		Since:  timefmt.FormatDeltaOnly(state.LastChanged, now),
 		Source: attrString(state.Attributes, "source"),
 	}
 	return marshalCompact(pc)
@@ -265,22 +266,22 @@ func formatSun(state *homeassistant.State, now time.Time) string {
 		Entity:    state.EntityID,
 		State:     state.State,
 		Elevation: roundAttr(state.Attributes["elevation"], 1),
-		Since:     FormatDeltaOnly(state.LastChanged, now),
+		Since:     timefmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 
 	// Delta-annotate next rising/setting times.
 	if rising, ok := state.Attributes["next_rising"].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, rising); err == nil {
-			sc.NextRise = FormatDeltaOnly(t, now)
+			sc.NextRise = timefmt.FormatDeltaOnly(t, now)
 		} else if t, err := time.Parse(time.RFC3339, rising); err == nil {
-			sc.NextRise = FormatDeltaOnly(t, now)
+			sc.NextRise = timefmt.FormatDeltaOnly(t, now)
 		}
 	}
 	if setting, ok := state.Attributes["next_setting"].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, setting); err == nil {
-			sc.NextSet = FormatDeltaOnly(t, now)
+			sc.NextSet = timefmt.FormatDeltaOnly(t, now)
 		} else if t, err := time.Parse(time.RFC3339, setting); err == nil {
-			sc.NextSet = FormatDeltaOnly(t, now)
+			sc.NextSet = timefmt.FormatDeltaOnly(t, now)
 		}
 	}
 
@@ -310,7 +311,7 @@ func FormatPersonPresence(entityID, name, state string, since time.Time, room, r
 		Entity: entityID,
 		Name:   name,
 		State:  displayState,
-		Since:  FormatDeltaOnly(since, now),
+		Since:  timefmt.FormatDeltaOnly(since, now),
 		Room:   room,
 		RoomSr: roomSource,
 	}

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 // Tools holds email tool dependencies. Each handler takes the raw
@@ -422,7 +422,7 @@ func formatEnvelopeList(envelopes []Envelope) string {
 		sb.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
 		sb.WriteString(fmt.Sprintf("From: %s\n", env.From))
 		sb.WriteString(fmt.Sprintf("Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(env.Date, now)))
+		sb.WriteString(fmt.Sprintf("Date: %s\n", timefmt.FormatDelta(env.Date, now)))
 
 		if len(env.Flags) > 0 {
 			sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
@@ -444,7 +444,7 @@ func formatMessage(msg *Message) string {
 		sb.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(msg.Cc, ", ")))
 	}
 	sb.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-	sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(msg.Date, now)))
+	sb.WriteString(fmt.Sprintf("Date: %s\n", timefmt.FormatDelta(msg.Date, now)))
 	if len(msg.Flags) > 0 {
 		sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(msg.Flags, ", ")))
 	}

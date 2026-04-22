@@ -1,4 +1,9 @@
-package awareness
+// Package timefmt provides relative-time formatting and parsing primitives
+// shared across domain packages. It exists so packages like notifications,
+// homeassistant, agent, and awareness can render "how long ago was this"
+// fields consistently without any one of them being the owner of the
+// shared helpers.
+package timefmt
 
 import (
 	"fmt"

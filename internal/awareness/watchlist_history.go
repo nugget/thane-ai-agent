@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/timefmt"
 )
 
 const (
@@ -264,7 +265,7 @@ func formatSignedFloat(value float64, places int) string {
 
 func historyLookbackDelta(offsetSeconds int) string {
 	base := time.Unix(0, 0).UTC()
-	return FormatDeltaOnly(base.Add(-time.Duration(offsetSeconds)*time.Second), base)
+	return timefmt.FormatDeltaOnly(base.Add(-time.Duration(offsetSeconds)*time.Second), base)
 }
 
 func historyPrecision(current *homeassistant.State) int {
