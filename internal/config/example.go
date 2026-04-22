@@ -28,7 +28,6 @@ func ExampleConfig() *Config {
 	// Pointer helpers — needed for optional *T fields.
 	logRoot := "logs"
 	logDir := "logs"
-	compress := true
 	retentionDays := 7
 	maxContent := 4096
 	archiveDays := 90
@@ -134,12 +133,13 @@ func ExampleConfig() *Config {
 		},
 
 		Logging: LoggingConfig{
-			Root:     &logRoot,
-			Dir:      &logDir,
-			Level:    "info",
-			Format:   "json",
-			Compress: &compress,
-			Stdout:   LoggingStdoutConfig{Enabled: &stdoutEnabled},
+			Root:   &logRoot,
+			Dir:    &logDir,
+			Level:  "info",
+			Format: "json",
+			// Compress is deprecated and omitted intentionally; see
+			// LoggingConfig.Compress doc.
+			Stdout: LoggingStdoutConfig{Enabled: &stdoutEnabled},
 			Datasets: LoggingDatasetsConfig{
 				Events:    LoggingDatasetConfig{Enabled: &eventsEnabled},
 				Requests:  LoggingDatasetConfig{Enabled: &requestsEnabled},

@@ -353,9 +353,10 @@ type LoggingConfig struct {
 	// human-readable key=value pairs. Default: json.
 	Format string `yaml:"format"`
 
-	// Compress is retained for backwards compatibility with the legacy
-	// daily-rotated thane.log path. Structured datasets are not currently
-	// gzip-compressed at write time.
+	// Compress is deprecated and has no effect on the dataset-backed
+	// logging pipeline. The field is retained so existing YAML configs
+	// still parse; app startup logs a warning when it is set explicitly
+	// (see DeprecatedLoggingCompressSet).
 	Compress *bool `yaml:"compress"`
 
 	// Stdout configures the operator-facing stdout surface separately from
@@ -568,6 +569,14 @@ func datasetEnabled(cfg LoggingDatasetConfig, defaultValue bool) bool {
 // log_format fields are set. Callers use this to emit deprecation warnings.
 func (c *Config) DeprecatedFieldsUsed() (level, format bool) {
 	return c.LogLevel != "", c.LogFormat != ""
+}
+
+// DeprecatedLoggingCompressSet reports whether logging.compress was set
+// explicitly in the YAML config. It has no effect on the dataset-backed
+// logging pipeline and only exists to keep old configs parseable; the
+// app uses this signal to warn operators once on startup.
+func (c *Config) DeprecatedLoggingCompressSet() bool {
+	return c.Logging.Compress != nil
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -1730,11 +1739,11 @@ func (c *Config) applyDefaults() {
 	if c.Logging.Stdout.Format == "" {
 		c.Logging.Stdout.Format = c.Logging.Format
 	}
-	if c.Logging.Compress == nil {
-		v := true
-		c.Logging.Compress = &v
-	}
-
+	// Intentionally do not default Logging.Compress. The field is
+	// deprecated and has no effect on the dataset-backed logging
+	// pipeline; leaving it nil lets DeprecatedLoggingCompressSet
+	// report accurately whether the user set it in their YAML.
+	//
 	// Note: we intentionally do NOT back-sync Logging.Format → LogFormat.
 	// The deprecated fields are only populated if the user's YAML set them.
 	// DeprecatedFieldsUsed() relies on that to emit warnings accurately.

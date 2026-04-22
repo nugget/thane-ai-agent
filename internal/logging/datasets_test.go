@@ -387,6 +387,64 @@ func readDatasetLines(t *testing.T, root, dataset string) []string {
 	return lines
 }
 
+// TestDatasetWriter_RolloverAcrossHourAndDay verifies that records
+// whose timestamps straddle an hour or day boundary land in the
+// correct per-partition segment file, and that consecutive writes
+// rotate cleanly without losing records. This covers the "rotation to
+// a new date/hour segment happens cleanly" item in the #698 test plan.
+func TestDatasetWriter_RolloverAcrossHourAndDay(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := OpenDatasetWriter(dir)
+	if err != nil {
+		t.Fatalf("OpenDatasetWriter() error = %v", err)
+	}
+	defer writer.Close()
+
+	// Three records spanning an hour roll (14 -> 15) and a day roll
+	// (2026-04-10 23:xx -> 2026-04-11 00:xx). All UTC.
+	records := []DatasetRecord{
+		{Timestamp: time.Date(2026, 4, 10, 14, 59, 0, 0, time.UTC), Dataset: DatasetEvents, Kind: "a"},
+		{Timestamp: time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC), Dataset: DatasetEvents, Kind: "b"},
+		{Timestamp: time.Date(2026, 4, 10, 23, 59, 30, 0, time.UTC), Dataset: DatasetEvents, Kind: "c"},
+		{Timestamp: time.Date(2026, 4, 11, 0, 0, 15, 0, time.UTC), Dataset: DatasetEvents, Kind: "d"},
+	}
+	for _, r := range records {
+		if err := writer.WriteRecord(r); err != nil {
+			t.Fatalf("WriteRecord(%s) error = %v", r.Kind, err)
+		}
+	}
+
+	// Expect four distinct segment files, one per (day, hour).
+	expectedPaths := []string{
+		filepath.Join(dir, DatasetEvents, "2026-04-10", "14.jsonl"),
+		filepath.Join(dir, DatasetEvents, "2026-04-10", "15.jsonl"),
+		filepath.Join(dir, DatasetEvents, "2026-04-10", "23.jsonl"),
+		filepath.Join(dir, DatasetEvents, "2026-04-11", "00.jsonl"),
+	}
+	for i, path := range expectedPaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("missing segment %q: %v", path, err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) != 1 {
+			t.Errorf("segment %q line count = %d, want 1", path, len(lines))
+		}
+		var got DatasetRecord
+		if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error = %v", path, err)
+		}
+		if got.Kind != records[i].Kind {
+			t.Errorf("segment %q kind = %q, want %q", path, got.Kind, records[i].Kind)
+		}
+	}
+
+	// Full dataset count should be four — one per segment.
+	if got := datasetLineCount(t, dir, DatasetEvents); got != 4 {
+		t.Errorf("total line count = %d, want 4", got)
+	}
+}
+
 func TestDatasetHandler_EnabledWithStdoutOnly(t *testing.T) {
 	var stdout bytes.Buffer
 	handler := NewDatasetHandler(slog.NewJSONHandler(&stdout, nil), nil, DatasetHandlerOptions{

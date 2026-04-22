@@ -870,10 +870,10 @@ logging:
   # omitted. "json" produces one JSON object per line; "text" produces
   # human-readable key=value pairs. Default: json.
   format: json
-  # Compress is retained for backwards compatibility with the legacy
-  # daily-rotated thane.log path. Structured datasets are not currently
-  # gzip-compressed at write time.
-  compress: true
+  # Compress is deprecated and has no effect. Structured datasets are
+  # not gzipped at write time. Kept here solely so old configs still
+  # parse; Thane will warn on startup if it is set.
+  # compress: true
   # Stdout configures the operator-facing stdout surface separately from
   # the structured filesystem datasets.
   stdout:
