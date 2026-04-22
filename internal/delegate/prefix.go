@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // fileTools lists tool names whose "path" argument should have path
@@ -238,7 +238,7 @@ func listPrefixDir(path string, now time.Time) ([]dirEntry, bool) {
 			de.Type = "file"
 		}
 		if info, err := e.Info(); err == nil {
-			de.ModTime = timefmt.FormatDeltaOnly(info.ModTime(), now)
+			de.ModTime = promptfmt.FormatDeltaOnly(info.ModTime(), now)
 			if !e.IsDir() {
 				de.Size = info.Size()
 			}

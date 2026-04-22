@@ -10,7 +10,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 const (
@@ -294,7 +294,7 @@ func formatPollSection(accountName string, messages []Envelope) string {
 	for _, env := range messages {
 		sb.WriteString(fmt.Sprintf("  From: %s\n", env.From))
 		sb.WriteString(fmt.Sprintf("  Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("  Date: %s\n", timefmt.FormatDelta(env.Date, now)))
+		sb.WriteString(fmt.Sprintf("  Date: %s\n", promptfmt.FormatDelta(env.Date, now)))
 		sb.WriteString("\n")
 	}
 

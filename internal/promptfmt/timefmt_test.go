@@ -1,4 +1,4 @@
-package timefmt
+package promptfmt
 
 import (
 	"testing"

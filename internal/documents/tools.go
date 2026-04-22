@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 const (
@@ -135,14 +135,14 @@ func (t *Tools) Search(ctx context.Context, args SearchArgs) (string, error) {
 	}
 	now := nowUTC()
 	if args.ModifiedAfter != "" {
-		bound, err := timefmt.ParseTimeOrDelta(args.ModifiedAfter, now)
+		bound, err := promptfmt.ParseTimeOrDelta(args.ModifiedAfter, now)
 		if err != nil {
 			return "", fmt.Errorf("modified_after must be RFC3339 or signed delta like -604800s: %w", err)
 		}
 		query.ModifiedAfter = &bound
 	}
 	if args.ModifiedBefore != "" {
-		bound, err := timefmt.ParseTimeOrDelta(args.ModifiedBefore, now)
+		bound, err := promptfmt.ParseTimeOrDelta(args.ModifiedBefore, now)
 		if err != nil {
 			return "", fmt.Errorf("modified_before must be RFC3339 or signed delta like -3600s: %w", err)
 		}

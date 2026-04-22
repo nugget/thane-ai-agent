@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/timefmt"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
 
 // SetWorkingMemoryStore adds the session_working_memory tool to the registry.
@@ -49,7 +49,7 @@ func (r *Registry) SetWorkingMemoryStore(store *memory.WorkingMemoryStore) {
 				if content == "" {
 					return "(no working memory for this conversation)", nil
 				}
-				return fmt.Sprintf("Last updated: %s\n\n%s", timefmt.FormatDeltaOnly(updatedAt, time.Now()), content), nil
+				return fmt.Sprintf("Last updated: %s\n\n%s", promptfmt.FormatDeltaOnly(updatedAt, time.Now()), content), nil
 
 			case "write":
 				content, _ := args["content"].(string)
