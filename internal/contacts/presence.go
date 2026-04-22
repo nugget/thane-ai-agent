@@ -10,9 +10,39 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/promptfmt"
 )
+
+// PersonPresenceContext is the JSON structure emitted for each tracked
+// person in context output. Richer than the default entity JSON
+// because the tracker has room data from UniFi AP associations.
+type PersonPresenceContext struct {
+	Entity string `json:"entity"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Since  string `json:"since"`
+	Room   string `json:"room,omitempty"`
+	RoomSr string `json:"room_source,omitempty"`
+}
+
+// FormatPersonPresence formats a tracked person as compact JSON with
+// delta-annotated timestamps.
+func FormatPersonPresence(entityID, name, state string, since time.Time, room, roomSource string, now time.Time) string {
+	displayState := state
+	if strings.EqualFold(state, "not_home") {
+		displayState = "away"
+	}
+	pc := PersonPresenceContext{
+		Entity: entityID,
+		Name:   name,
+		State:  displayState,
+		Since:  promptfmt.FormatDeltaOnly(since, now),
+		Room:   room,
+		RoomSr: roomSource,
+	}
+	return promptfmt.MarshalCompact(pc)
+}
 
 // Person represents the current presence state of a tracked household
 // member. State is typically "home", "not_home", or a zone name like
@@ -218,7 +248,7 @@ func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error
 		if p.State == "Unknown" || p.Since.IsZero() {
 			fmt.Fprintf(&sb, "- **%s**: unknown\n", displayName)
 		} else {
-			sb.WriteString(awareness.FormatPersonPresence(
+			sb.WriteString(FormatPersonPresence(
 				p.EntityID, displayName, p.State, p.Since,
 				p.Room, p.RoomSource, now,
 			))

@@ -286,36 +286,6 @@ func formatSun(state *homeassistant.State, now time.Time) string {
 	return promptfmt.MarshalCompact(sc)
 }
 
-// PersonPresenceContext is the JSON structure emitted by the
-// PresenceTracker for each tracked person. Richer than personContext
-// because the tracker has room data from UniFi AP associations.
-type PersonPresenceContext struct {
-	Entity string `json:"entity"`
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Since  string `json:"since"`
-	Room   string `json:"room,omitempty"`
-	RoomSr string `json:"room_source,omitempty"`
-}
-
-// FormatPersonPresence formats a tracked person as compact JSON with
-// delta-annotated timestamps. Exported for use by the PresenceTracker.
-func FormatPersonPresence(entityID, name, state string, since time.Time, room, roomSource string, now time.Time) string {
-	displayState := state
-	if strings.EqualFold(state, "not_home") {
-		displayState = "away"
-	}
-	pc := PersonPresenceContext{
-		Entity: entityID,
-		Name:   name,
-		State:  displayState,
-		Since:  promptfmt.FormatDeltaOnly(since, now),
-		Room:   room,
-		RoomSr: roomSource,
-	}
-	return promptfmt.MarshalCompact(pc)
-}
-
 // roundState rounds a numeric state string to appropriate precision
 // based on device_class. Non-numeric states pass through unchanged.
 func roundState(state, deviceClass string) string {

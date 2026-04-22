@@ -11,10 +11,8 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/attachments"
-	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
@@ -47,29 +45,26 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools                 map[string]*Tool
-	tagIndex              map[string][]string // tag → tool names
-	ha                    *homeassistant.Client
-	scheduler             *scheduler.Scheduler
-	factTools             *knowledge.Tools
-	contactTools          *contacts.Tools
-	emailTools            *email.Tools
-	mqttSubTools          *mqtt.Tools
-	notifier              *notifications.Sender
-	notifRecords          *notifications.RecordStore
-	notifRouter           *notifications.NotificationRouter
-	notifDispatcher       CallbackDispatcher
-	platformCaller        platformCallFunc
-	forgeTools            forgeHandler
-	fileTools             *FileTools
-	shellExec             *ShellExec
-	attachmentTools       *attachments.Tools
-	watchlistStore        *awareness.WatchlistStore
-	watchlistTagRegistrar func(string)
-	tempFileStore         *TempFileStore
-	usageStore            *usage.Store
-	lensStore             *LensStore
-	logIndexDB            *sql.DB
+	tools           map[string]*Tool
+	tagIndex        map[string][]string // tag → tool names
+	ha              *homeassistant.Client
+	scheduler       *scheduler.Scheduler
+	factTools       *knowledge.Tools
+	contactTools    *contacts.Tools
+	emailTools      *email.Tools
+	notifier        *notifications.Sender
+	notifRecords    *notifications.RecordStore
+	notifRouter     *notifications.NotificationRouter
+	notifDispatcher CallbackDispatcher
+	platformCaller  platformCallFunc
+	forgeTools      forgeHandler
+	fileTools       *FileTools
+	shellExec       *ShellExec
+	attachmentTools *attachments.Tools
+	tempFileStore   *TempFileStore
+	usageStore      *usage.Store
+	lensStore       *LensStore
+	logIndexDB      *sql.DB
 
 	modelRegistry                              *models.Registry
 	modelRouter                                *routepkg.Router

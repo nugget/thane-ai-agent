@@ -112,15 +112,15 @@ func resolvedToolNames(resolved map[string]config.CapabilityTagConfig, tag strin
 	return spec.Tools
 }
 
-// TestResolveCapabilityTags_IncludesWatchlistToolsAfterSetStore is the
-// regression test for issue #733. SetWatchlistStore causes the three
-// watchlist tools (add/list/remove_context_entity) to be registered
-// via r.registerWatchlistTools(). They are tagged "awareness" in the
-// builtin catalog, so resolveCapabilityTags must include them under
-// that tag — but only if the snapshot is taken *after* SetWatchlistStore
-// runs. Pre-fix, initDelegation ran before initAwareness and the
-// watchlist tools silently vanished from the awareness capability.
-func TestResolveCapabilityTags_IncludesWatchlistToolsAfterSetStore(t *testing.T) {
+// TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider is the
+// regression test for issue #733. The watchlist tool provider
+// contributes three tools (add/list/remove_context_entity) tagged
+// "awareness" in the builtin catalog. resolveCapabilityTags must
+// include them under that tag — but only if the snapshot is taken
+// *after* the provider is registered. Pre-fix, initDelegation ran
+// before initAwareness and the watchlist tools silently vanished from
+// the awareness capability.
+func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 
 	db, err := sql.Open("sqlite", ":memory:")
@@ -134,23 +134,23 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterSetStore(t *testing.T)
 		t.Fatalf("new watchlist store: %v", err)
 	}
 
-	// Before SetWatchlistStore: the awareness tag exists but the
-	// watchlist tools are absent from it because they haven't been
-	// registered yet. Record the baseline so we can show the delta.
+	// Before registration: the awareness tag exists but the watchlist
+	// tools are absent from it because they haven't been registered
+	// yet. Record the baseline so we can show the delta.
 	before := resolveCapabilityTags(reg, nil)
 	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
 		if slices.Contains(before["awareness"].Tools, name) {
-			t.Fatalf("precondition: %q should not appear in awareness tag before SetWatchlistStore", name)
+			t.Fatalf("precondition: %q should not appear in awareness tag before provider registration", name)
 		}
 	}
 
-	reg.SetWatchlistStore(store)
+	reg.RegisterProvider(awareness.NewWatchlistTools(awareness.WatchlistToolsConfig{Store: store}))
 
 	after := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"add_context_entity", "list_context_entities", "remove_context_entity"}
 	for _, name := range wantTools {
 		if !slices.Contains(after["awareness"].Tools, name) {
-			t.Errorf("awareness tag missing %q after SetWatchlistStore; got %v",
+			t.Errorf("awareness tag missing %q after provider registration; got %v",
 				name, after["awareness"].Tools)
 		}
 	}
@@ -179,7 +179,7 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 	if err != nil {
 		t.Fatalf("new mqtt subscription store: %v", err)
 	}
-	reg.SetMQTTSubscriptionTools(mqtt.NewTools(subStore))
+	reg.RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore)))
 
 	resolved := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"mqtt_wake_add", "mqtt_wake_list", "mqtt_wake_remove"}
