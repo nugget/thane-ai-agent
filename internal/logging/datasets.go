@@ -228,7 +228,7 @@ func classifyDataset(projection datasetProjection) datasetDecision {
 	source := datasetSource(projection)
 
 	switch {
-	case kind == "http_access" || kind == "request_received":
+	case kind == KindHTTPAccess || kind == KindRequestReceived:
 		return datasetDecision{Dataset: DatasetAccess, Kind: kind, Source: source}
 	case projection.Subsystem == SubsystemAgent && projection.RequestID != "":
 		return datasetDecision{Dataset: DatasetRequests, Kind: kind, Source: source}

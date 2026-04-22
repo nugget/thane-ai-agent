@@ -112,7 +112,7 @@ func (s *OllamaServer) withLogging(next http.Handler) http.Handler {
 		rw := logging.NewAccessResponseWriter(w)
 		next.ServeHTTP(rw, r)
 		s.logger.Info("request handled",
-			"kind", "http_access",
+			"kind", logging.KindHTTPAccess,
 			"server", "ollama",
 			"method", r.Method,
 			"path", r.URL.Path,

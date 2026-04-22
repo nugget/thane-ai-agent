@@ -29,6 +29,21 @@ const (
 	DatasetEnvelopes = "envelopes"
 )
 
+// Shared log-attribute keys and values used to route slog records into
+// the right dataset. Kept in one place so the handler classifier and
+// the HTTP access middleware cannot drift against each other.
+const (
+	// KindHTTPAccess labels HTTP access-log records for the access dataset.
+	KindHTTPAccess = "http_access"
+	// KindRequestReceived is an alternate access-log kind for legacy
+	// compatibility with earlier call sites.
+	KindRequestReceived = "request_received"
+
+	// ComponentMessageBus labels slog records originating from the
+	// envelope message bus plumbing.
+	ComponentMessageBus = "message_bus"
+)
+
 // DatasetRecord is one append-only structured JSONL record in a dataset stream.
 type DatasetRecord struct {
 	EventID        string         `json:"event_id"`
@@ -158,8 +173,13 @@ func (w *DatasetWriter) WriteRecord(record DatasetRecord) error {
 	return nil
 }
 
+// datasetSegmentKeyAndPath returns the partition key and filesystem path
+// for a record at the given timestamp. Partitioning is done in UTC so
+// the directory layout (date/hour folders) matches the ts field inside
+// each record and DST transitions cannot produce overlapping or missing
+// partitions.
 func datasetSegmentKeyAndPath(root, dataset string, ts time.Time) (string, string) {
-	segmentTime := ts.In(time.Local)
+	segmentTime := ts.UTC()
 	day := segmentTime.Format(time.DateOnly)
 	hour := segmentTime.Format("15")
 	return dataset + "/" + day + "/" + hour,
