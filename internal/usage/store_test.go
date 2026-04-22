@@ -474,10 +474,66 @@ func TestComputeDetailedCostForIdentity_AnthropicCacheBuckets(t *testing.T) {
 		Provider:      "anthropic",
 	}
 
+	// Legacy call without TTL breakdown: all cache-writes billed at 5m
+	// rate (1.25×), matching pre-#736 behavior for historical records.
 	got := ComputeDetailedCostForIdentity(identity, 1_000_000, 1_000_000, 1_000_000, 100_000, pricing)
 	want := 15.0 + (15.0 * 1.25) + (15.0 * 0.10) + 7.5
 	if diff := got - want; diff > 0.0001 || diff < -0.0001 {
 		t.Fatalf("ComputeDetailedCostForIdentity(...) = %f, want %f", got, want)
+	}
+}
+
+func TestComputeDetailedCostForIdentityWithTTL_ChargesFiveMinuteAndOneHour(t *testing.T) {
+	pricing := testPricing()
+	identity := ModelIdentity{
+		Model:         "claude-opus-4-20250514",
+		UpstreamModel: "claude-opus-4-20250514",
+		Provider:      "anthropic",
+	}
+
+	// 1M uncached input + 1M 5m writes + 1M 1h writes + 1M reads + 100k output.
+	// Opus pricing: input $15/MTok, output $75/MTok.
+	// 5m write multiplier: 1.25×. 1h: 2.0×. Read: 0.1×.
+	got := ComputeDetailedCostForIdentityWithTTL(identity,
+		1_000_000,   // uncached input
+		2_000_000,   // total cache writes (5m + 1h attributed)
+		1_000_000,   // 5m bucket
+		1_000_000,   // 1h bucket
+		1_000_000,   // cache reads
+		100_000,     // output
+		pricing,
+	)
+	want := 15.0 /* uncached input */ +
+		(15.0 * 1.25) /* 5m write */ +
+		(15.0 * 2.00) /* 1h write */ +
+		(15.0 * 0.10) /* cache read */ +
+		7.5 /* output */
+	if diff := got - want; diff > 0.0001 || diff < -0.0001 {
+		t.Fatalf("cost = %f, want %f", got, want)
+	}
+}
+
+func TestComputeDetailedCostForIdentityWithTTL_UnattributedFallsBackTo5m(t *testing.T) {
+	pricing := testPricing()
+	identity := ModelIdentity{
+		Model:         "claude-opus-4-20250514",
+		UpstreamModel: "claude-opus-4-20250514",
+		Provider:      "anthropic",
+	}
+
+	// Provider reported 1M total writes but attributed 0 to each
+	// bucket. Matches the pre-#736 schema where the breakdown columns
+	// didn't exist. Must fall back to 5m multiplier on the full total.
+	got := ComputeDetailedCostForIdentityWithTTL(identity,
+		0,         // no uncached input
+		1_000_000, // total writes
+		0, 0,      // no attribution
+		0, 0,      // no reads, no output
+		pricing,
+	)
+	want := 15.0 * 1.25
+	if diff := got - want; diff > 0.0001 || diff < -0.0001 {
+		t.Fatalf("unattributed cost = %f, want %f (5m rate)", got, want)
 	}
 }
 

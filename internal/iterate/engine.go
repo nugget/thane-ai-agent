@@ -33,17 +33,19 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 	// Per-run tracking.
 	var (
-		iterations       []IterationRecord
-		toolsUsed        = make(map[string]int)
-		toolCallCounts   = make(map[string]int)
-		totalInput       int
-		totalOutput      int
-		totalCacheCreate int
-		totalCacheRead   int
-		illegalStrikes   int
-		emptyRetried     bool
-		deferredText     string
-		breakReason      string
+		iterations          []IterationRecord
+		toolsUsed           = make(map[string]int)
+		toolCallCounts      = make(map[string]int)
+		totalInput          int
+		totalOutput         int
+		totalCacheCreate    int
+		totalCacheCreate5m  int
+		totalCacheCreate1h  int
+		totalCacheRead      int
+		illegalStrikes      int
+		emptyRetried        bool
+		deferredText        string
+		breakReason         string
 	)
 
 	for i := 0; i < cfg.MaxIterations; i++ {
@@ -76,7 +78,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						Model:                    model,
 						InputTokens:              totalInput,
 						OutputTokens:             totalOutput,
-						CacheCreationInputTokens: totalCacheCreate,
+						CacheCreationInputTokens:   totalCacheCreate,
+						CacheCreation5mInputTokens: totalCacheCreate5m,
+						CacheCreation1hInputTokens: totalCacheCreate1h,
 						CacheReadInputTokens:     totalCacheRead,
 						ToolsUsed:                toolsUsed,
 						Exhausted:                true,
@@ -93,7 +97,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					Model:                    model,
 					InputTokens:              totalInput,
 					OutputTokens:             totalOutput,
-					CacheCreationInputTokens: totalCacheCreate,
+					CacheCreationInputTokens:   totalCacheCreate,
+					CacheCreation5mInputTokens: totalCacheCreate5m,
+					CacheCreation1hInputTokens: totalCacheCreate1h,
 					CacheReadInputTokens:     totalCacheRead,
 					ToolsUsed:                toolsUsed,
 					Exhausted:                true,
@@ -108,6 +114,8 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		totalInput += llmResp.InputTokens
 		totalOutput += llmResp.OutputTokens
 		totalCacheCreate += llmResp.CacheCreationInputTokens
+		totalCacheCreate5m += llmResp.CacheCreation5mInputTokens
+		totalCacheCreate1h += llmResp.CacheCreation1hInputTokens
 		totalCacheRead += llmResp.CacheReadInputTokens
 
 		// --- Callback: LLM response ---
@@ -123,7 +131,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				Model:                    llmResp.Model,
 				InputTokens:              llmResp.InputTokens,
 				OutputTokens:             llmResp.OutputTokens,
-				CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+				CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
+				CacheCreation5mInputTokens: llmResp.CacheCreation5mInputTokens,
+				CacheCreation1hInputTokens: llmResp.CacheCreation1hInputTokens,
 				CacheReadInputTokens:     llmResp.CacheReadInputTokens,
 				ToolsOffered:             toolDefsNames(toolDefs),
 				StartedAt:                iterStart,
@@ -136,7 +146,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				Model:                    model,
 				InputTokens:              totalInput,
 				OutputTokens:             totalOutput,
-				CacheCreationInputTokens: totalCacheCreate,
+				CacheCreationInputTokens:   totalCacheCreate,
+				CacheCreation5mInputTokens: totalCacheCreate5m,
+				CacheCreation1hInputTokens: totalCacheCreate1h,
 				CacheReadInputTokens:     totalCacheRead,
 				ToolsUsed:                toolsUsed,
 				Exhausted:                true,
@@ -175,7 +187,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			Model:                    llmResp.Model,
 			InputTokens:              llmResp.InputTokens,
 			OutputTokens:             llmResp.OutputTokens,
-			CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+			CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
+			CacheCreation5mInputTokens: llmResp.CacheCreation5mInputTokens,
+			CacheCreation1hInputTokens: llmResp.CacheCreation1hInputTokens,
 			CacheReadInputTokens:     llmResp.CacheReadInputTokens,
 			ToolsOffered:             toolDefsNames(toolDefs),
 			StartedAt:                iterStart,
@@ -407,7 +421,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			Model:                    model,
 			InputTokens:              totalInput,
 			OutputTokens:             totalOutput,
-			CacheCreationInputTokens: totalCacheCreate,
+			CacheCreationInputTokens:   totalCacheCreate,
+			CacheCreation5mInputTokens: totalCacheCreate5m,
+			CacheCreation1hInputTokens: totalCacheCreate1h,
 			CacheReadInputTokens:     totalCacheRead,
 			ToolsUsed:                toolsUsed,
 			Exhausted:                false,
@@ -427,7 +443,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		Model:                    model,
 		InputTokens:              totalInput,
 		OutputTokens:             totalOutput,
-		CacheCreationInputTokens: totalCacheCreate,
+		CacheCreationInputTokens:   totalCacheCreate,
+		CacheCreation5mInputTokens: totalCacheCreate5m,
+		CacheCreation1hInputTokens: totalCacheCreate1h,
 		CacheReadInputTokens:     totalCacheRead,
 		ToolsUsed:                toolsUsed,
 		Exhausted:                true,
@@ -481,7 +499,9 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 			Model:                    resp.Model,
 			InputTokens:              resp.InputTokens,
 			OutputTokens:             resp.OutputTokens,
-			CacheCreationInputTokens: resp.CacheCreationInputTokens,
+			CacheCreationInputTokens:   resp.CacheCreationInputTokens,
+			CacheCreation5mInputTokens: resp.CacheCreation5mInputTokens,
+			CacheCreation1hInputTokens: resp.CacheCreation1hInputTokens,
 			CacheReadInputTokens:     resp.CacheReadInputTokens,
 			StartedAt:                time.Now(),
 			HasToolCalls:             false,

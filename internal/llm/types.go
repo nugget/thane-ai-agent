@@ -59,6 +59,14 @@ type ChatResponse struct {
 	OutputTokens             int
 	CacheCreationInputTokens int
 	CacheReadInputTokens     int
+	// Per-TTL breakdown of cache-write tokens. Populated by providers
+	// that return a structured cache_creation breakdown (Anthropic).
+	// Zero when the provider doesn't expose the breakdown, in which
+	// case callers should fall back to CacheCreationInputTokens and
+	// treat the TTL mix as unknown (typically charged at the 5m rate
+	// for cost estimation, since that's the default).
+	CacheCreation5mInputTokens int
+	CacheCreation1hInputTokens int
 
 	// Timing (populated when available)
 	TotalDuration time.Duration

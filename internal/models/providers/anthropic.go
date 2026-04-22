@@ -129,6 +129,20 @@ type anthropicUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	// CacheCreation breaks down cache-write tokens by TTL bucket so
+	// downstream pricing can apply the correct multiplier (5m writes
+	// are 1.25× base input, 1h writes are 2.0×). Older Anthropic
+	// responses omit this object; callers must treat absence as
+	// "unknown TTL mix" and fall back to CacheCreationInputTokens.
+	CacheCreation *anthropicCacheCreation `json:"cache_creation,omitempty"`
+}
+
+// anthropicCacheCreation mirrors the response shape Anthropic returns
+// under usage.cache_creation: a per-TTL breakdown of tokens that were
+// written into the cache on this turn.
+type anthropicCacheCreation struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens,omitempty"`
 }
 
 // SSE event types for streaming
@@ -392,6 +406,10 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		OutputTokens:             usage.OutputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
+	}
+	if bd := usage.CacheCreation; bd != nil {
+		resp.CacheCreation5mInputTokens = bd.Ephemeral5mInputTokens
+		resp.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
 	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
@@ -795,7 +813,7 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 		}
 	}
 
-	return &llm.ChatResponse{
+	out := &llm.ChatResponse{
 		Model: resp.Model,
 		Message: llm.Message{
 			Role:      resp.Role,
@@ -808,6 +826,11 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
 	}
+	if bd := resp.Usage.CacheCreation; bd != nil {
+		out.CacheCreation5mInputTokens = bd.Ephemeral5mInputTokens
+		out.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
+	}
+	return out
 }
 
 // (toolUseID removed — IDs are now carried on ToolCall.ID directly)
