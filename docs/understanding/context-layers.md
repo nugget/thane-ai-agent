@@ -102,3 +102,10 @@ memory.
 | Identity in talents | Confusing — talent says "you are X" but persona says "you are Y" | Keep identity in persona only |
 | Behavioral directives in inject files | Inject files are knowledge, not instructions | Move directives to talents |
 | Static time in build info | Model treats version metadata as ignorable | Use Current Conditions section |
+
+## Related
+
+- [Anthropic Caching](../anthropic-caching.md) — how the layer
+  boundaries map onto Anthropic cache TTLs (persona and inject-file
+  layers cache at 1h; dynamic context and current conditions are
+  uncached so they don't churn the prefix).
