@@ -39,8 +39,7 @@ var promotedKeys = map[string]bool{
 // Call [IndexHandler.Close] to flush pending entries and stop the
 // background goroutine.
 type IndexHandler struct {
-	inner   slog.Handler
-	rotator *Rotator // for raw_file / raw_line; nil if file logging disabled
+	inner slog.Handler
 
 	// preAttrs are attributes added via WithAttrs that apply to every
 	// record handled by this instance.
@@ -81,8 +80,6 @@ type indexEntry struct {
 	SourceFile     string
 	SourceLine     int
 	Attrs          string // JSON object of non-promoted attributes
-	RawFile        string
-	RawLine        int
 }
 
 // indexBufSize is the channel buffer for async SQLite writes. Sized to
@@ -91,21 +88,18 @@ const indexBufSize = 4096
 
 // NewIndexHandler wraps inner with a SQLite indexing handler. The db
 // must be an open SQLite connection (typically from [database.Open]).
-// If rotator is non-nil, each entry records the raw log filename and
-// line number for back-linking.
 //
 // The caller must call [IndexHandler.Close] on shutdown to flush
 // pending entries and release the background goroutine.
-func NewIndexHandler(inner slog.Handler, db *sql.DB, rotator *Rotator) *IndexHandler {
+func NewIndexHandler(inner slog.Handler, db *sql.DB) *IndexHandler {
 	s := &indexShared{
 		db:   db,
 		ch:   make(chan indexEntry, indexBufSize),
 		done: make(chan struct{}),
 	}
 	h := &IndexHandler{
-		inner:   inner,
-		rotator: rotator,
-		shared:  s,
+		inner:  inner,
+		shared: s,
 	}
 	go h.drain()
 	return h
@@ -142,12 +136,6 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		f, _ := fs.Next()
 		entry.SourceFile = strings.TrimPrefix(f.File, modulePrefix)
 		entry.SourceLine = f.Line
-	}
-
-	// Raw file back-link.
-	if h.rotator != nil {
-		entry.RawFile = h.rotator.ActiveFile()
-		entry.RawLine = h.rotator.LineCount()
 	}
 
 	// Collect all attributes: pre-set ones from WithAttrs, then per-record.
@@ -191,7 +179,6 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 func (h *IndexHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &IndexHandler{
 		inner:    h.inner.WithAttrs(attrs),
-		rotator:  h.rotator,
 		preAttrs: append(cloneAttrs(h.preAttrs), attrs...),
 		groups:   h.groups,
 		shared:   h.shared,
@@ -205,7 +192,6 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 	}
 	return &IndexHandler{
 		inner:    h.inner.WithGroup(name),
-		rotator:  h.rotator,
 		preAttrs: cloneAttrs(h.preAttrs),
 		groups:   append(slices.Clone(h.groups), name),
 		shared:   h.shared,
@@ -323,8 +309,8 @@ func (h *IndexHandler) drain() {
 	const insertSQL = `INSERT INTO log_entries
 		(timestamp, level, msg, request_id, session_id, conversation_id,
 		 subsystem, tool, model, loop_id, loop_name,
-		 source_file, source_line, attrs, raw_file, raw_line)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 source_file, source_line, attrs)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	stmt, err := h.shared.db.Prepare(insertSQL)
 	if err != nil {
@@ -350,8 +336,6 @@ func (h *IndexHandler) drain() {
 			nullString(e.SourceFile),
 			nullInt(e.SourceLine),
 			nullString(e.Attrs),
-			nullString(e.RawFile),
-			nullInt(e.RawLine),
 		)
 	}
 }

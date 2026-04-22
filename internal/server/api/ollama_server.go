@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
 // OllamaServer is a dedicated server for Ollama-compatible API endpoints.
@@ -108,11 +109,16 @@ func (s *OllamaServer) Shutdown(ctx context.Context) error {
 func (s *OllamaServer) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		s.logger.Info("ollama request",
+		rw := logging.NewAccessResponseWriter(w)
+		next.ServeHTTP(rw, r)
+		s.logger.Info("request handled",
+			"kind", logging.KindHTTPAccess,
+			"server", "ollama",
 			"method", r.Method,
 			"path", r.URL.Path,
-			"duration", time.Since(start).Round(time.Millisecond),
+			"status", rw.StatusCode(),
+			"response_bytes", rw.BytesWritten(),
+			"duration_ms", time.Since(start).Milliseconds(),
 		)
 	})
 }

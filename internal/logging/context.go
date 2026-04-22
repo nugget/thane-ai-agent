@@ -1,16 +1,18 @@
-// Package logging provides self-managed log file rotation,
-// context-propagated structured logging, and a queryable SQLite
-// index for Thane.
+// Package logging provides dataset-partitioned JSONL log retention,
+// context-propagated structured logging, and a queryable SQLite index
+// for Thane.
 //
-// The [Rotator] implements [io.WriteCloser] and handles daily log
-// rotation with optional gzip compression of previous days' files.
-// Log files are organized by date:
+// Structured filesystem retention is written as append-only JSONL
+// datasets, partitioned by dataset/date/hour:
 //
 //	logs/
-//	  thane.log                    # current, active
-//	  thane-2026-03-09.log.gz     # rotated daily, compressed
-//	  thane-2026-03-08.log.gz
-//	  ...never deleted...
+//	  events/2026-04-21/15.jsonl
+//	  requests/2026-04-21/15.jsonl
+//	  access/2026-04-21/15.jsonl
+//	  loops/2026-04-21/15.jsonl
+//	  delegates/2026-04-21/15.jsonl
+//	  envelopes/2026-04-21/15.jsonl
+//	  logs.db
 //
 // The [WithLogger] / [Logger] helpers thread a *[slog.Logger] through
 // [context.Context] so that every log line in a request chain
@@ -25,7 +27,7 @@
 // (request_id, session_id, conversation_id, subsystem, tool, model)
 // are extracted into indexed columns for fast queries; remaining
 // attributes go into a JSON catch-all. Use [Prune] to manage index
-// retention while preserving the raw log files as the canonical
+// retention while preserving the dataset files as the canonical
 // record.
 package logging
 

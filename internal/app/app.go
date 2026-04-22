@@ -136,11 +136,11 @@ type App struct {
 	// Logging infrastructure
 	indexDB             *sql.DB
 	indexHandler        *logging.IndexHandler
+	datasetWriter       *logging.DatasetWriter
 	liveRequestStore    *logging.LiveRequestStore
 	liveRequestRecorder logging.RequestRecordFunc
 	requestRecorder     logging.RequestRecordFunc
 	contentWriter       *logging.ContentWriter
-	rotator             *logging.Rotator
 
 	// Attachment and vision
 	attachmentStore *attachments.Store

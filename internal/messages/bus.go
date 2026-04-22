@@ -97,6 +97,26 @@ func (b *Bus) RegisterRoute(kind DestinationKind, handler HandlerFunc) {
 	b.handlers[kind] = handler
 }
 
+// AddAuditFunc appends fn to the bus audit pipeline after the existing
+// audit function. Nil functions are ignored.
+func (b *Bus) AddAuditFunc(fn AuditFunc) {
+	if b == nil || fn == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	prev := b.audit
+	if prev == nil {
+		b.audit = fn
+		return
+	}
+	b.audit = func(ctx context.Context, env Envelope, result *DeliveryResult, err error) {
+		prev(ctx, env, result, err)
+		fn(ctx, env, result, err)
+	}
+}
+
 // Send validates and routes one envelope.
 func (b *Bus) Send(ctx context.Context, env Envelope) (DeliveryResult, error) {
 	if b == nil {

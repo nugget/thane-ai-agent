@@ -561,8 +561,8 @@ func TestApplyDefaults_Logging(t *testing.T) {
 	if cfg.Logging.Dir != nil {
 		t.Errorf("Logging.Dir = %v, want nil (defaults via DirPath())", cfg.Logging.Dir)
 	}
-	if got := cfg.Logging.DirPath(); got != "logs" {
-		t.Errorf("Logging.DirPath() = %q, want %q", got, "logs")
+	if got := cfg.Logging.RootPath(); got != "logs" {
+		t.Errorf("Logging.RootPath() = %q, want %q", got, "logs")
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, "info")
@@ -570,8 +570,17 @@ func TestApplyDefaults_Logging(t *testing.T) {
 	if cfg.Logging.Format != "json" {
 		t.Errorf("Logging.Format = %q, want %q", cfg.Logging.Format, "json")
 	}
-	if !cfg.Logging.CompressEnabled() {
-		t.Error("Logging.CompressEnabled() = false, want true")
+	if got := cfg.Logging.StdoutLevelValue(); got != "info" {
+		t.Errorf("Logging.StdoutLevelValue() = %q, want %q", got, "info")
+	}
+	if got := cfg.Logging.StdoutFormatValue(); got != "json" {
+		t.Errorf("Logging.StdoutFormatValue() = %q, want %q", got, "json")
+	}
+	if !cfg.Logging.DatasetEnabled("events") {
+		t.Error("Logging.DatasetEnabled(events) = false, want true")
+	}
+	if cfg.Logging.DatasetEnabled("access") {
+		t.Error("Logging.DatasetEnabled(access) = true, want false by default")
 	}
 }
 
@@ -729,43 +738,74 @@ func TestValidate_DelegateZeroKeepsDefaults(t *testing.T) {
 	}
 }
 
-func TestLoggingConfig_CompressEnabled(t *testing.T) {
+func TestLoggingConfig_RootPath(t *testing.T) {
 	tests := []struct {
-		name     string
-		compress *bool
-		want     bool
+		name string
+		root *string
+		dir  *string
+		want string
 	}{
-		{"nil defaults to true", nil, true},
-		{"explicit true", boolPtr(true), true},
-		{"explicit false", boolPtr(false), false},
+		{"nil defaults to logs", nil, nil, "logs"},
+		{"explicit root empty disables", strPtr(""), strPtr("/var/log/thane"), ""},
+		{"explicit root wins", strPtr("/srv/thane/logs"), strPtr("/var/log/thane"), "/srv/thane/logs"},
+		{"legacy dir used when root unset", nil, strPtr("/var/log/thane"), "/var/log/thane"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lc := LoggingConfig{Compress: tt.compress}
-			if got := lc.CompressEnabled(); got != tt.want {
-				t.Errorf("CompressEnabled() = %v, want %v", got, tt.want)
+			lc := LoggingConfig{Root: tt.root, Dir: tt.dir}
+			if got := lc.RootPath(); got != tt.want {
+				t.Errorf("RootPath() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestLoggingConfig_DirPath(t *testing.T) {
-	tests := []struct {
-		name string
-		dir  *string
-		want string
-	}{
-		{"nil defaults to logs", nil, "logs"},
-		{"explicit empty disables", strPtr(""), ""},
-		{"explicit value used", strPtr("/var/log/thane"), "/var/log/thane"},
+func TestLoggingConfig_StdoutAndDatasetDefaults(t *testing.T) {
+	lc := LoggingConfig{
+		Level:  "warn",
+		Format: "text",
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lc := LoggingConfig{Dir: tt.dir}
-			if got := lc.DirPath(); got != tt.want {
-				t.Errorf("DirPath() = %q, want %q", got, tt.want)
-			}
-		})
+
+	if !lc.StdoutEnabled() {
+		t.Error("StdoutEnabled() = false, want true by default")
+	}
+	if got := lc.StdoutLevelValue(); got != "warn" {
+		t.Errorf("StdoutLevelValue() = %q, want %q", got, "warn")
+	}
+	if got := lc.StdoutFormatValue(); got != "text" {
+		t.Errorf("StdoutFormatValue() = %q, want %q", got, "text")
+	}
+	if !lc.DatasetEnabled("loops") {
+		t.Error("DatasetEnabled(loops) = false, want true")
+	}
+	if !lc.DatasetEnabled("envelopes") {
+		t.Error("DatasetEnabled(envelopes) = false, want true")
+	}
+}
+
+func TestValidate_LoggingInvalidStdoutLevel(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.Stdout.Level = "loud"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid logging.stdout.level")
+	}
+	if !strings.Contains(err.Error(), "logging.stdout.level") {
+		t.Errorf("error %q should mention logging.stdout.level", err)
+	}
+}
+
+func TestValidate_LoggingInvalidStdoutFormat(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.Stdout.Format = "yaml"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid logging.stdout.format")
+	}
+	if !strings.Contains(err.Error(), "logging.stdout.format") {
+		t.Errorf("error %q should mention logging.stdout.format", err)
 	}
 }
 
@@ -792,7 +832,5 @@ func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
 		t.Error("expected format=false on fresh config, got true")
 	}
 }
-
-func boolPtr(b bool) *bool { return &b }
 
 func strPtr(s string) *string { return &s }

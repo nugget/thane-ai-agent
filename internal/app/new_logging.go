@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -13,10 +12,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
-// initLogging reconfigures the logger with the desired level, format, and
-// output destination (rotated files + stdout). It also opens the SQLite
-// log index, content writer, and registers background workers for log
-// index pruning and content archival.
+// initLogging reconfigures the logger with the desired stdout policy and
+// structured dataset storage. It also opens the SQLite log index, content
+// writer, and registers background workers for log index pruning and content
+// archival.
 //
 // On return, a.logger is the final configured logger for all subsequent
 // initialization and runtime logging.
@@ -26,35 +25,43 @@ func (a *App) initLogging(augmentedDirs []string) error {
 	stdout := a.stdout
 
 	level, _ := config.ParseLogLevel(cfg.Logging.Level)
+	stdoutLevel, _ := config.ParseLogLevel(cfg.Logging.StdoutLevelValue())
 
-	// Open the log rotator for file output. Logs go to both
-	// stdout (for launchd/systemd capture) and the rotated file.
-	// When Dir is empty, file logging is disabled (stdout only).
-	logWriter := stdout
-	var rotator *logging.Rotator
+	var stdoutHandler slog.Handler
+	if cfg.Logging.StdoutEnabled() {
+		stdoutHandler = newHandler(stdout, stdoutLevel, cfg.Logging.StdoutFormatValue())
+	}
 
-	if logDir := cfg.Logging.DirPath(); logDir != "" {
+	logRoot := cfg.Logging.RootPath()
+	var datasetWriter *logging.DatasetWriter
+	if logRoot != "" {
 		var err error
-		rotator, err = logging.Open(logDir, cfg.Logging.CompressEnabled())
+		datasetWriter, err = logging.OpenDatasetWriter(logRoot)
 		if err != nil {
-			// File logging failed — fall back to stdout only.
-			logger.Warn("failed to open log directory, using stdout only",
-				"dir", logDir, "error", err)
+			logger.Warn("failed to open logging root, using stdout only",
+				"root", logRoot, "error", err)
+			datasetWriter = nil
 		} else {
-			a.rotator = rotator
-			a.onCloseErr("rotator", rotator.Close)
-			logWriter = io.MultiWriter(stdout, rotator)
+			a.datasetWriter = datasetWriter
+			a.onCloseErr("dataset-writer", datasetWriter.Close)
 		}
 	}
 
-	handler := newHandler(logWriter, level, cfg.Logging.Format)
+	var handler slog.Handler = logging.NewDatasetHandler(stdoutHandler, datasetWriter, logging.DatasetHandlerOptions{
+		DatasetLevel:    level,
+		StdoutLevel:     stdoutLevel,
+		StdoutEnabled:   cfg.Logging.StdoutEnabled(),
+		EventsEnabled:   cfg.Logging.DatasetEnabled(logging.DatasetEvents),
+		RequestsEnabled: cfg.Logging.DatasetEnabled(logging.DatasetRequests),
+		AccessEnabled:   cfg.Logging.DatasetEnabled(logging.DatasetAccess),
+	})
 
-	// Open the SQLite log index alongside the raw log files.
-	// If file logging is disabled (no logDir) or the DB fails to
+	// Open the SQLite log index alongside the structured dataset root.
+	// If filesystem logging is disabled (no logRoot) or the DB fails to
 	// open, logging continues without indexing.
-	if logDir := cfg.Logging.DirPath(); logDir != "" {
+	if logRoot != "" {
 		var err error
-		a.indexDB, err = database.Open(filepath.Join(logDir, "logs.db"))
+		a.indexDB, err = database.Open(filepath.Join(logRoot, "logs.db"))
 		if err != nil {
 			logger.Warn("failed to open log index database, indexing disabled",
 				"error", err)
@@ -65,7 +72,7 @@ func (a *App) initLogging(augmentedDirs []string) error {
 			a.indexDB.Close()
 			a.indexDB = nil
 		} else {
-			indexHandler := logging.NewIndexHandler(handler, a.indexDB, rotator)
+			indexHandler := logging.NewIndexHandler(handler, a.indexDB)
 			a.onCloseErr("index-db", a.indexDB.Close)
 			handler = indexHandler
 			a.indexHandler = indexHandler
@@ -138,9 +145,9 @@ func (a *App) initLogging(augmentedDirs []string) error {
 		// content older than ContentArchiveDays to monthly JSONL files, then
 		// removes it from logs.db. Runs daily; disabled when archive duration
 		// is 0 or content retention is off.
-		if logDir := cfg.Logging.DirPath(); logDir != "" {
+		if logRoot != "" {
 			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && a.contentWriter != nil {
-				archiveDir := cfg.Logging.ContentArchiveDirPath(logDir)
+				archiveDir := cfg.Logging.ContentArchiveDirPath(logRoot)
 				archiver := logging.NewArchiver(a.indexDB, archiveDir, logger)
 				a.deferWorker("content-archiver", func(ctx context.Context) error {
 					go func() {

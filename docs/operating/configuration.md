@@ -238,13 +238,32 @@ is blocked by default.
 ## Logging
 
 ```yaml
-log_format: text       # text or json
-log_dir: ~/Thane/logs
+logging:
+  root: ~/Thane/logs
+  level: info
+  stdout:
+    enabled: true
+    level: info
+  datasets:
+    events:
+      enabled: true
+    requests:
+      enabled: true
+    access:
+      enabled: false
+    loops:
+      enabled: true
+    delegates:
+      enabled: true
+    envelopes:
+      enabled: true
 ```
 
-Thane manages its own log rotation with daily files and optional gzip
-compression. The SQLite log index enables fast queries by session, level,
-and subsystem without parsing raw log files.
+Thane writes append-only JSONL datasets under `logging.root`, partitioned by
+dataset/date/hour. `stdout` is a separate operator-facing surface, so high-volume
+request and access chatter can be retained on disk without polluting live logs.
+`logs.db` remains the query/index layer, but the dataset files are the primary
+filesystem record.
 
 ## MCP Servers
 

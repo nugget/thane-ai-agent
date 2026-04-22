@@ -220,7 +220,8 @@ service-install: install
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
     echo "  Data:    $THANE_HOME/db/"
-    echo "  Logs:    $THANE_HOME/logs/thane.log  (rotated daily)"
+    echo "  Logs:    $THANE_HOME/logs/{events,requests,access,loops,delegates,envelopes}/YYYY-MM-DD/HH.jsonl"
+    echo "           $THANE_HOME/logs/logs.db"
     echo "  Crashes: $THANE_HOME/crash.log       (pre-init errors only)"
     echo ""
     echo "Next steps:"
@@ -380,10 +381,48 @@ deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/than
 serve: build
     cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve
 
-# Tail live service logs (default: dev workdir)
+# Tail live service logs (default: dev workdir). Follows the events
+# dataset and rolls to the next HH.jsonl segment automatically. Waits
+# patiently if no segment exists yet so this works on a fresh install.
 [group('operations')]
 logs workdir="./Thane":
-    tail -f {{workdir}}/logs/thane.log
+    #!/usr/bin/env bash
+    set -euo pipefail
+    events_dir="{{workdir}}/logs/events"
+    echo "Tailing events dataset under $events_dir (Ctrl-C to stop)..."
+    current=""
+    while true; do
+        latest="$(find "$events_dir" -type f -name '*.jsonl' 2>/dev/null | sort | tail -n 1 || true)"
+        if [ -z "$latest" ]; then
+            # No segment yet — wait for the first one. Repeat cheaply.
+            sleep 2
+            continue
+        fi
+        if [ "$latest" != "$current" ]; then
+            if [ -n "$current" ]; then
+                echo "--- rolled over to $latest ---"
+            else
+                echo "--- tailing $latest ---"
+            fi
+            current="$latest"
+            # Stream the new segment in the foreground until the next
+            # hour rolls. The outer loop kills tail when a newer file
+            # appears (tail's --pid would be cleaner but isn't portable).
+            tail -n 0 -F "$latest" &
+            tail_pid=$!
+            # Poll once a minute for a newer segment; kill tail when
+            # one appears so the outer loop can latch on to it.
+            while kill -0 "$tail_pid" 2>/dev/null; do
+                sleep 60
+                newer="$(find "$events_dir" -type f -name '*.jsonl' 2>/dev/null | sort | tail -n 1 || true)"
+                if [ -n "$newer" ] && [ "$newer" != "$current" ]; then
+                    kill "$tail_pid" 2>/dev/null || true
+                    wait "$tail_pid" 2>/dev/null || true
+                    break
+                fi
+            done
+        fi
+    done
 
 # Live smoke test for loops-ng loop definition registry behavior against a running dev instance
 [group('operations')]

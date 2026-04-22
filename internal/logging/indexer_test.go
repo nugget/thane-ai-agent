@@ -29,7 +29,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func TestIndexHandler_BasicWrite(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 	defer h.Close()
 
 	logger := slog.New(h)
@@ -83,7 +83,7 @@ func TestIndexHandler_PromotedFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := openTestDB(t)
 			inner := slog.NewJSONHandler(discardWriter{}, nil)
-			h := NewIndexHandler(inner, db, nil)
+			h := NewIndexHandler(inner, db)
 
 			logger := slog.New(h)
 			logger.Info("test", tt.key, tt.value)
@@ -104,7 +104,7 @@ func TestIndexHandler_PromotedFields(t *testing.T) {
 func TestIndexHandler_WithAttrsPreserved(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	// Create a child handler with pre-set attributes.
 	child := h.WithAttrs([]slog.Attr{
@@ -141,7 +141,7 @@ func TestIndexHandler_WithAttrsPreserved(t *testing.T) {
 func TestIndexHandler_NonPromotedGoToAttrs(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 	logger.Info("custom fields", "elapsed", "1.5s", "entity_id", "light.kitchen")
@@ -165,7 +165,7 @@ func TestIndexHandler_NonPromotedGoToAttrs(t *testing.T) {
 func TestIndexHandler_ErrorValueInAttrs(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 	logger.Info("operation failed", "error", fmt.Errorf("connection refused"))
@@ -198,7 +198,7 @@ func TestIndexHandler_ErrorValueInAttrs(t *testing.T) {
 func TestIndexHandler_WithGroupPrefix(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	// Create a handler inside a group.
 	grouped := h.WithGroup("source")
@@ -230,51 +230,10 @@ func TestIndexHandler_WithGroupPrefix(t *testing.T) {
 	}
 }
 
-func TestIndexHandler_WithRotator(t *testing.T) {
-	dir := t.TempDir()
-	rotator, err := Open(dir, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rotator.Close()
-
-	// Write some lines through the rotator to advance the counter.
-	for range 5 {
-		if _, err := rotator.Write([]byte("line\n")); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	db := openTestDB(t)
-	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, rotator)
-
-	logger := slog.New(h)
-	logger.Info("with rotator context")
-	h.Close()
-
-	var (
-		rawFile sql.NullString
-		rawLine sql.NullInt64
-	)
-	err = db.QueryRow(`SELECT raw_file, raw_line FROM log_entries LIMIT 1`).
-		Scan(&rawFile, &rawLine)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !rawFile.Valid || rawFile.String != activeLogName {
-		t.Errorf("raw_file = %v, want %q", rawFile, activeLogName)
-	}
-	if !rawLine.Valid || rawLine.Int64 != 5 {
-		t.Errorf("raw_line = %v, want 5", rawLine)
-	}
-}
-
 func TestIndexHandler_MultipleEntries(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 	for i := range 10 {
@@ -296,7 +255,7 @@ func TestIndexHandler_Enabled(t *testing.T) {
 	inner := slog.NewJSONHandler(discardWriter{}, &slog.HandlerOptions{
 		Level: slog.LevelWarn,
 	})
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 	defer h.Close()
 
 	if h.Enabled(context.Background(), slog.LevelInfo) {
@@ -310,7 +269,7 @@ func TestIndexHandler_Enabled(t *testing.T) {
 func TestIndexHandler_TimestampStored(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 	before := time.Now()
@@ -347,7 +306,7 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 func TestIndexHandler_LogAfterCloseNoPanic(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 	logger.Info("before close")
@@ -363,7 +322,7 @@ func TestIndexHandler_LogAfterCloseNoPanic(t *testing.T) {
 func TestIndexHandler_ConcurrentLogDuringClose(t *testing.T) {
 	db := openTestDB(t)
 	inner := slog.NewJSONHandler(discardWriter{}, nil)
-	h := NewIndexHandler(inner, db, nil)
+	h := NewIndexHandler(inner, db)
 
 	logger := slog.New(h)
 

@@ -37,7 +37,7 @@ import (
 //
 // Initialization is split into focused phases, each in its own file:
 //
-//   - [initLogging]    — logger, rotator, index DB, content writer
+//   - [initLogging]    — logger, dataset writer, index DB, content writer
 //   - [initStores]     — data stores, HA client, connwatch, router, scheduler
 //   - [initAgentLoop]  — agent loop, path resolver, context injection
 //   - [initChannels]   — tools, email, forge, MCP, Signal, facts, contacts

@@ -12,9 +12,12 @@ Thane/
 ├── persona.md        # Agent personality (replaces default system prompt)
 ├── talents/          # Skill/behavior markdown files (extend system prompt)
 │   └── *.md
-├── db/             # SQLite databases — facts, memory, checkpoints (auto-created)
-├── workspace/        # Agent's sandboxed file access (if configured)
-└── thane.log         # Log output
+├── db/               # SQLite databases — facts, memory, checkpoints (auto-created)
+├── logs/             # JSONL datasets plus logs.db
+│   ├── events/
+│   ├── requests/
+│   └── logs.db
+└── workspace/        # Agent's sandboxed file access (if configured)
 ```
 
 ## Config defaults
