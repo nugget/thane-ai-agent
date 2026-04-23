@@ -21,6 +21,11 @@ notary-profile := env("THANE_NOTARY_PROFILE", "")
 
 # List available recipes
 default:
+    @echo "Common workflows:"
+    @echo "  just release-github <version> [auto|prerelease|release]  # normal production release path"
+    @echo "  just deploy-macos-pkg <user@host>                         # live-host pkg validation without a GitHub release"
+    @echo "  just ci                                                   # full local validation gate"
+    @echo ""
     @just --list
 
 # --- Build ---
