@@ -164,7 +164,7 @@ reasoning:
   anchoring matters, and should still include a delta
 - persistent storage, logs, and APIs should keep absolute timestamps
 
-Use the shared helpers in `internal/awareness/timefmt.go`:
+Use the shared helpers in `internal/promptfmt/timefmt.go`:
 
 - `FormatDelta`
 - `FormatDeltaOnly`
