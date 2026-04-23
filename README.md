@@ -39,6 +39,10 @@ Point Home Assistant's Ollama integration at `http://thane-host:11434`, select m
 
 **[Your First Thane](docs/operating/guide.md)** — Complete onboarding guide with hardware, models, and deployment.
 
+On macOS, we recommend the
+[thane-agent-macos](https://github.com/nugget/thane-agent-macos) companion app
+for a native, integrated way to run Thane on a Mac.
+
 ## Releases
 
 Tagged releases publish locally prepared release artifacts on GitHub plus a
