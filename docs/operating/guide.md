@@ -75,6 +75,12 @@ cloud model provides the intelligence for orchestration and conversation.
 
 ## Deployment
 
+If you're running Thane on a macOS host, start with the
+[thane-agent-macos](https://github.com/nugget/thane-agent-macos) companion
+app. It gives you a native, integrated Mac experience for installing and
+running Thane. The manual steps below remain useful for source-based setups,
+Linux hosts, and operators who want the raw binary and service path.
+
 ### Step 1: Build and Install
 
 ```bash
