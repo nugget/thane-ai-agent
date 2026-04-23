@@ -18,7 +18,7 @@ require_signed="${4:-true}"
 
 cd "$repo_root"
 require_macos_host
-require_commands just codesign pkgbuild productbuild pkgutil
+require_commands just codesign pkgbuild productbuild pkgutil lsbom mkbom cpio gzip
 
 case "$target_arch" in
     amd64|arm64) ;;

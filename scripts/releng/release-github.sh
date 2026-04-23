@@ -17,7 +17,7 @@ container_tag="${3:-thane:prepare-release}"
 
 cd "$repo_root"
 require_macos_host
-require_commands just docker gh codesign pkgbuild productbuild xcrun
+require_commands just docker gh codesign pkgbuild productbuild pkgutil lsbom mkbom cpio gzip xcrun
 
 validate_release_version "$version"
 validate_release_kind "$release_kind"

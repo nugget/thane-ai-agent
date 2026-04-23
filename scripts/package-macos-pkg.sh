@@ -48,6 +48,9 @@ package_name="thane_${version}_darwin_${target_arch}.pkg"
 stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/thane-pkg.XXXXXX")"
 payload_root="$stage_dir/root"
 component_pkg="$stage_dir/thane-component.pkg"
+component_expanded="$stage_dir/thane-component-expanded"
+clean_component_pkg="$stage_dir/thane-component-clean.pkg"
+clean_bom_list="$stage_dir/clean-bom.txt"
 distribution_path="$stage_dir/Distribution.xml"
 requirements_plist="$stage_dir/product-requirements.plist"
 resources_root="$stage_dir/Resources"
@@ -63,6 +66,7 @@ install -m 755 "$binary_path" "$payload_root/Thane/bin/thane"
 if command -v xattr >/dev/null 2>&1; then
     xattr -cr "$payload_root"
 fi
+find "$payload_root" \( -name '.DS_Store' -o -name '._*' \) -delete
 
 artifact_path="$output_dir/$package_name"
 
@@ -110,6 +114,10 @@ pkgbuild_args=(
     --version "$version"
     --install-location "/"
     --ownership recommended
+    --filter '(^|/)\.DS_Store$'
+    --filter '(^|/)\.svn(/|$)'
+    --filter '(^|/)CVS(/|$)'
+    --filter '(^|/)\._[^/]*$'
     --quiet
     "$component_pkg"
 )
@@ -117,6 +125,21 @@ pkgbuild_args=(
 # Keep stdout reserved for the final artifact path so release recipes can
 # safely capture this script's result with command substitution.
 COPYFILE_DISABLE=1 "${pkgbuild_args[@]}" >&2
+
+# pkgbuild preserves protected macOS provenance metadata as AppleDouble `._*`
+# entries in the component payload/BOM. Rebuild both from the clean staging
+# root so published packages contain only the files operators should inspect.
+pkgutil --expand "$component_pkg" "$component_expanded" >&2
+lsbom "$component_expanded/Bom" \
+    | awk '$1 !~ /(^|\/)\._/ && $1 !~ /(^|\/)\.DS_Store$/ { print }' \
+    > "$clean_bom_list"
+mkbom -i "$clean_bom_list" "$component_expanded/Bom" >&2
+(
+    cd "$payload_root"
+    find . | LC_ALL=C sort | cpio -o --format odc --owner 0:0 2>/dev/null
+) | gzip -c > "$component_expanded/Payload"
+pkgutil --flatten "$component_expanded" "$clean_component_pkg" >&2
+mv "$clean_component_pkg" "$component_pkg"
 
 productbuild --synthesize \
     --product "$requirements_plist" \
