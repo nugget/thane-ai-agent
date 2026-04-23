@@ -66,7 +66,11 @@ install -m 755 "$binary_path" "$payload_root/Thane/bin/thane"
 if command -v xattr >/dev/null 2>&1; then
     xattr -cr "$payload_root"
 fi
-find "$payload_root" \( -name '.DS_Store' -o -name '._*' \) -delete
+# Keep the staging root aligned with the pkgbuild filter set so the
+# post-processing payload rebuild cannot reintroduce metadata debris.
+find "$payload_root" \
+    \( -name '.DS_Store' -o -name '._*' -o -name '.svn' -o -name 'CVS' \) \
+    -exec rm -rf {} +
 
 artifact_path="$output_dir/$package_name"
 
