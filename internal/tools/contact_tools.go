@@ -21,7 +21,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "save_contact",
-		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
+		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
