@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -67,7 +67,7 @@ type SystemStatusProvider interface {
 	// Version returns build and runtime metadata.
 	Version() map[string]string
 	// ModelRegistry returns the current model-registry snapshot.
-	ModelRegistry() *models.RegistrySnapshot
+	ModelRegistry() *fleet.RegistrySnapshot
 	// RouterStats returns the current router statistics snapshot.
 	RouterStats() *router.Stats
 	// CapabilityCatalog returns the resolved runtime capability catalog.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
@@ -155,7 +155,7 @@ func (a *App) initAgentLoop(s *newState) error {
 	return nil
 }
 
-func desiredPeriodicReflectionPayload(modelCatalog *models.Catalog) scheduler.Payload {
+func desiredPeriodicReflectionPayload(modelCatalog *fleet.Catalog) scheduler.Payload {
 	reflectionModel := "claude-sonnet-4-20250514"
 	if modelCatalog != nil {
 		if resolved, err := modelCatalog.ResolveModelRef(reflectionModel); err == nil {

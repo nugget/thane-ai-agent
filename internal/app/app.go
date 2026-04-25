@@ -25,9 +25,9 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
@@ -76,10 +76,10 @@ type App struct {
 	// LLM clients
 	llmClient             llm.Client
 	ollamaClients         map[string]*modelproviders.OllamaClient
-	resourceHealthClients map[string]models.ResourceHealthClient
-	modelRuntime          *models.Runtime
-	modelCatalog          *models.Catalog
-	modelRegistry         *models.Registry
+	resourceHealthClients map[string]fleet.ResourceHealthClient
+	modelRuntime          *fleet.Runtime
+	modelCatalog          *fleet.Catalog
+	modelRegistry         *fleet.Registry
 
 	// Core subsystems
 	mem                       *memory.SQLiteStore

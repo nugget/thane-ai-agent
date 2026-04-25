@@ -10,8 +10,8 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -114,13 +114,13 @@ func (a *App) initStores(s *newState) error {
 	connMgr := connwatch.NewManager(logger)
 	a.connMgr = connMgr
 
-	countDiscovered := func(snapshot *models.RegistrySnapshot) int {
+	countDiscovered := func(snapshot *fleet.RegistrySnapshot) int {
 		if snapshot == nil {
 			return 0
 		}
 		discovered := 0
 		for _, dep := range snapshot.Deployments {
-			if dep.Source == models.DeploymentSourceDiscovered {
+			if dep.Source == fleet.DeploymentSourceDiscovered {
 				discovered++
 			}
 		}

@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
-func matchesResourceQuery(res models.RegistryResourceSnapshot, query string) bool {
+func matchesResourceQuery(res fleet.RegistryResourceSnapshot, query string) bool {
 	return mrContainsFold(res.ID, query) ||
 		mrContainsFold(res.Provider, query) ||
 		mrContainsFold(res.URL, query) ||
@@ -19,7 +19,7 @@ func matchesResourceQuery(res models.RegistryResourceSnapshot, query string) boo
 		mrContainsFold(res.LastError, query)
 }
 
-func matchesDeploymentQuery(dep models.RegistryDeploymentSnapshot, query string) bool {
+func matchesDeploymentQuery(dep fleet.RegistryDeploymentSnapshot, query string) bool {
 	return mrContainsFold(dep.ID, query) ||
 		mrContainsFold(dep.Model, query) ||
 		mrContainsFold(dep.Provider, query) ||

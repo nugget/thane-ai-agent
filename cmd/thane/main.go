@@ -28,9 +28,9 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/app"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -424,22 +424,22 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 }
 
 type llmSetup struct {
-	Catalog       *models.Catalog
-	ModelRegistry *models.Registry
-	ModelRuntime  *models.Runtime
+	Catalog       *fleet.Catalog
+	ModelRegistry *fleet.Registry
+	ModelRuntime  *fleet.Runtime
 	Client        llm.Client
-	HealthClients map[string]models.ResourceHealthClient
+	HealthClients map[string]fleet.ResourceHealthClient
 	OllamaClients map[string]*modelproviders.OllamaClient
 }
 
 func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
-	baseCatalog, err := models.BuildCatalog(cfg)
+	baseCatalog, err := fleet.BuildCatalog(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("build model catalog: %w", err)
 	}
 	normalizeConfiguredModelRefs(cfg, baseCatalog)
 
-	runtime, err := models.NewRuntime(ctx, baseCatalog, cfg, logger)
+	runtime, err := fleet.NewRuntime(ctx, baseCatalog, cfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("build model runtime: %w", err)
 	}
@@ -489,20 +489,20 @@ func logLLMSetup(logger *slog.Logger, setup *llmSetup) {
 	)
 }
 
-func countDiscoveredDeployments(snapshot *models.RegistrySnapshot) int {
+func countDiscoveredDeployments(snapshot *fleet.RegistrySnapshot) int {
 	if snapshot == nil {
 		return 0
 	}
 	discovered := 0
 	for _, dep := range snapshot.Deployments {
-		if dep.Source == models.DeploymentSourceDiscovered {
+		if dep.Source == fleet.DeploymentSourceDiscovered {
 			discovered++
 		}
 	}
 	return discovered
 }
 
-func normalizeConfiguredModelRefs(cfg *config.Config, catalog *models.Catalog) {
+func normalizeConfiguredModelRefs(cfg *config.Config, catalog *fleet.Catalog) {
 	cfg.Models.Default = catalog.DefaultModel
 	cfg.Models.RecoveryModel = catalog.RecoveryModel
 

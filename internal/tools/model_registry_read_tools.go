@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
@@ -34,9 +34,9 @@ func (r *Registry) handleModelRegistrySummary(_ context.Context, _ map[string]an
 			degradedResources = append(degradedResources, res.ID)
 		}
 		switch res.PolicyState {
-		case models.DeploymentPolicyStateInactive:
+		case fleet.DeploymentPolicyStateInactive:
 			inactiveResources = append(inactiveResources, res.ID)
-		case models.DeploymentPolicyStateFlagged:
+		case fleet.DeploymentPolicyStateFlagged:
 			flaggedResources = append(flaggedResources, res.ID)
 		}
 	}
@@ -50,10 +50,10 @@ func (r *Registry) handleModelRegistrySummary(_ context.Context, _ map[string]an
 		} else {
 			explicitOnlyDeployments = append(explicitOnlyDeployments, dep.ID)
 		}
-		if dep.Source == models.DeploymentSourceDiscovered {
+		if dep.Source == fleet.DeploymentSourceDiscovered {
 			discoveredDeployments++
 		}
-		if dep.RoutableSource == models.DeploymentPolicySourceOverlay {
+		if dep.RoutableSource == fleet.DeploymentPolicySourceOverlay {
 			promotedDeployments = append(promotedDeployments, dep.ID)
 		}
 	}
@@ -257,7 +257,7 @@ func (r *Registry) handleModelRegistryGet(_ context.Context, args map[string]any
 	return "", fmt.Errorf("deployment %q not found", deploymentID)
 }
 
-func (r *Registry) currentModelRegistryState() (*models.RegistrySnapshot, *routepkg.Stats, error) {
+func (r *Registry) currentModelRegistryState() (*fleet.RegistrySnapshot, *routepkg.Stats, error) {
 	if r.modelRegistry == nil {
 		return nil, nil, fmt.Errorf("model registry not configured")
 	}
@@ -272,7 +272,7 @@ func (r *Registry) currentModelRegistryState() (*models.RegistrySnapshot, *route
 	return snapshot, &stats, nil
 }
 
-func buildResourceView(snapshot *models.RegistrySnapshot, stats *routepkg.Stats, res models.RegistryResourceSnapshot) modelRegistryResourceView {
+func buildResourceView(snapshot *fleet.RegistrySnapshot, stats *routepkg.Stats, res fleet.RegistryResourceSnapshot) modelRegistryResourceView {
 	view := modelRegistryResourceView{RegistryResourceSnapshot: res}
 	for _, dep := range snapshot.Deployments {
 		if dep.Resource == res.ID {
@@ -288,7 +288,7 @@ func buildResourceView(snapshot *models.RegistrySnapshot, stats *routepkg.Stats,
 	return view
 }
 
-func buildDeploymentView(stats *routepkg.Stats, dep models.RegistryDeploymentSnapshot) modelRegistryDeploymentView {
+func buildDeploymentView(stats *routepkg.Stats, dep fleet.RegistryDeploymentSnapshot) modelRegistryDeploymentView {
 	view := modelRegistryDeploymentView{RegistryDeploymentSnapshot: dep}
 	if stats != nil {
 		if meta, ok := stats.DeploymentStats[dep.ID]; ok {

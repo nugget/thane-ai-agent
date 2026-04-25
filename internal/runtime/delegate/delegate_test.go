@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -337,7 +337,7 @@ func TestRecordCompletion_UsesLiveModelRegistryForUsageIdentity(t *testing.T) {
 		t.Fatalf("usage.NewStore: %v", err)
 	}
 
-	staleCatalog, err := models.BuildCatalog(&config.Config{
+	staleCatalog, err := fleet.BuildCatalog(&config.Config{
 		Models: config.ModelsConfig{
 			Resources: map[string]config.ModelServerConfig{
 				"deepslate": {URL: "http://deepslate:1234", Provider: "lmstudio"},
@@ -345,20 +345,20 @@ func TestRecordCompletion_UsesLiveModelRegistryForUsageIdentity(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
 
-	registry, err := models.NewRegistry(staleCatalog)
+	registry, err := fleet.NewRegistry(staleCatalog)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
-	if err := registry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := registry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "deepslate",
 				Provider:   "lmstudio",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{
+				Models: []fleet.DiscoveredModel{
 					{
 						Name:              "google/gemma-3-4b",
 						SupportsChat:      true,

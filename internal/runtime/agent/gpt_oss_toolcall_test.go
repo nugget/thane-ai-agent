@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -86,7 +86,7 @@ func setupCapabilityLoopWithClient(client llm.Client, extraNames []string, capTa
 	return loop
 }
 
-func testProviderBackedGptOSSCatalog(t *testing.T) *models.Catalog {
+func testProviderBackedGptOSSCatalog(t *testing.T) *fleet.Catalog {
 	t.Helper()
 
 	cfg := &config.Config{}
@@ -109,7 +109,7 @@ func testProviderBackedGptOSSCatalog(t *testing.T) *models.Catalog {
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
 		t.Fatalf("BuildCatalog() error: %v", err)
 	}

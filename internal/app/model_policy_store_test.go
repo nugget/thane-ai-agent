@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
-func testModelPolicyRegistry(t *testing.T) *models.Registry {
+func testModelPolicyRegistry(t *testing.T) *fleet.Registry {
 	t.Helper()
 
 	cfg := &config.Config{}
@@ -33,13 +33,13 @@ func testModelPolicyRegistry(t *testing.T) *models.Registry {
 		},
 	}
 
-	base, err := models.BuildCatalog(cfg)
+	base, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	registry, err := models.NewRegistry(base)
+	registry, err := fleet.NewRegistry(base)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
 	return registry
 }
@@ -62,8 +62,8 @@ func TestModelPolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 
 	routable := true
 	updatedAt := time.Date(2026, 4, 4, 2, 0, 0, 0, time.UTC)
-	if err := store.Save("deepslate/google/gemma-3-4b", models.DeploymentPolicy{
-		State:     models.DeploymentPolicyStateFlagged,
+	if err := store.Save("deepslate/google/gemma-3-4b", fleet.DeploymentPolicy{
+		State:     fleet.DeploymentPolicyStateFlagged,
 		Routable:  &routable,
 		Reason:    "night-only route",
 		UpdatedAt: updatedAt,
@@ -75,13 +75,13 @@ func TestModelPolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 		t.Fatalf("LoadInto: %v", err)
 	}
 
-	if err := registry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := registry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "deepslate",
 				Provider:   "lmstudio",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{
+				Models: []fleet.DiscoveredModel{
 					{
 						Name:              "google/gemma-3-4b",
 						SupportsTools:     true,
@@ -105,11 +105,11 @@ func TestModelPolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 			continue
 		}
 		found = true
-		if dep.PolicyState != models.DeploymentPolicyStateFlagged {
-			t.Fatalf("PolicyState = %q, want %q", dep.PolicyState, models.DeploymentPolicyStateFlagged)
+		if dep.PolicyState != fleet.DeploymentPolicyStateFlagged {
+			t.Fatalf("PolicyState = %q, want %q", dep.PolicyState, fleet.DeploymentPolicyStateFlagged)
 		}
-		if dep.PolicySource != models.DeploymentPolicySourceOverlay {
-			t.Fatalf("PolicySource = %q, want %q", dep.PolicySource, models.DeploymentPolicySourceOverlay)
+		if dep.PolicySource != fleet.DeploymentPolicySourceOverlay {
+			t.Fatalf("PolicySource = %q, want %q", dep.PolicySource, fleet.DeploymentPolicySourceOverlay)
 		}
 		if dep.PolicyReason != "night-only route" {
 			t.Fatalf("PolicyReason = %q, want %q", dep.PolicyReason, "night-only route")
@@ -148,7 +148,7 @@ func TestModelPolicyStoreLoadIntoSkipsInvalidEntries(t *testing.T) {
 
 	snap := registry.Snapshot()
 	for _, dep := range snap.Deployments {
-		if dep.ID == "spark/gpt-oss:20b" && dep.PolicySource != models.DeploymentPolicySourceDefault {
+		if dep.ID == "spark/gpt-oss:20b" && dep.PolicySource != fleet.DeploymentPolicySourceDefault {
 			t.Fatalf("PolicySource = %q, want default when persisted entry is invalid", dep.PolicySource)
 		}
 	}

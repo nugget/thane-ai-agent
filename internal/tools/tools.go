@@ -16,7 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
@@ -68,12 +68,12 @@ type Registry struct {
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 
-	modelRegistry                              *models.Registry
+	modelRegistry                              *fleet.Registry
 	modelRouter                                *routepkg.Router
 	modelRegistrySyncRouter                    func()
-	persistModelRegistryPolicy                 func(string, models.DeploymentPolicy) error
+	persistModelRegistryPolicy                 func(string, fleet.DeploymentPolicy) error
 	deletePersistedModelRegistryPolicy         func(string) error
-	persistModelRegistryResourcePolicy         func(string, models.ResourcePolicy) error
+	persistModelRegistryResourcePolicy         func(string, fleet.ResourcePolicy) error
 	deletePersistedModelRegistryResourcePolicy func(string) error
 	loopDefinitionRegistry                     *looppkg.DefinitionRegistry
 	loopDefinitionView                         func() *looppkg.DefinitionRegistryView

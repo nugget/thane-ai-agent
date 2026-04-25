@@ -36,7 +36,7 @@ How Thane talks to models and shapes model-facing context.
 | Package | Purpose |
 |---------|---------|
 | `model/llm/` | LLM client contracts, messages, streaming, tool-call parsing |
-| `model/models/` | Model catalog, provider clients, runtime inventory |
+| `model/fleet/` | Model fleet catalog, provider clients, registry, runtime inventory |
 | `model/router/` | Model selection and routing profiles |
 | `model/prompts/` | Prompt templates and runtime contracts |
 | `model/talents/` | Markdown behavioral guidance loaded by capability tags |

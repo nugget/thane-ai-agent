@@ -1,4 +1,4 @@
-package models
+package fleet
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 )
 
 // Inventory is the mutable provider-exported overlay that sits on top

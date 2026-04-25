@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 func TestAgentErrorDetails_UnknownModelIsBadRequest(t *testing.T) {
-	code, message := agentErrorDetails(&models.UnknownModelError{Model: "missing/model"})
+	code, message := agentErrorDetails(&fleet.UnknownModelError{Model: "missing/model"})
 
 	if code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want %d", code, http.StatusBadRequest)

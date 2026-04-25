@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
@@ -27,8 +27,8 @@ func TestModelResourcePolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 	registry := testModelPolicyRegistry(t)
 
 	updatedAt := time.Date(2026, 4, 4, 4, 0, 0, 0, time.UTC)
-	if err := store.Save("deepslate", models.ResourcePolicy{
-		State:     models.DeploymentPolicyStateInactive,
+	if err := store.Save("deepslate", fleet.ResourcePolicy{
+		State:     fleet.DeploymentPolicyStateInactive,
 		Reason:    "office hours",
 		UpdatedAt: updatedAt,
 	}); err != nil {
@@ -46,11 +46,11 @@ func TestModelResourcePolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 			continue
 		}
 		found = true
-		if res.PolicyState != models.DeploymentPolicyStateInactive {
-			t.Fatalf("PolicyState = %q, want %q", res.PolicyState, models.DeploymentPolicyStateInactive)
+		if res.PolicyState != fleet.DeploymentPolicyStateInactive {
+			t.Fatalf("PolicyState = %q, want %q", res.PolicyState, fleet.DeploymentPolicyStateInactive)
 		}
-		if res.PolicySource != models.DeploymentPolicySourceOverlay {
-			t.Fatalf("PolicySource = %q, want %q", res.PolicySource, models.DeploymentPolicySourceOverlay)
+		if res.PolicySource != fleet.DeploymentPolicySourceOverlay {
+			t.Fatalf("PolicySource = %q, want %q", res.PolicySource, fleet.DeploymentPolicySourceOverlay)
 		}
 		if res.PolicyReason != "office hours" {
 			t.Fatalf("PolicyReason = %q, want %q", res.PolicyReason, "office hours")
@@ -86,7 +86,7 @@ func TestModelResourcePolicyStoreLoadIntoSkipsInvalidEntries(t *testing.T) {
 
 	snap := registry.Snapshot()
 	for _, res := range snap.Resources {
-		if res.ID == "deepslate" && res.PolicySource != models.DeploymentPolicySourceDefault {
+		if res.ID == "deepslate" && res.PolicySource != fleet.DeploymentPolicySourceDefault {
 			t.Fatalf("PolicySource = %q, want default when persisted entry is invalid", res.PolicySource)
 		}
 	}

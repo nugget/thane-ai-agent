@@ -1,11 +1,11 @@
-package models
+package fleet
 
 import (
 	"errors"
 	"testing"
 	"time"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 )
 
 func boolPtr(v bool) *bool {

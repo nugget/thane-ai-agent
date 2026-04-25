@@ -12,24 +12,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"gopkg.in/yaml.v3"
 )
 
-func testModelRegistryFromConfig(t *testing.T, cfg *config.Config) *models.Registry {
+func testModelRegistryFromConfig(t *testing.T, cfg *config.Config) *fleet.Registry {
 	t.Helper()
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	registry, err := models.NewRegistry(cat)
+	registry, err := fleet.NewRegistry(cat)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
 	return registry
 }
@@ -248,21 +248,21 @@ func TestRun_ExplicitModelRejectsLoadedContextOverflowWithMaxHint(t *testing.T) 
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	registry, err := models.NewRegistry(cat)
+	registry, err := fleet.NewRegistry(cat)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
-	if err := registry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := registry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "deepslate",
 				Provider:   "lmstudio",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{
+				Models: []fleet.DiscoveredModel{
 					{
 						Name:                "google/gemma-3-4b",
 						SupportsChat:        true,
@@ -394,13 +394,13 @@ func TestRun_ExplicitModelPreparesLoadedContextAndRetries(t *testing.T) {
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
 	if err != nil {
-		t.Fatalf("models.NewRuntime: %v", err)
+		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
 	registry := runtime.Registry()
 	loop.UseModelRegistry(registry)
@@ -532,13 +532,13 @@ func TestRun_ExplicitModelPreparesWhenLMStudioLoadedContextUnknown(t *testing.T)
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
 	if err != nil {
-		t.Fatalf("models.NewRuntime: %v", err)
+		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
 	loop.UseModelRegistry(runtime.Registry())
 	loop.UseModelRuntime(runtime)
@@ -694,13 +694,13 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
 	if err != nil {
-		t.Fatalf("models.NewRuntime: %v", err)
+		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
 	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
 	loop.UseModelRegistry(runtime.Registry())
@@ -857,13 +857,13 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterRegistryRefresh(t *tes
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
 	if err != nil {
-		t.Fatalf("models.NewRuntime: %v", err)
+		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
 	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
 	loop.UseModelRegistry(runtime.Registry())
@@ -994,13 +994,13 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	runtime, err := fleet.NewRuntime(context.Background(), cat, cfg, nil)
 	if err != nil {
-		t.Fatalf("models.NewRuntime: %v", err)
+		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
 	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
 	loop.UseModelRegistry(runtime.Registry())
@@ -1050,7 +1050,7 @@ func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
 }
 
 func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
-	cat, err := models.BuildCatalog(&config.Config{
+	cat, err := fleet.BuildCatalog(&config.Config{
 		Models: config.ModelsConfig{
 			Default: "qwen3-vl:4b",
 			Resources: map[string]config.ModelServerConfig{
@@ -1067,7 +1067,7 @@ func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
 	cat.Deployments[0].ContextWindow = 4096
 	cat.Deployments[0].LoadedContextWindow = 4096
@@ -1117,21 +1117,21 @@ func TestRun_RoutedImageRequestRejectsWhenNoEligibleImageCapableDeploymentExists
 		},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
-	registry, err := models.NewRegistry(cat)
+	registry, err := fleet.NewRegistry(cat)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
-	if err := registry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := registry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "deepslate",
 				Provider:   "lmstudio",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{
+				Models: []fleet.DiscoveredModel{
 					{
 						Name:              "google/gemma-3-4b",
 						SupportsTools:     true,
