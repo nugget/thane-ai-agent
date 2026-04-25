@@ -9,8 +9,8 @@ import (
 
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.

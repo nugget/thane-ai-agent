@@ -1,7 +1,7 @@
 package app
 
 import (
-	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
 func coreRootPath(workspacePath string) string {

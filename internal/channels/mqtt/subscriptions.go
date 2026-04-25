@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/database"
-	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // WakeSubscription pairs an MQTT topic filter with the LoopProfile

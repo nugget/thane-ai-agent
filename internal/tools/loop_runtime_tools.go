@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 const (

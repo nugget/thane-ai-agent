@@ -12,7 +12,7 @@ activated, either by the model via `activate_capability` or via
 configured always-active tags.
 
 The authoritative source for which tool is tagged how is
-[`internal/toolcatalog/catalog.go`](../../internal/toolcatalog/catalog.go);
+[`internal/model/toolcatalog/catalog.go`](../../internal/model/toolcatalog/catalog.go);
 this doc is a human-readable reflection of that catalog. If you add or
 re-tag a tool there, update this file in the same PR.
 
@@ -287,11 +287,11 @@ tools for Signal-specific workflows.
 | `signal_send_message` | Send a Signal message to a phone number. |
 | `signal_send_reaction` | React to an inbound Signal message. |
 
-## `platform` — native OS integration
+## `companion` — native companion app integration
 
 | Tool | Description |
 |------|-------------|
-| `macos_calendar_events` | Query the local macOS Calendar (platform provider required). |
+| `macos_calendar_events` | Query the local macOS Calendar (companion app required). |
 
 ## `models` — model registry and routing
 
@@ -318,7 +318,7 @@ Thane hosts MCP servers as subprocesses and bridges their tools into
 the registry as `mcp_{server}_{tool}`. MCP tools inherit their default
 tags from the MCP config's `default_tags` or configuration-side tag
 overrides; they do not have a compiled-in entry in
-`internal/toolcatalog/catalog.go`.
+`internal/model/toolcatalog/catalog.go`.
 
 The primary MCP server in typical deployments is
 [`ha-mcp`](https://github.com/karimkhaleel/ha-mcp), which exposes

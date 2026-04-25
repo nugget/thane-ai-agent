@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 func TestExecute_UnknownToolReturnsErrToolUnavailable(t *testing.T) {

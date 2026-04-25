@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/forge"
-	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 // finalizeCapabilityTags resolves capability-tag membership from the

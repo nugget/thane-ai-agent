@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 const (

@@ -13,41 +13,41 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/attachments"
-	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
-	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
-	"github.com/nugget/thane-ai-agent/internal/checkpoint"
-	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/delegate"
-	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/forge"
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	"github.com/nugget/thane-ai-agent/internal/llm"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/mcp"
-	"github.com/nugget/thane-ai-agent/internal/media"
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/messages"
-	"github.com/nugget/thane-ai-agent/internal/metacognitive"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
-	"github.com/nugget/thane-ai-agent/internal/opstate"
-	"github.com/nugget/thane-ai-agent/internal/platform"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
-	"github.com/nugget/thane-ai-agent/internal/telemetry"
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
-	"github.com/nugget/thane-ai-agent/internal/unifi"
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
+	"github.com/nugget/thane-ai-agent/internal/state/attachments"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // Logger returns the application's configured logger. Callers that
@@ -112,8 +112,8 @@ type App struct {
 	ha   *homeassistant.Client
 	haWS *homeassistant.WSClient
 
-	// Platform provider registry
-	platformRegistry *platform.Registry
+	// Companion app registry
+	companionRegistry *companion.Registry
 
 	// Connection health
 	connMgr *connwatch.Manager

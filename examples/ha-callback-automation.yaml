@@ -19,8 +19,8 @@
 #   ^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^
 #     prefix              UUIDv7 request ID           action ID
 #
-# Keep this file in sync with internal/notifications/callback.go
-# (ActionPrefix) and internal/notifications/sender.go (buildHAActions).
+# Keep this file in sync with internal/channels/notifications/callback.go
+# (ActionPrefix) and internal/channels/notifications/sender.go (buildHAActions).
 
 alias: "Agent Callback Router"
 description: >-

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/paths"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 // initAgentLoop builds the core agent loop, registers the periodic

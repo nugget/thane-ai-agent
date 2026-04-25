@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/opstate"
-	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
 const modelRegistryExperienceNamespace = "model_registry_experience"

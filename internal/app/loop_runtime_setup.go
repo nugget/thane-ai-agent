@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func (a *App) newLoopRegistry(logger *slog.Logger) *looppkg.Registry {

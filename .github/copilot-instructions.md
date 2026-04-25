@@ -14,7 +14,7 @@ For full project conventions, see [AGENTS.md](../AGENTS.md).
 When reviewing or generating code, watch for:
 
 - Unbounded data returns from tools (search: 16 KB cap, transcripts: 32 KB)
-- Inline LLM prompt text outside `internal/prompts/`
+- Inline LLM prompt text outside `internal/model/prompts/`
 - `sql.ErrNoRows` must be handled distinctly from other DB errors
 - Async goroutines must have context timeouts
 - No `os.Exit` outside `main()`

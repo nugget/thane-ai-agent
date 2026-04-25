@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
 )
 
 func (r *Registry) handleModelResourceSetPolicy(_ context.Context, args map[string]any) (string, error) {

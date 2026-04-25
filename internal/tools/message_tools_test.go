@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/messages"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 )
 
 type recordingMessageHandler struct {

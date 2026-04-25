@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/llm"
-	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 func agentErrorDetails(err error) (int, string) {

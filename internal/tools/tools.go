@@ -10,22 +10,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/attachments"
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/media"
-	"github.com/nugget/thane-ai-agent/internal/messages"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
-	routepkg "github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
-	"github.com/nugget/thane-ai-agent/internal/search"
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
+	"github.com/nugget/thane-ai-agent/internal/integrations/search"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/attachments"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
 // Tool represents a callable tool.
@@ -56,7 +56,7 @@ type Registry struct {
 	notifRecords    *notifications.RecordStore
 	notifRouter     *notifications.NotificationRouter
 	notifDispatcher CallbackDispatcher
-	platformCaller  platformCallFunc
+	companionCaller companionCallFunc
 	forgeTools      forgeHandler
 	fileTools       *FileTools
 	shellExec       *ShellExec

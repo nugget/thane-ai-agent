@@ -428,7 +428,7 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 		"core":          {"loop_status"},
 		"loops":         {"loop_status", "set_next_sleep"},
 		"notifications": {"send_notification", "request_human_decision"},
-		"platform":      {"macos_calendar_events"},
+		"companion":     {"macos_calendar_events"},
 	})
 
 	tests := []struct {

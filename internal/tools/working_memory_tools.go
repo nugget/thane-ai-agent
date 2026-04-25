@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // SetWorkingMemoryStore adds the session_working_memory tool to the registry.

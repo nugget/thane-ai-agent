@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 const maxDecodedImageBytes = 20 << 20

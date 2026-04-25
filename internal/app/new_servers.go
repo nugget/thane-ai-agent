@@ -9,16 +9,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
-	"github.com/nugget/thane-ai-agent/internal/checkpoint"
-	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/platform"
+	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
+	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
-	"github.com/nugget/thane-ai-agent/internal/telemetry"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 // initServers creates servers, infrastructure services, and background
@@ -176,19 +176,19 @@ func (a *App) initServers(s *newState) error {
 		a.ollamaServer.SetOWUTracker(owuTracker)
 	}
 
-	// --- Platform provider endpoint ---
-	// Optional: WebSocket endpoint for native platform apps (e.g. macOS)
+	// --- Companion app endpoint ---
+	// Optional: WebSocket endpoint for native companion apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.
-	if cfg.Platform.Configured() {
-		a.platformRegistry = platform.NewRegistry(logger)
-		a.loop.Tools().EnablePlatformTools(a.platformRegistry.Call)
-		handler := platform.NewHandler(cfg.Platform.TokenIndex(), a.platformRegistry, logger)
-		server.SetPlatformHandler(handler)
+	if cfg.Companion.Configured() {
+		a.companionRegistry = companion.NewRegistry(logger)
+		a.loop.Tools().EnableCompanionTools(a.companionRegistry.Call)
+		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
+		server.SetCompanionHandler(handler)
 
 		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-			Name: "platform",
+			Name: "companion",
 			Probe: func(_ context.Context) error {
-				if a.platformRegistry.Count() == 0 {
+				if a.companionRegistry.Count() == 0 {
 					return fmt.Errorf("no providers connected")
 				}
 				return nil
@@ -197,7 +197,7 @@ func (a *App) initServers(s *newState) error {
 			Logger:  logger,
 		})
 
-		logger.Info("platform provider endpoint enabled")
+		logger.Info("companion app endpoint enabled")
 	}
 
 	// --- CardDAV server ---

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 type loopDefinitionLintEffective struct {

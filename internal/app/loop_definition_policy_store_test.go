@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/database"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func TestLoopDefinitionPolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {

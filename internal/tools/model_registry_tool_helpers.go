@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/models"
-	routepkg "github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
 func matchesResourceQuery(res models.RegistryResourceSnapshot, query string) bool {

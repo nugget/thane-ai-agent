@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // Tools holds email tool dependencies. Each handler takes the raw

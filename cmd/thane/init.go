@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
 )
 
 //go:generate sh -c "cp ../../examples/config.example.yaml . && cp ../../examples/persona.example.md ."

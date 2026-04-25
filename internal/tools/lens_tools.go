@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
 const (

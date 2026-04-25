@@ -3,11 +3,11 @@ package app
 import (
 	"context"
 
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/forge"
-	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	"github.com/nugget/thane-ai-agent/internal/paths"
-	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
 // newState carries local variables from [New] that are shared across

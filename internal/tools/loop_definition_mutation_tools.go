@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]any) (string, error) {

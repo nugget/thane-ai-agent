@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 func TestFileTools_ResolvePath(t *testing.T) {

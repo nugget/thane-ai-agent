@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/metacognitive"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
 
 func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {

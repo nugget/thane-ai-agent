@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/models"
-	routepkg "github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
 func (r *Registry) handleModelRegistrySummary(_ context.Context, _ map[string]any) (string, error) {

@@ -125,6 +125,23 @@ contacts:
 The contact directory is always active. The CardDAV server is optional —
 enable it to sync contacts with macOS/iOS/Thunderbird.
 
+## Companion Apps
+
+```yaml
+companion:
+  enabled: true
+  providers:
+    nugget:
+      tokens:
+        - your-shared-token
+```
+
+Optional. Companion apps connect inward to Thane and expose local host
+capabilities, such as macOS Calendar access from
+[thane-agent-macos](https://github.com/nugget/thane-agent-macos).
+Use `companion:` for new configs. Older `platform:` configs still load as
+a compatibility alias.
+
 ## Capability Tags
 
 ```yaml

@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/messages"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func (a *App) initMessageInfrastructure(logger *slog.Logger) {

@@ -15,7 +15,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
 // StatsSource provides runtime data for sensor state publishing. The

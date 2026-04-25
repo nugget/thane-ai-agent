@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 )
 
 // CapabilityManager controls per-Run capability tag activation.

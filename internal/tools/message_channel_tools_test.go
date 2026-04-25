@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 func TestSendReaction_DispatchesToCurrentChannel(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
 func TestLoadOrCreateInstanceID_CreatesFile(t *testing.T) {

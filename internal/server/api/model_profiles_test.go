@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
 func TestNormalizeModelSelection(t *testing.T) {

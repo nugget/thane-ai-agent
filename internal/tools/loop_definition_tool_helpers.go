@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func ldStringArg(args map[string]any, key string) string {

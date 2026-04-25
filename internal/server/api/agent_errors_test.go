@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 func TestAgentErrorDetails_UnknownModelIsBadRequest(t *testing.T) {

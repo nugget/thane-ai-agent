@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 func TestIsOWUAuxiliaryRequest(t *testing.T) {

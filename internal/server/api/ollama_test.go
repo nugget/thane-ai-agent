@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
 func TestOllamaAgentError_AmbiguousModel(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/messages"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 )
 
 // MessageToolDeps wires the shared envelope bus into the tool registry.

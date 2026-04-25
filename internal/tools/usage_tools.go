@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 )
 
 // registerCostSummary registers the cost_summary tool for querying

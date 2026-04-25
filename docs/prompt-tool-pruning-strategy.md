@@ -31,7 +31,7 @@ same thing.
 
 ## Current Runtime Shape
 
-Today, prompt assembly in `internal/agent/loop.go` roughly looks like:
+Today, prompt assembly in `internal/runtime/agent/loop.go` roughly looks like:
 
 1. persona
 2. ego
@@ -415,7 +415,7 @@ Tagged KB articles are the preferred home for:
       keep this tracking doc updated with current evidence.
 - [ ] Remove duplicated tool/capability essays from always-on prompt
       assembly.
-- [ ] Keep only a compact runtime contract in `internal/prompts/agent.go`.
+- [ ] Keep only a compact runtime contract in `internal/model/prompts/agent.go`.
 - [ ] Shrink `## Active Capabilities` to loaded-state facts, not
       capability doctrine.
 - [ ] Move forge, web, Home Assistant, and channel-specific teaching

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // ContentResolver resolves bare prefix references (temp:LABEL, kb:file.md,
