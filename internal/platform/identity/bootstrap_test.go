@@ -2,6 +2,7 @@ package identity
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,36 @@ func TestBootstrapCoreRejectsPartialIdentity(t *testing.T) {
 
 	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil); err == nil {
 		t.Fatal("BootstrapCore partial identity returned nil, want error")
+	}
+}
+
+func TestBootstrapCoreRollsBackFailedBirthCommit(t *testing.T) {
+	requireGit(t)
+
+	coreDir := filepath.Join(t.TempDir(), "core")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := BootstrapCore(ctx, coreDir, "pocket", nil); err == nil {
+		t.Fatal("BootstrapCore with canceled context returned nil, want error")
+	}
+
+	for _, rel := range []string{
+		CoreConfigFile,
+		SigningPrivateKeyFile,
+		SigningPublicKeyFile,
+		ChannelCAKeyFile,
+		ChannelCACertFile,
+		".gitignore",
+		".allowed_signers",
+		".git",
+	} {
+		if _, err := os.Stat(filepath.Join(coreDir, rel)); !os.IsNotExist(err) {
+			t.Fatalf("%s exists after failed bootstrap; stat err=%v", rel, err)
+		}
+	}
+
+	if _, err := BootstrapCore(t.Context(), coreDir, "pocket", nil); err != nil {
+		t.Fatalf("BootstrapCore after rollback: %v", err)
 	}
 }
 

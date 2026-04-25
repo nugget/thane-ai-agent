@@ -64,6 +64,13 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, fmt.Errorf("core identity appears partially initialized in %s", absCoreDir)
 	}
 
+	created := false
+	defer func() {
+		if !created {
+			cleanupBootstrapArtifacts(absCoreDir, logger)
+		}
+	}()
+
 	if err := os.MkdirAll(filepath.Join(absCoreDir, "identity"), 0o755); err != nil {
 		return nil, fmt.Errorf("create identity directory: %w", err)
 	}
@@ -112,12 +119,41 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, err
 	}
 
+	created = true
 	return &BootstrapResult{
 		Created:               true,
 		CoreDir:               absCoreDir,
 		SigningKeyFingerprint: signing.Fingerprint,
 		ChannelCAFingerprint:  channelCA.Fingerprint,
 	}, nil
+}
+
+func cleanupBootstrapArtifacts(coreDir string, logger *slog.Logger) {
+	for _, rel := range []string{
+		CoreConfigFile,
+		SigningPrivateKeyFile,
+		SigningPublicKeyFile,
+		ChannelCAKeyFile,
+		ChannelCACertFile,
+		".gitignore",
+		".allowed_signers",
+	} {
+		path := filepath.Join(coreDir, rel)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logger.Warn("failed to clean up core identity bootstrap artifact", "path", path, "error", err)
+		}
+	}
+
+	if err := os.RemoveAll(filepath.Join(coreDir, ".git")); err != nil {
+		logger.Warn("failed to clean up core identity git repository", "path", filepath.Join(coreDir, ".git"), "error", err)
+	}
+
+	for _, rel := range []string{"identity", "ca", ""} {
+		path := filepath.Join(coreDir, rel)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logger.Debug("core identity bootstrap directory not removed", "path", path, "error", err)
+		}
+	}
 }
 
 type coreIdentityState struct {

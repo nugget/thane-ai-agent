@@ -205,15 +205,18 @@ func (s *Store) Write(ctx context.Context, filename, content, message string) er
 		return fmt.Errorf("provenance: write %s: %w", filename, err)
 	}
 
-	if err := s.commitFile(ctx, filename, message); err != nil {
+	committed, err := s.commitFile(ctx, filename, message)
+	if err != nil {
 		return fmt.Errorf("provenance: commit %s: %w", filename, err)
 	}
 
-	s.logger.Info("provenance file committed",
-		"file", filename,
-		"bytes", len(content),
-		"message", message,
-	)
+	if committed {
+		s.logger.Info("provenance file committed",
+			"file", filename,
+			"bytes", len(content),
+			"message", message,
+		)
+	}
 
 	return nil
 }
@@ -250,14 +253,17 @@ func (s *Store) WriteFiles(ctx context.Context, files map[string]string, message
 		}
 	}
 
-	if err := s.commitFiles(ctx, filenames, message); err != nil {
+	committed, err := s.commitFiles(ctx, filenames, message)
+	if err != nil {
 		return fmt.Errorf("provenance: commit files: %w", err)
 	}
 
-	s.logger.Info("provenance files committed",
-		"files", filenames,
-		"message", message,
-	)
+	if committed {
+		s.logger.Info("provenance files committed",
+			"files", filenames,
+			"message", message,
+		)
+	}
 
 	return nil
 }
@@ -265,10 +271,16 @@ func (s *Store) WriteFiles(ctx context.Context, files map[string]string, message
 // validateFilename rejects filenames that could escape the store root
 // via path traversal or absolute paths.
 func validateFilename(filename string) error {
+	if filename == "" {
+		return fmt.Errorf("empty filename not allowed")
+	}
 	if filepath.IsAbs(filename) {
 		return fmt.Errorf("absolute path not allowed: %s", filename)
 	}
 	cleaned := filepath.Clean(filename)
+	if cleaned == "." {
+		return fmt.Errorf("current directory filename not allowed: %s", filename)
+	}
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal not allowed: %s", filename)
 	}

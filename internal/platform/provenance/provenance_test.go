@@ -136,6 +136,28 @@ func TestStoreWriteFilesRejectsEmptySet(t *testing.T) {
 	}
 }
 
+func TestStoreWriteRejectsEmptyOrDotFilename(t *testing.T) {
+	s := testStore(t)
+
+	for _, tc := range []struct {
+		name     string
+		filename string
+	}{
+		{name: "empty", filename: ""},
+		{name: "dot", filename: "."},
+		{name: "dot-slash", filename: "./"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := s.Write(t.Context(), tc.filename, "content", "bad"); err == nil {
+				t.Fatal("Write returned nil, want error")
+			}
+			if err := s.WriteFiles(t.Context(), map[string]string{tc.filename: "content"}, "bad"); err == nil {
+				t.Fatal("WriteFiles returned nil, want error")
+			}
+		})
+	}
+}
+
 func TestStoreWriteNoChangeSkipsCommit(t *testing.T) {
 	s := testStore(t)
 
@@ -155,6 +177,31 @@ func TestStoreWriteNoChangeSkipsCommit(t *testing.T) {
 
 	if hist.RevisionCount != 1 {
 		t.Errorf("RevisionCount = %d, want 1 (no-change write should not create commit)", hist.RevisionCount)
+	}
+}
+
+func TestStoreWriteFilesNoChangeSkipsCommit(t *testing.T) {
+	s := testStore(t)
+
+	files := map[string]string{
+		"alpha.txt":      "alpha",
+		"nested/beta.md": "beta",
+	}
+	if err := s.WriteFiles(t.Context(), files, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteFiles(t.Context(), files, "second"); err != nil {
+		t.Fatal(err)
+	}
+
+	for filename := range files {
+		hist, err := s.History(t.Context(), filename)
+		if err != nil {
+			t.Fatalf("History %s: %v", filename, err)
+		}
+		if hist.RevisionCount != 1 || hist.LastMessage != "first" {
+			t.Fatalf("History %s = %+v, want one first commit", filename, hist)
+		}
 	}
 }
 
