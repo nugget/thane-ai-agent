@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -17,7 +18,15 @@ func clearUmask(t *testing.T) {
 	t.Cleanup(func() { syscall.Umask(old) })
 }
 
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+}
+
 func TestRunInit_FreshDirectory(t *testing.T) {
+	requireGit(t)
 	clearUmask(t)
 	dir := t.TempDir()
 	var buf bytes.Buffer
@@ -29,7 +38,7 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	out := buf.String()
 
 	// Verify directory structure.
-	for _, sub := range []string{"db", "talents"} {
+	for _, sub := range []string{"core", "db", "talents"} {
 		info, err := os.Stat(filepath.Join(dir, sub))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", sub, err)
@@ -88,9 +97,35 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 	if !strings.Contains(out, "persona.md") {
 		t.Error("output missing persona.md")
 	}
+	if !strings.Contains(out, "core identity") {
+		t.Error("output missing core identity")
+	}
+
+	for _, rel := range []string{
+		"core/config.yaml",
+		"core/identity/signing_ed25519",
+		"core/identity/signing_ed25519.pub",
+		"core/ca/channel_root.key",
+		"core/ca/channel_root.crt",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Fatalf("%s not created: %v", rel, err)
+		}
+	}
+
+	for _, rel := range []string{"core/identity/signing_ed25519", "core/ca/channel_root.key"} {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s permissions = %o, want 0600", rel, got)
+		}
+	}
 }
 
 func TestRunInit_SkipsExistingFiles(t *testing.T) {
+	requireGit(t)
 	dir := t.TempDir()
 	var buf bytes.Buffer
 

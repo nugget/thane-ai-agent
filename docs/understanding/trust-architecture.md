@@ -21,6 +21,22 @@ prompt compliance, we acknowledge the gap and plan structural replacements.
 
 ## Current Structural Enforcement
 
+### Core Identity Bootstrap
+
+**Status: Implemented**
+
+`thane init` creates `core/` as the instance trust root. It generates an
+Ed25519 SSH signing key, an internal Ed25519 X.509 channel CA, and
+`core/config.yaml` with the initial identity declaration and default trust
+policy. Private keys remain local under `core/` with `0600` permissions and
+are ignored by git. Public identity material and policy are committed
+together as one SSH-signed birth commit, giving the instance a verifiable
+cryptographic birthday.
+
+This is a foundation, not the full peer-trust system. Peer CA exchange,
+delegation certificates, inherited-trust policy enforcement, and transport
+mTLS still need dedicated runtime paths.
+
 ### Trust Zones
 
 **Status: Implemented**

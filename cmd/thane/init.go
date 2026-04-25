@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
+	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 )
 
 //go:generate sh -c "cp ../../examples/config.example.yaml . && cp ../../examples/persona.example.md ."
@@ -73,6 +76,16 @@ func runInit(w io.Writer, dir string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("deploy talents: %w", err)
+	}
+
+	result, err := identity.BootstrapCore(context.Background(), filepath.Join(absDir, "core"), filepath.Base(absDir), slog.Default())
+	if err != nil {
+		return fmt.Errorf("bootstrap core identity: %w", err)
+	}
+	if result.Created {
+		fmt.Fprintf(w, "  ✓ %s (core identity, signing %s)\n", result.CoreDir, result.SigningKeyFingerprint)
+	} else {
+		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
 	}
 
 	fmt.Fprintln(w)

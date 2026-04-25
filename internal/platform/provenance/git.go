@@ -67,11 +67,21 @@ func (s *Store) ensureRepo() error {
 }
 
 // commitFile stages a file and creates a signed commit.
-func (s *Store) commitFile(ctx context.Context, filename, message string) error {
+func (s *Store) commitFile(ctx context.Context, filename, message string) (bool, error) {
+	return s.commitFiles(ctx, []string{filename}, message)
+}
 
-	// Stage the file.
-	if err := s.git(ctx, nil, nil, "add", filename); err != nil {
-		return fmt.Errorf("git add %s: %w", filename, err)
+// commitFiles stages files and creates one signed commit containing all
+// staged changes. It reports whether a commit was created.
+func (s *Store) commitFiles(ctx context.Context, filenames []string, message string) (bool, error) {
+	if len(filenames) == 0 {
+		return false, fmt.Errorf("no files to commit")
+	}
+
+	// Stage the files.
+	args := append([]string{"add", "--"}, filenames...)
+	if err := s.git(ctx, nil, nil, args...); err != nil {
+		return false, fmt.Errorf("git add: %w", err)
 	}
 
 	// Check if there are staged changes — skip commit if nothing changed.
@@ -80,18 +90,18 @@ func (s *Store) commitFile(ctx context.Context, filename, message string) error 
 	diffErr := s.git(ctx, nil, nil, "diff", "--cached", "--quiet")
 	if diffErr == nil {
 		// Exit code 0 means no differences — nothing to commit.
-		s.logger.Debug("no changes to commit", "file", filename)
-		return nil
+		s.logger.Debug("no changes to commit", "files", filenames)
+		return false, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(diffErr, &exitErr) && exitErr.ExitCode() != 1 {
-		return fmt.Errorf("git diff --cached: %w", diffErr)
+		return false, fmt.Errorf("git diff --cached: %w", diffErr)
 	}
 
 	// Get the tree hash.
 	var treeBuf bytes.Buffer
 	if err := s.git(ctx, nil, &treeBuf, "write-tree"); err != nil {
-		return fmt.Errorf("git write-tree: %w", err)
+		return false, fmt.Errorf("git write-tree: %w", err)
 	}
 	tree := strings.TrimSpace(treeBuf.String())
 
@@ -129,7 +139,7 @@ func (s *Store) commitFile(ctx context.Context, filename, message string) error 
 	commitForSigning := commitObj.String() + "\n" + message + "\n"
 	armoredSig, err := s.signer.Sign([]byte(commitForSigning))
 	if err != nil {
-		return fmt.Errorf("sign commit: %w", err)
+		return false, fmt.Errorf("sign commit: %w", err)
 	}
 
 	// Insert the gpgsig header between the last header line and the
@@ -147,23 +157,23 @@ func (s *Store) commitFile(ctx context.Context, filename, message string) error 
 	commitBytes := []byte(commitObj.String())
 	if err := s.git(ctx, bytes.NewReader(commitBytes), &hashBuf,
 		"hash-object", "-t", "commit", "-w", "--stdin"); err != nil {
-		return fmt.Errorf("git hash-object: %w", err)
+		return false, fmt.Errorf("git hash-object: %w", err)
 	}
 	commitHash := strings.TrimSpace(hashBuf.String())
 
 	// Update HEAD to point to the new commit.
 	if err := s.git(ctx, nil, nil,
 		"update-ref", "HEAD", commitHash); err != nil {
-		return fmt.Errorf("git update-ref: %w", err)
+		return false, fmt.Errorf("git update-ref: %w", err)
 	}
 
 	// Reset the index to match HEAD so subsequent operations see a
 	// clean working tree.
 	if err := s.git(ctx, nil, nil, "reset", "--mixed", "HEAD"); err != nil {
-		return fmt.Errorf("git reset: %w", err)
+		return false, fmt.Errorf("git reset: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // fileHistory reads git log for a file and returns structured metadata.
