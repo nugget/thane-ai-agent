@@ -13,6 +13,8 @@ import (
 // mockContactLookup implements ContactLookup for testing.
 type mockContactLookup struct {
 	contacts map[string]*ContactContext
+	byID     map[string]*ContactContext
+	policies map[string]*ContactOriginPolicy
 }
 
 func (m *mockContactLookup) LookupContact(name, _ string) *ContactContext {
@@ -20,6 +22,25 @@ func (m *mockContactLookup) LookupContact(name, _ string) *ContactContext {
 		return nil
 	}
 	return m.contacts[name]
+}
+
+func (m *mockContactLookup) LookupContactByID(id, _ string) *ContactContext {
+	if m == nil || m.byID == nil {
+		return nil
+	}
+	return m.byID[id]
+}
+
+func (m *mockContactLookup) LookupContactOriginPolicy(id, name, _ string) *ContactOriginPolicy {
+	if m == nil || m.policies == nil {
+		return nil
+	}
+	if id != "" {
+		if policy := m.policies[id]; policy != nil {
+			return policy
+		}
+	}
+	return m.policies[name]
 }
 
 // parseContactJSON extracts the ContactContext from a channel context

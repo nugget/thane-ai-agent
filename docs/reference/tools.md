@@ -46,6 +46,13 @@ These tools load on every turn regardless of active tags.
 | `conversation_reset` | Reset the current conversation's message history. |
 | `send_notification` | Provider-agnostic fire-and-forget notification. |
 
+`thane_delegate` inherits elective caller capability tags by default so
+child work keeps the same task context. Runtime and channel affordance
+tags such as `owner` and `message_channel` are re-asserted only from
+trusted runtime context; they are not inherited as model-requested tags.
+Use `inherit_caller_tags: false` when a delegate needs a strict fresh
+tool scope.
+
 ## `awareness` — live-context entity management
 
 | Tool | Description |
@@ -255,11 +262,25 @@ See [MQTT](../operating/mqtt.md) for the broker-side conventions.
 | `mqtt_wake_add` | Add a runtime wake subscription with routing config. |
 | `mqtt_wake_remove` | Remove a runtime wake subscription by ID. |
 
+## `message_channel` — current message-app conversation
+
+Normalized tools for the active message-app channel. Providers such as
+Signal adapt these calls to their native APIs. Inbound message-app
+bridges assert this capability as a runtime fact; it does not need to be
+listed in `channel_tags`.
+
+| Tool | Description |
+|------|-------------|
+| `send_reaction` | React inside the current message-app conversation. |
+
 ## `signal` — Signal messaging
 
 Declared via a Provider with async binding; handlers return
 [`tools.ErrUnavailable`](../../internal/tools/provider.go) when
-signal-cli isn't connected.
+signal-cli isn't connected. In inbound Signal conversations, final
+response text is sent automatically by the bridge; prefer
+`message_channel` for in-channel reactions and reserve these native
+tools for Signal-specific workflows.
 
 | Tool | Description |
 |------|-------------|

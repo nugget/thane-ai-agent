@@ -300,6 +300,45 @@ type contactNameLookup struct {
 	logger *slog.Logger
 }
 
+func (r *contactNameLookup) contactWithPropertiesByName(name string) (*contacts.Contact, []contacts.Property, bool) {
+	c, err := r.store.ResolveContact(name)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			r.logger.Error("failed to resolve contact by name", "name", name, "error", err)
+		}
+		return nil, nil, false
+	}
+	props, ok := r.propertiesForContact(c)
+	return c, props, ok
+}
+
+func (r *contactNameLookup) contactWithPropertiesByID(id string) (*contacts.Contact, []contacts.Property, bool) {
+	contactID, err := uuid.Parse(strings.TrimSpace(id))
+	if err != nil {
+		r.logger.Warn("failed to parse contact id", "contact_id", id, "error", err)
+		return nil, nil, false
+	}
+
+	c, err := r.store.Get(contactID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			r.logger.Error("failed to resolve contact by id", "contact_id", id, "error", err)
+		}
+		return nil, nil, false
+	}
+	props, ok := r.propertiesForContact(c)
+	return c, props, ok
+}
+
+func (r *contactNameLookup) propertiesForContact(c *contacts.Contact) ([]contacts.Property, bool) {
+	props, err := r.store.GetProperties(c.ID)
+	if err != nil {
+		r.logger.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
+		return nil, true
+	}
+	return props, true
+}
+
 // LookupContact returns a ContactContext for the given name, or nil if
 // no matching contact is found. The source parameter identifies the
 // channel so fields can be gated by trust zone — known-zone contacts
@@ -311,22 +350,58 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 		return nil
 	}
 
-	c, err := r.store.ResolveContact(name)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			r.logger.Error("failed to resolve contact by name", "name", name, "error", err)
-		}
+	c, props, ok := r.contactWithPropertiesByName(name)
+	if !ok {
 		return nil
-	}
-
-	props, err := r.store.GetProperties(c.ID)
-	if err != nil {
-		r.logger.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
-		props = nil
 	}
 
 	policy := contacts.Policy(c.TrustZone)
 	return buildContactContext(c, props, policy, source, time.Now())
+}
+
+// LookupContactByID returns a ContactContext for the exact contact UUID,
+// or nil if no matching contact is found.
+func (r *contactNameLookup) LookupContactByID(id string, source string) *agent.ContactContext {
+	if r == nil || r.store == nil {
+		return nil
+	}
+
+	c, props, ok := r.contactWithPropertiesByID(id)
+	if !ok {
+		return nil
+	}
+
+	policy := contacts.Policy(c.TrustZone)
+	return buildContactContext(c, props, policy, source, time.Now())
+}
+
+// LookupContactOriginPolicy returns contact-owned origin policy from the
+// contact directory. Policy lives with the contact record so adding,
+// removing, or changing origin tags does not require editing config or
+// restarting the agent.
+func (r *contactNameLookup) LookupContactOriginPolicy(id string, name string, source string) *agent.ContactOriginPolicy {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	var props []contacts.Property
+	var ok bool
+	if strings.TrimSpace(id) != "" {
+		_, props, ok = r.contactWithPropertiesByID(id)
+	}
+	if !ok && strings.TrimSpace(name) != "" {
+		_, props, ok = r.contactWithPropertiesByName(name)
+	}
+	if !ok {
+		return nil
+	}
+	policy := contacts.OriginPolicyFromProperties(props, source)
+	if policy.Empty() {
+		return nil
+	}
+	return &agent.ContactOriginPolicy{
+		Tags:        policy.Tags,
+		ContextRefs: policy.ContextRefs,
+	}
 }
 
 // buildContactContext assembles a ContactContext from a contact record,

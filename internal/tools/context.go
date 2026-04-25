@@ -17,6 +17,7 @@ const iterationIndexKey contextKey = "iteration_index"
 const hintsKey contextKey = "hints"
 const loopIDKey contextKey = "loop_id"
 const channelBindingKey contextKey = "channel_binding"
+const inheritableCapabilityTagsKey contextKey = "inheritable_capability_tags"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -130,6 +131,24 @@ func ChannelBindingFromContext(ctx context.Context) *memory.ChannelBinding {
 		return binding.Clone()
 	}
 	return nil
+}
+
+// WithInheritableCapabilityTags adds the caller's elective capability tags
+// to the context for child work. The slice is copied so downstream code
+// cannot mutate the caller's snapshot.
+func WithInheritableCapabilityTags(ctx context.Context, tags []string) context.Context {
+	return context.WithValue(ctx, inheritableCapabilityTagsKey, append([]string(nil), tags...))
+}
+
+// InheritableCapabilityTagsFromContext returns the caller's elective
+// capability tags. Runtime/channel affordance tags should be filtered out
+// before storing them with [WithInheritableCapabilityTags].
+func InheritableCapabilityTagsFromContext(ctx context.Context) []string {
+	tags, ok := ctx.Value(inheritableCapabilityTagsKey).([]string)
+	if !ok || len(tags) == 0 {
+		return nil
+	}
+	return append([]string(nil), tags...)
 }
 
 // LoopCompletionTargetFromContext derives the most natural detached

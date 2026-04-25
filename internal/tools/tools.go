@@ -66,6 +66,8 @@ type Registry struct {
 	lensStore       *LensStore
 	logIndexDB      *sql.DB
 
+	channelReactionHandlers map[string]ChannelReactionFunc
+
 	modelRegistry                              *models.Registry
 	modelRouter                                *routepkg.Router
 	modelRegistrySyncRouter                    func()

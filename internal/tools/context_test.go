@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
@@ -166,6 +167,28 @@ func TestChannelBindingFromContext(t *testing.T) {
 	got.ContactName = "changed"
 	if binding.ContactName != "Alice Smith" {
 		t.Fatalf("binding mutated = %#v", binding)
+	}
+}
+
+func TestInheritableCapabilityTagsFromContext(t *testing.T) {
+	tags := []string{"ha", "kb:article/example"}
+	ctx := WithInheritableCapabilityTags(context.Background(), tags)
+	tags[0] = "mutated"
+
+	got := InheritableCapabilityTagsFromContext(ctx)
+	if !slices.Equal(got, []string{"ha", "kb:article/example"}) {
+		t.Fatalf("InheritableCapabilityTagsFromContext() = %#v", got)
+	}
+
+	got[0] = "changed"
+	got = InheritableCapabilityTagsFromContext(ctx)
+	if !slices.Equal(got, []string{"ha", "kb:article/example"}) {
+		t.Fatalf("stored inheritable tags mutated = %#v", got)
+	}
+
+	ctx = WithInheritableCapabilityTags(ctx, nil)
+	if got := InheritableCapabilityTagsFromContext(ctx); got != nil {
+		t.Fatalf("cleared inheritable tags = %#v, want nil", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,64 @@ func TestSaveContact_WithFacts(t *testing.T) {
 	if !foundTZ {
 		t.Error("expected timezone property for America/Chicago")
 	}
+}
+
+func TestSaveContact_OriginPolicyProperties(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{
+		"name":"Origin Policy",
+		"kind":"individual",
+		"origin_tags":["signal","projects"],
+		"origin_context_refs":["kb:projects/current.md"]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Origin Policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	props, err := tools.store.GetProperties(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := propertyValues(props, PropertyOriginTag), []string{"signal", "projects"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("origin tags = %#v, want %#v", got, want)
+	}
+	if got, want := propertyValues(props, PropertyOriginContextRef), []string{"kb:projects/current.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("origin context refs = %#v, want %#v", got, want)
+	}
+
+	_, err = tools.SaveContact(`{
+		"name":"Origin Policy",
+		"origin_tags":[],
+		"origin_context_refs":[]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	props, err = tools.store.GetProperties(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := propertyValues(props, PropertyOriginTag); len(got) != 0 {
+		t.Fatalf("origin tags should be cleared, got %#v", got)
+	}
+	if got := propertyValues(props, PropertyOriginContextRef); len(got) != 0 {
+		t.Fatalf("origin context refs should be cleared, got %#v", got)
+	}
+}
+
+func propertyValues(props []Property, name string) []string {
+	var values []string
+	for _, prop := range props {
+		if prop.Property == name {
+			values = append(values, prop.Value)
+		}
+	}
+	return values
 }
 
 func TestSaveContact_TopLevelFieldsRescued(t *testing.T) {

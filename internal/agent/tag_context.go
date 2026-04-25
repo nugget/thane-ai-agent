@@ -10,6 +10,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
@@ -26,6 +27,8 @@ import (
 // concurrent use after construction.
 type TagContextAssembler struct {
 	capTags    map[string]config.CapabilityTagConfig
+	kbDir      string
+	resolver   *paths.Resolver
 	kbArticles []kbArticle                // pre-scanned, sorted
 	haInject   homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger     *slog.Logger
@@ -54,6 +57,7 @@ type KBMenuHint struct {
 type TagContextAssemblerConfig struct {
 	CapTags  map[string]config.CapabilityTagConfig
 	KBDir    string                     // resolved kb: directory; empty skips scanning
+	Resolver *paths.Resolver            // managed document root resolver; nil falls back to KBDir for kb: refs
 	HAInject homeassistant.StateFetcher // nil-safe
 	Logger   *slog.Logger
 }
@@ -78,6 +82,8 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 
 	return &TagContextAssembler{
 		capTags:    cfg.CapTags,
+		kbDir:      cfg.KBDir,
+		resolver:   cfg.Resolver,
 		kbArticles: articles,
 		haInject:   cfg.HAInject,
 		logger:     cfg.Logger,
@@ -153,6 +159,106 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 	}
 
 	return buf.String()
+}
+
+// BuildRefs assembles exact managed document refs for origin-derived
+// context. Refs are read fresh each turn, frontmatter is stripped, and
+// each document is labeled by its semantic ref.
+func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) string {
+	if a == nil || len(refs) == 0 {
+		return ""
+	}
+
+	seen := make(map[string]bool, len(refs))
+	var buf strings.Builder
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+
+		path, ok := a.resolveContextRef(ref)
+		if !ok {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			a.logger.Warn("failed to read session origin context ref",
+				"ref", ref, "path", path, "error", err)
+			continue
+		}
+		_, content := talents.ParseFrontmatterMetadata(string(data))
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		resolved := homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
+		var entry strings.Builder
+		entry.WriteString("#### ")
+		entry.WriteString(ref)
+		entry.WriteString("\n\n")
+		entry.Write(resolved)
+		a.appendContent(&buf, []byte(entry.String()))
+		if buf.Len() >= maxTagContextBytes {
+			a.logger.Warn("session origin context aggregate limit reached",
+				"ref", ref, "limit_bytes", maxTagContextBytes)
+			return buf.String()
+		}
+	}
+	return buf.String()
+}
+
+func (a *TagContextAssembler) resolveContextRef(ref string) (string, bool) {
+	prefix, _, ok := strings.Cut(ref, ":")
+	if !ok || strings.TrimSpace(prefix) == "" {
+		a.logger.Warn("session origin context ref is not semantic", "ref", ref)
+		return "", false
+	}
+	rootRef := prefix + ":"
+	if a.resolver != nil && a.resolver.HasPrefix(ref) {
+		path, err := a.resolver.Resolve(ref)
+		if err != nil {
+			a.logger.Warn("failed to resolve session origin context ref", "ref", ref, "error", err)
+			return "", false
+		}
+		root, err := a.resolver.Resolve(rootRef)
+		if err != nil {
+			a.logger.Warn("failed to resolve session origin context root", "ref", ref, "root", rootRef, "error", err)
+			return "", false
+		}
+		return safeManagedRefPath(root, path)
+	}
+	if rootRef == "kb:" && a.kbDir != "" {
+		path := filepath.Join(a.kbDir, strings.TrimPrefix(ref, "kb:"))
+		return safeManagedRefPath(a.kbDir, path)
+	}
+	a.logger.Warn("unsupported session origin context ref", "ref", ref)
+	return "", false
+}
+
+func safeManagedRefPath(root, path string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	pathResolved, err := filepath.EvalSymlinks(pathAbs)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootResolved, pathResolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return pathResolved, true
 }
 
 const truncationMarker = "\n\n[tag context truncated — exceeded aggregate 64 KB limit]"

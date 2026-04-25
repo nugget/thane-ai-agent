@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -55,7 +56,7 @@ func (p *ToolProvider) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{
 			Name:        "signal_send_message",
-			Description: "Send a Signal message to a phone number. Use this to reply to the user's Signal message or initiate a new Signal conversation.",
+			Description: "Send a Signal message to a phone number for proactive or out-of-band Signal delivery. Do not use this as the normal reply path inside an inbound Signal conversation; the Signal bridge sends final response text automatically.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -125,6 +126,29 @@ func (p *ToolProvider) handleSendMessage(ctx context.Context, args map[string]an
 }
 
 func (p *ToolProvider) handleSendReaction(ctx context.Context, args map[string]any) (string, error) {
+	return p.sendReaction(ctx, args)
+}
+
+// HandleChannelReaction adapts the normalized message-channel reaction
+// tool to Signal's native recipient/author/timestamp shape.
+func (p *ToolProvider) HandleChannelReaction(ctx context.Context, req tools.ChannelReactionRequest) (string, error) {
+	recipient := strings.TrimSpace(req.Recipient)
+	if recipient == "" {
+		return "", fmt.Errorf("current Signal recipient is unknown")
+	}
+	emoji := strings.TrimSpace(req.Emoji)
+	if emoji == "" {
+		return "", fmt.Errorf("emoji is required")
+	}
+	return p.sendReaction(ctx, map[string]any{
+		"recipient":        recipient,
+		"emoji":            emoji,
+		"target_author":    recipient,
+		"target_timestamp": normalizeSignalReactionTarget(req.Target),
+	})
+}
+
+func (p *ToolProvider) sendReaction(ctx context.Context, args map[string]any) (string, error) {
 	p.mu.RLock()
 	client := p.client
 	bridge := p.bridge
@@ -171,4 +195,15 @@ func (p *ToolProvider) handleSendReaction(ctx context.Context, args map[string]a
 		return "", err
 	}
 	return fmt.Sprintf("Reacted with %s to message from %s", emoji, targetAuthor), nil
+}
+
+func normalizeSignalReactionTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "latest"
+	}
+	if strings.HasPrefix(target, "[ts:") && strings.HasSuffix(target, "]") {
+		return strings.TrimSuffix(strings.TrimPrefix(target, "[ts:"), "]")
+	}
+	return target
 }

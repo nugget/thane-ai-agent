@@ -39,7 +39,13 @@ func ToolDefinition() map[string]any {
 				"items": map[string]any{"type": "string"},
 				"description": "Optional capability tags to scope the delegate's tools. " +
 					"When provided, the delegate only sees tools from these tags " +
-					"(plus always-active tags). Omit to use the profile's default toolset.",
+					"(plus inherited elective caller tags and always-active tags). " +
+					"Omit to inherit the caller's elective task context or use the profile's default toolset.",
+			},
+			"inherit_caller_tags": map[string]any{
+				"type":        "boolean",
+				"default":     true,
+				"description": "Whether to inherit elective capability tags from the caller. Runtime and channel affordance tags such as message_channel are never inherited.",
 			},
 			"path_prefixes": map[string]any{
 				"type":                 "object",
@@ -79,6 +85,10 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		}
 
 		guidance, _ := args["guidance"].(string)
+		inheritCallerTags := true
+		if rawInherit, ok := args["inherit_caller_tags"].(bool); ok {
+			inheritCallerTags = rawInherit
+		}
 
 		var tags []string
 		if rawTags, ok := args["tags"].([]any); ok {
@@ -99,15 +109,16 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			}
 		}
 
+		opts := executionOptions{inheritCallerTags: inheritCallerTags}
 		if mode == "async" {
-			loopID, err := exec.StartBackground(ctx, task, profileName, guidance, tags, pathPrefixes)
+			loopID, err := exec.startBackground(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 			if err != nil {
 				return fmt.Sprintf("[Delegate error: profile=%s, mode=%s] %s", profileName, mode, err.Error()), nil
 			}
 			return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID), nil
 		}
 
-		result, err := exec.Execute(ctx, task, profileName, guidance, tags, pathPrefixes)
+		result, err := exec.execute(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 		if err != nil {
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}

@@ -328,37 +328,11 @@ talents_dir: ./talents
 #       budget exhaustion. Zero keeps the builtin default (25000).
 #       max_tokens: 25000
 #
-# (optional) CapabilityTags overlays the compiled-in tool/tag baseline with
-# capability_tags:
-#   ha:
-#     Description is a human-readable summary shown in the capability
-#     manifest so the agent knows what activating this tag provides. For
-#     compiled-in tags, empty keeps the built-in description.
-#     description: Home Assistant tools and sensors
-#     Tools lists the tool names belonging to this tag. A tool can
-#     appear in multiple tags; it loads when any of its tags is active.
+# (optional) CapabilityTags optionally overlays the compiled-in capability-tag catalog.
+# capability_tags: {}
 #
-#     For compiled-in tags, empty keeps the built-in tool membership.
-#     Prefer leaving this empty for built-in or MCP-backed tags unless
-#     you intentionally want to replace the compiled/operator-derived
-#     membership with an explicit list.
-#     tools: []
-#     AlwaysActive tags cannot be deactivated. They are included in
-#     every session regardless of channel or agent requests.
-#     always_active: true
-#     Protected tags are reserved for runtime trust and environment
-#     assertions (for example an owner-authenticated conversation).
-#     They are visible to the model when active, but cannot be toggled
-#     via activate_capability or deactivate_capability.
-#     protected: false
-#
-# (optional) ChannelTags maps conversation source channels (e.g., "signal",
-# channel_tags:
-#   email:
-#     - forge
-#   signal:
-#     - ha
-#     - web
+# (optional) ChannelTags maps source channels to broad optional capability tags.
+# channel_tags: {}
 #
 # (optional) MCP configures external MCP (Model Context Protocol) server
 # mcp:
@@ -514,7 +488,7 @@ talents_dir: ./talents
 #     ap-bedroom: bedroom
 #     ap-office: office
 #
-# (optional) Signal configures the Signal message bridge for inbound message
+# (optional) Signal configures native Signal message routing through signal-cli jsonRpc.
 # signal:
 #   Enabled controls whether the Signal bridge starts.
 #   enabled: true
@@ -613,7 +587,7 @@ talents_dir: ./talents
 #   resolves directly to this contact instead of guessing from trust
 #   zones. When empty, owner_contact falls back to the sole admin
 #   contact if exactly one exists.
-#   owner_contact_name: Aimee
+#   owner_contact_name: Operator Name
 #
 # (optional) Attachments configures content-addressed attachment storage.
 # attachments:
@@ -735,7 +709,7 @@ talents_dir: ./talents
 #   analysis:
 #     DefaultOutputPath is the base directory for analysis output when
 #     a feed has no per-feed output_path configured. Supports ~ expansion.
-#     Example: ~/Sync/Aimee/Vault/Media
+#     Example: ~/Thane/generated/media
 #     default_output_path: ~/Thane/generated/media
 #     DatabasePath is the SQLite database file for engagement tracking.
 #     If empty, defaults to {data_dir}/media_engagement.db at startup.

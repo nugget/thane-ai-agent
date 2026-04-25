@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -400,6 +402,239 @@ func TestProtectedOwnerTag_ActivatedByChannelBinding(t *testing.T) {
 	names := toolNames(mock.calls[0].Tools)
 	if !hasName(names, "owner_tool") {
 		t.Fatalf("owner_tool should be available for owner binding: %v", names)
+	}
+}
+
+func TestContactOrigin_ActivatedBySignalContact(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"signal_tool", "project_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"signal": {
+			Description: "Signal messaging",
+			Tools:       []string{"signal_tool"},
+		},
+		"projects": {
+			Description: "Project context",
+			Tools:       []string{"project_tool"},
+		},
+	}, nil)
+	loop.UseContactLookup(&mockContactLookup{
+		byID: map[string]*ContactContext{
+			"contact-1": {
+				ID:        "contact-1",
+				Name:      "David McNett",
+				TrustZone: "admin",
+				TrustPolicy: &TrustPolicyView{
+					FrontierModel:     true,
+					ProactiveOutreach: "full",
+					ToolAccess:        "unrestricted",
+					SendGating:        "allowed",
+				},
+				Summary: "Prefers contact identity from the structured directory.",
+			},
+		},
+		policies: map[string]*ContactOriginPolicy{
+			"contact-1": {
+				Tags: []string{"signal", "projects"},
+			},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "what needs attention?"}},
+		Hints:    map[string]string{"source": "signal"},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			Address:     "+15551234567",
+			ContactID:   "contact-1",
+			ContactName: "David McNett",
+			TrustZone:   "trusted",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	for _, want := range []string{"signal_tool", "project_tool"} {
+		if !hasName(names, want) {
+			t.Fatalf("%s should be available via session origin policy: %v", want, names)
+		}
+	}
+	systemPrompt := mock.calls[0].Messages[0].Content
+	for _, want := range []string{"Session Origin Context", "contact_origin", "Prefers contact identity from the structured directory."} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt should include origin/contact context %q, got:\n%s", want, systemPrompt)
+		}
+	}
+	if strings.Contains(systemPrompt, "kb:people") {
+		t.Fatalf("people identity should come from contact context, got:\n%s", systemPrompt)
+	}
+}
+
+func TestContactOrigin_MissingIdentityFallsBackToChannelTags(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"signal_tool", "project_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"signal": {
+			Description: "Signal messaging",
+			Tools:       []string{"signal_tool"},
+		},
+		"projects": {
+			Description: "Project context",
+			Tools:       []string{"project_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"signal"},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "check signal updates"}},
+		Hints:    map[string]string{"source": "signal"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	if !hasName(names, "signal_tool") {
+		t.Fatalf("signal_tool should remain available through channel_tags fallback: %v", names)
+	}
+	if hasName(names, "project_tool") {
+		t.Fatalf("project_tool should not be available without matching contact identity: %v", names)
+	}
+}
+
+func TestContactOrigin_ProtectedTagsRequireTrustedBinding(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"owner_tool", "signal_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Tools:       []string{"owner_tool"},
+			Protected:   true,
+		},
+		"signal": {
+			Description: "Signal messaging",
+			Tools:       []string{"signal_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"owner", "signal"},
+	})
+	loop.UseContactLookup(&mockContactLookup{
+		policies: map[string]*ContactOriginPolicy{
+			"David": {
+				Tags: []string{"owner"},
+			},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "check privileged tools"}},
+		Hints:    map[string]string{"source": "signal"},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			ContactName: "David",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	if hasName(names, "owner_tool") {
+		t.Fatalf("owner_tool should not be available from contact policy without owner binding: %v", names)
+	}
+	if !hasName(names, "signal_tool") {
+		t.Fatalf("signal_tool should still be available: %v", names)
+	}
+}
+
+func TestContactOrigin_InjectsExactContextRefs(t *testing.T) {
+	kbDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(kbDir, "projects"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "projects", "current.md"),
+		[]byte("---\ntags: [private]\n---\n# Current Projects\nBring project context forward."), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, nil)
+	loop.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		KBDir: kbDir,
+	}))
+	loop.UseContactLookup(&mockContactLookup{
+		policies: map[string]*ContactOriginPolicy{
+			"David": {
+				ContextRefs: []string{"kb:projects/current.md"},
+			},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "what do you know?"}},
+		Hints:    map[string]string{"source": "signal"},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			ContactName: "David",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	systemPrompt := mock.calls[0].Messages[0].Content
+	for _, want := range []string{"Session Origin Context", "kb:projects/current.md", "Current Projects", "Bring project context forward."} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+	if strings.Contains(systemPrompt, "tags: [private]") {
+		t.Fatalf("frontmatter should be stripped from context refs:\n%s", systemPrompt)
 	}
 }
 

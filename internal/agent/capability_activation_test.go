@@ -282,6 +282,80 @@ func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *test
 	}
 }
 
+func TestRuntimeTags_PinForRunWithoutPersistence(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Reacted."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"message_channel": {
+			Description: "Current message channel",
+			Tools:       []string{"send_reaction"},
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"send_reaction"}, capTags)
+	store := newTestCapStore(t)
+	loop.SetCapabilityTagStore(store)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		ConversationID: "signal-15551234567",
+		RuntimeTags:    []string{"message_channel"},
+		Messages:       []Message{{Role: "user", Content: "Thanks"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !slices.Equal(resp.ActiveTags, []string{"message_channel"}) {
+		t.Fatalf("ActiveTags = %#v, want [message_channel]", resp.ActiveTags)
+	}
+	if names := toolNames(mock.calls[0].Tools); !hasName(names, "send_reaction") {
+		t.Fatalf("send_reaction should be available via runtime tag: %v", names)
+	}
+
+	saved, err := store.LoadTags("signal-15551234567")
+	if err != nil {
+		t.Fatalf("LoadTags() error: %v", err)
+	}
+	if len(saved) != 0 {
+		t.Fatalf("runtime tags should not persist, got %#v", saved)
+	}
+}
+
+func TestCapabilityScope_InheritableTagsOnlyElective(t *testing.T) {
+	scope := newCapabilityScope(map[string]config.CapabilityTagConfig{
+		"core": {
+			Description:  "Core tools",
+			Tools:        []string{"remember_fact"},
+			AlwaysActive: true,
+		},
+		"ha": {
+			Description: "Home Assistant",
+			Tools:       []string{"get_state"},
+		},
+		"message_channel": {
+			Description: "Current message channel",
+			Tools:       []string{"send_reaction"},
+		},
+	}, []string{"ops_lens"})
+
+	if err := scope.Request("ha"); err != nil {
+		t.Fatalf("Request(ha) error: %v", err)
+	}
+	scope.PinChannelTags([]string{"message_channel"})
+
+	if got := scope.InheritableTags(); !slices.Equal(got, []string{"ha"}) {
+		t.Fatalf("InheritableTags() = %#v, want [ha]", got)
+	}
+}
+
 func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{

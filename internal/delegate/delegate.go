@@ -42,6 +42,75 @@ const (
 	ExhaustIllegalTool   = iterate.ExhaustIllegalTool
 )
 
+type executionOptions struct {
+	inheritCallerTags bool
+}
+
+func defaultExecutionOptions() executionOptions {
+	return executionOptions{inheritCallerTags: true}
+}
+
+func mergeDelegateScopeTags(ctx context.Context, explicitTags []string, inheritCallerTags bool) (scopeTags []string, inheritedTags []string, droppedTags []string, explicitScopeRequested bool) {
+	scope := make(map[string]bool)
+	inherited := make(map[string]bool)
+	dropped := make(map[string]bool)
+
+	if inheritCallerTags {
+		for _, tag := range tools.InheritableCapabilityTagsFromContext(ctx) {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				continue
+			}
+			if nonDelegableCapabilityTag(tag) {
+				dropped[tag] = true
+				continue
+			}
+			scope[tag] = true
+			inherited[tag] = true
+		}
+	}
+
+	for _, tag := range explicitTags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		explicitScopeRequested = true
+		if nonDelegableCapabilityTag(tag) {
+			dropped[tag] = true
+			continue
+		}
+		scope[tag] = true
+	}
+
+	scopeTags = make([]string, 0, len(scope))
+	for tag := range scope {
+		scopeTags = append(scopeTags, tag)
+	}
+	sort.Strings(scopeTags)
+	inheritedTags = make([]string, 0, len(inherited))
+	for tag := range inherited {
+		inheritedTags = append(inheritedTags, tag)
+	}
+	sort.Strings(inheritedTags)
+
+	droppedTags = make([]string, 0, len(dropped))
+	for tag := range dropped {
+		droppedTags = append(droppedTags, tag)
+	}
+	sort.Strings(droppedTags)
+	return scopeTags, inheritedTags, droppedTags, explicitScopeRequested
+}
+
+func nonDelegableCapabilityTag(tag string) bool {
+	switch tag {
+	case "message_channel", "owner":
+		return true
+	default:
+		return false
+	}
+}
+
 // ToolCallOutcome records the name and success/failure of a single tool
 // invocation during delegate execution.
 type ToolCallOutcome struct {
@@ -276,18 +345,27 @@ func (e *Executor) ProfileNames() []string {
 // Execute runs a delegated task with the given profile and guidance.
 // When tags is non-empty, the delegate's tool registry is scoped to
 // only tools belonging to the given capability tags (plus any
-// always-active tags). When tags is nil, the profile's AllowedTools
-// controls tool selection (existing behavior).
+// always-active tags). Elective caller tags are inherited by default;
+// when the resulting scope has no tags, the profile's AllowedTools
+// controls tool selection.
 func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
+	return e.execute(ctx, task, profileName, guidance, tags, pathPrefixes, defaultExecutionOptions())
+}
+
+func (e *Executor) execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*Result, error) {
 	if e.loopRunner != nil && e.loopRegistry != nil {
-		return e.executeViaLoop(ctx, task, profileName, guidance, tags, pathPrefixes)
+		return e.executeViaLoop(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 	}
-	return e.executeLegacy(ctx, task, profileName, guidance, tags, pathPrefixes)
+	return e.executeLegacy(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 }
 
 // StartBackground launches a detached delegate loop that reports its
 // completion back into the current conversation.
 func (e *Executor) StartBackground(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (string, error) {
+	return e.startBackground(ctx, task, profileName, guidance, tags, pathPrefixes, defaultExecutionOptions())
+}
+
+func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (string, error) {
 	if e.loopRunner == nil || e.loopRegistry == nil {
 		return "", fmt.Errorf("background delegation requires loops-ng execution")
 	}
@@ -295,7 +373,7 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 		return "", fmt.Errorf("background delegation requires a completion sink")
 	}
 
-	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes)
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 	if err != nil {
 		return "", err
 	}
@@ -334,7 +412,7 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 	return launchResult.LoopID, nil
 }
 
-func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (delegateResult *Result, delegateErr error) {
+func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (delegateResult *Result, delegateErr error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -385,13 +463,22 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	if profile == nil {
 		profile = e.profiles["general"]
 	}
+	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags)
+	if len(droppedTags) > 0 {
+		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
+	}
 
 	// Build filtered tool registry. Tag-scoped delegations take
 	// precedence over the profile's AllowedTools list.
 	var reg *tools.Registry
-	if len(tags) > 0 {
-		merged := append(tags, e.alwaysActiveTags...)
-		reg = e.parentReg.FilterByTags(merged)
+	if len(scopeTags) > 0 || explicitScopeRequested {
+		merged := append([]string(nil), scopeTags...)
+		merged = append(merged, e.alwaysActiveTags...)
+		if len(merged) > 0 {
+			reg = e.parentReg.FilterByTags(merged)
+		} else {
+			reg = e.parentReg.FilteredCopy(nil)
+		}
 		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
 	} else if len(profile.AllowedTools) > 0 {
 		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
@@ -409,7 +496,8 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	log.Info("delegate started",
 		"task", truncate(task, 200),
 		"guidance", truncate(guidance, 200),
-		"tags", tags,
+		"tags", scopeTags,
+		"inherited_tags", inheritedTags,
 		"tools_available", len(toolDefs),
 	)
 
@@ -425,7 +513,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 			"profile":        profile.Name,
 			"task":           truncate(task, 200),
 			"guidance":       truncate(guidance, 200),
-			"tags":           tags,
+			"tags":           scopeTags,
 			"name":           "delegate-" + did[:8],
 		},
 	})
@@ -439,9 +527,9 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	// Inject tag context (static files, KB articles, live providers).
 	// Falls back to the legacy forge-only injection when the tag
 	// context function is not configured.
-	// Build effective tag set: explicit tags + always-active + global lenses.
-	merged := make(map[string]bool, len(tags)+len(e.alwaysActiveTags))
-	for _, t := range tags {
+	// Build effective tag set: scoped tags + always-active + global lenses.
+	merged := make(map[string]bool, len(scopeTags)+len(e.alwaysActiveTags))
+	for _, t := range scopeTags {
 		merged[t] = true
 	}
 	for _, t := range e.alwaysActiveTags {
@@ -792,8 +880,8 @@ type preparedExecution struct {
 	toolTimeout      time.Duration
 }
 
-func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
-	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes)
+func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*Result, error) {
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,7 +1102,7 @@ func (e *Executor) finishLoopExecution(prep *preparedExecution) {
 	}
 }
 
-func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*preparedExecution, error) {
+func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*preparedExecution, error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -1057,12 +1145,20 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	if profile == nil {
 		profile = e.profiles["general"]
 	}
+	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags)
+	if len(droppedTags) > 0 {
+		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
+	}
 
 	var reg *tools.Registry
-	if len(tags) > 0 {
-		merged := append([]string(nil), tags...)
+	if len(scopeTags) > 0 || explicitScopeRequested {
+		merged := append([]string(nil), scopeTags...)
 		merged = append(merged, e.alwaysActiveTags...)
-		reg = e.parentReg.FilterByTags(merged)
+		if len(merged) > 0 {
+			reg = e.parentReg.FilterByTags(merged)
+		} else {
+			reg = e.parentReg.FilteredCopy(nil)
+		}
 		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
 	} else if len(profile.AllowedTools) > 0 {
 		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
@@ -1078,12 +1174,13 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	log.Info("delegate started",
 		"task", truncate(task, 200),
 		"guidance", truncate(guidance, 200),
-		"tags", tags,
+		"tags", scopeTags,
+		"inherited_tags", inheritedTags,
 		"tools_available", len(toolDefs),
 	)
 
-	effectiveTagsMap := make(map[string]bool, len(tags)+len(e.alwaysActiveTags))
-	for _, t := range tags {
+	effectiveTagsMap := make(map[string]bool, len(scopeTags)+len(e.alwaysActiveTags))
+	for _, t := range scopeTags {
 		effectiveTagsMap[t] = true
 	}
 	for _, t := range e.alwaysActiveTags {
@@ -1163,7 +1260,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		userMessage:      userMsg.String(),
 		model:            e.selectModel(ctx, task, profile, len(toolDefs)),
 		toolNames:        toolNames,
-		explicitTags:     append([]string(nil), tags...),
+		explicitTags:     append([]string(nil), scopeTags...),
 		effectiveTags:    effectiveTags,
 		maxIterations:    maxIterations,
 		maxOutputTokens:  maxOutputTokens,

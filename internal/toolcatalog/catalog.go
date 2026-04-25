@@ -346,6 +346,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"resolve_actionable":          {CanonicalID: "native:resolve_actionable", Source: NativeToolSource, DefaultTags: []string{"notifications"}},
 	"save_contact":                {CanonicalID: "native:save_contact", Source: NativeToolSource, DefaultTags: []string{"contacts"}},
 	"schedule_task":               {CanonicalID: "native:schedule_task", Source: NativeToolSource, DefaultTags: []string{"scheduler"}},
+	"send_reaction":               {CanonicalID: "native:send_reaction", Source: NativeToolSource, DefaultTags: []string{"message_channel"}},
 	"session_checkpoint":          {CanonicalID: "native:session_checkpoint", Source: NativeToolSource, DefaultTags: []string{"session"}},
 	"session_close":               {CanonicalID: "native:session_close", Source: NativeToolSource, DefaultTags: []string{"session"}},
 	"session_split":               {CanonicalID: "native:session_split", Source: NativeToolSource, DefaultTags: []string{"session"}},

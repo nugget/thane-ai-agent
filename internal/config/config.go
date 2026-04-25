@@ -201,20 +201,20 @@ type Config struct {
 	// Delegate configures the thane_delegate tool's split-model execution.
 	Delegate DelegateConfig `yaml:"delegate"`
 
-	// CapabilityTags overlays the compiled-in tool/tag baseline with
-	// operator-defined descriptions, tool membership overrides, and
-	// custom tags. Tags marked always_active are loaded
-	// unconditionally. Other tags are activated via
-	// activate_capability/deactivate_capability tools or channel-pinned
-	// configuration.
+	// CapabilityTags optionally overlays the compiled-in capability-tag catalog.
+	// Use this for deliberate operator overrides or custom tags. Built-in
+	// tags usually do not need entries here. Tags marked always_active are
+	// loaded unconditionally. Other tags are activated via
+	// activate_capability/deactivate_capability tools, runtime source
+	// policy, or channel-pinned configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
-	// ChannelTags maps conversation source channels (e.g., "signal",
-	// "email") to lists of capability tag names that are automatically
-	// activated when a message arrives on that channel. This is
-	// additive to always-active tags and any tags the agent requests
-	// at runtime. Tag names must reference either compiled-in tags or
-	// entries in [CapabilityTags].
+	// ChannelTags maps source channels to broad optional capability tags.
+	// Use this for coarse source defaults, not runtime facts such as owner
+	// identity or current message-channel affordances. This is additive to
+	// always-active tags and any tags the agent requests at runtime. Tag
+	// names must reference either compiled-in tags or entries in
+	// [CapabilityTags].
 	ChannelTags map[string][]string `yaml:"channel_tags"`
 
 	// MCP configures external MCP (Model Context Protocol) server
@@ -234,8 +234,7 @@ type Config struct {
 	// calls for basic presence questions.
 	Person PersonConfig `yaml:"person"`
 
-	// Signal configures the Signal message bridge for inbound message
-	// reception and response routing via a signal-mcp MCP server.
+	// Signal configures native Signal message routing through signal-cli jsonRpc.
 	Signal SignalConfig `yaml:"signal"`
 
 	// Forge configures code forge integrations (GitHub, Gitea). When
@@ -1569,7 +1568,7 @@ type MediaConfig struct {
 type AnalysisConfig struct {
 	// DefaultOutputPath is the base directory for analysis output when
 	// a feed has no per-feed output_path configured. Supports ~ expansion.
-	// Example: ~/Sync/Aimee/Vault/Media
+	// Example: ~/Thane/generated/media
 	DefaultOutputPath string `yaml:"default_output_path"`
 
 	// DatabasePath is the SQLite database file for engagement tracking.
