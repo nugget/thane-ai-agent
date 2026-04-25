@@ -129,21 +129,27 @@ enable it to sync contacts with macOS/iOS/Thunderbird.
 
 ```yaml
 capability_tags:
-  ha:
-    description: "Home Assistant device control and monitoring"
-    tools: [control_device, find_entity, get_state, list_entities]
-  email:
-    description: "Email reading, sending, and management"
-    tools: [email_list, email_read, email_search, email_send]
-  memory:
-    description: "Fact storage and recall"
-    tools: [remember_fact, recall_fact, forget_fact]
-    always_active: true
+  project_ops:
+    description: "Project-specific research and archive tools"
+    tools: [archive_search, web_search]
 ```
 
-Tags gate which tools and talents are available per session. Tags with
-`always_active: true` are always loaded. Others activate on demand.
-See [The Agent Loop](../understanding/agent-loop.md).
+Thane ships with a compiled-in capability-tag catalog for native and
+provider-discovered tools. Most operators leave built-in tags out of
+config. Use `capability_tags` only for deliberate overrides or custom
+tags. Tags with `always_active: true` are always loaded. Others activate
+on demand. See [The Agent Loop](../understanding/agent-loop.md).
+
+## Channel Tags
+
+```yaml
+channel_tags: {}
+```
+
+`channel_tags` pins broad optional capability families for requests from
+a source. Use it for coarse source defaults only. Runtime facts such as
+current message-channel affordances and owner identity are asserted by
+the integrations that know them, not configured here.
 
 ## Memory & Storage
 

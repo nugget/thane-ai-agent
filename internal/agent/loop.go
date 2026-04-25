@@ -56,6 +56,7 @@ type Request struct {
 	ExcludeTools    []string               `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
 	SkipTagFilter   bool                   `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
 	InitialTags     []string               `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	RuntimeTags     []string               `json:"-"`               // Trusted runtime-asserted tags pinned for this run only
 	MaxIterations   int                    `json:"-"`               // Optional per-request iteration cap (0 = default)
 	MaxOutputTokens int                    `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
 	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
@@ -240,6 +241,7 @@ type Loop struct {
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config (static)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering (static)
 	channelTags   map[string][]string                   // channel name → tag names (static)
+	contactLookup ContactLookup                         // trust-gated contact profile lookup for origin context
 	capTagStore   CapabilityTagStore                    // persists activated tags per conversation (nil = no persistence)
 	lensProvider  func() []string                       // returns active global lenses (nil = none)
 	capSurface    []toolcatalog.CapabilitySurface       // resolved capability surface for model-facing rendering
@@ -467,6 +469,41 @@ func (l *Loop) UseModelRuntime(runtime *models.Runtime) {
 // DropCapability. They are removed on return to prevent cross-channel bleed.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
 	l.channelTags = ct
+}
+
+// UseContactLookup configures the contact-directory lookup used to
+// include trust-gated contact profiles in session origin context.
+func (l *Loop) UseContactLookup(lookup ContactLookup) {
+	l.contactLookup = lookup
+}
+
+func (l *Loop) filterOriginPinnedTags(origin SessionOrigin, tags []string) []string {
+	if len(tags) == 0 || l.capTags == nil {
+		return nil
+	}
+	filtered := make([]string, 0, len(tags))
+	for _, tag := range cleanUnique(tags) {
+		cfg, ok := l.capTags[tag]
+		if !ok {
+			if l.logger != nil {
+				l.logger.Warn("session origin policy referenced inactive capability tag", "tag", tag)
+			}
+			continue
+		}
+		if cfg.Protected && (tag != "owner" || !origin.IsOwner) {
+			if l.logger != nil {
+				l.logger.Warn("session origin policy skipped protected tag",
+					"tag", tag,
+					"source", origin.Source,
+					"channel", origin.Channel,
+					"contact_name", origin.ContactName,
+				)
+			}
+			continue
+		}
+		filtered = append(filtered, tag)
+	}
+	return filtered
 }
 
 // SetLensProvider configures a function that returns the currently
@@ -753,6 +790,14 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		seal()
 	}
 
+	// 5b. Session origin policy (runtime data about why this run was shaped).
+	if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
+		mark("SESSION ORIGIN CONTEXT")
+		sb.WriteString("\n\n## Session Origin Context\n\n")
+		sb.WriteString(originCtx)
+		seal()
+	}
+
 	// 6. Tag context (capability knowledge — what does my active role need)
 	// Keep it before current conditions for continuity, but uncached.
 	if l.tagContextAssembler != nil && tags != nil {
@@ -806,6 +851,88 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 
 	text := sb.String()
 	return text, promptSectionsFromBoundaries(text, sections)
+}
+
+func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
+	result := sessionOriginPolicyResultFromContext(ctx)
+	if result == nil || result.empty() {
+		return ""
+	}
+	payload := struct {
+		Origin      SessionOrigin              `json:"origin"`
+		Contact     *ContactContext            `json:"contact,omitempty"`
+		Applied     []SessionOriginAppliedRule `json:"applied_rules,omitempty"`
+		Tags        []string                   `json:"tags,omitempty"`
+		ContextRefs []string                   `json:"context_refs,omitempty"`
+	}{
+		Origin:      result.Origin,
+		Contact:     l.originContactContext(result),
+		Applied:     result.Applied,
+		Tags:        result.Tags,
+		ContextRefs: result.ContextRefs,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		l.logger.Warn("failed to marshal session origin context", "error", err)
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Generated runtime data. Use it to understand which origin-derived policy is active for this run.\n\n")
+	sb.WriteString("```json\n")
+	sb.Write(data)
+	sb.WriteString("\n```\n")
+
+	if l.tagContextAssembler != nil && len(result.ContextRefs) > 0 {
+		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer haCancel()
+		if refs := l.tagContextAssembler.BuildRefs(haCtx, result.ContextRefs); refs != "" {
+			sb.WriteString("\n\n### Context Refs\n\n")
+			sb.WriteString(refs)
+		}
+	}
+
+	return sb.String()
+}
+
+func (l *Loop) originContactContext(result *SessionOriginPolicyResult) *ContactContext {
+	if result == nil || l.contactLookup == nil {
+		return nil
+	}
+	source := result.Origin.Source
+	if source == "" {
+		source = result.Origin.Channel
+	}
+	if result.Origin.ContactID != "" {
+		if contact := l.contactLookup.LookupContactByID(result.Origin.ContactID, source); contact != nil {
+			return contact
+		}
+	}
+	if result.Origin.ContactName != "" {
+		return l.contactLookup.LookupContact(result.Origin.ContactName, source)
+	}
+	return nil
+}
+
+func (l *Loop) contactOriginPolicy(origin SessionOrigin) *ContactOriginPolicy {
+	if l.contactLookup == nil {
+		return nil
+	}
+	if origin.ContactID == "" && origin.ContactName == "" {
+		return nil
+	}
+	source := origin.Source
+	if source == "" {
+		source = origin.Channel
+	}
+	policy := l.contactLookup.LookupContactOriginPolicy(origin.ContactID, origin.ContactName, source)
+	if policy == nil || (len(policy.Tags) == 0 && len(policy.ContextRefs) == 0) {
+		return nil
+	}
+	return &ContactOriginPolicy{
+		Tags:        cleanUnique(policy.Tags),
+		ContextRefs: cleanUnique(policy.ContextRefs),
+	}
 }
 
 func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.PromptSection {
@@ -1305,6 +1432,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if channelBinding == nil {
 		channelBinding = l.conversationChannelBinding(convID)
 	}
+	origin := newSessionOrigin(req.Hints, channelBinding)
+	originResult := SessionOriginPolicyResult{Origin: origin}
+	if contactPolicy := l.contactOriginPolicy(origin); contactPolicy != nil {
+		originResult.addApplied(SessionOriginAppliedRule{
+			Name:        "contact_origin",
+			Source:      "contacts",
+			Tags:        l.filterOriginPinnedTags(origin, contactPolicy.Tags),
+			ContextRefs: contactPolicy.ContextRefs,
+		})
+	}
 
 	// Create a per-Run capability scope seeded with always-active tags.
 	// Channel-pinned tags are merged based on the request's source hint.
@@ -1322,6 +1459,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		for _, tag := range req.InitialTags {
 			_ = scope.Request(tag)
 		}
+		if runtimeTags := l.filterOriginPinnedTags(origin, req.RuntimeTags); len(runtimeTags) > 0 {
+			scope.PinChannelTags(runtimeTags)
+			originResult.addApplied(SessionOriginAppliedRule{
+				Name:   "runtime_tags",
+				Source: "runtime",
+				Tags:   runtimeTags,
+			})
+			log.Info("runtime tags activated",
+				"source", origin.Source,
+				"channel", origin.Channel,
+				"pinned_tags", runtimeTags,
+			)
+		}
 		// Restore conversation-persisted capability tags.
 		if l.capTagStore != nil && convID != "" {
 			if saved, err := l.capTagStore.LoadTags(convID); err == nil {
@@ -1335,15 +1485,35 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
+				pinnedTags = l.filterOriginPinnedTags(origin, pinnedTags)
 				scope.PinChannelTags(pinnedTags)
+				originResult.addApplied(SessionOriginAppliedRule{
+					Name:   "source:" + source,
+					Source: "channel_tags",
+					Tags:   pinnedTags,
+				})
 				log.Info("channel tags activated",
 					"source", source,
 					"pinned_tags", pinnedTags,
 				)
 			}
 		}
+		if len(originResult.Tags) > 0 {
+			scope.PinChannelTags(originResult.Tags)
+			log.Info("session origin tags activated",
+				"source", origin.Source,
+				"channel", origin.Channel,
+				"contact_name", origin.ContactName,
+				"pinned_tags", originResult.Tags,
+			)
+		}
 		if channelBinding != nil && channelBinding.IsOwner {
 			scope.PinChannelTags([]string{"owner"})
+			originResult.addApplied(SessionOriginAppliedRule{
+				Name:   "owner_binding",
+				Source: "channel_binding",
+				Tags:   []string{"owner"},
+			})
 			log.Info("runtime tag activated",
 				"tag", "owner",
 				"channel", channelBinding.Channel,
@@ -1353,6 +1523,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		ctx = withCapabilityScope(ctx, scope)
 		l.updateLastRunTags(scope)
 	}
+	ctx = withSessionOriginPolicyResult(ctx, originResult)
 
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
@@ -1800,6 +1971,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
 			toolCtx = tools.WithHints(toolCtx, req.Hints)
+			if scope != nil {
+				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
+			}
 			if l.archiver != nil {
 				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
 					toolCtx = tools.WithSessionID(toolCtx, sid)

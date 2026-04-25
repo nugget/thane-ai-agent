@@ -21,7 +21,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "save_contact",
-		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
+		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -70,6 +70,16 @@ func (r *Registry) registerContactTools() {
 				"ai_summary": map[string]any{
 					"type":        "string",
 					"description": "AI-generated one-line context summary (e.g., 'Backend engineer at Anthropic, prefers Signal')",
+				},
+				"origin_tags": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Capability tags to pin automatically when this contact is the session origin. Do not use this for owner; owner is asserted from trusted runtime identity.",
+				},
+				"origin_context_refs": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Supplemental managed document refs to inject when this contact is the session origin, such as kb:projects/current.md. Store person identity in the contact fields and ai_summary instead.",
 				},
 				"facts": map[string]any{
 					"type":                 "object",

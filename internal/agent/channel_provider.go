@@ -58,12 +58,22 @@ type InteractionRef struct {
 	Topics     []string `json:"topics,omitempty"`
 }
 
-// ContactLookup resolves a contact name to a rich context profile for
-// system prompt injection. The source parameter identifies the channel
-// (e.g., "signal", "email") so the implementation can gate fields by
-// trust zone. Returns nil when no matching contact is found.
+// ContactLookup resolves contact identity into trust-gated profile and
+// origin-policy context for system prompt injection. The source
+// parameter identifies the channel (e.g., "signal", "email") so the
+// implementation can gate fields and source-specific policy by trust
+// zone. Returns nil when no matching contact is found.
 type ContactLookup interface {
 	LookupContact(name string, source string) *ContactContext
+	LookupContactByID(id string, source string) *ContactContext
+	LookupContactOriginPolicy(id string, name string, source string) *ContactOriginPolicy
+}
+
+// ContactOriginPolicy is contact-owned session shaping applied when a
+// contact is the request origin.
+type ContactOriginPolicy struct {
+	Tags        []string `json:"tags,omitempty"`
+	ContextRefs []string `json:"context_refs,omitempty"`
 }
 
 // channelDefaults maps source hint values to channel-specific behavioral

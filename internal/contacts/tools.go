@@ -132,18 +132,20 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 
 // SaveContactArgs are arguments for the save_contact tool.
 type SaveContactArgs struct {
-	Name       string            `json:"name"`                  // maps to FormattedName
-	Kind       string            `json:"kind,omitempty"`        // individual, group, org, location
-	TrustZone  string            `json:"trust_zone,omitempty"`  // admin, household, trusted, known
-	GivenName  string            `json:"given_name,omitempty"`  // vCard N given name
-	FamilyName string            `json:"family_name,omitempty"` // vCard N family name
-	Nickname   string            `json:"nickname,omitempty"`    // vCard NICKNAME
-	Org        string            `json:"org,omitempty"`         // vCard ORG
-	Title      string            `json:"title,omitempty"`       // vCard TITLE
-	Role       string            `json:"role,omitempty"`        // vCard ROLE
-	Note       string            `json:"note,omitempty"`        // vCard NOTE
-	AISummary  string            `json:"ai_summary,omitempty"`  // AI-generated context
-	Facts      map[string]string `json:"facts,omitempty"`       // freeform AI metadata
+	Name              string            `json:"name"`                          // maps to FormattedName
+	Kind              string            `json:"kind,omitempty"`                // individual, group, org, location
+	TrustZone         string            `json:"trust_zone,omitempty"`          // admin, household, trusted, known
+	GivenName         string            `json:"given_name,omitempty"`          // vCard N given name
+	FamilyName        string            `json:"family_name,omitempty"`         // vCard N family name
+	Nickname          string            `json:"nickname,omitempty"`            // vCard NICKNAME
+	Org               string            `json:"org,omitempty"`                 // vCard ORG
+	Title             string            `json:"title,omitempty"`               // vCard TITLE
+	Role              string            `json:"role,omitempty"`                // vCard ROLE
+	Note              string            `json:"note,omitempty"`                // vCard NOTE
+	AISummary         string            `json:"ai_summary,omitempty"`          // AI-generated context
+	OriginTags        []string          `json:"origin_tags,omitempty"`         // tags pinned when this contact is the session origin
+	OriginContextRefs []string          `json:"origin_context_refs,omitempty"` // refs injected when this contact is the session origin
+	Facts             map[string]string `json:"facts,omitempty"`               // freeform AI metadata
 }
 
 // propertyKeys lists fact keys that should be stored as vCard properties
@@ -162,7 +164,8 @@ var saveContactKnownFields = map[string]bool{
 	"name": true, "kind": true, "trust_zone": true,
 	"given_name": true, "family_name": true, "nickname": true,
 	"org": true, "title": true, "role": true,
-	"note": true, "ai_summary": true, "facts": true,
+	"note": true, "ai_summary": true, "origin_tags": true,
+	"origin_context_refs": true, "facts": true,
 }
 
 // SaveContact creates or updates a contact. When a contact with the
@@ -256,6 +259,9 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		if err := t.saveProperties(updated.ID, args.Facts); err != nil {
 			return "", err
 		}
+		if err := t.saveOriginPolicyProperties(updated.ID, args.OriginTags, args.OriginContextRefs); err != nil {
+			return "", err
+		}
 
 		t.generateEmbedding(updated)
 
@@ -285,10 +291,43 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	if err := t.saveProperties(created.ID, args.Facts); err != nil {
 		return "", err
 	}
+	if err := t.saveOriginPolicyProperties(created.ID, args.OriginTags, args.OriginContextRefs); err != nil {
+		return "", err
+	}
 
 	t.generateEmbedding(created)
 
 	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.FormattedName, created.Kind), nil
+}
+
+func (t *Tools) saveOriginPolicyProperties(contactID uuid.UUID, tags, refs []string) error {
+	if tags != nil {
+		if err := t.store.DeleteContactProperties(contactID, PropertyOriginTag); err != nil {
+			return err
+		}
+		for _, tag := range cleanOriginValues(tags) {
+			if err := t.store.AddProperty(contactID, &Property{
+				Property: PropertyOriginTag,
+				Value:    tag,
+			}); err != nil {
+				return fmt.Errorf("add origin tag: %w", err)
+			}
+		}
+	}
+	if refs != nil {
+		if err := t.store.DeleteContactProperties(contactID, PropertyOriginContextRef); err != nil {
+			return err
+		}
+		for _, ref := range cleanOriginValues(refs) {
+			if err := t.store.AddProperty(contactID, &Property{
+				Property: PropertyOriginContextRef,
+				Value:    ref,
+			}); err != nil {
+				return fmt.Errorf("add origin context ref: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // saveProperties stores all fact entries as contact_properties. Known

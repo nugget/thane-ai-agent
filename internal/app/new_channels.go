@@ -659,6 +659,7 @@ func (a *App) initChannels(s *newState) error {
 		// from the deferred worker below, once signal-cli has started.
 		signalToolProvider := sigcli.NewToolProvider()
 		a.loop.Tools().RegisterProvider(signalToolProvider)
+		a.loop.Tools().RegisterChannelReactionHandler("signal", signalToolProvider.HandleChannelReaction)
 
 		signalArgs := append([]string{"-a", a.cfg.Signal.Account, "jsonRpc"}, a.cfg.Signal.Args...)
 		signalClient := sigcli.NewClient(a.cfg.Signal.Command, signalArgs, a.logger)

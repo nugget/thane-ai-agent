@@ -124,6 +124,14 @@ which model and tools the delegate gets:
 | `general` | Default local | All (native + MCP) | Most tasks |
 | `ha` | Default local | Native HA tools only | Device control, entity queries |
 
+Delegates inherit elective caller capability tags by default. This keeps
+task context such as activated domain tags or KB articles attached to
+the child work without making the orchestrator restate it on every
+handoff. Runtime/channel affordance tags such as `message_channel` and
+trust tags such as `owner` are not inherited as model-requested tags;
+they must be asserted again by trusted runtime context. Use
+`inherit_caller_tags=false` for a strict fresh scope.
+
 ## Writing Good Delegation Prompts
 
 Delegates are literal executors, not creative problem-solvers. The more

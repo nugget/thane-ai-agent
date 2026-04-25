@@ -399,6 +399,46 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 
 // --- TagContextAssembler unit tests ---
 
+func TestSafeManagedRefPath_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	link := filepath.Join(root, "link.md")
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if got, ok := safeManagedRefPath(root, link); ok {
+		t.Fatalf("safeManagedRefPath() = (%q, true), want false for symlink escape", got)
+	}
+}
+
+func TestSafeManagedRefPath_AllowsSymlinkInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.md")
+	if err := os.WriteFile(target, []byte("safe"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(root, "link.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	got, ok := safeManagedRefPath(root, link)
+	if !ok {
+		t.Fatal("safeManagedRefPath() rejected symlink that resolves inside root")
+	}
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("resolve target: %v", err)
+	}
+	if got != want {
+		t.Fatalf("safeManagedRefPath() = %q, want %q", got, want)
+	}
+}
+
 // mockTagProvider is a test double for TagContextProvider.
 type mockTagProvider struct {
 	content string

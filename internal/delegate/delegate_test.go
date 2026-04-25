@@ -286,6 +286,45 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	}
 }
 
+func TestExecute_LoopBackedInheritsCallerTags(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	ctx := tools.WithInheritableCapabilityTags(context.Background(), []string{"web", "message_channel"})
+	if _, err := exec.Execute(ctx, "Search for something", "general", "", nil, nil); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if captured.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false for inherited tag-scoped delegate")
+	}
+	if !containsString(captured.InitialTags, "web") {
+		t.Fatalf("InitialTags = %#v, want web", captured.InitialTags)
+	}
+	if containsString(captured.InitialTags, "message_channel") {
+		t.Fatalf("InitialTags = %#v, should not inherit message_channel", captured.InitialTags)
+	}
+	if !containsString(captured.AllowedTools, "web_search") {
+		t.Fatalf("AllowedTools = %#v, want web_search", captured.AllowedTools)
+	}
+	if containsString(captured.AllowedTools, "send_reaction") {
+		t.Fatalf("AllowedTools = %#v, should not include send_reaction", captured.AllowedTools)
+	}
+}
+
 func TestRecordCompletion_UsesLiveModelRegistryForUsageIdentity(t *testing.T) {
 	db, err := database.OpenMemory()
 	if err != nil {
@@ -1718,6 +1757,202 @@ func TestExecute_TagScoping(t *testing.T) {
 			t.Errorf("tool %q should not appear in tag-scoped definitions, got %v", unwanted, toolNames)
 		}
 	}
+}
+
+func TestExecute_InheritsCallerTagsByDefault(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Inherited web context."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+	reg := taggedDelegateTestRegistry()
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+
+	ctx := tools.WithInheritableCapabilityTags(context.Background(), []string{"web", "message_channel", "owner"})
+	result, err := exec.Execute(ctx, "Search for something", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "Inherited web context." {
+		t.Errorf("Content = %q, want inherited response", result.Content)
+	}
+
+	toolNames := toolNameSet(mock.calls[0].Tools)
+	if !toolNames["web_search"] {
+		t.Fatalf("web_search should be inherited into delegate tool scope: %v", toolNames)
+	}
+	for _, unwanted := range []string{"get_state", "send_reaction", "owner_contact", "thane_delegate"} {
+		if toolNames[unwanted] {
+			t.Fatalf("%s should not be inherited into delegate tool scope: %v", unwanted, toolNames)
+		}
+	}
+}
+
+func TestExecute_ExplicitTagsAugmentInheritedCallerTags(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Inherited and explicit."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+	reg := taggedDelegateTestRegistry()
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+
+	ctx := tools.WithInheritableCapabilityTags(context.Background(), []string{"web"})
+	_, err := exec.Execute(ctx, "Check the light and web", "general", "", []string{"ha"}, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	toolNames := toolNameSet(mock.calls[0].Tools)
+	for _, want := range []string{"web_search", "get_state"} {
+		if !toolNames[want] {
+			t.Fatalf("%s should be available with inherited+explicit scope: %v", want, toolNames)
+		}
+	}
+	if toolNames["send_reaction"] {
+		t.Fatalf("send_reaction should not be available: %v", toolNames)
+	}
+}
+
+func TestExecute_CanDisableCallerTagInheritance(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Explicit only."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+	reg := taggedDelegateTestRegistry()
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+
+	ctx := tools.WithInheritableCapabilityTags(context.Background(), []string{"web"})
+	_, err := exec.execute(ctx, "Check the light only", "general", "", []string{"ha"}, nil, executionOptions{inheritCallerTags: false})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	toolNames := toolNameSet(mock.calls[0].Tools)
+	if !toolNames["get_state"] {
+		t.Fatalf("get_state should be available with explicit ha scope: %v", toolNames)
+	}
+	if toolNames["web_search"] {
+		t.Fatalf("web_search should not be available when inheritance is disabled: %v", toolNames)
+	}
+}
+
+func TestExecute_NonDelegableExplicitTagsDoNotFallBackToProfile(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "No channel tools."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+	reg := taggedDelegateTestRegistry()
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+
+	_, err := exec.Execute(context.Background(), "React from a delegate", "general", "", []string{"message_channel"}, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	toolNames := toolNameSet(mock.calls[0].Tools)
+	for _, unwanted := range []string{"web_search", "get_state", "send_reaction", "owner_contact", "thane_delegate"} {
+		if toolNames[unwanted] {
+			t.Fatalf("%s should not be available after non-delegable explicit scope: %v", unwanted, toolNames)
+		}
+	}
+}
+
+func taggedDelegateTestRegistry() *tools.Registry {
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "web_search",
+		Description: "Search the web",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "results", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "get_state",
+		Description: "HA state",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "on", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "send_reaction",
+		Description: "React",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "reacted", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "owner_contact",
+		Description: "Owner contact",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "owner", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "thane_delegate",
+		Description: "Delegate",
+		Parameters:  map[string]any{},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "should not be called", nil
+		},
+	})
+	reg.SetTagIndex(map[string][]string{
+		"web":             {"web_search"},
+		"ha":              {"get_state"},
+		"message_channel": {"send_reaction"},
+		"owner":           {"owner_contact"},
+	})
+	return reg
+}
+
+func toolNameSet(toolDefs []map[string]any) map[string]bool {
+	toolNames := make(map[string]bool)
+	for _, td := range toolDefs {
+		fn, _ := td["function"].(map[string]any)
+		if fn == nil {
+			continue
+		}
+		name, _ := fn["name"].(string)
+		if name != "" {
+			toolNames[name] = true
+		}
+	}
+	return toolNames
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {

@@ -22,4 +22,6 @@ BAD delegate tasks (keep these yourself):
 
 Use the guidance field to steer execution: provide entity names, file paths, specific focus areas, or output format preferences. More specific guidance means fewer wasted iterations.
 
+Delegates inherit the caller's elective capability tags by default. Set inherit_caller_tags=false only when you need a strict, fresh tool scope.
+
 Use mode="async" when you want the delegate to keep running in the background and report the result back into the current conversation later instead of blocking for a direct reply.`

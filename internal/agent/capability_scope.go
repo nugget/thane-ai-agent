@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -103,6 +104,17 @@ func (s *capabilityScope) Snapshot() map[string]bool {
 // always-active, not pinned by channel or lens). These are the tags
 // that should be persisted per conversation.
 func (s *capabilityScope) UserActivatedTags() []string {
+	return s.electiveTags()
+}
+
+// InheritableTags returns active elective tags that can be carried into
+// child work such as delegates. Runtime-pinned tags, channel affordance
+// tags, global lenses, and always-active tags are intentionally excluded.
+func (s *capabilityScope) InheritableTags() []string {
+	return s.electiveTags()
+}
+
+func (s *capabilityScope) electiveTags() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var tags []string
@@ -115,6 +127,7 @@ func (s *capabilityScope) UserActivatedTags() []string {
 		}
 		tags = append(tags, tag)
 	}
+	sort.Strings(tags)
 	return tags
 }
 

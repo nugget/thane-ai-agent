@@ -96,6 +96,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
 		CapTags:  resolvedCapTags,
 		KBDir:    kbDir,
+		Resolver: s.resolver,
 		HAInject: a.loop.HAInject(),
 		Logger:   logger.With("component", "tag_context"),
 	})

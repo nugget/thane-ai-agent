@@ -63,8 +63,11 @@ Inbound Signal messages arrive via a JSON-RPC bridge to `signal-cli`. When
 a message is received, it's routed to the agent loop with the sender's
 contact context (including trust zone).
 
-Signal messages automatically activate the `signal` capability tag, giving
-the agent access to Signal-specific tools.
+Signal messages automatically assert the runtime `message_channel`
+capability, giving the agent normalized current-conversation tools such
+as `send_reaction`. Final reply text is sent back to the sender by the
+bridge automatically; the native `signal` capability is for
+Signal-specific outbound or diagnostic workflows.
 
 ## Scheduled Tasks
 

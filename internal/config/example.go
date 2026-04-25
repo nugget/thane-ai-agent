@@ -230,7 +230,7 @@ func ExampleConfig() *Config {
 
 		Identity: IdentityConfig{
 			ContactName:      "Thane",
-			OwnerContactName: "Aimee",
+			OwnerContactName: "Operator Name",
 		},
 
 		Attachments: AttachmentsConfig{
@@ -410,17 +410,9 @@ func ExampleConfig() *Config {
 			MaxAgeMinutes: 30,
 		},
 
-		CapabilityTags: map[string]CapabilityTagConfig{
-			"ha": {
-				Description:  "Home Assistant tools and sensors",
-				AlwaysActive: true,
-			},
-		},
+		CapabilityTags: map[string]CapabilityTagConfig{},
 
-		ChannelTags: map[string][]string{
-			"signal": {"ha", "web"},
-			"email":  {"forge"},
-		},
+		ChannelTags: map[string][]string{},
 
 		Timezone: "America/Chicago",
 

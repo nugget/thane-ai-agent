@@ -134,7 +134,8 @@ of:
 
 We now have the right substrate for targeted context:
 
-- helper tags like `interactive`, `owu`, `signal`, and `owner`
+- helper tags like `interactive`, `message_channel`, `owu`, `signal`,
+  and `owner`
 - protected tags like `owner`
 - per-channel tag activation
 - KB article injection by tag
@@ -165,7 +166,8 @@ Domain-specific behavioral guidance should move behind tags, for example:
 - `ha` for Home Assistant control norms and caution
 - `web` for remote retrieval and wider-web discovery habits
 - `interactive` for owner-facing conversational loops
-- `signal` for Signal-specific tone and response patterns
+- `message_channel` for normalized current-conversation affordances
+- `signal` for Signal-specific native operations
 - `owu` for Open WebUI specifics
 - `owner` for privileged owner-facing guidance
 
@@ -418,8 +420,8 @@ Tagged KB articles are the preferred home for:
       capability doctrine.
 - [ ] Move forge, web, Home Assistant, and channel-specific teaching
       into tagged KB articles.
-- [ ] Add targeted tagged articles for `interactive`, `signal`, `owu`,
-      and `owner`.
+- [ ] Add targeted tagged articles for `interactive`, `message_channel`,
+      `signal`, `owu`, and `owner`.
 - [ ] Audit `{workspace}/core` files so they reflect identity and mission
       rather than operational sprawl.
 - [ ] Revisit talents and delete any sections that are now better served

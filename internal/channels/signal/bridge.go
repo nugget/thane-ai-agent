@@ -613,6 +613,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		Hints:           opts.Hints,
 		ExcludeTools:    opts.ExcludeTools,
 		InitialTags:     opts.InitialTags,
+		RuntimeTags:     []string{"message_channel"},
 		FallbackContent: fallbackContent,
 	}
 
@@ -719,6 +720,12 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	stopTyping := b.startTypingRefresh(ctx, sender)
 
 	content := formatReaction(env)
+	channelBinding := b.resolveBinding(sender)
+	if b.bindConversation != nil && channelBinding != nil {
+		if err := b.bindConversation(convID, channelBinding); err != nil {
+			b.logger.Warn("failed to persist signal conversation binding", "error", err)
+		}
+	}
 
 	opts := b.requestOptions(sender, map[string]string{
 		"source":                "signal",
@@ -731,11 +738,13 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 
 	req := &agent.Request{
 		ConversationID:  convID,
+		ChannelBinding:  channelBinding,
 		Messages:        []agent.Message{{Role: "user", Content: content}},
 		Model:           opts.Model,
 		Hints:           opts.Hints,
 		ExcludeTools:    opts.ExcludeTools,
 		InitialTags:     opts.InitialTags,
+		RuntimeTags:     []string{"message_channel"},
 		FallbackContent: fallbackContent,
 	}
 

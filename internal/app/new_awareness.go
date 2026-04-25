@@ -29,7 +29,9 @@ func (a *App) initAwareness(s *newState) error {
 	// Dynamic system prompt injection. Providers add context based on
 	// current state before each LLM call.
 	contextProvider := agent.NewCompositeContextProvider()
-	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: a.contactStore, logger: logger}))
+	contactLookup := &contactNameLookup{store: a.contactStore, logger: logger}
+	contextProvider.Add(agent.NewChannelProvider(contactLookup))
+	a.loop.UseContactLookup(contactLookup)
 	contextProvider.Add(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
 		Phones: &contactPhoneResolver{store: a.contactStore},

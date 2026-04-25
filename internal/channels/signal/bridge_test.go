@@ -45,6 +45,15 @@ func (r *testRunner) getLastReq() *agent.Request {
 	return r.lastReq
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // bridgeOption applies a focused test-specific mutation to BridgeConfig.
 // The tests use this lightweight options pattern to keep setup local to
 // each case without adding many near-identical helpers.
@@ -146,6 +155,9 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 	if req.Hints["sender"] != "+15551234567" {
 		t.Errorf("hint sender = %q, want %q", req.Hints["sender"], "+15551234567")
+	}
+	if !containsString(req.RuntimeTags, "message_channel") {
+		t.Errorf("RuntimeTags = %#v, want message_channel", req.RuntimeTags)
 	}
 	if !strings.Contains(req.Messages[0].Content, "What's the weather?") {
 		t.Errorf("message content missing user text: %q", req.Messages[0].Content)
@@ -961,6 +973,12 @@ func TestBridge_ReactionWakesAgent(t *testing.T) {
 	}
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")
+	}
+	if req.ChannelBinding == nil || req.ChannelBinding.Channel != "signal" || req.ChannelBinding.Address != "+15551234567" {
+		t.Errorf("ChannelBinding = %#v", req.ChannelBinding)
+	}
+	if !containsString(req.RuntimeTags, "message_channel") {
+		t.Errorf("RuntimeTags = %#v, want message_channel", req.RuntimeTags)
 	}
 }
 
