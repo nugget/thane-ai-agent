@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
@@ -18,10 +18,10 @@ type modelPolicyStore struct {
 }
 
 type persistedDeploymentPolicy struct {
-	State     models.DeploymentPolicyState `json:"state"`
-	Routable  *bool                        `json:"routable,omitempty"`
-	Reason    string                       `json:"reason,omitempty"`
-	UpdatedAt time.Time                    `json:"updated_at,omitempty"`
+	State     fleet.DeploymentPolicyState `json:"state"`
+	Routable  *bool                       `json:"routable,omitempty"`
+	Reason    string                      `json:"reason,omitempty"`
+	UpdatedAt time.Time                   `json:"updated_at,omitempty"`
 }
 
 func newModelPolicyStore(store *opstate.Store) *modelPolicyStore {
@@ -31,7 +31,7 @@ func newModelPolicyStore(store *opstate.Store) *modelPolicyStore {
 	return &modelPolicyStore{store: store}
 }
 
-func (s *modelPolicyStore) Save(id string, policy models.DeploymentPolicy) error {
+func (s *modelPolicyStore) Save(id string, policy fleet.DeploymentPolicy) error {
 	if s == nil || s.store == nil {
 		return nil
 	}
@@ -62,7 +62,7 @@ func (s *modelPolicyStore) Delete(id string) error {
 	return s.store.Delete(modelRegistryPolicyNamespace, id)
 }
 
-func (s *modelPolicyStore) LoadInto(registry *models.Registry, logger *slog.Logger) error {
+func (s *modelPolicyStore) LoadInto(registry *fleet.Registry, logger *slog.Logger) error {
 	if s == nil || s.store == nil || registry == nil {
 		return nil
 	}
@@ -81,7 +81,7 @@ func (s *modelPolicyStore) LoadInto(registry *models.Registry, logger *slog.Logg
 	}
 	sort.Strings(keys)
 
-	policies := make(map[string]models.DeploymentPolicy, len(entries))
+	policies := make(map[string]fleet.DeploymentPolicy, len(entries))
 	latest := time.Time{}
 	for _, key := range keys {
 		var persisted persistedDeploymentPolicy
@@ -91,7 +91,7 @@ func (s *modelPolicyStore) LoadInto(registry *models.Registry, logger *slog.Logg
 			}
 			continue
 		}
-		policies[key] = models.DeploymentPolicy{
+		policies[key] = fleet.DeploymentPolicy{
 			State:     persisted.State,
 			Routable:  persisted.Routable,
 			Reason:    strings.TrimSpace(persisted.Reason),
@@ -110,7 +110,7 @@ func (s *modelPolicyStore) LoadInto(registry *models.Registry, logger *slog.Logg
 	return registry.ReplaceDeploymentPolicies(policies, latest)
 }
 
-func (a *App) persistModelRegistryPolicy(id string, policy models.DeploymentPolicy) error {
+func (a *App) persistModelRegistryPolicy(id string, policy fleet.DeploymentPolicy) error {
 	if a == nil || a.modelPolicyStore == nil {
 		return nil
 	}

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
@@ -77,13 +77,13 @@ type Server struct {
 	owuTracker                         *OWUTracker
 	webServer                          WebServerRegistrar
 	companionHandler                   http.Handler
-	modelRegistry                      *models.Registry
+	modelRegistry                      *fleet.Registry
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
 	usageStore                         *usage.Store
-	persistModelRegistryPolicy         func(string, models.DeploymentPolicy) error
+	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
-	persistModelRegistryResourcePolicy func(string, models.ResourcePolicy) error
+	persistModelRegistryResourcePolicy func(string, fleet.ResourcePolicy) error
 	deleteModelRegistryResourcePolicy  func(string) error
 	persistLoopDefinition              func(looppkg.Spec, time.Time) error
 	deleteLoopDefinition               func(string) error
@@ -239,7 +239,7 @@ func (s *SessionStats) LastRequest() time.Time {
 // token observer (if set) so external consumers (e.g., the MQTT daily
 // token accumulator) are updated.
 func (s *Server) recordUsage(model string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
-	var cat *models.Catalog
+	var cat *fleet.Catalog
 	if s.modelRegistry != nil {
 		cat = s.modelRegistry.Catalog()
 	}
@@ -346,11 +346,11 @@ func NewServer(
 	loop *agent.Loop,
 	rtr *router.Router,
 	pricing map[string]config.PricingEntry,
-	registry *models.Registry,
+	registry *fleet.Registry,
 	usageStore *usage.Store,
-	persistPolicy func(string, models.DeploymentPolicy) error,
+	persistPolicy func(string, fleet.DeploymentPolicy) error,
 	deletePolicy func(string) error,
-	persistResourcePolicy func(string, models.ResourcePolicy) error,
+	persistResourcePolicy func(string, fleet.ResourcePolicy) error,
 	deleteResourcePolicy func(string) error,
 	logger *slog.Logger,
 ) *Server {
@@ -952,15 +952,15 @@ type setModelRegistryResourcePolicyRequest struct {
 }
 
 type modelRegistryPolicyResponse struct {
-	Status     string                            `json:"status"`
-	Generation int64                             `json:"generation"`
-	Deployment models.RegistryDeploymentSnapshot `json:"deployment"`
+	Status     string                           `json:"status"`
+	Generation int64                            `json:"generation"`
+	Deployment fleet.RegistryDeploymentSnapshot `json:"deployment"`
 }
 
 type modelRegistryResourcePolicyResponse struct {
-	Status     string                          `json:"status"`
-	Generation int64                           `json:"generation"`
-	Resource   models.RegistryResourceSnapshot `json:"resource"`
+	Status     string                         `json:"status"`
+	Generation int64                          `json:"generation"`
+	Resource   fleet.RegistryResourceSnapshot `json:"resource"`
 }
 
 func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
@@ -998,13 +998,13 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 
 	current := findRegistryDeployment(s.modelRegistry.Snapshot(), req.Deployment)
 	if !current.found {
-		s.errorResponse(w, http.StatusNotFound, (&models.UnknownDeploymentError{Deployment: req.Deployment}).Error())
+		s.errorResponse(w, http.StatusNotFound, (&fleet.UnknownDeploymentError{Deployment: req.Deployment}).Error())
 		return
 	}
 
 	state := current.snapshot.PolicyState
 	if raw := strings.TrimSpace(req.State); raw != "" {
-		parsed, err := models.ParseDeploymentPolicyState(raw)
+		parsed, err := fleet.ParseDeploymentPolicyState(raw)
 		if err != nil {
 			s.errorResponse(w, http.StatusBadRequest, err.Error())
 			return
@@ -1012,7 +1012,7 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 		state = parsed
 	}
 
-	policy := models.DeploymentPolicy{
+	policy := fleet.DeploymentPolicy{
 		State:     state,
 		Routable:  req.Routable,
 		Reason:    req.Reason,
@@ -1027,7 +1027,7 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, policy, policy.UpdatedAt); err != nil {
-		if models.IsUnknownDeployment(err) {
+		if fleet.IsUnknownDeployment(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -1074,7 +1074,7 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	}
 
 	if err := s.modelRegistry.ClearDeploymentPolicy(id, time.Now()); err != nil {
-		if models.IsUnknownDeployment(err) {
+		if fleet.IsUnknownDeployment(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -1117,13 +1117,13 @@ func (s *Server) handleModelRegistryResourcePolicySet(w http.ResponseWriter, r *
 		return
 	}
 
-	parsed, err := models.ParseDeploymentPolicyState(req.State)
+	parsed, err := fleet.ParseDeploymentPolicyState(req.State)
 	if err != nil {
 		s.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	policy := models.ResourcePolicy{
+	policy := fleet.ResourcePolicy{
 		State:     parsed,
 		Reason:    req.Reason,
 		UpdatedAt: time.Now(),
@@ -1137,7 +1137,7 @@ func (s *Server) handleModelRegistryResourcePolicySet(w http.ResponseWriter, r *
 	}
 
 	if err := s.modelRegistry.ApplyResourcePolicy(req.Resource, policy, policy.UpdatedAt); err != nil {
-		if models.IsUnknownResource(err) {
+		if fleet.IsUnknownResource(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -1184,7 +1184,7 @@ func (s *Server) handleModelRegistryResourcePolicyDelete(w http.ResponseWriter, 
 	}
 
 	if err := s.modelRegistry.ClearResourcePolicy(id, time.Now()); err != nil {
-		if models.IsUnknownResource(err) {
+		if fleet.IsUnknownResource(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -1211,16 +1211,16 @@ func (s *Server) handleModelRegistryResourcePolicyDelete(w http.ResponseWriter, 
 }
 
 type registryDeploymentLookup struct {
-	snapshot models.RegistryDeploymentSnapshot
+	snapshot fleet.RegistryDeploymentSnapshot
 	found    bool
 }
 
 type registryResourceLookup struct {
-	snapshot models.RegistryResourceSnapshot
+	snapshot fleet.RegistryResourceSnapshot
 	found    bool
 }
 
-func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) registryDeploymentLookup {
+func findRegistryDeployment(snapshot *fleet.RegistrySnapshot, id string) registryDeploymentLookup {
 	if snapshot == nil {
 		return registryDeploymentLookup{}
 	}
@@ -1232,7 +1232,7 @@ func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) regist
 	return registryDeploymentLookup{}
 }
 
-func findRegistryResource(snapshot *models.RegistrySnapshot, id string) registryResourceLookup {
+func findRegistryResource(snapshot *fleet.RegistrySnapshot, id string) registryResourceLookup {
 	if snapshot == nil {
 		return registryResourceLookup{}
 	}

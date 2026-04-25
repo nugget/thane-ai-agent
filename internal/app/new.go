@@ -10,9 +10,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -63,7 +63,7 @@ import (
 //   - initDelegation no longer takes a capability-tag snapshot; it
 //     creates the delegate executor without tag state and leaves
 //     alwaysActiveTags / SetTagContextFunc to the finalizer.
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]models.ResourceHealthClient, modelRuntime *models.Runtime) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]fleet.ResourceHealthClient, modelRuntime *fleet.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
 	}

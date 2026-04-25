@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
@@ -23,7 +23,7 @@ func agentErrorDetails(err error) (int, string) {
 	if errors.As(err, &noEligible) {
 		return http.StatusBadRequest, err.Error()
 	}
-	if models.IsUnknownModel(err) {
+	if fleet.IsUnknownModel(err) {
 		return http.StatusBadRequest, err.Error()
 	}
 

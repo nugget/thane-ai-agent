@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
@@ -314,7 +314,7 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]Grouped
 // model/deployment. When a normalized catalog is available, it is used
 // as the source of truth. Otherwise the function falls back to parsing
 // deployment-qualified IDs like "resource/model".
-func ResolveModelIdentity(model string, cat *models.Catalog) ModelIdentity {
+func ResolveModelIdentity(model string, cat *fleet.Catalog) ModelIdentity {
 	model = strings.TrimSpace(model)
 	if cat != nil {
 		if dep, ok := cat.DeploymentByRef(model); ok {

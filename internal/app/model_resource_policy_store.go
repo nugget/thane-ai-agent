@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
@@ -18,9 +18,9 @@ type modelResourcePolicyStore struct {
 }
 
 type persistedResourcePolicy struct {
-	State     models.DeploymentPolicyState `json:"state"`
-	Reason    string                       `json:"reason,omitempty"`
-	UpdatedAt time.Time                    `json:"updated_at,omitempty"`
+	State     fleet.DeploymentPolicyState `json:"state"`
+	Reason    string                      `json:"reason,omitempty"`
+	UpdatedAt time.Time                   `json:"updated_at,omitempty"`
 }
 
 func newModelResourcePolicyStore(store *opstate.Store) *modelResourcePolicyStore {
@@ -30,7 +30,7 @@ func newModelResourcePolicyStore(store *opstate.Store) *modelResourcePolicyStore
 	return &modelResourcePolicyStore{store: store}
 }
 
-func (s *modelResourcePolicyStore) Save(id string, policy models.ResourcePolicy) error {
+func (s *modelResourcePolicyStore) Save(id string, policy fleet.ResourcePolicy) error {
 	if s == nil || s.store == nil {
 		return nil
 	}
@@ -60,7 +60,7 @@ func (s *modelResourcePolicyStore) Delete(id string) error {
 	return s.store.Delete(modelRegistryResourcePolicyNamespace, id)
 }
 
-func (s *modelResourcePolicyStore) LoadInto(registry *models.Registry, logger *slog.Logger) error {
+func (s *modelResourcePolicyStore) LoadInto(registry *fleet.Registry, logger *slog.Logger) error {
 	if s == nil || s.store == nil || registry == nil {
 		return nil
 	}
@@ -79,7 +79,7 @@ func (s *modelResourcePolicyStore) LoadInto(registry *models.Registry, logger *s
 	}
 	sort.Strings(keys)
 
-	policies := make(map[string]models.ResourcePolicy, len(entries))
+	policies := make(map[string]fleet.ResourcePolicy, len(entries))
 	latest := time.Time{}
 	for _, key := range keys {
 		var persisted persistedResourcePolicy
@@ -89,7 +89,7 @@ func (s *modelResourcePolicyStore) LoadInto(registry *models.Registry, logger *s
 			}
 			continue
 		}
-		policies[key] = models.ResourcePolicy{
+		policies[key] = fleet.ResourcePolicy{
 			State:     persisted.State,
 			Reason:    strings.TrimSpace(persisted.Reason),
 			UpdatedAt: persisted.UpdatedAt,
@@ -107,7 +107,7 @@ func (s *modelResourcePolicyStore) LoadInto(registry *models.Registry, logger *s
 	return registry.ReplaceResourcePolicies(policies, latest)
 }
 
-func (a *App) persistModelRegistryResourcePolicy(id string, policy models.ResourcePolicy) error {
+func (a *App) persistModelRegistryResourcePolicy(id string, policy fleet.ResourcePolicy) error {
 	if a == nil || a.modelResourcePolicyStore == nil {
 		return nil
 	}

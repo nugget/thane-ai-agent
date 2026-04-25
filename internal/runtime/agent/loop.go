@@ -17,8 +17,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -228,9 +228,9 @@ type Loop struct {
 	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
 	usageStore          *usage.Store                   // nil = no usage recording
 	pricing             map[string]config.PricingEntry // model→cost for usage recording
-	usageCatalog        *models.Catalog
-	modelRegistry       *models.Registry
-	modelRuntime        *models.Runtime
+	usageCatalog        *fleet.Catalog
+	modelRegistry       *fleet.Registry
+	modelRuntime        *fleet.Runtime
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -443,7 +443,7 @@ func (l *Loop) UseCapabilitySurface(surface []toolcatalog.CapabilitySurface) {
 // SetUsageRecorder configures persistent token usage recording. When
 // set, every LLM completion in the agent loop is persisted for cost
 // attribution and analysis.
-func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
+func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *fleet.Catalog) {
 	l.usageStore = store
 	l.pricing = pricing
 	l.usageCatalog = cat
@@ -451,13 +451,13 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 
 // UseModelRegistry configures the live model registry used for
 // explicit model resolution and runtime usage attribution.
-func (l *Loop) UseModelRegistry(registry *models.Registry) {
+func (l *Loop) UseModelRegistry(registry *fleet.Registry) {
 	l.modelRegistry = registry
 }
 
 // UseModelRuntime configures the live model runtime used for explicit
 // runner preparation flows such as LM Studio context expansion.
-func (l *Loop) UseModelRuntime(runtime *models.Runtime) {
+func (l *Loop) UseModelRuntime(runtime *fleet.Runtime) {
 	l.modelRuntime = runtime
 }
 

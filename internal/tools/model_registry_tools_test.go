@@ -7,18 +7,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
 type testModelRegistryDeps struct {
 	reg                   *Registry
-	modelRegistry         *models.Registry
+	modelRegistry         *fleet.Registry
 	router                *routepkg.Router
 	syncRouterCalls       int
-	deploymentPersisted   map[string]models.DeploymentPolicy
-	resourcePersisted     map[string]models.ResourcePolicy
+	deploymentPersisted   map[string]fleet.DeploymentPolicy
+	resourcePersisted     map[string]fleet.ResourcePolicy
 	deploymentDeleteCalls []string
 	resourceDeleteCalls   []string
 }
@@ -26,7 +26,7 @@ type testModelRegistryDeps struct {
 func newTestModelRegistryDeps(t *testing.T) *testModelRegistryDeps {
 	t.Helper()
 
-	base, err := models.BuildCatalog(&config.Config{
+	base, err := fleet.BuildCatalog(&config.Config{
 		Models: config.ModelsConfig{
 			Default:    "gpt-oss:20b",
 			LocalFirst: true,
@@ -62,17 +62,17 @@ func newTestModelRegistryDeps(t *testing.T) *testModelRegistryDeps {
 	if err != nil {
 		t.Fatalf("BuildCatalog: %v", err)
 	}
-	modelRegistry, err := models.NewRegistry(base)
+	modelRegistry, err := fleet.NewRegistry(base)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	if err := modelRegistry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := modelRegistry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "deepslate",
 				Provider:   "lmstudio",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{{
+				Models: []fleet.DiscoveredModel{{
 					Name:                "google/gemma-3-4b",
 					ModelType:           "vlm",
 					SupportsChat:        true,
@@ -102,8 +102,8 @@ func newTestModelRegistryDeps(t *testing.T) *testModelRegistryDeps {
 		reg:                 reg,
 		modelRegistry:       modelRegistry,
 		router:              router,
-		deploymentPersisted: make(map[string]models.DeploymentPolicy),
-		resourcePersisted:   make(map[string]models.ResourcePolicy),
+		deploymentPersisted: make(map[string]fleet.DeploymentPolicy),
+		resourcePersisted:   make(map[string]fleet.ResourcePolicy),
 	}
 	reg.ConfigureModelRegistryTools(ModelRegistryToolDeps{
 		Registry: modelRegistry,
@@ -112,7 +112,7 @@ func newTestModelRegistryDeps(t *testing.T) *testModelRegistryDeps {
 			deps.syncRouterCalls++
 			router.UpdateConfig(modelRegistry.Catalog().RouterConfig(25))
 		},
-		PersistDeploymentPolicy: func(id string, policy models.DeploymentPolicy) error {
+		PersistDeploymentPolicy: func(id string, policy fleet.DeploymentPolicy) error {
 			deps.deploymentPersisted[id] = policy
 			return nil
 		},
@@ -121,7 +121,7 @@ func newTestModelRegistryDeps(t *testing.T) *testModelRegistryDeps {
 			delete(deps.deploymentPersisted, id)
 			return nil
 		},
-		PersistResourcePolicy: func(id string, policy models.ResourcePolicy) error {
+		PersistResourcePolicy: func(id string, policy fleet.ResourcePolicy) error {
 			deps.resourcePersisted[id] = policy
 			return nil
 		},

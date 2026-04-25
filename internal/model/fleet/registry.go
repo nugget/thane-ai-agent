@@ -1,4 +1,4 @@
-package models
+package fleet
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 )
 
 // Registry is the long-lived model registry for one Thane process. It

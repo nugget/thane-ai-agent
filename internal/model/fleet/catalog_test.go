@@ -1,11 +1,11 @@
-package models
+package fleet
 
 import (
 	"log/slog"
 	"strings"
 	"testing"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"gopkg.in/yaml.v3"

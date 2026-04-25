@@ -6,7 +6,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
@@ -613,7 +613,7 @@ func TestResolveModelIdentity_WithCatalog(t *testing.T) {
 		{Name: "qwen3:8b", Resource: "edge", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
 	}
 
-	cat, err := models.BuildCatalog(cfg)
+	cat, err := fleet.BuildCatalog(cfg)
 	if err != nil {
 		t.Fatalf("BuildCatalog: %v", err)
 	}

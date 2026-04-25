@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -68,7 +68,7 @@ type stubSystemStatus struct {
 	health        map[string]ServiceHealth
 	uptime        time.Duration
 	version       map[string]string
-	modelRegistry *models.RegistrySnapshot
+	modelRegistry *fleet.RegistrySnapshot
 	routerStats   *router.Stats
 	capCatalog    *toolcatalog.CapabilityCatalogView
 }
@@ -76,7 +76,7 @@ type stubSystemStatus struct {
 func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
 func (s *stubSystemStatus) Uptime() time.Duration            { return s.uptime }
 func (s *stubSystemStatus) Version() map[string]string       { return s.version }
-func (s *stubSystemStatus) ModelRegistry() *models.RegistrySnapshot {
+func (s *stubSystemStatus) ModelRegistry() *fleet.RegistrySnapshot {
 	return s.modelRegistry
 }
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
@@ -331,15 +331,15 @@ func TestHandleSystem_Healthy(t *testing.T) {
 		},
 		uptime:  3*time.Hour + 42*time.Minute,
 		version: map[string]string{"version": "v0.1.0", "git_commit": "abc1234"},
-		modelRegistry: &models.RegistrySnapshot{
+		modelRegistry: &fleet.RegistrySnapshot{
 			Generation:   2,
 			DefaultModel: "spark/gpt-oss:20b",
-			Resources: []models.RegistryResourceSnapshot{
+			Resources: []fleet.RegistryResourceSnapshot{
 				{ID: "spark", Provider: "ollama", DiscoveredModels: 14},
 			},
-			Deployments: []models.RegistryDeploymentSnapshot{
-				{ID: "spark/gpt-oss:20b", Model: "gpt-oss:20b", Resource: "spark", Source: models.DeploymentSourceConfig, Routable: true},
-				{ID: "spark/qwen3:8b", Model: "qwen3:8b", Resource: "spark", Source: models.DeploymentSourceDiscovered, Routable: false},
+			Deployments: []fleet.RegistryDeploymentSnapshot{
+				{ID: "spark/gpt-oss:20b", Model: "gpt-oss:20b", Resource: "spark", Source: fleet.DeploymentSourceConfig, Routable: true},
+				{ID: "spark/qwen3:8b", Model: "qwen3:8b", Resource: "spark", Source: fleet.DeploymentSourceDiscovered, Routable: false},
 			},
 		},
 		routerStats: &router.Stats{

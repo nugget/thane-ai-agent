@@ -3,7 +3,7 @@ package tools
 import (
 	"fmt"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
@@ -16,23 +16,23 @@ const (
 // into the tool registry so model-facing operator tools can act on the
 // same runtime machinery as the API surface.
 type ModelRegistryToolDeps struct {
-	Registry                *models.Registry
+	Registry                *fleet.Registry
 	Router                  *routepkg.Router
 	SyncRouter              func()
-	PersistDeploymentPolicy func(string, models.DeploymentPolicy) error
+	PersistDeploymentPolicy func(string, fleet.DeploymentPolicy) error
 	DeleteDeploymentPolicy  func(string) error
-	PersistResourcePolicy   func(string, models.ResourcePolicy) error
+	PersistResourcePolicy   func(string, fleet.ResourcePolicy) error
 	DeleteResourcePolicy    func(string) error
 }
 
 type modelRegistryResourceView struct {
-	models.RegistryResourceSnapshot
+	fleet.RegistryResourceSnapshot
 	DeploymentCount int                      `json:"deployment_count,omitempty"`
 	Health          *routepkg.ResourceHealth `json:"health,omitempty"`
 }
 
 type modelRegistryDeploymentView struct {
-	models.RegistryDeploymentSnapshot
+	fleet.RegistryDeploymentSnapshot
 	Stats *routepkg.DeploymentStats `json:"stats,omitempty"`
 }
 

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -157,8 +157,8 @@ type Executor struct {
 	tempFiles           labelExpander
 	usageStore          *usage.Store
 	pricing             map[string]config.PricingEntry
-	usageCatalog        *models.Catalog
-	modelRegistry       *models.Registry
+	usageCatalog        *fleet.Catalog
+	modelRegistry       *fleet.Registry
 	alwaysActiveTags    []string
 	lensProvider        func() []string // returns active global lenses (nil = none)
 	forgeContext        string
@@ -247,7 +247,7 @@ func (e *Executor) SetTempFileStore(tfs interface {
 // SetUsageRecorder configures persistent token usage recording for
 // delegate executions. When set, every delegate completion is persisted
 // for cost attribution.
-func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
+func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *fleet.Catalog) {
 	e.usageStore = store
 	e.pricing = pricing
 	e.usageCatalog = cat
@@ -255,7 +255,7 @@ func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]confi
 
 // UseModelRegistry configures the live model registry used for
 // runtime usage attribution and deployment metadata resolution.
-func (e *Executor) UseModelRegistry(registry *models.Registry) {
+func (e *Executor) UseModelRegistry(registry *fleet.Registry) {
 	e.modelRegistry = registry
 }
 
@@ -1424,7 +1424,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	}
 }
 
-func (e *Executor) currentModelCatalog() *models.Catalog {
+func (e *Executor) currentModelCatalog() *fleet.Catalog {
 	if e == nil {
 		return nil
 	}

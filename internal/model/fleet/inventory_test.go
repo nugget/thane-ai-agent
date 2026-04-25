@@ -1,4 +1,4 @@
-package models
+package fleet
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 )
 
 func TestDiscoverInventorySkipsUnsupportedProviders(t *testing.T) {

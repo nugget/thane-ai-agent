@@ -1,8 +1,8 @@
-// Package models provides the normalized model catalog, live registry, and
+// Package fleet provides the normalized model catalog, live registry, and
 // runtime client wiring. The catalog is built from config at startup. The
 // registry merges catalog entries with live inventory from providers (Ollama,
 // Anthropic, LM Studio) and exposes the result to the router for scoring.
-package models
+package fleet
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )

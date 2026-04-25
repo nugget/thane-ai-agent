@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
@@ -63,7 +63,7 @@ func (e *NoEligibleModelError) Error() string {
 	return base
 }
 
-func (l *Loop) currentModelCatalog() *models.Catalog {
+func (l *Loop) currentModelCatalog() *fleet.Catalog {
 	if l == nil {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	}
 
 	var reasons []string
-	if dep.ResourcePolicyState == models.DeploymentPolicyStateInactive {
+	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		reasons = append(reasons, "its resource is currently inactive by operator policy")
 	}
 	if needsTools {
@@ -132,10 +132,10 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	if err != nil {
 		return false, nil
 	}
-	if dep.ResourcePolicyState == models.DeploymentPolicyStateInactive {
+	if dep.ResourcePolicyState == fleet.DeploymentPolicyStateInactive {
 		return false, nil
 	}
-	if !models.CanExpandLoadedContext(dep, contextSize) {
+	if !fleet.CanExpandLoadedContext(dep, contextSize) {
 		return false, nil
 	}
 	if needsTools {
@@ -313,7 +313,7 @@ func isLMStudioLoadedContextError(err error) bool {
 		strings.Contains(msg, "load the model with a larger context length")
 }
 
-func noEligibleImageRoutingError(cat *models.Catalog, decision *router.Decision) error {
+func noEligibleImageRoutingError(cat *fleet.Catalog, decision *router.Decision) error {
 	err := &NoEligibleModelError{
 		Requirement: "image inputs",
 		Suggestions: imageCapableDeploymentSuggestions(cat, 5),
@@ -324,7 +324,7 @@ func noEligibleImageRoutingError(cat *models.Catalog, decision *router.Decision)
 	return err
 }
 
-func contextWindowReason(dep models.Deployment, contextSize int) string {
+func contextWindowReason(dep fleet.Deployment, contextSize int) string {
 	if dep.LoadedContextWindow > 0 && dep.MaxContextWindow > dep.LoadedContextWindow {
 		if contextSize <= dep.MaxContextWindow {
 			return fmt.Sprintf(
@@ -348,7 +348,7 @@ func contextWindowReason(dep models.Deployment, contextSize int) string {
 	)
 }
 
-func imageCapableDeploymentSuggestions(cat *models.Catalog, limit int) []string {
+func imageCapableDeploymentSuggestions(cat *fleet.Catalog, limit int) []string {
 	if cat == nil || limit <= 0 {
 		return nil
 	}
@@ -361,7 +361,7 @@ func imageCapableDeploymentSuggestions(cat *models.Catalog, limit int) []string 
 		if !dep.SupportsImages {
 			continue
 		}
-		if dep.PolicyState == models.DeploymentPolicyStateInactive {
+		if dep.PolicyState == fleet.DeploymentPolicyStateInactive {
 			continue
 		}
 		candidates = append(candidates, candidate{id: dep.ID, contextWindow: dep.ContextWindow})
@@ -412,7 +412,7 @@ func imageRoutingLimitedByContext(decision *router.Decision) bool {
 	return sawImageCandidate
 }
 
-func imageRoutingContextHint(cat *models.Catalog, decision *router.Decision) string {
+func imageRoutingContextHint(cat *fleet.Catalog, decision *router.Decision) string {
 	base := "the available image-capable routed deployments are too small for the current prompt; try a shorter request or use a larger explicit vision deployment"
 	if !imageRoutingLimitedByLoadedWindow(cat, decision) {
 		return base
@@ -420,11 +420,11 @@ func imageRoutingContextHint(cat *models.Catalog, decision *router.Decision) str
 	return base + "; at least one vision deployment advertises a larger max window than is currently loaded on the runner"
 }
 
-func imageRoutingLimitedByLoadedWindow(cat *models.Catalog, decision *router.Decision) bool {
+func imageRoutingLimitedByLoadedWindow(cat *fleet.Catalog, decision *router.Decision) bool {
 	if cat == nil || decision == nil || len(decision.RejectedModels) == 0 {
 		return false
 	}
-	deployments := make(map[string]models.Deployment, len(cat.Deployments))
+	deployments := make(map[string]fleet.Deployment, len(cat.Deployments))
 	for _, dep := range cat.Deployments {
 		deployments[dep.ID] = dep
 	}

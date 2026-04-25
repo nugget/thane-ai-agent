@@ -15,8 +15,8 @@ import (
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/models"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -1004,7 +1004,7 @@ func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.
 // snapshot.
 type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
-	modelRegistry *models.Registry
+	modelRegistry *fleet.Registry
 	router        *router.Router
 	capSurface    func() []toolcatalog.CapabilitySurface
 }
@@ -1038,7 +1038,7 @@ func (a *systemStatusAdapter) Version() map[string]string {
 }
 
 // ModelRegistry returns the current effective model-registry snapshot.
-func (a *systemStatusAdapter) ModelRegistry() *models.RegistrySnapshot {
+func (a *systemStatusAdapter) ModelRegistry() *fleet.RegistrySnapshot {
 	if a.modelRegistry == nil {
 		return nil
 	}

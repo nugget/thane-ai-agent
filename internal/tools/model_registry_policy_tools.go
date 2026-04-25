@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 )
 
 func (r *Registry) handleModelResourceSetPolicy(_ context.Context, args map[string]any) (string, error) {
@@ -54,11 +54,11 @@ func (r *Registry) handleModelResourceSetPolicy(_ context.Context, args map[stri
 		return "", fmt.Errorf("resource policy cleared but resource snapshot is unavailable")
 	}
 
-	state, err := models.ParseDeploymentPolicyState(stateRaw)
+	state, err := fleet.ParseDeploymentPolicyState(stateRaw)
 	if err != nil {
 		return "", err
 	}
-	policy := models.ResourcePolicy{
+	policy := fleet.ResourcePolicy{
 		State:     state,
 		Reason:    strings.TrimSpace(mrStringArg(args, "reason")),
 		UpdatedAt: time.Now().UTC(),
@@ -136,15 +136,15 @@ func (r *Registry) handleModelDeploymentSetPolicy(_ context.Context, args map[st
 		return "", fmt.Errorf("deployment policy cleared but deployment snapshot is unavailable")
 	}
 
-	var state models.DeploymentPolicyState
+	var state fleet.DeploymentPolicyState
 	if stateRaw != "" {
-		parsed, err := models.ParseDeploymentPolicyState(stateRaw)
+		parsed, err := fleet.ParseDeploymentPolicyState(stateRaw)
 		if err != nil {
 			return "", err
 		}
 		state = parsed
 	}
-	policy := models.DeploymentPolicy{
+	policy := fleet.DeploymentPolicy{
 		State:     state,
 		Reason:    strings.TrimSpace(mrStringArg(args, "reason")),
 		UpdatedAt: time.Now().UTC(),

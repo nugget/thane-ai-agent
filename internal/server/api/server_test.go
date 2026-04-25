@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -39,7 +39,7 @@ func testAPIUsageStore(t *testing.T) *usage.Store {
 	return store
 }
 
-func testAPIModelRegistry(t *testing.T) *models.Registry {
+func testAPIModelRegistry(t *testing.T) *fleet.Registry {
 	t.Helper()
 
 	cfg := &config.Config{}
@@ -70,14 +70,14 @@ func testAPIModelRegistry(t *testing.T) *models.Registry {
 		},
 	}
 
-	base, err := models.BuildCatalog(cfg)
+	base, err := fleet.BuildCatalog(cfg)
 	if err != nil {
-		t.Fatalf("models.BuildCatalog: %v", err)
+		t.Fatalf("fleet.BuildCatalog: %v", err)
 	}
 
-	registry, err := models.NewRegistry(base)
+	registry, err := fleet.NewRegistry(base)
 	if err != nil {
-		t.Fatalf("models.NewRegistry: %v", err)
+		t.Fatalf("fleet.NewRegistry: %v", err)
 	}
 	return registry
 }
@@ -357,7 +357,7 @@ func TestHandleModelRegistry(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
-	var snap models.RegistrySnapshot
+	var snap fleet.RegistrySnapshot
 	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -367,11 +367,11 @@ func TestHandleModelRegistry(t *testing.T) {
 	if snap.Deployments[1].ID != "spark/gpt-oss:20b" {
 		t.Fatalf("deployment id = %q, want %q", snap.Deployments[1].ID, "spark/gpt-oss:20b")
 	}
-	if snap.Deployments[1].PolicyState != models.DeploymentPolicyStateActive {
-		t.Fatalf("policy state = %q, want %q", snap.Deployments[1].PolicyState, models.DeploymentPolicyStateActive)
+	if snap.Deployments[1].PolicyState != fleet.DeploymentPolicyStateActive {
+		t.Fatalf("policy state = %q, want %q", snap.Deployments[1].PolicyState, fleet.DeploymentPolicyStateActive)
 	}
-	if snap.Deployments[1].PolicySource != models.DeploymentPolicySourceDefault {
-		t.Fatalf("policy source = %q, want %q", snap.Deployments[1].PolicySource, models.DeploymentPolicySourceDefault)
+	if snap.Deployments[1].PolicySource != fleet.DeploymentPolicySourceDefault {
+		t.Fatalf("policy source = %q, want %q", snap.Deployments[1].PolicySource, fleet.DeploymentPolicySourceDefault)
 	}
 }
 
@@ -393,11 +393,11 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
 		t.Fatalf("decode set response: %v", err)
 	}
-	if setResp.Deployment.PolicyState != models.DeploymentPolicyStateFlagged {
-		t.Fatalf("set policy state = %q, want %q", setResp.Deployment.PolicyState, models.DeploymentPolicyStateFlagged)
+	if setResp.Deployment.PolicyState != fleet.DeploymentPolicyStateFlagged {
+		t.Fatalf("set policy state = %q, want %q", setResp.Deployment.PolicyState, fleet.DeploymentPolicyStateFlagged)
 	}
-	if setResp.Deployment.PolicySource != models.DeploymentPolicySourceOverlay {
-		t.Fatalf("set policy source = %q, want %q", setResp.Deployment.PolicySource, models.DeploymentPolicySourceOverlay)
+	if setResp.Deployment.PolicySource != fleet.DeploymentPolicySourceOverlay {
+		t.Fatalf("set policy source = %q, want %q", setResp.Deployment.PolicySource, fleet.DeploymentPolicySourceOverlay)
 	}
 	if setResp.Deployment.PolicyReason != "manual review" {
 		t.Fatalf("set policy reason = %q, want %q", setResp.Deployment.PolicyReason, "manual review")
@@ -415,11 +415,11 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	if err := json.NewDecoder(deleteRec.Body).Decode(&deleteResp); err != nil {
 		t.Fatalf("decode delete response: %v", err)
 	}
-	if deleteResp.Deployment.PolicyState != models.DeploymentPolicyStateActive {
-		t.Fatalf("delete policy state = %q, want %q", deleteResp.Deployment.PolicyState, models.DeploymentPolicyStateActive)
+	if deleteResp.Deployment.PolicyState != fleet.DeploymentPolicyStateActive {
+		t.Fatalf("delete policy state = %q, want %q", deleteResp.Deployment.PolicyState, fleet.DeploymentPolicyStateActive)
 	}
-	if deleteResp.Deployment.PolicySource != models.DeploymentPolicySourceDefault {
-		t.Fatalf("delete policy source = %q, want %q", deleteResp.Deployment.PolicySource, models.DeploymentPolicySourceDefault)
+	if deleteResp.Deployment.PolicySource != fleet.DeploymentPolicySourceDefault {
+		t.Fatalf("delete policy source = %q, want %q", deleteResp.Deployment.PolicySource, fleet.DeploymentPolicySourceDefault)
 	}
 }
 
@@ -451,13 +451,13 @@ func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
 
 func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	if err := registry.ApplyInventory(&models.Inventory{
-		Resources: []models.ResourceInventory{
+	if err := registry.ApplyInventory(&fleet.Inventory{
+		Resources: []fleet.ResourceInventory{
 			{
 				ResourceID: "mirror",
 				Provider:   "ollama",
 				Attempted:  true,
-				Models: []models.DiscoveredModel{
+				Models: []fleet.DiscoveredModel{
 					{Name: "qwen3-vl:latest", SupportsTools: true, SupportsStreaming: true, SupportsImages: true},
 				},
 			},
@@ -485,8 +485,8 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 	if !resp.Deployment.Routable {
 		t.Fatalf("response deployment Routable = false, want true")
 	}
-	if resp.Deployment.RoutableSource != models.DeploymentPolicySourceOverlay {
-		t.Fatalf("response RoutableSource = %q, want %q", resp.Deployment.RoutableSource, models.DeploymentPolicySourceOverlay)
+	if resp.Deployment.RoutableSource != fleet.DeploymentPolicySourceOverlay {
+		t.Fatalf("response RoutableSource = %q, want %q", resp.Deployment.RoutableSource, fleet.DeploymentPolicySourceOverlay)
 	}
 
 	found := false
@@ -561,7 +561,7 @@ func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
 func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	var savedID string
-	var savedPolicy models.DeploymentPolicy
+	var savedPolicy fleet.DeploymentPolicy
 	var deletedID string
 	server := NewServer(
 		"",
@@ -571,7 +571,7 @@ func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T
 		nil,
 		registry,
 		nil,
-		func(id string, policy models.DeploymentPolicy) error {
+		func(id string, policy fleet.DeploymentPolicy) error {
 			savedID = id
 			savedPolicy = policy
 			return nil
@@ -596,8 +596,8 @@ func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T
 	if savedID != "spark/gpt-oss:20b" {
 		t.Fatalf("savedID = %q, want %q", savedID, "spark/gpt-oss:20b")
 	}
-	if savedPolicy.State != models.DeploymentPolicyStateFlagged {
-		t.Fatalf("saved state = %q, want %q", savedPolicy.State, models.DeploymentPolicyStateFlagged)
+	if savedPolicy.State != fleet.DeploymentPolicyStateFlagged {
+		t.Fatalf("saved state = %q, want %q", savedPolicy.State, fleet.DeploymentPolicyStateFlagged)
 	}
 	if savedPolicy.Reason != "manual review" {
 		t.Fatalf("saved reason = %q, want %q", savedPolicy.Reason, "manual review")
@@ -627,7 +627,7 @@ func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
 		nil,
 		registry,
 		nil,
-		func(string, models.DeploymentPolicy) error { return errors.New("boom") },
+		func(string, fleet.DeploymentPolicy) error { return errors.New("boom") },
 		nil,
 		nil,
 		nil,
@@ -648,8 +648,8 @@ func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
 	if !dep.found {
 		t.Fatal("deployment missing from snapshot")
 	}
-	if dep.snapshot.PolicySource != models.DeploymentPolicySourceDefault {
-		t.Fatalf("PolicySource = %q, want %q after persistence failure", dep.snapshot.PolicySource, models.DeploymentPolicySourceDefault)
+	if dep.snapshot.PolicySource != fleet.DeploymentPolicySourceDefault {
+		t.Fatalf("PolicySource = %q, want %q after persistence failure", dep.snapshot.PolicySource, fleet.DeploymentPolicySourceDefault)
 	}
 }
 
@@ -671,11 +671,11 @@ func TestHandleModelRegistryResourcePolicySetAndDelete(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
 		t.Fatalf("decode set response: %v", err)
 	}
-	if setResp.Resource.PolicyState != models.DeploymentPolicyStateInactive {
-		t.Fatalf("set resource policy state = %q, want %q", setResp.Resource.PolicyState, models.DeploymentPolicyStateInactive)
+	if setResp.Resource.PolicyState != fleet.DeploymentPolicyStateInactive {
+		t.Fatalf("set resource policy state = %q, want %q", setResp.Resource.PolicyState, fleet.DeploymentPolicyStateInactive)
 	}
-	if setResp.Resource.PolicySource != models.DeploymentPolicySourceOverlay {
-		t.Fatalf("set resource policy source = %q, want %q", setResp.Resource.PolicySource, models.DeploymentPolicySourceOverlay)
+	if setResp.Resource.PolicySource != fleet.DeploymentPolicySourceOverlay {
+		t.Fatalf("set resource policy source = %q, want %q", setResp.Resource.PolicySource, fleet.DeploymentPolicySourceOverlay)
 	}
 	if setResp.Resource.PolicyReason != "office hours" {
 		t.Fatalf("set resource policy reason = %q, want %q", setResp.Resource.PolicyReason, "office hours")
@@ -698,8 +698,8 @@ func TestHandleModelRegistryResourcePolicySetAndDelete(t *testing.T) {
 	if err := json.NewDecoder(deleteRec.Body).Decode(&deleteResp); err != nil {
 		t.Fatalf("decode delete response: %v", err)
 	}
-	if deleteResp.Resource.PolicySource != models.DeploymentPolicySourceDefault {
-		t.Fatalf("delete resource policy source = %q, want %q", deleteResp.Resource.PolicySource, models.DeploymentPolicySourceDefault)
+	if deleteResp.Resource.PolicySource != fleet.DeploymentPolicySourceDefault {
+		t.Fatalf("delete resource policy source = %q, want %q", deleteResp.Resource.PolicySource, fleet.DeploymentPolicySourceDefault)
 	}
 	if len(rtr.GetModels()) != 2 {
 		t.Fatalf("len(router models) after clear = %d, want 2", len(rtr.GetModels()))
@@ -718,7 +718,7 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func(string, models.ResourcePolicy) error { return errors.New("boom") },
+		func(string, fleet.ResourcePolicy) error { return errors.New("boom") },
 		nil,
 		testAPILogger(),
 	)
@@ -737,8 +737,8 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 	if !res.found {
 		t.Fatal("resource missing from snapshot")
 	}
-	if res.snapshot.PolicySource != models.DeploymentPolicySourceDefault {
-		t.Fatalf("PolicySource = %q, want %q after persistence failure", res.snapshot.PolicySource, models.DeploymentPolicySourceDefault)
+	if res.snapshot.PolicySource != fleet.DeploymentPolicySourceDefault {
+		t.Fatalf("PolicySource = %q, want %q after persistence failure", res.snapshot.PolicySource, fleet.DeploymentPolicySourceDefault)
 	}
 }
 
