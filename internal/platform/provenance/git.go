@@ -68,10 +68,20 @@ func (s *Store) ensureRepo() error {
 
 // commitFile stages a file and creates a signed commit.
 func (s *Store) commitFile(ctx context.Context, filename, message string) error {
+	return s.commitFiles(ctx, []string{filename}, message)
+}
 
-	// Stage the file.
-	if err := s.git(ctx, nil, nil, "add", filename); err != nil {
-		return fmt.Errorf("git add %s: %w", filename, err)
+// commitFiles stages files and creates one signed commit containing all
+// staged changes.
+func (s *Store) commitFiles(ctx context.Context, filenames []string, message string) error {
+	if len(filenames) == 0 {
+		return fmt.Errorf("no files to commit")
+	}
+
+	// Stage the files.
+	args := append([]string{"add", "--"}, filenames...)
+	if err := s.git(ctx, nil, nil, args...); err != nil {
+		return fmt.Errorf("git add: %w", err)
 	}
 
 	// Check if there are staged changes — skip commit if nothing changed.
@@ -80,7 +90,7 @@ func (s *Store) commitFile(ctx context.Context, filename, message string) error 
 	diffErr := s.git(ctx, nil, nil, "diff", "--cached", "--quiet")
 	if diffErr == nil {
 		// Exit code 0 means no differences — nothing to commit.
-		s.logger.Debug("no changes to commit", "file", filename)
+		s.logger.Debug("no changes to commit", "files", filenames)
 		return nil
 	}
 	var exitErr *exec.ExitError

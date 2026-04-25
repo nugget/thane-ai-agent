@@ -32,14 +32,18 @@ This builds a platform-specific binary into `dist/`. Cross-compile with
 
 ## Initialize
 
-Set up the `~/Thane` directory with config, talents, and persona:
+Set up the `~/Thane` directory with config, talents, persona, and a local
+cryptographic identity:
 
 ```bash
 just init
 ```
 
-This creates `~/Thane/config.yaml`, copies talent files, and sets up the
-persona. Edit `~/Thane/config.yaml` for your setup.
+This creates `~/Thane/config.yaml`, copies talent files, sets up the
+persona, and bootstraps `~/Thane/core` as the instance trust root. The core
+root contains a generated Ed25519 signing key, an internal channel CA, and a
+signed git birth commit containing the public identity material and
+`core/config.yaml`. Edit `~/Thane/config.yaml` for your setup.
 
 **Required settings:**
 

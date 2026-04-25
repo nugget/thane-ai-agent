@@ -97,6 +97,45 @@ func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 	}
 }
 
+func TestStoreWriteFilesCreatesSingleCommit(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.WriteFiles(t.Context(), map[string]string{
+		"alpha.txt":      "alpha",
+		"nested/beta.md": "beta",
+	}, "bootstrap"); err != nil {
+		t.Fatalf("WriteFiles: %v", err)
+	}
+
+	for name, want := range map[string]string{
+		"alpha.txt":      "alpha",
+		"nested/beta.md": "beta",
+	} {
+		got, err := s.Read(name)
+		if err != nil {
+			t.Fatalf("Read %s: %v", name, err)
+		}
+		if got != want {
+			t.Fatalf("Read %s = %q, want %q", name, got, want)
+		}
+		hist, err := s.History(t.Context(), name)
+		if err != nil {
+			t.Fatalf("History %s: %v", name, err)
+		}
+		if hist.RevisionCount != 1 || hist.LastMessage != "bootstrap" {
+			t.Fatalf("History %s = %+v, want one bootstrap commit", name, hist)
+		}
+	}
+}
+
+func TestStoreWriteFilesRejectsEmptySet(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.WriteFiles(t.Context(), map[string]string{}, "empty"); err == nil {
+		t.Fatal("WriteFiles empty set returned nil, want error")
+	}
+}
+
 func TestStoreWriteNoChangeSkipsCommit(t *testing.T) {
 	s := testStore(t)
 
