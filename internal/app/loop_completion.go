@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // loopCompletionPlan is the app-layer delivery plan for a detached loop

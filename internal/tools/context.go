@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/memory"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 type contextKey string

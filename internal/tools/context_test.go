@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/memory"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 func TestConversationIDFromContext(t *testing.T) {

@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/database"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func testAPILogger() *slog.Logger {

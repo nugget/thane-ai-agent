@@ -6,16 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/awareness"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/state/awareness"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
-	"github.com/nugget/thane-ai-agent/internal/unifi"
 )
 
 // initAwareness sets up context providers, entity watchlist, state change

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	routepkg "github.com/nugget/thane-ai-agent/internal/router"
+	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
 func (r *Registry) handleModelRouteExplain(_ context.Context, args map[string]any) (string, error) {

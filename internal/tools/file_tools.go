@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // errResultLimit is a sentinel returned from WalkDir callbacks to stop

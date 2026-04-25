@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/nugget/thane-ai-agent/internal/attachments"
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 

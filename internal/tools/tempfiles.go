@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
 // labelPattern restricts labels to safe filesystem characters: alphanumeric

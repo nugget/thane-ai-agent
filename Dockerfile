@@ -29,10 +29,10 @@ RUN test -n "${TARGETARCH}" || (echo "TARGETARCH build argument must be set" >&2
     CGO_ENABLED=1 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
     go build -trimpath -tags "sqlite_fts5" \
       -ldflags="-s -w \
-        -X github.com/nugget/thane-ai-agent/internal/buildinfo.Version=${THANE_VERSION} \
-        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitCommit=${BUILD_COMMIT} \
-        -X github.com/nugget/thane-ai-agent/internal/buildinfo.GitBranch=${BUILD_BRANCH} \
-        -X github.com/nugget/thane-ai-agent/internal/buildinfo.BuildTime=${BUILD_TIME}" \
+        -X github.com/nugget/thane-ai-agent/internal/platform/buildinfo.Version=${THANE_VERSION} \
+        -X github.com/nugget/thane-ai-agent/internal/platform/buildinfo.GitCommit=${BUILD_COMMIT} \
+        -X github.com/nugget/thane-ai-agent/internal/platform/buildinfo.GitBranch=${BUILD_BRANCH} \
+        -X github.com/nugget/thane-ai-agent/internal/platform/buildinfo.BuildTime=${BUILD_TIME}" \
       -o /out/thane ./cmd/thane
 
 FROM scratch AS artifact

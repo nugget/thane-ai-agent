@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // defaultNotificationTimeout is the default time to wait for a user

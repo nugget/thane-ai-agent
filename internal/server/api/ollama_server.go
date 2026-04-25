@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 // OllamaServer is a dedicated server for Ollama-compatible API endpoints.

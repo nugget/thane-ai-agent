@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 func TestHAClient(t *testing.T) {

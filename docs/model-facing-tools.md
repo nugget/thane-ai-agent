@@ -116,7 +116,7 @@ Bad errors force the model to speculate:
 Better errors tell the model what to change next:
 
 - `no calendar events matched account="aimee" between start=... and end=...; try widening the window or removing query`
-- `multiple accounts have connected platform providers for macos.calendar/list_events; retry with account set to one of ["aimee", "nugget"]`
+- `multiple accounts have connected companion apps for macos.calendar/list_events; retry with account set to one of ["aimee", "nugget"]`
 - `label "critical" is ambiguous; matches [{"id":"label_a","name":"Critical"},{"id":"label_b","name":"Critical"}]`
 
 An actionable error usually includes:
@@ -134,7 +134,7 @@ when the set is small.
 
 Good:
 
-- `multiple accounts have connected platform providers for macos.calendar/list_events; retry with account set to one of ["aimee", "nugget"]`
+- `multiple accounts have connected companion apps for macos.calendar/list_events; retry with account set to one of ["aimee", "nugget"]`
 
 When the result shape allows it, include the choices as structured data
 as well as in the error text.

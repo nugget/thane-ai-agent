@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
 type streamingResponseRecorder struct {

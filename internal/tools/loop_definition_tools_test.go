@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 type testLoopDefinitionDeps struct {

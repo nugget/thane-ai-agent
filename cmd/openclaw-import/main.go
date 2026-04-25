@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 const sourceType = "openclaw"

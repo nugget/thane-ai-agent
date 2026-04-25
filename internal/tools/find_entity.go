@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 // FindEntityArgs represents the arguments for the find_entity tool.

@@ -10,12 +10,12 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/llm"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/model/models/providers"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
 // New constructs and initializes a fully wired App from the provided

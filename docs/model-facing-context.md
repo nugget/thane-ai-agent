@@ -164,7 +164,7 @@ reasoning:
   anchoring matters, and should still include a delta
 - persistent storage, logs, and APIs should keep absolute timestamps
 
-Use the shared helpers in `internal/promptfmt/timefmt.go`:
+Use the shared helpers in `internal/model/promptfmt/timefmt.go`:
 
 - `FormatDelta`
 - `FormatDeltaOnly`
@@ -223,11 +223,11 @@ prefer compactness.
 
 ## Placement And Ownership
 
-- `internal/agent` owns assembly, section ordering, and capability-gated
+- `internal/runtime/agent` owns assembly, section ordering, and capability-gated
   injection
 - domain packages own projection from raw domain state into model-facing
   views
-- `internal/awareness` owns shared time and recency helpers plus other
+- `internal/state/awareness` owns shared time and recency helpers plus other
   cross-domain cognition aids
 - talents and prompt builders own behavioral instruction, not runtime data
 
@@ -265,12 +265,12 @@ right track.
 
 Good places to look for existing patterns:
 
-- `internal/promptfmt/timefmt.go`
-- `internal/awareness/entity_format.go`
-- `internal/agent/tag_context.go`
-- `internal/forge/context.go`
-- `internal/notifications/history_provider.go`
-- `internal/agent/channel_provider.go`
+- `internal/model/promptfmt/timefmt.go`
+- `internal/state/awareness/entity_format.go`
+- `internal/runtime/agent/tag_context.go`
+- `internal/integrations/forge/context.go`
+- `internal/channels/notifications/history_provider.go`
+- `internal/runtime/agent/channel_provider.go`
 
 ## Related
 

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 // SetContactTools adds contact management tools to the registry.

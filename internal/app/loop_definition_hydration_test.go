@@ -9,10 +9,10 @@ import (
 	"time"
 
 	emailcfg "github.com/nugget/thane-ai-agent/internal/channels/email"
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/unifi"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 type testDeviceLocator struct {

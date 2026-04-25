@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	"github.com/nugget/thane-ai-agent/internal/messages"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 const (

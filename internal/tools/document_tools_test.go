@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/database"
-	"github.com/nugget/thane-ai-agent/internal/documents"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 func TestNumericArgSupportsCommonTypesAndBounds(t *testing.T) {

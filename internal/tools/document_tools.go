@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nugget/thane-ai-agent/internal/documents"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 const (

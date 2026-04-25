@@ -1,4 +1,4 @@
-pkg := "github.com/nugget/thane-ai-agent/internal/buildinfo"
+pkg := "github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 version := env("THANE_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo "dev"`)
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 git_branch := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown"`
@@ -31,11 +31,11 @@ default:
 # --- Build ---
 
 # Copy default files into embeddable positions for go:embed, and
-# regenerate examples/config.example.yaml from internal/config.
+# regenerate examples/config.example.yaml from internal/platform/config.
 [group('build')]
 generate:
-    go generate ./internal/talents/ ./cmd/thane/
-    go generate ./internal/config/...
+    go generate ./internal/model/talents/ ./cmd/thane/
+    go generate ./internal/platform/config/...
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
@@ -128,8 +128,8 @@ mod-tidy-check:
 # Runs go generate and fails if the file changed (i.e., was stale).
 [group('test')]
 config-generate-check:
-    go generate ./internal/config/...
-    @test -z "$(git diff --name-only examples/config.example.yaml)" || (echo "examples/config.example.yaml is stale — run 'go generate ./internal/config/...' and commit the result" && git diff examples/config.example.yaml && exit 1)
+    go generate ./internal/platform/config/...
+    @test -z "$(git diff --name-only examples/config.example.yaml)" || (echo "examples/config.example.yaml is stale — run 'go generate ./internal/platform/config/...' and commit the result" && git diff examples/config.example.yaml && exit 1)
 
 # Architecture metrics report — shows package count, interface count, large files, Set* mutators, and database.Open call sites vs baselines.
 [group('test')]
@@ -450,7 +450,7 @@ web-static-check:
 [group('operations')]
 loops-ng-contract-tests:
     just web-static-check
-    go test -race ./internal/loop ./internal/tools ./internal/delegate ./internal/app ./internal/channels/signal ./internal/server/api
+    go test -race ./internal/runtime/loop ./internal/tools ./internal/runtime/delegate ./internal/app ./internal/channels/messaging/signal ./internal/server/api
 
 # Broader loops-ng smoke pass: focused regression packages plus live
 # loop-definition runtime smoke against a running dev instance.

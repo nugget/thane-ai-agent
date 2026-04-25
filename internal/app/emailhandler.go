@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/prompts"
-	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // emailPollHandler returns a loop handler that checks IMAP accounts for

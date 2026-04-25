@@ -1,6 +1,6 @@
 package mqtt
 
-import "github.com/nugget/thane-ai-agent/internal/buildinfo"
+import "github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 
 // DeviceInfo holds the Home Assistant device registry fields shared
 // across all MQTT discovery config payloads. Every sensor entity

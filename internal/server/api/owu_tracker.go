@@ -8,12 +8,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/prompts"
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // owuWork is a single request dispatched to a per-conversation child loop.

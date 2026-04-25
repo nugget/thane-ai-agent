@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/notifications"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 )
 
 // defaultEscalationTimeout is the default time to wait for a human

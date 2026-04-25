@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func (a *App) launchLoop(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {

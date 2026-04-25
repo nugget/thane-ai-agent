@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/documents"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {

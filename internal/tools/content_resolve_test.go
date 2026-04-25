@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/nugget/thane-ai-agent/internal/database"
-	"github.com/nugget/thane-ai-agent/internal/documents"
-	"github.com/nugget/thane-ai-agent/internal/opstate"
-	"github.com/nugget/thane-ai-agent/internal/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 func testContentResolver(t *testing.T) (*ContentResolver, *TempFileStore, string) {

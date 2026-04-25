@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	"github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 //go:embed static/*

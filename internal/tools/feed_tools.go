@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/nugget/thane-ai-agent/internal/media"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 )
 
 // SetMediaFeedTools adds RSS/Atom feed management tools to the registry.

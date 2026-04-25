@@ -9,13 +9,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/prompts"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // periodicReflectionTaskName is the well-known name for the self-reflection

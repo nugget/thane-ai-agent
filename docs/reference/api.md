@@ -26,6 +26,10 @@ interactivity. No build step, no JavaScript framework.
 
 **Health endpoint:** Available for service monitoring.
 
+**Companion WebSocket:** Native companion apps connect at
+`/v1/companion/ws` to register local host capabilities. The older
+`/v1/platform/ws` route remains as a compatibility alias.
+
 ## Port 11434 — Ollama-Compatible API
 
 Speaks the Ollama chat API so Home Assistant's native Ollama integration

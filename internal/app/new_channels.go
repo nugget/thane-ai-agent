@@ -12,21 +12,21 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
-	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
-	"github.com/nugget/thane-ai-agent/internal/config"
+	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/documents"
-	"github.com/nugget/thane-ai-agent/internal/forge"
-	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	"github.com/nugget/thane-ai-agent/internal/llm"
-	"github.com/nugget/thane-ai-agent/internal/mcp"
-	"github.com/nugget/thane-ai-agent/internal/media"
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
-	"github.com/nugget/thane-ai-agent/internal/prompts"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
+	"github.com/nugget/thane-ai-agent/internal/integrations/search"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -640,16 +640,16 @@ func (a *App) initChannels(s *newState) error {
 	// the entire tool/bridge/notification wiring depends on it running.
 	//
 	// deferredTools is now a narrow escape hatch for the macOS
-	// platform calendar tool, whose registration still happens inside
+	// companion calendar tool, whose registration still happens inside
 	// a deferWorker closure. Signal used to live here too; it has
 	// since migrated to the tools.Provider async-binding pattern
-	// (see internal/channels/signal/tool_provider.go). Tools
+	// (see internal/channels/messaging/signal/tool_provider.go). Tools
 	// registered synchronously in any init phase land in the
 	// capability-tag snapshot naturally (finalizeCapabilityTags runs
 	// last) and never belong here. New subsystems should follow the
 	// Signal pattern rather than adding entries here.
 	s.deferredTools = make(map[string]bool)
-	if a.cfg.Platform.Configured() {
+	if a.cfg.Companion.Configured() {
 		s.deferredTools["macos_calendar_events"] = true
 	}
 	if a.cfg.Signal.Configured() {

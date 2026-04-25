@@ -1,0 +1,231 @@
+package media
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
+)
+
+const (
+	// feedNamespace is the opstate namespace for media feed state.
+	feedNamespace = "media_feed"
+
+	// feedIndexKey stores a JSON array of feed IDs.
+	feedIndexKey = "feeds"
+)
+
+// opstate key helpers — all under the feedNamespace.
+func feedKeyURL(id string) string         { return "feed:" + id + ":url" }
+func feedKeyName(id string) string        { return "feed:" + id + ":name" }
+func feedKeyNotify(id string) string      { return "feed:" + id + ":notify" }
+func feedKeyLastEntryID(id string) string { return "feed:" + id + ":last_entry_id" }
+func feedKeyLastChecked(id string) string { return "feed:" + id + ":last_checked" }
+func feedKeyLatestTitle(id string) string { return "feed:" + id + ":latest_title" }
+func feedKeyTrustZone(id string) string   { return "feed:" + id + ":trust_zone" }
+
+// validFeedTrustZones is the set of trust zones applicable to media feeds.
+// Admin and household zones don't apply to media sources — only the 3-tier
+// model (trusted/known/unknown) is relevant.
+var validFeedTrustZones = map[string]bool{
+	"trusted": true,
+	"known":   true,
+	"unknown": true,
+}
+
+// FeedPoller checks followed RSS/Atom feeds for new entries by
+// comparing entry IDs against a persisted high-water mark. When run
+// inside the loop infrastructure, it reports per-iteration metrics
+// (feeds_checked, new_entries) via [loop.IterationSummary].
+type FeedPoller struct {
+	state  *opstate.Store
+	logger *slog.Logger
+	http   *http.Client
+}
+
+// NewFeedPoller creates a feed poller that checks all followed feeds
+// and tracks state in the provided opstate store.
+func NewFeedPoller(state *opstate.Store, logger *slog.Logger) *FeedPoller {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &FeedPoller{
+		state:  state,
+		logger: logger,
+		http:   httpkit.NewClient(httpkit.WithTimeout(30 * time.Second)),
+	}
+}
+
+// CheckFeeds checks all followed feeds for new entries. Returns a
+// formatted wake message describing new content, or empty string if
+// nothing new was found. Network errors are logged and skipped
+// per-feed; a failure on one feed does not prevent checking others.
+func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
+	summary := loop.IterationSummary(ctx)
+
+	ids, err := loadFeedIndex(p.state)
+	if err != nil {
+		return "", fmt.Errorf("load feed index: %w", err)
+	}
+	if len(ids) == 0 {
+		if summary != nil {
+			summary["feeds_checked"] = 0
+		}
+		return "", nil
+	}
+
+	var sections []string
+	newEntryCount := 0
+
+	for _, id := range ids {
+		section, n, err := p.checkFeed(ctx, id)
+		if err != nil {
+			p.logger.Warn("feed poll failed",
+				"feed_id", id,
+				"error", err,
+			)
+			continue
+		}
+		newEntryCount += n
+		if section != "" {
+			sections = append(sections, section)
+		}
+	}
+
+	if summary != nil {
+		summary["feeds_checked"] = len(ids)
+		summary["new_entries"] = newEntryCount
+	}
+
+	if len(sections) == 0 {
+		return "", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("New media content detected:\n")
+	for _, s := range sections {
+		sb.WriteString("\n")
+		sb.WriteString(s)
+	}
+	return sb.String(), nil
+}
+
+// checkFeed checks a single feed for new entries. Returns a formatted
+// section for the wake message (empty if nothing new), the number of
+// new entries found, and any error.
+func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, int, error) {
+	feedURL, err := p.state.Get(feedNamespace, feedKeyURL(feedID))
+	if err != nil {
+		return "", 0, fmt.Errorf("get feed URL: %w", err)
+	}
+	if feedURL == "" {
+		return "", 0, fmt.Errorf("feed %q has no URL", feedID)
+	}
+
+	feedName, _ := p.state.Get(feedNamespace, feedKeyName(feedID))
+	if feedName == "" {
+		feedName = feedID
+	}
+
+	trustZone, _ := p.state.Get(feedNamespace, feedKeyTrustZone(feedID))
+	if trustZone == "" {
+		trustZone = "unknown"
+	}
+
+	lastEntryID, _ := p.state.Get(feedNamespace, feedKeyLastEntryID(feedID))
+
+	feed, err := fetchFeed(ctx, p.http, feedURL)
+	if err != nil {
+		return "", 0, fmt.Errorf("fetch %q: %w", feedName, err)
+	}
+
+	// Update last_checked timestamp.
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := p.state.Set(feedNamespace, feedKeyLastChecked(feedID), now); err != nil {
+		p.logger.Warn("failed to update last_checked", "feed_id", feedID, "error", err)
+	}
+
+	if len(feed.Entries) == 0 {
+		return "", 0, nil
+	}
+
+	// Update latest title for display purposes.
+	if err := p.state.Set(feedNamespace, feedKeyLatestTitle(feedID), feed.Entries[0].Title); err != nil {
+		p.logger.Warn("failed to update latest_title", "feed_id", feedID, "error", err)
+	}
+
+	// First run: set high-water mark without reporting.
+	if lastEntryID == "" {
+		if err := p.state.Set(feedNamespace, feedKeyLastEntryID(feedID), feed.Entries[0].ID); err != nil {
+			p.logger.Warn("failed to set initial high-water mark", "feed_id", feedID, "error", err)
+		}
+		p.logger.Info("feed high-water mark initialized",
+			"feed_id", feedID,
+			"feed_name", feedName,
+			"latest_entry", feed.Entries[0].Title,
+		)
+		return "", 0, nil
+	}
+
+	// Collect new entries (entries newer than the high-water mark).
+	var newEntries []FeedEntry
+	foundLast := false
+	for _, entry := range feed.Entries {
+		if entry.ID == lastEntryID {
+			foundLast = true
+			break
+		}
+		newEntries = append(newEntries, entry)
+	}
+
+	// If the previous high-water mark is no longer present in the feed
+	// (common when feeds drop older items), reseed the mark to the latest
+	// entry without reporting. This avoids misreporting a large batch of
+	// "new" entries that are actually old.
+	if !foundLast {
+		if err := p.state.Set(feedNamespace, feedKeyLastEntryID(feedID), feed.Entries[0].ID); err != nil {
+			p.logger.Warn("failed to reseed high-water mark", "feed_id", feedID, "error", err)
+		} else {
+			p.logger.Info("feed high-water mark reseeded after missing last_entry_id",
+				"feed_id", feedID,
+				"feed_name", feedName,
+				"latest_entry", feed.Entries[0].Title,
+			)
+		}
+		return "", 0, nil
+	}
+
+	if len(newEntries) == 0 {
+		return "", 0, nil
+	}
+
+	// Update high-water mark to the newest entry.
+	if err := p.state.Set(feedNamespace, feedKeyLastEntryID(feedID), newEntries[0].ID); err != nil {
+		p.logger.Warn("failed to update high-water mark", "feed_id", feedID, "error", err)
+	}
+
+	p.logger.Info("new feed entries detected",
+		"feed_id", feedID,
+		"feed_name", feedName,
+		"new_count", len(newEntries),
+	)
+
+	// Format section for wake message. Trust zone is shown in brackets
+	// so the agent can adapt analysis depth per the wake prompt guidance.
+	// The feed_id is included so the agent can pass it to media_save_analysis
+	// for per-feed output_path resolution.
+	var sb strings.Builder
+	for _, entry := range newEntries {
+		fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
+	}
+	return sb.String(), len(newEntries), nil
+}
+
+// loadFeedIndex and saveFeedIndex are defined in tools_feed.go as
+// package-level functions shared by both FeedPoller and FeedTools.

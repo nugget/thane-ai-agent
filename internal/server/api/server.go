@@ -13,18 +13,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
-	"github.com/nugget/thane-ai-agent/internal/checkpoint"
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/llm"
-	"github.com/nugget/thane-ai-agent/internal/logging"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/usage"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/models"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // WebServerRegistrar is implemented by types that can register HTTP
@@ -76,7 +76,7 @@ type Server struct {
 	eventBus                           *events.Bus
 	owuTracker                         *OWUTracker
 	webServer                          WebServerRegistrar
-	platformHandler                    http.Handler
+	companionHandler                   http.Handler
 	modelRegistry                      *models.Registry
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
@@ -124,10 +124,10 @@ func (s *Server) SetWebServer(ws WebServerRegistrar) {
 	s.webServer = ws
 }
 
-// SetPlatformHandler configures the WebSocket handler for platform
-// provider connections.
-func (s *Server) SetPlatformHandler(h http.Handler) {
-	s.platformHandler = h
+// SetCompanionHandler configures the WebSocket handler for native
+// companion app connections.
+func (s *Server) SetCompanionHandler(h http.Handler) {
+	s.companionHandler = h
 }
 
 // UseLoopDefinitionRegistry configures the persistent loops-ng definition
@@ -456,9 +456,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// Platform provider WebSocket endpoint
-	if s.platformHandler != nil {
-		mux.Handle("GET /v1/platform/ws", s.platformHandler)
+	// Companion app WebSocket endpoint. The platform route is a legacy
+	// alias for existing thane-agent-macos installs.
+	if s.companionHandler != nil {
+		mux.Handle("GET /v1/companion/ws", s.companionHandler)
+		mux.Handle("GET /v1/platform/ws", s.companionHandler)
 	}
 
 	// When a WebServerRegistrar is wired in, it owns "/" and related

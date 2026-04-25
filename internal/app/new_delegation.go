@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/delegate"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
+	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 

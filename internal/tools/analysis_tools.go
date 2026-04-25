@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/nugget/thane-ai-agent/internal/media"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 )
 
 // SetMediaAnalysisTools adds the media analysis persistence tool to the

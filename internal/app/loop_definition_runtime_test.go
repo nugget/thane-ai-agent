@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/events"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 type testLoopRunner struct{}

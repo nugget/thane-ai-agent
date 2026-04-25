@@ -1,65 +1,119 @@
 # internal/
 
-Thane's internal packages, organized by architectural role.
+Thane's internal packages are organized by architectural role. The
+directory layout is meant to answer the first question future humans and
+agents ask: "what kind of thing am I looking at?"
 
-## How the agent thinks
+## Placement Rules
 
-| Package | Purpose |
-|---------|---------|
-| `agent/` | Core loop: assembles context, plans via LLM, executes tools, returns responses |
-| `llm/` | LLM provider abstraction (Anthropic, Ollama) and streaming |
-| `router/` | Model selection — picks the best model for each request based on quality, cost, and hints |
-| `prompts/` | System prompt templates for all agent modes (main, delegate, compaction, extraction) |
-| `talents/` | Capability tag system — markdown-based behavior guidance that scopes tool access |
-| `delegate/` | Delegate task execution — isolated sub-agent runs with their own tool sets |
-| `metacognitive/` | Autonomous self-reflection loop that monitors state and adjusts its own attention cycle |
-| `tools/` | Tool registry and all tool handler implementations |
+- `app/` is the composition root. It may wire broad subsystems together.
+- `server/` is the local API/UI surface.
+- `tools/` owns tool runtime primitives: registry, context plumbing,
+  provider interfaces, common errors, and shared tool helpers.
+- Domain-specific tool behavior belongs with the domain package whenever
+  practical. Do not add new domain tool families to `tools/` by default.
+  Existing domain tool families still live in `tools/` and should migrate
+  incrementally when there is a focused reason to move them.
+- Packages should generally import inward toward platform/model/state
+  primitives, not sideways through unrelated domains.
 
-## What the agent knows
+## Runtime
 
-| Package | Purpose |
-|---------|---------|
-| `memory/` | Conversation storage, compaction, archiving, episodic memory, and session summarization |
-| `knowledge/` | Structured entity facts, semantic search via embeddings, and document ingestion |
-| `contacts/` | Contact directory, trust zones, presence tracking, and relationship metadata |
-| `awareness/` | System prompt context providers — current conditions, HA state window, entity watchlist |
-
-## How the agent communicates
+Execution machinery for agent runs and child work.
 
 | Package | Purpose |
 |---------|---------|
-| `channels/email/` | Email integration (IMAP polling, SMTP sending, trust-based filtering) |
-| `channels/signal/` | Signal messenger bridge (receives messages, routes to agent, sends replies) |
-| `channels/mqtt/` | MQTT for Home Assistant device discovery and sensor state publishing |
-| `server/api/` | REST API — OpenAI-compatible and Ollama-compatible endpoints |
-| `server/web/` | Built-in web dashboard and chat UI |
-| `carddav/` | CardDAV server for native contact app sync (macOS Contacts.app, iOS, Thunderbird) |
-| `notifications/` | Provider-agnostic notification routing, actionable HITL callbacks, timeout escalation |
+| `runtime/agent/` | Core agent loop: context assembly, model calls, tool execution, responses |
+| `runtime/loop/` | Durable loop runtime, loop definitions, launch/request bridge |
+| `runtime/delegate/` | Delegate task execution and child-loop handoff |
+| `runtime/iterate/` | Model/tool iteration engine |
+| `runtime/metacognitive/` | Autonomous self-reflection loop |
 
-## Domain integrations
+## Model Interface
+
+How Thane talks to models and shapes model-facing context.
 
 | Package | Purpose |
 |---------|---------|
-| `homeassistant/` | Home Assistant REST + WebSocket client |
-| `unifi/` | UniFi network client (device tracking, AP associations) |
-| `forge/` | GitHub and Forgejo integration (issues, PRs, repo management) |
-| `mcp/` | Model Context Protocol client and tool bridge |
-| `media/` | Media transcript extraction, RSS/Atom feed polling, and content summarization |
-| `search/` | Web search providers (Brave, SearXNG) and page content extraction |
+| `model/llm/` | LLM client contracts, messages, streaming, tool-call parsing |
+| `model/models/` | Model catalog, provider clients, runtime inventory |
+| `model/router/` | Model selection and routing profiles |
+| `model/prompts/` | Prompt templates and runtime contracts |
+| `model/talents/` | Markdown behavioral guidance loaded by capability tags |
+| `model/toolcatalog/` | Capability tag catalog and model-facing tool summaries |
+| `model/promptfmt/` | Shared prompt-formatting helpers |
+
+## State
+
+Durable knowledge, persisted projections, and assembled situational
+context the agent reasons over.
+
+| Package | Purpose |
+|---------|---------|
+| `state/memory/` | Conversations, archives, compaction, episodic memory |
+| `state/contacts/` | Contact directory, trust zones, CardDAV-facing records |
+| `state/documents/` | Managed document roots, queries, mutation helpers |
+| `state/knowledge/` | Structured facts, embeddings, semantic search |
+| `state/awareness/` | Agent-facing situational context: current conditions, HA state windows, watchlists |
+| `state/attachments/` | Attachment storage and metadata |
+
+## Channels
+
+Entrypoints and communication surfaces that can wake, converse, notify,
+or carry human/event interaction.
+
+`channels/messages/` is the in-process envelope and bus substrate shared
+by channel adapters and runtime loop signaling. It lives here because it
+defines message-channel contracts, even though it is not an external
+adapter like Signal or email.
+
+| Package | Purpose |
+|---------|---------|
+| `channels/messaging/signal/` | Signal request/reply bridge and provider-specific messaging tools |
+| `channels/email/` | Email polling, reading, sending, trust filtering |
+| `channels/mqtt/` | MQTT event/wake subscriptions and HA discovery publishing |
+| `channels/messages/` | In-process message envelopes and buses |
+| `channels/notifications/` | Notification routing, actionable callbacks, timeout escalation |
+
+## Integrations
+
+External systems exposed as capabilities or provider-backed tool surfaces.
+
+| Package | Purpose |
+|---------|---------|
+| `integrations/homeassistant/` | Home Assistant REST/WebSocket client and state projections |
+| `integrations/unifi/` | UniFi network client and device tracking |
+| `integrations/forge/` | GitHub/Forgejo integration for issues, PRs, repos |
+| `integrations/media/` | Feeds, transcripts, media vault, summarization |
+| `integrations/search/` | Web search providers and page extraction |
+| `integrations/mcp/` | Model Context Protocol client and tool bridge |
+| `integrations/companion/` | Native companion app WebSocket endpoint |
 
 ## Platform
 
+Cross-cutting process, storage, scheduling, and operational substrate.
+
 | Package | Purpose |
 |---------|---------|
-| `config/` | Configuration loading, validation, and defaults |
-| `database/` | Shared SQLite helpers (WAL mode, busy timeout, schema migration) |
-| `scheduler/` | Time-based task scheduling |
-| `opstate/` | Operational state key-value store with TTLs |
-| `events/` | In-process publish/subscribe event bus |
-| `checkpoint/` | State snapshots for crash recovery |
-| `usage/` | LLM token usage and cost tracking |
-| `httpkit/` | Shared HTTP client construction (User-Agent, timeouts) |
-| `connwatch/` | Service health monitoring with exponential backoff |
-| `logging/` | Self-managed log rotation, context-propagated structured logging, and queryable SQLite index |
-| `buildinfo/` | Build metadata injected via ldflags |
-| `paths/` | Named path prefix resolution (e.g., `kb:file.md`) |
+| `platform/config/` | Configuration loading, validation, defaults, generated example config |
+| `platform/database/` | Shared SQLite helpers and timestamp parsing |
+| `platform/logging/` | Structured logging, request archival, queryable log index |
+| `platform/events/` | In-process publish/subscribe event bus |
+| `platform/opstate/` | Operational state key-value store with TTLs |
+| `platform/paths/` | Named path prefix resolution, such as `kb:file.md` |
+| `platform/httpkit/` | Shared HTTP client construction and response helpers |
+| `platform/scheduler/` | Time-based task scheduling |
+| `platform/usage/` | LLM token usage and cost accounting |
+| `platform/telemetry/` | Runtime telemetry collection |
+| `platform/checkpoint/` | State snapshots for crash recovery |
+| `platform/buildinfo/` | Build metadata injected via ldflags |
+| `platform/provenance/` | Tool-call and content provenance helpers |
+
+## API And Composition
+
+| Package | Purpose |
+|---------|---------|
+| `app/` | Wires configuration, stores, providers, tools, loops, and servers |
+| `server/api/` | OpenAI-compatible, Ollama-compatible, and admin HTTP APIs |
+| `server/web/` | Built-in web dashboard and chat UI |
+| `server/carddav/` | CardDAV server for native contact app sync |

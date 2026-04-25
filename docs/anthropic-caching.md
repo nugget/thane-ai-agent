@@ -23,7 +23,7 @@ Opus and 100+ KB prefixes.
 The system prompt is assembled as a list of named sections, each with
 a `CacheTTL` annotation that controls where (and whether) a cache
 breakpoint gets placed. The policy lives in
-[`internal/agent/loop.go`](../internal/agent/loop.go) in
+[`internal/runtime/agent/loop.go`](../internal/runtime/agent/loop.go) in
 `promptSectionCacheTTL`:
 
 | Section                 | TTL | Rationale |
@@ -45,7 +45,7 @@ breakpoint gets placed. The policy lives in
 Volatile sections (no TTL) sit **after** the cached sections in the
 final prompt so the cache prefix stops at the last stable byte. Tools
 get a blanket `1h` cache on the last tool definition in
-[`internal/models/providers/anthropic.go`](../internal/models/providers/anthropic.go).
+[`internal/model/models/providers/anthropic.go`](../internal/model/models/providers/anthropic.go).
 
 ## Decision tree for new sections
 
@@ -81,7 +81,7 @@ below a per-family threshold:
 | Claude Haiku 4.x         | 4096           |
 
 Thane enforces this in
-[`anthropic.go:applyCacheBreakpointGuards`](../internal/models/providers/anthropic.go):
+[`anthropic.go:applyCacheBreakpointGuards`](../internal/model/models/providers/anthropic.go):
 under-minimum runs have their `cache_control` stripped at request time
 with a WARN log, so the request doesn't silently miss caching while
 appearing to request it. Unknown model families default to the
@@ -139,7 +139,7 @@ Three signals, in order of usefulness:
 ## References
 
 - [Anthropic prompt caching docs](https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching)
-- [`internal/agent/loop.go`](../internal/agent/loop.go) — `promptSectionCacheTTL` (policy)
-- [`internal/models/providers/anthropic.go`](../internal/models/providers/anthropic.go) — `applyCacheBreakpointGuards` (enforcement)
-- [`internal/llm/types.go`](../internal/llm/types.go) — `CacheHitRate` helper
-- [`internal/usage/store.go`](../internal/usage/store.go) — per-TTL cost breakdown
+- [`internal/runtime/agent/loop.go`](../internal/runtime/agent/loop.go) — `promptSectionCacheTTL` (policy)
+- [`internal/model/models/providers/anthropic.go`](../internal/model/models/providers/anthropic.go) — `applyCacheBreakpointGuards` (enforcement)
+- [`internal/model/llm/types.go`](../internal/model/llm/types.go) — `CacheHitRate` helper
+- [`internal/platform/usage/store.go`](../internal/platform/usage/store.go) — per-TTL cost breakdown

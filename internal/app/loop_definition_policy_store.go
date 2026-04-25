@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 const loopDefinitionPolicyNamespace = "loop_definition_policy"

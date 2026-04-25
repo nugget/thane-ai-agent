@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 func TestInferDomainFromDescription(t *testing.T) {

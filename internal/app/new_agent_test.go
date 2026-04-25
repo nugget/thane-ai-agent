@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 )
 
 func TestSyncPeriodicReflectionTaskUpdatesDriftedTask(t *testing.T) {

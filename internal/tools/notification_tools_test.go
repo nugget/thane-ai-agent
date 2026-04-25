@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/database"
-	"github.com/nugget/thane-ai-agent/internal/notifications"
+	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 // mockNotifyHA implements notifications.HAClient for testing.

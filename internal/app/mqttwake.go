@@ -10,12 +10,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
-	"github.com/nugget/thane-ai-agent/internal/events"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // maxWakePayloadBytes is the maximum MQTT payload size included in the
