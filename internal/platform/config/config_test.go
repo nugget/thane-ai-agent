@@ -900,7 +900,7 @@ func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
 func TestLoad_DocumentRootConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(`
+	if err := os.WriteFile(path, []byte(`
 paths:
   kb: ./knowledge
 doc_roots:
@@ -913,7 +913,9 @@ doc_roots:
       verify_signatures: required
       repo_path: ./knowledge
       allowed_signers: ./allowed_signers
-`), 0600)
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	cfg, err := Load(path)
 	if err != nil {

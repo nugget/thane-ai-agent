@@ -95,8 +95,8 @@ func (s *Store) commitFiles(ctx context.Context, filenames []string, message str
 		return false, fmt.Errorf("no files to commit")
 	}
 
-	// Stage the files.
-	args := append([]string{"add", "--"}, filenames...)
+	// Stage additions, modifications, and removals for the pathspecs.
+	args := append([]string{"add", "-A", "--"}, filenames...)
 	if err := s.git(ctx, nil, nil, args...); err != nil {
 		return false, fmt.Errorf("git add: %w", err)
 	}

@@ -179,6 +179,9 @@ func (s *Store) Refresh(ctx context.Context) error {
 	}
 	for root, dir := range s.roots {
 		if !s.rootPolicy(root).Indexing {
+			if err := s.purgeRootIndex(ctx, root); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := s.refreshRoot(ctx, root, dir); err != nil {
@@ -274,6 +277,16 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		}
 	}
 	return rows.Err()
+}
+
+func (s *Store) purgeRootIndex(ctx context.Context, root string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_document_sections WHERE root = ?`, root); err != nil {
+		return fmt.Errorf("delete indexed sections for non-indexed root %q: %w", root, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_documents WHERE root = ?`, root); err != nil {
+		return fmt.Errorf("delete indexed documents for non-indexed root %q: %w", root, err)
+	}
+	return nil
 }
 
 func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {

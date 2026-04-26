@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
@@ -92,6 +93,53 @@ func TestStorePolicyIndexingFalseSkipsRefreshAndWriteIndexing(t *testing.T) {
 	}
 	if len(roots) != 1 || roots[0].Root != "kb" || roots[0].DocumentCount != 0 || roots[0].Policy.Indexing {
 		t.Fatalf("Roots = %#v, want visible non-indexed kb root with zero indexed docs", roots)
+	}
+}
+
+func TestStorePolicyIndexingFalsePurgesPreviouslyIndexedRows(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStore(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+		},
+	}, nil)
+	writeFile(t, filepath.Join(kbDir, "stale.md"), "# Stale\n\nPreviously searchable.\n")
+
+	ctx := context.Background()
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("initial Refresh: %v", err)
+	}
+	results, err := store.Search(ctx, SearchQuery{Root: "kb", Query: "searchable", Limit: 10})
+	if err != nil {
+		t.Fatalf("initial Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("initial Search returned %d results, want 1", len(results))
+	}
+
+	store.rootPolicies["kb"] = RootPolicy{
+		Indexing:  false,
+		Authoring: AuthoringManaged,
+	}
+	store.lastRefresh = time.Time{}
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("policy Refresh: %v", err)
+	}
+	results, err = store.Search(ctx, SearchQuery{Root: "kb", Query: "searchable", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search after disabling indexing: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Search after disabling indexing returned %d results, want 0", len(results))
+	}
+	roots, err := store.Roots(ctx)
+	if err != nil {
+		t.Fatalf("Roots: %v", err)
+	}
+	if len(roots) != 1 || roots[0].DocumentCount != 0 || roots[0].LastModifiedAt != "" {
+		t.Fatalf("Roots = %#v, want purged non-indexed root stats", roots)
 	}
 }
 
