@@ -1614,3 +1614,140 @@ func TestSearch_UnifiedModeNullArchivedAt(t *testing.T) {
 		t.Fatal("expected at least 1 search result with context")
 	}
 }
+
+func TestGetMessagesInRange_TimeWindow(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	msgs := make([]Message, 10)
+	for i := range msgs {
+		msgs[i] = Message{
+			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: "sess-1",
+			Role: "user", Content: fmt.Sprintf("message %d", i),
+			Timestamp:     base.Add(time.Duration(i) * time.Minute),
+			ArchiveReason: "reset",
+		}
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(2 * time.Minute),
+		To:             base.Add(6 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5", len(got))
+	}
+	if got[0].Content != "message 2" || got[4].Content != "message 6" {
+		t.Errorf("got[0]=%q got[4]=%q, want message 2..message 6", got[0].Content, got[4].Content)
+	}
+}
+
+func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	msgs := make([]Message, 10)
+	for i := range msgs {
+		msgs[i] = Message{
+			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: "sess-1",
+			Role: "user", Content: fmt.Sprintf("message %d", i),
+			Timestamp:     base.Add(time.Duration(i) * time.Minute),
+			ArchiveReason: "reset",
+		}
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// From = base+9 (only "message 9" falls in the window) but
+	// MinMessages=5 should pull the 5 most recent regardless.
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(9 * time.Minute),
+		To:             base.Add(20 * time.Minute),
+		MinMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5 (floor satisfied)", len(got))
+	}
+	if got[0].Content != "message 5" || got[4].Content != "message 9" {
+		t.Errorf("got[0]=%q got[4]=%q, want message 5..message 9", got[0].Content, got[4].Content)
+	}
+}
+
+func TestGetMessagesInRange_MaxMessagesCap(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	msgs := make([]Message, 20)
+	for i := range msgs {
+		msgs[i] = Message{
+			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: "sess-1",
+			Role: "user", Content: fmt.Sprintf("message %d", i),
+			Timestamp:     base.Add(time.Duration(i) * time.Minute),
+			ArchiveReason: "reset",
+		}
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		To:             base.Add(20 * time.Minute),
+		MaxMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5 (cap)", len(got))
+	}
+	// Cap keeps the most recent — messages 15..19, output ASC.
+	if got[0].Content != "message 15" || got[4].Content != "message 19" {
+		t.Errorf("got[0]=%q got[4]=%q, want message 15..message 19", got[0].Content, got[4].Content)
+	}
+}
+
+func TestGetMessagesInRange_AllConversations(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		{ID: "a1", ConversationID: "conv-a", SessionID: "sa", Role: "user", Content: "a-first",
+			Timestamp: base.Add(1 * time.Minute), ArchiveReason: "reset"},
+		{ID: "b1", ConversationID: "conv-b", SessionID: "sb", Role: "user", Content: "b-first",
+			Timestamp: base.Add(2 * time.Minute), ArchiveReason: "reset"},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := store.GetMessagesInRange(RangeOptions{
+		To: base.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (both conversations)", len(got))
+	}
+}

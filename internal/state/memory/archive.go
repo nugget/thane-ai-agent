@@ -2028,6 +2028,120 @@ func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID
 	return s.scanMessages(rows)
 }
 
+// RangeOptions configures [ArchiveStore.GetMessagesInRange]. All fields
+// are optional — the zero value of RangeOptions returns the most recent
+// 200 messages across all conversations, ordered chronologically.
+type RangeOptions struct {
+	// ConversationID restricts the result to a single conversation when
+	// non-empty. Empty matches all conversations.
+	ConversationID string
+
+	// From is the earliest timestamp to include (inclusive). Zero means
+	// unbounded — combined with MinMessages, this is how the "give me at
+	// least N most-recent messages regardless of age" query is expressed.
+	From time.Time
+
+	// To is the latest timestamp to include (inclusive). Zero is treated
+	// as time.Now() at query time.
+	To time.Time
+
+	// MinMessages is a floor: ensure at least this many of the most
+	// recent (≤ To) messages are returned, even when fewer fall inside
+	// [From, To]. Zero disables the floor. Useful for "last X minutes
+	// OR Y messages, whichever is more" without two callsite queries.
+	MinMessages int
+
+	// MaxMessages caps the result. Non-positive uses the default of 200.
+	// When the cap clips the result, the second return value of
+	// GetMessagesInRange is true.
+	MaxMessages int
+}
+
+// GetMessagesInRange returns archived messages bounded by time, with an
+// optional MinMessages floor that guarantees a useful tail even on quiet
+// conversations. Results are ordered chronologically (oldest first).
+// The boolean return is true when MaxMessages clipped the result.
+func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, error) {
+	maxN := opts.MaxMessages
+	if maxN <= 0 {
+		maxN = 200
+	}
+	to := opts.To
+	if to.IsZero() {
+		to = time.Now()
+	}
+	from := opts.From
+	if from.IsZero() {
+		from = time.Unix(0, 0)
+	}
+
+	// Step 1: most recent messages within [from, to], DESC. Ask for one
+	// more than the cap so we can detect truncation.
+	msgs, err := s.queryMessagesDesc(opts.ConversationID, from, to, maxN+1)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(msgs) > maxN
+	if truncated {
+		msgs = msgs[:maxN]
+	}
+
+	// Step 2: floor — if the in-window query under-delivered, broaden
+	// the lower bound and re-query for the most recent MinMessages.
+	if opts.MinMessages > 0 && len(msgs) < opts.MinMessages {
+		want := opts.MinMessages
+		if want > maxN {
+			want = maxN
+		}
+		floor, err := s.queryMessagesDesc(opts.ConversationID, time.Unix(0, 0), to, want)
+		if err != nil {
+			return nil, false, err
+		}
+		msgs = floor
+		// The floor query asked for ≤ MaxMessages — no need to recheck
+		// truncation, since by construction we asked for what fits.
+		truncated = false
+	}
+
+	// Reverse DESC → chronological for output.
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, truncated, nil
+}
+
+func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Time, limit int) ([]Message, error) {
+	cols := s.msgSelectCols()
+	table := s.msgTableName
+	var query string
+	var args []any
+	if conversationID != "" {
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE conversation_id = ? AND timestamp >= ? AND timestamp <= ?
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, cols, table)
+		args = []any{conversationID, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
+	} else {
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
+			WHERE timestamp >= ? AND timestamp <= ?
+			ORDER BY timestamp DESC
+			LIMIT ?
+		`, cols, table)
+		args = []any{from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
+	}
+	rows, err := s.msgDB().Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query messages desc: %w", err)
+	}
+	defer rows.Close()
+	return s.scanMessages(rows)
+}
+
 // ExportSessionMarkdown exports a session transcript as human-readable markdown.
 // Includes tool call records interleaved chronologically with messages.
 func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {

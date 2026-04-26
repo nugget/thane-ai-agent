@@ -2,71 +2,85 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
-
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.
+// archiveResultByteCap is the per-tool byte ceiling on JSON output.
+// The cap protects the model's context budget when an archive query
+// returns more content than is useful; callers see truncated=true in
+// the JSON envelope so the model can narrow its query and try again.
+const archiveResultByteCap = 16000
+
+// archiveTranscriptByteCap is the larger ceiling reserved for full
+// session transcripts, which routinely run longer than search hits.
+const archiveTranscriptByteCap = 32000
+
+// truncateUTF8 truncates s to at most maxBytes, ensuring the result is
+// valid UTF-8.
 func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	// Back up to a valid UTF-8 boundary
 	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
 		maxBytes--
 	}
 	return s[:maxBytes]
 }
 
-// SetArchiveStore adds conversation archive tools to the registry.
+// SetArchiveStore registers the four archive tools on the registry.
+// Together they form Thane's long-term memory surface: search across
+// past conversations, browse the catalog of sessions, pull a single
+// session in full, and grab message history by time/conversation range.
 func (r *Registry) SetArchiveStore(store *memory.ArchiveStore) {
 	r.registerArchiveSearch(store)
-	r.registerArchiveSessionList(store)
-	r.registerArchiveSessionGet(store)
+	r.registerArchiveSessions(store)
+	r.registerArchiveSessionTranscript(store)
+	r.registerArchiveRange(store)
 }
 
 func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 	r.Register(&Tool{
 		Name: "archive_search",
-		Description: "Search your conversation archive — your long-term memory of past sessions. " +
-			"Use this to recall what was discussed previously, find decisions made, " +
-			"look up things the user told you, or recover context from earlier conversations. " +
-			"Returns matching messages with surrounding conversation context, " +
-			"bounded by natural silence gaps in the conversation.",
+		Description: "Search your conversation archive — semantic search across every past " +
+			"session you've had with anyone. Use this when something jogs a memory or you " +
+			"need context from a prior conversation. Each result is the matching message " +
+			"plus the surrounding context window (bounded by natural silence gaps), so you " +
+			"see a moment in conversation, not just an isolated line. Returns JSON with " +
+			"delta-second timestamps. Pair with archive_session_transcript when a hit looks " +
+			"worth reading in full.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{
 					"type":        "string",
-					"description": "Search query — what you're looking for in past conversations",
+					"description": "What you're looking for. Semantic search — phrasing matters less than concept.",
 				},
 				"conversation_id": map[string]any{
 					"type":        "string",
-					"description": "Optional: filter to a specific conversation ID",
+					"description": "Optional: scope to one conversation. Omit to search across everything.",
 				},
 				"silence_minutes": map[string]any{
 					"type":        "number",
-					"description": "Minutes of silence that defines a conversation boundary for context expansion. Default: 10",
+					"description": "How long a silence gap before context expansion stops. Default: 10.",
 				},
 				"no_context": map[string]any{
 					"type":        "boolean",
-					"description": "If true, return only matching messages without surrounding context. Default: false",
+					"description": "If true, return only matches without surrounding context. Default: false.",
 				},
 				"limit": map[string]any{
 					"type":        "number",
-					"description": "Maximum number of results. Default: 5",
+					"description": "Max results. Default: 5.",
 				},
 			},
 			"required": []string{"query"},
 		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			query, _ := args["query"].(string)
 			if query == "" {
 				return "", fmt.Errorf("query is required")
@@ -76,7 +90,6 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 				Query: query,
 				Limit: 5,
 			}
-
 			if convID, ok := args["conversation_id"].(string); ok && convID != "" {
 				opts.ConversationID = convID
 			}
@@ -95,45 +108,46 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 				return "", fmt.Errorf("archive search: %w", err)
 			}
 
-			if len(results) == 0 {
-				return "No results found in conversation archive.", nil
+			now := time.Now()
+			data := memory.FormatSearchResults(results, now, false)
+			if len(data) > archiveResultByteCap {
+				// Re-render with a clipped result set rather than
+				// half-cutting the JSON. Drop hits from the tail until
+				// it fits.
+				clipped := results
+				for len(clipped) > 0 && len(data) > archiveResultByteCap {
+					clipped = clipped[:len(clipped)-1]
+					data = memory.FormatSearchResults(clipped, now, true)
+				}
 			}
-
-			// Cap results to prevent context flooding (182KB observed in production)
-			const maxResultBytes = 16000 // ~4K tokens — enough for useful context
-			formatted := formatSearchResults(results)
-			if len(formatted) > maxResultBytes {
-				totalLen := len(formatted)
-				formatted = truncateUTF8(formatted, maxResultBytes) + fmt.Sprintf(
-					"\n\n[Truncated: %d bytes total, showing first %d bytes. Use archive_session_transcript for full context of a specific session.]",
-					totalLen, maxResultBytes,
-				)
-			}
-			return formatted, nil
+			return string(data), nil
 		},
 	})
 }
 
-func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
+func (r *Registry) registerArchiveSessions(store *memory.ArchiveStore) {
 	r.Register(&Tool{
 		Name: "archive_sessions",
-		Description: "List past conversation sessions from the archive. " +
-			"Shows when sessions started/ended, message counts, and end reasons. " +
-			"Use to understand conversation history or find a specific session to examine.",
+		Description: "Browse your past sessions — the catalog of every closed conversation, " +
+			"newest first. Each entry shows when it happened (delta seconds), how long it " +
+			"ran, message count, title, tags, and summary. Use this when you want to flip " +
+			"through history without a specific search query, or to find a session by " +
+			"tag or title. Returns JSON. Once you spot one worth a closer look, " +
+			"archive_session_transcript pulls the full transcript.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"conversation_id": map[string]any{
 					"type":        "string",
-					"description": "Optional: filter to a specific conversation ID",
+					"description": "Optional: scope to one conversation. Omit to list across everything.",
 				},
 				"limit": map[string]any{
 					"type":        "number",
-					"description": "Maximum number of sessions to return. Default: 20",
+					"description": "Max sessions to return. Default: 20.",
 				},
 			},
 		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			convID, _ := args["conversation_id"].(string)
 			limit := 20
 			if l, ok := args["limit"].(float64); ok && l > 0 {
@@ -145,81 +159,43 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 				return "", fmt.Errorf("list sessions: %w", err)
 			}
 
-			if len(sessions) == 0 {
-				return "No sessions found in the archive.", nil
-			}
-
 			now := time.Now()
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("Found %d sessions:\n\n", len(sessions)))
-
-			for _, s := range sessions {
-				endInfo := "active"
-				if s.EndedAt != nil {
-					duration := s.EndedAt.Sub(s.StartedAt).Round(time.Minute)
-					endInfo = fmt.Sprintf("ended (%s, %s)", s.EndReason, duration)
-				}
-				title := memory.ShortID(s.ID)
-				if s.Title != "" {
-					// Sanitize: single line, cap length
-					t := strings.ReplaceAll(s.Title, "\n", " ")
-					if len(t) > 80 {
-						t = t[:80] + "…"
-					}
-					title = fmt.Sprintf("%s — %s", memory.ShortID(s.ID), t)
-				}
-				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
-					title,
-					promptfmt.FormatDelta(s.StartedAt, now),
-					s.MessageCount,
-					endInfo,
-				))
-				if s.Summary != "" {
-					sb.WriteString(fmt.Sprintf("  *%s*\n", s.Summary))
-				}
-				if len(s.Tags) > 0 {
-					sb.WriteString(fmt.Sprintf("  Tags: %s\n", strings.Join(s.Tags, ", ")))
+			data := memory.FormatSessionsList(sessions, now, false)
+			if len(data) > archiveResultByteCap {
+				clipped := sessions
+				for len(clipped) > 0 && len(data) > archiveResultByteCap {
+					clipped = clipped[:len(clipped)-1]
+					data = memory.FormatSessionsList(clipped, now, true)
 				}
 			}
-
-			return sb.String(), nil
+			return string(data), nil
 		},
 	})
 }
 
-func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
+func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) {
 	r.Register(&Tool{
 		Name: "archive_session_transcript",
-		Description: "Retrieve the full transcript of a past conversation session. " +
-			"Returns all messages in chronological order. Use after archive_sessions " +
-			"to read a specific session, or after archive_search to get full context.",
+		Description: "Read one past session in full. Pass either the full session ID or its " +
+			"first 8 characters (longer prefixes are also fine). Returns the complete " +
+			"message-by-message transcript as JSON, ordered chronologically with delta " +
+			"timestamps. Best after archive_search or archive_sessions has narrowed you to " +
+			"a specific session worth examining.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"session_id": map[string]any{
 					"type":        "string",
-					"description": "Session ID (or first 8 characters) to retrieve",
-				},
-				"format": map[string]any{
-					"type":        "string",
-					"enum":        []string{"text", "json"},
-					"description": "Output format. 'text' is human-readable, 'json' is structured. Default: text",
+					"description": "Full session ID or its first 8+ characters.",
 				},
 			},
 			"required": []string{"session_id"},
 		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			sessionID, _ := args["session_id"].(string)
 			if sessionID == "" {
 				return "", fmt.Errorf("session_id is required")
 			}
-
-			format, _ := args["format"].(string)
-			if format == "" {
-				format = "text"
-			}
-
-			// Support short IDs — look up full ID from session list
 			if len(sessionID) <= 8 {
 				fullID, err := resolveShortSessionID(store, sessionID)
 				if err != nil {
@@ -228,38 +204,109 @@ func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
 				sessionID = fullID
 			}
 
-			const maxTranscriptBytes = 32000 // ~8K tokens
-
-			if format == "json" {
-				messages, err := store.GetSessionTranscript(sessionID)
-				if err != nil {
-					return "", fmt.Errorf("get transcript: %w", err)
-				}
-				data, _ := json.MarshalIndent(messages, "", "  ")
-				result := string(data)
-				if len(result) > maxTranscriptBytes {
-					totalLen := len(result)
-					result = truncateUTF8(result, maxTranscriptBytes) + fmt.Sprintf(
-						"\n\n[Truncated: %d bytes total. Full transcript has %d messages.]",
-						totalLen, len(messages),
-					)
-				}
-				return result, nil
-			}
-
-			// Text format — use markdown export
-			md, err := store.ExportSessionMarkdown(sessionID)
+			messages, err := store.GetSessionTranscript(sessionID)
 			if err != nil {
-				return "", fmt.Errorf("export session: %w", err)
+				return "", fmt.Errorf("get transcript: %w", err)
 			}
-			if len(md) > maxTranscriptBytes {
-				totalLen := len(md)
-				md = truncateUTF8(md, maxTranscriptBytes) + fmt.Sprintf(
-					"\n\n[Truncated: %d bytes total. Use archive_search to find specific content.]",
-					totalLen,
-				)
+
+			now := time.Now()
+			data := memory.FormatRecentMessages(messages, now, false)
+			if len(data) > archiveTranscriptByteCap {
+				// Drop oldest messages first — the tail is more useful
+				// when the model is following up on a recent moment.
+				clipped := messages
+				for len(clipped) > 0 && len(data) > archiveTranscriptByteCap {
+					clipped = clipped[1:]
+					data = memory.FormatRecentMessages(clipped, now, true)
+				}
 			}
-			return md, nil
+			return string(data), nil
+		},
+	})
+}
+
+func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
+	r.Register(&Tool{
+		Name: "archive_range",
+		Description: "Pull archived messages by time range — the verbatim history tool. " +
+			"min_time / max_time accept either RFC3339 absolute timestamps or signed " +
+			"deltas (\"-1800s\" = 30 minutes ago). min_messages acts as a floor: set it " +
+			"to 50 and you'll get at least 50 of the most recent messages even on a quiet " +
+			"conversation, regardless of min_time. Filter to one conversation_id or omit " +
+			"it for everything. Crosses session boundaries — sessions are an internal " +
+			"abstraction here; this tool just gives you the messages. Returns JSON with " +
+			"delta-second timestamps and originating session IDs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"conversation_id": map[string]any{
+					"type":        "string",
+					"description": "Optional: scope to one conversation. Omit for all conversations.",
+				},
+				"min_time": map[string]any{
+					"type": "string",
+					"description": "Earliest timestamp to include. Accepts RFC3339 " +
+						"(\"2026-04-25T14:00:00Z\") or signed delta (\"-1800s\"). Omit for unbounded.",
+				},
+				"max_time": map[string]any{
+					"type":        "string",
+					"description": "Latest timestamp to include. Same format as min_time. Default: now.",
+				},
+				"min_messages": map[string]any{
+					"type": "number",
+					"description": "Floor: return at least this many of the most recent messages even if " +
+						"older than min_time. Useful for \"last X minutes OR Y messages, whichever is more.\" " +
+						"Default: 0.",
+				},
+				"max_messages": map[string]any{
+					"type":        "number",
+					"description": "Cap on results. Default: 200.",
+				},
+			},
+		},
+		Handler: func(_ context.Context, args map[string]any) (string, error) {
+			now := time.Now()
+			opts := memory.RangeOptions{}
+
+			if convID, ok := args["conversation_id"].(string); ok && convID != "" {
+				opts.ConversationID = convID
+			}
+			if v, ok := args["min_time"].(string); ok && v != "" {
+				t, err := promptfmt.ParseTimeOrDelta(v, now)
+				if err != nil {
+					return "", fmt.Errorf("min_time: %w", err)
+				}
+				opts.From = t
+			}
+			if v, ok := args["max_time"].(string); ok && v != "" {
+				t, err := promptfmt.ParseTimeOrDelta(v, now)
+				if err != nil {
+					return "", fmt.Errorf("max_time: %w", err)
+				}
+				opts.To = t
+			}
+			if n, ok := args["min_messages"].(float64); ok && n > 0 {
+				opts.MinMessages = int(n)
+			}
+			if n, ok := args["max_messages"].(float64); ok && n > 0 {
+				opts.MaxMessages = int(n)
+			}
+
+			messages, truncated, err := store.GetMessagesInRange(opts)
+			if err != nil {
+				return "", fmt.Errorf("archive range: %w", err)
+			}
+
+			data := memory.FormatRecentMessages(messages, now, truncated)
+			if len(data) > archiveResultByteCap {
+				// Drop oldest messages first to fit the byte cap.
+				clipped := messages
+				for len(clipped) > 0 && len(data) > archiveResultByteCap {
+					clipped = clipped[1:]
+					data = memory.FormatRecentMessages(clipped, now, true)
+				}
+			}
+			return string(data), nil
 		},
 	})
 }
@@ -270,14 +317,12 @@ func resolveShortSessionID(store *memory.ArchiveStore, prefix string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("list sessions: %w", err)
 	}
-
 	var matches []string
 	for _, s := range sessions {
 		if strings.HasPrefix(s.ID, prefix) {
 			matches = append(matches, s.ID)
 		}
 	}
-
 	switch len(matches) {
 	case 0:
 		return "", fmt.Errorf("no session found with prefix %q", prefix)
@@ -286,51 +331,4 @@ func resolveShortSessionID(store *memory.ArchiveStore, prefix string) (string, e
 	default:
 		return "", fmt.Errorf("ambiguous prefix %q matches %d sessions", prefix, len(matches))
 	}
-}
-
-// formatSearchResults formats archive search results for the agent.
-func formatSearchResults(results []memory.SearchResult) string {
-	now := time.Now()
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d results:\n\n", len(results)))
-
-	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("--- Result %d (session %s) ---\n", i+1, memory.ShortID(r.SessionID)))
-
-		// Context before
-		for _, m := range r.ContextBefore {
-			sb.WriteString(formatArchiveMessage(m, now))
-		}
-
-		// The match itself (highlighted)
-		sb.WriteString(fmt.Sprintf(">>> [%s] %s: %s\n",
-			promptfmt.FormatDeltaOnly(r.Match.Timestamp, now),
-			r.Match.Role,
-			r.Match.Content,
-		))
-
-		// Context after
-		for _, m := range r.ContextAfter {
-			sb.WriteString(formatArchiveMessage(m, now))
-		}
-
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func formatArchiveMessage(m memory.Message, now time.Time) string {
-	return fmt.Sprintf("    [%s] %s: %s\n",
-		promptfmt.FormatDeltaOnly(m.Timestamp, now),
-		m.Role,
-		truncate(m.Content, 500),
-	)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
