@@ -13,6 +13,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 const (
@@ -1816,10 +1817,7 @@ func formatAutomationLastTriggered(raw string, now time.Time) string {
 	if raw == "" {
 		return ""
 	}
-	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
-		return promptfmt.FormatDeltaOnly(ts, now)
-	}
-	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+	if ts, err := database.ParseTimestamp(raw); err == nil {
 		return promptfmt.FormatDeltaOnly(ts, now)
 	}
 	return raw
