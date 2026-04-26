@@ -493,18 +493,17 @@ func TestValidate_CapabilityTagEmptyDescription(t *testing.T) {
 	}
 }
 
-func TestValidate_CapabilityTagEmptyTools(t *testing.T) {
+func TestValidate_CapabilityTagEmptyToolsAllowed(t *testing.T) {
+	// Tags can exist purely to gate content (talents, KB articles via
+	// tags_all/tags frontmatter, tag-context providers) without owning
+	// any tools. Validation must allow that shape.
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"custom": {Description: "Web search", Tools: nil},
+		"signal_channel": {Description: "Runtime gate for Signal-channel context.", Tools: nil},
 	}
 
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for empty tools")
-	}
-	if !strings.Contains(err.Error(), "capability_tags.custom.tools") {
-		t.Errorf("error should mention capability_tags.custom.tools, got: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("content-only tag rejected: %v", err)
 	}
 }
 
@@ -532,21 +531,21 @@ func TestValidate_CapabilityTagValid(t *testing.T) {
 	}
 }
 
-func TestValidate_CapabilityTagNoTools(t *testing.T) {
+func TestValidate_CapabilityTagContentOnlyValid(t *testing.T) {
+	// Companion of TestValidate_CapabilityTagEmptyToolsAllowed — a
+	// purely content-gating tag (no tools, just a description) is a
+	// valid first-class shape after the empty-tools requirement was
+	// dropped.
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
 		"docs": {
 			Description: "Documentation context",
-			Tools:       nil, // tools are required
+			Tools:       nil,
 		},
 	}
 
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for tag with no tools")
-	}
-	if !strings.Contains(err.Error(), "capability_tags.docs.tools") {
-		t.Errorf("error should mention capability_tags.docs.tools, got: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("content-only tag rejected: %v", err)
 	}
 }
 
