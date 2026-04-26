@@ -47,13 +47,6 @@ func ToolDefinition() map[string]any {
 				"default":     true,
 				"description": "Whether to inherit elective capability tags from the caller. Runtime and channel affordance tags such as message_channel are never inherited.",
 			},
-			"path_prefixes": map[string]any{
-				"type":                 "object",
-				"additionalProperties": map[string]any{"type": "string"},
-				"description": "Map of short prefix names to full directory paths. " +
-					"The delegate can use 'prefix/rest' in file tool paths instead of the full path. " +
-					"Use this to pass pre-resolved paths so the delegate skips discovery.",
-			},
 		},
 		"required": []string{"task"},
 	}
@@ -102,29 +95,19 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			}
 		}
 
-		var pathPrefixes map[string]string
-		if rawPrefixes, ok := args["path_prefixes"].(map[string]any); ok {
-			pathPrefixes = make(map[string]string, len(rawPrefixes))
-			for k, v := range rawPrefixes {
-				if s, ok := v.(string); ok {
-					pathPrefixes[k] = s
-				}
-			}
-		}
-
 		opts := executionOptions{
 			inheritCallerTags: inheritCallerTags,
 			explicitTagScope:  tagsProvided,
 		}
 		if mode == "async" {
-			loopID, err := exec.startBackground(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+			loopID, err := exec.startBackground(ctx, task, profileName, guidance, tags, opts)
 			if err != nil {
 				return fmt.Sprintf("[Delegate error: profile=%s, mode=%s] %s", profileName, mode, err.Error()), nil
 			}
 			return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID), nil
 		}
 
-		result, err := exec.execute(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+		result, err := exec.execute(ctx, task, profileName, guidance, tags, opts)
 		if err != nil {
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}

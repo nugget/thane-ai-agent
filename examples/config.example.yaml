@@ -974,10 +974,3 @@ logging:
   # files are written. Relative paths are resolved from the working
   # directory. Defaults to {logging.root}/archive when unset.
   content_archive_dir: ""
-
-#
-# (optional) LogLevel is deprecated; use Logging.Level instead.
-# log_level: ""
-#
-# (optional) LogFormat is deprecated; use Logging.Format instead.
-# log_format: ""
