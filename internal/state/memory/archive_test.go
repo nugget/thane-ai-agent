@@ -1890,3 +1890,47 @@ func TestGetMessagesInRange_ExcludeSessionIDFloorPath(t *testing.T) {
 		}
 	}
 }
+
+func TestGetMessagesInRange_ExcludeSessionIDPreservesNullRows(t *testing.T) {
+	// Regression for PR #762 review: SQL three-valued logic means
+	// `session_id != ?` silently drops NULL rows. The unified messages
+	// table has nullable session_id, so the exclusion predicate must
+	// preserve NULL rows and only filter the named session.
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	insert("conv-1", "active", "user", "active-msg", base.Add(1*time.Minute))
+	insert("conv-1", "archived", "user", "archived-msg", base.Add(2*time.Minute))
+
+	// Hand-insert a row with NULL session_id, mirroring rows from
+	// before session-stamping or any other write path that leaves
+	// session_id unset.
+	if _, err := store.msgDB().Exec(`
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, status)
+		VALUES (?, ?, ?, ?, ?, 'active')
+	`, "msg-null", "conv-1", "user", "null-session-msg", base.Add(3*time.Minute)); err != nil {
+		t.Fatalf("insert null-session row: %v", err)
+	}
+
+	got, _, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID:   "conv-1",
+		ExcludeSessionID: "active",
+		To:               base.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := make(map[string]bool)
+	for _, m := range got {
+		contents[m.Content] = true
+	}
+	if contents["active-msg"] {
+		t.Error("active session message leaked through exclusion")
+	}
+	if !contents["archived-msg"] {
+		t.Error("archived session message missing")
+	}
+	if !contents["null-session-msg"] {
+		t.Error("NULL session_id row dropped — exclusion should preserve NULLs")
+	}
+}

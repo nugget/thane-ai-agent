@@ -2142,7 +2142,13 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID, excludeSessionID string
 		args = append(args, conversationID)
 	}
 	if excludeSessionID != "" {
-		clauses = append(clauses, "session_id != ?")
+		// `session_id != ?` would silently drop rows whose session_id
+		// is NULL — SQL three-valued logic returns NULL on `NULL != x`
+		// and the WHERE clause treats that as false. The unified
+		// messages table has nullable session_id (rows can predate
+		// session-stamping), so we want NULL rows preserved and only
+		// the named session excluded.
+		clauses = append(clauses, "(session_id IS NULL OR session_id != ?)")
 		args = append(args, excludeSessionID)
 	}
 	args = append(args, limit)
