@@ -179,10 +179,5 @@ func (a *App) initLogging(augmentedDirs []string) error {
 		}
 	}
 
-	// Warn about deprecated config fields.
-	if depLevel, depFormat := cfg.DeprecatedFieldsUsed(); depLevel || depFormat {
-		logger.Warn("log_level/log_format are deprecated; use logging.level/logging.format instead")
-	}
-
 	return nil
 }

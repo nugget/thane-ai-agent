@@ -119,48 +119,6 @@ companion:
 	}
 }
 
-func TestLoad_LegacyPlatformConfigMigratesToCompanion(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(`
-platform:
-  enabled: true
-  providers:
-    nugget:
-      tokens: ["legacy-secret"]
-`), 0600)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	if !cfg.Companion.Configured() {
-		t.Fatal("expected legacy platform config to configure companion")
-	}
-	if got := cfg.Companion.TokenIndex()["legacy-secret"]; got != "nugget" {
-		t.Fatalf("token index = %q, want nugget", got)
-	}
-}
-
-func TestLoad_CompanionAndLegacyPlatformConflict(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte(`
-companion:
-  enabled: false
-platform:
-  enabled: false
-`), 0600)
-
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected conflict error")
-	}
-	if !strings.Contains(err.Error(), "both companion and deprecated platform") {
-		t.Fatalf("error = %v, want companion/platform conflict", err)
-	}
-}
-
 func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -648,78 +606,6 @@ func TestApplyDefaults_Logging(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_LoggingMigration(t *testing.T) {
-	tests := []struct {
-		name      string
-		logLevel  string
-		logFormat string
-		wantLevel string
-		wantFmt   string
-	}{
-		{
-			name:      "legacy log_level migrates",
-			logLevel:  "debug",
-			wantLevel: "debug",
-			wantFmt:   "json", // new default
-		},
-		{
-			name:      "legacy log_format migrates",
-			logFormat: "text",
-			wantLevel: "info",
-			wantFmt:   "text",
-		},
-		{
-			name:      "both legacy fields migrate",
-			logLevel:  "warn",
-			logFormat: "text",
-			wantLevel: "warn",
-			wantFmt:   "text",
-		},
-		{
-			name:      "no legacy fields uses new defaults",
-			wantLevel: "info",
-			wantFmt:   "json",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				LogLevel:  tt.logLevel,
-				LogFormat: tt.logFormat,
-			}
-			cfg.applyDefaults()
-
-			if cfg.Logging.Level != tt.wantLevel {
-				t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, tt.wantLevel)
-			}
-			if cfg.Logging.Format != tt.wantFmt {
-				t.Errorf("Logging.Format = %q, want %q", cfg.Logging.Format, tt.wantFmt)
-			}
-		})
-	}
-}
-
-func TestApplyDefaults_LoggingNewFieldsOverrideLegacy(t *testing.T) {
-	// When both new and legacy fields are set, new fields win.
-	cfg := &Config{
-		LogLevel:  "debug",
-		LogFormat: "text",
-		Logging: LoggingConfig{
-			Level:  "warn",
-			Format: "json",
-		},
-	}
-	cfg.applyDefaults()
-
-	if cfg.Logging.Level != "warn" {
-		t.Errorf("Logging.Level = %q, want %q (new field should win)", cfg.Logging.Level, "warn")
-	}
-	if cfg.Logging.Format != "json" {
-		t.Errorf("Logging.Format = %q, want %q (new field should win)", cfg.Logging.Format, "json")
-	}
-}
-
 func TestValidate_LoggingInvalidLevel(t *testing.T) {
 	cfg := Default()
 	cfg.Logging.Level = "bogus"
@@ -870,30 +756,6 @@ func TestValidate_LoggingInvalidStdoutFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "logging.stdout.format") {
 		t.Errorf("error %q should mention logging.stdout.format", err)
-	}
-}
-
-func TestConfig_DeprecatedFieldsUsed(t *testing.T) {
-	cfg := &Config{LogLevel: "debug"}
-	lvl, fmt := cfg.DeprecatedFieldsUsed()
-	if !lvl {
-		t.Error("expected level=true when LogLevel is set")
-	}
-	if fmt {
-		t.Error("expected format=false when LogFormat is empty")
-	}
-}
-
-func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
-	// A config with no legacy fields should NOT trigger deprecation warnings,
-	// even after applyDefaults has run.
-	cfg := Default()
-	lvl, format := cfg.DeprecatedFieldsUsed()
-	if lvl {
-		t.Error("expected level=false on fresh config, got true")
-	}
-	if format {
-		t.Error("expected format=false on fresh config, got true")
 	}
 }
 

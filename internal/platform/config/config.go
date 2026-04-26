@@ -322,14 +322,6 @@ type Config struct {
 	// Logging configures Thane's filesystem datasets, stdout policy, and
 	// queryable request/log retention.
 	Logging LoggingConfig `yaml:"logging"`
-
-	// LogLevel is deprecated; use Logging.Level instead.
-	// Kept for backwards compatibility — migrated in [Config.applyDefaults].
-	LogLevel string `yaml:"log_level"`
-
-	// LogFormat is deprecated; use Logging.Format instead.
-	// Kept for backwards compatibility — migrated in [Config.applyDefaults].
-	LogFormat string `yaml:"log_format"`
 }
 
 // PricingEntry defines per-million-token costs for a model in USD.
@@ -557,12 +549,6 @@ func datasetEnabled(cfg LoggingDatasetConfig, defaultValue bool) bool {
 		return defaultValue
 	}
 	return *cfg.Enabled
-}
-
-// DeprecatedFieldsUsed reports whether the legacy top-level log_level or
-// log_format fields are set. Callers use this to emit deprecation warnings.
-func (c *Config) DeprecatedFieldsUsed() (level, format bool) {
-	return c.LogLevel != "", c.LogFormat != ""
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -1747,44 +1733,6 @@ func Load(path string) (*Config, error) {
 // platform section to companion. The old key is accepted for existing
 // installations, but generated config and new deployments should use
 // companion.
-func (c *Config) UnmarshalYAML(node *yaml.Node) error {
-	type rawConfig Config
-	var raw rawConfig
-	if err := node.Decode(&raw); err != nil {
-		return err
-	}
-
-	hasCompanion := yamlMappingHasKey(node, "companion")
-	hasLegacyPlatform := yamlMappingHasKey(node, "platform")
-	if hasCompanion && hasLegacyPlatform {
-		return fmt.Errorf("config contains both companion and deprecated platform sections; use companion")
-	}
-	if hasLegacyPlatform {
-		var legacy struct {
-			Platform CompanionConfig `yaml:"platform"`
-		}
-		if err := node.Decode(&legacy); err != nil {
-			return err
-		}
-		raw.Companion = legacy.Platform
-	}
-
-	*c = Config(raw)
-	return nil
-}
-
-func yamlMappingHasKey(node *yaml.Node, key string) bool {
-	if node == nil || node.Kind != yaml.MappingNode {
-		return false
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return true
-		}
-	}
-	return false
-}
-
 // applyDefaults fills zero-value fields with sensible defaults. It is
 // called automatically by [Load] and [Default]. After this method
 // returns, callers can read any field without conditional fallbacks.
@@ -1792,17 +1740,6 @@ func yamlMappingHasKey(node *yaml.Node, key string) bool {
 // Cross-field defaults are resolved here too — for example,
 // Embeddings.BaseURL defaults to Models.OllamaURL when unset.
 func (c *Config) applyDefaults() {
-	// --- Logging migration: deprecated top-level fields → Logging struct ---
-	// If the user still has log_level / log_format at the top level and
-	// hasn't set the new Logging.Level / Logging.Format, migrate silently.
-	// The deprecated fields are validated later and warned at startup.
-	if c.Logging.Level == "" && c.LogLevel != "" {
-		c.Logging.Level = c.LogLevel
-	}
-	if c.Logging.Format == "" && c.LogFormat != "" {
-		c.Logging.Format = c.LogFormat
-	}
-
 	// Root/Dir use *string pointers — nil defaults to "logs" via
 	// RootPath()/DirPath(). Explicit empty string disables filesystem
 	// logging entirely.
@@ -1818,10 +1755,6 @@ func (c *Config) applyDefaults() {
 	if c.Logging.Stdout.Format == "" {
 		c.Logging.Stdout.Format = c.Logging.Format
 	}
-
-	// Note: we intentionally do NOT back-sync Logging.Format → LogFormat.
-	// The deprecated fields are only populated if the user's YAML set them.
-	// DeprecatedFieldsUsed() relies on that to emit warnings accurately.
 
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
@@ -2080,17 +2013,6 @@ func (c *Config) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("logging.stdout.format %q invalid (expected text or json)", c.Logging.Stdout.Format)
-	}
-	if c.LogLevel != "" {
-		if _, err := ParseLogLevel(c.LogLevel); err != nil {
-			return err
-		}
-	}
-	switch c.LogFormat {
-	case "text", "json", "":
-		// valid
-	default:
-		return fmt.Errorf("log_format %q invalid (expected text or json)", c.LogFormat)
 	}
 	if c.Timezone != "" {
 		if _, err := time.LoadLocation(c.Timezone); err != nil {
