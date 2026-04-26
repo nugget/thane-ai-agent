@@ -166,7 +166,9 @@ channel_tags: {}
 `channel_tags` pins broad optional capability families for requests from
 a source. Use it for coarse source defaults only. Runtime facts such as
 current message-channel affordances and owner identity are asserted by
-the integrations that know them, not configured here.
+the integrations that know them, not configured here. Do not put
+`message_channel` or `owner` in `channel_tags`; Thane skips those
+runtime-only tags from source defaults.
 
 ## Memory & Storage
 

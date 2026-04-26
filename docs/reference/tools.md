@@ -273,7 +273,7 @@ See [MQTT](../operating/mqtt.md) for the broker-side conventions.
 Normalized tools for the active message-app channel. Providers such as
 Signal adapt these calls to their native APIs. Inbound message-app
 bridges assert this capability as a runtime fact; it does not need to be
-listed in `channel_tags`.
+listed in `channel_tags` or contact `origin_tags`.
 
 | Tool | Description |
 |------|-------------|

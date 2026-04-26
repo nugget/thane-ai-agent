@@ -20,7 +20,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"loops":           {Description: "Live loop status, sleep control, notifications, ad hoc spawn, and durable loop-definition authoring tools."},
 	"media":           {Description: "Coarse entry point for transcripts, feeds, and media analysis. Usually leads to media, feeds, attachments, or web.", Menu: true},
 	"memory":          {Description: "Persistent fact memory and working-memory tools."},
-	"message_channel": {Description: "Current message-app conversation affordances, such as reactions, normalized across Signal, Matrix, iMessage, and similar providers."},
+	"message_channel": {Description: "Current message-app conversation affordances, such as reactions, normalized across Signal, Matrix, iMessage, and similar providers.", Protected: true},
 	"models":          {Description: "Model registry inspection, routing, and policy tools."},
 	"mqtt":            {Description: "MQTT wake subscription management tools."},
 	"notifications":   {Description: "Notification delivery, escalation, and actionable response tools."},

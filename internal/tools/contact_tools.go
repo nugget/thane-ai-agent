@@ -74,7 +74,7 @@ func (r *Registry) registerContactTools() {
 				"origin_tags": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Capability tags to pin automatically when this contact is the session origin. Do not use this for owner; owner is asserted from trusted runtime identity.",
+					"description": "Capability tags to pin automatically when this contact is the session origin. Do not use this for owner or message_channel; those are asserted from trusted runtime identity.",
 				},
 				"origin_context_refs": map[string]any{
 					"type":        "array",
