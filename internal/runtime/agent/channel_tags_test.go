@@ -640,7 +640,7 @@ func TestSessionOrigin_RuntimeOnlyTagsRequireTrustedRuntimeSource(t *testing.T) 
 		},
 	}
 
-	loop := buildTestLoop(mock, []string{"owner_tool", "send_reaction", "signal_tool", "project_tool"})
+	loop := buildTestLoop(mock, []string{"owner_tool", "send_reaction", "signal_tool", "project_tool", "protected_tool"})
 	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
 		"owner": {
 			Description: "Owner-scoped privileged tools.",
@@ -660,14 +660,19 @@ func TestSessionOrigin_RuntimeOnlyTagsRequireTrustedRuntimeSource(t *testing.T) 
 			Description: "Project context.",
 			Tools:       []string{"project_tool"},
 		},
+		"protected_custom": {
+			Description: "Future protected runtime surface.",
+			Tools:       []string{"protected_tool"},
+			Protected:   true,
+		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
-		"signal": {"signal", "message_channel", "owner"},
+		"signal": {"signal", "message_channel", "owner", "protected_custom"},
 	})
 	loop.UseContactLookup(&mockContactLookup{
 		policies: map[string]*ContactOriginPolicy{
 			"David": {
-				Tags: []string{"projects", "message_channel", "owner"},
+				Tags: []string{"projects", "message_channel", "owner", "protected_custom"},
 			},
 		},
 	})
@@ -690,26 +695,26 @@ func TestSessionOrigin_RuntimeOnlyTagsRequireTrustedRuntimeSource(t *testing.T) 
 			t.Fatalf("%s should be available from source/contact policy: %v", want, names)
 		}
 	}
-	for _, unwanted := range []string{"send_reaction", "owner_tool"} {
+	for _, unwanted := range []string{"send_reaction", "owner_tool", "protected_tool"} {
 		if hasName(names, unwanted) {
 			t.Fatalf("%s should not be available from source/contact policy: %v", unwanted, names)
 		}
 	}
 
 	originCtx := parseSessionOriginContext(t, mock.calls[0].Messages[0].Content)
-	for _, unwanted := range []string{"message_channel", "owner"} {
+	for _, unwanted := range []string{"message_channel", "owner", "protected_custom"} {
 		if containsString(originCtx.Tags, unwanted) {
 			t.Fatalf("origin tags = %#v, should not include runtime-only %s", originCtx.Tags, unwanted)
 		}
 	}
 	if rule, ok := appliedRuleBySource(originCtx.Applied, "channel_tags"); !ok {
 		t.Fatalf("origin applied rules missing channel_tags: %#v", originCtx.Applied)
-	} else if !containsString(rule.Tags, "signal") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") {
+	} else if !containsString(rule.Tags, "signal") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") || containsString(rule.Tags, "protected_custom") {
 		t.Fatalf("channel_tags rule = %#v, want only broad source tags", rule)
 	}
 	if rule, ok := appliedRuleBySource(originCtx.Applied, "contacts"); !ok {
 		t.Fatalf("origin applied rules missing contacts: %#v", originCtx.Applied)
-	} else if !containsString(rule.Tags, "projects") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") {
+	} else if !containsString(rule.Tags, "projects") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") || containsString(rule.Tags, "protected_custom") {
 		t.Fatalf("contacts rule = %#v, want only contact-origin optional tags", rule)
 	}
 }

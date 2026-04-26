@@ -485,7 +485,7 @@ func (l *Loop) filterRuntimePinnedTags(origin SessionOrigin, tags []string) []st
 	return l.filterOriginPinnedTagsForSource(origin, tags, "runtime")
 }
 
-func (l *Loop) filterOriginPinnedTagsForSource(origin SessionOrigin, tags []string, source string) []string {
+func (l *Loop) filterOriginPinnedTagsForSource(origin SessionOrigin, tags []string, policySource string) []string {
 	if len(tags) == 0 || l.capTags == nil {
 		return nil
 	}
@@ -498,11 +498,24 @@ func (l *Loop) filterOriginPinnedTagsForSource(origin SessionOrigin, tags []stri
 			}
 			continue
 		}
-		if source != "runtime" && runtimeOnlyOriginTag(tag) {
+		if policySource != "runtime" && runtimeOnlyOriginTag(tag) {
 			if l.logger != nil {
 				l.logger.Warn("session origin policy skipped runtime-only tag",
 					"tag", tag,
-					"source", origin.Source,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
+					"channel", origin.Channel,
+					"contact_name", origin.ContactName,
+				)
+			}
+			continue
+		}
+		if policySource != "runtime" && cfg.Protected {
+			if l.logger != nil {
+				l.logger.Warn("session origin policy skipped protected tag",
+					"tag", tag,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
 					"channel", origin.Channel,
 					"contact_name", origin.ContactName,
 				)
@@ -513,7 +526,8 @@ func (l *Loop) filterOriginPinnedTagsForSource(origin SessionOrigin, tags []stri
 			if l.logger != nil {
 				l.logger.Warn("session origin policy skipped protected tag",
 					"tag", tag,
-					"source", origin.Source,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
 					"channel", origin.Channel,
 					"contact_name", origin.ContactName,
 				)
