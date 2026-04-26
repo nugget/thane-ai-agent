@@ -169,7 +169,7 @@ func parseCompanionTimeArg(args map[string]any, key string, fallback time.Time) 
 
 	ts, err := database.ParseTimestamp(value)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%s must be RFC3339 (got %q)", key, value)
+		return time.Time{}, fmt.Errorf("%s must be a valid timestamp (RFC3339, RFC3339Nano, or YYYY-MM-DD HH:MM:SS) (got %q)", key, value)
 	}
 	return ts, nil
 }

@@ -173,11 +173,21 @@ func TestFormatRecentMessages_ContentTruncation(t *testing.T) {
 	if parsed.Messages[1].ContentTruncated {
 		t.Error("short message should not be flagged content_truncated")
 	}
-	// Schema stability: session_id is always present, even when empty
-	// upstream — drop omitempty was a deliberate choice in this file.
-	for i, m := range parsed.Messages {
-		if m.SessionID == "" {
-			t.Errorf("messages[%d].SessionID empty — schema invariant violated", i)
+
+	// Schema stability: session_id is always *present* in the JSON,
+	// even when its value is empty. Inspect the raw object map so the
+	// assertion catches an `omitempty` regression — checking the
+	// SessionID field on a typed struct can't distinguish "key absent"
+	// from "key present with empty string."
+	var raw struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	for i, m := range raw.Messages {
+		if _, ok := m["session_id"]; !ok {
+			t.Errorf("messages[%d] missing session_id key — schema invariant violated", i)
 		}
 	}
 }

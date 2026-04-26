@@ -100,8 +100,9 @@ func FormatRecentMessages(messages []Message, now time.Time, truncated bool) []b
 
 // FormatSearchResults renders archive search hits as JSON. Each result
 // carries the matched message plus the surrounding context window in
-// chronological order. SessionID is emitted on every message; for
-// context messages around a match it equals the match's session.
+// chronological order. SessionID is emitted on every message; context
+// messages may belong to a different session than the match because
+// context expansion is bounded by silence gaps, not session edges.
 func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) []byte {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
