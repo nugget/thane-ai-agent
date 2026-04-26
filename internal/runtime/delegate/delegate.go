@@ -2,7 +2,6 @@ package delegate
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,18 +12,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
-	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -170,31 +165,6 @@ func mergeTagLists(tagGroups ...[]string) []string {
 	return merged
 }
 
-func (e *Executor) buildLegacySystemPrompt(ctx context.Context, effectiveTags map[string]bool, pathPrefixes map[string]string) string {
-	var sb strings.Builder
-	sb.WriteString(prompts.BaseSystemPrompt())
-	sb.WriteString("\n\n## Delegate Execution Contract\n\n")
-	sb.WriteString(prompts.DelegateRunInstructions)
-	sb.WriteString("\n\n")
-	sb.WriteString(awareness.CurrentConditions(e.timezone))
-
-	if e.tagCtxFunc != nil && len(effectiveTags) > 0 {
-		if tagCtx := e.tagCtxFunc(ctx, effectiveTags); tagCtx != "" {
-			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(tagCtx)
-		}
-	} else if e.forgeContext != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(e.forgeContext)
-	}
-
-	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(prefixPrompt)
-	}
-	return sb.String()
-}
-
 // ToolCallOutcome records the name and success/failure of a single tool
 // invocation during delegate execution.
 type ToolCallOutcome struct {
@@ -223,41 +193,32 @@ type labelExpander interface {
 	ExpandLabels(convID, text string) string
 }
 
-// tagContextFunc builds capability context for a set of active tags.
-// The function should snapshot any mutable state (e.g., live providers)
-// at call time. Wired in main.go as a closure over the loop and assembler.
-type tagContextFunc func(ctx context.Context, activeTags map[string]bool) string
-
 // Executor runs delegate sub-agent tasks.
 type Executor struct {
-	logger              *slog.Logger
-	llm                 llm.Client
-	router              *router.Router
-	parentReg           *tools.Registry
-	profiles            map[string]*Profile
-	timezone            string
-	defaultModel        string
-	archiver            *memory.ArchiveStore
-	tempFiles           labelExpander
-	usageStore          *usage.Store
-	pricing             map[string]config.PricingEntry
-	usageCatalog        *fleet.Catalog
-	modelRegistry       *fleet.Registry
-	alwaysActiveTags    []string
-	lensProvider        func() []string // returns active global lenses (nil = none)
-	forgeContext        string
-	tagCtxFunc          tagContextFunc // nil-safe — replaces forgeContext when set
-	eventBus            *events.Bus
-	liveRequestRecorder logging.RequestRecordFunc
-	requestRecorder     logging.RequestRecordFunc
-	loopRunner          looppkg.Runner
-	loopRegistry        *looppkg.Registry
-	completionSink      looppkg.CompletionSink
-	sessionArchiver     agent.SessionArchiver
-	conversations       *memory.SQLiteStore
+	logger           *slog.Logger
+	llm              llm.Client
+	router           *router.Router
+	parentReg        *tools.Registry
+	profiles         map[string]*Profile
+	timezone         string
+	defaultModel     string
+	archiver         *memory.ArchiveStore
+	tempFiles        labelExpander
+	alwaysActiveTags []string
+	lensProvider     func() []string // returns active global lenses (nil = none)
+	eventBus         *events.Bus
+	loopRunner       looppkg.Runner
+	loopRegistry     *looppkg.Registry
+	completionSink   looppkg.CompletionSink
+	sessionArchiver  agent.SessionArchiver
+	conversations    *memory.SQLiteStore
 }
 
-// NewExecutor creates a delegate executor.
+// NewExecutor creates a delegate executor. The returned executor is not
+// usable until [Executor.ConfigureLoopExecution] has been called with a
+// non-nil runner and registry; without those, [Executor.Execute] and
+// [Executor.StartBackground] will fail. The remaining Configure* and
+// Set* methods supply optional cross-cutting wiring.
 func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, parentReg *tools.Registry, defaultModel string) *Executor {
 	return &Executor{
 		logger:       logger,
@@ -304,8 +265,8 @@ type ProfileOverride struct {
 	MaxTokens   int
 }
 
-// SetTimezone configures the IANA timezone for Current Conditions in
-// legacy delegate prompt assembly.
+// SetTimezone configures the IANA timezone used in delegate logging and
+// archive metadata.
 func (e *Executor) SetTimezone(tz string) {
 	e.timezone = tz
 }
@@ -328,33 +289,11 @@ func (e *Executor) SetTempFileStore(tfs interface {
 	e.tempFiles = tfs
 }
 
-// SetUsageRecorder configures persistent token usage recording for
-// delegate executions. When set, every delegate completion is persisted
-// for cost attribution.
-func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *fleet.Catalog) {
-	e.usageStore = store
-	e.pricing = pricing
-	e.usageCatalog = cat
-}
-
-// UseModelRegistry configures the live model registry used for
-// runtime usage attribution and deployment metadata resolution.
-func (e *Executor) UseModelRegistry(registry *fleet.Registry) {
-	e.modelRegistry = registry
-}
-
 // SetEventBus configures the event bus for delegate lifecycle events.
 // When set, each Execute call publishes spawn and complete events so
 // the dashboard can render delegates as ephemeral child nodes.
 func (e *Executor) SetEventBus(bus *events.Bus) {
 	e.eventBus = bus
-}
-
-// SetForgeContext configures the forge account context block used by
-// legacy delegate prompt assembly. Loop-backed delegates receive this
-// kind of context through the normal loop context providers.
-func (e *Executor) SetForgeContext(ctx string) {
-	e.forgeContext = ctx
 }
 
 // SetAlwaysActiveTags configures the capability tags that are
@@ -370,25 +309,6 @@ func (e *Executor) SetAlwaysActiveTags(tags []string) {
 // effective tag set so lens-tagged KB articles and talents apply.
 func (e *Executor) SetLensProvider(fn func() []string) {
 	e.lensProvider = fn
-}
-
-// SetTagContextFunc configures the legacy tag context builder function
-// for injecting capability context. Loop-backed delegates use the normal
-// loop prompt assembly path.
-func (e *Executor) SetTagContextFunc(fn tagContextFunc) {
-	e.tagCtxFunc = fn
-}
-
-// SetRequestRecorder configures request detail recording for delegate
-// executions.
-func (e *Executor) SetRequestRecorder(recorder logging.RequestRecordFunc) {
-	e.requestRecorder = recorder
-}
-
-// UseLiveRequestRecorder configures live request detail recording for
-// in-flight delegate turns.
-func (e *Executor) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
-	e.liveRequestRecorder = recorder
 }
 
 // ConfigureLoopExecution configures loop-backed delegate execution. When both
@@ -428,24 +348,24 @@ func (e *Executor) ProfileNames() []string {
 // Capability tags define the delegate's tool and context scope. Elective
 // caller tags are inherited by default; compatibility profiles may add
 // default tags only when the caller did not request an explicit scope.
-func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
-	return e.execute(ctx, task, profileName, guidance, tags, pathPrefixes, defaultExecutionOptions())
+func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (*Result, error) {
+	return e.execute(ctx, task, profileName, guidance, tags, defaultExecutionOptions())
 }
 
-func (e *Executor) execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*Result, error) {
-	if e.loopRunner != nil && e.loopRegistry != nil {
-		return e.executeViaLoop(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+func (e *Executor) execute(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*Result, error) {
+	if e.loopRunner == nil || e.loopRegistry == nil {
+		return nil, fmt.Errorf("delegate execution requires loops-ng wiring; call ConfigureLoopExecution before Execute")
 	}
-	return e.executeLegacy(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+	return e.executeViaLoop(ctx, task, profileName, guidance, tags, opts)
 }
 
 // StartBackground launches a detached delegate loop that reports its
 // completion back into the current conversation.
-func (e *Executor) StartBackground(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (string, error) {
-	return e.startBackground(ctx, task, profileName, guidance, tags, pathPrefixes, defaultExecutionOptions())
+func (e *Executor) StartBackground(ctx context.Context, task, profileName, guidance string, tags []string) (string, error) {
+	return e.startBackground(ctx, task, profileName, guidance, tags, defaultExecutionOptions())
 }
 
-func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (string, error) {
+func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (string, error) {
 	if e.loopRunner == nil || e.loopRegistry == nil {
 		return "", fmt.Errorf("background delegation requires loops-ng execution")
 	}
@@ -453,7 +373,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 		return "", fmt.Errorf("background delegation requires a completion sink")
 	}
 
-	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, opts)
 	if err != nil {
 		return "", err
 	}
@@ -492,416 +412,6 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 	return launchResult.LoopID, nil
 }
 
-func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (delegateResult *Result, delegateErr error) {
-	if task == "" {
-		return nil, fmt.Errorf("task is required")
-	}
-
-	// Generate a unique delegate ID for log correlation.
-	delegateID, _ := uuid.NewV7()
-	did := delegateID.String()
-
-	// Create an archive session for this delegate execution so it
-	// appears in the session inspector alongside user conversations.
-	convID := "delegate-" + did[:8]
-
-	// Context logger inherits upstream fields (request_id, session,
-	// conversation from the agent loop) and adds delegate-specific trace
-	// fields so all downstream code (tool implementations) gets the
-	// full trace chain.
-	log := logging.Logger(ctx).With(
-		"subsystem", logging.SubsystemDelegate,
-		"delegate_id", did,
-	)
-	ctx = logging.WithLogger(ctx, log)
-
-	var archiveSessionID string
-	if e.archiver != nil {
-		parentSessionID := tools.SessionIDFromContext(ctx)
-		parentToolCallID := tools.ToolCallIDFromContext(ctx)
-
-		var opts []memory.SessionOption
-		if parentSessionID != "" {
-			opts = append(opts, memory.WithParentSession(parentSessionID))
-		}
-		if parentToolCallID != "" {
-			opts = append(opts, memory.WithParentToolCall(parentToolCallID))
-		}
-		if binding := tools.ChannelBindingFromContext(ctx); binding != nil {
-			opts = append(opts, memory.WithChannelBinding(binding))
-		}
-
-		sess, err := e.archiver.StartSessionWithOptions(convID, opts...)
-		if err != nil {
-			log.Warn("failed to create archive session for delegate", "error", err)
-		} else {
-			archiveSessionID = sess.ID
-		}
-	}
-
-	profile := e.profiles[profileName]
-	if profile == nil {
-		profile = e.profiles["general"]
-	}
-	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags, opts.explicitTagScope)
-	if len(droppedTags) > 0 {
-		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
-	}
-	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
-
-	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
-
-	toolDefs := reg.List()
-	toolNames := reg.AllToolNames()
-	sort.Strings(toolNames)
-
-	log = log.With("profile", profile.Name)
-	ctx = logging.WithLogger(ctx, log)
-
-	log.Info("delegate started",
-		"task", truncate(task, 200),
-		"guidance", truncate(guidance, 200),
-		"tags", scopeTags,
-		"inherited_tags", inheritedTags,
-		"profile_default_tags", profileDefaultTags,
-		"tools_available", len(toolDefs),
-	)
-
-	// Publish spawn event so the dashboard can render an ephemeral child node.
-	parentLoopID := tools.LoopIDFromContext(ctx)
-	e.eventBus.Publish(events.Event{
-		Timestamp: time.Now(),
-		Source:    events.SourceDelegate,
-		Kind:      events.KindSpawn,
-		Data: map[string]any{
-			"delegate_id":    did,
-			"parent_loop_id": parentLoopID,
-			"profile":        profile.Name,
-			"task":           truncate(task, 200),
-			"guidance":       truncate(guidance, 200),
-			"tags":           scopeTags,
-			"name":           "delegate-" + did[:8],
-		},
-	})
-
-	// Build effective tag set: scoped tags + always-active + global lenses.
-	merged := make(map[string]bool, len(scopeTags)+len(e.alwaysActiveTags))
-	for _, t := range scopeTags {
-		merged[t] = true
-	}
-	for _, t := range e.alwaysActiveTags {
-		merged[t] = true
-	}
-	if e.lensProvider != nil {
-		for _, lens := range e.lensProvider() {
-			merged[lens] = true
-		}
-	}
-	systemPrompt := e.buildLegacySystemPrompt(ctx, merged, pathPrefixes)
-
-	// Expand temp file labels so the delegate sees real paths.
-	if e.tempFiles != nil {
-		convID := tools.ConversationIDFromContext(ctx)
-		task = e.tempFiles.ExpandLabels(convID, task)
-		if guidance != "" {
-			guidance = e.tempFiles.ExpandLabels(convID, guidance)
-		}
-	}
-
-	// Build user message.
-	var userMsg strings.Builder
-	userMsg.WriteString(task)
-	if guidance != "" {
-		userMsg.WriteString("\n\nGuidance: ")
-		userMsg.WriteString(guidance)
-	}
-
-	messages := []llm.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userMsg.String()},
-	}
-
-	// Select model via router.
-	model := e.selectModel(ctx, task, profile, len(toolDefs))
-	e.seedLiveRequestDetail(ctx, did, messages[0].Content, userMsg.String(), model, 0, messages)
-
-	startTime := time.Now()
-	var totalInput, totalOutput, totalCacheCreate, totalCacheCreate5m, totalCacheCreate1h, totalCacheRead int
-	var toolCalls []ToolCallOutcome
-
-	// Publish complete event on all exit paths so the dashboard removes
-	// the ephemeral node. The defer captures the named return delegateResult.
-	defer func() {
-		data := map[string]any{
-			"delegate_id":    did,
-			"parent_loop_id": parentLoopID,
-			"duration_ms":    time.Since(startTime).Milliseconds(),
-		}
-		if delegateResult != nil {
-			data["iterations"] = delegateResult.Iterations
-			data["exhausted"] = delegateResult.Exhausted
-			data["exhaust_reason"] = delegateResult.ExhaustReason
-		}
-		if delegateErr != nil {
-			data["error"] = delegateErr.Error()
-		}
-		e.eventBus.Publish(events.Event{
-			Timestamp: time.Now(),
-			Source:    events.SourceDelegate,
-			Kind:      events.KindComplete,
-			Data:      data,
-		})
-	}()
-
-	maxIter := profile.MaxIter
-	if maxIter <= 0 {
-		maxIter = defaultMaxIter
-	}
-	maxTokens := profile.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
-	}
-	maxDuration := profile.MaxDuration
-	if maxDuration <= 0 {
-		maxDuration = defaultMaxDuration
-	}
-
-	// Enforce wall clock as a context deadline so in-flight HTTP calls
-	// are cancelled when time expires. Without this, a blocking
-	// ChatStream call bypasses the manual wall clock checks (which only
-	// run at iteration boundaries). See issue #219.
-	ctx, cancel := context.WithTimeout(ctx, maxDuration)
-	defer cancel()
-
-	// Safety net: log if Execute returns without recording completion.
-	// With the context deadline fix this should rarely fire, but it
-	// guards against unforeseen code paths. Context cancellation
-	// (including timeouts) is an expected exit and should not log.
-	var completed bool
-	defer func() {
-		if !completed && ctx.Err() == nil {
-			log.Error("delegate terminated without completion record",
-				"elapsed", time.Since(startTime).Round(time.Second),
-			)
-		}
-	}()
-
-	// Build the iterate.Config, delegating tool execution to
-	// DeadlineExecutor with per-tool timeouts.
-	toolTimeout := profile.ToolTimeout
-	if toolTimeout == 0 {
-		toolTimeout = defaultToolTimeout
-	}
-
-	// toolCancelFuncs holds per-tool cancel functions created by
-	// OnBeforeToolExec, cancelled after each tool completes.
-	var currentToolCancel context.CancelFunc
-
-	// iterCount tracks completed iterations so the wall-clock deadline
-	// path can record accurate counts even when engine.Run returns an error.
-	var iterCount int
-
-	iterCfg := iterate.Config{
-		MaxIterations: maxIter,
-		Model:         model,
-		LLM:           e.llm,
-		ToolDefs:      func(int) []map[string]any { return toolDefs },
-		Executor: &iterate.DeadlineExecutor{
-			Exec: func(execCtx context.Context, name, argsJSON string) (string, error) {
-				// Expand caller-defined path prefixes in file tool arguments.
-				if len(pathPrefixes) > 0 && fileTools[name] {
-					argsJSON = expandPathPrefixes(name, argsJSON, pathPrefixes)
-				}
-				return reg.Execute(execCtx, name, argsJSON)
-			},
-		},
-		// Accumulate token counts as each LLM call completes so they
-		// remain accurate even if engine.Run returns an error (e.g.
-		// wall-clock deadline fires mid-run).
-		OnLLMResponse: func(_ context.Context, resp *llm.ChatResponse, _ int) {
-			totalInput += resp.InputTokens
-			totalOutput += resp.OutputTokens
-			totalCacheCreate += resp.CacheCreationInputTokens
-			totalCacheCreate5m += resp.CacheCreation5mInputTokens
-			totalCacheCreate1h += resp.CacheCreation1hInputTokens
-			totalCacheRead += resp.CacheReadInputTokens
-			iterCount++
-		},
-		OnBeforeToolExec: func(execCtx context.Context, _ int, _ llm.ToolCall) context.Context {
-			toolCtx := tools.WithConversationID(execCtx, convID)
-			toolCtx, currentToolCancel = context.WithTimeout(toolCtx, toolTimeout)
-			return toolCtx
-		},
-		OnToolCallDone: func(_ context.Context, name, _, errMsg string) {
-			if currentToolCancel != nil {
-				currentToolCancel()
-				currentToolCancel = nil
-			}
-			toolCalls = append(toolCalls, ToolCallOutcome{
-				Name:    name,
-				Success: errMsg == "",
-			})
-		},
-		CheckBudget:    func(totalOut int) bool { return totalOut >= maxTokens },
-		CheckToolAvail: func(name string) bool { return reg.Get(name) != nil },
-		OnLLMError: func(_ context.Context, err error, m string,
-			_ []llm.Message, _ []map[string]any,
-			_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
-			// Translate context deadline into wall-clock exhaustion so
-			// the engine returns an exhaustion result.
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, "", err
-			}
-			return nil, "", err
-		},
-	}
-
-	engine := &iterate.Engine{}
-	iterResult, err := engine.Run(ctx, iterCfg, messages)
-
-	// Handle context errors that propagated through the engine.
-	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			// Wall clock exhaustion — return result, not error.
-			// Engine.Run returns a partial Result alongside the error;
-			// use its Messages if available for a complete execution trace.
-			archiveMsgs := messages
-			if iterResult != nil && len(iterResult.Messages) > 0 {
-				archiveMsgs = iterResult.Messages
-			}
-			completed = true
-			var partialIterations []iterate.IterationRecord
-			if iterResult != nil {
-				partialIterations = iterResult.Iterations
-				// ctx is past its deadline — use a fresh context so content
-				// retention writes don't fail immediately. Build RequestContent
-				// directly so we can override the exhaustion metadata: the
-				// partial iterate.Result comes from the engine's error path
-				// and lacks an ExhaustReason, but the delegate knows it's
-				// ExhaustWallClock.
-				if e.requestRecorder != nil {
-					go func() {
-						retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer retainCancel()
-						e.requestRecorder(retainCtx, logging.RequestContent{
-							RequestID:        did,
-							SystemPrompt:     messages[0].Content,
-							UserContent:      userMsg.String(),
-							Model:            iterResult.Model,
-							AssistantContent: iterResult.Content,
-							IterationCount:   iterResult.IterationCount,
-							InputTokens:      iterResult.InputTokens,
-							OutputTokens:     iterResult.OutputTokens,
-							ToolsUsed:        iterResult.ToolsUsed,
-							Exhausted:        true,
-							ExhaustReason:    ExhaustWallClock,
-							Messages:         iterResult.Messages,
-						})
-					}()
-				}
-			}
-			e.recordCompletion(&completionRecord{
-				log:                log,
-				delegateID:         did,
-				conversationID:     convID,
-				archiveSessionID:   archiveSessionID,
-				task:               task,
-				guidance:           guidance,
-				profileName:        profile.Name,
-				model:              model,
-				totalIter:          iterCount,
-				maxIter:            maxIter,
-				totalInput:         totalInput,
-				totalOutput:        totalOutput,
-				totalCacheCreate:   totalCacheCreate,
-				totalCacheCreate5m: totalCacheCreate5m,
-				totalCacheCreate1h: totalCacheCreate1h,
-				totalCacheRead:     totalCacheRead,
-				exhausted:          true,
-				exhaustReason:      ExhaustWallClock,
-				startTime:          startTime,
-				messages:           archiveMsgs,
-				resultContent:      "Delegate was unable to complete the task within its time limit.",
-				errMsg:             err.Error(),
-				toolCalls:          toolCalls,
-				iterations:         partialIterations,
-			})
-			return &Result{
-				Content:                  "Delegate was unable to complete the task within its time limit.",
-				Model:                    model,
-				InputTokens:              totalInput,
-				OutputTokens:             totalOutput,
-				CacheCreationInputTokens: totalCacheCreate,
-				CacheReadInputTokens:     totalCacheRead,
-				Exhausted:                true,
-				ExhaustReason:            ExhaustWallClock,
-				ToolCalls:                toolCalls,
-				Duration:                 time.Since(startTime),
-			}, nil
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			completed = true
-			return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
-		}
-		completed = true
-		return nil, fmt.Errorf("delegate failed: %w", err)
-	}
-
-	// Convert iterate.Result → delegate.Result.
-	// Empty content after tool iterations is a no-output exhaustion.
-	exhaustReason := iterResult.ExhaustReason
-	exhausted := iterResult.Exhausted
-	if iterResult.Content == "" && iterResult.IterationCount > 1 && !exhausted {
-		exhausted = true
-		exhaustReason = ExhaustNoOutput
-	}
-
-	completed = true
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		e.retainContent(bgCtx, did, messages[0].Content, userMsg.String(), iterResult)
-	}()
-	e.recordCompletion(&completionRecord{
-		log:                log,
-		delegateID:         did,
-		conversationID:     convID,
-		archiveSessionID:   archiveSessionID,
-		task:               task,
-		guidance:           guidance,
-		profileName:        profile.Name,
-		model:              iterResult.Model,
-		totalIter:          iterResult.IterationCount,
-		maxIter:            maxIter,
-		totalInput:         iterResult.InputTokens,
-		totalOutput:        iterResult.OutputTokens,
-		totalCacheCreate:   iterResult.CacheCreationInputTokens,
-		totalCacheCreate5m: iterResult.CacheCreation5mInputTokens,
-		totalCacheCreate1h: iterResult.CacheCreation1hInputTokens,
-		totalCacheRead:     iterResult.CacheReadInputTokens,
-		exhausted:          exhausted,
-		exhaustReason:      exhaustReason,
-		startTime:          startTime,
-		messages:           iterResult.Messages,
-		resultContent:      iterResult.Content,
-		toolCalls:          toolCalls,
-		iterations:         iterResult.Iterations,
-	})
-	return &Result{
-		Content:                  iterResult.Content,
-		Model:                    iterResult.Model,
-		Iterations:               iterResult.IterationCount,
-		InputTokens:              iterResult.InputTokens,
-		OutputTokens:             iterResult.OutputTokens,
-		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
-		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
-		Exhausted:                exhausted,
-		ExhaustReason:            exhaustReason,
-		ToolCalls:                toolCalls,
-		Duration:                 time.Since(startTime),
-	}, nil
-}
-
 type preparedExecution struct {
 	id               string
 	conversationID   string
@@ -924,8 +434,8 @@ type preparedExecution struct {
 	toolTimeout      time.Duration
 }
 
-func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*Result, error) {
-	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
+func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*Result, error) {
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1148,7 +658,7 @@ func (e *Executor) finishLoopExecution(prep *preparedExecution) {
 	}
 }
 
-func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string, opts executionOptions) (*preparedExecution, error) {
+func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*preparedExecution, error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -1328,248 +838,6 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 		"model", e.defaultModel,
 	)
 	return e.defaultModel
-}
-
-// completionRecord carries all data for logging and persistence of a
-// delegate execution. The log field carries the context-enriched logger
-// so recordCompletion and archiveSession inherit trace fields (request_id,
-// session_id, conversation_id, subsystem, delegate_id, profile).
-type completionRecord struct {
-	log                *slog.Logger
-	delegateID         string
-	conversationID     string
-	archiveSessionID   string
-	task               string
-	guidance           string
-	profileName        string
-	model              string
-	totalIter          int
-	maxIter            int
-	totalInput         int
-	totalOutput        int
-	totalCacheCreate   int
-	totalCacheCreate5m int
-	totalCacheCreate1h int
-	totalCacheRead     int
-	exhausted          bool
-	exhaustReason      string
-	startTime          time.Time
-	messages           []llm.Message
-	resultContent      string
-	errMsg             string
-	toolCalls          []ToolCallOutcome
-	iterations         []iterate.IterationRecord
-}
-
-// retainContent captures request-level content for a delegate execution.
-func (e *Executor) retainContent(ctx context.Context, delegateID, systemPrompt, userContent string, result *iterate.Result) {
-	if e.requestRecorder == nil || result == nil {
-		return
-	}
-	e.requestRecorder(ctx, logging.RequestContent{
-		RequestID:        delegateID,
-		SystemPrompt:     systemPrompt,
-		UserContent:      userContent,
-		Model:            result.Model,
-		AssistantContent: result.Content,
-		IterationCount:   result.IterationCount,
-		InputTokens:      result.InputTokens,
-		OutputTokens:     result.OutputTokens,
-		ToolsUsed:        result.ToolsUsed,
-		Exhausted:        result.Exhausted,
-		ExhaustReason:    result.ExhaustReason,
-		Messages:         result.Messages,
-	})
-}
-
-func (e *Executor) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userContent, model string, iterationCount int, messages []llm.Message) {
-	if e.liveRequestRecorder == nil {
-		return
-	}
-	e.liveRequestRecorder(ctx, logging.RequestContent{
-		RequestID:      requestID,
-		SystemPrompt:   systemPrompt,
-		UserContent:    userContent,
-		Model:          model,
-		IterationCount: iterationCount,
-		Messages:       messages,
-	})
-}
-
-// recordCompletion logs and optionally persists a delegate execution.
-func (e *Executor) recordCompletion(rec *completionRecord) {
-	now := time.Now()
-	elapsed := now.Sub(rec.startTime)
-
-	rec.log.Info("delegate completed",
-		"model", rec.model,
-		"total_iter", rec.totalIter,
-		"input_tokens", rec.totalInput,
-		"output_tokens", rec.totalOutput,
-		"exhausted", rec.exhausted,
-		"exhaust_reason", rec.exhaustReason,
-		"elapsed", elapsed.Round(time.Second),
-	)
-
-	// Archive session lifecycle: end the session and persist messages
-	// and tool calls so they appear in the session inspector.
-	if e.archiver != nil && rec.archiveSessionID != "" {
-		e.archiveSession(rec, now)
-	}
-
-	// Record usage for cost tracking. Uses context.Background() because
-	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
-	if e.usageStore != nil {
-		identity := usage.ResolveModelIdentity(rec.model, e.currentModelCatalog())
-		cost := usage.ComputeDetailedCostForIdentityWithTTL(identity, rec.totalInput, rec.totalCacheCreate, rec.totalCacheCreate5m, rec.totalCacheCreate1h, rec.totalCacheRead, rec.totalOutput, e.pricing)
-		usageRec := usage.Record{
-			Timestamp:                  now,
-			RequestID:                  rec.delegateID,
-			ConversationID:             rec.conversationID,
-			Model:                      identity.Model,
-			UpstreamModel:              identity.UpstreamModel,
-			Resource:                   identity.Resource,
-			Provider:                   identity.Provider,
-			InputTokens:                rec.totalInput,
-			OutputTokens:               rec.totalOutput,
-			CacheCreationInputTokens:   rec.totalCacheCreate,
-			CacheCreation5mInputTokens: rec.totalCacheCreate5m,
-			CacheCreation1hInputTokens: rec.totalCacheCreate1h,
-			CacheReadInputTokens:       rec.totalCacheRead,
-			CostUSD:                    cost,
-			Role:                       "delegate",
-			TaskName:                   rec.profileName,
-		}
-		if err := e.usageStore.Record(context.Background(), usageRec); err != nil {
-			rec.log.Warn("failed to record delegate usage", "error", err)
-		}
-	}
-}
-
-func (e *Executor) currentModelCatalog() *fleet.Catalog {
-	if e == nil {
-		return nil
-	}
-	if e.modelRegistry != nil {
-		return e.modelRegistry.Catalog()
-	}
-	return e.usageCatalog
-}
-
-// archiveSession persists the delegate's messages, tool calls, and ends
-// the archive session so the execution is visible in the session inspector.
-func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
-	sessionID := rec.archiveSessionID
-	convID := rec.conversationID
-
-	// Archive messages from the LLM conversation.
-	var archived []memory.Message
-	for i, m := range rec.messages {
-		archived = append(archived, memory.Message{
-			ConversationID: convID,
-			SessionID:      sessionID,
-			Role:           m.Role,
-			Content:        m.Content,
-			Timestamp:      rec.startTime.Add(time.Duration(i) * time.Millisecond),
-			ToolCallID:     m.ToolCallID,
-			ArchiveReason:  "delegate",
-		})
-	}
-	if err := e.archiver.ArchiveMessages(archived); err != nil {
-		rec.log.Warn("failed to archive delegate messages",
-			"session_id", sessionID,
-			"error", err,
-		)
-	}
-
-	// Archive tool calls extracted from assistant messages.
-	var archivedCalls []memory.ArchivedToolCall
-	for _, m := range rec.messages {
-		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
-			continue
-		}
-		for _, tc := range m.ToolCalls {
-			argsJSON := ""
-			if tc.Function.Arguments != nil {
-				argsBytes, _ := json.Marshal(tc.Function.Arguments)
-				argsJSON = string(argsBytes)
-			}
-
-			// Find the matching tool result message for this call.
-			var result, errStr string
-			for _, rm := range rec.messages {
-				if rm.Role == "tool" && rm.ToolCallID == tc.ID {
-					if strings.HasPrefix(rm.Content, "Error: ") {
-						errStr = strings.TrimSpace(strings.TrimPrefix(rm.Content, "Error: "))
-					} else {
-						result = rm.Content
-					}
-					break
-				}
-			}
-
-			archivedCalls = append(archivedCalls, memory.ArchivedToolCall{
-				ID:             tc.ID,
-				ConversationID: convID,
-				SessionID:      sessionID,
-				ToolName:       tc.Function.Name,
-				Arguments:      argsJSON,
-				Result:         result,
-				Error:          errStr,
-				StartedAt:      now, // approximate
-			})
-		}
-	}
-	if err := e.archiver.ArchiveToolCalls(archivedCalls); err != nil {
-		rec.log.Warn("failed to archive delegate tool calls",
-			"session_id", sessionID,
-			"error", err,
-		)
-	}
-
-	// Archive iteration records and link tool calls to their iterations.
-	if len(rec.iterations) > 0 {
-		archived := make([]memory.ArchivedIteration, len(rec.iterations))
-		for i, iter := range rec.iterations {
-			archived[i] = memory.ArchivedIteration{
-				SessionID:      sessionID,
-				IterationIndex: iter.Index,
-				Model:          iter.Model,
-				InputTokens:    iter.InputTokens,
-				OutputTokens:   iter.OutputTokens,
-				ToolCallCount:  len(iter.ToolCallIDs),
-				ToolCallIDs:    iter.ToolCallIDs,
-				ToolsOffered:   iter.ToolsOffered,
-				StartedAt:      iter.StartedAt,
-				DurationMs:     iter.DurationMs,
-				HasToolCalls:   iter.HasToolCalls,
-				BreakReason:    iter.BreakReason,
-			}
-		}
-		if err := e.archiver.ArchiveIterations(archived); err != nil {
-			rec.log.Warn("failed to archive delegate iterations",
-				"session_id", sessionID,
-				"error", err,
-			)
-		}
-		if err := e.archiver.LinkPendingIterationToolCalls(sessionID); err != nil {
-			rec.log.Warn("failed to link delegate tool calls to iterations",
-				"session_id", sessionID,
-				"error", err,
-			)
-		}
-	}
-
-	endReason := "completed"
-	if rec.exhausted && rec.exhaustReason != "" {
-		endReason = rec.exhaustReason
-	}
-	if err := e.archiver.EndSessionAt(sessionID, endReason, now); err != nil {
-		rec.log.Warn("failed to end delegate archive session",
-			"session_id", sessionID,
-			"error", err,
-		)
-	}
 }
 
 // formatTokens formats a token count as a human-readable string (e.g., "1.2K").

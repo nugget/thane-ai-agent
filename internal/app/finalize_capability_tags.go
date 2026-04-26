@@ -160,16 +160,6 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	a.loop.SetTagContextAssembler(tagCtxAssembler)
 	a.loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(a.opStore))
 
-	// Wire tag context into delegates. The closure captures both the
-	// assembler and the loop so delegates always see the latest
-	// registered providers at call time (not a stale snapshot from
-	// construction time).
-	if delegateExec != nil {
-		delegateExec.SetTagContextFunc(func(ctx context.Context, activeTags map[string]bool) string {
-			return tagCtxAssembler.Build(ctx, activeTags, a.loop.TagContextProviders())
-		})
-	}
-
 	var activeTagNames []string
 	for tag := range a.loop.LastRunTags() {
 		activeTagNames = append(activeTagNames, tag)
