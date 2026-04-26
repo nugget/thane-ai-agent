@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 const maxOutputToolNameLength = 64
@@ -191,7 +190,7 @@ func safeOutputToolSuffix(name string) string {
 		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
 			lastUnderscore = false
-		case r == '_' || r == '-' || unicode.IsSpace(r):
+		case r == '_' || r == '-' || r == ' ':
 			if b.Len() > 0 && !lastUnderscore {
 				b.WriteByte('_')
 				lastUnderscore = true
@@ -207,7 +206,7 @@ func firstUnsupportedOutputNameRune(name string) (rune, bool) {
 		switch {
 		case (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			continue
-		case r == '_' || r == '-' || unicode.IsSpace(r):
+		case r == '_' || r == '-' || r == ' ':
 			continue
 		default:
 			return r, true

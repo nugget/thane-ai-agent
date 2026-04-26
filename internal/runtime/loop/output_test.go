@@ -59,6 +59,24 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "tab rejected",
+			output: OutputSpec{
+				Name: "bad\tname",
+				Type: OutputTypeMaintainedDocument,
+				Ref:  "core:state.md",
+			},
+			wantErr: true,
+		},
+		{
+			name: "newline rejected",
+			output: OutputSpec{
+				Name: "bad\nname",
+				Type: OutputTypeMaintainedDocument,
+				Ref:  "core:state.md",
+			},
+			wantErr: true,
+		},
+		{
 			name: "overlong tool name rejected",
 			output: OutputSpec{
 				Name: strings.Repeat("a", maxOutputToolNameLength),

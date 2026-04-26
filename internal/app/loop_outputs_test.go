@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -52,6 +53,11 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 	if hydrated.RuntimeTools[1].Name != "append_output_metacognitive_journal" {
 		t.Fatalf("RuntimeTools[1].Name = %q", hydrated.RuntimeTools[1].Name)
+	}
+	for _, tool := range hydrated.RuntimeTools {
+		if !tool.SkipContentResolve {
+			t.Fatalf("%s SkipContentResolve = false, want true", tool.Name)
+		}
 	}
 
 	_, err = hydrated.RuntimeTools[0].Handler(context.Background(), map[string]any{
@@ -114,6 +120,39 @@ func TestHydrateLoopOutputsRequiresDocumentStore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "managed document roots are not configured") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestTruncateLoopOutputTextPreservesUTF8(t *testing.T) {
+	t.Parallel()
+
+	const text = "abcédef"
+	head, truncated, shown, total := truncateLoopOutputText(text, 4, false)
+	if !truncated {
+		t.Fatal("head truncated = false, want true")
+	}
+	if !utf8.ValidString(head) {
+		t.Fatalf("head is invalid UTF-8: %q", head)
+	}
+	if !strings.HasPrefix(head, "abc\n") {
+		t.Fatalf("head = %q, want ASCII prefix before split rune", head)
+	}
+	if shown != len(head) || total != len(text) {
+		t.Fatalf("head counts shown=%d total=%d, want %d/%d", shown, total, len(head), len(text))
+	}
+
+	tail, truncated, shown, total := truncateLoopOutputText(text, 4, true)
+	if !truncated {
+		t.Fatal("tail truncated = false, want true")
+	}
+	if !utf8.ValidString(tail) {
+		t.Fatalf("tail is invalid UTF-8: %q", tail)
+	}
+	if !strings.HasSuffix(tail, "def") {
+		t.Fatalf("tail = %q, want suffix after split rune", tail)
+	}
+	if shown != len(tail) || total != len(text) {
+		t.Fatalf("tail counts shown=%d total=%d, want %d/%d", shown, total, len(tail), len(text))
 	}
 }
 

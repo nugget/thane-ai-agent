@@ -73,8 +73,9 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 		switch output.EffectiveMode() {
 		case looppkg.OutputModeReplace:
 			out = append(out, looppkg.RuntimeTool{
-				Name:        output.ToolName(),
-				Description: fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane.", output.Name, output.Ref),
+				Name:               output.ToolName(),
+				Description:        fmt.Sprintf("Replace the loop-declared maintained document output %q at %s. Pass the complete markdown body for the new current document state; root policy and indexing are handled by Thane.", output.Name, output.Ref),
+				SkipContentResolve: true,
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -102,8 +103,9 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 			})
 		case looppkg.OutputModeAppend:
 			out = append(out, looppkg.RuntimeTool{
-				Name:        output.ToolName(),
-				Description: fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref),
+				Name:               output.ToolName(),
+				Description:        fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref),
+				SkipContentResolve: true,
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -199,7 +201,7 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 }
 
 func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, int, int) {
-	total := len([]byte(s))
+	total := len(s)
 	if total <= maxBytes {
 		return s, false, total, total
 	}
@@ -208,21 +210,19 @@ func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, in
 	}
 	var out string
 	if tail {
-		data := []byte(s)
-		start := len(data) - maxBytes
-		for start < len(data) && !utf8.RuneStart(data[start]) {
+		start := len(s) - maxBytes
+		for start < len(s) && !utf8.RuneStart(s[start]) {
 			start++
 		}
-		out = "[truncated: showing recent tail]\n" + string(data[start:])
+		out = "[truncated: showing recent tail]\n" + s[start:]
 	} else {
-		data := []byte(s)
 		end := maxBytes
-		for end > 0 && !utf8.Valid(data[:end]) {
+		for end < len(s) && end > 0 && !utf8.RuneStart(s[end]) {
 			end--
 		}
-		out = string(data[:end]) + "\n[truncated: output exceeded context budget]"
+		out = s[:end] + "\n[truncated: output exceeded context budget]"
 	}
-	return out, true, len([]byte(out)), total
+	return out, true, len(out), total
 }
 
 func marshalLoopOutputToolResult(v any) (string, error) {
