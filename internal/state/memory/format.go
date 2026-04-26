@@ -211,11 +211,25 @@ func sessionToView(s *Session, now time.Time) SessionView {
 	return view
 }
 
+// archiveAssistantRole is the display label used for assistant
+// messages in archive-derived JSON the model reads. The neutral
+// "assistant" role is anodyne and reads as a third party — but
+// archived assistant messages are *the model's own past output*.
+// Surfacing them as "past you" gives the model a personal hook into
+// its own history. This is a cosmetic label only: stored roles, live
+// conversation history, API responses, and tool wire formats are
+// unaffected.
+const archiveAssistantRole = "past you"
+
 func messageToView(m Message, now time.Time) MessageView {
 	content, truncated := clipContent(m.Content, maxMessageContentBytes)
+	role := m.Role
+	if role == "assistant" {
+		role = archiveAssistantRole
+	}
 	return MessageView{
 		T:                promptfmt.FormatDeltaOnly(m.Timestamp, now),
-		Role:             m.Role,
+		Role:             role,
 		Content:          content,
 		ContentTruncated: truncated,
 		SessionID:        m.SessionID,

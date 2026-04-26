@@ -286,3 +286,65 @@ func TestFormatSearchResults_BoundsContextPerSide(t *testing.T) {
 		t.Errorf("context_after len = %d, want %d", len(r.ContextAfter), maxSearchContextPerSide)
 	}
 }
+
+func TestMessageToView_AssistantRoleRelabeled(t *testing.T) {
+	// Archive-derived JSON should surface the model's own past output
+	// as "past you" rather than the third-party-feeling "assistant".
+	// User and other roles pass through unchanged.
+	now := time.Now()
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"assistant", "past you"},
+		{"user", "user"},
+		{"system", "system"},
+		{"tool", "tool"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			view := messageToView(Message{Role: tc.input, Content: "x", Timestamp: now}, now)
+			if view.Role != tc.want {
+				t.Errorf("role = %q, want %q", view.Role, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatSearchResults_AssistantContextRelabeled(t *testing.T) {
+	// Substitution applies to context_before / context_after too —
+	// any assistant message in archive output reads as "past you".
+	now := time.Now()
+	results := []SearchResult{{
+		Match: Message{Role: "user", Content: "freezer alert", Timestamp: now.Add(-1 * time.Hour), SessionID: "s1"},
+		ContextBefore: []Message{
+			{Role: "assistant", Content: "earlier reply", Timestamp: now.Add(-1*time.Hour - time.Minute)},
+		},
+		ContextAfter: []Message{
+			{Role: "assistant", Content: "later reply", Timestamp: now.Add(-1*time.Hour + time.Minute)},
+		},
+		SessionID: "s1",
+	}}
+	data := FormatSearchResults(results, now, false)
+
+	var parsed struct {
+		Results []SearchResultView `json:"results"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Results) != 1 {
+		t.Fatalf("results len = %d", len(parsed.Results))
+	}
+	r := parsed.Results[0]
+	if len(r.ContextBefore) != 1 || r.ContextBefore[0].Role != "past you" {
+		t.Errorf("context_before role = %q, want past you", r.ContextBefore[0].Role)
+	}
+	if len(r.ContextAfter) != 1 || r.ContextAfter[0].Role != "past you" {
+		t.Errorf("context_after role = %q, want past you", r.ContextAfter[0].Role)
+	}
+	if r.Match.Role != "user" {
+		t.Errorf("match role = %q, want user (unchanged)", r.Match.Role)
+	}
+}

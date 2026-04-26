@@ -273,7 +273,10 @@ func TestArchiveSessionTranscriptTool_JSONOutput(t *testing.T) {
 	if len(parsed.Messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(parsed.Messages))
 	}
-	if parsed.Messages[0].Role != "user" || parsed.Messages[1].Role != "assistant" {
+	// Assistant role is relabeled to "past you" in archive-derived
+	// JSON so the model reads its own historical output as personal,
+	// not as a third party. User role is unchanged.
+	if parsed.Messages[0].Role != "user" || parsed.Messages[1].Role != "past you" {
 		t.Errorf("roles = %q,%q", parsed.Messages[0].Role, parsed.Messages[1].Role)
 	}
 }
