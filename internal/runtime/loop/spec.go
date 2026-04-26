@@ -92,6 +92,10 @@ type Spec struct {
 	// caller, conversation, or channel.
 	Completion Completion `yaml:"completion,omitempty" json:"completion,omitempty"`
 
+	// Outputs declare durable documents this loop is allowed to
+	// maintain through scoped runtime tools.
+	Outputs []OutputSpec `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+
 	// Conditions constrain when the definition is currently eligible to
 	// run or launch. When empty, the definition is always eligible
 	// unless blocked by policy.
@@ -163,6 +167,12 @@ type Spec struct {
 	// [NewFromSpec] but before [Loop.Start].
 	Setup func(l *Loop) `yaml:"-" json:"-"`
 
+	// RuntimeTools are request-scoped tools attached during hydration.
+	RuntimeTools []RuntimeTool `yaml:"-" json:"-"`
+
+	// OutputContextBuilder renders model-facing context for [Outputs].
+	OutputContextBuilder OutputContextBuilder `yaml:"-" json:"-"`
+
 	// Metadata holds arbitrary key/value pairs for the loop.
 	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 
@@ -191,6 +201,9 @@ func (s *Spec) Validate() error {
 	if err := s.Profile.Validate(); err != nil {
 		return fmt.Errorf("loop: profile: %w", err)
 	}
+	if err := validateOutputs(s.Outputs); err != nil {
+		return fmt.Errorf("loop: %w", err)
+	}
 	cfg := s.ToConfig()
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
@@ -217,6 +230,10 @@ func (s *Spec) ValidatePersistable() error {
 		return fmt.Errorf("loop: persistable spec %q cannot set Handler", s.Name)
 	case s.Setup != nil:
 		return fmt.Errorf("loop: persistable spec %q cannot set Setup", s.Name)
+	case len(s.RuntimeTools) > 0:
+		return fmt.Errorf("loop: persistable spec %q cannot set RuntimeTools", s.Name)
+	case s.OutputContextBuilder != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set OutputContextBuilder", s.Name)
 	default:
 		return nil
 	}
@@ -237,6 +254,7 @@ func (s *Spec) ToConfig() Config {
 		Task:                   ns.Task,
 		Operation:              ns.Operation,
 		Completion:             ns.Completion,
+		Outputs:                cloneOutputs(ns.Outputs),
 		Tags:                   append([]string(nil), ns.Tags...),
 		ExcludeTools:           append([]string(nil), ns.ExcludeTools...),
 		SleepMin:               ns.SleepMin,
@@ -258,6 +276,8 @@ func (s *Spec) ToConfig() Config {
 		Hints:                  cloneStringMap(ns.Hints),
 		FallbackContent:        ns.FallbackContent,
 		Setup:                  ns.Setup,
+		RuntimeTools:           cloneRuntimeTools(ns.RuntimeTools),
+		OutputContextBuilder:   ns.OutputContextBuilder,
 		Metadata:               cloneStringMap(ns.Metadata),
 		ParentID:               ns.ParentID,
 	}
@@ -283,6 +303,7 @@ func (s *Spec) profileRequest() Request {
 		Hints:        opts.Hints,
 		ExcludeTools: opts.ExcludeTools,
 		InitialTags:  opts.InitialTags,
+		RuntimeTools: cloneRuntimeTools(s.RuntimeTools),
 	}
 }
 

@@ -92,6 +92,8 @@ the next iteration. Tool calls can be:
 
 - **Native tools** (80+ built-in: HA control, email, contacts, memory, files, etc.)
 - **MCP tools** (bridged from external servers like ha-mcp)
+- **Runtime tools** generated for this specific loop run, such as declared
+  document output tools
 - **Delegation** (spawning a local model to execute a multi-step task)
 
 ### 5. Response Shaping
@@ -101,6 +103,27 @@ generates a final text response formatted for the requesting interface.
 
 If the loop exhausts its ten iterations without producing a response, a
 final LLM call with no tools available forces a text response.
+
+## Durable Outputs
+
+Loops can declare durable document outputs as part of their loop
+definition. A declared output is an explicit contract: this loop is
+responsible for maintaining or appending to this document, and Thane
+generates the narrow tool surface for that job at runtime.
+
+Two output shapes exist today:
+
+- **Maintained document** outputs replace the whole current document
+  through a generated `replace_output_<name>` tool.
+- **Journal document** outputs append a timestamped entry through a
+  generated `append_output_<name>` tool.
+
+The same declaration also feeds context assembly. Each turn receives a
+`Declared Durable Outputs` block with the output name, document root
+reference, generated tool name, current content or recent journal tail,
+and any truncation markers. The model should use those generated tools
+instead of generic file tools; the document root owns path safety,
+indexing, provenance, and future signature policy.
 
 ## Capability Tags
 

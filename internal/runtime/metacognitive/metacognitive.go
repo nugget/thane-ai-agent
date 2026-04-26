@@ -1,6 +1,6 @@
 // Package metacognitive implements a perpetual self-regulating attention
-// loop that reads persistent state, reasons via LLM, and adapts its own
-// sleep cycle. See issue #319.
+// loop that receives persistent state, reasons via LLM, and adapts its
+// own sleep cycle. See issue #319.
 //
 // Each iteration is a fresh conversation. State persists across iterations
 // via a markdown file (metacognitive.md by default). The loop's cost is
@@ -12,8 +12,7 @@
 //
 // The loop lifecycle is managed by the [loop] package. This package
 // provides [BuildLoopConfig] to assemble a [loop.Config] with the
-// correct TaskBuilder, PostIterate, and tool exclusions, plus
-// [RegisterTools] for metacog-specific tool handlers.
+// correct TaskBuilder, PostIterate, and tool exclusions.
 package metacognitive
 
 import (
@@ -39,10 +38,6 @@ import (
 // DefinitionName is the durable loops-ng definition name for the
 // metacognitive service.
 const DefinitionName = "metacognitive"
-
-// maxStateBytes is the maximum metacognitive.md content read per
-// iteration. Content beyond this limit is truncated with a marker.
-const maxStateBytes = 16 * 1024
 
 // iterationLogRetention is the number of iteration log blocks to keep
 // when pruning. Oldest beyond this limit are removed.
@@ -150,11 +145,20 @@ type Opts struct {
 // [HydrateSpec] so the definition can live in the durable registry.
 func DefinitionSpec(cfg Config) loop.Spec {
 	return loop.Spec{
-		Name:         DefinitionName,
-		Enabled:      cfg.Enabled,
-		Task:         "Observe the system, reason about its recent behavior, and update metacognitive state when needed.",
-		Operation:    loop.OperationService,
-		Completion:   loop.CompletionNone,
+		Name:       DefinitionName,
+		Enabled:    cfg.Enabled,
+		Task:       "Observe the system, reason about its recent behavior, and update metacognitive state when needed.",
+		Operation:  loop.OperationService,
+		Completion: loop.CompletionNone,
+		Outputs: []loop.OutputSpec{
+			{
+				Name:    "metacognitive_state",
+				Type:    loop.OutputTypeMaintainedDocument,
+				Ref:     "core:metacognitive.md",
+				Mode:    loop.OutputModeReplace,
+				Purpose: "Current metacognitive state: active concerns, recent observations, actions taken, and sleep reasoning that should persist across fresh loop iterations.",
+			},
+		},
 		SleepMin:     cfg.MinSleep,
 		SleepMax:     cfg.MaxSleep,
 		SleepDefault: cfg.DefaultSleep,
@@ -185,22 +189,7 @@ func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 		spec.Name = DefinitionName
 	}
 	spec.TaskBuilder = func(ctx context.Context, isSupervisor bool) (string, error) {
-		stateContent, err := readStateFile(opts.StateFilePath)
-		if err != nil {
-			log := logging.Logger(ctx)
-			if errors.Is(err, fs.ErrNotExist) {
-				log.Info("metacognitive state file not found, starting fresh",
-					"path", opts.StateFilePath,
-				)
-			} else {
-				log.Warn("metacognitive state file read failed, starting with empty state",
-					"error", err,
-					"path", opts.StateFilePath,
-				)
-			}
-			stateContent = ""
-		}
-		return prompts.MetacognitivePrompt(stateContent, isSupervisor), nil
+		return prompts.MetacognitivePrompt("", isSupervisor), nil
 	}
 	spec.PostIterate = func(ctx context.Context, result loop.IterationResult) error {
 		log := logging.Logger(ctx)
@@ -211,9 +200,9 @@ func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 }
 
 // BuildSpec returns a [loop.Spec] that implements the metacognitive
-// loop as a standard loops-ng service. The returned spec uses
-// TaskBuilder and PostIterate closures to read state, build prompts,
-// and append iteration logs.
+// loop as a standard loops-ng service. The returned spec declares the
+// durable output document and uses runtime hooks to build prompts and
+// append iteration logs.
 func BuildSpec(cfg Config, opts Opts) loop.Spec {
 	spec := DefinitionSpec(cfg)
 	// TaskBuilder handles supervisor augmentation itself via
@@ -241,9 +230,9 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 }
 
 // metacogExcludeTools lists tools that the metacognitive loop should not
-// have access to. File tools are replaced by update_metacognitive_state,
-// exec is unnecessary and dangerous, session management is for interactive
-// use only.
+// have access to. File tools are replaced by the declared durable output
+// tool, exec is unnecessary and dangerous, session management is for
+// interactive use only.
 var metacogExcludeTools = []string{
 	"file_read", "file_write", "file_edit", "file_list",
 	"file_search", "file_grep", "file_stat", "file_tree",
@@ -251,23 +240,6 @@ var metacogExcludeTools = []string{
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"activate_capability", "deactivate_capability",
-}
-
-// readStateFile reads the metacognitive state file from the given path.
-// Returns an error if the file does not exist (first iteration).
-// Content is capped at [maxStateBytes].
-func readStateFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		return "", fmt.Errorf("read state file: %w", err)
-	}
-	if len(data) > maxStateBytes {
-		return string(data[:maxStateBytes]) + "\n\n[metacognitive.md truncated — exceeded 16 KB limit]", nil
-	}
-	return string(data), nil
 }
 
 // appendIterationLog appends an HTML comment summary block to the state
@@ -278,10 +250,6 @@ func readStateFile(path string) (string, error) {
 // When store is non-nil, reads and writes go through the provenance
 // store (committed with SSH signatures). When nil, direct file I/O is
 // used at statePath.
-//
-// Unlike [readStateFile], this reads the full file without the
-// maxStateBytes cap to avoid silently truncating user/model state on
-// rewrite.
 func appendIterationLog(ctx context.Context, log *slog.Logger, statePath string, store ProvenanceWriter, stateFileName string, result *loop.IterationResult) {
 	// Read the full file (uncapped) to avoid truncation on rewrite.
 	var content string

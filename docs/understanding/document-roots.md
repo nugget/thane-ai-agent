@@ -121,6 +121,23 @@ IDs. Use `refresh_strategy` to distinguish one-shot immutable artifacts
 from generated files that are replaced, appended to, or maintained as a
 rolling window.
 
+## Loop-Declared Outputs
+
+Autonomous and background loops can declare the documents they are
+responsible for maintaining. Thane turns those declarations into narrow
+runtime tools:
+
+- `replace_output_<name>` for a maintained document that should be
+  rewritten as a complete current state.
+- `append_output_<name>` for a journal document that should receive new
+  entries over time.
+
+The loop sees a matching context block with the current document content
+or recent journal tail, so the document itself remains the durable source
+of truth. The generated tools still write through document roots. That
+keeps path resolution, indexing, provenance, and future root-level
+integrity policy in one subsystem.
+
 ## Special Case: `core`
 
 The `core:` root is reserved.

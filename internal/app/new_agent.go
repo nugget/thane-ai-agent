@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -117,6 +118,9 @@ func (a *App) initAgentLoop(s *newState) error {
 			delete(cfg.Paths, k)
 		}
 		cfg.Paths["core"] = derivedCore
+		if err := os.MkdirAll(derivedCore, 0o755); err != nil {
+			return fmt.Errorf("create core document root: %w", err)
+		}
 	}
 
 	var resolver *paths.Resolver

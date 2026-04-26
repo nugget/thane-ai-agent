@@ -1,35 +1,30 @@
 package prompts
 
-import "fmt"
-
 // metacognitiveBaseTemplate is the prompt for each metacognitive loop
-// iteration. The single format verb receives the current metacognitive.md
-// content (or a placeholder on first run).
+// iteration. Current state is injected by the loop-declared output
+// context provider.
 const metacognitiveBaseTemplate = `Metacognitive loop iteration.
 
 You are running as a background metacognitive process — a perpetual
 attention loop that monitors the environment, reasons about what you
 observe, and adapts your own wake cycle.
 
-## Your State File
+## Your Durable Output
 
-metacognitive.md is your persistent memory across iterations. You wrote it
-last time. Its current content is shown below — file tools are NOT available
-in this context, so do not attempt to read or search for files.
-
-To update it, call update_metacognitive_state with your complete new content.
-
-%s
+Your current durable output contract is injected in the "Declared Durable
+Outputs" block. That block shows core:metacognitive.md when it exists and
+names the generated replacement tool for the document.
 
 ## What To Do This Iteration
 
-1. **Assess** — Review your state file and the current context (system prompt
-   data: state changes, person presence, time of day).
+1. **Assess** — Review your declared output content and the current context
+   (system prompt data: state changes, person presence, time of day).
 2. **Act if warranted** — Send messages or use any available tool if the
    situation calls for it.
-3. **Update metacognitive.md** — Call update_metacognitive_state with your
-   complete updated state (observations, active concerns, recent actions,
-   sleep reasoning). This is the ONLY tool that writes your state file.
+3. **Update metacognitive.md** — Call replace_output_metacognitive_state
+   with your complete updated state (observations, active concerns, recent
+   actions, sleep reasoning). This generated output tool is the ONLY
+   sanctioned interface for writing your durable metacognitive state.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration and
    reasoning. Short (2–5m) for active situations. Long (15–30m) for quiet
    periods.
@@ -38,8 +33,8 @@ To update it, call update_metacognitive_state with your complete new content.
 
 - Your system prompt contains the same household context, ego.md, contacts,
   and state data that the interactive agent sees. Use it.
-- Each iteration is a fresh conversation. metacognitive.md is your ONLY
-  memory between iterations.
+- Each iteration is a fresh conversation. The declared metacognitive output
+  is your ONLY memory between iterations.
 - Timestamps in your context appear as relative deltas (e.g., -300s means
   300 seconds ago, +3600s means 1 hour from now). When writing timestamps
   to metacognitive.md, always convert to absolute format (RFC3339, e.g.,
@@ -47,10 +42,10 @@ To update it, call update_metacognitive_state with your complete new content.
   Deltas become meaningless on the next iteration.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
   needs a message or action.
-- You have exactly two special tools: update_metacognitive_state and
+- You have exactly two special tools: replace_output_metacognitive_state and
   set_next_sleep. All other tools are from the standard agent toolkit
-  (contacts, facts, notifications). File tools, exec,
-  and session management tools are NOT available.
+  (contacts, facts, notifications). File tools, exec, and session management
+  tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
 // metacognitiveSupervisorAugmentation is appended for frontier/supervisor
@@ -80,10 +75,8 @@ cheaper model's consistent blind spots miss.`
 // iteration. When isSupervisor is true, additional self-review
 // instructions are appended for frontier-model iterations.
 func MetacognitivePrompt(currentState string, isSupervisor bool) string {
-	if currentState == "" {
-		currentState = "(metacognitive.md does not exist yet — this is your first iteration. Call update_metacognitive_state to create it.)"
-	}
-	prompt := fmt.Sprintf(metacognitiveBaseTemplate, currentState)
+	_ = currentState // State is now injected by loop-declared output context.
+	prompt := metacognitiveBaseTemplate
 	if isSupervisor {
 		prompt += metacognitiveSupervisorAugmentation
 	}

@@ -57,6 +57,7 @@ type Request struct {
 	SkipTagFilter   bool                   `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
 	InitialTags     []string               `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
 	RuntimeTags     []string               `json:"-"`               // Trusted runtime-asserted tags pinned for this run only
+	RuntimeTools    []*tools.Tool          `json:"-"`               // Request-scoped tools visible only to this run
 	MaxIterations   int                    `json:"-"`               // Optional per-request iteration cap (0 = default)
 	MaxOutputTokens int                    `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
 	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
@@ -1648,6 +1649,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if len(req.AllowedTools) > 0 {
 		baseTools = baseTools.FilteredCopy(req.AllowedTools)
 	}
+	if len(req.RuntimeTools) > 0 {
+		baseTools = baseTools.WithRuntimeTools(req.RuntimeTools)
+	}
 	if len(req.ExcludeTools) > 0 {
 		baseTools = baseTools.FilteredCopyExcluding(req.ExcludeTools)
 		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
@@ -1910,7 +1914,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		Executor: &iterate.DirectExecutor{
 			Exec: func(execCtx context.Context, name, argsJSON string) (string, error) {
-				return l.tools.Execute(execCtx, name, argsJSON)
+				toolsForExec := currentTools()
+				if gatingActive {
+					toolsForExec = toolsForExec.FilteredCopy(l.orchestratorTools)
+				}
+				return toolsForExec.Execute(execCtx, name, argsJSON)
 			},
 		},
 

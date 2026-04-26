@@ -299,6 +299,7 @@ func (a *App) initChannels(s *newState) error {
 			if err != nil {
 				return fmt.Errorf("create document index: %w", err)
 			}
+			a.documentStore = docStore
 			tools.RegisterDocumentTools(a.loop.Tools(), documents.NewTools(docStore))
 			a.deferWorker("documents-index", func(ctx context.Context) error {
 				go docStore.RunRefresher(ctx)

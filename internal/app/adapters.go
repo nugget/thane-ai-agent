@@ -28,6 +28,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // factSetterFunc adapts knowledge.Store to the memory.FactSetter interface,
@@ -1114,6 +1115,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		SkipTagFilter:   req.SkipTagFilter,
 		Hints:           cloneStringMap(req.Hints),
 		InitialTags:     append([]string(nil), req.InitialTags...),
+		RuntimeTools:    compileLoopRuntimeTools(req.RuntimeTools),
 		MaxIterations:   req.MaxIterations,
 		MaxOutputTokens: req.MaxOutputTokens,
 		ToolTimeout:     req.ToolTimeout,
@@ -1121,6 +1123,29 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		UsageTaskName:   req.UsageTaskName,
 		SystemPrompt:    req.SystemPrompt,
 	}
+}
+
+func compileLoopRuntimeTools(src []looppkg.RuntimeTool) []*tools.Tool {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*tools.Tool, 0, len(src))
+	for _, t := range src {
+		if strings.TrimSpace(t.Name) == "" || t.Handler == nil {
+			continue
+		}
+		out = append(out, &tools.Tool{
+			Name:                 t.Name,
+			Description:          t.Description,
+			Parameters:           t.Parameters,
+			Handler:              t.Handler,
+			AlwaysAvailable:      true,
+			SkipContentResolve:   t.SkipContentResolve,
+			ContentResolveExempt: append([]string(nil), t.ContentResolveExempt...),
+			Source:               string(toolcatalog.NativeToolSource),
+		})
+	}
+	return out
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

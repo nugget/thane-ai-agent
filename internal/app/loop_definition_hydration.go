@@ -50,10 +50,7 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			StateFilePath: stateFilePath,
 			StateFileName: stateFileName,
 		})
-		runtimeSpec.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(a.loop.Tools(), l, *a.metacogCfg, stateFilePath, nil)
-		}
-		return runtimeSpec, nil
+		return a.hydrateLoopOutputs(runtimeSpec)
 	case unifiPollerDefinitionName:
 		if a.unifiPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires UniFi poller runtime", unifiPollerDefinitionName)
@@ -61,24 +58,24 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		spec.Handler = func(ctx context.Context, _ any) error {
 			return a.unifiPoller.Poll(ctx)
 		}
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	case haStateWatcherDefinitionName:
 		if a.haStateWatcher == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires Home Assistant state watcher runtime", haStateWatcherDefinitionName)
 		}
-		return hydrateHAStateWatcherSpec(spec, a.haStateWatcher), nil
+		return a.hydrateLoopOutputs(hydrateHAStateWatcherSpec(spec, a.haStateWatcher))
 	case emailPollerDefinitionName:
 		if a.emailPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires email poller runtime", emailPollerDefinitionName)
 		}
 		spec.Handler = emailPollHandler(a.emailPoller, a.loop, a.logger)
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	case mediaFeedPollerDefinitionName:
 		if a.mediaFeedPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires media feed poller runtime", mediaFeedPollerDefinitionName)
 		}
 		spec.Handler = mediaFeedHandler(a.mediaFeedPoller, a.loop, a.logger)
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	case mqttPublisherDefinitionName:
 		if a.mqttPub == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires MQTT publisher runtime", mqttPublisherDefinitionName)
@@ -87,7 +84,7 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			a.mqttPub.PublishStates(ctx)
 			return nil
 		}
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	case telemetryDefinitionName:
 		if a.telemetryPublisher == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires telemetry publisher runtime", telemetryDefinitionName)
@@ -95,9 +92,9 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		spec.Handler = func(ctx context.Context, _ any) error {
 			return a.telemetryPublisher.Publish(ctx)
 		}
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	default:
-		return spec, nil
+		return a.hydrateLoopOutputs(spec)
 	}
 }
 

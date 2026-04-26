@@ -947,6 +947,34 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 	return filtered
 }
 
+// WithRuntimeTools creates a shallow registry copy with request-scoped
+// runtime tools layered over the global registry. Runtime tools are
+// intentionally not registered on the source registry; they belong only
+// to one model run.
+func (r *Registry) WithRuntimeTools(runtime []*Tool) *Registry {
+	if len(runtime) == 0 {
+		return r
+	}
+	filtered := &Registry{
+		tools:           make(map[string]*Tool, len(r.tools)+len(runtime)),
+		contentResolver: r.contentResolver,
+		tagIndex:        r.tagIndex,
+	}
+	for name, t := range r.tools {
+		filtered.tools[name] = t
+	}
+	for _, t := range runtime {
+		if t == nil || strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		cp := *t
+		cp.Name = strings.TrimSpace(cp.Name)
+		cp.AlwaysAvailable = true
+		filtered.Register(&cp)
+	}
+	return filtered
+}
+
 // MetadataTagIndex builds a tag-to-tool mapping from per-tool default
 // metadata. Tags with no registered tools are omitted.
 func (r *Registry) MetadataTagIndex() map[string][]string {

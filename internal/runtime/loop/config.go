@@ -135,6 +135,10 @@ type Config struct {
 	// caller, conversation, or channel.
 	Completion Completion
 
+	// Outputs declare durable documents this loop is allowed to
+	// maintain through scoped runtime tools.
+	Outputs []OutputSpec
+
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
 	// tags (plus always-active tags).
@@ -249,6 +253,12 @@ type Config struct {
 	// that requires a *Loop reference before the goroutine launches.
 	Setup func(l *Loop) `json:"-"`
 
+	// RuntimeTools are request-scoped tools attached during hydration.
+	RuntimeTools []RuntimeTool `json:"-"`
+
+	// OutputContextBuilder renders model-facing context for [Outputs].
+	OutputContextBuilder OutputContextBuilder `json:"-"`
+
 	// Metadata holds arbitrary key/value pairs for the loop.
 	Metadata map[string]string
 
@@ -312,6 +322,9 @@ func (c *Config) validate() error {
 	}
 	if c.SupervisorProb < 0 || c.SupervisorProb > 1 {
 		return fmt.Errorf("loop: SupervisorProb must be in [0, 1], got %v", c.SupervisorProb)
+	}
+	if err := validateOutputs(c.Outputs); err != nil {
+		return fmt.Errorf("loop: %w", err)
 	}
 	return nil
 }

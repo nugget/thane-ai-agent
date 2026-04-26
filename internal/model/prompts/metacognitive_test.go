@@ -9,8 +9,11 @@ func TestMetacognitivePrompt_Normal(t *testing.T) {
 	state := "## Current Sense\nAll quiet."
 	result := MetacognitivePrompt(state, false)
 
-	if !strings.Contains(result, "All quiet.") {
-		t.Error("prompt should contain state file content")
+	if strings.Contains(result, "All quiet.") {
+		t.Error("prompt should not inline state file content")
+	}
+	if !strings.Contains(result, "Declared Durable") {
+		t.Error("prompt should point to declared output context")
 	}
 	if !strings.Contains(result, "Metacognitive loop iteration") {
 		t.Error("prompt should contain base template header")
@@ -24,8 +27,8 @@ func TestMetacognitivePrompt_Supervisor(t *testing.T) {
 	state := "## Current Sense\nMonitoring garage."
 	result := MetacognitivePrompt(state, true)
 
-	if !strings.Contains(result, "Monitoring garage.") {
-		t.Error("supervisor prompt should contain state file content")
+	if strings.Contains(result, "Monitoring garage.") {
+		t.Error("supervisor prompt should not inline state file content")
 	}
 	if !strings.Contains(result, "Supervisor Review") {
 		t.Error("supervisor prompt should contain supervisor augmentation")
@@ -46,11 +49,11 @@ func TestMetacognitivePrompt_Supervisor(t *testing.T) {
 func TestMetacognitivePrompt_EmptyState(t *testing.T) {
 	result := MetacognitivePrompt("", false)
 
-	if !strings.Contains(result, "does not exist yet") {
-		t.Error("empty state should produce first-iteration placeholder")
+	if !strings.Contains(result, "Declared Durable") {
+		t.Error("empty state prompt should rely on declared output context")
 	}
-	if !strings.Contains(result, "update_metacognitive_state") {
-		t.Error("first-iteration placeholder should mention update_metacognitive_state")
+	if !strings.Contains(result, "replace_output_metacognitive_state") {
+		t.Error("prompt should mention generated output tool")
 	}
 }
 
@@ -65,18 +68,18 @@ func TestMetacognitivePrompt_SetNextSleepMentioned(t *testing.T) {
 func TestMetacognitivePrompt_MentionsUpdateTool(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "update_metacognitive_state") {
-		t.Error("prompt should mention update_metacognitive_state tool")
+	if !strings.Contains(result, "replace_output_metacognitive_state") {
+		t.Error("prompt should mention generated output tool")
 	}
 	if strings.Contains(result, "file_write") {
-		t.Error("prompt should not mention file_write (replaced by update_metacognitive_state)")
+		t.Error("prompt should not mention file_write")
 	}
 }
 
 func TestMetacognitivePrompt_FileToolsNotAvailable(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "file tools are NOT available") {
+	if !strings.Contains(result, "File tools, exec, and session management") {
 		t.Error("prompt should explicitly state file tools are not available")
 	}
 	if strings.Contains(result, "Read it carefully") {
@@ -115,7 +118,7 @@ func TestMetacognitivePrompt_TimestampConversionGuidance(t *testing.T) {
 func TestMetacognitivePrompt_OnlyWriteMechanism(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "ONLY tool that writes your state file") {
-		t.Error("prompt should clarify update_metacognitive_state is the only write mechanism")
+	if !strings.Contains(result, "sanctioned interface") {
+		t.Error("prompt should clarify the generated output tool is the only write mechanism")
 	}
 }

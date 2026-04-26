@@ -195,6 +195,18 @@ tag-scoped provider or tagged knowledge article.
 
 This keeps prompts lean and makes available context more meaningful.
 
+### Keep loop-declared outputs concrete
+
+If a loop declares durable outputs, render those outputs from the same
+runtime spec that generates the tools. The context should state the
+output name, kind, document reference, generated tool name, write mode,
+and current content or recent journal tail in a capped, deterministic
+shape.
+
+This is runtime data. Put it in a context provider block, not in static
+prompt prose, and do not make the model infer whether a file tool,
+document tool, or generated output tool is the intended write surface.
+
 ### Separate instructions from data
 
 Behavioral guidance belongs in talents and prompts. Runtime facts belong
