@@ -127,6 +127,8 @@ covered by trusted signed git history.
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
+| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it. |
+| `doc_commit` | Commit an approved `doc_intake` result through managed mutations. |
 | `doc_write` | Write or replace a document. |
 | `doc_edit` | Targeted edit within a document. |
 | `doc_copy` | Copy a document to another location. |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -21,12 +22,14 @@ const (
 
 // Tools exposes model-facing document navigation tools.
 type Tools struct {
-	store *Store
+	store    *Store
+	intakeMu sync.Mutex
+	intakes  map[string]IntakeResult
 }
 
 // NewTools creates a document tool surface.
 func NewTools(store *Store) *Tools {
-	return &Tools{store: store}
+	return &Tools{store: store, intakes: make(map[string]IntakeResult)}
 }
 
 // BrowseArgs requests one rooted browse step through an indexed corpus.

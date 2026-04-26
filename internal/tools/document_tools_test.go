@@ -289,6 +289,52 @@ func TestDocumentLinksHandlerSupportsLimitsAndTruncation(t *testing.T) {
 	}
 }
 
+func TestDocumentIntakeAndCommitHandlersCreateManagedDocument(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	intakeTool := reg.Get("doc_intake")
+	if intakeTool == nil {
+		t.Fatal("doc_intake not registered")
+	}
+	commitTool := reg.Get("doc_commit")
+	if commitTool == nil {
+		t.Fatal("doc_commit not registered")
+	}
+
+	intakeOut, err := intakeTool.Handler(context.Background(), map[string]any{
+		"root":          "kb",
+		"intent":        "create a durable operating note",
+		"summary":       "Garage door opener reset notes.",
+		"desired_title": "Garage Door Reset",
+		"tags":          []any{"home"},
+	})
+	if err != nil {
+		t.Fatalf("doc_intake: %v", err)
+	}
+	var intake documents.IntakeResult
+	if err := json.Unmarshal([]byte(intakeOut), &intake); err != nil {
+		t.Fatalf("unmarshal doc_intake: %v", err)
+	}
+	if intake.IntakeID == "" || intake.ProposedRef == "" {
+		t.Fatalf("intake = %#v, want id and proposed ref", intake)
+	}
+
+	if _, err := commitTool.Handler(context.Background(), map[string]any{
+		"intake_id": intake.IntakeID,
+		"body":      "# Garage Door Reset\n\nHold the wall button until the opener resets.",
+	}); err != nil {
+		t.Fatalf("doc_commit: %v", err)
+	}
+	record, err := store.Read(context.Background(), intake.ProposedRef)
+	if err != nil {
+		t.Fatalf("Read committed intake document: %v", err)
+	}
+	if record.Title != "Garage Door Reset" {
+		t.Fatalf("record title = %q, want Garage Door Reset", record.Title)
+	}
+}
+
 func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 	t.Helper()
 
