@@ -28,6 +28,8 @@ BAD delegate tasks (keep these yourself):
 
 Use the guidance field to steer execution: provide entity names, file paths, specific focus areas, or output format preferences. More specific guidance means fewer wasted iterations.
 
-Use tags to scope the delegate's capability surface. Delegates inherit the caller's elective capability tags by default. Set inherit_caller_tags=false only when you need a strict, fresh tool scope.
+Use tags to scope the delegate's capability surface. Use a root entry-point tag like development, home, operations, knowledge, media, interactive, or people when the delegate should read the menu guidance and decide which narrower toolset to activate. Use leaf tags like ha, files, forge, web, loops, documents, or diagnostics when you already know the exact surface needed.
+
+Delegates inherit the caller's elective capability tags by default. Set inherit_caller_tags=false only when you need a strict, fresh tool scope.
 
 Use mode="async" when you want the delegate to keep running in the background and report the result back into the current conversation later instead of blocking for a direct reply.`

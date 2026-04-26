@@ -39,6 +39,7 @@ func ToolDefinition() map[string]any {
 				"description": "Optional capability tags to scope the delegate's tools. " +
 					"When provided, the delegate only sees tools from these tags " +
 					"(plus inherited elective caller tags and always-active tags). " +
+					"Use root entry-point tags when the delegate should choose a narrower branch; use leaf tags when you already know the needed toolset. " +
 					"Omit to inherit the caller's elective task context and any compatibility profile default tags.",
 			},
 			"inherit_caller_tags": map[string]any{

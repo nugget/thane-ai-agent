@@ -129,10 +129,18 @@ Delegates inherit elective caller capability tags by default. This keeps
 task context such as activated domain tags or KB articles attached to
 the child work without making the orchestrator restate it on every
 handoff. If explicit tags are provided, they take precedence over profile
-default tags. Runtime/channel affordance tags such as `message_channel`
-and trust tags such as `owner` are not inherited as model-requested tags;
-they must be asserted again by trusted runtime context. Use
-`inherit_caller_tags=false` for a strict fresh scope.
+default tags.
+
+Use root entry-point tags when the delegate should read the menu guidance
+and choose the next branch itself: `development`, `home`, `operations`,
+`knowledge`, `media`, `interactive`, or `people`. Use leaf tags when the
+caller already knows the needed toolset: `ha`, `files`, `forge`, `web`,
+`loops`, `documents`, `diagnostics`, and similar focused tags.
+
+Runtime/channel affordance tags such as `message_channel` and trust tags
+such as `owner` are not inherited as model-requested tags; they must be
+asserted again by trusted runtime context. Use `inherit_caller_tags=false`
+for a strict fresh scope.
 
 ## Writing Good Delegation Prompts
 
