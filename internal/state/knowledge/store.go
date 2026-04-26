@@ -324,9 +324,12 @@ func (s *Store) GetBySubjects(subjects []string) ([]*Fact, error) {
 		args[i] = sub
 	}
 
+	// updated_at is stored at second precision, so multiple facts set
+	// in a tight loop tie. Tiebreak on key ASC for deterministic order
+	// across SQLite plans (FTS5 vs LIKE fallback) and test stability.
 	query := `SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` AND subjects IS NOT NULL AND EXISTS (
 		SELECT 1 FROM json_each(subjects) WHERE value IN (` + strings.Join(placeholders, ",") + `)
-	) ORDER BY updated_at DESC`
+	) ORDER BY updated_at DESC, key ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
