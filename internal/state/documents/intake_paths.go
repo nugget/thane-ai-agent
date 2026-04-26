@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"unicode"
 )
 
 func normalizeIntakeTitle(args IntakeArgs) string {
@@ -32,7 +33,9 @@ func normalizeIntakeTags(tags []string, observed []ValueCount) []string {
 			continue
 		}
 		observedByFold[strings.ToLower(clean)] = clean
-		observedBySlug[slugify(clean)] = clean
+		if slug := slugifyIntakeValue(clean); slug != "" {
+			observedBySlug[slug] = clean
+		}
 	}
 	out := make([]string, 0, len(tags))
 	for _, tag := range tags {
@@ -44,7 +47,10 @@ func normalizeIntakeTags(tags []string, observed []ValueCount) []string {
 			out = append(out, observed)
 			continue
 		}
-		slug := slugify(tag)
+		slug := slugifyIntakeValue(tag)
+		if slug == "" {
+			continue
+		}
 		if observed := observedBySlug[slug]; observed != "" {
 			out = append(out, observed)
 			continue
@@ -52,6 +58,15 @@ func normalizeIntakeTags(tags []string, observed []ValueCount) []string {
 		out = append(out, slug)
 	}
 	return dedupeSorted(out)
+}
+
+func slugifyIntakeValue(raw string) string {
+	for _, r := range raw {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return slugify(raw)
+		}
+	}
+	return ""
 }
 
 func (s *Store) proposeIntakeRef(ctx context.Context, root string, args IntakeArgs, title string, tags []string, related []IntakeRelatedDocument) (string, string, error) {

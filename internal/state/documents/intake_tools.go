@@ -143,9 +143,7 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if action != IntakeActionDraftForReview {
-		t.forgetIntake(args.IntakeID)
-	}
+	t.forgetIntake(args.IntakeID)
 	return marshalToolResult(CommitResult{
 		IntakeID: args.IntakeID,
 		Action:   action,
@@ -165,22 +163,50 @@ func (t *Tools) rememberIntake(result *IntakeResult) {
 	t.intakeMu.Lock()
 	defer t.intakeMu.Unlock()
 	if t.intakes == nil {
-		t.intakes = make(map[string]IntakeResult)
+		t.intakes = make(map[string]intakeEntry)
 	}
-	t.intakes[id] = *result
+	now := time.Now()
+	t.pruneIntakesLocked(now)
+	if len(t.intakes) >= maxIntakeEntries {
+		t.evictOldestIntakeLocked()
+	}
+	t.intakes[id] = intakeEntry{result: *result, createdAt: now}
 }
 
 func (t *Tools) lookupIntake(id string) (IntakeResult, bool) {
 	t.intakeMu.Lock()
 	defer t.intakeMu.Unlock()
-	result, ok := t.intakes[id]
-	return result, ok
+	t.pruneIntakesLocked(time.Now())
+	entry, ok := t.intakes[id]
+	return entry.result, ok
 }
 
 func (t *Tools) forgetIntake(id string) {
 	t.intakeMu.Lock()
 	defer t.intakeMu.Unlock()
 	delete(t.intakes, id)
+}
+
+func (t *Tools) pruneIntakesLocked(now time.Time) {
+	for id, entry := range t.intakes {
+		if entry.createdAt.IsZero() || now.Sub(entry.createdAt) > intakeEntryTTL {
+			delete(t.intakes, id)
+		}
+	}
+}
+
+func (t *Tools) evictOldestIntakeLocked() {
+	oldestID := ""
+	var oldest time.Time
+	for id, entry := range t.intakes {
+		if oldestID == "" || entry.createdAt.Before(oldest) {
+			oldestID = id
+			oldest = entry.createdAt
+		}
+	}
+	if oldestID != "" {
+		delete(t.intakes, oldestID)
+	}
 }
 
 func newIntakeID() string {

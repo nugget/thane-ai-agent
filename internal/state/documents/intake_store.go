@@ -24,7 +24,7 @@ func (s *Store) Intake(ctx context.Context, args IntakeArgs) (*IntakeResult, err
 	}
 
 	policy := s.rootPolicy(root)
-	observedTags, err := s.Values(ctx, root, "tags", 40)
+	observedTags, err := s.values(ctx, root, "tags", 40, false)
 	if err != nil {
 		return nil, fmt.Errorf("load observed tags: %w", err)
 	}

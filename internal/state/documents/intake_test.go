@@ -3,10 +3,12 @@ package documents
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
@@ -178,6 +180,82 @@ func TestDocumentCommitRejectsUnknownAction(t *testing.T) {
 		Body:     "# Action Validation\n",
 	}); err == nil || !strings.Contains(err.Error(), "unsupported action") {
 		t.Fatalf("Commit unknown action error = %v, want unsupported action", err)
+	}
+}
+
+func TestDocumentCommitDraftForReviewForgetsIntake(t *testing.T) {
+	t.Parallel()
+
+	tools, _ := newIntakeTools(t, nil)
+	out, err := tools.Intake(context.Background(), IntakeArgs{
+		Root:         "kb",
+		Summary:      "A draft-only intake should not stay resident.",
+		DesiredTitle: "Draft Intake",
+	})
+	if err != nil {
+		t.Fatalf("Intake: %v", err)
+	}
+	var intake IntakeResult
+	if err := json.Unmarshal([]byte(out), &intake); err != nil {
+		t.Fatalf("unmarshal intake: %v", err)
+	}
+	if _, err := tools.Commit(context.Background(), CommitArgs{
+		IntakeID: intake.IntakeID,
+		Action:   IntakeActionDraftForReview,
+	}); err != nil {
+		t.Fatalf("Commit draft_for_review: %v", err)
+	}
+	if _, err := tools.Commit(context.Background(), CommitArgs{
+		IntakeID: intake.IntakeID,
+		Body:     "# Draft Intake\n",
+	}); err == nil || !strings.Contains(err.Error(), "unknown intake_id") {
+		t.Fatalf("Commit reused draft intake error = %v, want unknown intake_id", err)
+	}
+}
+
+func TestDocumentIntakeCacheIsBoundedAndExpires(t *testing.T) {
+	t.Parallel()
+
+	tools, _ := newIntakeTools(t, nil)
+	for i := 0; i < maxIntakeEntries+10; i++ {
+		result := &IntakeResult{
+			Status:            IntakeReady,
+			RecommendedAction: IntakeActionCreateNew,
+			ProposedRef:       fmt.Sprintf("kb:notes/intake-%d.md", i),
+		}
+		tools.rememberIntake(result)
+	}
+	tools.intakeMu.Lock()
+	got := len(tools.intakes)
+	tools.intakeMu.Unlock()
+	if got != maxIntakeEntries {
+		t.Fatalf("intake cache size = %d, want %d", got, maxIntakeEntries)
+	}
+
+	tools.intakeMu.Lock()
+	tools.intakes["old"] = intakeEntry{
+		result: IntakeResult{
+			IntakeID:          "old",
+			Status:            IntakeReady,
+			RecommendedAction: IntakeActionCreateNew,
+		},
+		createdAt: time.Now().Add(-intakeEntryTTL - time.Second),
+	}
+	tools.intakeMu.Unlock()
+
+	if _, ok := tools.lookupIntake("old"); ok {
+		t.Fatal("expired intake was still available")
+	}
+}
+
+func TestNormalizeIntakeTagsDropsPunctuationOnlyTags(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeIntakeTags([]string{"...", "--", "Home Assistant"}, []ValueCount{
+		{Value: "home-assistant", Count: 2},
+	})
+	if len(got) != 1 || got[0] != "home-assistant" {
+		t.Fatalf("normalizeIntakeTags = %#v, want only observed home-assistant tag", got)
 	}
 }
 
