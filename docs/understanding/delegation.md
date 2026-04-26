@@ -20,7 +20,7 @@ tool-heavy execution to a smaller, faster local model.
 User: "Set the office Hue Go to teal"
 
 Orchestrator (Opus):
-  -> "Delegate to ha profile: search for 'hue go' entities in office,
+  -> "Delegate with the ha capability tag: search for 'hue go' entities in office,
      call light.turn_on with rgb_color [0,200,180], verify with get_state"
 
 Delegate (local 20B model):
@@ -47,10 +47,10 @@ partitioned:
 - `session_working_memory` — session scratchpad
 - `archive_search` — conversation history search
 
-**Delegates see all tools** for their profile:
-- Native HA tools (`get_state`, `find_entity`, `call_service`, etc.)
-- MCP tools (`mcp_home_assistant_ha_*`)
-- File operations, shell exec, web search/fetch
+**Delegates see tools** through their capability tags:
+- HA-tagged native and MCP tools for device control or entity queries
+- Web, file, shell, document, and other tool families when those tags are active
+- Always-active tools configured for the instance
 
 The `thane:ops` [routing profile](../operating/routing-profiles.md) disables
 orchestrator gating — the primary model sees everything directly. Use it when
@@ -64,7 +64,7 @@ Instead, **talent files** teach it what's available and how to write effective
 delegation prompts.
 
 `delegate-hints.md` contains:
-- Which tools exist for each delegation profile
+- Which capability tags and tool families exist
 - Patterns to follow (search, act, verify for HA)
 - Anti-patterns to avoid (multi-entity delegations, `list_entities` abuse)
 - Known quirks (ha-mcp `return_response` errors, silent `call_service` failures)
@@ -116,21 +116,31 @@ if a server exists, Thane can host it.
 
 ## Delegation Profiles
 
-When delegating, the orchestrator specifies a **profile** that determines
-which model and tools the delegate gets:
+Delegation profiles are compatibility hints for budget and routing defaults.
+They do not own a separate system prompt or fixed tool allowlist. Capability
+tags determine the delegate's tool and context scope.
 
-| Profile | Model | Tools | Use For |
-|---------|-------|-------|---------|
-| `general` | Default local | All (native + MCP) | Most tasks |
-| `ha` | Default local | Native HA tools only | Device control, entity queries |
+| Profile | Default Tags | Routing Bias | Use For |
+|---------|--------------|--------------|---------|
+| `general` | none | local, general purpose | Most tasks |
+| `ha` | `ha` when no explicit tags are supplied | local, device-control mission | Legacy HA delegations |
 
 Delegates inherit elective caller capability tags by default. This keeps
 task context such as activated domain tags or KB articles attached to
 the child work without making the orchestrator restate it on every
-handoff. Runtime/channel affordance tags such as `message_channel` and
-trust tags such as `owner` are not inherited as model-requested tags;
-they must be asserted again by trusted runtime context. Use
-`inherit_caller_tags=false` for a strict fresh scope.
+handoff. If explicit tags are provided, they take precedence over profile
+default tags.
+
+Use root entry-point tags when the delegate should read the menu guidance
+and choose the next branch itself: `development`, `home`, `operations`,
+`knowledge`, `media`, `interactive`, or `people`. Use leaf tags when the
+caller already knows the needed toolset: `ha`, `files`, `forge`, `web`,
+`loops`, `documents`, `diagnostics`, and similar focused tags.
+
+Runtime/channel affordance tags such as `message_channel` and trust tags
+such as `owner` are not inherited as model-requested tags; they must be
+asserted again by trusted runtime context. Use `inherit_caller_tags=false`
+for a strict fresh scope.
 
 ## Writing Good Delegation Prompts
 

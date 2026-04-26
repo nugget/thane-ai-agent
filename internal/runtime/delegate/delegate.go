@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -44,16 +45,18 @@ const (
 
 type executionOptions struct {
 	inheritCallerTags bool
+	explicitTagScope  bool
 }
 
 func defaultExecutionOptions() executionOptions {
 	return executionOptions{inheritCallerTags: true}
 }
 
-func mergeDelegateScopeTags(ctx context.Context, explicitTags []string, inheritCallerTags bool) (scopeTags []string, inheritedTags []string, droppedTags []string, explicitScopeRequested bool) {
+func mergeDelegateScopeTags(ctx context.Context, explicitTags []string, inheritCallerTags bool, explicitTagScope bool) (scopeTags []string, inheritedTags []string, droppedTags []string, explicitScopeRequested bool) {
 	scope := make(map[string]bool)
 	inherited := make(map[string]bool)
 	dropped := make(map[string]bool)
+	explicitScopeRequested = explicitTagScope
 
 	if inheritCallerTags {
 		for _, tag := range tools.InheritableCapabilityTagsFromContext(ctx) {
@@ -109,6 +112,87 @@ func nonDelegableCapabilityTag(tag string) bool {
 	default:
 		return false
 	}
+}
+
+func applyProfileDefaultTags(scopeTags []string, profile *Profile, explicitScopeRequested bool) (mergedTags []string, appliedDefaults []string) {
+	mergedTags = append([]string(nil), scopeTags...)
+	if explicitScopeRequested || profile == nil || len(profile.DefaultTags) == 0 {
+		return mergedTags, nil
+	}
+
+	seen := make(map[string]bool, len(mergedTags)+len(profile.DefaultTags))
+	for _, tag := range mergedTags {
+		seen[tag] = true
+	}
+	for _, tag := range profile.DefaultTags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] || nonDelegableCapabilityTag(tag) {
+			continue
+		}
+		seen[tag] = true
+		mergedTags = append(mergedTags, tag)
+		appliedDefaults = append(appliedDefaults, tag)
+	}
+	sort.Strings(mergedTags)
+	sort.Strings(appliedDefaults)
+	return mergedTags, appliedDefaults
+}
+
+func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequested bool) *tools.Registry {
+	if len(scopeTags) > 0 || explicitScopeRequested {
+		merged := mergeTagLists(scopeTags, e.alwaysActiveTags)
+		var reg *tools.Registry
+		if len(merged) > 0 {
+			reg = e.parentReg.FilterByTags(merged)
+		} else {
+			reg = e.parentReg.FilteredCopy(nil)
+		}
+		return reg.FilteredCopyExcluding([]string{delegateToolName})
+	}
+	return e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
+}
+
+func mergeTagLists(tagGroups ...[]string) []string {
+	seen := make(map[string]bool)
+	for _, tags := range tagGroups {
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				seen[tag] = true
+			}
+		}
+	}
+	merged := make([]string, 0, len(seen))
+	for tag := range seen {
+		merged = append(merged, tag)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
+func (e *Executor) buildLegacySystemPrompt(ctx context.Context, effectiveTags map[string]bool, pathPrefixes map[string]string) string {
+	var sb strings.Builder
+	sb.WriteString(prompts.BaseSystemPrompt())
+	sb.WriteString("\n\n## Delegate Execution Contract\n\n")
+	sb.WriteString(prompts.DelegateRunInstructions)
+	sb.WriteString("\n\n")
+	sb.WriteString(awareness.CurrentConditions(e.timezone))
+
+	if e.tagCtxFunc != nil && len(effectiveTags) > 0 {
+		if tagCtx := e.tagCtxFunc(ctx, effectiveTags); tagCtx != "" {
+			sb.WriteString("\n\n## Capability Context\n\n")
+			sb.WriteString(tagCtx)
+		}
+	} else if e.forgeContext != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(e.forgeContext)
+	}
+
+	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(prefixPrompt)
+	}
+	return sb.String()
 }
 
 // ToolCallOutcome records the name and success/failure of a single tool
@@ -220,8 +304,8 @@ type ProfileOverride struct {
 	MaxTokens   int
 }
 
-// SetTimezone configures the IANA timezone for Current Conditions
-// in the delegate system prompt.
+// SetTimezone configures the IANA timezone for Current Conditions in
+// legacy delegate prompt assembly.
 func (e *Executor) SetTimezone(tz string) {
 	e.timezone = tz
 }
@@ -266,10 +350,9 @@ func (e *Executor) SetEventBus(bus *events.Bus) {
 	e.eventBus = bus
 }
 
-// SetForgeContext configures the forge account context block that is
-// appended to delegate system prompts. This gives delegates immediate
-// knowledge of configured forge accounts so they don't waste iterations
-// guessing account names.
+// SetForgeContext configures the forge account context block used by
+// legacy delegate prompt assembly. Loop-backed delegates receive this
+// kind of context through the normal loop context providers.
 func (e *Executor) SetForgeContext(ctx string) {
 	e.forgeContext = ctx
 }
@@ -289,10 +372,9 @@ func (e *Executor) SetLensProvider(fn func() []string) {
 	e.lensProvider = fn
 }
 
-// SetTagContextFunc configures the tag context builder function for
-// injecting capability context (static files, tagged KB articles,
-// and live providers) into delegate system prompts. When set, this
-// replaces the ad-hoc forge context injection.
+// SetTagContextFunc configures the legacy tag context builder function
+// for injecting capability context. Loop-backed delegates use the normal
+// loop prompt assembly path.
 func (e *Executor) SetTagContextFunc(fn tagContextFunc) {
 	e.tagCtxFunc = fn
 }
@@ -343,11 +425,9 @@ func (e *Executor) ProfileNames() []string {
 }
 
 // Execute runs a delegated task with the given profile and guidance.
-// When tags is non-empty, the delegate's tool registry is scoped to
-// only tools belonging to the given capability tags (plus any
-// always-active tags). Elective caller tags are inherited by default;
-// when the resulting scope has no tags, the profile's AllowedTools
-// controls tool selection.
+// Capability tags define the delegate's tool and context scope. Elective
+// caller tags are inherited by default; compatibility profiles may add
+// default tags only when the caller did not request an explicit scope.
 func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
 	return e.execute(ctx, task, profileName, guidance, tags, pathPrefixes, defaultExecutionOptions())
 }
@@ -463,28 +543,13 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	if profile == nil {
 		profile = e.profiles["general"]
 	}
-	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags)
+	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags, opts.explicitTagScope)
 	if len(droppedTags) > 0 {
 		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
 	}
+	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
 
-	// Build filtered tool registry. Tag-scoped delegations take
-	// precedence over the profile's AllowedTools list.
-	var reg *tools.Registry
-	if len(scopeTags) > 0 || explicitScopeRequested {
-		merged := append([]string(nil), scopeTags...)
-		merged = append(merged, e.alwaysActiveTags...)
-		if len(merged) > 0 {
-			reg = e.parentReg.FilterByTags(merged)
-		} else {
-			reg = e.parentReg.FilteredCopy(nil)
-		}
-		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
-	} else if len(profile.AllowedTools) > 0 {
-		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
-	} else {
-		reg = e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
-	}
+	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 
 	toolDefs := reg.List()
 	toolNames := reg.AllToolNames()
@@ -498,6 +563,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		"guidance", truncate(guidance, 200),
 		"tags", scopeTags,
 		"inherited_tags", inheritedTags,
+		"profile_default_tags", profileDefaultTags,
 		"tools_available", len(toolDefs),
 	)
 
@@ -518,15 +584,6 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		},
 	})
 
-	// Build system prompt.
-	var sb strings.Builder
-	sb.WriteString(profile.SystemPrompt)
-	sb.WriteString("\n\n")
-	sb.WriteString(awareness.CurrentConditions(e.timezone))
-
-	// Inject tag context (static files, KB articles, live providers).
-	// Falls back to the legacy forge-only injection when the tag
-	// context function is not configured.
 	// Build effective tag set: scoped tags + always-active + global lenses.
 	merged := make(map[string]bool, len(scopeTags)+len(e.alwaysActiveTags))
 	for _, t := range scopeTags {
@@ -540,21 +597,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 			merged[lens] = true
 		}
 	}
-	if e.tagCtxFunc != nil && len(merged) > 0 {
-		if tagCtx := e.tagCtxFunc(ctx, merged); tagCtx != "" {
-			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(tagCtx)
-		}
-	} else if e.forgeContext != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(e.forgeContext)
-	}
-
-	// Inject path prefix documentation so the delegate knows the shortcuts.
-	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(prefixPrompt)
-	}
+	systemPrompt := e.buildLegacySystemPrompt(ctx, merged, pathPrefixes)
 
 	// Expand temp file labels so the delegate sees real paths.
 	if e.tempFiles != nil {
@@ -574,7 +617,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	}
 
 	messages := []llm.Message{
-		{Role: "system", Content: sb.String()},
+		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userMsg.String()},
 	}
 
@@ -868,11 +911,12 @@ type preparedExecution struct {
 	profile          *Profile
 	routeHints       map[string]string
 	log              *slog.Logger
-	systemPrompt     string
 	userMessage      string
 	model            string
-	toolNames        []string
-	explicitTags     []string
+	scopeTags        []string
+	filterTags       []string
+	excludeTools     []string
+	tagFilterActive  bool
 	effectiveTags    []string
 	maxIterations    int
 	maxOutputTokens  int
@@ -983,7 +1027,10 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			Operation:   operation,
 			Completion:  completion,
 			MaxDuration: loopMaxDuration,
-			Tags:        append([]string(nil), prep.explicitTags...),
+			Tags:        append([]string(nil), prep.filterTags...),
+			Profile: router.LoopProfile{
+				Instructions: prompts.DelegateRunInstructions,
+			},
 			Metadata: map[string]string{
 				"category":          "delegate",
 				"delegate_id":       prep.id,
@@ -998,10 +1045,9 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ChannelBinding:           prep.channelBinding.Clone(),
 		Model:                    prep.model,
 		Hints:                    hints,
-		AllowedTools:             append([]string(nil), prep.toolNames...),
-		SkipTagFilter:            len(prep.explicitTags) == 0,
+		ExcludeTools:             append([]string(nil), prep.excludeTools...),
+		SkipTagFilter:            !prep.tagFilterActive,
 		InitialTags:              append([]string(nil), prep.effectiveTags...),
-		SystemPrompt:             prep.systemPrompt,
 		MaxIterations:            prep.maxIterations,
 		MaxOutputTokens:          prep.maxOutputTokens,
 		ToolTimeout:              prep.toolTimeout,
@@ -1145,29 +1191,21 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	if profile == nil {
 		profile = e.profiles["general"]
 	}
-	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags)
+	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags, opts.explicitTagScope)
 	if len(droppedTags) > 0 {
 		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
 	}
+	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
 
-	var reg *tools.Registry
-	if len(scopeTags) > 0 || explicitScopeRequested {
-		merged := append([]string(nil), scopeTags...)
-		merged = append(merged, e.alwaysActiveTags...)
-		if len(merged) > 0 {
-			reg = e.parentReg.FilterByTags(merged)
-		} else {
-			reg = e.parentReg.FilteredCopy(nil)
-		}
-		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
-	} else if len(profile.AllowedTools) > 0 {
-		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
-	} else {
-		reg = e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
-	}
+	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
-	toolNames := reg.AllToolNames()
-	sort.Strings(toolNames)
+	filterTags := mergeTagLists(scopeTags, e.alwaysActiveTags)
+	var excludeTools []string
+	if explicitScopeRequested && len(filterTags) == 0 {
+		excludeTools = e.parentReg.AllToolNames()
+		sort.Strings(excludeTools)
+	}
+	tagFilterActive := len(scopeTags) > 0 || explicitScopeRequested
 
 	log = log.With("profile", profile.Name)
 	ctx = logging.WithLogger(ctx, log)
@@ -1176,6 +1214,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		"guidance", truncate(guidance, 200),
 		"tags", scopeTags,
 		"inherited_tags", inheritedTags,
+		"profile_default_tags", profileDefaultTags,
 		"tools_available", len(toolDefs),
 	)
 
@@ -1196,24 +1235,6 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		effectiveTags = append(effectiveTags, tag)
 	}
 	sort.Strings(effectiveTags)
-
-	var sb strings.Builder
-	sb.WriteString(profile.SystemPrompt)
-	sb.WriteString("\n\n")
-	sb.WriteString(awareness.CurrentConditions(e.timezone))
-	if e.tagCtxFunc != nil && len(effectiveTagsMap) > 0 {
-		if tagCtx := e.tagCtxFunc(ctx, effectiveTagsMap); tagCtx != "" {
-			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(tagCtx)
-		}
-	} else if e.forgeContext != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(e.forgeContext)
-	}
-	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(prefixPrompt)
-	}
 
 	if e.tempFiles != nil {
 		parentConvID := tools.ConversationIDFromContext(ctx)
@@ -1256,11 +1277,12 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		profile:          profile,
 		routeHints:       e.effectiveDelegateRouterHints(ctx, profile),
 		log:              log,
-		systemPrompt:     sb.String(),
 		userMessage:      userMsg.String(),
 		model:            e.selectModel(ctx, task, profile, len(toolDefs)),
-		toolNames:        toolNames,
-		explicitTags:     append([]string(nil), scopeTags...),
+		scopeTags:        append([]string(nil), scopeTags...),
+		filterTags:       filterTags,
+		excludeTools:     excludeTools,
+		tagFilterActive:  tagFilterActive,
 		effectiveTags:    effectiveTags,
 		maxIterations:    maxIterations,
 		maxOutputTokens:  maxOutputTokens,

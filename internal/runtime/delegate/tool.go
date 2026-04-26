@@ -20,9 +20,8 @@ func ToolDefinition() map[string]any {
 			},
 			"profile": map[string]any{
 				"type":        "string",
-				"enum":        []string{"general", "ha"},
 				"default":     "general",
-				"description": "Delegation profile — controls which tools and context the delegate receives",
+				"description": "Compatibility profile for budget and routing defaults. Prefer tags for capability scoping. The ha profile adds the ha tag only when tags are omitted.",
 			},
 			"mode": map[string]any{
 				"type":        "string",
@@ -40,7 +39,8 @@ func ToolDefinition() map[string]any {
 				"description": "Optional capability tags to scope the delegate's tools. " +
 					"When provided, the delegate only sees tools from these tags " +
 					"(plus inherited elective caller tags and always-active tags). " +
-					"Omit to inherit the caller's elective task context or use the profile's default toolset.",
+					"Use root entry-point tags when the delegate should choose a narrower branch; use leaf tags when you already know the needed toolset. " +
+					"Omit to inherit the caller's elective task context and any compatibility profile default tags.",
 			},
 			"inherit_caller_tags": map[string]any{
 				"type":        "boolean",
@@ -91,7 +91,10 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		}
 
 		var tags []string
+		tagsProvided := false
 		if rawTags, ok := args["tags"].([]any); ok {
+			tagsProvided = true
+			tags = make([]string, 0, len(rawTags))
 			for _, rt := range rawTags {
 				if s, ok := rt.(string); ok {
 					tags = append(tags, s)
@@ -109,7 +112,10 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			}
 		}
 
-		opts := executionOptions{inheritCallerTags: inheritCallerTags}
+		opts := executionOptions{
+			inheritCallerTags: inheritCallerTags,
+			explicitTagScope:  tagsProvided,
+		}
 		if mode == "async" {
 			loopID, err := exec.startBackground(ctx, task, profileName, guidance, tags, pathPrefixes, opts)
 			if err != nil {

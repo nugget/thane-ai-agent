@@ -46,12 +46,18 @@ These tools load on every turn regardless of active tags.
 | `conversation_reset` | Reset the current conversation's message history. |
 | `send_notification` | Provider-agnostic fire-and-forget notification. |
 
-`thane_delegate` inherits elective caller capability tags by default so
-child work keeps the same task context. Runtime and channel affordance
-tags such as `owner` and `message_channel` are re-asserted only from
-trusted runtime context; they are not inherited as model-requested tags.
-Use `inherit_caller_tags: false` when a delegate needs a strict fresh
-tool scope.
+`thane_delegate` uses capability tags as its primary tool and context
+scope. It inherits elective caller tags by default so child work keeps
+the same task context; explicit `tags` override profile default tags.
+Use root entry-point tags such as `development`, `home`, `operations`,
+`knowledge`, `media`, `interactive`, or `people` when the delegate should
+read the menu guidance and choose a narrower branch. Use leaf tags such
+as `ha`, `files`, `forge`, `web`, `loops`, `documents`, or `diagnostics`
+when the caller already knows the needed toolset.
+Runtime and channel affordance tags such as `owner` and `message_channel`
+are re-asserted only from trusted runtime context; they are not inherited
+as model-requested tags. Use `inherit_caller_tags: false` when a delegate
+needs a strict fresh tool scope.
 
 ## `awareness` — live-context entity management
 
