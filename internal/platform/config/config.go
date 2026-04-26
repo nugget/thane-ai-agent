@@ -159,6 +159,16 @@ type Config struct {
 	// {workspace.path}/core; it is not configured here.
 	Paths map[string]string `yaml:"paths"`
 
+	// DocRoots configures per-root document policy keyed by paths root name.
+	// Keys match roots defined in paths plus the derived core root.
+	// Omitted roots use the default policy: indexed, managed-authorable,
+	// and not git-backed.
+	//
+	// This is a policy overlay, not a replacement for paths:. Use
+	// paths: to name the root and doc_roots: to say whether it is
+	// indexed, model-authorable, git-backed, signed, or verified.
+	DocRoots map[string]DocumentRootConfig `yaml:"doc_roots"`
+
 	// ExtraPath lists additional directories to prepend to the process
 	// PATH at startup, ensuring exec.LookPath finds binaries installed
 	// outside the default system PATH (e.g., /opt/homebrew/bin on macOS).
@@ -744,6 +754,56 @@ type ProvenanceConfig struct {
 // signing key set.
 func (c ProvenanceConfig) Configured() bool {
 	return c.Path != "" && c.SigningKey != ""
+}
+
+// DocumentRootConfig configures policy for one managed document root.
+// The root itself is still named under paths:, except for core:, which
+// is derived from workspace.path.
+type DocumentRootConfig struct {
+	// Indexing controls whether markdown files in this root are scanned
+	// into the document index. Omit to keep indexing enabled.
+	Indexing *bool `yaml:"indexing,omitempty"`
+
+	// Authoring controls whether managed document mutation tools may
+	// write this root. Empty defaults to "managed". Supported values:
+	// "managed", "read_only", and "restricted". Restricted is intended
+	// for high-integrity roots whose writes must come from narrower
+	// future flows.
+	Authoring string `yaml:"authoring,omitempty"`
+
+	// Git configures optional git-backed write provenance for this root.
+	Git DocumentRootGitConfig `yaml:"git,omitempty"`
+}
+
+// DocumentRootGitConfig configures git-backed provenance for one
+// managed document root.
+type DocumentRootGitConfig struct {
+	// Enabled controls whether this root participates in git-backed
+	// provenance. When false, git settings are ignored.
+	Enabled bool `yaml:"enabled,omitempty"`
+
+	// SignCommits creates a signed git commit for each managed document
+	// mutation. Requires signing_key.
+	SignCommits bool `yaml:"sign_commits,omitempty"`
+
+	// VerifySignatures is the desired verification policy for consumers
+	// of this root: "none", "warn", or "required". V1 records the
+	// policy and signs managed writes; policy-aware load/activation
+	// consumers enforce this in follow-up work.
+	VerifySignatures string `yaml:"verify_signatures,omitempty"`
+
+	// RepoPath optionally points at the git repository to use for this
+	// root. Empty means the root directory itself is the repository.
+	RepoPath string `yaml:"repo_path,omitempty"`
+
+	// SigningKey is the SSH private key used to sign managed commits.
+	// Supports ~ expansion at startup.
+	SigningKey string `yaml:"signing_key,omitempty"`
+
+	// AllowedSigners is the OpenSSH allowed signers file to use when
+	// verifying this root. Empty uses the repository-local
+	// .allowed_signers written from signing_key.
+	AllowedSigners string `yaml:"allowed_signers,omitempty"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -2187,6 +2247,9 @@ func (c *Config) Validate() error {
 	if c.Provenance.SigningKey != "" && c.Provenance.Path == "" {
 		return fmt.Errorf("provenance.path is required when provenance.signing_key is set")
 	}
+	if err := c.validateDocRoots(); err != nil {
+		return err
+	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
@@ -2235,6 +2298,33 @@ func (c *Config) validateModels() error {
 		case "", "simple", "moderate", "complex":
 		default:
 			return fmt.Errorf("models.available[%d] (%s): min_complexity %q invalid (expected simple, moderate, complex)", i, m.Name, m.MinComplexity)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateDocRoots() error {
+	for root, policy := range c.DocRoots {
+		root = strings.TrimSuffix(strings.TrimSpace(root), ":")
+		if root == "" {
+			return fmt.Errorf("doc_roots contains an empty root name")
+		}
+		switch strings.TrimSpace(policy.Authoring) {
+		case "", "managed", "read_only", "restricted":
+		default:
+			return fmt.Errorf("doc_roots.%s.authoring %q must be one of [managed, read_only, restricted]", root, policy.Authoring)
+		}
+		git := policy.Git
+		switch strings.TrimSpace(git.VerifySignatures) {
+		case "", "none", "warn", "required":
+		default:
+			return fmt.Errorf("doc_roots.%s.git.verify_signatures %q must be one of [none, warn, required]", root, git.VerifySignatures)
+		}
+		if git.SignCommits && !git.Enabled {
+			return fmt.Errorf("doc_roots.%s.git.enabled must be true when sign_commits is true", root)
+		}
+		if git.Enabled && git.SignCommits && strings.TrimSpace(git.SigningKey) == "" {
+			return fmt.Errorf("doc_roots.%s.git.signing_key is required when sign_commits is true", root)
 		}
 	}
 	return nil

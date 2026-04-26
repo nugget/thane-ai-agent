@@ -327,37 +327,6 @@ func (s *Store) readDocumentFile(absPath, root, relPath string) (*DocumentRecord
 	}, rawFrontmatter, body, nil
 }
 
-func (s *Store) writeDocumentFile(ctx context.Context, root, relPath, raw string) error {
-	absPath, err := s.resolveDocumentWritePath(root, relPath)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return fmt.Errorf("create document directories: %w", err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(absPath), ".thane-doc-*")
-	if err != nil {
-		return fmt.Errorf("create temp document: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.WriteString(raw); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temp document: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp document: %w", err)
-	}
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		return fmt.Errorf("replace document: %w", err)
-	}
-	if err := s.upsertFile(ctx, root, relPath); err != nil {
-		return fmt.Errorf("refresh indexed document: %w", err)
-	}
-	s.touchLastRefresh(time.Now())
-	return nil
-}
-
 func (s *Store) resolveDocumentWritePath(root, relPath string) (string, error) {
 	rootPath, err := s.resolveRootPath(root)
 	if err != nil {

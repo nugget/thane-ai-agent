@@ -39,6 +39,7 @@ func ExampleConfig() *Config {
 	loopsEnabled := true
 	delegatesEnabled := true
 	envelopesEnabled := true
+	docRootIndexing := true
 
 	return &Config{
 		// ── Required / always-shown sections ──────────────────────────────
@@ -106,6 +107,22 @@ func ExampleConfig() *Config {
 			"generated":  "./generated",
 			"kb":         "./knowledge",
 			"scratchpad": "./scratchpad",
+		},
+
+		DocRoots: map[string]DocumentRootConfig{
+			"kb": {
+				Indexing:  &docRootIndexing,
+				Authoring: "managed",
+				Git: DocumentRootGitConfig{
+					Enabled:          true,
+					SignCommits:      true,
+					VerifySignatures: "warn",
+					SigningKey:       "~/.ssh/id_ed25519",
+				},
+			},
+			"scratchpad": {
+				Authoring: "managed",
+			},
 		},
 
 		ShellExec: ShellExecConfig{

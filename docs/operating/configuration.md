@@ -189,14 +189,41 @@ paths:
   kb: ~/Thane/knowledge
   scratchpad: ~/Thane/scratchpad
   dossiers: ~/Vaults/private-dossiers
+
+doc_roots:
+  kb:
+    authoring: managed
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: warn
+      signing_key: ~/.ssh/id_ed25519
+  dossiers:
+    authoring: read_only
+  scratchpad:
+    indexing: false
+    authoring: managed
 ```
 
 Any directory listed in `paths:` becomes a named local collection that
 Thane can keep track of.
 
-This is how you teach Thane that a folder matters as part of its working
-world. You do not need a second indexing section or a separate enable
-switch.
+Use `paths:` to name the collection. Use `doc_roots:` only when that
+collection needs policy: whether Thane indexes it, whether managed
+document tools may write to it, and whether writes should go through a
+signed git history.
+
+`authoring` accepts `managed`, `read_only`, or `restricted`. `managed`
+is the default and allows document tools and loop-declared output tools
+to write the root. `read_only` blocks managed writes. `restricted`
+reserves the root for narrower future flows.
+
+`git.sign_commits` turns each managed document write/delete into a
+signed git commit. By default the root itself is the repository; set
+`git.repo_path` when several roots live under one larger repo. Set
+`git.allowed_signers` to use an existing OpenSSH allowed signers file;
+otherwise Thane writes a repository-local `.allowed_signers` file from
+the signing key.
 
 Good uses for custom roots:
 

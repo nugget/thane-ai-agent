@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,6 +79,76 @@ func TestStoreWriteRead(t *testing.T) {
 
 	if got != content {
 		t.Errorf("Read = %q, want %q", got, content)
+	}
+}
+
+func TestStoreDeleteCreatesSignedDeletionCommit(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.Write(t.Context(), "state.md", "present", "write-state"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Delete(t.Context(), "state.md", "delete-state"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.path, "state.md")); !os.IsNotExist(err) {
+		t.Fatalf("state.md stat error = %v, want not exist", err)
+	}
+	hist, err := s.History(t.Context(), "state.md")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if hist.RevisionCount != 2 || hist.LastMessage != "delete-state" {
+		t.Fatalf("History = %+v, want write and delete commits", hist)
+	}
+}
+
+func TestStoreDeleteRejectsUntrackedFileWithoutRemovingIt(t *testing.T) {
+	s := testStore(t)
+
+	filename := "manual.md"
+	path := filepath.Join(s.path, filename)
+	if err := os.WriteFile(path, []byte("outside provenance"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	err := s.Delete(t.Context(), filename, "delete-manual")
+	if err == nil {
+		t.Fatal("Delete returned nil, want untracked-file error")
+	}
+	if !strings.Contains(err.Error(), "untracked file") {
+		t.Fatalf("Delete error = %v, want untracked-file message", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("manual.md stat after failed delete = %v, want file preserved", statErr)
+	}
+}
+
+func TestStoreNewWithOptionsUsesExternalAllowedSigners(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	allowedPath := filepath.Join(dir, "allowed_signers")
+	signer := testSigner(t)
+	if err := os.WriteFile(allowedPath, []byte("thane@provenance.local "+signer.PublicKey()+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile allowed signers: %v", err)
+	}
+	storePath := filepath.Join(dir, "repo")
+	s, err := NewWithOptions(storePath, signer, slog.Default(), Options{
+		AllowedSignersPath: allowedPath,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(storePath, ".allowed_signers")); !os.IsNotExist(err) {
+		t.Fatalf(".allowed_signers stat error = %v, want repository-local file absent", err)
+	}
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-external-signers"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.git(t.Context(), nil, nil, "verify-commit", "HEAD"); err != nil {
+		t.Fatalf("verify-commit with external allowed signers: %v", err)
 	}
 }
 

@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -258,10 +257,9 @@ func (a *App) initChannels(s *newState) error {
 		a.loop.SetExtractor(extractor)
 	}
 
-	// Provenance storage is intentionally not initialized here because
-	// there is currently no runtime consumer wired to use it. Skipping
-	// startup avoids unnecessary work and prevents misleading logs that
-	// imply provenance is active when it is not.
+	// Git provenance is initialized per managed document root below when
+	// doc_roots.<root>.git enables signed commits. The legacy top-level
+	// provenance block is retained only for older config compatibility.
 
 	// --- Attachment store ---
 	// Content-addressed file storage with SHA-256 deduplication.
@@ -282,20 +280,13 @@ func (a *App) initChannels(s *newState) error {
 	// structured search, and section retrieval when the exact path is not
 	// yet known.
 	if s.resolver != nil {
-		documentRoots := make(map[string]string)
-		for _, root := range s.resolver.Prefixes() {
-			absPath, err := s.resolver.Resolve(root + ":")
-			if err != nil {
-				continue
-			}
-			info, err := os.Stat(absPath)
-			if err != nil || !info.IsDir() {
-				continue
-			}
-			documentRoots[root] = absPath
-		}
+		documentRoots := buildDocumentRoots(s.resolver)
 		if len(documentRoots) > 0 {
-			docStore, err := documents.NewStore(a.mem.DB(), documentRoots, a.logger.With("component", "documents"))
+			docOptions, err := a.buildDocumentStoreOptions(documentRoots, s.resolver)
+			if err != nil {
+				return err
+			}
+			docStore, err := documents.NewStoreWithOptions(a.mem.DB(), documentRoots, a.logger.With("component", "documents"), docOptions)
 			if err != nil {
 				return fmt.Errorf("create document index: %w", err)
 			}
@@ -305,12 +296,9 @@ func (a *App) initChannels(s *newState) error {
 				go docStore.RunRefresher(ctx)
 				return nil
 			})
-			roots := make([]string, 0, len(documentRoots))
-			for root := range documentRoots {
-				roots = append(roots, root)
-			}
-			sort.Strings(roots)
-			a.logger.Info("document index enabled", "roots", roots)
+			roots := sortedDocumentRootNames(documentRoots)
+			attrs := append([]slog.Attr{slog.Any("roots", roots)}, documentRootPolicyAttrs(docOptions, roots)...)
+			a.logger.LogAttrs(context.Background(), slog.LevelInfo, "document index enabled", attrs...)
 		}
 	}
 

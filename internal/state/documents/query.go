@@ -20,10 +20,11 @@ func (s *Store) Roots(ctx context.Context) ([]RootSummary, error) {
 		return nil, err
 	}
 	summaries := make([]RootSummary, 0, len(s.roots))
-	for _, root := range s.indexedRoots() {
+	for _, root := range s.allRoots() {
 		summary := RootSummary{
-			Root: root,
-			Path: s.roots[root],
+			Root:   root,
+			Path:   s.roots[root],
+			Policy: s.rootPolicySummary(root),
 		}
 		if err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(word_count), 0), COALESCE(MAX(modified_at), '')

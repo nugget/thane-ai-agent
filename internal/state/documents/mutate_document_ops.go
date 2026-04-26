@@ -104,17 +104,11 @@ func (s *Store) Delete(ctx context.Context, args DeleteArgs) (*DeleteResult, err
 		return nil, err
 	}
 
-	if err := os.Remove(absPath); err != nil {
+	if err := s.removeDocumentFile(ctx, root, relPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}
-		return nil, fmt.Errorf("delete document: %w", err)
-	}
-	if err := s.deleteIndexedDocument(ctx, root, relPath); err != nil {
 		return nil, err
-	}
-	if rootPath, err := s.resolveRootPath(root); err == nil {
-		s.pruneEmptyDocumentDirs(rootPath, filepath.Dir(absPath))
 	}
 	return deleteResultFromRecord(record), nil
 }
@@ -180,7 +174,7 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 	if err := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(raw)); err != nil {
 		return nil, err
 	}
-	if err := os.Remove(srcAbsPath); err != nil {
+	if err := s.removeDocumentFile(ctx, srcRoot, srcRelPath); err != nil {
 		if destinationExists {
 			if restoreErr := s.writeDocumentFile(ctx, dstRoot, dstRelPath, string(originalDestinationRaw)); restoreErr != nil {
 				if os.IsNotExist(err) {
@@ -196,12 +190,6 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
 		}
 		return nil, fmt.Errorf("remove source document: %w", err)
-	}
-	if err := s.deleteIndexedDocument(ctx, srcRoot, srcRelPath); err != nil {
-		return nil, err
-	}
-	if rootPath, err := s.resolveRootPath(srcRoot); err == nil {
-		s.pruneEmptyDocumentDirs(rootPath, filepath.Dir(srcAbsPath))
 	}
 
 	destinationRecord, _, _, err := s.readDocumentFile(dstAbsPath, dstRoot, dstRelPath)

@@ -109,20 +109,19 @@ understood as **managed document roots with different integrity
 policies**. What differs between them isn't their storage nature; it's
 their authoring policy, indexing behavior, and provenance requirements.
 
-[Issue #657](https://github.com/nugget/thane-ai-agent/issues/657)
-describes the target architecture: a root-policy model where each
-document store declares its integrity tier — whether the model may
-author directly, whether writes go through git-backed commit flows,
-whether signatures are required, whether verification blocks loading.
-Persona files get high-integrity roots with signed commits. Knowledge
-bases get managed authoring with optional git backing. Scratchpads get
-low-integrity ephemeral storage. Same architectural primitive,
-different policy dials.
+The root-policy model lets each document store declare its integrity
+tier: whether the model may author directly, whether writes go through
+git-backed commit flows, whether signatures are expected, and whether a
+root participates in indexing. Persona files can move toward
+high-integrity roots with signed commits. Knowledge bases can use
+managed authoring with optional git backing. Scratchpads can stay
+low-integrity and even opt out of indexing. Same architectural
+primitive, different policy dials.
 
-We're not there yet. The current memory works well enough for
-production use, but the path to genuine provenance, trust-aware
-document management, and composable indexing across roots runs through
-#657. See [Memory](memory.md) for what's implemented today.
+The current implementation establishes policy-aware managed roots and
+signed git-backed writes. Stricter load-time enforcement, such as
+blocking activation of unsigned high-integrity content, builds on that
+foundation rather than creating another storage lane.
 
 ## Trust Zones: Safety in Go, Not Prompts
 
