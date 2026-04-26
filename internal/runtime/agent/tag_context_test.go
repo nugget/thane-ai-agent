@@ -707,3 +707,105 @@ func TestTagContextAssembler_TagsAllArticleInjects(t *testing.T) {
 		t.Errorf("article missing when both required tags active:\n%s", got)
 	}
 }
+
+func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
+	// Frontmatter edits, additions, and deletions all propagate on the
+	// next Build call — no process restart required. Each Build
+	// re-scans the KB directory.
+	kbDir := t.TempDir()
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}, "ha": {}},
+		KBDir:   kbDir,
+	})
+
+	// First Build: empty dir, nothing injects.
+	if got := a.Build(context.Background(), map[string]bool{"forge": true}, nil); got != "" {
+		t.Errorf("expected empty output before any articles exist, got: %s", got)
+	}
+
+	// Add an article tagged forge — next Build should pick it up
+	// without reconstruction.
+	articlePath := filepath.Join(kbDir, "forge.md")
+	if err := os.WriteFile(articlePath,
+		[]byte("---\ntags: [forge]\n---\nFORGE_V1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	if !strings.Contains(got, "FORGE_V1") {
+		t.Errorf("new article not picked up:\n%s", got)
+	}
+
+	// Edit the article body — next Build should see the new content.
+	if err := os.WriteFile(articlePath,
+		[]byte("---\ntags: [forge]\n---\nFORGE_V2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	if !strings.Contains(got, "FORGE_V2") {
+		t.Errorf("body edit not picked up:\n%s", got)
+	}
+	if strings.Contains(got, "FORGE_V1") {
+		t.Errorf("stale content from first Build leaked through:\n%s", got)
+	}
+
+	// Change the frontmatter to retag the article — must propagate
+	// without restart. Activate `ha` instead and confirm.
+	if err := os.WriteFile(articlePath,
+		[]byte("---\ntags: [ha]\n---\nFORGE_V2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Build(context.Background(), map[string]bool{"forge": true}, nil); strings.Contains(got, "FORGE_V2") {
+		t.Errorf("retagged article still firing for forge:\n%s", got)
+	}
+	got = a.Build(context.Background(), map[string]bool{"ha": true}, nil)
+	if !strings.Contains(got, "FORGE_V2") {
+		t.Errorf("retagged article not firing for ha:\n%s", got)
+	}
+
+	// Delete the article — next Build should be silent.
+	if err := os.Remove(articlePath); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Build(context.Background(), map[string]bool{"ha": true}, nil); got != "" {
+		t.Errorf("deleted article still appearing:\n%s", got)
+	}
+}
+
+func TestKBArticleTags_CountsTagsAll(t *testing.T) {
+	// Regression for PR #763 review: KBArticleTags previously counted
+	// only article.Tags, so tags_all-only articles were invisible to
+	// the capability surface. Both lists must contribute, with within-
+	// article dedup so tags appearing in both lists count once.
+	kbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(kbDir, "or.md"),
+		[]byte("---\ntags: [forge, ha]\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "and-only.md"),
+		[]byte("---\ntags_all: [owner, signal_channel]\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "mixed.md"),
+		[]byte("---\ntags: [forge]\ntags_all: [forge, owner]\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{KBDir: kbDir})
+	counts := a.KBArticleTags()
+
+	expect := map[string]int{
+		"forge":          2, // or.md + mixed.md (mixed has forge in both lists, dedup → 1)
+		"ha":             1, // or.md
+		"owner":          2, // and-only.md + mixed.md
+		"signal_channel": 1, // and-only.md
+	}
+	for tag, want := range expect {
+		if counts[tag] != want {
+			t.Errorf("counts[%q] = %d, want %d (full counts: %v)", tag, counts[tag], want, counts)
+		}
+	}
+	if len(counts) != len(expect) {
+		t.Errorf("unexpected extra tags in counts: %v", counts)
+	}
+}
