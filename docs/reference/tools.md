@@ -192,7 +192,7 @@ filesystem access. See
 | Tool | Description |
 |------|-------------|
 | `media_transcript` | Fetch a video/podcast transcript via yt-dlp. Also tagged `web`. |
-| `media_save_analysis` | Save a media analysis to the configured vault. |
+| `media_save_analysis` | Save a media analysis to the configured vault with generated-document provenance. |
 
 ## `feeds` — RSS/Atom and channel subscriptions
 

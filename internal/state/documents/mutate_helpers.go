@@ -58,11 +58,17 @@ func renderFrontmatter(meta map[string][]string) string {
 		return ""
 	}
 	priority := map[string]int{
-		"title":       0,
-		"description": 1,
-		"tags":        2,
-		"created":     3,
-		"updated":     4,
+		"title":                       0,
+		"description":                 1,
+		"tags":                        2,
+		GeneratedFieldBy:              3,
+		GeneratedFieldAt:              4,
+		GeneratedFieldDocumentKind:    5,
+		GeneratedFieldRefreshStrategy: 6,
+		GeneratedFieldSourceRefs:      7,
+		GeneratedFieldManagedRoot:     8,
+		"created":                     9,
+		"updated":                     10,
 	}
 	keys := make([]string, 0, len(meta))
 	for key, values := range meta {

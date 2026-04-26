@@ -167,6 +167,7 @@ func (at *AnalysisTools) SaveHandler() func(ctx context.Context, args map[string
 			Title:        title,
 			Channel:      channel,
 			URL:          entryURL,
+			FeedID:       feedIDParam,
 			Published:    published,
 			Topics:       topics,
 			TrustZone:    trustZone,

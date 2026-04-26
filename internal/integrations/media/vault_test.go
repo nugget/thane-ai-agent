@@ -64,6 +64,7 @@ func TestWriteAnalysis(t *testing.T) {
 		Title:        "Annie Jacobsen: Nuclear War & Area 51",
 		Channel:      "Lex Fridman Podcast",
 		URL:          "https://youtube.com/watch?v=test123",
+		FeedID:       "lex-fridman",
 		Published:    "2026-03-15",
 		Topics:       []string{"nuclear-war", "area-51", "existential-risk"},
 		TrustZone:    "known",
@@ -116,6 +117,21 @@ func TestWriteAnalysis(t *testing.T) {
 	}
 	if !strings.Contains(content, `- "nuclear-war"`) {
 		t.Error("missing topic in frontmatter")
+	}
+	if !strings.Contains(content, `generated_by: "media_save_analysis"`) {
+		t.Error("missing generated_by provenance field")
+	}
+	if !strings.Contains(content, `generated_at: "2026-03-15T14:30:00Z"`) {
+		t.Error("missing generated_at provenance field")
+	}
+	if !strings.Contains(content, `document_kind: "media_analysis"`) {
+		t.Error("missing document_kind provenance field")
+	}
+	if !strings.Contains(content, `refresh_strategy: "immutable"`) {
+		t.Error("missing refresh_strategy provenance field")
+	}
+	if !strings.Contains(content, `"feed:lex-fridman"`) || !strings.Contains(content, `"url:https://youtube.com/watch?v=test123"`) {
+		t.Error("missing source_refs provenance values")
 	}
 
 	// Check body.
@@ -214,6 +230,18 @@ func TestWriteAnalysis_ChannelIndex(t *testing.T) {
 	// Check frontmatter.
 	if !strings.Contains(index, `channel: "Index Test"`) {
 		t.Error("channel index missing channel name")
+	}
+	if !strings.Contains(index, `generated_by: "media_vault_writer"`) {
+		t.Error("channel index missing generated_by provenance field")
+	}
+	if !strings.Contains(index, `document_kind: "media_channel_index"`) {
+		t.Error("channel index missing document_kind provenance field")
+	}
+	if !strings.Contains(index, `refresh_strategy: "replace"`) {
+		t.Error("channel index missing refresh_strategy provenance field")
+	}
+	if !strings.Contains(index, "source_refs:") || !strings.Contains(index, `"channel:Index Test"`) {
+		t.Error("channel index missing source_refs provenance field")
 	}
 
 	// Check both entries are listed.
