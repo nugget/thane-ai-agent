@@ -2036,6 +2036,13 @@ type RangeOptions struct {
 	// non-empty. Empty matches all conversations.
 	ConversationID string
 
+	// ExcludeSessionID drops messages from the named session when
+	// non-empty. Useful for system-prompt context providers that want
+	// archived/older messages but not the active session's currently
+	// in-memory rows (which the model already sees in its working
+	// message list).
+	ExcludeSessionID string
+
 	// From is the earliest timestamp to include (inclusive). Zero means
 	// unbounded — combined with MinMessages, this is how the "give me at
 	// least N most-recent messages regardless of age" query is expressed.
@@ -2083,7 +2090,7 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 
 	// Step 1: most recent messages within [from, to], DESC. Ask for one
 	// more than the cap so we can detect truncation.
-	msgs, err := s.queryMessagesDesc(opts.ConversationID, from, to, maxN+1)
+	msgs, err := s.queryMessagesDesc(opts.ConversationID, opts.ExcludeSessionID, from, to, maxN+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2098,7 +2105,7 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 	// cap — when it triggers we still return up to MaxMessages so the
 	// model gets useful context, not exactly MinMessages.
 	if opts.MinMessages > 0 && len(msgs) < opts.MinMessages {
-		floor, err := s.queryMessagesDesc(opts.ConversationID, time.Unix(0, 0), to, maxN+1)
+		floor, err := s.queryMessagesDesc(opts.ConversationID, opts.ExcludeSessionID, time.Unix(0, 0), to, maxN+1)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2116,7 +2123,7 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 	return msgs, truncated, nil
 }
 
-func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Time, limit int) ([]Message, error) {
+func (s *ArchiveStore) queryMessagesDesc(conversationID, excludeSessionID string, from, to time.Time, limit int) ([]Message, error) {
 	cols := s.msgSelectCols()
 	table := s.msgTableName
 	// Bind time.Time directly rather than pre-formatting. The unified
@@ -2128,27 +2135,26 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Ti
 	// T-form bound and the lower edge of the window drops out. Binding
 	// the value round-trips through the driver's native format and
 	// keeps the lexical compare correct.
-	var query string
-	var args []any
+	clauses := []string{"timestamp >= ?", "timestamp <= ?"}
+	args := []any{from, to}
 	if conversationID != "" {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			WHERE conversation_id = ? AND timestamp >= ? AND timestamp <= ?
-			ORDER BY timestamp DESC
-			LIMIT ?
-		`, cols, table)
-		args = []any{conversationID, from, to, limit}
-	} else {
-		query = fmt.Sprintf(`
-			SELECT %s
-			FROM %s
-			WHERE timestamp >= ? AND timestamp <= ?
-			ORDER BY timestamp DESC
-			LIMIT ?
-		`, cols, table)
-		args = []any{from, to, limit}
+		clauses = append(clauses, "conversation_id = ?")
+		args = append(args, conversationID)
 	}
+	if excludeSessionID != "" {
+		clauses = append(clauses, "session_id != ?")
+		args = append(args, excludeSessionID)
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM %s
+		WHERE %s
+		ORDER BY timestamp DESC
+		LIMIT ?
+	`, cols, table, strings.Join(clauses, " AND "))
+
 	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query messages desc: %w", err)

@@ -289,6 +289,11 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 					"type":        "number",
 					"description": "Cap on results. Default: 200.",
 				},
+				"exclude_session_id": map[string]any{
+					"type": "string",
+					"description": "Optional: drop messages from this session ID. Useful when you " +
+						"want archived/older messages but not your current session's rows.",
+				},
 			},
 		},
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
@@ -297,6 +302,9 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 
 			if convID, ok := args["conversation_id"].(string); ok && convID != "" {
 				opts.ConversationID = convID
+			}
+			if v, ok := args["exclude_session_id"].(string); ok && v != "" {
+				opts.ExcludeSessionID = v
 			}
 			if v, ok := args["min_time"].(string); ok && v != "" {
 				t, err := promptfmt.ParseTimeOrDelta(v, now)

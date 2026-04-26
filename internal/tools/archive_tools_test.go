@@ -297,3 +297,34 @@ func TestArchiveSessionTranscriptTool_ShortIDPrefix(t *testing.T) {
 		t.Fatalf("handler with short ID: %v", err)
 	}
 }
+
+func TestArchiveRangeTool_ExcludeSessionID(t *testing.T) {
+	r, _, insert := newArchiveTestRegistry(t)
+	now := time.Now()
+	base := now.Add(-30 * time.Minute)
+	// Same conversation, two sessions: one we want to exclude, one we keep.
+	insert("conv-1", "active", "user", "active-msg", base.Add(1*time.Minute))
+	insert("conv-1", "archived", "user", "archived-msg", base.Add(2*time.Minute))
+
+	tool := r.Get("archive_range")
+	out, err := tool.Handler(context.Background(), map[string]any{
+		"conversation_id":    "conv-1",
+		"exclude_session_id": "active",
+		"min_time":           "-3600s",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var parsed struct {
+		Messages []memory.MessageView `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Messages) != 1 {
+		t.Fatalf("len = %d, want 1 (only archived session)", len(parsed.Messages))
+	}
+	if parsed.Messages[0].SessionID != "archived" {
+		t.Errorf("session_id = %q, want archived", parsed.Messages[0].SessionID)
+	}
+}
