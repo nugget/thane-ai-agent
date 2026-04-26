@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,20 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
+
+// countSearchResults parses an archive_search JSON envelope and
+// returns the length of its `results` array, or 0 on parse failure
+// or absent field. Used by the search handler's defensive guard
+// against the empty-with-truncated degenerate state.
+func countSearchResults(data []byte) int {
+	var env struct {
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return 0
+	}
+	return len(env.Results)
+}
 
 // archiveResultByteCap is the per-tool byte ceiling on JSON output.
 // The cap protects the model's context budget when an archive query
@@ -98,9 +113,20 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 			// Fit to byte cap by dropping from the tail (lowest-relevance
 			// hits go first). Binary search avoids O(n^2) re-marshaling.
 			now := time.Now()
-			data := memory.FitPrefix(len(results), archiveResultByteCap, func(k int) []byte {
+			render := func(k int) []byte {
 				return memory.FormatSearchResults(results[:k], now, k < len(results))
-			})
+			}
+			data := memory.FitPrefix(len(results), archiveResultByteCap, render)
+
+			// Defensive: if the fitter clipped to zero results despite
+			// having raw matches, force the top-relevance hit through
+			// even if it overshoots the byte cap. Returning empty with
+			// truncated=true would silently swallow useful signal — far
+			// worse than going slightly over budget on one oversized
+			// result.
+			if len(results) > 0 && countSearchResults(data) == 0 {
+				data = render(1)
+			}
 			return string(data), nil
 		},
 	})

@@ -148,11 +148,27 @@ func FormatRecentMessages(messages []Message, now time.Time, truncated bool) []b
 	return data
 }
 
+// maxSearchContextPerSide caps the number of context messages emitted
+// on each side of a search match. The archive's context-expansion
+// query bounds context by silence-gap and a generous per-direction
+// max (default 50), which made each search result potentially huge:
+// 1 match + up to 100 context × maxMessageContentBytes can blow well
+// past the tool's overall byte cap. With unbounded per-result size,
+// the byte-cap fitter could not seat even a single hit and would
+// return `{"results":[],"truncated":true}` — empty output, signal
+// lost. This per-side cap keeps each rendered result bounded so the
+// fitter can always fit at least one hit; the model can pull the
+// fuller window via archive_session_transcript when it wants more.
+const maxSearchContextPerSide = 5
+
 // FormatSearchResults renders archive search hits as JSON. Each result
 // carries the matched message plus the surrounding context window in
 // chronological order. SessionID is emitted on every message; context
 // messages may belong to a different session than the match because
 // context expansion is bounded by silence gaps, not session edges.
+// Context lists are trimmed to the [maxSearchContextPerSide] messages
+// closest to the match on each side — for context_before that's the
+// last N, for context_after the first N.
 func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) []byte {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
@@ -162,8 +178,8 @@ func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) 
 		}
 		views = append(views, SearchResultView{
 			Match:         match,
-			ContextBefore: messagesToViews(r.ContextBefore, now),
-			ContextAfter:  messagesToViews(r.ContextAfter, now),
+			ContextBefore: messagesToViews(tailMessages(r.ContextBefore, maxSearchContextPerSide), now),
+			ContextAfter:  messagesToViews(headMessages(r.ContextAfter, maxSearchContextPerSide), now),
 			Highlight:     r.Highlight,
 		})
 	}
@@ -212,6 +228,27 @@ func messagesToViews(messages []Message, now time.Time) []MessageView {
 		views = append(views, messageToView(m, now))
 	}
 	return views
+}
+
+// tailMessages returns the last n messages from msgs, or all of them
+// when the slice is shorter than n. Used to keep the context window
+// closest to the match (search result before-context is in
+// chronological order, so the closest message is at the tail).
+func tailMessages(msgs []Message, n int) []Message {
+	if n <= 0 || len(msgs) <= n {
+		return msgs
+	}
+	return msgs[len(msgs)-n:]
+}
+
+// headMessages returns the first n messages from msgs, or all of them
+// when the slice is shorter than n. Used for after-context, where the
+// chronologically-nearest message is at the head.
+func headMessages(msgs []Message, n int) []Message {
+	if n <= 0 || len(msgs) <= n {
+		return msgs
+	}
+	return msgs[:n]
 }
 
 // clipContent clips s to at most maxBytes, returning the clipped

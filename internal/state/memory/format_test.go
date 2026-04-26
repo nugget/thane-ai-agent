@@ -239,3 +239,50 @@ func TestFormatSearchResults_StructurePreserved(t *testing.T) {
 		t.Errorf("highlight = %q", r.Highlight)
 	}
 }
+
+func TestFormatSearchResults_BoundsContextPerSide(t *testing.T) {
+	// Production hotfix: per-message content was already capped at
+	// maxMessageContentBytes, but the per-side context list was not.
+	// With the archive's default 50-message-per-direction context
+	// expansion, a single search result's serialized form could blow
+	// well past the tool's overall byte cap, causing FitPrefix to
+	// clip to zero and emit an empty results array. Cap context
+	// list length per side so each rendered result is bounded.
+	now := time.Now()
+	makeMsgs := func(prefix string, n int) []Message {
+		out := make([]Message, n)
+		for i := range out {
+			out[i] = Message{
+				Role:      "user",
+				Content:   prefix,
+				Timestamp: now.Add(-time.Duration(n-i) * time.Minute),
+				SessionID: "s1",
+			}
+		}
+		return out
+	}
+	results := []SearchResult{{
+		Match:         Message{Role: "user", Content: "match", Timestamp: now, SessionID: "s1"},
+		SessionID:     "s1",
+		ContextBefore: makeMsgs("before", 50),
+		ContextAfter:  makeMsgs("after", 50),
+	}}
+
+	data := FormatSearchResults(results, now, false)
+	var parsed struct {
+		Results []SearchResultView `json:"results"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(parsed.Results))
+	}
+	r := parsed.Results[0]
+	if len(r.ContextBefore) != maxSearchContextPerSide {
+		t.Errorf("context_before len = %d, want %d", len(r.ContextBefore), maxSearchContextPerSide)
+	}
+	if len(r.ContextAfter) != maxSearchContextPerSide {
+		t.Errorf("context_after len = %d, want %d", len(r.ContextAfter), maxSearchContextPerSide)
+	}
+}

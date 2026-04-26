@@ -328,3 +328,43 @@ func TestArchiveRangeTool_ExcludeSessionID(t *testing.T) {
 		t.Errorf("session_id = %q, want archived", parsed.Messages[0].SessionID)
 	}
 }
+
+func TestArchiveSearchTool_NeverEmptyWhenResultsExist(t *testing.T) {
+	// Regression: production hotfix for an archive_search that returned
+	// `{"results":[],"truncated":true}` because each individual result
+	// (match + up to 100 context messages × per-message content cap)
+	// blew past archiveResultByteCap, so FitPrefix degenerated to 0
+	// and silently swallowed every match.
+	r, _, insert := newArchiveTestRegistry(t)
+	now := time.Now()
+
+	// Seed a session with the matched term plus enough surrounding
+	// chatter that a real search expansion would balloon the result.
+	insert("conv-1", "sess-1", "user", "looking for the freezer alarm details", now.Add(-30*time.Minute))
+	for i := range 30 {
+		ts := now.Add(-time.Duration(29-i) * time.Minute)
+		role := "user"
+		if i%2 == 0 {
+			role = "assistant"
+		}
+		insert("conv-1", "sess-1", role, strings.Repeat("filler text ", 100), ts)
+	}
+
+	tool := r.Get("archive_search")
+	out, err := tool.Handler(context.Background(), map[string]any{
+		"query": "freezer",
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	var parsed struct {
+		Results   []memory.SearchResultView `json:"results"`
+		Truncated bool                      `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	if len(parsed.Results) == 0 {
+		t.Fatalf("results empty despite real matches existing — regression of the production bug:\n%s", out)
+	}
+}
