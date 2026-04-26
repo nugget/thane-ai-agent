@@ -49,11 +49,10 @@ func (a *App) initAwareness(s *newState) error {
 	}
 
 	episodicProvider := memory.NewEpisodicProvider(a.archiveStore, logger, memory.EpisodicConfig{
-		Timezone:          cfg.Timezone,
-		DailyDir:          cfg.Episodic.DailyDir,
-		LookbackDays:      cfg.Episodic.LookbackDays,
-		HistoryTokens:     cfg.Episodic.HistoryTokens,
-		SessionGapMinutes: cfg.Episodic.SessionGapMinutes,
+		Timezone:      cfg.Timezone,
+		DailyDir:      cfg.Episodic.DailyDir,
+		LookbackDays:  cfg.Episodic.LookbackDays,
+		HistoryTokens: cfg.Episodic.HistoryTokens,
 	})
 	contextProvider.Add(episodicProvider)
 

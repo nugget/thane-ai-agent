@@ -1002,9 +1002,9 @@ type ExtractionConfig struct {
 }
 
 // EpisodicConfig configures episodic memory context injection. When
-// configured, the agent receives curated daily notes and a recency-graded
-// summary of recent conversations in its system prompt, giving it
-// continuity across sessions.
+// configured, the agent receives curated daily notes plus a JSON
+// catalog of recent closed sessions in its system prompt, giving it
+// continuity and discoverable archive entry points across sessions.
 type EpisodicConfig struct {
 	// DailyDir is the directory containing daily memory files named
 	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
@@ -1018,15 +1018,11 @@ type EpisodicConfig struct {
 	// Default: 2 (today + yesterday).
 	LookbackDays int `yaml:"lookback_days"`
 
-	// HistoryTokens is the approximate token budget for recent
-	// conversation history injected into the system prompt.
-	// Default: 4000.
+	// HistoryTokens is the approximate token budget for the recent-
+	// sessions JSON catalog injected into the system prompt. Internally
+	// converted to a byte cap (×4 ≈ 1 token / 4 bytes) when the
+	// catalog is rendered. Default: 4000.
 	HistoryTokens int `yaml:"history_tokens"`
-
-	// SessionGapMinutes is the silence duration (in minutes) between
-	// sessions that triggers a gap annotation in the history output.
-	// Default: 30.
-	SessionGapMinutes int `yaml:"session_gap_minutes"`
 }
 
 // AgentConfig configures agent loop behavior. When DelegationRequired
@@ -1865,9 +1861,6 @@ func (c *Config) applyDefaults() {
 	if c.Episodic.HistoryTokens == 0 {
 		c.Episodic.HistoryTokens = 4000
 	}
-	if c.Episodic.SessionGapMinutes == 0 {
-		c.Episodic.SessionGapMinutes = 30
-	}
 
 	if c.Pricing == nil {
 		c.Pricing = map[string]PricingEntry{
@@ -2111,9 +2104,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.HistoryTokens < 0 {
 		return fmt.Errorf("episodic.history_tokens %d must be non-negative", c.Episodic.HistoryTokens)
-	}
-	if c.Episodic.SessionGapMinutes < 0 {
-		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
 	}
 	if c.Archive.SessionIdleMinutes != nil && *c.Archive.SessionIdleMinutes < 0 {
 		return fmt.Errorf("archive.session_idle_minutes %d must be non-negative", *c.Archive.SessionIdleMinutes)
