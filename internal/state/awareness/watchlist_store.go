@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-const (
-	legacyWatchlistTable       = "watched_entities"
-	watchlistSubscriptionTable = "watched_entity_subscriptions"
-)
-
 // WatchedSubscription represents one entity subscription scope with its stored
 // options. Empty Scope means the entity is always visible.
 type WatchedSubscription struct {
@@ -47,45 +42,7 @@ func (s *WatchlistStore) migrate() error {
 			PRIMARY KEY (scope, entity_id)
 		)
 	`)
-	if err != nil {
-		return err
-	}
-
-	ok, err := s.hasTable(legacyWatchlistTable)
-	if err != nil {
-		return fmt.Errorf("check legacy watchlist table: %w", err)
-	}
-	if !ok {
-		return nil
-	}
-
-	if err := s.ensureLegacyWatchlistColumns(); err != nil {
-		return fmt.Errorf("ensure legacy watchlist columns: %w", err)
-	}
-
-	if err := s.migrateLegacyWatchlist(); err != nil {
-		return fmt.Errorf("migrate legacy watchlist rows: %w", err)
-	}
-
-	return nil
-}
-
-func (s *WatchlistStore) ensureLegacyWatchlistColumns() error {
-	for _, col := range []struct{ name, def string }{
-		{"tags", "TEXT NOT NULL DEFAULT ''"},
-		{"options", "TEXT NOT NULL DEFAULT '{}'"},
-	} {
-		_, err := s.db.Exec(fmt.Sprintf(
-			`ALTER TABLE %s ADD COLUMN %s %s`,
-			legacyWatchlistTable,
-			col.name,
-			col.def,
-		))
-		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return fmt.Errorf("alter %s add column %s: %w", legacyWatchlistTable, col.name, err)
-		}
-	}
-	return nil
+	return err
 }
 
 // Add inserts an entity into the watchlist with no scope or options.
@@ -318,16 +275,9 @@ func (s *WatchlistStore) removeExpiredSubscriptions(keys []subscriptionKey) erro
 	return tx.Commit()
 }
 
-func (s *WatchlistStore) hasTable(name string) (bool, error) {
-	var found string
-	err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+type subscriptionKey struct {
+	EntityID string
+	Scope    string
 }
 
 func (s *WatchlistStore) subscriptionCount() (int, error) {
@@ -336,44 +286,6 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 		return 0, err
 	}
 	return count, nil
-}
-
-func (s *WatchlistStore) migrateLegacyWatchlist() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	rows, err := tx.Query(`SELECT entity_id, tags, options, added_at FROM watched_entities ORDER BY added_at ASC`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var entityID, tagsStr, optsJSON, addedAt string
-		if err := rows.Scan(&entityID, &tagsStr, &optsJSON, &addedAt); err != nil {
-			return err
-		}
-		for _, scope := range normalizeScopes(splitTags(tagsStr)) {
-			if _, err := tx.Exec(`
-				INSERT OR IGNORE INTO watched_entity_subscriptions (entity_id, scope, added_at, options)
-				VALUES (?, ?, ?, ?)
-			`, entityID, scope, addedAt, normalizeLegacyOptions(optsJSON)); err != nil {
-				return err
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-type subscriptionKey struct {
-	EntityID string
-	Scope    string
 }
 
 type watchlistOptions struct {
@@ -420,21 +332,6 @@ func (o watchlistOptions) expired(now time.Time) bool {
 	return o.ExpiresAt != nil && !o.ExpiresAt.After(now)
 }
 
-func normalizeLegacyOptions(optsJSON string) string {
-	if optsJSON == "" {
-		return "{}"
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(optsJSON), &payload); err != nil {
-		return "{}"
-	}
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return "{}"
-	}
-	return string(normalized)
-}
-
 func normalizeScopes(tags []string) []string {
 	if len(tags) == 0 {
 		return []string{""}
@@ -461,18 +358,4 @@ func cloneTimePtr(src *time.Time) *time.Time {
 	}
 	cp := *src
 	return &cp
-}
-
-func splitTags(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var tags []string
-	for _, t := range strings.Split(s, ",") {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			tags = append(tags, t)
-		}
-	}
-	return tags
 }
