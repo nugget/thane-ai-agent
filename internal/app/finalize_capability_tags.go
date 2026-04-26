@@ -154,11 +154,14 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)
 	}
 
-	a.loop.SetCapabilityTags(resolvedCapTags, capTalents)
-	a.loop.UseCapabilitySurface(capSurface)
+	a.loop.ConfigureCapabilityWiring(agent.CapabilityWiring{
+		Tags:             resolvedCapTags,
+		ParsedTalents:    capTalents,
+		Surface:          capSurface,
+		Store:            agent.NewOpstateCapabilityTagStore(a.opStore),
+		ContextAssembler: tagCtxAssembler,
+	})
 	a.loop.Tools().SetCapabilityTools(a.loop, capSurface)
-	a.loop.SetTagContextAssembler(tagCtxAssembler)
-	a.loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(a.opStore))
 
 	var activeTagNames []string
 	for tag := range a.loop.LastRunTags() {

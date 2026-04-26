@@ -55,7 +55,6 @@ func (a *App) initFileTools(s *newState) {
 			fileTools.SetResolver(s.resolver)
 		}
 		a.loop.Tools().SetFileTools(fileTools)
-		a.loop.SetEgoFile(resolvePath(coreFilePath(a.cfg.Workspace.Path, "ego.md"), nil))
 		a.logger.Info("file tools enabled", "workspace", a.cfg.Workspace.Path)
 		return
 	}

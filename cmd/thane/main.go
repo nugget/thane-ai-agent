@@ -219,9 +219,21 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 
 	// Minimal loop: no router, no scheduler, no compactor. The default
 	// model handles everything for CLI one-shots.
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmSetup.Client, llmSetup.Catalog.DefaultModel, cliTalents, "", 0)
+	var haInject homeassistant.StateFetcher
 	if ha != nil {
-		loop.SetHAInject(ha)
+		haInject = ha
+	}
+	loop, err := agent.NewLoop(agent.LoopOptions{
+		Logger:        logger,
+		Memory:        mem,
+		HomeAssistant: ha,
+		LLM:           llmSetup.Client,
+		Model:         llmSetup.Catalog.DefaultModel,
+		ParsedTalents: cliTalents,
+		HAInject:      haInject,
+	})
+	if err != nil {
+		return fmt.Errorf("build agent loop: %w", err)
 	}
 
 	response, err := loop.Process(ctx, "cli-test", question)
