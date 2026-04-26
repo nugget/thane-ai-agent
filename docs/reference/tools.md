@@ -260,8 +260,16 @@ being reimplemented in each loop prompt.
 
 ## `loops` — live loop and loop-definition management
 
+Reach for `service_journal` first when the intent is "keep doing X on a
+schedule and write the result into a document." It scaffolds the output
+target with frontmatter recording loop ownership, derives sleep
+parameters from a cadence string, and launches the loop in one
+round-trip. The lower-level definition and runtime tools below are the
+right tools for inspection, control, or unusual launch shapes.
+
 | Tool | Description |
 |------|-------------|
+| `service_journal` | Intent-shaped: scaffold a managed document and launch a recurring service loop that maintains or journals into it. |
 | `loop_status` | Snapshot of currently running loops. |
 | `notify_loop` | Deliver a message envelope to a live loop. |
 | `set_next_sleep` | Request the next sleep duration for the current loop. |

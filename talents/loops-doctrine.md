@@ -10,6 +10,23 @@ Think of loops in two layers:
 - durable definitions
 - live runtime instances
 
+For the common case of "keep watching X over time and write what you
+learn into a document," reach for `service_journal` first. It is an
+intent-shaped shim that scaffolds the output document with frontmatter
+recording loop ownership, derives sleep_min/max/jitter from a cadence
+string ("hourly", "daily", "every 30 minutes", "30m", "1h"), and
+launches the loop in one round-trip — replacing what would otherwise be
+a multi-tool dance through `doc_write` + `loop_definition_set` +
+`loop_definition_launch`. Two output modes: `journal` appends a dated
+entry each cycle (research notes, decision logs); `maintain` rewrites
+the body each cycle (dashboards, current-state snapshots).
+
+Drop to the lower-level definition and runtime tools below when the
+launch shape is genuinely unusual (event-driven, mqtt-wake-only, no
+durable output, multi-stage), when you are inspecting or editing
+existing loops, or when you need to control a loop that is already
+running.
+
 Use the definition tools when the work is about a loop you want to keep,
 edit, pause, reactivate, or relaunch later:
 

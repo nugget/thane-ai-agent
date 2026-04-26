@@ -86,6 +86,7 @@ type Registry struct {
 	liveLoopRegistry                           *looppkg.Registry
 	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
 	messageBus                                 *messages.Bus
+	loopIntentDeps                             LoopIntentToolDeps
 
 	contentResolver *ContentResolver
 }

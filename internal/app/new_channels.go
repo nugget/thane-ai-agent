@@ -292,7 +292,8 @@ func (a *App) initChannels(s *newState) error {
 				return fmt.Errorf("create document index: %w", err)
 			}
 			a.documentStore = docStore
-			tools.RegisterDocumentTools(a.loop.Tools(), documents.NewTools(docStore))
+			a.documentTools = documents.NewTools(docStore)
+			tools.RegisterDocumentTools(a.loop.Tools(), a.documentTools)
 			a.deferWorker("documents-index", func(ctx context.Context) error {
 				go docStore.RunRefresher(ctx)
 				return nil
@@ -362,6 +363,15 @@ func (a *App) initChannels(s *newState) error {
 		Reconcile:        a.reconcileLoopDefinition,
 		LaunchDefinition: a.launchLoopDefinition,
 	})
+	if a.documentTools != nil {
+		a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{
+			DocTools:         a.documentTools,
+			Registry:         a.loopDefinitionRegistry,
+			PersistSpec:      a.persistLoopDefinition,
+			Reconcile:        a.reconcileLoopDefinition,
+			LaunchDefinition: a.launchLoopDefinition,
+		})
+	}
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
 		Registry:   a.loopRegistry,
 		LaunchLoop: a.launchLoop,

@@ -326,6 +326,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"spawn_loop":                  {CanonicalID: "native:spawn_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"stop_loop":                   {CanonicalID: "native:stop_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"notify_loop":                 {CanonicalID: "native:notify_loop", Source: NativeToolSource, DefaultTags: []string{"loops"}},
+	"service_journal":             {CanonicalID: "native:service_journal", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"macos_calendar_events":       {CanonicalID: "native:macos_calendar_events", Source: NativeToolSource, DefaultTags: []string{"companion"}},
 	"media_feeds":                 {CanonicalID: "native:media_feeds", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"media_follow":                {CanonicalID: "native:media_follow", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
