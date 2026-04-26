@@ -74,6 +74,25 @@ func TestRenderGeneratedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestRenderFrontmatterUsesBlockListForSourceRefs(t *testing.T) {
+	t.Parallel()
+
+	raw := renderFrontmatter(map[string][]string{
+		GeneratedFieldSourceRefs: {"url:https://example.test/watch?v=a,b", "feed:security-news"},
+	})
+
+	if !strings.Contains(raw, "source_refs:\n") {
+		t.Fatalf("rendered frontmatter = %q, want source_refs block list", raw)
+	}
+	if strings.Contains(raw, `source_refs: ["`) {
+		t.Fatalf("rendered frontmatter = %q, should not use flow sequence for source_refs", raw)
+	}
+	parsed := parseFrontmatterMap(raw)
+	if got := parsed[GeneratedFieldSourceRefs]; len(got) != 2 || got[0] != "feed:security-news" || got[1] != "url:https://example.test/watch?v=a,b" {
+		t.Fatalf("parsed %s = %#v, want comma-bearing URL preserved", GeneratedFieldSourceRefs, got)
+	}
+}
+
 func TestRenderGeneratedFrontmatterRequiresCoreFields(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +140,7 @@ func TestRenderGeneratedFrontmatterRequiresCoreFields(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 

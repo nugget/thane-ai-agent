@@ -102,7 +102,10 @@ func (w *VaultWriter) WriteAnalysis(outputPath string, page *AnalysisPage) (stri
 	filePath := filepath.Join(channelDir, filename)
 
 	// Build the markdown content.
-	content := w.buildMarkdown(page)
+	content, err := w.buildMarkdown(page)
+	if err != nil {
+		return "", fmt.Errorf("build analysis markdown: %w", err)
+	}
 
 	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write analysis file: %w", err)
@@ -126,7 +129,7 @@ func (w *VaultWriter) WriteAnalysis(outputPath string, page *AnalysisPage) (stri
 }
 
 // buildMarkdown assembles the YAML frontmatter and body.
-func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
+func (w *VaultWriter) buildMarkdown(page *AnalysisPage) (string, error) {
 	var sb strings.Builder
 
 	sb.WriteString("---\n")
@@ -156,22 +159,19 @@ func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
 		analyzedAt = time.Now().UTC()
 	}
 	sb.WriteString(fmt.Sprintf("analyzed: %s\n", analyzedAt.Format(time.RFC3339)))
-	if generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
+	generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
 		GeneratedBy:     "media_save_analysis",
 		GeneratedAt:     analyzedAt,
 		SourceRefs:      mediaAnalysisSourceRefs(page),
 		DocumentKind:    documents.DocumentKindMediaAnalysis,
 		RefreshStrategy: documents.RefreshStrategyImmutable,
 		ManagedRoot:     page.ManagedRoot,
-	}); err == nil {
-		sb.WriteString(generatedRaw)
-		sb.WriteString("\n")
-	} else {
-		w.logger.Warn("failed to render generated document metadata",
-			"title", page.Title,
-			"error", err,
-		)
+	})
+	if err != nil {
+		return "", fmt.Errorf("render generated document metadata: %w", err)
 	}
+	sb.WriteString(generatedRaw)
+	sb.WriteString("\n")
 
 	sb.WriteString("---\n\n")
 
@@ -183,7 +183,7 @@ func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
 		sb.WriteString("\n")
 	}
 
-	return sb.String()
+	return sb.String(), nil
 }
 
 // updateChannelIndex rebuilds the _channel.md index file by scanning
@@ -230,21 +230,18 @@ func (w *VaultWriter) updateChannelIndex(channelDir, channelName, trustZone stri
 		sb.WriteString(fmt.Sprintf("trust_zone: %q\n", trustZone))
 	}
 	sb.WriteString(fmt.Sprintf("updated: %s\n", updatedAt.Format(time.RFC3339)))
-	if generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
+	generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
 		GeneratedBy:     "media_vault_writer",
 		GeneratedAt:     updatedAt,
 		SourceRefs:      []string{"channel:" + channelName},
 		DocumentKind:    documents.DocumentKindMediaChannelIndex,
 		RefreshStrategy: documents.RefreshStrategyReplace,
-	}); err == nil {
-		sb.WriteString(generatedRaw)
-		sb.WriteString("\n")
-	} else {
-		w.logger.Warn("failed to render generated channel index metadata",
-			"channel", channelName,
-			"error", err,
-		)
+	})
+	if err != nil {
+		return fmt.Errorf("render generated channel index metadata: %w", err)
 	}
+	sb.WriteString(generatedRaw)
+	sb.WriteString("\n")
 	sb.WriteString("---\n\n")
 	sb.WriteString(fmt.Sprintf("# %s\n\n", channelName))
 	sb.WriteString("## Analyses\n\n")

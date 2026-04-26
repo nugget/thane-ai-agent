@@ -94,6 +94,10 @@ func renderFrontmatter(meta map[string][]string) string {
 	lines := make([]string, 0, len(keys))
 	for _, key := range keys {
 		values := meta[key]
+		if key == GeneratedFieldSourceRefs {
+			lines = appendBlockListFrontmatter(lines, key, values)
+			continue
+		}
 		switch {
 		case len(values) == 1:
 			lines = append(lines, fmt.Sprintf("%s: %s", key, strconv.Quote(values[0])))
@@ -106,6 +110,17 @@ func renderFrontmatter(meta map[string][]string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func appendBlockListFrontmatter(lines []string, key string, values []string) []string {
+	if len(values) == 0 {
+		return lines
+	}
+	lines = append(lines, key+":")
+	for _, value := range values {
+		lines = append(lines, "  - "+strconv.Quote(value))
+	}
+	return lines
 }
 
 func touchDocumentFrontmatter(frontmatterRaw string, record *DocumentRecord, now time.Time) string {

@@ -128,10 +128,7 @@ func RenderGeneratedFrontmatter(m GeneratedMetadata) (string, error) {
 			continue
 		}
 		if key == GeneratedFieldSourceRefs {
-			lines = append(lines, key+":")
-			for _, value := range values {
-				lines = append(lines, "  - "+strconv.Quote(value))
-			}
+			lines = appendBlockListFrontmatter(lines, key, values)
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", key, strconv.Quote(values[0])))
