@@ -260,16 +260,21 @@ being reimplemented in each loop prompt.
 
 ## `loops` — live loop and loop-definition management
 
-Reach for `service_journal` first when the intent is "keep doing X on a
+Reach for `thane_curate` first when the intent is "keep doing X on a
 schedule and write the result into a document." It scaffolds the output
 target with frontmatter recording loop ownership, derives sleep
 parameters from a cadence string, and launches the loop in one
-round-trip. The lower-level definition and runtime tools below are the
-right tools for inspection, control, or unusual launch shapes.
+round-trip. `thane_curate` is the first member of the `thane_*`
+intent-shaped family; sibling tools for sync (`thane_now`), async
+one-shot (`thane_assign`), and waking existing loops (`thane_wake`)
+will land in a follow-up PR that deprecates `thane_delegate` and
+`notify_loop` in favor of the family. The lower-level definition and
+runtime tools below remain for inspection, control, or unusual launch
+shapes (event-driven, mqtt-wake-only, supervisor-randomized metacog).
 
 | Tool | Description |
 |------|-------------|
-| `service_journal` | Intent-shaped: scaffold a managed document and launch a recurring service loop that maintains or journals into it. |
+| `thane_curate` | Intent-shaped: scaffold a managed document and launch a recurring service loop that curates it. |
 | `loop_status` | Snapshot of currently running loops. |
 | `notify_loop` | Deliver a message envelope to a live loop. |
 | `set_next_sleep` | Request the next sleep duration for the current loop. |

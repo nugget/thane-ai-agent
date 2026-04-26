@@ -16,7 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
-// mkdirAllForTest is a tiny helper used by the service_journal tests to
+// mkdirAllForTest is a tiny helper used by the thane_curate tests to
 // pre-create the document root directory before invoking the document
 // store, which refuses to write into a non-existent root.
 func mkdirAllForTest(dir string) error {
@@ -80,12 +80,12 @@ func TestParseCadence_RejectsEmpty(t *testing.T) {
 	}
 }
 
-// TestServiceJournal_EndToEnd exercises the full happy path: scaffold
+// TestThaneCurate_EndToEnd exercises the full happy path: scaffold
 // the output document with frontmatter recording loop ownership,
 // register and reconcile a service-loop definition, and launch it.
 // The launch path is stubbed via fake registry helpers so the test
 // stays in-process.
-func TestServiceJournal_EndToEnd(t *testing.T) {
+func TestThaneCurate_EndToEnd(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -131,9 +131,9 @@ func TestServiceJournal_EndToEnd(t *testing.T) {
 		LaunchDefinition: launchFn,
 	})
 
-	tool := reg.Get("service_journal")
+	tool := reg.Get("thane_curate")
 	if tool == nil {
-		t.Fatal("service_journal tool not registered after ConfigureLoopIntentTools")
+		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
 	}
 
 	result, err := tool.Handler(context.Background(), map[string]any{
@@ -148,7 +148,7 @@ func TestServiceJournal_EndToEnd(t *testing.T) {
 		"tags": []any{"forge"},
 	})
 	if err != nil {
-		t.Fatalf("service_journal handler: %v", err)
+		t.Fatalf("thane_curate handler: %v", err)
 	}
 
 	// Verify the response shape includes the document, loop, and cadence.
@@ -215,10 +215,10 @@ func TestServiceJournal_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestServiceJournal_RefusesToClobber verifies the safety check that
+// TestThaneCurate_RefusesToClobber verifies the safety check that
 // an existing loop definition of the same name cannot be overwritten
 // without an explicit replace=true.
-func TestServiceJournal_RefusesToClobber(t *testing.T) {
+func TestThaneCurate_RefusesToClobber(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -265,7 +265,7 @@ func TestServiceJournal_RefusesToClobber(t *testing.T) {
 		},
 	})
 
-	tool := reg.Get("service_journal")
+	tool := reg.Get("thane_curate")
 	_, err = tool.Handler(context.Background(), map[string]any{
 		"name":    "existing_loop",
 		"intent":  "Replace the prior loop without permission.",
@@ -276,7 +276,7 @@ func TestServiceJournal_RefusesToClobber(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("expected service_journal to refuse to clobber existing definition")
+		t.Fatal("expected thane_curate to refuse to clobber existing definition")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error %q should mention name collision", err)

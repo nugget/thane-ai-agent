@@ -16,12 +16,13 @@ import (
 // LoopIntentToolDeps wires the loop-definition registry, document
 // store, and launch helper into the intent-shaped loop creation tools.
 //
-// Intent-shaped tools (service_journal today; task_now and
-// task_background in later phases) construct a Spec and Launch on the
-// caller's behalf from intent-shaped inputs (cadence, output target,
-// natural-language intent), then persist + launch through the same
-// registry + reconcile + launch path used by loop_definition_set and
-// loop_definition_launch.
+// Intent-shaped tools form a thane_* family — verbs after the prefix
+// carry the lifecycle: thane_curate (recurring; this PR), thane_now
+// (sync; future), thane_assign (async one-shot; future), thane_wake
+// (poke an existing loop; future). Each tool constructs a Spec and
+// Launch on the caller's behalf from intent-shaped inputs, then
+// persists + launches through the same registry + reconcile + launch
+// path used by loop_definition_set and loop_definition_launch.
 type LoopIntentToolDeps struct {
 	DocTools         *documents.Tools
 	Registry         *looppkg.DefinitionRegistry
@@ -39,15 +40,16 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 		return
 	}
 	r.loopIntentDeps = deps
-	r.registerServiceJournal()
+	r.registerThaneCurate()
 }
 
-func (r *Registry) registerServiceJournal() {
+func (r *Registry) registerThaneCurate() {
 	r.Register(&Tool{
-		Name: "service_journal",
-		Description: "Create and launch a recurring service loop that maintains or journals into a managed markdown document. " +
-			"Output-first: the document target (kb:, core:, scratchpad:, generated:) is scaffolded with frontmatter recording loop ownership before the loop is registered, so the loop's identity and intent are self-describing on disk. " +
-			"Two output modes: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
+		Name: "thane_curate",
+		Description: "Create and launch a recurring service loop that curates a managed markdown collection. " +
+			"Output-first: the target document (kb:, core:, scratchpad:, generated:) is scaffolded with frontmatter recording loop ownership before the loop is registered, so the loop's identity and intent are self-describing on disk. " +
+			"Two output modes today: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
+			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
 			"Returns the document ref, loop definition name, loop_id, and next wake time.",
@@ -103,14 +105,14 @@ func (r *Registry) registerServiceJournal() {
 			},
 			"required": []string{"name", "intent", "cadence", "output"},
 		},
-		Handler: r.handleServiceJournal,
+		Handler: r.handleThaneCurate,
 	})
 }
 
-func (r *Registry) handleServiceJournal(ctx context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (string, error) {
 	deps := r.loopIntentDeps
 	if deps.DocTools == nil || deps.Registry == nil {
-		return "", fmt.Errorf("service_journal not configured: ConfigureLoopIntentTools must be called at startup")
+		return "", fmt.Errorf("thane_curate not configured: ConfigureLoopIntentTools must be called at startup")
 	}
 
 	name, _ := args["name"].(string)
@@ -179,7 +181,7 @@ func (r *Registry) handleServiceJournal(ctx context.Context, args map[string]any
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
-		Task:         buildServiceJournalTask(intent, documentRef, outputMode, guidance),
+		Task:         buildCurateTask(intent, documentRef, outputMode, guidance),
 		Operation:    looppkg.OperationService,
 		SleepMin:     cad.sleepMin,
 		SleepMax:     cad.sleepMax,
@@ -256,12 +258,12 @@ func (r *Registry) handleServiceJournal(ctx context.Context, args map[string]any
 	})
 }
 
-// buildServiceJournalTask renders the per-iteration task prompt for a
-// service_journal-created loop. The model running each iteration sees
-// the intent, the document target, and the output mode, plus any
-// caller guidance. Kept short and shape-clear so the model can act
-// without re-reading the loop's own definition.
-func buildServiceJournalTask(intent, docRef, outputMode, guidance string) string {
+// buildCurateTask renders the per-iteration task prompt for a
+// thane_curate-created loop. The model running each iteration sees the
+// intent, the document target, and the output mode, plus any caller
+// guidance. Kept short and shape-clear so the model can act without
+// re-reading the loop's own definition.
+func buildCurateTask(intent, docRef, outputMode, guidance string) string {
 	var verb string
 	switch outputMode {
 	case "journal":
