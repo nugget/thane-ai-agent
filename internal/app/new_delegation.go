@@ -52,6 +52,18 @@ func (a *App) initDelegation(s *newState) error {
 		delegateExec.SetTempFileStore(tfs)
 	}
 	a.loop.Tools().Register(&tools.Tool{
+		Name:        "thane_now",
+		Description: delegate.NowToolDescription,
+		Parameters:  delegate.NowToolDefinition(),
+		Handler:     delegate.NowToolHandler(delegateExec),
+	})
+	a.loop.Tools().Register(&tools.Tool{
+		Name:        "thane_assign",
+		Description: delegate.AssignToolDescription,
+		Parameters:  delegate.AssignToolDefinition(),
+		Handler:     delegate.AssignToolHandler(delegateExec),
+	})
+	a.loop.Tools().Register(&tools.Tool{
 		Name:        "thane_delegate",
 		Description: delegate.ToolDescription,
 		Parameters:  delegate.ToolDefinition(),

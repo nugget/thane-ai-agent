@@ -5,29 +5,38 @@ tags: [loops]
 
 # Loops Doctrine
 
-Think of loops in two layers:
+The model-facing front door for "do work" is the `thane_*` family.
+Pick by lifecycle:
 
-- durable definitions
-- live runtime instances
+- `thane_now(task, ...)` — synchronous answer right now. Blocks the
+  current turn until the delegate completes; result returns inline.
+  Use for bounded investigation, summarization, controlled tool use
+  where the answer is needed in this turn.
+- `thane_assign(task, ...)` — async one-shot. The delegate runs in
+  the background and reports back through the current conversation or
+  channel when complete. Use when the work is long enough that the
+  caller should move on rather than block.
+- `thane_curate(intent, cadence, output)` — recurring service loop
+  that maintains a managed document over time. Scaffolds the document
+  with frontmatter recording loop ownership, derives sleep parameters
+  from a cadence string ("hourly", "daily", "every 30 minutes",
+  "30m", "1h"), and launches in one round-trip. Two output modes:
+  `journal` appends a dated entry each cycle; `maintain` rewrites the
+  body each cycle. Future versions will accept a directory ref for
+  tree-shaped collections.
+- `thane_wake(loop_id|name, message?)` — tap a sleeping or
+  already-running timer loop with one-shot context. Wakes immediately
+  if sleeping; queues for the next iteration if processing. Useful
+  for forcing the next iteration into supervisor mode or delivering
+  fresh context to a watcher.
 
-For the common case of "keep watching X over time and write what you
-learn into a document," reach for `thane_curate` first. It is the
-recurring member of the `thane_*` intent-shaped family — a verb-shaped
-shim that scaffolds the output document with frontmatter recording
-loop ownership, derives sleep_min/max/jitter from a cadence string
-("hourly", "daily", "every 30 minutes", "30m", "1h"), and launches the
-loop in one round-trip. Replaces what would otherwise be a multi-tool
-dance through `doc_write` + `loop_definition_set` +
-`loop_definition_launch`. Two output modes: `journal` appends a dated
-entry each cycle (research notes, decision logs); `maintain` rewrites
-the body each cycle (dashboards, current-state snapshots). Future
-versions will accept a directory ref for tree-shaped collections.
+`thane_delegate` and `notify_loop` are deprecated aliases that route
+into the family. Prefer the family names directly.
 
-Drop to the lower-level definition and runtime tools below when the
-launch shape is genuinely unusual (event-driven, mqtt-wake-only, no
-durable output, multi-stage, supervisor-randomized metacog patterns),
-when you are inspecting or editing existing loops, or when you need to
-control a loop that is already running.
+Below the family, the lower-level definition and runtime tools remain
+for inspection, control, and unusual launch shapes (event-driven,
+mqtt-wake-only, multi-stage, supervisor-randomized metacog patterns,
+or anything where the canonical family doesn't fit).
 
 Use the definition tools when the work is about a loop you want to keep,
 edit, pause, reactivate, or relaunch later:
@@ -52,14 +61,6 @@ now:
 first becoming part of the persistent loop-definition registry. Reach
 for it when the loop is temporary, experimental, or tightly tied to the
 current moment.
-
-`notify_loop` is for an already-running timer-driven loop that needs a
-single tap on the shoulder:
-
-- wake a sleeping loop immediately with one-shot context
-- force the next iteration into supervisor mode when that is the real need
-- do not use it as a persistence mechanism; the notification is only for the
-  next iteration
 
 `set_next_sleep` is for the loop that is already running right now:
 

@@ -9,66 +9,107 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 )
 
-// ToolDefinition returns the JSON schema parameters for the thane_delegate tool.
+// ToolDescription is the LLM-facing description for the deprecated
+// thane_delegate tool. New code should use NowToolDescription /
+// AssignToolDescription on the family-shaped tools.
+var ToolDescription = "DEPRECATED: prefer thane_now (sync answer) or thane_assign (async one-shot). " +
+	"thane_delegate remains as a compatibility alias and routes to the appropriate family member based on the mode parameter; it will be removed in a future release. " +
+	"\n\n" + prompts.DelegateToolDescription
+
+// NowToolDescription is the LLM-facing description for thane_now, the
+// sync member of the thane_* family.
+const NowToolDescription = "Synchronously delegate a bounded task to a sub-agent and return the result inline. " +
+	"Use when the calling model needs the answer in this turn — investigation, research, summarization, controlled tool execution. " +
+	"Blocks until the delegate completes or exhausts its budget. " +
+	"For fire-and-forget background work, use thane_assign instead. " +
+	"For recurring document-anchored work on a schedule, use thane_curate."
+
+// AssignToolDescription is the LLM-facing description for thane_assign,
+// the async one-shot member of the thane_* family.
+const AssignToolDescription = "Assign a bounded task to a sub-agent that runs in the background and reports its result back through the current conversation or interactive channel when complete. " +
+	"Use when the work will take long enough that the calling model should not block waiting — multi-step investigation, deferred report generation, anything where the caller wants to move on while the delegate completes. " +
+	"For an answer needed in this turn, use thane_now. " +
+	"For recurring scheduled work, use thane_curate."
+
+// ToolDefinition returns the JSON schema for the deprecated
+// thane_delegate tool. Routes to thane_now or thane_assign internally
+// based on the mode parameter.
 func ToolDefinition() map[string]any {
+	props := commonDelegateProperties()
+	props["profile"] = map[string]any{
+		"type":        "string",
+		"default":     "general",
+		"description": "Compatibility profile for budget and routing defaults. Prefer tags for capability scoping. The ha profile adds the ha tag only when tags are omitted.",
+	}
+	props["mode"] = map[string]any{
+		"type":        "string",
+		"enum":        []string{"sync", "async"},
+		"default":     "sync",
+		"description": "DEPRECATED. mode=sync routes to thane_now; mode=async routes to thane_assign. Prefer calling those tools directly.",
+	}
 	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"task": map[string]any{
-				"type":        "string",
-				"description": "Plain English description of what to accomplish",
-			},
-			"profile": map[string]any{
-				"type":        "string",
-				"default":     "general",
-				"description": "Compatibility profile for budget and routing defaults. Prefer tags for capability scoping. The ha profile adds the ha tag only when tags are omitted.",
-			},
-			"mode": map[string]any{
-				"type":        "string",
-				"enum":        []string{"sync", "async"},
-				"default":     "sync",
-				"description": "Execution mode. Use 'sync' for a direct reply now, or 'async' to run in the background and deliver the result back through the current conversation or interactive channel when it completes.",
-			},
-			"guidance": map[string]any{
-				"type":        "string",
-				"description": "Optional hints to steer execution (entity names, what to focus on, output format preferences)",
-			},
-			"tags": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string"},
-				"description": "Optional capability tags to scope the delegate's tools. " +
-					"When provided, the delegate only sees tools from these tags " +
-					"(plus inherited elective caller tags and always-active tags). " +
-					"Use root entry-point tags when the delegate should choose a narrower branch; use leaf tags when you already know the needed toolset. " +
-					"Omit to inherit the caller's elective task context and any compatibility profile default tags.",
-			},
-			"inherit_caller_tags": map[string]any{
-				"type":        "boolean",
-				"default":     true,
-				"description": "Whether to inherit elective capability tags from the caller. Runtime and channel affordance tags such as message_channel are never inherited.",
-			},
-		},
-		"required": []string{"task"},
+		"type":       "object",
+		"properties": props,
+		"required":   []string{"task"},
 	}
 }
 
-// ToolDescription is the LLM-facing description for the thane_delegate tool.
-var ToolDescription = prompts.DelegateToolDescription
+// NowToolDefinition returns the JSON schema for thane_now.
+func NowToolDefinition() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": commonDelegateProperties(),
+		"required":   []string{"task"},
+	}
+}
 
-// ToolHandler returns a tool handler function bound to the given executor.
-// Errors from the delegate are returned as tool result strings (not Go errors)
-// so the calling model can decide what to do.
+// AssignToolDefinition returns the JSON schema for thane_assign. The
+// schema is identical to thane_now today; future revisions will add an
+// output target parameter so async work can land in a document or
+// directory tree instead of the current conversation/channel.
+func AssignToolDefinition() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": commonDelegateProperties(),
+		"required":   []string{"task"},
+	}
+}
+
+// commonDelegateProperties returns the JSON schema property block
+// shared by thane_now, thane_assign, and thane_delegate.
+func commonDelegateProperties() map[string]any {
+	return map[string]any{
+		"task": map[string]any{
+			"type":        "string",
+			"description": "Plain English description of what to accomplish.",
+		},
+		"guidance": map[string]any{
+			"type":        "string",
+			"description": "Optional hints to steer execution (entity names, what to focus on, output format preferences).",
+		},
+		"tags": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+			"description": "Optional capability tags to scope the delegate's tools. " +
+				"When provided, the delegate only sees tools from these tags " +
+				"(plus inherited elective caller tags and always-active tags). " +
+				"Use root entry-point tags when the delegate should choose a narrower branch; use leaf tags when you already know the needed toolset. " +
+				"Omit to inherit the caller's elective task context.",
+		},
+		"inherit_caller_tags": map[string]any{
+			"type":        "boolean",
+			"default":     true,
+			"description": "Whether to inherit elective capability tags from the caller. Runtime and channel affordance tags such as message_channel are never inherited.",
+		},
+	}
+}
+
+// ToolHandler returns the handler for thane_delegate. Routes to the
+// thane_now or thane_assign code paths based on the mode parameter.
+// Errors from the delegate are returned as tool result strings (not
+// Go errors) so the calling model can decide what to do.
 func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) (string, error) {
 	return func(ctx context.Context, args map[string]any) (string, error) {
-		task, _ := args["task"].(string)
-		if task == "" {
-			return "Error: task is required", nil
-		}
-
-		profileName, _ := args["profile"].(string)
-		if profileName == "" {
-			profileName = "general"
-		}
 		mode, _ := args["mode"].(string)
 		if mode == "" {
 			mode = "sync"
@@ -77,90 +118,156 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			return "Error: mode must be one of [sync, async]", nil
 		}
 
-		guidance, _ := args["guidance"].(string)
-		inheritCallerTags := true
-		if rawInherit, ok := args["inherit_caller_tags"].(bool); ok {
-			inheritCallerTags = rawInherit
-		}
-
-		var tags []string
-		tagsProvided := false
-		if rawTags, ok := args["tags"].([]any); ok {
-			tagsProvided = true
-			tags = make([]string, 0, len(rawTags))
-			for _, rt := range rawTags {
-				if s, ok := rt.(string); ok {
-					tags = append(tags, s)
-				}
-			}
-		}
-
-		opts := executionOptions{
-			inheritCallerTags: inheritCallerTags,
-			explicitTagScope:  tagsProvided,
+		req, errMsg := parseDelegateArgs(args)
+		if errMsg != "" {
+			return errMsg, nil
 		}
 		if mode == "async" {
-			loopID, err := exec.startBackground(ctx, task, profileName, guidance, tags, opts)
-			if err != nil {
-				return fmt.Sprintf("[Delegate error: profile=%s, mode=%s] %s", profileName, mode, err.Error()), nil
-			}
-			return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID), nil
+			return runAssign(ctx, exec, req), nil
 		}
-
-		result, err := exec.execute(ctx, task, profileName, guidance, tags, opts)
-		if err != nil {
-			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
-		}
-		summary := formatExecSummary(result)
-
-		// Format the result with explicit success/failure headers so the
-		// calling model can distinguish outcomes unambiguously.
-		if !result.Exhausted {
-			if result.Content == "" {
-				// Safety net — should be rare after delegate.go now flags
-				// empty-after-tool-calls as ExhaustNoOutput.
-				return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
-					"\n\nDelegate completed without producing results.\n\n%s",
-					profileName, result.Model, result.Iterations, summary), nil
-			}
-			header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
-				profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
-			return header + "\n\n" + result.Content + "\n\n" + summary, nil
-		}
-
-		// Exhausted delegation — provide actionable context for retry.
-		header := fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
-			profileName, result.Model, result.ExhaustReason, result.Iterations,
-			formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
-
-		var out strings.Builder
-		out.WriteString(header)
-		out.WriteString("\n\n")
-		if result.Content != "" {
-			out.WriteString(result.Content)
-			out.WriteString("\n\n")
-		}
-		out.WriteString("[Exhaustion note: ")
-		switch result.ExhaustReason {
-		case ExhaustNoOutput:
-			out.WriteString("The delegate completed all tool calls but produced no text output. Retry with more specific guidance — tell the delegate exactly what information to return.")
-		case ExhaustWallClock:
-			out.WriteString("The delegate exceeded its wall clock time limit before completing the task.")
-		case ExhaustTokenBudget:
-			out.WriteString("The delegate exceeded its output token budget before completing the task.")
-		case ExhaustIllegalTool:
-			out.WriteString("The delegate attempted to call a tool it does not have access to and was stopped.")
-		default:
-			out.WriteString("The delegate used all available iterations before completing the task.")
-		}
-		if result.ExhaustReason != ExhaustNoOutput {
-			out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
-			out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.")
-		}
-		out.WriteString("]\n\n")
-		out.WriteString(summary)
-		return out.String(), nil
+		return runNow(ctx, exec, req), nil
 	}
+}
+
+// NowToolHandler returns the handler for thane_now.
+func NowToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) (string, error) {
+	return func(ctx context.Context, args map[string]any) (string, error) {
+		req, errMsg := parseDelegateArgs(args)
+		if errMsg != "" {
+			return errMsg, nil
+		}
+		return runNow(ctx, exec, req), nil
+	}
+}
+
+// AssignToolHandler returns the handler for thane_assign.
+func AssignToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) (string, error) {
+	return func(ctx context.Context, args map[string]any) (string, error) {
+		req, errMsg := parseDelegateArgs(args)
+		if errMsg != "" {
+			return errMsg, nil
+		}
+		return runAssign(ctx, exec, req), nil
+	}
+}
+
+// delegateRequest captures the parsed arguments common to all
+// thane_* delegation tools.
+type delegateRequest struct {
+	task              string
+	profileName       string
+	guidance          string
+	inheritCallerTags bool
+	tags              []string
+	tagsProvided      bool
+}
+
+// parseDelegateArgs extracts the shared args for the family.
+// The profile field is read from args for thane_delegate compatibility
+// but defaults to "general" for the family tools that don't expose it.
+func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
+	req := delegateRequest{inheritCallerTags: true, profileName: "general"}
+
+	task, _ := args["task"].(string)
+	if task == "" {
+		return req, "Error: task is required"
+	}
+	req.task = task
+
+	if profile, ok := args["profile"].(string); ok && profile != "" {
+		req.profileName = profile
+	}
+	req.guidance, _ = args["guidance"].(string)
+	if rawInherit, ok := args["inherit_caller_tags"].(bool); ok {
+		req.inheritCallerTags = rawInherit
+	}
+	if rawTags, ok := args["tags"].([]any); ok {
+		req.tagsProvided = true
+		req.tags = make([]string, 0, len(rawTags))
+		for _, rt := range rawTags {
+			if s, ok := rt.(string); ok {
+				req.tags = append(req.tags, s)
+			}
+		}
+	}
+	return req, ""
+}
+
+// runAssign executes the async path. Used by both thane_assign and
+// thane_delegate(mode=async).
+func runAssign(ctx context.Context, exec *Executor, req delegateRequest) string {
+	opts := executionOptions{
+		inheritCallerTags: req.inheritCallerTags,
+		explicitTagScope:  req.tagsProvided,
+	}
+	loopID, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
+	if err != nil {
+		return fmt.Sprintf("[Delegate error: profile=%s, mode=async] %s", req.profileName, err.Error())
+	}
+	return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", req.profileName, loopID)
+}
+
+// runNow executes the sync path. Used by both thane_now and
+// thane_delegate(mode=sync). Returns a fully formatted tool-result
+// string with success/exhaustion headers and execution summary.
+func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
+	opts := executionOptions{
+		inheritCallerTags: req.inheritCallerTags,
+		explicitTagScope:  req.tagsProvided,
+	}
+	result, err := exec.execute(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
+	if err != nil {
+		return fmt.Sprintf("[Delegate error: profile=%s] %s", req.profileName, err.Error())
+	}
+	summary := formatExecSummary(result)
+
+	// Format the result with explicit success/failure headers so the
+	// calling model can distinguish outcomes unambiguously.
+	if !result.Exhausted {
+		if result.Content == "" {
+			// Safety net — should be rare after delegate.go now flags
+			// empty-after-tool-calls as ExhaustNoOutput.
+			return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
+				"\n\nDelegate completed without producing results.\n\n%s",
+				req.profileName, result.Model, result.Iterations, summary)
+		}
+		header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
+			req.profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
+		return header + "\n\n" + result.Content + "\n\n" + summary
+	}
+
+	// Exhausted delegation — provide actionable context for retry.
+	header := fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
+		req.profileName, result.Model, result.ExhaustReason, result.Iterations,
+		formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
+
+	var out strings.Builder
+	out.WriteString(header)
+	out.WriteString("\n\n")
+	if result.Content != "" {
+		out.WriteString(result.Content)
+		out.WriteString("\n\n")
+	}
+	out.WriteString("[Exhaustion note: ")
+	switch result.ExhaustReason {
+	case ExhaustNoOutput:
+		out.WriteString("The delegate completed all tool calls but produced no text output. Retry with more specific guidance — tell the delegate exactly what information to return.")
+	case ExhaustWallClock:
+		out.WriteString("The delegate exceeded its wall clock time limit before completing the task.")
+	case ExhaustTokenBudget:
+		out.WriteString("The delegate exceeded its output token budget before completing the task.")
+	case ExhaustIllegalTool:
+		out.WriteString("The delegate attempted to call a tool it does not have access to and was stopped.")
+	default:
+		out.WriteString("The delegate used all available iterations before completing the task.")
+	}
+	if result.ExhaustReason != ExhaustNoOutput {
+		out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
+		out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.")
+	}
+	out.WriteString("]\n\n")
+	out.WriteString(summary)
+	return out.String()
 }
 
 // formatExecSummary produces a structured execution summary block from a
