@@ -2119,15 +2119,15 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Time, limit int) ([]Message, error) {
 	cols := s.msgSelectCols()
 	table := s.msgTableName
-	// Bind time.Time directly rather than pre-formatting as
-	// RFC3339Nano. The unified messages table stores timestamps as
-	// they are emitted by go-sqlite3's time.Time → TEXT conversion,
-	// which uses a space separator ("2026-04-25 10:00:00..."), not a
-	// T separator. Lexically " " (0x20) < "T" (0x54), so comparing
-	// stored space-form rows against an RFC3339Nano-formatted bound
-	// silently excludes the lower edge of the window. Binding
-	// time.Time round-trips through the same driver format as the
-	// stored values, keeping the lexical compare correct.
+	// Bind time.Time directly rather than pre-formatting. The unified
+	// messages table stores timestamps in the form go-sqlite3 emits
+	// when binding a time.Time value — see [database.SQLiteTimestampLayout]
+	// and [database.FormatTimestamp]. Mixing that with time.RFC3339Nano
+	// produces silent lexical mismatches: " " (0x20) < "T" (0x54), so
+	// at the same instant the space-form row reads as "less than" the
+	// T-form bound and the lower edge of the window drops out. Binding
+	// the value round-trips through the driver's native format and
+	// keeps the lexical compare correct.
 	var query string
 	var args []any
 	if conversationID != "" {

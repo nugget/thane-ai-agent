@@ -1,8 +1,11 @@
 package database
 
 import (
+	"database/sql"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestParseTimestamp(t *testing.T) {
@@ -87,5 +90,58 @@ func TestParseTimestamp(t *testing.T) {
 				t.Errorf("ParseTimestamp(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatTimestamp_RoundTrip(t *testing.T) {
+	cases := []time.Time{
+		time.Date(2026, 4, 25, 10, 0, 0, 123456789, time.UTC),
+		time.Date(2026, 12, 31, 23, 59, 59, 999999999, time.FixedZone("CST", -6*3600)),
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, ts := range cases {
+		s := FormatTimestamp(ts)
+		got, err := ParseTimestamp(s)
+		if err != nil {
+			t.Fatalf("ParseTimestamp(FormatTimestamp(%v)) error: %v (string was %q)", ts, err, s)
+		}
+		if !got.Equal(ts) {
+			t.Errorf("round-trip mismatch: in=%v string=%q parsed=%v", ts, s, got)
+		}
+	}
+}
+
+func TestFormatTimestamp_MatchesDriverBinding(t *testing.T) {
+	// Pin FormatTimestamp to go-sqlite3's actual binding output. If the
+	// driver ever changes its time.Time → TEXT serialization, this test
+	// fails immediately rather than silently rotting the helper.
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE t (ts TEXT)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	cases := []time.Time{
+		time.Date(2026, 4, 25, 10, 0, 0, 123456789, time.UTC),
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.FixedZone("CST", -6*3600)),
+	}
+	for _, ts := range cases {
+		if _, err := db.Exec("DELETE FROM t"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("INSERT INTO t VALUES (?)", ts); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+		var stored string
+		if err := db.QueryRow("SELECT ts FROM t").Scan(&stored); err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		formatted := FormatTimestamp(ts)
+		if stored != formatted {
+			t.Errorf("driver wrote %q but FormatTimestamp returned %q (instant %v)", stored, formatted, ts)
+		}
 	}
 }
