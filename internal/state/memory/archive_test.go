@@ -1669,7 +1669,10 @@ func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
 	}
 
 	// From = base+9 (only "message 9" falls in the window) but
-	// MinMessages=5 should pull the 5 most recent regardless.
+	// MinMessages=5 trips the floor. Floor semantics: "at least 5",
+	// not "exactly 5" — once the floor triggers, return up to
+	// MaxMessages (default 200), so the model gets useful context
+	// rather than the bare minimum.
 	got, truncated, err := store.GetMessagesInRange(RangeOptions{
 		ConversationID: "conv-1",
 		From:           base.Add(9 * time.Minute),
@@ -1680,13 +1683,13 @@ func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if truncated {
-		t.Error("truncated = true, want false")
+		t.Error("truncated = true, want false (10 < default cap)")
 	}
-	if len(got) != 5 {
-		t.Fatalf("len = %d, want 5 (floor satisfied)", len(got))
+	if len(got) != 10 {
+		t.Fatalf("len = %d, want 10 (floor returns up to MaxMessages)", len(got))
 	}
-	if got[0].Content != "message 5" || got[4].Content != "message 9" {
-		t.Errorf("got[0]=%q got[4]=%q, want message 5..message 9", got[0].Content, got[4].Content)
+	if got[0].Content != "message 0" || got[9].Content != "message 9" {
+		t.Errorf("got[0]=%q got[9]=%q, want message 0..message 9", got[0].Content, got[9].Content)
 	}
 }
 
@@ -1749,5 +1752,45 @@ func TestGetMessagesInRange_AllConversations(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 (both conversations)", len(got))
+	}
+}
+
+func TestGetMessagesInRange_FloorReportsTruncation(t *testing.T) {
+	// Edge case from PR #761 review: when the floor path runs and
+	// there are more rows than MaxMessages, truncated must be true
+	// — earlier the floor path silently forced truncated=false.
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	msgs := make([]Message, 20)
+	for i := range msgs {
+		msgs[i] = Message{
+			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: "sess-1",
+			Role: "user", Content: fmt.Sprintf("message %d", i),
+			Timestamp:     base.Add(time.Duration(i) * time.Minute),
+			ArchiveReason: "reset",
+		}
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tight in-window query returns 1 msg → floor path runs. MaxMessages=5
+	// caps the floor result; with 20 messages available, truncated=true.
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(19 * time.Minute),
+		To:             base.Add(30 * time.Minute),
+		MinMessages:    5,
+		MaxMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5", len(got))
+	}
+	if !truncated {
+		t.Error("truncated = false, want true (floor capped with more rows available)")
 	}
 }

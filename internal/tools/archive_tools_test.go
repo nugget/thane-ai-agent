@@ -126,8 +126,11 @@ func TestArchiveRangeTool_MinMessagesFloor(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(parsed.Messages) != 5 {
-		t.Fatalf("len = %d, want 5 (floor satisfied)", len(parsed.Messages))
+	// Floor semantics: when triggered, return up to MaxMessages (default
+	// 200), not exactly MinMessages. With 8 archived messages and a
+	// tight in-window query, the floor path delivers all 8.
+	if len(parsed.Messages) != 8 {
+		t.Fatalf("len = %d, want 8 (floor returns up to MaxMessages)", len(parsed.Messages))
 	}
 }
 

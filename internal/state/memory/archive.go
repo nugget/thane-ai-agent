@@ -2074,6 +2074,12 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 	if from.IsZero() {
 		from = time.Unix(0, 0)
 	}
+	// NOTE: query bounds are formatted with their callsite zone offset
+	// (see queryMessagesDesc). Stored timestamps preserve the offset
+	// they were written in, so lexical SQL compares assume same-zone
+	// reads and writes. Cross-zone correctness would need either a
+	// stored-timestamp normalization migration or datetime()-based
+	// SQL compares, both out of scope here. See PR #761 review.
 
 	// Step 1: most recent messages within [from, to], DESC. Ask for one
 	// more than the cap so we can detect truncation.
@@ -2086,21 +2092,21 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 		msgs = msgs[:maxN]
 	}
 
-	// Step 2: floor — if the in-window query under-delivered, broaden
-	// the lower bound and re-query for the most recent MinMessages.
+	// Step 2: floor — if the in-window query under-delivered, drop the
+	// From bound entirely and re-query for the most recent up-to-MaxN
+	// messages. MinMessages is a floor ("at least this many"), not a
+	// cap — when it triggers we still return up to MaxMessages so the
+	// model gets useful context, not exactly MinMessages.
 	if opts.MinMessages > 0 && len(msgs) < opts.MinMessages {
-		want := opts.MinMessages
-		if want > maxN {
-			want = maxN
-		}
-		floor, err := s.queryMessagesDesc(opts.ConversationID, time.Unix(0, 0), to, want)
+		floor, err := s.queryMessagesDesc(opts.ConversationID, time.Unix(0, 0), to, maxN+1)
 		if err != nil {
 			return nil, false, err
 		}
+		truncated = len(floor) > maxN
+		if truncated {
+			floor = floor[:maxN]
+		}
 		msgs = floor
-		// The floor query asked for ≤ MaxMessages — no need to recheck
-		// truncation, since by construction we asked for what fits.
-		truncated = false
 	}
 
 	// Reverse DESC → chronological for output.
@@ -2113,6 +2119,13 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Time, limit int) ([]Message, error) {
 	cols := s.msgSelectCols()
 	table := s.msgTableName
+	// Format bounds with the callsite's zone offset (matches the
+	// existing convention in this package — see GetMessagesByTimeRange
+	// and ArchiveMessages, which also format RFC3339Nano without
+	// normalizing zone). Cross-zone correctness is a known gap that
+	// would require a stored-timestamp normalization migration.
+	fromStr := from.Format(time.RFC3339Nano)
+	toStr := to.Format(time.RFC3339Nano)
 	var query string
 	var args []any
 	if conversationID != "" {
@@ -2123,7 +2136,7 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Ti
 			ORDER BY timestamp DESC
 			LIMIT ?
 		`, cols, table)
-		args = []any{conversationID, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
+		args = []any{conversationID, fromStr, toStr, limit}
 	} else {
 		query = fmt.Sprintf(`
 			SELECT %s
@@ -2132,7 +2145,7 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Ti
 			ORDER BY timestamp DESC
 			LIMIT ?
 		`, cols, table)
-		args = []any{from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
+		args = []any{fromStr, toStr, limit}
 	}
 	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {

@@ -14,28 +14,37 @@ import (
 //
 // Started/Ended are signed-second deltas via [promptfmt.FormatDeltaOnly]
 // (e.g., "-7200s"). Ended is the empty string when the session is still
-// active; Duration is 0 in the same case.
+// active; DurationSeconds is 0 in the same case.
 type SessionView struct {
-	ID             string   `json:"id"`
-	ConversationID string   `json:"conversation_id"`
-	Started        string   `json:"started"`
-	Ended          string   `json:"ended"`
-	Duration       int      `json:"duration"`
-	Messages       int      `json:"messages"`
-	Title          string   `json:"title"`
-	Tags           []string `json:"tags"`
-	Summary        string   `json:"summary"`
+	ID              string   `json:"id"`
+	ConversationID  string   `json:"conversation_id"`
+	Started         string   `json:"started"`
+	Ended           string   `json:"ended"`
+	DurationSeconds int      `json:"duration_seconds"`
+	Messages        int      `json:"messages"`
+	Title           string   `json:"title"`
+	Tags            []string `json:"tags"`
+	Summary         string   `json:"summary"`
 }
+
+// maxMessageContentBytes caps per-message content in JSON output. Beyond
+// this size, content is truncated and ContentTruncated is set to true so
+// the model knows there is more available via archive_session_transcript.
+// The cap protects against single huge messages blowing through the
+// tool's overall byte budget and forcing the handler to drop everything.
+const maxMessageContentBytes = 2000
 
 // MessageView is the JSON-facing projection of an archived message.
 // T is a signed-second delta via [promptfmt.FormatDeltaOnly]. SessionID
-// is included when callers want the model to be able to chain into
-// archive_session_transcript for fuller context.
+// is always emitted (empty string when unknown) so the model sees a
+// stable schema across calls. ContentTruncated signals when Content was
+// clipped to [maxMessageContentBytes].
 type MessageView struct {
-	T         string `json:"t"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	SessionID string `json:"session_id,omitempty"`
+	T                string `json:"t"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ContentTruncated bool   `json:"content_truncated"`
+	SessionID        string `json:"session_id"`
 }
 
 // SearchResultView is the JSON-facing projection of an archive search hit.
@@ -76,7 +85,7 @@ func FormatSessionsList(sessions []*Session, now time.Time, truncated bool) []by
 func FormatRecentMessages(messages []Message, now time.Time, truncated bool) []byte {
 	views := make([]MessageView, 0, len(messages))
 	for _, m := range messages {
-		views = append(views, messageToView(m, now, true))
+		views = append(views, messageToView(m, now))
 	}
 	out := struct {
 		Messages  []MessageView `json:"messages"`
@@ -91,17 +100,19 @@ func FormatRecentMessages(messages []Message, now time.Time, truncated bool) []b
 
 // FormatSearchResults renders archive search hits as JSON. Each result
 // carries the matched message plus the surrounding context window in
-// chronological order. SessionID lives on the match (and is implied for
-// surrounding context, which always belongs to the same session).
+// chronological order. SessionID is emitted on every message; for
+// context messages around a match it equals the match's session.
 func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) []byte {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
-		match := messageToView(r.Match, now, false)
-		match.SessionID = r.SessionID
+		match := messageToView(r.Match, now)
+		if match.SessionID == "" {
+			match.SessionID = r.SessionID
+		}
 		views = append(views, SearchResultView{
 			Match:         match,
-			ContextBefore: messagesToViews(r.ContextBefore, now, false),
-			ContextAfter:  messagesToViews(r.ContextAfter, now, false),
+			ContextBefore: messagesToViews(r.ContextBefore, now),
+			ContextAfter:  messagesToViews(r.ContextAfter, now),
 			Highlight:     r.Highlight,
 		})
 	}
@@ -128,27 +139,39 @@ func sessionToView(s *Session, now time.Time) SessionView {
 	}
 	if s.EndedAt != nil {
 		view.Ended = promptfmt.FormatDeltaOnly(*s.EndedAt, now)
-		view.Duration = int(s.EndedAt.Sub(s.StartedAt).Seconds())
+		view.DurationSeconds = int(s.EndedAt.Sub(s.StartedAt).Seconds())
 	}
 	return view
 }
 
-func messageToView(m Message, now time.Time, includeSessionID bool) MessageView {
-	view := MessageView{
-		T:       promptfmt.FormatDeltaOnly(m.Timestamp, now),
-		Role:    m.Role,
-		Content: m.Content,
+func messageToView(m Message, now time.Time) MessageView {
+	content, truncated := clipContent(m.Content, maxMessageContentBytes)
+	return MessageView{
+		T:                promptfmt.FormatDeltaOnly(m.Timestamp, now),
+		Role:             m.Role,
+		Content:          content,
+		ContentTruncated: truncated,
+		SessionID:        m.SessionID,
 	}
-	if includeSessionID {
-		view.SessionID = m.SessionID
-	}
-	return view
 }
 
-func messagesToViews(messages []Message, now time.Time, includeSessionID bool) []MessageView {
+func messagesToViews(messages []Message, now time.Time) []MessageView {
 	views := make([]MessageView, 0, len(messages))
 	for _, m := range messages {
-		views = append(views, messageToView(m, now, includeSessionID))
+		views = append(views, messageToView(m, now))
 	}
 	return views
+}
+
+// clipContent clips s to at most maxBytes, returning the clipped
+// string and a flag indicating whether truncation occurred. The cut
+// respects UTF-8 boundaries so the result is always valid UTF-8.
+func clipContent(s string, maxBytes int) (string, bool) {
+	if len(s) <= maxBytes {
+		return s, false
+	}
+	for maxBytes > 0 && (s[maxBytes]&0xC0) == 0x80 {
+		maxBytes--
+	}
+	return s[:maxBytes], true
 }

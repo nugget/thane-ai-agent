@@ -54,8 +54,8 @@ func TestFormatSessionsList_StableSchema(t *testing.T) {
 	if closed.Ended != "-1800s" {
 		t.Errorf("closed.Ended = %q, want -1800s", closed.Ended)
 	}
-	if closed.Duration != 5400 {
-		t.Errorf("closed.Duration = %d, want 5400", closed.Duration)
+	if closed.DurationSeconds != 5400 {
+		t.Errorf("closed.DurationSeconds = %d, want 5400", closed.DurationSeconds)
 	}
 	if closed.Title != "Freezer alarm troubleshooting" {
 		t.Errorf("closed.Title = %q", closed.Title)
@@ -65,8 +65,8 @@ func TestFormatSessionsList_StableSchema(t *testing.T) {
 	if active.Ended != "" {
 		t.Errorf("active.Ended = %q, want empty string", active.Ended)
 	}
-	if active.Duration != 0 {
-		t.Errorf("active.Duration = %d, want 0", active.Duration)
+	if active.DurationSeconds != 0 {
+		t.Errorf("active.DurationSeconds = %d, want 0", active.DurationSeconds)
 	}
 	if active.Tags == nil {
 		t.Error("active.Tags is nil, want empty slice — schema stability")
@@ -143,6 +143,42 @@ func TestFormatRecentMessages_EmptyEmitsArray(t *testing.T) {
 	data := FormatRecentMessages(nil, time.Now(), false)
 	if !strings.Contains(string(data), `"messages":[]`) {
 		t.Errorf("expected empty array, got %s", data)
+	}
+}
+
+func TestFormatRecentMessages_ContentTruncation(t *testing.T) {
+	now := time.Now()
+	huge := strings.Repeat("x", maxMessageContentBytes+500)
+	messages := []Message{
+		{ID: "m1", Role: "user", Content: huge, Timestamp: now.Add(-time.Minute), SessionID: "s1"},
+		{ID: "m2", Role: "assistant", Content: "short reply", Timestamp: now, SessionID: "s1"},
+	}
+
+	data := FormatRecentMessages(messages, now, false)
+	var parsed struct {
+		Messages []MessageView `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Messages) != 2 {
+		t.Fatalf("len = %d, want 2", len(parsed.Messages))
+	}
+	if !parsed.Messages[0].ContentTruncated {
+		t.Error("first message should be flagged content_truncated")
+	}
+	if len(parsed.Messages[0].Content) > maxMessageContentBytes {
+		t.Errorf("truncated content len = %d, want <= %d", len(parsed.Messages[0].Content), maxMessageContentBytes)
+	}
+	if parsed.Messages[1].ContentTruncated {
+		t.Error("short message should not be flagged content_truncated")
+	}
+	// Schema stability: session_id is always present, even when empty
+	// upstream — drop omitempty was a deliberate choice in this file.
+	for i, m := range parsed.Messages {
+		if m.SessionID == "" {
+			t.Errorf("messages[%d].SessionID empty — schema invariant violated", i)
+		}
 	}
 }
 
