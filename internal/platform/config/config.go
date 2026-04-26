@@ -1715,6 +1715,10 @@ func Load(path string) (*Config, error) {
 
 	expanded := os.ExpandEnv(string(data))
 
+	if err := rejectRetiredTopLevelKeys([]byte(expanded)); err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{}
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, err
@@ -1729,10 +1733,36 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// UnmarshalYAML decodes Config and migrates the deprecated top-level
-// platform section to companion. The old key is accepted for existing
-// installations, but generated config and new deployments should use
-// companion.
+// rejectRetiredTopLevelKeys returns an actionable error when the YAML
+// document contains a top-level key that was renamed and whose silent
+// removal could leave a real subsystem misconfigured. yaml.v3's default
+// is to ignore unknown keys, which is fine for fields where the surface
+// area is small but dangerous for whole subsystem blocks (the Companion
+// section, formerly platform:, is the canonical example: silent ignore
+// would leave Companion unconfigured without any signal to the operator).
+func rejectRetiredTopLevelKeys(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		// Defer parse-error reporting to the caller's main Unmarshal.
+		return nil
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i].Value
+		switch key {
+		case "platform":
+			return fmt.Errorf("config has top-level platform: section, which was renamed to companion: in v0.9.x. Rename it (the field shape is unchanged) and re-load")
+		}
+	}
+	return nil
+}
+
 // applyDefaults fills zero-value fields with sensible defaults. It is
 // called automatically by [Load] and [Default]. After this method
 // returns, callers can read any field without conditional fallbacks.

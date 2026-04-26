@@ -298,10 +298,45 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 
 func TestExecute_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(&mockLoopRunner{}, looppkg.NewRegistry())
 	_, err := exec.Execute(context.Background(), "", "general", "", nil)
 
 	if err == nil {
 		t.Fatal("Execute() with empty task should return error")
+	}
+}
+
+// TestExecute_RequiresLoopExecutionWiring guards the contract that
+// NewExecutor returns an executor that is not usable until
+// ConfigureLoopExecution has been called. The error message must point
+// callers at the missing wiring step so future refactors do not silently
+// reintroduce a fallback path or a less actionable error.
+func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
+	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	// No ConfigureLoopExecution call.
+
+	_, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
+	if err == nil {
+		t.Fatal("Execute() without loops-ng wiring should return error")
+	}
+	if !strings.Contains(err.Error(), "ConfigureLoopExecution") {
+		t.Errorf("error %q should mention ConfigureLoopExecution", err)
+	}
+}
+
+// TestStartBackground_RequiresLoopExecutionWiring is the StartBackground
+// counterpart to TestExecute_RequiresLoopExecutionWiring. Same rationale:
+// the contract is that loops-ng wiring is mandatory and the failure mode
+// must be actionable.
+func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
+	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+
+	_, err := exec.StartBackground(context.Background(), "Check the office light", "general", "", nil)
+	if err == nil {
+		t.Fatal("StartBackground() without loops-ng wiring should return error")
+	}
+	if !strings.Contains(err.Error(), "loops-ng") {
+		t.Errorf("error %q should mention loops-ng wiring", err)
 	}
 }
 

@@ -119,6 +119,32 @@ companion:
 	}
 }
 
+// TestLoad_RetiredTopLevelPlatformIsRejected guards against silent
+// misconfiguration when an operator carries a pre-v0.9.x config with a
+// top-level platform: block. The subsystem behind that key was renamed
+// to companion:; yaml.v3 would otherwise accept the document and leave
+// Companion unconfigured. Load must fail fast with an actionable error
+// pointing at the rename.
+func TestLoad_RetiredTopLevelPlatformIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+platform:
+  enabled: true
+  providers:
+    nugget:
+      tokens: ["legacy-secret"]
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject top-level platform: section")
+	}
+	if !strings.Contains(err.Error(), "platform:") || !strings.Contains(err.Error(), "companion:") {
+		t.Errorf("error %q should mention both platform: and companion:", err)
+	}
+}
+
 func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
