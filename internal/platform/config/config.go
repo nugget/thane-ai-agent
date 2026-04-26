@@ -964,12 +964,13 @@ type ArchiveConfig struct {
 	// metadata LLM call. Default: 60.
 	SummarizeTimeout int `yaml:"summarize_timeout"`
 
-	// SessionIdleMinutes is the backstop idle timeout for the
-	// summarizer worker. Active sessions with no message activity
-	// for this many minutes are silently closed and become eligible
-	// for summarization. This complements the channel-specific idle
-	// check (e.g. signal.session_idle_minutes) which sends farewell
-	// messages.
+	// SessionIdleMinutes is the idle timeout for the summarizer
+	// worker. Active sessions with no message activity for this many
+	// minutes are silently closed and become eligible for summarization.
+	// This is the sole owner of session idle close — message-channel
+	// continuity across the rotation boundary is delivered via the
+	// message_channel context provider's verbatim tail, not an LLM-
+	// driven carry-forward.
 	//
 	// Pointer type distinguishes "omitted" (nil → inherit from
 	// signal.session_idle_minutes) from "explicitly set to 0"
@@ -1002,9 +1003,9 @@ type ExtractionConfig struct {
 }
 
 // EpisodicConfig configures episodic memory context injection. When
-// configured, the agent receives curated daily notes and a recency-graded
-// summary of recent conversations in its system prompt, giving it
-// continuity across sessions.
+// configured, the agent receives curated daily notes plus a JSON
+// catalog of recent closed sessions in its system prompt, giving it
+// continuity and discoverable archive entry points across sessions.
 type EpisodicConfig struct {
 	// DailyDir is the directory containing daily memory files named
 	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
@@ -1018,15 +1019,11 @@ type EpisodicConfig struct {
 	// Default: 2 (today + yesterday).
 	LookbackDays int `yaml:"lookback_days"`
 
-	// HistoryTokens is the approximate token budget for recent
-	// conversation history injected into the system prompt.
-	// Default: 4000.
+	// HistoryTokens is the approximate token budget for the recent-
+	// sessions JSON catalog injected into the system prompt. Internally
+	// converted to a byte cap (×4 ≈ 1 token / 4 bytes) when the
+	// catalog is rendered. Default: 4000.
 	HistoryTokens int `yaml:"history_tokens"`
-
-	// SessionGapMinutes is the silence duration (in minutes) between
-	// sessions that triggers a gap annotation in the history output.
-	// Default: 30.
-	SessionGapMinutes int `yaml:"session_gap_minutes"`
 }
 
 // AgentConfig configures agent loop behavior. When DelegationRequired
@@ -1804,11 +1801,10 @@ func (c *Config) applyDefaults() {
 	if c.Archive.SummarizeTimeout == 0 {
 		c.Archive.SummarizeTimeout = 60
 	}
-	// The archive idle timeout is a crash-recovery backstop (silent close
-	// via DB timestamps). The signal idle timeout is the interactive path
-	// (farewell message on next inbound). Inherit when omitted (nil) so
-	// users only need to set signal.session_idle_minutes for both to work.
-	// Explicit 0 disables the backstop without affecting the signal path.
+	// The archive idle timeout drives the summarizer worker's silent
+	// close. Inherit from signal.session_idle_minutes when omitted (nil)
+	// so users still get the same effective threshold without setting
+	// both. Explicit 0 disables the worker's idle close.
 	if c.Signal.HandleTimeout == 0 {
 		c.Signal.HandleTimeout = 10 * time.Minute
 	}
@@ -1864,9 +1860,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Episodic.HistoryTokens == 0 {
 		c.Episodic.HistoryTokens = 4000
-	}
-	if c.Episodic.SessionGapMinutes == 0 {
-		c.Episodic.SessionGapMinutes = 30
 	}
 
 	if c.Pricing == nil {
@@ -2111,9 +2104,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.HistoryTokens < 0 {
 		return fmt.Errorf("episodic.history_tokens %d must be non-negative", c.Episodic.HistoryTokens)
-	}
-	if c.Episodic.SessionGapMinutes < 0 {
-		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
 	}
 	if c.Archive.SessionIdleMinutes != nil && *c.Archive.SessionIdleMinutes < 0 {
 		return fmt.Errorf("archive.session_idle_minutes %d must be non-negative", *c.Archive.SessionIdleMinutes)

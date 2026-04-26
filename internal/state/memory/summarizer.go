@@ -38,11 +38,11 @@ type SummarizerConfig struct {
 	ModelPreference string
 
 	// IdleTimeout is the duration of inactivity after which an open
-	// session is silently closed by the summarizer as a backstop.
-	// Zero disables idle session closing. This complements the
-	// interactive idle check in the channel bridge, which sends
-	// farewell messages. The summarizer-based check recovers from
-	// crashes where in-memory state was lost.
+	// session is silently closed by the summarizer. Zero disables
+	// idle session closing. The summarizer worker is the sole owner
+	// of session idle close — message-channel continuity across the
+	// rotation boundary is delivered via the message_channel context
+	// provider's verbatim tail, not an LLM-driven carry-forward.
 	IdleTimeout time.Duration
 }
 
@@ -179,11 +179,12 @@ func (w *SummarizerWorker) run(ctx context.Context) {
 	}
 }
 
-// closeIdleSessions silently ends any active sessions whose last activity
-// is older than the configured idle timeout. Closed sessions become eligible
-// for summarization on the next scan cycle. This is a crash-recovery backstop
-// — the interactive idle check in the channel bridge handles the normal case
-// with farewell messages.
+// closeIdleSessions silently ends any active sessions whose last
+// activity is older than the configured idle timeout. Closed sessions
+// become eligible for summarization on the next scan cycle. This is
+// the sole owner of session idle close — message-channel continuity
+// is delivered via the message_channel context provider's verbatim
+// tail, not an interactive farewell.
 func (w *SummarizerWorker) closeIdleSessions(ctx context.Context) {
 	if w.config.IdleTimeout <= 0 {
 		return

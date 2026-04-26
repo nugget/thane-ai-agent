@@ -2,7 +2,8 @@ package memory
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,10 +14,8 @@ import (
 
 // mockArchive implements ArchiveReader for testing.
 type mockArchive struct {
-	sessions      []*Session
-	transcripts   map[string][]Message
-	listErr       error
-	transcriptErr error
+	sessions []*Session
+	listErr  error
 }
 
 func (m *mockArchive) ListSessions(_ string, _ int) ([]*Session, error) {
@@ -26,24 +25,13 @@ func (m *mockArchive) ListSessions(_ string, _ int) ([]*Session, error) {
 	return m.sessions, nil
 }
 
-func (m *mockArchive) GetSessionTranscript(sessionID string) ([]Message, error) {
-	if m.transcriptErr != nil {
-		return nil, m.transcriptErr
-	}
-	return m.transcripts[sessionID], nil
-}
-
-// timeAt returns a time.Time at the given hour offset from a base time.
 func timeAt(base time.Time, hoursAgo float64) time.Time {
 	return base.Add(-time.Duration(hoursAgo * float64(time.Hour)))
 }
 
-// ptrTime returns a pointer to a time.Time.
-func ptrTime(t time.Time) *time.Time {
-	return &t
-}
+func ptrTime(t time.Time) *time.Time { return &t }
 
-func TestGetContext_Empty(t *testing.T) {
+func TestEpisodicGetContext_Empty(t *testing.T) {
 	p := NewEpisodicProvider(nil, slog.Default(), EpisodicConfig{
 		LookbackDays:  2,
 		HistoryTokens: 4000,
@@ -58,12 +46,11 @@ func TestGetContext_Empty(t *testing.T) {
 	}
 }
 
-func TestGetContext_DailyFilesOnly(t *testing.T) {
+func TestEpisodicGetContext_DailyFilesOnly(t *testing.T) {
 	dir := t.TempDir()
 	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
 	today := fixedNow.Format("2006-01-02")
-	err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("Worked on FTS5 today."), 0644)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("Worked on FTS5 today."), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,12 +74,12 @@ func TestGetContext_DailyFilesOnly(t *testing.T) {
 	if !strings.Contains(got, "Today") {
 		t.Error("expected Today label")
 	}
-	if strings.Contains(got, "Recent Conversations") {
-		t.Error("should not have Recent Conversations when archive is empty")
+	if strings.Contains(got, "Recent Sessions") {
+		t.Error("should not have Recent Sessions when archive is empty")
 	}
 }
 
-func TestGetContext_HistoryOnly(t *testing.T) {
+func TestEpisodicGetContext_RecentSessionsJSON(t *testing.T) {
 	now := time.Now().UTC()
 	archive := &mockArchive{
 		sessions: []*Session{
@@ -101,375 +88,169 @@ func TestGetContext_HistoryOnly(t *testing.T) {
 				StartedAt: timeAt(now, 1),
 				EndedAt:   ptrTime(timeAt(now, 0.5)),
 				Title:     "Recent chat",
-				Metadata: &SessionMetadata{
-					OneLiner:  "Discussed delegation",
-					Paragraph: "We discussed the delegation feature in detail.",
-				},
+				Tags:      []string{"home-automation"},
+				Summary:   "Discussed delegation in detail.",
 			},
-		},
-		transcripts: map[string][]Message{
-			"s1": {
-				{Role: "user", Content: "How does delegation work?", Timestamp: timeAt(now, 1)},
-				{Role: "assistant", Content: "Delegation uses profiles to filter tools.", Timestamp: timeAt(now, 0.9)},
-			},
-		},
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		LookbackDays:      2,
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got, err := p.GetContext(context.Background(), "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.Contains(got, "Daily Notes") {
-		t.Error("should not have Daily Notes without daily_dir")
-	}
-	if !strings.Contains(got, "Recent Conversations") {
-		t.Error("expected Recent Conversations section")
-	}
-	if !strings.Contains(got, "ARCHIVED HISTORY") {
-		t.Error("expected ARCHIVED HISTORY framing")
-	}
-	if !strings.Contains(got, "PAST sessions") {
-		t.Error("expected temporal boundary warning")
-	}
-	if !strings.Contains(got, "delegation") {
-		t.Errorf("expected transcript content about delegation, got: %s", got)
-	}
-}
-
-func TestGetContext_Combined(t *testing.T) {
-	dir := t.TempDir()
-	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
-	today := fixedNow.Format("2006-01-02")
-	if err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("Morning standup notes."), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	now := fixedNow
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s1",
-				StartedAt: timeAt(now, 2),
-				EndedAt:   ptrTime(timeAt(now, 1)),
-				Title:     "Earlier session",
-				Metadata:  &SessionMetadata{OneLiner: "Quick chat"},
-			},
-		},
-		transcripts: map[string][]Message{
-			"s1": {
-				{Role: "user", Content: "Hello", Timestamp: timeAt(now, 2)},
-				{Role: "assistant", Content: "Hi there!", Timestamp: timeAt(now, 1.9)},
-			},
-		},
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		DailyDir:          dir,
-		LookbackDays:      1,
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-	p.nowFunc = func() time.Time { return fixedNow }
-
-	got, err := p.GetContext(context.Background(), "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(got, "Daily Notes") {
-		t.Error("expected Daily Notes section")
-	}
-	if !strings.Contains(got, "Recent Conversations") {
-		t.Error("expected Recent Conversations section")
-	}
-}
-
-func TestDailyMemory_MissingFiles(t *testing.T) {
-	dir := t.TempDir()
-	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
-	// Only create yesterday's file, not today's.
-	yesterday := fixedNow.AddDate(0, 0, -1).Format("2006-01-02")
-	if err := os.WriteFile(filepath.Join(dir, yesterday+".md"), []byte("Yesterday's notes."), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	p := NewEpisodicProvider(nil, slog.Default(), EpisodicConfig{
-		DailyDir:     dir,
-		LookbackDays: 2,
-	})
-	p.nowFunc = func() time.Time { return fixedNow }
-
-	got := p.getDailyMemory()
-	if !strings.Contains(got, "Yesterday") {
-		t.Error("expected Yesterday label")
-	}
-	if !strings.Contains(got, "Yesterday's notes.") {
-		t.Error("expected yesterday's content")
-	}
-	if strings.Contains(got, "Today") {
-		t.Error("should not have Today when file is missing")
-	}
-}
-
-func TestDailyMemory_EmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
-	today := fixedNow.Format("2006-01-02")
-	if err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("  \n  "), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	p := NewEpisodicProvider(nil, slog.Default(), EpisodicConfig{
-		DailyDir:     dir,
-		LookbackDays: 1,
-	})
-	p.nowFunc = func() time.Time { return fixedNow }
-
-	got := p.getDailyMemory()
-	if got != "" {
-		t.Errorf("expected empty string for whitespace-only file, got %q", got)
-	}
-}
-
-func TestRecencyGradient(t *testing.T) {
-	now := time.Now().UTC()
-
-	sessions := make([]*Session, 6)
-	transcripts := make(map[string][]Message)
-
-	for i := range 6 {
-		id := fmt.Sprintf("s%d", i)
-		ended := timeAt(now, float64(i)+0.5)
-		sessions[i] = &Session{
-			ID:        id,
-			StartedAt: timeAt(now, float64(i)+1),
-			EndedAt:   &ended,
-			Title:     fmt.Sprintf("Session %d", i),
-			Metadata: &SessionMetadata{
-				OneLiner:  fmt.Sprintf("One-liner for session %d", i),
-				Paragraph: fmt.Sprintf("Paragraph summary for session %d with more detail.", i),
-			},
-		}
-		transcripts[id] = []Message{
-			{Role: "user", Content: fmt.Sprintf("User message in session %d", i), Timestamp: timeAt(now, float64(i)+1)},
-			{Role: "assistant", Content: fmt.Sprintf("Assistant reply in session %d", i), Timestamp: timeAt(now, float64(i)+0.9)},
-		}
-	}
-
-	archive := &mockArchive{sessions: sessions, transcripts: transcripts}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     8000, // Large budget to include all sessions.
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-
-	// Session 0 should have transcript (user/assistant messages).
-	if !strings.Contains(got, "User message in session 0") {
-		t.Error("most recent session should have transcript excerpt")
-	}
-
-	// Sessions 1-3 should have paragraph summaries.
-	for i := 1; i <= 3; i++ {
-		expected := fmt.Sprintf("Paragraph summary for session %d", i)
-		if !strings.Contains(got, expected) {
-			t.Errorf("session %d should have paragraph summary", i)
-		}
-	}
-
-	// Sessions 4-5 should have one-liners.
-	for i := 4; i <= 5; i++ {
-		expected := fmt.Sprintf("One-liner for session %d", i)
-		if !strings.Contains(got, expected) {
-			t.Errorf("session %d should have one-liner", i)
-		}
-	}
-}
-
-func TestTokenBudget(t *testing.T) {
-	now := time.Now().UTC()
-
-	sessions := make([]*Session, 10)
-	for i := range 10 {
-		ended := timeAt(now, float64(i)+0.5)
-		sessions[i] = &Session{
-			ID:        fmt.Sprintf("s%d", i),
-			StartedAt: timeAt(now, float64(i)+1),
-			EndedAt:   &ended,
-			Title:     fmt.Sprintf("Session %d", i),
-			Metadata: &SessionMetadata{
-				OneLiner:  fmt.Sprintf("One-liner for session %d", i),
-				Paragraph: fmt.Sprintf("Paragraph summary for session %d with more detail.", i),
-			},
-		}
-	}
-
-	archive := &mockArchive{
-		sessions: sessions,
-		transcripts: map[string][]Message{
-			"s0": {
-				{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)},
-				{Role: "assistant", Content: "Hi!", Timestamp: timeAt(now, 0.9)},
-			},
-		},
-	}
-
-	// Very small budget should limit output.
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     100, // ~400 chars
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-	if got == "" {
-		t.Fatal("expected some output even with small budget")
-	}
-
-	// Should not contain all 10 sessions.
-	if strings.Contains(got, "session 9") {
-		t.Error("budget should have prevented including all sessions")
-	}
-}
-
-func TestGapDetection(t *testing.T) {
-	now := time.Now().UTC()
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s0",
-				StartedAt: timeAt(now, 1),
-				EndedAt:   ptrTime(timeAt(now, 0.5)),
-				Title:     "Recent",
-				Metadata:  &SessionMetadata{OneLiner: "Recent session"},
-			},
-			{
-				// 5 hours earlier — should trigger gap.
-				ID:        "s1",
-				StartedAt: timeAt(now, 6),
-				EndedAt:   ptrTime(timeAt(now, 5)),
-				Title:     "Earlier",
-				Metadata:  &SessionMetadata{OneLiner: "Earlier session"},
-			},
-		},
-		transcripts: map[string][]Message{
-			"s0": {{Role: "user", Content: "Hey", Timestamp: timeAt(now, 1)}},
-		},
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-	if !strings.Contains(got, "gap") {
-		t.Errorf("expected gap annotation, got: %s", got)
-	}
-	if !strings.Contains(got, "4h") {
-		t.Errorf("expected ~4h gap annotation, got: %s", got)
-	}
-}
-
-func TestNoMetadata(t *testing.T) {
-	now := time.Now().UTC()
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s0",
-				StartedAt: timeAt(now, 1),
-				EndedAt:   ptrTime(timeAt(now, 0.5)),
-				// No Title, no Metadata, no Summary.
-			},
-		},
-		transcripts: map[string][]Message{
-			"s0": {
-				{Role: "user", Content: "Test message", Timestamp: timeAt(now, 1)},
-			},
-		},
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-	if got != "" {
-		t.Errorf("expected empty output for session without metadata, got:\n%s", got)
-	}
-}
-
-func TestEmptySessionsSkipped(t *testing.T) {
-	now := time.Now().UTC()
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			// Most recent: has title → should be included.
-			{
-				ID:        "s1",
-				StartedAt: timeAt(now, 1),
-				EndedAt:   ptrTime(timeAt(now, 0.5)),
-				Title:     "Useful session",
-			},
-			// Second: empty delegate → should be skipped.
 			{
 				ID:        "s2",
-				StartedAt: timeAt(now, 2),
-				EndedAt:   ptrTime(timeAt(now, 1.5)),
+				StartedAt: timeAt(now, 24),
+				EndedAt:   ptrTime(timeAt(now, 23)),
+				Title:     "Yesterday",
+				Summary:   "Reviewed PRs.",
 			},
-			// Third: has summary → should be included.
-			{
-				ID:        "s3",
-				StartedAt: timeAt(now, 3),
-				EndedAt:   ptrTime(timeAt(now, 2.5)),
-				Summary:   "Earlier session with content.",
-			},
-			// Fourth: another empty delegate → should be skipped.
-			{
-				ID:        "s4",
-				StartedAt: timeAt(now, 4),
-				EndedAt:   ptrTime(timeAt(now, 3.5)),
-			},
-			// Fifth: empty session marked by summarizer → should be skipped.
-			{
-				ID:        "s5",
-				StartedAt: timeAt(now, 5),
-				EndedAt:   ptrTime(timeAt(now, 4.5)),
-				Title:     "(empty session)",
-				Metadata:  &SessionMetadata{SessionType: "empty", OneLiner: "Empty session (no transcript)"},
-			},
-		},
-		transcripts: map[string][]Message{
-			"s1": {{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)}},
 		},
 	}
 
 	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
+		LookbackDays:  2,
+		HistoryTokens: 4000,
 	})
 
-	got := p.getRecentHistory()
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+	if !strings.Contains(got, "### Recent Sessions") {
+		t.Errorf("expected Recent Sessions header:\n%s", got)
+	}
+	if !strings.Contains(got, "archive_session_transcript") {
+		t.Error("framing should mention archive_session_transcript as enticement")
+	}
 
-	if !strings.Contains(got, "Useful session") {
-		t.Error("expected session with title to appear")
+	// Pull the fenced JSON block and assert schema/contents.
+	jsonBlock := extractFirstFencedJSON(got)
+	if jsonBlock == "" {
+		t.Fatalf("missing fenced JSON block:\n%s", got)
 	}
-	if !strings.Contains(got, "Earlier session with content.") {
-		t.Error("expected session with summary to appear")
+	var parsed struct {
+		Sessions  []SessionView `json:"sessions"`
+		Truncated bool          `json:"truncated"`
 	}
-	if strings.Contains(got, "(no summary)") {
-		t.Error("empty sessions should not produce '(no summary)' entries")
+	if err := json.Unmarshal([]byte(jsonBlock), &parsed); err != nil {
+		t.Fatalf("unmarshal sessions JSON: %v\nblock: %s", err, jsonBlock)
 	}
-	if strings.Contains(got, "empty session") {
-		t.Error("sessions with SessionType 'empty' should not appear in history")
+	if len(parsed.Sessions) != 2 {
+		t.Fatalf("sessions len = %d, want 2", len(parsed.Sessions))
+	}
+	if parsed.Sessions[0].ID != "s1" {
+		t.Errorf("sessions[0].id = %q, want s1 (newest first)", parsed.Sessions[0].ID)
+	}
+	if parsed.Sessions[0].Started == "" || !strings.HasPrefix(parsed.Sessions[0].Started, "-") {
+		t.Errorf("sessions[0].started = %q, want negative delta", parsed.Sessions[0].Started)
+	}
+}
+
+func TestEpisodicGetContext_ActiveSessionsExcluded(t *testing.T) {
+	now := time.Now().UTC()
+	archive := &mockArchive{
+		sessions: []*Session{
+			{
+				ID:        "active",
+				StartedAt: timeAt(now, 0.1),
+				EndedAt:   nil, // active — should be excluded
+				Title:     "Live conversation",
+			},
+			{
+				ID:        "closed",
+				StartedAt: timeAt(now, 24),
+				EndedAt:   ptrTime(timeAt(now, 23)),
+				Title:     "Yesterday",
+			},
+		},
+	}
+	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+	if strings.Contains(got, `"id":"active"`) {
+		t.Errorf("active session leaked into Recent Sessions:\n%s", got)
+	}
+	if !strings.Contains(got, `"id":"closed"`) {
+		t.Errorf("closed session missing:\n%s", got)
+	}
+}
+
+func TestEpisodicGetContext_EmptySessionsSkipped(t *testing.T) {
+	now := time.Now().UTC()
+	archive := &mockArchive{
+		sessions: []*Session{
+			// Delegate session with no metadata or title — should be filtered.
+			{
+				ID:        "delegate",
+				StartedAt: timeAt(now, 1),
+				EndedAt:   ptrTime(timeAt(now, 0.5)),
+			},
+			{
+				ID:        "real",
+				StartedAt: timeAt(now, 2),
+				EndedAt:   ptrTime(timeAt(now, 1.5)),
+				Title:     "Real conversation",
+			},
+		},
+	}
+	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+	if strings.Contains(got, `"id":"delegate"`) {
+		t.Errorf("empty delegate session leaked:\n%s", got)
+	}
+	if !strings.Contains(got, `"id":"real"`) {
+		t.Errorf("real session missing:\n%s", got)
+	}
+}
+
+func TestEpisodicGetContext_ListSessionsErrorIsSilent(t *testing.T) {
+	archive := &mockArchive{listErr: errors.New("boom")}
+	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext should not propagate archive error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty output on archive error, got %q", got)
+	}
+}
+
+func TestEpisodicGetContext_ByteCapTruncates(t *testing.T) {
+	now := time.Now().UTC()
+	// Synthesize many large sessions so the byte cap clamps the output.
+	huge := strings.Repeat("x", 1000)
+	archive := &mockArchive{}
+	for i := range 30 {
+		archive.sessions = append(archive.sessions, &Session{
+			ID:        sessionID(i),
+			StartedAt: timeAt(now, float64(i+1)),
+			EndedAt:   ptrTime(timeAt(now, float64(i))),
+			Title:     "session " + sessionID(i),
+			Summary:   huge,
+		})
+	}
+	// Tight token budget → tight byte cap (×4) → truncated catalog.
+	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 100})
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+	jsonBlock := extractFirstFencedJSON(got)
+	var parsed struct {
+		Sessions  []SessionView `json:"sessions"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(jsonBlock), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !parsed.Truncated {
+		t.Error("expected truncated=true under tight byte cap")
+	}
+	if len(parsed.Sessions) >= 30 {
+		t.Errorf("expected catalog clipped, got %d entries (no clip)", len(parsed.Sessions))
 	}
 }
 
@@ -479,287 +260,53 @@ func TestSessionHasContent(t *testing.T) {
 		session *Session
 		want    bool
 	}{
-		{"title only", &Session{Title: "A title"}, true},
-		{"summary only", &Session{Summary: "A summary"}, true},
-		{"metadata oneliner", &Session{Metadata: &SessionMetadata{OneLiner: "short"}}, true},
-		{"metadata paragraph", &Session{Metadata: &SessionMetadata{Paragraph: "long"}}, true},
-		{"metadata detailed", &Session{Metadata: &SessionMetadata{Detailed: "full detail"}}, true},
-		{"empty metadata", &Session{Metadata: &SessionMetadata{}}, false},
-		{"nil metadata", &Session{}, false},
-		{"completely empty", &Session{}, false},
-		{"empty session type", &Session{
-			Title:    "(empty session)",
-			Metadata: &SessionMetadata{SessionType: "empty", OneLiner: "Empty session (no transcript)"},
-		}, false},
+		{name: "title only", session: &Session{Title: "x"}, want: true},
+		{name: "summary only", session: &Session{Summary: "x"}, want: true},
+		{name: "metadata one_liner", session: &Session{Metadata: &SessionMetadata{OneLiner: "x"}}, want: true},
+		{name: "metadata paragraph", session: &Session{Metadata: &SessionMetadata{Paragraph: "x"}}, want: true},
+		{name: "metadata detailed", session: &Session{Metadata: &SessionMetadata{Detailed: "x"}}, want: true},
+		{name: "explicit empty type", session: &Session{Title: "x", Metadata: &SessionMetadata{SessionType: "empty"}}, want: false},
+		{name: "no content", session: &Session{}, want: false},
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := sessionHasContent(tc.session)
-			if got != tc.want {
-				t.Errorf("sessionHasContent() = %v, want %v", got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionHasContent(tt.session); got != tt.want {
+				t.Errorf("sessionHasContent = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestSessionFallbackChain(t *testing.T) {
-	tests := []struct {
-		name     string
-		session  *Session
-		wantPara string
-		wantOne  string
-	}{
-		{
-			name: "full metadata",
-			session: &Session{
-				Metadata: &SessionMetadata{
-					Paragraph: "Full paragraph.",
-					OneLiner:  "Short version.",
-				},
-				Summary: "Summary text.",
-				Title:   "The Title",
-			},
-			wantPara: "Full paragraph.",
-			wantOne:  "Short version.",
-		},
-		{
-			name: "summary only",
-			session: &Session{
-				Summary: "Just a summary. With extra detail.",
-			},
-			wantPara: "Just a summary. With extra detail.",
-			wantOne:  "Just a summary.",
-		},
-		{
-			name: "title only",
-			session: &Session{
-				Title: "Just a title",
-			},
-			wantPara: "Just a title",
-			wantOne:  "Just a title",
-		},
-		{
-			name:     "nothing",
-			session:  &Session{},
-			wantPara: "(no summary available)",
-			wantOne:  "(no summary)",
-		},
+// extractFirstFencedJSON returns the contents of the first ```json
+// block in s, or empty string if none.
+func extractFirstFencedJSON(s string) string {
+	start := strings.Index(s, "```json\n")
+	if start < 0 {
+		return ""
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gotPara := sessionParagraph(tc.session)
-			if gotPara != tc.wantPara {
-				t.Errorf("sessionParagraph: got %q, want %q", gotPara, tc.wantPara)
-			}
-			gotOne := sessionOneLiner(tc.session)
-			if gotOne != tc.wantOne {
-				t.Errorf("sessionOneLiner: got %q, want %q", gotOne, tc.wantOne)
-			}
-		})
+	s = s[start+len("```json\n"):]
+	end := strings.Index(s, "\n```")
+	if end < 0 {
+		return ""
 	}
+	return s[:end]
 }
 
-func TestHelpers(t *testing.T) {
-	t.Run("truncateContent", func(t *testing.T) {
-		short := "hello"
-		if got := truncateEpisodicContent(short, 10); got != "hello" {
-			t.Errorf("got %q, want %q", got, "hello")
-		}
-		long := strings.Repeat("x", 300)
-		got := truncateEpisodicContent(long, 200)
-		if got != strings.Repeat("x", 200)+"..." {
-			t.Errorf("truncated content mismatch")
-		}
-		// Newlines should be replaced with spaces.
-		multiline := "line1\nline2\nline3"
-		if got := truncateEpisodicContent(multiline, 100); strings.Contains(got, "\n") {
-			t.Errorf("expected newlines replaced, got %q", got)
-		}
-		// UTF-8 safety: multi-byte runes should not be split.
-		utf8Str := strings.Repeat("\u00e9", 10) // 10 × é (2 bytes each)
-		got = truncateEpisodicContent(utf8Str, 5)
-		if !strings.HasSuffix(got, "...") {
-			t.Errorf("expected ... suffix, got %q", got)
-		}
-		// Should have exactly 5 runes + "..."
-		if got != strings.Repeat("\u00e9", 5)+"..." {
-			t.Errorf("UTF-8 truncation failed: got %q", got)
-		}
-	})
-
-	t.Run("firstSentence", func(t *testing.T) {
-		if got := firstSentence("Hello world. More text."); got != "Hello world." {
-			t.Errorf("got %q", got)
-		}
-		if got := firstSentence("No period here"); got != "No period here" {
-			t.Errorf("got %q", got)
-		}
-		long := strings.Repeat("x", 100)
-		got := firstSentence(long)
-		if got != strings.Repeat("x", 80)+"..." {
-			t.Errorf("long truncation failed: got %q", got)
-		}
-		// UTF-8 safety: truncation should respect rune boundaries.
-		utf8Long := strings.Repeat("\u00e9", 100)
-		got = firstSentence(utf8Long)
-		if got != strings.Repeat("\u00e9", 80)+"..." {
-			t.Errorf("UTF-8 firstSentence failed: got %q", got)
-		}
-	})
-
-	t.Run("formatGap", func(t *testing.T) {
-		tests := []struct {
-			d    time.Duration
-			want string
-		}{
-			{25 * time.Minute, "25m"},
-			{2 * time.Hour, "2h"},
-			{24 * time.Hour, "1 day"},
-			{72 * time.Hour, "3 days"},
-		}
-		for _, tc := range tests {
-			if got := formatGap(tc.d); got != tc.want {
-				t.Errorf("formatGap(%v): got %q, want %q", tc.d, got, tc.want)
-			}
-		}
-	})
-
-	t.Run("dayLabel", func(t *testing.T) {
-		now := time.Now()
-		if got := dayLabel(0, now); got != "Today" {
-			t.Errorf("got %q, want Today", got)
-		}
-		if got := dayLabel(1, now); got != "Yesterday" {
-			t.Errorf("got %q, want Yesterday", got)
-		}
-		twoDaysAgo := now.AddDate(0, 0, -2)
-		got := dayLabel(2, twoDaysAgo)
-		if got == "Today" || got == "Yesterday" {
-			t.Errorf("got %q, expected day name", got)
-		}
-	})
-
+// sessionID returns "s0", "s1", ... for test fixture IDs.
+func sessionID(i int) string {
+	return "s" + itoaInt(i)
 }
 
-func TestMessageTimestamps(t *testing.T) {
-	// Fixed time so we can assert exact RFC3339 output.
-	base := time.Date(2026, 2, 15, 21, 0, 0, 0, time.FixedZone("CST", -6*3600))
-	msgTime := base.Add(-10 * time.Minute) // 20:50
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s1",
-				StartedAt: base.Add(-1 * time.Hour),
-				EndedAt:   ptrTime(base.Add(-30 * time.Minute)),
-				Title:     "Timestamp test",
-				Metadata:  &SessionMetadata{OneLiner: "Testing timestamps"},
-			},
-		},
-		transcripts: map[string][]Message{
-			"s1": {
-				{Role: "user", Content: "what time is it", Timestamp: msgTime},
-				{Role: "assistant", Content: "It's 8:50 PM", Timestamp: msgTime.Add(5 * time.Second)},
-			},
-		},
+func itoaInt(n int) string {
+	if n == 0 {
+		return "0"
 	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		Timezone:          "America/Chicago",
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-
-	// Each transcript message should have an RFC3339 timestamp prefix.
-	if !strings.Contains(got, "[2026-02-15T20:50:00-06:00] **user:**") {
-		t.Errorf("expected RFC3339 timestamp on user message, got:\n%s", got)
+	var b [20]byte
+	pos := len(b)
+	for n > 0 {
+		pos--
+		b[pos] = byte('0' + n%10)
+		n /= 10
 	}
-	if !strings.Contains(got, "[2026-02-15T20:50:05-06:00] **assistant:**") {
-		t.Errorf("expected RFC3339 timestamp on assistant message, got:\n%s", got)
-	}
-}
-
-func TestSessionHeaderRFC3339(t *testing.T) {
-	base := time.Date(2026, 2, 15, 21, 4, 0, 0, time.FixedZone("CST", -6*3600))
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s1",
-				StartedAt: base,
-				EndedAt:   ptrTime(base.Add(30 * time.Minute)),
-				Title:     "RFC3339 header test",
-				Metadata:  &SessionMetadata{OneLiner: "Testing header format"},
-			},
-		},
-		transcripts: map[string][]Message{
-			"s1": {
-				{Role: "user", Content: "Hello", Timestamp: base},
-			},
-		},
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		Timezone:          "America/Chicago",
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-
-	// Match the full header pattern so message timestamps alone can't
-	// satisfy this assertion.
-	if !strings.Contains(got, "**[2026-02-15T21:04:00-06:00 — RFC3339 header test]**") {
-		t.Errorf("expected RFC3339-formatted session header, got:\n%s", got)
-	}
-	// Should NOT contain old-style "Feb 15 21:04".
-	if strings.Contains(got, "Feb 15 21:04") {
-		t.Errorf("session header should not use old format, got:\n%s", got)
-	}
-}
-
-func TestArchiveError(t *testing.T) {
-	archive := &mockArchive{listErr: fmt.Errorf("database locked")}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-	if got != "" {
-		t.Errorf("expected empty string on archive error, got %q", got)
-	}
-}
-
-func TestTranscriptError(t *testing.T) {
-	now := time.Now().UTC()
-
-	archive := &mockArchive{
-		sessions: []*Session{
-			{
-				ID:        "s0",
-				StartedAt: timeAt(now, 1),
-				EndedAt:   ptrTime(timeAt(now, 0.5)),
-				Title:     "Test",
-				Metadata:  &SessionMetadata{Paragraph: "Fallback paragraph."},
-			},
-		},
-		transcriptErr: fmt.Errorf("IO error"),
-	}
-
-	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{
-		HistoryTokens:     4000,
-		SessionGapMinutes: 30,
-	})
-
-	got := p.getRecentHistory()
-	// Should fall back to paragraph when transcript fails.
-	if !strings.Contains(got, "Fallback paragraph.") {
-		t.Errorf("expected paragraph fallback on transcript error, got: %s", got)
-	}
+	return string(b[pos:])
 }

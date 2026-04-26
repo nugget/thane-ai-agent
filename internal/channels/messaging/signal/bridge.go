@@ -29,27 +29,6 @@ type AgentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
 
-// SessionRotator gracefully closes the active session for a
-// conversation, optionally generating a farewell message and
-// carry-forward context. The agent loop's EnsureSession call creates a
-// fresh session on the next message automatically.
-type SessionRotator interface {
-	// RotateIdleSession closes the active session for conversationID,
-	// generating a farewell message for sender and injecting
-	// carry-forward context into the next session. Returns true if a
-	// session was ended. No-op if no active session.
-	RotateIdleSession(ctx context.Context, conversationID string, sender string) bool
-}
-
-// ChannelSender can send a text message to a recipient on the
-// originating channel. Used by the session rotator to deliver farewell
-// messages before closing a session.
-type ChannelSender interface {
-	// SendMessage delivers a text message to recipient. The recipient
-	// format is channel-specific (e.g., phone number for Signal).
-	SendMessage(ctx context.Context, recipient, message string) error
-}
-
 // ContactResolver resolves a channel/address pair to a typed channel
 // binding. The bridge uses this to inject sender identity into agent
 // requests and to persist contact-backed bindings on the conversation.
@@ -118,8 +97,6 @@ type BridgeConfig struct {
 	RateLimit        int                                                               // per sender per minute; 0 = unlimited
 	HandleTimeout    time.Duration                                                     // per-message processing timeout; 0 = defaultHandleTimeout
 	Routing          config.SignalRoutingConfig                                        // model selection and routing hints
-	Rotator          SessionRotator                                                    // nil disables idle session rotation
-	IdleTimeout      time.Duration                                                     // 0 disables idle session rotation
 	Resolver         ContactResolver                                                   // nil disables phone→name resolution
 	BindConversation func(conversationID string, binding *memory.ChannelBinding) error // nil disables conversation binding persistence
 	Attachments      AttachmentConfig                                                  // attachment storage configuration
@@ -138,8 +115,6 @@ type Bridge struct {
 	rateLimit        int
 	handleTimeout    time.Duration
 	routing          config.SignalRoutingConfig
-	rotator          SessionRotator
-	idleTimeout      time.Duration
 	resolver         ContactResolver
 	bindConversation func(conversationID string, binding *memory.ChannelBinding) error
 	attachments      AttachmentConfig
@@ -182,8 +157,6 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		rateLimit:        cfg.RateLimit,
 		handleTimeout:    handleTimeout,
 		routing:          cfg.Routing,
-		rotator:          cfg.Rotator,
-		idleTimeout:      cfg.IdleTimeout,
 		resolver:         cfg.Resolver,
 		bindConversation: cfg.BindConversation,
 		attachments:      cfg.Attachments,
@@ -564,25 +537,11 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		"attachments", len(env.DataMessage.Attachments),
 	)
 
-	// Rotate the session if the sender has been idle longer than
-	// the configured timeout. The agent loop's deferred
-	// EnsureSession call will create a fresh session automatically.
-	if b.idleTimeout > 0 && b.rotator != nil {
-		b.mu.Lock()
-		lm, exists := b.lastInboundTS[sender]
-		b.mu.Unlock()
-		if exists && time.Since(lm.receivedAt) > b.idleTimeout {
-			if b.rotator.RotateIdleSession(ctx, convID, sender) {
-				log.Info("signal session rotated (idle)",
-					"idle_duration", time.Since(lm.receivedAt).Round(time.Second),
-				)
-			}
-		}
-	}
-
-	// Update lastInboundTS *after* the idle check so the check
-	// reads the previous message's wall-clock time, not the current
-	// one. This also serves the reaction tool's "latest" resolution.
+	// Update lastInboundTS so the reaction tool's "latest" resolution
+	// has a fresh anchor. Idle-session rotation is no longer triggered
+	// here — the summarizer worker is the sole owner of idle close,
+	// and continuity is delivered via the message_channel context
+	// provider's verbatim tail rather than an LLM-driven carry-forward.
 	ts := env.Timestamp
 	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
 		ts = env.DataMessage.Timestamp

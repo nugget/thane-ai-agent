@@ -10,23 +10,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
-// ArchiveReader is the subset of [ArchiveStore] needed by the
-// episodic memory provider. Defined as an interface for testability.
+// ArchiveReader is the subset of [ArchiveStore] needed by the episodic
+// memory provider. Defined as an interface for testability.
 type ArchiveReader interface {
 	// ListSessions returns sessions ordered newest-first. Pass empty
 	// conversationID to list sessions across all conversations.
 	ListSessions(conversationID string, limit int) ([]*Session, error)
-
-	// GetSessionTranscript returns all archived messages for a session
-	// in chronological order.
-	GetSessionTranscript(sessionID string) ([]Message, error)
 }
 
 // EpisodicConfig holds configuration for the episodic memory provider.
@@ -42,17 +35,34 @@ type EpisodicConfig struct {
 	LookbackDays int
 
 	// HistoryTokens is the approximate token budget for recent
-	// conversation history.
+	// conversation history. Converted to a byte cap (×4) when fitting
+	// the JSON catalog block.
 	HistoryTokens int
-
-	// SessionGapMinutes is the silence duration between sessions that
-	// triggers a gap annotation in the output.
-	SessionGapMinutes int
 }
 
+// recentSessionsListLimit is the over-fetch from the archive before
+// content / closed filtering. Twenty closed sessions with metadata is
+// usually plenty even after non-content delegate sessions are dropped.
+const recentSessionsListLimit = 20
+
 // EpisodicProvider implements the agent.ContextProvider interface for
-// episodic memory. It injects daily memory notes and recent conversation
-// history into the system prompt.
+// episodic memory. It injects two unrelated context blocks into the
+// system prompt:
+//
+//   - "Daily Notes" — markdown content from per-day notes files (a
+//     human-authored journal) for the configured lookback window.
+//
+//   - "Recent Sessions" — a JSON catalog of the most recent closed
+//     sessions across all conversations, keyed for archive_search and
+//     archive_session_transcript follow-ups. Rendered via
+//     [FormatSessionsList] for schema parity with the archive_*
+//     tools and the message_channel context provider.
+//
+// Per-channel verbatim history (the model's "what did we just say?"
+// view for message-channel conversations) lives in a separate provider
+// gated on the message_channel capability tag — see
+// [MessageChannelProvider]. EpisodicProvider intentionally stays
+// channel-agnostic and emits the same JSON shape on every code path.
 type EpisodicProvider struct {
 	archive       ArchiveReader
 	logger        *slog.Logger
@@ -60,8 +70,7 @@ type EpisodicProvider struct {
 	dailyDir      string
 	lookbackDays  int
 	historyTokens int
-	sessionGap    time.Duration
-	nowFunc       func() time.Time // injectable for testing; defaults to time.Now
+	nowFunc       func() time.Time
 }
 
 // NewEpisodicProvider creates an episodic memory context provider.
@@ -73,14 +82,13 @@ func NewEpisodicProvider(archive ArchiveReader, logger *slog.Logger, cfg Episodi
 		dailyDir:      cfg.DailyDir,
 		lookbackDays:  cfg.LookbackDays,
 		historyTokens: cfg.HistoryTokens,
-		sessionGap:    time.Duration(cfg.SessionGapMinutes) * time.Minute,
 		nowFunc:       time.Now,
 	}
 }
 
 // GetContext returns episodic memory context for injection into the
-// system prompt. It assembles daily memory notes and recent
-// conversation history from the session archive.
+// system prompt. It assembles daily memory notes and the recent-
+// sessions JSON catalog from the archive.
 func (p *EpisodicProvider) GetContext(_ context.Context, _ string) (string, error) {
 	var sb strings.Builder
 
@@ -90,13 +98,16 @@ func (p *EpisodicProvider) GetContext(_ context.Context, _ string) (string, erro
 		sb.WriteString(daily)
 	}
 
-	history := p.getRecentHistory()
-	if history != "" {
+	recent := p.getRecentSessionsJSON()
+	if len(recent) > 0 {
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}
-		sb.WriteString("### Recent Conversations\n\n")
-		sb.WriteString(history)
+		sb.WriteString("### Recent Sessions\n\n")
+		sb.WriteString("Past conversation sessions, newest first. Use archive_session_transcript for full transcripts, or archive_search to search semantically.\n\n")
+		sb.WriteString("```json\n")
+		sb.Write(recent)
+		sb.WriteString("\n```\n")
 	}
 
 	return sb.String(), nil
@@ -146,194 +157,44 @@ func (p *EpisodicProvider) getDailyMemory() string {
 	return sb.String()
 }
 
-// getRecentHistory assembles recent conversation history from the
-// session archive using a recency gradient: most recent session gets
-// transcript excerpts, recent sessions get paragraph summaries, and
-// older sessions get one-liners. Fills backward until the token budget
-// is exhausted.
-func (p *EpisodicProvider) getRecentHistory() string {
+// getRecentSessionsJSON returns the recent-sessions JSON catalog as
+// raw bytes, or nil when there is nothing to emit. Closed sessions
+// only; sessions without content (delegate runs with no metadata)
+// are filtered out.
+func (p *EpisodicProvider) getRecentSessionsJSON() []byte {
 	if p.archive == nil {
-		return ""
+		return nil
 	}
-
-	allSessions, err := p.archive.ListSessions("", 20)
+	allSessions, err := p.archive.ListSessions("", recentSessionsListLimit)
 	if err != nil {
 		p.logger.Warn("episodic: failed to list sessions", "error", err)
-		return ""
+		return nil
 	}
-
-	// Filter to closed sessions only. Active (unclosed) sessions have
-	// EndedAt == nil — they represent the current conversation or
-	// other in-progress sessions whose transcripts are incomplete.
 	var sessions []*Session
 	for _, s := range allSessions {
-		if s.EndedAt != nil {
-			sessions = append(sessions, s)
+		if s.EndedAt == nil {
+			continue
 		}
+		if !sessionHasContent(s) {
+			continue
+		}
+		sessions = append(sessions, s)
 	}
 	if len(sessions) == 0 {
-		return ""
+		return nil
 	}
 
-	framing := prompts.EpisodicHistoryFraming() + "\n\n"
-	budget := p.historyTokens - llm.EstimateTokens(framing)
-	var entries []string
-
-	formatted := 0          // Count of sessions actually emitted.
-	var prevStart time.Time // StartedAt of the previously emitted session.
-	for _, sess := range sessions {
-		if budget <= 0 {
-			break
-		}
-
-		// Skip sessions with no useful content (e.g. delegate sessions
-		// with no title, summary, or metadata).
-		if !sessionHasContent(sess) {
-			continue
-		}
-
-		// Gap detection between consecutively emitted sessions.
-		var gapNote string
-		if formatted > 0 && sess.EndedAt != nil {
-			gap := prevStart.Sub(*sess.EndedAt)
-			if gap > p.sessionGap {
-				gapNote = fmt.Sprintf("*(%s gap)*\n", formatGap(gap))
-			}
-		}
-
-		var entry string
-		var cost int
-
-		switch {
-		case formatted == 0:
-			// Most recent archived session: transcript excerpt.
-			entry, cost = p.formatTranscriptExcerpt(sess, budget)
-		case formatted <= 3:
-			// Recent sessions: paragraph summary.
-			entry, cost = p.formatParagraph(sess)
-		default:
-			// Older sessions: one-liner.
-			entry, cost = p.formatOneLiner(sess)
-		}
-
-		if cost > budget && formatted > 0 {
-			break
-		}
-
-		if gapNote != "" {
-			entries = append(entries, gapNote)
-		}
-		entries = append(entries, entry)
-		budget -= cost
-		prevStart = sess.StartedAt
-		formatted++
+	// Convert the token budget to a byte cap (×4 ≈ 1 token / 4 bytes
+	// rule of thumb). Drop oldest sessions first when the cap bites
+	// — most recent are the most useful.
+	byteCap := p.historyTokens * 4
+	if byteCap <= 0 {
+		byteCap = 16000
 	}
-
-	if len(entries) == 0 {
-		return ""
-	}
-
-	// Reverse to chronological order (entries are newest-first).
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	var sb strings.Builder
-	sb.WriteString(framing)
-	for _, e := range entries {
-		sb.WriteString(e)
-		if !strings.HasSuffix(e, "\n") {
-			sb.WriteString("\n")
-		}
-	}
-
-	return strings.TrimSpace(sb.String())
-}
-
-// maxExcerptMessages caps how many messages we scan from the tail of a
-// session transcript. This avoids loading excessively large transcripts
-// when the budget only needs a handful of messages. A future
-// optimisation could add a GetRecentMessages(sessionID, limit) method
-// to ArchiveReader to push this limit into the SQL query.
-const maxExcerptMessages = 50
-
-// formatTranscriptExcerpt formats the most recent session with actual
-// message excerpts from the transcript, walking backward from the end
-// until the budget is consumed.
-func (p *EpisodicProvider) formatTranscriptExcerpt(sess *Session, budget int) (string, int) {
-	header := p.sessionHeader(sess)
-
-	messages, err := p.archive.GetSessionTranscript(sess.ID)
-	if err != nil || len(messages) == 0 {
-		return p.formatParagraph(sess)
-	}
-
-	var sb strings.Builder
-	sb.WriteString(header)
-	sb.WriteString("\n")
-
-	remaining := budget - llm.EstimateTokens(header)
-
-	// Collect user/assistant messages from the end, capped to avoid
-	// scanning excessively long transcripts.
-	loc := p.loadLocation()
-	var excerpts []string
-	scanned := 0
-	for i := len(messages) - 1; i >= 0 && remaining > 0 && scanned < maxExcerptMessages; i-- {
-		scanned++
-		m := messages[i]
-		if m.Role != "user" && m.Role != "assistant" {
-			continue
-		}
-		ts := m.Timestamp.In(loc).Format(time.RFC3339)
-		line := fmt.Sprintf("[%s] **%s:** %s", ts, m.Role, truncateEpisodicContent(m.Content, 200))
-		cost := llm.EstimateTokens(line)
-		if cost > remaining {
-			break
-		}
-		excerpts = append(excerpts, line)
-		remaining -= cost
-	}
-
-	// Reverse to chronological order.
-	for i, j := 0, len(excerpts)-1; i < j; i, j = i+1, j-1 {
-		excerpts[i], excerpts[j] = excerpts[j], excerpts[i]
-	}
-
-	for _, e := range excerpts {
-		sb.WriteString(e)
-		sb.WriteString("\n")
-	}
-
-	result := sb.String()
-	return result, llm.EstimateTokens(result)
-}
-
-// formatParagraph formats a session with its paragraph-level summary.
-func (p *EpisodicProvider) formatParagraph(sess *Session) (string, int) {
-	header := p.sessionHeader(sess)
-	summary := sessionParagraph(sess)
-	entry := header + summary + "\n"
-	return entry, llm.EstimateTokens(entry)
-}
-
-// formatOneLiner formats a session with a single-line summary.
-func (p *EpisodicProvider) formatOneLiner(sess *Session) (string, int) {
-	header := p.sessionHeader(sess)
-	oneliner := sessionOneLiner(sess)
-	entry := header + oneliner + "\n"
-	return entry, llm.EstimateTokens(entry)
-}
-
-// sessionHeader returns a formatted header for a session entry.
-func (p *EpisodicProvider) sessionHeader(sess *Session) string {
-	loc := p.loadLocation()
-	ts := sess.StartedAt.In(loc).Format(time.RFC3339)
-	title := ""
-	if sess.Title != "" {
-		title = " — " + sess.Title
-	}
-	return fmt.Sprintf("**[%s%s]** ", ts, title)
+	now := p.nowFunc()
+	return FitPrefix(len(sessions), byteCap, func(k int) []byte {
+		return FormatSessionsList(sessions[:k], now, k < len(sessions))
+	})
 }
 
 // loadLocation returns the configured timezone or the system local
@@ -347,29 +208,11 @@ func (p *EpisodicProvider) loadLocation() *time.Location {
 	return time.Now().Location()
 }
 
-// sessionParagraph returns the best available paragraph-level summary
-// for a session, falling through a chain of alternatives.
-func sessionParagraph(sess *Session) string {
-	if sess.Metadata != nil && sess.Metadata.Paragraph != "" {
-		return sess.Metadata.Paragraph
-	}
-	if sess.Summary != "" {
-		return sess.Summary
-	}
-	if sess.Metadata != nil && sess.Metadata.OneLiner != "" {
-		return sess.Metadata.OneLiner
-	}
-	if sess.Title != "" {
-		return sess.Title
-	}
-	return "(no summary available)"
-}
-
-// sessionHasContent reports whether a session has any meaningful content
-// worth including in the episodic history. Delegate sessions typically
-// have no title, summary, or metadata and should be skipped. Sessions
-// explicitly marked as empty by the summarizer (SessionType "empty")
-// are also excluded — they have metadata but no real transcript.
+// sessionHasContent reports whether a session has any meaningful
+// content worth including in the recent-sessions catalog. Delegate
+// sessions typically have no title, summary, or metadata and should
+// be skipped. Sessions explicitly marked SessionType "empty" by the
+// summarizer also drop out — they have metadata but no real transcript.
 func sessionHasContent(sess *Session) bool {
 	if sess.Metadata != nil && sess.Metadata.SessionType == "empty" {
 		return false
@@ -388,21 +231,6 @@ func sessionHasContent(sess *Session) bool {
 	return false
 }
 
-// sessionOneLiner returns the best available one-line summary for a
-// session.
-func sessionOneLiner(sess *Session) string {
-	if sess.Metadata != nil && sess.Metadata.OneLiner != "" {
-		return sess.Metadata.OneLiner
-	}
-	if sess.Title != "" {
-		return sess.Title
-	}
-	if sess.Summary != "" {
-		return firstSentence(sess.Summary)
-	}
-	return "(no summary)"
-}
-
 // dayLabel returns a human-readable label for a day offset (0 = today,
 // 1 = yesterday, etc.).
 func dayLabel(offset int, day time.Time) string {
@@ -414,45 +242,4 @@ func dayLabel(offset int, day time.Time) string {
 	default:
 		return day.Format("Monday, January 2")
 	}
-}
-
-// truncateEpisodicContent shortens a string to maxLen runes, appending "..."
-// if truncated. Newlines are replaced with spaces for inline display.
-func truncateEpisodicContent(s string, maxLen int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxLen]) + "..."
-}
-
-// firstSentence returns the first sentence of a string, or a truncated
-// version if no sentence boundary is found. Truncation is rune-safe.
-func firstSentence(s string) string {
-	if idx := strings.Index(s, ". "); idx > 0 && idx < 100 {
-		return s[:idx+1]
-	}
-	if utf8.RuneCountInString(s) > 80 {
-		runes := []rune(s)
-		return string(runes[:80]) + "..."
-	}
-	return s
-}
-
-// formatGap returns a human-readable representation of a time gap
-// between sessions.
-func formatGap(d time.Duration) string {
-	hours := int(d.Hours())
-	if hours >= 24 {
-		days := hours / 24
-		if days == 1 {
-			return "1 day"
-		}
-		return fmt.Sprintf("%d days", days)
-	}
-	if hours > 0 {
-		return fmt.Sprintf("%dh", hours)
-	}
-	return fmt.Sprintf("%dm", int(d.Minutes()))
 }

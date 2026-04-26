@@ -234,12 +234,13 @@ talents_dir: ./talents
 #   SummarizeTimeout is the max seconds for a single session's
 #   metadata LLM call. Default: 60.
 #   summarize_timeout: 60
-#   SessionIdleMinutes is the backstop idle timeout for the
-#   summarizer worker. Active sessions with no message activity
-#   for this many minutes are silently closed and become eligible
-#   for summarization. This complements the channel-specific idle
-#   check (e.g. signal.session_idle_minutes) which sends farewell
-#   messages.
+#   SessionIdleMinutes is the idle timeout for the summarizer
+#   worker. Active sessions with no message activity for this many
+#   minutes are silently closed and become eligible for summarization.
+#   This is the sole owner of session idle close — message-channel
+#   continuity across the rotation boundary is delivered via the
+#   message_channel context provider's verbatim tail, not an LLM-
+#   driven carry-forward.
 #
 #   Pointer type distinguishes "omitted" (nil → inherit from
 #   signal.session_idle_minutes) from "explicitly set to 0"
@@ -287,14 +288,11 @@ talents_dir: ./talents
 #   Today and the previous (LookbackDays-1) days are checked.
 #   Default: 2 (today + yesterday).
 #   lookback_days: 2
-#   HistoryTokens is the approximate token budget for recent
-#   conversation history injected into the system prompt.
-#   Default: 4000.
+#   HistoryTokens is the approximate token budget for the recent-
+#   sessions JSON catalog injected into the system prompt. Internally
+#   converted to a byte cap (×4 ≈ 1 token / 4 bytes) when the
+#   catalog is rendered. Default: 4000.
 #   history_tokens: 4000
-#   SessionGapMinutes is the silence duration (in minutes) between
-#   sessions that triggers a gap annotation in the history output.
-#   Default: 30.
-#   session_gap_minutes: 0
 #
 # (optional) Agent configures agent loop behavior, including orchestrator
 # agent:
