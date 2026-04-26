@@ -82,6 +82,53 @@ With a setup like this, you can gradually build several stable document
 collections without changing code or teaching Thane a new subsystem each
 time.
 
+## Root Policy
+
+Most roots do not need extra policy. If a root is listed in `paths:` and
+exists on disk, Thane indexes markdown in that root and managed document
+tools may write it.
+
+When a root needs a stronger contract, add `doc_roots:`:
+
+```yaml
+paths:
+  kb: ~/Thane/knowledge
+  scratchpad: ~/Thane/scratchpad
+
+doc_roots:
+  kb:
+    authoring: managed
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: warn
+      signing_key: ~/.ssh/id_ed25519
+  scratchpad:
+    indexing: false
+    authoring: managed
+```
+
+Policy is deliberately attached to the root, not to individual tools or
+prompts. A loop-declared output, a document write tool, and a future
+specialized authoring flow should all meet the same root contract.
+
+The current policy fields are:
+
+- `indexing`: set `false` when a root may be written/read by exact ref
+  but should stay out of browse/search results.
+- `authoring`: `managed` allows document mutations, `read_only` blocks
+  them, and `restricted` reserves the root for narrower future flows.
+- `git.enabled`: records that the root participates in git-backed
+  provenance.
+- `git.sign_commits`: signs and commits each managed write/delete.
+- `git.verify_signatures`: records the intended consumer policy:
+  `none`, `warn`, or `required`.
+
+Signature-required roots are the place for high-integrity authored
+knowledge, such as owner-tagged knowledge articles. Broader enforcement
+for loading or activating signed content builds on this root policy
+rather than inventing a separate trust lane.
+
 ## A Few Practical Guidelines
 
 - Prefer a small number of well-named roots over dozens of tiny ones.

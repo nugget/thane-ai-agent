@@ -180,6 +180,75 @@ paths:
   kb: ./knowledge
   scratchpad: ./scratchpad
 #
+# (optional) DocRoots configures per-root document policy keyed by paths root name.
+# doc_roots:
+#   kb:
+#     Indexing controls whether markdown files in this root are scanned
+#     into the document index. Omit to keep indexing enabled.
+#     indexing: true
+#     Authoring controls whether managed document mutation tools may
+#     write this root. Empty defaults to "managed". Supported values:
+#     "managed", "read_only", and "restricted". Restricted is intended
+#     for high-integrity roots whose writes must come from narrower
+#     future flows.
+#     authoring: managed
+#     Git configures optional git-backed write provenance for this root.
+#     git:
+#       Enabled controls whether this root participates in git-backed
+#       provenance. When false, git settings are ignored.
+#       enabled: true
+#       SignCommits creates a signed git commit for each managed document
+#       mutation. Requires signing_key.
+#       sign_commits: true
+#       VerifySignatures is the desired verification policy for consumers
+#       of this root: "none", "warn", or "required". V1 records the
+#       policy and signs managed writes; policy-aware load/activation
+#       consumers enforce this in follow-up work.
+#       verify_signatures: warn
+#       RepoPath optionally points at the git repository to use for this
+#       root. Empty means the root directory itself is the repository.
+#       repo_path: ""
+#       SigningKey is the SSH private key used to sign managed commits.
+#       Supports ~ expansion at startup.
+#       signing_key: ~/.ssh/id_ed25519
+#       AllowedSigners is the OpenSSH allowed signers file to use when
+#       verifying this root. Empty uses the repository-local
+#       .allowed_signers written from signing_key.
+#       allowed_signers: ""
+#   scratchpad:
+#     Indexing controls whether markdown files in this root are scanned
+#     into the document index. Omit to keep indexing enabled.
+#     indexing: false
+#     Authoring controls whether managed document mutation tools may
+#     write this root. Empty defaults to "managed". Supported values:
+#     "managed", "read_only", and "restricted". Restricted is intended
+#     for high-integrity roots whose writes must come from narrower
+#     future flows.
+#     authoring: managed
+#     Git configures optional git-backed write provenance for this root.
+#     git:
+#       Enabled controls whether this root participates in git-backed
+#       provenance. When false, git settings are ignored.
+#       enabled: false
+#       SignCommits creates a signed git commit for each managed document
+#       mutation. Requires signing_key.
+#       sign_commits: false
+#       VerifySignatures is the desired verification policy for consumers
+#       of this root: "none", "warn", or "required". V1 records the
+#       policy and signs managed writes; policy-aware load/activation
+#       consumers enforce this in follow-up work.
+#       verify_signatures: ""
+#       RepoPath optionally points at the git repository to use for this
+#       root. Empty means the root directory itself is the repository.
+#       repo_path: ""
+#       SigningKey is the SSH private key used to sign managed commits.
+#       Supports ~ expansion at startup.
+#       signing_key: ""
+#       AllowedSigners is the OpenSSH allowed signers file to use when
+#       verifying this root. Empty uses the repository-local
+#       .allowed_signers written from signing_key.
+#       allowed_signers: ""
+#
 # (optional) ExtraPath lists additional directories to prepend to the process
 # extra_path:
 #   - $HOME/.local/bin

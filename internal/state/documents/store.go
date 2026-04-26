@@ -21,6 +21,7 @@ import (
 type RootSummary struct {
 	Root            string             `json:"root"`
 	Path            string             `json:"-"`
+	Policy          RootPolicySummary  `json:"policy"`
 	DocumentCount   int                `json:"document_count"`
 	TotalSizeBytes  int64              `json:"total_size_bytes"`
 	TotalWordCount  int                `json:"total_word_count"`
@@ -76,6 +77,8 @@ type ValueCount struct {
 type Store struct {
 	db              *sql.DB
 	roots           map[string]string
+	rootPolicies    map[string]RootPolicy
+	rootWriters     map[string]RootWriter
 	logger          *slog.Logger
 	refreshMu       sync.Mutex
 	lastRefresh     time.Time
@@ -86,15 +89,24 @@ const defaultRefreshInterval = 5 * time.Second
 
 // NewStore creates a document index store backed by db.
 func NewStore(db *sql.DB, roots map[string]string, logger *slog.Logger) (*Store, error) {
+	return NewStoreWithOptions(db, roots, logger, StoreOptions{})
+}
+
+// NewStoreWithOptions creates a document index store backed by db and
+// optional per-root policy.
+func NewStoreWithOptions(db *sql.DB, roots map[string]string, logger *slog.Logger, opts StoreOptions) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("nil database")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	normalizedRoots := normalizeRoots(roots)
 	s := &Store{
 		db:              db,
-		roots:           normalizeRoots(roots),
+		roots:           normalizedRoots,
+		rootPolicies:    normalizePolicies(normalizedRoots, opts.RootPolicies),
+		rootWriters:     normalizeRootWriters(normalizedRoots, opts.RootWriters),
 		logger:          logger,
 		refreshInterval: defaultRefreshInterval,
 	}
@@ -166,6 +178,9 @@ func (s *Store) Refresh(ctx context.Context) error {
 		return nil
 	}
 	for root, dir := range s.roots {
+		if !s.rootPolicy(root).Indexing {
+			continue
+		}
 		if err := s.refreshRoot(ctx, root, dir); err != nil {
 			return err
 		}
@@ -348,7 +363,7 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 	return tx.Commit()
 }
 
-func (s *Store) indexedRoots() []string {
+func (s *Store) allRoots() []string {
 	roots := make([]string, 0, len(s.roots))
 	for root := range s.roots {
 		roots = append(roots, root)

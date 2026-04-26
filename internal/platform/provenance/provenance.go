@@ -147,10 +147,19 @@ type EditEntry struct {
 // to prevent interleaved add/commit sequences from corrupting the
 // repository.
 type Store struct {
-	mu     sync.Mutex
-	path   string
-	signer Signer
-	logger *slog.Logger
+	mu                 sync.Mutex
+	path               string
+	signer             Signer
+	logger             *slog.Logger
+	allowedSignersPath string
+}
+
+// Options configures optional provenance store behavior.
+type Options struct {
+	// AllowedSignersPath points git signature verification at an
+	// existing OpenSSH allowed signers file. Empty writes a
+	// repository-local .allowed_signers file containing the signing key.
+	AllowedSignersPath string
 }
 
 // New creates a [Store] backed by a git repository at path. If the
@@ -158,15 +167,35 @@ type Store struct {
 // initializes it (git init, user config, .allowed_signers). The signer
 // is used for all commit signing.
 func New(path string, signer Signer, logger *slog.Logger) (*Store, error) {
+	return NewWithOptions(path, signer, logger, Options{})
+}
+
+// NewWithOptions creates a [Store] backed by a git repository at path
+// with optional repository verification settings.
+func NewWithOptions(path string, signer Signer, logger *slog.Logger, opts Options) (*Store, error) {
+	if signer == nil {
+		return nil, fmt.Errorf("provenance: nil signer")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("provenance: resolve path: %w", err)
 	}
+	allowedSignersPath := strings.TrimSpace(opts.AllowedSignersPath)
+	if allowedSignersPath != "" {
+		allowedSignersPath, err = filepath.Abs(allowedSignersPath)
+		if err != nil {
+			return nil, fmt.Errorf("provenance: resolve allowed signers path: %w", err)
+		}
+	}
 
 	s := &Store{
-		path:   absPath,
-		signer: signer,
-		logger: logger,
+		path:               absPath,
+		signer:             signer,
+		logger:             logger,
+		allowedSignersPath: allowedSignersPath,
 	}
 
 	if err := s.ensureRepo(); err != nil {
@@ -265,6 +294,43 @@ func (s *Store) WriteFiles(ctx context.Context, files map[string]string, message
 		)
 	}
 
+	return nil
+}
+
+// Delete removes filename within the store, then creates a signed git
+// commit with the given message. If the file is already absent, Delete
+// returns an os.ErrNotExist-wrapped error.
+func (s *Store) Delete(ctx context.Context, filename, message string) error {
+	if err := validateFilename(filename); err != nil {
+		return fmt.Errorf("provenance: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tracked, err := s.fileTracked(ctx, filename)
+	if err != nil {
+		return fmt.Errorf("provenance: check tracked file %s: %w", filename, err)
+	}
+	if !tracked {
+		return fmt.Errorf("provenance: cannot commit signed deletion for untracked file %s; write it through provenance before deleting", filename)
+	}
+
+	absPath := filepath.Join(s.path, filename)
+	if err := os.Remove(absPath); err != nil {
+		return fmt.Errorf("provenance: delete %s: %w", filename, err)
+	}
+
+	committed, err := s.commitFile(ctx, filename, message)
+	if err != nil {
+		return fmt.Errorf("provenance: commit delete %s: %w", filename, err)
+	}
+	if committed {
+		s.logger.Info("provenance file deletion committed",
+			"file", filename,
+			"message", message,
+		)
+	}
 	return nil
 }
 

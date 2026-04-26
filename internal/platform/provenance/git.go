@@ -50,11 +50,16 @@ func (s *Store) ensureRepo() error {
 		}
 	}
 
-	// Write .allowed_signers with the signer's public key.
-	allowedSigners := fmt.Sprintf("thane@provenance.local %s\n", s.signer.PublicKey())
-	allowedPath := filepath.Join(s.path, ".allowed_signers")
-	if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
-		return fmt.Errorf("write .allowed_signers: %w", err)
+	allowedPath := s.allowedSignersPath
+	if allowedPath == "" {
+		// Write .allowed_signers with the signer's public key.
+		allowedSigners := fmt.Sprintf("thane@provenance.local %s\n", s.signer.PublicKey())
+		allowedPath = filepath.Join(s.path, ".allowed_signers")
+		if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
+			return fmt.Errorf("write .allowed_signers: %w", err)
+		}
+	} else if _, err := os.Stat(allowedPath); err != nil {
+		return fmt.Errorf("stat allowed signers file: %w", err)
 	}
 
 	// Tell git where to find allowed signers for verification.
@@ -69,6 +74,18 @@ func (s *Store) ensureRepo() error {
 // commitFile stages a file and creates a signed commit.
 func (s *Store) commitFile(ctx context.Context, filename, message string) (bool, error) {
 	return s.commitFiles(ctx, []string{filename}, message)
+}
+
+func (s *Store) fileTracked(ctx context.Context, filename string) (bool, error) {
+	err := s.git(ctx, nil, nil, "ls-files", "--error-unmatch", "--", filename)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
 }
 
 // commitFiles stages files and creates one signed commit containing all

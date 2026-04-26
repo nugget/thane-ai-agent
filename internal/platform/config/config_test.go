@@ -897,4 +897,82 @@ func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_DocumentRootConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+paths:
+  kb: ./knowledge
+doc_roots:
+  kb:
+    indexing: false
+    authoring: read_only
+    git:
+      enabled: true
+      sign_commits: false
+      verify_signatures: required
+      repo_path: ./knowledge
+      allowed_signers: ./allowed_signers
+`), 0600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	root := cfg.DocRoots["kb"]
+	if root.Indexing == nil || *root.Indexing {
+		t.Fatalf("DocRoots[kb].Indexing = %v, want false pointer", root.Indexing)
+	}
+	if root.Authoring != "read_only" {
+		t.Fatalf("DocRoots[kb].Authoring = %q, want read_only", root.Authoring)
+	}
+	if !root.Git.Enabled || root.Git.VerifySignatures != "required" || root.Git.AllowedSigners != "./allowed_signers" {
+		t.Fatalf("DocRoots[kb].Git = %#v, want enabled required verification", root.Git)
+	}
+}
+
+func TestValidate_DocumentRootConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		root DocumentRootConfig
+		want string
+	}{
+		{
+			name: "invalid authoring",
+			root: DocumentRootConfig{Authoring: "free_for_all"},
+			want: "authoring",
+		},
+		{
+			name: "invalid verification",
+			root: DocumentRootConfig{Git: DocumentRootGitConfig{VerifySignatures: "strict"}},
+			want: "verify_signatures",
+		},
+		{
+			name: "sign without git enabled",
+			root: DocumentRootConfig{Git: DocumentRootGitConfig{SignCommits: true, SigningKey: "~/.ssh/id_ed25519"}},
+			want: "git.enabled must be true",
+		},
+		{
+			name: "sign without signing key",
+			root: DocumentRootConfig{Git: DocumentRootGitConfig{Enabled: true, SignCommits: true}},
+			want: "signing_key is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Default()
+			cfg.DocRoots = map[string]DocumentRootConfig{"kb": tc.root}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate error = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func strPtr(s string) *string { return &s }

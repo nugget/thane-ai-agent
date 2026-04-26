@@ -109,9 +109,14 @@ custom prefixes) are browsed through these tools rather than via raw
 filesystem access. See
 [Document Roots](../understanding/document-roots.md).
 
+`doc_roots` includes each root's policy summary: indexing status,
+authoring mode, and git/signature expectations. Mutation tools obey that
+policy before writing; for example, `read_only` roots reject managed
+writes and git-backed roots route writes through signed commits.
+
 | Tool | Description |
 |------|-------------|
-| `doc_roots` | List configured document roots with health/counts. |
+| `doc_roots` | List configured document roots with policy, health, and counts. |
 | `doc_browse` | Walk a document root by folder. |
 | `doc_outline` | Emit the heading/section outline for a document. |
 | `doc_read` | Read a document by prefixed path. |
