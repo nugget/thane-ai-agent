@@ -122,7 +122,10 @@ The current implementation establishes policy-aware managed roots,
 signed git-backed writes, and read-side enforcement for roots that
 require trusted signatures. Unsigned or dirty high-integrity content is
 kept out of managed document reads, indexed results, and tagged context
-injection instead of relying on model behavior.
+injection instead of relying on model behavior. New durable knowledge
+can also enter through a corpus-aware intake flow that checks nearby
+documents, observed tags, path conventions, and root policy before any
+managed write is committed.
 
 ## Trust Zones: Safety in Go, Not Prompts
 

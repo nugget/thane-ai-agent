@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -17,16 +18,25 @@ const (
 	maxDocLinksLimit           = 100
 	defaultBacklinkTargetLimit = 10
 	maxBacklinkTargetLimit     = 50
+	maxIntakeEntries           = 128
+	intakeEntryTTL             = 6 * time.Hour
 )
 
 // Tools exposes model-facing document navigation tools.
 type Tools struct {
-	store *Store
+	store    *Store
+	intakeMu sync.Mutex
+	intakes  map[string]intakeEntry
 }
 
 // NewTools creates a document tool surface.
 func NewTools(store *Store) *Tools {
-	return &Tools{store: store}
+	return &Tools{store: store, intakes: make(map[string]intakeEntry)}
+}
+
+type intakeEntry struct {
+	result    IntakeResult
+	createdAt time.Time
 }
 
 // BrowseArgs requests one rooted browse step through an indexed corpus.

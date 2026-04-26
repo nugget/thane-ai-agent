@@ -109,8 +109,8 @@ doc_roots:
 ```
 
 Policy is deliberately attached to the root, not to individual tools or
-prompts. A loop-declared output, a document write tool, and a future
-specialized authoring flow should all meet the same root contract.
+prompts. A loop-declared output, a direct document write, and the
+corpus-aware intake flow should all meet the same root contract.
 
 The current policy fields are:
 
@@ -141,6 +141,31 @@ failures but still lets the content load.
   give it a root instead of leaving it buried in a generic folder.
 - If a root is very high integrity or operationally sensitive, be
   deliberate about how you want it managed and edited.
+
+## Corpus-Aware Intake
+
+When Thane is about to create durable knowledge, the safest first step
+is `doc_intake`, not guessing a new filename. Intake looks at the target
+root, searches related documents, checks observed tag vocabulary and
+path patterns, and returns a proposed destination with a recommended
+action:
+
+- `create_new` when the corpus does not appear to contain the idea yet
+- `update_existing` when a related document looks like the better home
+- `append_existing` when the request sounds like a journal or running
+  note
+- `draft_for_review` when root policy or ambiguity makes a write
+  inappropriate
+
+The result includes an `intake_id`, normalized title/tags/frontmatter,
+related documents with similarity scores, and a `commit_plan`. The
+model then calls `doc_commit` with that `intake_id` and the approved
+body. If intake reports a caution, such as a high-overlap existing
+document, `doc_commit` requires `confirm=true` before writing.
+
+This keeps taxonomy decisions anchored in the existing corpus. The raw
+mutation tools still exist for deliberate exact-path work, but intake is
+the normal authoring flow for new knowledge.
 
 ## Generated Documents
 

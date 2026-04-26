@@ -302,5 +302,6 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			return dt.Values(ctx, documents.ValuesArgs{Root: root, Key: key, Limit: limit})
 		},
 	})
+	registerDocumentIntakeTools(r, dt)
 	registerDocumentMutationTools(r, dt)
 }
