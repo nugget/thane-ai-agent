@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func newTestArchiveStore(t *testing.T) *ArchiveStore {
@@ -1612,5 +1614,224 @@ func TestSearch_UnifiedModeNullArchivedAt(t *testing.T) {
 	}
 	if len(resultsCtx) == 0 {
 		t.Fatal("expected at least 1 search result with context")
+	}
+}
+
+// newRangeTestStore creates a unified-mode ArchiveStore over a fresh
+// SQLiteStore — the production wiring shape. Messages inserted via the
+// returned helper bind time.Time directly, mirroring the format
+// go-sqlite3 writes when SQLiteStore.AddMessage runs in production.
+// Tests against this store exercise the same lexical timestamp
+// comparisons production hits, not the legacy archive_messages path.
+func newRangeTestStore(t *testing.T) (*ArchiveStore, func(convID, sessID, role, content string, ts time.Time)) {
+	t.Helper()
+	working, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = working.Close() })
+
+	archive, err := NewArchiveStoreFromDB(working.DB(), nil, nil)
+	if err != nil {
+		t.Fatalf("NewArchiveStoreFromDB: %v", err)
+	}
+
+	insert := func(convID, sessID, role, content string, ts time.Time) {
+		t.Helper()
+		// Bind time.Time directly so go-sqlite3 stores in its native
+		// "2026-04-25 10:00:00.x..." form — the same format production
+		// writes via SQLiteStore.AddMessage. Test data must match
+		// production storage shape for range queries to mean anything.
+		id, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("uuid: %v", err)
+		}
+		_, err = working.DB().Exec(`
+			INSERT INTO messages (id, conversation_id, session_id, role, content, timestamp, status)
+			VALUES (?, ?, ?, ?, ?, ?, 'active')
+		`, id.String(), convID, sessID, role, content, ts)
+		if err != nil {
+			t.Fatalf("insert message: %v", err)
+		}
+	}
+	return archive, insert
+}
+
+func TestGetMessagesInRange_TimeWindow(t *testing.T) {
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	for i := range 10 {
+		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(2 * time.Minute),
+		To:             base.Add(6 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5", len(got))
+	}
+	if got[0].Content != "message 2" || got[4].Content != "message 6" {
+		t.Errorf("got[0]=%q got[4]=%q, want message 2..message 6", got[0].Content, got[4].Content)
+	}
+}
+
+func TestGetMessagesInRange_MinMessagesFloorBeyondWindow(t *testing.T) {
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	for i := range 10 {
+		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	// From = base+9 (only "message 9" falls in the window) but
+	// MinMessages=5 trips the floor. Floor semantics: "at least 5",
+	// not "exactly 5" — once the floor triggers, return up to
+	// MaxMessages (default 200), so the model gets useful context
+	// rather than the bare minimum.
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(9 * time.Minute),
+		To:             base.Add(20 * time.Minute),
+		MinMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (10 < default cap)")
+	}
+	if len(got) != 10 {
+		t.Fatalf("len = %d, want 10 (floor returns up to MaxMessages)", len(got))
+	}
+	if got[0].Content != "message 0" || got[9].Content != "message 9" {
+		t.Errorf("got[0]=%q got[9]=%q, want message 0..message 9", got[0].Content, got[9].Content)
+	}
+}
+
+func TestGetMessagesInRange_MaxMessagesCap(t *testing.T) {
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	for i := range 20 {
+		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		To:             base.Add(20 * time.Minute),
+		MaxMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5 (cap)", len(got))
+	}
+	// Cap keeps the most recent — messages 15..19, output ASC.
+	if got[0].Content != "message 15" || got[4].Content != "message 19" {
+		t.Errorf("got[0]=%q got[4]=%q, want message 15..message 19", got[0].Content, got[4].Content)
+	}
+}
+
+func TestGetMessagesInRange_AllConversations(t *testing.T) {
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	insert("conv-a", "sa", "user", "a-first", base.Add(1*time.Minute))
+	insert("conv-b", "sb", "user", "b-first", base.Add(2*time.Minute))
+
+	got, _, err := store.GetMessagesInRange(RangeOptions{
+		To: base.Add(10 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (both conversations)", len(got))
+	}
+}
+
+func TestGetMessagesInRange_FloorReportsTruncation(t *testing.T) {
+	// Edge case from PR #761 review: when the floor path runs and
+	// there are more rows than MaxMessages, truncated must be true
+	// — earlier the floor path silently forced truncated=false.
+	store, insert := newRangeTestStore(t)
+
+	base := time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)
+	for i := range 20 {
+		insert("conv-1", "sess-1", "user", fmt.Sprintf("message %d", i), base.Add(time.Duration(i)*time.Minute))
+	}
+
+	// Tight in-window query returns 1 msg → floor path runs. MaxMessages=5
+	// caps the floor result; with 20 messages available, truncated=true.
+	got, truncated, err := store.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           base.Add(19 * time.Minute),
+		To:             base.Add(30 * time.Minute),
+		MinMessages:    5,
+		MaxMessages:    5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("len = %d, want 5", len(got))
+	}
+	if !truncated {
+		t.Error("truncated = false, want true (floor capped with more rows available)")
+	}
+}
+
+func TestGetMessagesInRange_UnifiedTableSpaceFormat(t *testing.T) {
+	// Regression: go-sqlite3 binds time.Time as space-separated TEXT
+	// ("2026-04-25 10:00:00..."), but earlier code formatted query
+	// bounds as RFC3339Nano (T-separated). Lexically " " < "T", so
+	// rows in the unified messages table — written via SQLiteStore.
+	// AddMessage which binds time.Time directly — were silently
+	// excluded from the lower edge of the time window.
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert three messages via the production path (bound time.Time).
+	for i, content := range []string{"first", "second", "third"} {
+		if err := workingStore.AddMessage("conv-1", "user", content); err != nil {
+			t.Fatalf("AddMessage[%d]: %v", i, err)
+		}
+		time.Sleep(2 * time.Millisecond) // distinguish timestamps
+	}
+
+	// Wide-open window. Pre-fix this would return zero rows on a
+	// production-shape store because the query bounds were T-format
+	// while the rows were space-format.
+	got, _, err := archiveStore.GetMessagesInRange(RangeOptions{
+		ConversationID: "conv-1",
+		From:           time.Now().Add(-1 * time.Hour),
+		To:             time.Now().Add(1 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (regression: T/space format mismatch)", len(got))
 	}
 }

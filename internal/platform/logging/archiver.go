@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 const (
@@ -225,15 +227,13 @@ func (mf *monthFile) close() {
 	_ = mf.f.Close()
 }
 
-// monthKeyFor parses a created_at string (RFC3339 or RFC3339Nano) and
-// returns a "YYYY-MM" string for use as an archive file name.
+// monthKeyFor parses a created_at string and returns a "YYYY-MM" key
+// for use as an archive file name. Accepts any timestamp shape SQLite
+// or Go code is likely to have written — see [database.ParseTimestamp].
 func monthKeyFor(createdAt string) (string, error) {
-	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	t, err := database.ParseTimestamp(createdAt)
 	if err != nil {
-		t, err = time.Parse(time.RFC3339, createdAt)
-		if err != nil {
-			return "", fmt.Errorf("parse timestamp %q: %w", createdAt, err)
-		}
+		return "", fmt.Errorf("parse timestamp %q: %w", createdAt, err)
 	}
 	return t.UTC().Format("2006-01"), nil
 }

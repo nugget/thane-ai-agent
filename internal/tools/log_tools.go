@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
@@ -353,13 +354,10 @@ func parseTimeOrDuration(s string) time.Time {
 	return parseTimestamp(s)
 }
 
-// parseTimestamp tries to parse s as an ISO 8601 timestamp in both
-// RFC3339 and RFC3339Nano formats. Returns zero time on failure.
+// parseTimestamp tries to parse s as a SQLite/ISO timestamp via the
+// shared [database.ParseTimestamp] helper. Returns zero time on failure.
 func parseTimestamp(s string) time.Time {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+	if t, err := database.ParseTimestamp(s); err == nil {
 		return t
 	}
 	return time.Time{}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 type companionCallFunc func(ctx context.Context, req companion.CallRequest) (json.RawMessage, error)
@@ -166,13 +167,11 @@ func parseCompanionTimeArg(args map[string]any, key string, fallback time.Time) 
 		return fallback, nil
 	}
 
-	if ts, err := time.Parse(time.RFC3339, value); err == nil {
-		return ts, nil
+	ts, err := database.ParseTimestamp(value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be a valid timestamp (RFC3339, RFC3339Nano, or YYYY-MM-DD HH:MM:SS) (got %q)", key, value)
 	}
-	if ts, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return ts, nil
-	}
-	return time.Time{}, fmt.Errorf("%s must be RFC3339 (got %q)", key, value)
+	return ts, nil
 }
 
 func stringSliceArg(args map[string]any, key string) []string {
@@ -276,8 +275,5 @@ func parseCalendarTimestamp(value string) (time.Time, error) {
 	if value == "" {
 		return time.Time{}, fmt.Errorf("empty timestamp")
 	}
-	if ts, err := time.Parse(time.RFC3339, value); err == nil {
-		return ts, nil
-	}
-	return time.Parse(time.RFC3339Nano, value)
+	return database.ParseTimestamp(value)
 }
