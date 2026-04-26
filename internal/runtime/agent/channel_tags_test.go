@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,45 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
+
+type sessionOriginContextView struct {
+	Origin      SessionOrigin              `json:"origin"`
+	Applied     []SessionOriginAppliedRule `json:"applied_rules,omitempty"`
+	Tags        []string                   `json:"tags,omitempty"`
+	ContextRefs []string                   `json:"context_refs,omitempty"`
+}
+
+func parseSessionOriginContext(t *testing.T, prompt string) sessionOriginContextView {
+	t.Helper()
+	sectionStart := strings.Index(prompt, "## Session Origin Context")
+	if sectionStart < 0 {
+		t.Fatalf("prompt missing Session Origin Context:\n%s", prompt)
+	}
+	blockStart := strings.Index(prompt[sectionStart:], "```json\n")
+	if blockStart < 0 {
+		t.Fatalf("session origin context missing JSON block:\n%s", prompt[sectionStart:])
+	}
+	blockStart = sectionStart + blockStart + len("```json\n")
+	blockEnd := strings.Index(prompt[blockStart:], "\n```")
+	if blockEnd < 0 {
+		t.Fatalf("session origin context has unterminated JSON block:\n%s", prompt[blockStart:])
+	}
+
+	var payload sessionOriginContextView
+	if err := json.Unmarshal([]byte(prompt[blockStart:blockStart+blockEnd]), &payload); err != nil {
+		t.Fatalf("parse session origin context: %v\n%s", err, prompt[blockStart:blockStart+blockEnd])
+	}
+	return payload
+}
+
+func appliedRuleBySource(rules []SessionOriginAppliedRule, source string) (SessionOriginAppliedRule, bool) {
+	for _, rule := range rules {
+		if rule.Source == source {
+			return rule, true
+		}
+	}
+	return SessionOriginAppliedRule{}, false
+}
 
 func TestChannelTags_ActivatedBySource(t *testing.T) {
 	// When a request has hints["source"]="signal" and channel_tags maps
@@ -348,14 +388,20 @@ func TestProtectedTags_CannotBeActivatedManually(t *testing.T) {
 			Description: "Owner-scoped privileged tools.",
 			Protected:   true,
 		},
+		"message_channel": {
+			Description: "Current message channel.",
+			Protected:   true,
+		},
 	}, nil)
 
-	err := scope.Request("owner")
-	if err == nil {
-		t.Fatal("expected protected tag activation to fail")
-	}
-	if !strings.Contains(err.Error(), "protected tag") {
-		t.Fatalf("error = %v, want protected-tag message", err)
+	for _, tag := range []string{"owner", "message_channel"} {
+		err := scope.Request(tag)
+		if err == nil {
+			t.Fatalf("expected protected tag %q activation to fail", tag)
+		}
+		if !strings.Contains(err.Error(), "protected tag") {
+			t.Fatalf("error = %v, want protected-tag message", err)
+		}
 	}
 }
 
@@ -579,6 +625,199 @@ func TestContactOrigin_ProtectedTagsRequireTrustedBinding(t *testing.T) {
 	}
 	if !hasName(names, "signal_tool") {
 		t.Fatalf("signal_tool should still be available: %v", names)
+	}
+}
+
+func TestSessionOrigin_RuntimeOnlyTagsRequireTrustedRuntimeSource(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"owner_tool", "send_reaction", "signal_tool", "project_tool", "protected_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Tools:       []string{"owner_tool"},
+			Protected:   true,
+		},
+		"message_channel": {
+			Description: "Current message channel.",
+			Tools:       []string{"send_reaction"},
+			Protected:   true,
+		},
+		"signal": {
+			Description: "Signal messaging.",
+			Tools:       []string{"signal_tool"},
+		},
+		"projects": {
+			Description: "Project context.",
+			Tools:       []string{"project_tool"},
+		},
+		"protected_custom": {
+			Description: "Future protected runtime surface.",
+			Tools:       []string{"protected_tool"},
+			Protected:   true,
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"signal", "message_channel", "owner", "protected_custom"},
+	})
+	loop.UseContactLookup(&mockContactLookup{
+		policies: map[string]*ContactOriginPolicy{
+			"David": {
+				Tags: []string{"projects", "message_channel", "owner", "protected_custom"},
+			},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "check available surfaces"}},
+		Hints:    map[string]string{"source": "signal"},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			ContactName: "David",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	for _, want := range []string{"signal_tool", "project_tool"} {
+		if !hasName(names, want) {
+			t.Fatalf("%s should be available from source/contact policy: %v", want, names)
+		}
+	}
+	for _, unwanted := range []string{"send_reaction", "owner_tool", "protected_tool"} {
+		if hasName(names, unwanted) {
+			t.Fatalf("%s should not be available from source/contact policy: %v", unwanted, names)
+		}
+	}
+
+	originCtx := parseSessionOriginContext(t, mock.calls[0].Messages[0].Content)
+	for _, unwanted := range []string{"message_channel", "owner", "protected_custom"} {
+		if containsString(originCtx.Tags, unwanted) {
+			t.Fatalf("origin tags = %#v, should not include runtime-only %s", originCtx.Tags, unwanted)
+		}
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "channel_tags"); !ok {
+		t.Fatalf("origin applied rules missing channel_tags: %#v", originCtx.Applied)
+	} else if !containsString(rule.Tags, "signal") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") || containsString(rule.Tags, "protected_custom") {
+		t.Fatalf("channel_tags rule = %#v, want only broad source tags", rule)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "contacts"); !ok {
+		t.Fatalf("origin applied rules missing contacts: %#v", originCtx.Applied)
+	} else if !containsString(rule.Tags, "projects") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") || containsString(rule.Tags, "protected_custom") {
+		t.Fatalf("contacts rule = %#v, want only contact-origin optional tags", rule)
+	}
+}
+
+func TestSessionOrigin_CombinesRuntimeContactSourceAndOwnerBinding(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"owner_tool", "send_reaction", "signal_tool", "project_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Tools:       []string{"owner_tool"},
+			Protected:   true,
+		},
+		"message_channel": {
+			Description: "Current message channel.",
+			Tools:       []string{"send_reaction"},
+			Protected:   true,
+		},
+		"signal": {
+			Description: "Signal messaging.",
+			Tools:       []string{"signal_tool"},
+		},
+		"projects": {
+			Description: "Project context.",
+			Tools:       []string{"project_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"signal", "message_channel"},
+	})
+	loop.UseContactLookup(&mockContactLookup{
+		byID: map[string]*ContactContext{
+			"contact-1": {
+				ID:        "contact-1",
+				Name:      "David",
+				TrustZone: "admin",
+			},
+		},
+		policies: map[string]*ContactOriginPolicy{
+			"contact-1": {
+				Tags:        []string{"projects", "message_channel", "owner"},
+				ContextRefs: []string{"kb:projects/current.md"},
+			},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages:    []Message{{Role: "user", Content: "check all origin layers"}},
+		Hints:       map[string]string{"source": "signal"},
+		RuntimeTags: []string{"message_channel"},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			ContactID:   "contact-1",
+			ContactName: "David",
+			IsOwner:     true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	for _, want := range []string{"owner_tool", "send_reaction", "signal_tool", "project_tool"} {
+		if !hasName(names, want) {
+			t.Fatalf("%s should be available from the combined production origin shape: %v", want, names)
+		}
+	}
+
+	originCtx := parseSessionOriginContext(t, mock.calls[0].Messages[0].Content)
+	if !containsString(originCtx.Tags, "message_channel") || !containsString(originCtx.Tags, "owner") ||
+		!containsString(originCtx.Tags, "signal") || !containsString(originCtx.Tags, "projects") {
+		t.Fatalf("origin tags = %#v, want runtime, owner binding, source, and contact tags", originCtx.Tags)
+	}
+	if !containsString(originCtx.ContextRefs, "kb:projects/current.md") {
+		t.Fatalf("origin context refs = %#v, want exact contact ref", originCtx.ContextRefs)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "runtime"); !ok || !containsString(rule.Tags, "message_channel") {
+		t.Fatalf("runtime rule = %#v, ok=%v, want message_channel", rule, ok)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "channel_tags"); !ok {
+		t.Fatalf("origin applied rules missing channel_tags: %#v", originCtx.Applied)
+	} else if !containsString(rule.Tags, "signal") || containsString(rule.Tags, "message_channel") {
+		t.Fatalf("channel_tags rule = %#v, want signal without runtime-only tags", rule)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "contacts"); !ok {
+		t.Fatalf("origin applied rules missing contacts: %#v", originCtx.Applied)
+	} else if !containsString(rule.Tags, "projects") || containsString(rule.Tags, "message_channel") || containsString(rule.Tags, "owner") {
+		t.Fatalf("contacts rule = %#v, want projects without runtime-only tags", rule)
+	} else if !containsString(rule.ContextRefs, "kb:projects/current.md") {
+		t.Fatalf("contacts rule = %#v, want exact context ref", rule)
+	}
+	if rule, ok := appliedRuleBySource(originCtx.Applied, "channel_binding"); !ok || !containsString(rule.Tags, "owner") {
+		t.Fatalf("owner binding rule = %#v, ok=%v, want owner", rule, ok)
 	}
 }
 

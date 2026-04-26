@@ -298,6 +298,7 @@ func TestRuntimeTags_PinForRunWithoutPersistence(t *testing.T) {
 		"message_channel": {
 			Description: "Current message channel",
 			Tools:       []string{"send_reaction"},
+			Protected:   true,
 		},
 	}
 

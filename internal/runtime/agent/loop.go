@@ -478,6 +478,14 @@ func (l *Loop) UseContactLookup(lookup ContactLookup) {
 }
 
 func (l *Loop) filterOriginPinnedTags(origin SessionOrigin, tags []string) []string {
+	return l.filterOriginPinnedTagsForSource(origin, tags, "origin_policy")
+}
+
+func (l *Loop) filterRuntimePinnedTags(origin SessionOrigin, tags []string) []string {
+	return l.filterOriginPinnedTagsForSource(origin, tags, "runtime")
+}
+
+func (l *Loop) filterOriginPinnedTagsForSource(origin SessionOrigin, tags []string, policySource string) []string {
 	if len(tags) == 0 || l.capTags == nil {
 		return nil
 	}
@@ -490,11 +498,36 @@ func (l *Loop) filterOriginPinnedTags(origin SessionOrigin, tags []string) []str
 			}
 			continue
 		}
-		if cfg.Protected && (tag != "owner" || !origin.IsOwner) {
+		if policySource != "runtime" && runtimeOnlyOriginTag(tag) {
+			if l.logger != nil {
+				l.logger.Warn("session origin policy skipped runtime-only tag",
+					"tag", tag,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
+					"channel", origin.Channel,
+					"contact_name", origin.ContactName,
+				)
+			}
+			continue
+		}
+		if policySource != "runtime" && cfg.Protected {
 			if l.logger != nil {
 				l.logger.Warn("session origin policy skipped protected tag",
 					"tag", tag,
-					"source", origin.Source,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
+					"channel", origin.Channel,
+					"contact_name", origin.ContactName,
+				)
+			}
+			continue
+		}
+		if cfg.Protected && tag == "owner" && !origin.IsOwner {
+			if l.logger != nil {
+				l.logger.Warn("session origin policy skipped protected tag",
+					"tag", tag,
+					"policy_source", policySource,
+					"origin_source", origin.Source,
 					"channel", origin.Channel,
 					"contact_name", origin.ContactName,
 				)
@@ -504,6 +537,15 @@ func (l *Loop) filterOriginPinnedTags(origin SessionOrigin, tags []string) []str
 		filtered = append(filtered, tag)
 	}
 	return filtered
+}
+
+func runtimeOnlyOriginTag(tag string) bool {
+	switch tag {
+	case "message_channel", "owner":
+		return true
+	default:
+		return false
+	}
 }
 
 // SetLensProvider configures a function that returns the currently
@@ -1459,7 +1501,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		for _, tag := range req.InitialTags {
 			_ = scope.Request(tag)
 		}
-		if runtimeTags := l.filterOriginPinnedTags(origin, req.RuntimeTags); len(runtimeTags) > 0 {
+		if runtimeTags := l.filterRuntimePinnedTags(origin, req.RuntimeTags); len(runtimeTags) > 0 {
 			scope.PinChannelTags(runtimeTags)
 			originResult.addApplied(SessionOriginAppliedRule{
 				Name:   "runtime_tags",

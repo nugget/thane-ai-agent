@@ -210,10 +210,11 @@ type Config struct {
 
 	// ChannelTags maps source channels to broad optional capability tags.
 	// Use this for coarse source defaults, not runtime facts such as owner
-	// identity or current message-channel affordances. This is additive to
+	// identity or current message-channel affordances. Runtime-only tags
+	// such as owner and message_channel are skipped here; they must be
+	// asserted by trusted current-run evidence. This is additive to
 	// always-active tags and any tags the agent requests at runtime. Tag
-	// names must reference either compiled-in tags or entries in
-	// [CapabilityTags].
+	// names must reference either compiled-in tags or entries in [CapabilityTags].
 	ChannelTags map[string][]string `yaml:"channel_tags"`
 
 	// MCP configures external MCP (Model Context Protocol) server
@@ -1077,7 +1078,10 @@ type DelegateProfileConfig struct {
 // Description and Tools act as "keep the built-in defaults". Tags
 // marked AlwaysActive are included in every session unconditionally.
 // Tags marked Protected are runtime-asserted and cannot be manually
-// activated or deactivated by the model.
+// activated or deactivated by the model. Runtime-only tags such as
+// owner and message_channel should be asserted by the integration or
+// trusted channel binding that has current-run evidence, not by
+// channel_tags or contact origin policy.
 type CapabilityTagConfig struct {
 	// Description is a human-readable summary shown in the capability
 	// manifest so the agent knows what activating this tag provides. For
