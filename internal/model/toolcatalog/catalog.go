@@ -223,6 +223,7 @@ func BuildLoadedCapabilityView(entries []CapabilitySurface, activeTags []string,
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
+	"archive_range":               {CanonicalID: "native:archive_range", Source: NativeToolSource, DefaultTags: []string{"archive"}},
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, DefaultTags: []string{"archive"}},
 	"archive_session_transcript":  {CanonicalID: "native:archive_session_transcript", Source: NativeToolSource, DefaultTags: []string{"archive"}},
 	"archive_sessions":            {CanonicalID: "native:archive_sessions", Source: NativeToolSource, DefaultTags: []string{"archive"}},
@@ -236,10 +237,12 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, DefaultTags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, DefaultTags: []string{"files"}},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, DefaultTags: []string{"documents"}},
+	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_copy":                    {CanonicalID: "native:doc_copy", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_copy_section":            {CanonicalID: "native:doc_copy_section", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_delete":                  {CanonicalID: "native:doc_delete", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_edit":                    {CanonicalID: "native:doc_edit", Source: NativeToolSource, DefaultTags: []string{"documents"}},
+	"doc_intake":                  {CanonicalID: "native:doc_intake", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_journal_update":          {CanonicalID: "native:doc_journal_update", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_links":                   {CanonicalID: "native:doc_links", Source: NativeToolSource, DefaultTags: []string{"documents"}},
 	"doc_move":                    {CanonicalID: "native:doc_move", Source: NativeToolSource, DefaultTags: []string{"documents"}},
