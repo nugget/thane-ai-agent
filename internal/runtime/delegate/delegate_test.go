@@ -364,6 +364,46 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 	}
 }
 
+func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFiltering(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+	exec.SetAlwaysActiveTags([]string{"web"})
+
+	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, nil, executionOptions{
+		inheritCallerTags: false,
+		explicitTagScope:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	if captured.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false for explicit empty tag scope with always-active tags")
+	}
+	if !containsString(captured.InitialTags, "web") {
+		t.Fatalf("InitialTags = %#v, want always-active web tag", captured.InitialTags)
+	}
+	if containsString(captured.InitialTags, "ha") {
+		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
+	}
+	if len(captured.ExcludeTools) != 0 {
+		t.Fatalf("ExcludeTools = %#v, want tag filtering through always-active tags", captured.ExcludeTools)
+	}
+}
+
 func TestRecordCompletion_UsesLiveModelRegistryForUsageIdentity(t *testing.T) {
 	db, err := database.OpenMemory()
 	if err != nil {

@@ -140,8 +140,7 @@ func applyProfileDefaultTags(scopeTags []string, profile *Profile, explicitScope
 
 func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequested bool) *tools.Registry {
 	if len(scopeTags) > 0 || explicitScopeRequested {
-		merged := append([]string(nil), scopeTags...)
-		merged = append(merged, e.alwaysActiveTags...)
+		merged := mergeTagLists(scopeTags, e.alwaysActiveTags)
 		var reg *tools.Registry
 		if len(merged) > 0 {
 			reg = e.parentReg.FilterByTags(merged)
@@ -151,6 +150,24 @@ func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequest
 		return reg.FilteredCopyExcluding([]string{delegateToolName})
 	}
 	return e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
+}
+
+func mergeTagLists(tagGroups ...[]string) []string {
+	seen := make(map[string]bool)
+	for _, tags := range tagGroups {
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				seen[tag] = true
+			}
+		}
+	}
+	merged := make([]string, 0, len(seen))
+	for tag := range seen {
+		merged = append(merged, tag)
+	}
+	sort.Strings(merged)
+	return merged
 }
 
 func (e *Executor) buildLegacySystemPrompt(ctx context.Context, effectiveTags map[string]bool, pathPrefixes map[string]string) string {
@@ -897,6 +914,7 @@ type preparedExecution struct {
 	userMessage      string
 	model            string
 	scopeTags        []string
+	filterTags       []string
 	excludeTools     []string
 	tagFilterActive  bool
 	effectiveTags    []string
@@ -1009,7 +1027,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			Operation:   operation,
 			Completion:  completion,
 			MaxDuration: loopMaxDuration,
-			Tags:        append([]string(nil), prep.scopeTags...),
+			Tags:        append([]string(nil), prep.filterTags...),
 			Profile: router.LoopProfile{
 				Instructions: prompts.DelegateRunInstructions,
 			},
@@ -1181,8 +1199,9 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
+	filterTags := mergeTagLists(scopeTags, e.alwaysActiveTags)
 	var excludeTools []string
-	if explicitScopeRequested && len(scopeTags) == 0 && len(e.alwaysActiveTags) == 0 {
+	if explicitScopeRequested && len(filterTags) == 0 {
 		excludeTools = e.parentReg.AllToolNames()
 		sort.Strings(excludeTools)
 	}
@@ -1261,6 +1280,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		userMessage:      userMsg.String(),
 		model:            e.selectModel(ctx, task, profile, len(toolDefs)),
 		scopeTags:        append([]string(nil), scopeTags...),
+		filterTags:       filterTags,
 		excludeTools:     excludeTools,
 		tagFilterActive:  tagFilterActive,
 		effectiveTags:    effectiveTags,
