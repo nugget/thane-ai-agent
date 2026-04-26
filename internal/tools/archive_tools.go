@@ -20,58 +20,6 @@ const archiveResultByteCap = 16000
 // session transcripts, which routinely run longer than search hits.
 const archiveTranscriptByteCap = 32000
 
-// fitPrefix returns the largest count k in [0, n] such that
-// render(k) is within byteCap. render must produce monotonically
-// non-decreasing output as k grows. Used by prefix-fit clipping
-// (e.g., search results, where the tail entries are lower-relevance
-// and are the right ones to drop). Output is always rendered with
-// truncated=true when k < n.
-func fitPrefix(n, byteCap int, render func(k int) []byte) []byte {
-	if n == 0 {
-		return render(0)
-	}
-	full := render(n)
-	if len(full) <= byteCap {
-		return full
-	}
-	// Binary search for the largest k that fits.
-	low, high := 0, n
-	for low < high {
-		mid := (low + high + 1) / 2
-		if len(render(mid)) <= byteCap {
-			low = mid
-		} else {
-			high = mid - 1
-		}
-	}
-	return render(low)
-}
-
-// fitSuffix returns the smallest count k in [0, n] such that
-// render(k) is within byteCap. render must produce monotonically
-// non-increasing output as k grows (k is the number of items dropped
-// from the front). Used by suffix-fit clipping where older entries
-// are dropped first to preserve the most-recent tail.
-func fitSuffix(n, byteCap int, render func(drop int) []byte) []byte {
-	if n == 0 {
-		return render(0)
-	}
-	full := render(0)
-	if len(full) <= byteCap {
-		return full
-	}
-	low, high := 0, n
-	for low < high {
-		mid := (low + high) / 2
-		if len(render(mid)) <= byteCap {
-			high = mid
-		} else {
-			low = mid + 1
-		}
-	}
-	return render(low)
-}
-
 // SetArchiveStore registers the four archive tools on the registry.
 // Together they form Thane's long-term memory surface: search across
 // past conversations, browse the catalog of sessions, pull a single
@@ -150,7 +98,7 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 			// Fit to byte cap by dropping from the tail (lowest-relevance
 			// hits go first). Binary search avoids O(n^2) re-marshaling.
 			now := time.Now()
-			data := fitPrefix(len(results), archiveResultByteCap, func(k int) []byte {
+			data := memory.FitPrefix(len(results), archiveResultByteCap, func(k int) []byte {
 				return memory.FormatSearchResults(results[:k], now, k < len(results))
 			})
 			return string(data), nil
@@ -195,7 +143,7 @@ func (r *Registry) registerArchiveSessions(store *memory.ArchiveStore) {
 			// Fit to byte cap by dropping older sessions (results come
 			// newest-first, so the oldest entries fall off the tail).
 			now := time.Now()
-			data := fitPrefix(len(sessions), archiveResultByteCap, func(k int) []byte {
+			data := memory.FitPrefix(len(sessions), archiveResultByteCap, func(k int) []byte {
 				return memory.FormatSessionsList(sessions[:k], now, k < len(sessions))
 			})
 			return string(data), nil
@@ -244,7 +192,7 @@ func (r *Registry) registerArchiveSessionTranscript(store *memory.ArchiveStore) 
 			// moment. Binary search avoids O(n^2) re-marshaling on long
 			// transcripts.
 			now := time.Now()
-			data := fitSuffix(len(messages), archiveTranscriptByteCap, func(drop int) []byte {
+			data := memory.FitSuffix(len(messages), archiveTranscriptByteCap, func(drop int) []byte {
 				return memory.FormatRecentMessages(messages[drop:], now, drop > 0)
 			})
 			return string(data), nil
@@ -335,7 +283,7 @@ func (r *Registry) registerArchiveRange(store *memory.ArchiveStore) {
 			// Drop oldest messages first to fit the byte cap. The
 			// query-level truncated flag stays sticky once set; the
 			// fit pass only deepens it.
-			data := fitSuffix(len(messages), archiveResultByteCap, func(drop int) []byte {
+			data := memory.FitSuffix(len(messages), archiveResultByteCap, func(drop int) []byte {
 				return memory.FormatRecentMessages(messages[drop:], now, truncated || drop > 0)
 			})
 			return string(data), nil

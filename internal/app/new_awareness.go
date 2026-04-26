@@ -60,6 +60,20 @@ func (a *App) initAwareness(s *newState) error {
 	wmProvider := memory.NewWorkingMemoryProvider(a.wmStore, tools.ConversationIDFromContext)
 	contextProvider.Add(wmProvider)
 
+	// Message-channel verbatim tail + older-sessions context. Gated on
+	// the message_channel capability tag, asserted by Signal (and
+	// future Matrix/iMessage) inbound bridges. Output sits in DYNAMIC
+	// CONTEXT (uncached) per docs/anthropic-caching.md — the delta
+	// timestamps tick every turn so it's intrinsically uncacheable,
+	// but the cached prefix above stays warm.
+	messageChannelProvider := memory.NewMessageChannelProvider(
+		a.archiveStore,
+		tools.ConversationIDFromContext,
+		memory.MessageChannelProviderConfig{},
+		logger,
+	)
+	a.loop.RegisterTagContextProvider("message_channel", messageChannelProvider)
+
 	// --- Entity watchlist ---
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
