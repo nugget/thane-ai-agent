@@ -42,22 +42,11 @@ func (a *App) initDelegation(s *newState) error {
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
-	if a.liveRequestRecorder != nil {
-		delegateExec.UseLiveRequestRecorder(a.liveRequestRecorder)
-	}
-	if a.requestRecorder != nil {
-		delegateExec.SetRequestRecorder(a.requestRecorder)
-	}
 	delegateExec.SetArchiver(a.archiveStore)
-	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
-	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
 	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()}, a.loopRegistry)
 	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
-	if a.forgeMgr != nil {
-		delegateExec.SetForgeContext(a.forgeMgr.Context())
-	}
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}

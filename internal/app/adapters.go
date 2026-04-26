@@ -657,7 +657,7 @@ type notifDelegateSpawner struct {
 
 // Spawn executes the task in a lightweight delegate loop.
 func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string) error {
-	_, err := n.exec.Execute(ctx, task, "", guidance, nil, nil)
+	_, err := n.exec.Execute(ctx, task, "", guidance, nil)
 	return err
 }
 
