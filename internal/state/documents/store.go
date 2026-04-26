@@ -4,12 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,16 +17,17 @@ import (
 
 // RootSummary describes one indexed document root.
 type RootSummary struct {
-	Root            string             `json:"root"`
-	Path            string             `json:"-"`
-	Policy          RootPolicySummary  `json:"policy"`
-	DocumentCount   int                `json:"document_count"`
-	TotalSizeBytes  int64              `json:"total_size_bytes"`
-	TotalWordCount  int                `json:"total_word_count"`
-	LastModifiedAt  string             `json:"last_modified_at,omitempty"`
-	TopTags         []string           `json:"top_tags,omitempty"`
-	TopDirectories  []BrowseDirectory  `json:"top_directories,omitempty"`
-	RecentDocuments []RootDocumentHint `json:"recent_documents,omitempty"`
+	Root            string                 `json:"root"`
+	Path            string                 `json:"-"`
+	Policy          RootPolicySummary      `json:"policy"`
+	Verification    *SignatureVerification `json:"verification,omitempty"`
+	DocumentCount   int                    `json:"document_count"`
+	TotalSizeBytes  int64                  `json:"total_size_bytes"`
+	TotalWordCount  int                    `json:"total_word_count"`
+	LastModifiedAt  string                 `json:"last_modified_at,omitempty"`
+	TopTags         []string               `json:"top_tags,omitempty"`
+	TopDirectories  []BrowseDirectory      `json:"top_directories,omitempty"`
+	RecentDocuments []RootDocumentHint     `json:"recent_documents,omitempty"`
 }
 
 // RootDocumentHint is a compact example document attached to a root summary.
@@ -79,6 +78,9 @@ type Store struct {
 	roots           map[string]string
 	rootPolicies    map[string]RootPolicy
 	rootWriters     map[string]RootWriter
+	rootVerifiers   map[string]RootVerifier
+	verificationMu  sync.Mutex
+	verification    map[string]SignatureVerification
 	logger          *slog.Logger
 	refreshMu       sync.Mutex
 	lastRefresh     time.Time
@@ -107,6 +109,8 @@ func NewStoreWithOptions(db *sql.DB, roots map[string]string, logger *slog.Logge
 		roots:           normalizedRoots,
 		rootPolicies:    normalizePolicies(normalizedRoots, opts.RootPolicies),
 		rootWriters:     normalizeRootWriters(normalizedRoots, opts.RootWriters),
+		rootVerifiers:   normalizeRootVerifiers(normalizedRoots, opts.RootVerifiers),
+		verification:    make(map[string]SignatureVerification),
 		logger:          logger,
 		refreshInterval: defaultRefreshInterval,
 	}
@@ -245,10 +249,16 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 			return nil
 		}
 		rel = filepath.ToSlash(filepath.Clean(rel))
-		seen[rel] = true
+		if err := s.verifyDocumentForConsumer(ctx, root, rel, "document_index"); err != nil {
+			s.logger.Warn("document index skipped file blocked by signature policy",
+				"root", root, "path", rel, "error", err)
+			return nil
+		}
 		if err := s.upsertFile(ctx, root, rel); err != nil {
 			s.logger.Warn("document index skipped file", "root", root, "path", path, "error", err)
+			return nil
 		}
+		seen[rel] = true
 		return nil
 	})
 	if walkErr != nil {
@@ -383,117 +393,4 @@ func (s *Store) allRoots() []string {
 	}
 	sort.Strings(roots)
 	return roots
-}
-
-func parseRef(ref string) (root string, relPath string, err error) {
-	ref = strings.TrimSpace(ref)
-	parts := strings.SplitN(ref, ":", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return "", "", fmt.Errorf("invalid ref %q; expected root:path.md", ref)
-	}
-	root = strings.TrimSuffix(strings.TrimSpace(parts[0]), ":")
-	relPath = strings.TrimSpace(parts[1])
-	relPath = strings.ReplaceAll(relPath, "\\", "/")
-	relPath = strings.TrimPrefix(path.Clean(strings.TrimPrefix(relPath, "./")), "./")
-	if relPath == "" || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
-		return "", "", fmt.Errorf("invalid ref %q; path escapes root", ref)
-	}
-	return root, relPath, nil
-}
-
-func makeRef(root, relPath string) string {
-	return root + ":" + relPath
-}
-
-func scanDocument(rows *sql.Rows, doc *DocumentSummary) error {
-	var tagsJSON string
-	var metaJSON string
-	if err := rows.Scan(&doc.Root, &doc.Path, &doc.Title, &doc.Summary, &tagsJSON, &metaJSON, &doc.ModifiedAt, &doc.WordCount); err != nil {
-		return err
-	}
-	doc.Ref = makeRef(doc.Root, doc.Path)
-	if err := json.Unmarshal([]byte(tagsJSON), &doc.Tags); err != nil {
-		doc.Tags = nil
-	}
-	if err := json.Unmarshal([]byte(metaJSON), &doc.Frontmatter); err != nil {
-		doc.Frontmatter = nil
-	}
-	return nil
-}
-
-func rootExists(roots map[string]string, root string) bool {
-	_, ok := roots[strings.TrimSuffix(strings.TrimSpace(root), ":")]
-	return ok
-}
-
-func asValueCounts(values map[string]int) []ValueCount {
-	out := make([]ValueCount, 0, len(values))
-	for value, count := range values {
-		out = append(out, ValueCount{Value: value, Count: count})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count == out[j].Count {
-			return out[i].Value < out[j].Value
-		}
-		return out[i].Count > out[j].Count
-	})
-	return out
-}
-
-func trimPathPrefix(prefix string) string {
-	prefix = filepath.ToSlash(strings.Trim(strings.TrimSpace(prefix), "/"))
-	if prefix == "." {
-		return ""
-	}
-	return prefix
-}
-
-func (s *Store) resolveRootPath(root string) (string, error) {
-	dir, ok := s.roots[strings.TrimSuffix(strings.TrimSpace(root), ":")]
-	if !ok || strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("unknown document root %q", root)
-	}
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("resolve root %q: %w", root, err)
-	}
-	resolvedDir, err := filepath.EvalSymlinks(absDir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("document root %q does not exist", root)
-		}
-		return "", fmt.Errorf("resolve root %q: %w", root, err)
-	}
-	return filepath.Clean(resolvedDir), nil
-}
-
-func (s *Store) resolveDocumentPath(root, relPath string) (string, error) {
-	rootPath, err := s.resolveRootPath(root)
-	if err != nil {
-		return "", err
-	}
-	candidate := filepath.Clean(filepath.Join(rootPath, filepath.FromSlash(relPath)))
-	if !pathWithinRoot(rootPath, candidate) {
-		return "", fmt.Errorf("document path %q escapes root %q", relPath, root)
-	}
-	resolved, err := filepath.EvalSymlinks(candidate)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", os.ErrNotExist
-		}
-		return "", fmt.Errorf("resolve document path %q: %w", relPath, err)
-	}
-	resolved = filepath.Clean(resolved)
-	if !pathWithinRoot(rootPath, resolved) {
-		return "", fmt.Errorf("document path %q resolves outside root %q", relPath, root)
-	}
-	return resolved, nil
-}
-
-func pathWithinRoot(rootPath, targetPath string) bool {
-	rel, err := filepath.Rel(rootPath, targetPath)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

@@ -21,6 +21,11 @@ type documentRootProvenanceWriter struct {
 	prefix string
 }
 
+type documentRootProvenanceVerifier struct {
+	verifier *provenance.Verifier
+	prefix   string
+}
+
 func (w *documentRootProvenanceWriter) Write(ctx context.Context, filename, content, message string) error {
 	return w.store.Write(ctx, w.storeFilename(filename), content, message)
 }
@@ -38,6 +43,39 @@ func (w *documentRootProvenanceWriter) storeFilename(filename string) string {
 		return clean
 	}
 	return path.Join(w.prefix, clean)
+}
+
+func (v *documentRootProvenanceVerifier) Verify(ctx context.Context, filename string) (documents.SignatureVerification, error) {
+	result, err := v.verifier.VerifyFile(ctx, v.storeFilename(filename))
+	return documentSignatureVerificationFromProvenance(result), err
+}
+
+func (v *documentRootProvenanceVerifier) VerifyRoot(ctx context.Context) (documents.SignatureVerification, error) {
+	result, err := v.verifier.VerifyTree(ctx, v.prefix)
+	return documentSignatureVerificationFromProvenance(result), err
+}
+
+func (v *documentRootProvenanceVerifier) storeFilename(filename string) string {
+	clean := filepath.ToSlash(filepath.Clean(filename))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return clean
+	}
+	if v.prefix == "" || v.prefix == "." {
+		return clean
+	}
+	return path.Join(v.prefix, clean)
+}
+
+func documentSignatureVerificationFromProvenance(result provenance.VerificationResult) documents.SignatureVerification {
+	status := documents.SignatureFailed
+	if result.Status == provenance.VerificationTrusted {
+		status = documents.SignatureTrusted
+	}
+	return documents.SignatureVerification{
+		Status:  status,
+		Commit:  result.Commit,
+		Message: result.Message,
+	}
 }
 
 func buildDocumentRoots(resolver *paths.Resolver) map[string]string {
@@ -76,6 +114,10 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 	if len(a.cfg.DocRoots) == 0 {
 		return opts, nil
 	}
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	for root, rootCfg := range a.cfg.DocRoots {
 		root = strings.TrimSuffix(strings.TrimSpace(root), ":")
 		if root == "" {
@@ -87,6 +129,21 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 		}
 		policy := documentRootPolicyFromConfig(rootCfg)
 		opts.RootPolicies[root] = policy
+		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
+			verifier, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
+			if err != nil {
+				logger.Warn("document root signature verifier unavailable",
+					"root", root,
+					"mode", policy.Git.VerifySignatures,
+					"error", err,
+				)
+			} else {
+				if opts.RootVerifiers == nil {
+					opts.RootVerifiers = make(map[string]documents.RootVerifier)
+				}
+				opts.RootVerifiers[root] = verifier
+			}
+		}
 		if !policy.Git.Enabled || !policy.Git.SignCommits {
 			continue
 		}
@@ -178,6 +235,43 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		"allowed_signers", allowedSigners != "",
 	)
 	return &documentRootProvenanceWriter{store: store, prefix: prefix}, nil
+}
+
+func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
+	repoPath := strings.TrimSpace(gitCfg.RepoPath)
+	if repoPath == "" {
+		repoPath = rootPath
+	} else {
+		repoPath = resolvePath(repoPath, resolver)
+	}
+	absRepoPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve doc_roots.%s.git.repo_path: %w", root, err)
+	}
+	absRootPath, err := filepath.Abs(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve document root %s path: %w", root, err)
+	}
+	prefix, err := rootPrefixWithinRepo(absRepoPath, absRootPath)
+	if err != nil {
+		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
+	}
+
+	allowedSigners := strings.TrimSpace(gitCfg.AllowedSigners)
+	if allowedSigners != "" {
+		allowedSigners = resolvePath(allowedSigners, resolver)
+	}
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	verifier, err := provenance.NewVerifier(absRepoPath, logger.With("component", "document_root_verifier", "root", root), provenance.Options{
+		AllowedSignersPath: allowedSigners,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize git verifier for document root %s: %w", root, err)
+	}
+	return &documentRootProvenanceVerifier{verifier: verifier, prefix: prefix}, nil
 }
 
 func rootPrefixWithinRepo(repoPath, rootPath string) (string, error) {

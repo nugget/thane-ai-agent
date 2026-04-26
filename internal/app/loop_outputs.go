@@ -151,7 +151,7 @@ func renderLoopOutputContext(ctx context.Context, store *documents.Store, output
 			Ref:       output.Ref,
 			Purpose:   output.Purpose,
 			ToolName:  output.ToolName(),
-			Policy:    "Write only through the generated output tool. The managed document root handles path safety, indexing, and future provenance/signature policy.",
+			Policy:    "Write only through the generated output tool. The managed document root handles path safety, indexing, provenance, and signature policy.",
 			Interface: outputInterfaceDescription(output),
 		}
 		if output.Type == looppkg.OutputTypeJournalDocument {

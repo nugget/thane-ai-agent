@@ -225,6 +225,12 @@ signed git commit. By default the root itself is the repository; set
 otherwise Thane writes a repository-local `.allowed_signers` file from
 the signing key.
 
+`git.verify_signatures` controls read-side enforcement. `none` disables
+checks, `warn` logs and reports verification failures without blocking,
+and `required` blocks managed document reads, indexed browse/search
+results, and tagged context injection unless the content is cleanly
+covered by trusted signed git history.
+
 Good uses for custom roots:
 
 - knowledge bases

@@ -200,10 +200,10 @@ paths:
 #       SignCommits creates a signed git commit for each managed document
 #       mutation. Requires signing_key.
 #       sign_commits: true
-#       VerifySignatures is the desired verification policy for consumers
-#       of this root: "none", "warn", or "required". V1 records the
-#       policy and signs managed writes; policy-aware load/activation
-#       consumers enforce this in follow-up work.
+#       VerifySignatures is the verification policy for consumers of this
+#       root: "none", "warn", or "required". Required roots block managed
+#       reads, indexed results, and tagged context injection when content
+#       is not covered by trusted signed git history.
 #       verify_signatures: warn
 #       RepoPath optionally points at the git repository to use for this
 #       root. Empty means the root directory itself is the repository.
@@ -233,10 +233,10 @@ paths:
 #       SignCommits creates a signed git commit for each managed document
 #       mutation. Requires signing_key.
 #       sign_commits: false
-#       VerifySignatures is the desired verification policy for consumers
-#       of this root: "none", "warn", or "required". V1 records the
-#       policy and signs managed writes; policy-aware load/activation
-#       consumers enforce this in follow-up work.
+#       VerifySignatures is the verification policy for consumers of this
+#       root: "none", "warn", or "required". Required roots block managed
+#       reads, indexed results, and tagged context injection when content
+#       is not covered by trusted signed git history.
 #       verify_signatures: ""
 #       RepoPath optionally points at the git repository to use for this
 #       root. Empty means the root directory itself is the repository.

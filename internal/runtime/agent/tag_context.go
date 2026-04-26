@@ -30,6 +30,10 @@ type TagContextAssembler struct {
 	capTags  map[string]config.CapabilityTagConfig
 	kbDir    string
 	resolver *paths.Resolver
+	verifier interface {
+		VerifyRef(ctx context.Context, ref string, consumer string) error
+		VerifyPath(ctx context.Context, path string, consumer string) error
+	}
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
 }
@@ -62,8 +66,14 @@ type KBMenuHint struct {
 // TagContextAssembler.
 type TagContextAssemblerConfig struct {
 	CapTags  map[string]config.CapabilityTagConfig
-	KBDir    string                     // resolved kb: directory; empty skips scanning
-	Resolver *paths.Resolver            // managed document root resolver; nil falls back to KBDir for kb: refs
+	KBDir    string          // resolved kb: directory; empty skips scanning
+	Resolver *paths.Resolver // managed document root resolver; nil falls back to KBDir for kb: refs
+	// Verifier is an optional managed-root verifier for context refs and
+	// tagged articles.
+	Verifier interface {
+		VerifyRef(ctx context.Context, ref string, consumer string) error
+		VerifyPath(ctx context.Context, path string, consumer string) error
+	}
 	HAInject homeassistant.StateFetcher // nil-safe
 	Logger   *slog.Logger
 }
@@ -83,6 +93,7 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 		capTags:  cfg.CapTags,
 		kbDir:    cfg.KBDir,
 		resolver: cfg.Resolver,
+		verifier: cfg.Verifier,
 		haInject: cfg.HAInject,
 		logger:   cfg.Logger,
 	}
@@ -133,6 +144,11 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 			continue
 		}
 		seen[article.Path] = true
+		if err := a.verifyPath(ctx, article.Path, "tagged_kb_article"); err != nil {
+			a.logger.Warn("tagged KB article blocked by document root signature policy",
+				"path", article.Path, "error", err)
+			continue
+		}
 		data, err := os.ReadFile(article.Path)
 		if err != nil {
 			a.logger.Warn("failed to read tagged KB article",
@@ -201,6 +217,11 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		if !ok {
 			continue
 		}
+		if err := a.verifyRef(ctx, ref, "session_origin_context_ref"); err != nil {
+			a.logger.Warn("session origin context ref blocked by document root signature policy",
+				"ref", ref, "path", path, "error", err)
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			a.logger.Warn("failed to read session origin context ref",
@@ -226,6 +247,20 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		}
 	}
 	return buf.String()
+}
+
+func (a *TagContextAssembler) verifyRef(ctx context.Context, ref string, consumer string) error {
+	if a == nil || a.verifier == nil {
+		return nil
+	}
+	return a.verifier.VerifyRef(ctx, ref, consumer)
+}
+
+func (a *TagContextAssembler) verifyPath(ctx context.Context, path string, consumer string) error {
+	if a == nil || a.verifier == nil {
+		return nil
+	}
+	return a.verifier.VerifyPath(ctx, path, consumer)
 }
 
 func (a *TagContextAssembler) resolveContextRef(ref string) (string, bool) {

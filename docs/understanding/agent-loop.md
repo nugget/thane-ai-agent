@@ -123,7 +123,7 @@ The same declaration also feeds context assembly. Each turn receives a
 reference, generated tool name, current content or recent journal tail,
 and any truncation markers. The model should use those generated tools
 instead of generic file tools; the document root owns path safety,
-indexing, provenance, and future signature policy.
+indexing, provenance, and signature policy.
 
 ## Capability Tags
 

@@ -35,6 +35,9 @@ func (s *Store) Links(ctx context.Context, ref string, mode string, limit int, p
 	if err != nil {
 		return nil, err
 	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_links"); err != nil {
+		return nil, err
+	}
 	mode, err = normalizeLinkMode(mode)
 	if err != nil {
 		return nil, err
@@ -115,6 +118,11 @@ func (s *Store) loadDocumentIndex(ctx context.Context, includeLinks bool) (*docu
 			}
 		} else if err := rows.Scan(&root, &relPath, &title, &modifiedAt); err != nil {
 			return nil, fmt.Errorf("scan document link index: %w", err)
+		}
+		if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_links_index"); err != nil {
+			s.logger.Warn("document links skipped file blocked by signature policy",
+				"root", root, "path", relPath, "error", err)
+			continue
 		}
 		var links []string
 		if includeLinks {

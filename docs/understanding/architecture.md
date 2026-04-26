@@ -118,10 +118,11 @@ managed authoring with optional git backing. Scratchpads can stay
 low-integrity and even opt out of indexing. Same architectural
 primitive, different policy dials.
 
-The current implementation establishes policy-aware managed roots and
-signed git-backed writes. Stricter load-time enforcement, such as
-blocking activation of unsigned high-integrity content, builds on that
-foundation rather than creating another storage lane.
+The current implementation establishes policy-aware managed roots,
+signed git-backed writes, and read-side enforcement for roots that
+require trusted signatures. Unsigned or dirty high-integrity content is
+kept out of managed document reads, indexed results, and tagged context
+injection instead of relying on model behavior.
 
 ## Trust Zones: Safety in Go, Not Prompts
 

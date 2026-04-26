@@ -17,6 +17,33 @@ type recordingRootWriter struct {
 	deletes []string
 }
 
+type fakeRootVerifier struct {
+	files map[string]SignatureVerification
+	root  SignatureVerification
+}
+
+func (v fakeRootVerifier) Verify(_ context.Context, filename string) (SignatureVerification, error) {
+	result, ok := v.files[filename]
+	if !ok {
+		result = SignatureVerification{Status: SignatureFailed, Message: "untrusted test document"}
+	}
+	if result.Status == SignatureTrusted {
+		return result, nil
+	}
+	return result, os.ErrPermission
+}
+
+func (v fakeRootVerifier) VerifyRoot(_ context.Context) (SignatureVerification, error) {
+	result := v.root
+	if result.Status == "" {
+		result = SignatureVerification{Status: SignatureTrusted, Message: "trusted test root"}
+	}
+	if result.Status == SignatureTrusted {
+		return result, nil
+	}
+	return result, os.ErrPermission
+}
+
 func (w *recordingRootWriter) Write(_ context.Context, filename, content, message string) error {
 	w.writes = append(w.writes, filename+"|"+message)
 	path := filepath.Join(w.root, filename)
@@ -176,7 +203,90 @@ func TestStorePolicyRootWriterHandlesWriteAndDelete(t *testing.T) {
 	}
 }
 
+func TestStorePolicyRequiredSignatureBlocksReadAndIndex(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStoreWithOptions(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+			Git: RootGitPolicy{
+				Enabled:          true,
+				VerifySignatures: VerificationRequired,
+			},
+		},
+	}, nil, map[string]RootVerifier{"kb": fakeRootVerifier{
+		files: map[string]SignatureVerification{
+			"unsafe.md": {Status: SignatureFailed, Message: "unsigned test content"},
+		},
+		root: SignatureVerification{Status: SignatureFailed, Message: "dirty root"},
+	}})
+	writeFile(t, filepath.Join(kbDir, "unsafe.md"), "# Unsafe\n\nShould not load.\n")
+
+	ctx := context.Background()
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	results, err := store.Search(ctx, SearchQuery{Root: "kb", Query: "Unsafe", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Search returned %d results, want unsigned document excluded", len(results))
+	}
+	if _, err := store.Read(ctx, "kb:unsafe.md"); err == nil || !strings.Contains(err.Error(), "blocked by signature policy") {
+		t.Fatalf("Read error = %v, want signature policy block", err)
+	}
+	roots, err := store.Roots(ctx)
+	if err != nil {
+		t.Fatalf("Roots: %v", err)
+	}
+	if roots[0].Verification == nil || roots[0].Verification.Status != SignatureFailed {
+		t.Fatalf("Roots verification = %#v, want failed", roots[0].Verification)
+	}
+}
+
+func TestStorePolicyWarnSignatureDoesNotBlockReadOrIndex(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStoreWithOptions(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+			Git: RootGitPolicy{
+				Enabled:          true,
+				VerifySignatures: VerificationWarn,
+			},
+		},
+	}, nil, map[string]RootVerifier{"kb": fakeRootVerifier{
+		files: map[string]SignatureVerification{
+			"warning.md": {Status: SignatureFailed, Message: "unsigned but warn-only"},
+		},
+		root: SignatureVerification{Status: SignatureFailed, Message: "dirty root"},
+	}})
+	writeFile(t, filepath.Join(kbDir, "warning.md"), "# Warning\n\nWarn mode still loads.\n")
+
+	ctx := context.Background()
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	results, err := store.Search(ctx, SearchQuery{Root: "kb", Query: "Warning", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search returned %d results, want warn-mode document included", len(results))
+	}
+	if _, err := store.Read(ctx, "kb:warning.md"); err != nil {
+		t.Fatalf("Read warn-mode document: %v", err)
+	}
+}
+
 func newPolicyStore(t *testing.T, policies map[string]RootPolicy, writers map[string]RootWriter) (*Store, string) {
+	return newPolicyStoreWithOptions(t, policies, writers, nil)
+}
+
+func newPolicyStoreWithOptions(t *testing.T, policies map[string]RootPolicy, writers map[string]RootWriter, verifiers map[string]RootVerifier) (*Store, string) {
 	t.Helper()
 
 	rootDir := t.TempDir()
@@ -190,8 +300,9 @@ func newPolicyStore(t *testing.T, policies map[string]RootPolicy, writers map[st
 	}
 	t.Cleanup(func() { db.Close() })
 	store, err := NewStoreWithOptions(db, map[string]string{"kb": kbDir}, nil, StoreOptions{
-		RootPolicies: policies,
-		RootWriters:  writers,
+		RootPolicies:  policies,
+		RootWriters:   writers,
+		RootVerifiers: verifiers,
 	})
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)

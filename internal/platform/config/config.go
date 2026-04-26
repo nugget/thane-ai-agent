@@ -786,10 +786,10 @@ type DocumentRootGitConfig struct {
 	// mutation. Requires signing_key.
 	SignCommits bool `yaml:"sign_commits,omitempty"`
 
-	// VerifySignatures is the desired verification policy for consumers
-	// of this root: "none", "warn", or "required". V1 records the
-	// policy and signs managed writes; policy-aware load/activation
-	// consumers enforce this in follow-up work.
+	// VerifySignatures is the verification policy for consumers of this
+	// root: "none", "warn", or "required". Required roots block managed
+	// reads, indexed results, and tagged context injection when content
+	// is not covered by trusted signed git history.
 	VerifySignatures string `yaml:"verify_signatures,omitempty"`
 
 	// RepoPath optionally points at the git repository to use for this

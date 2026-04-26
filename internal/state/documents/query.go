@@ -2,8 +2,6 @@ package documents
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -22,9 +20,10 @@ func (s *Store) Roots(ctx context.Context) ([]RootSummary, error) {
 	summaries := make([]RootSummary, 0, len(s.roots))
 	for _, root := range s.allRoots() {
 		summary := RootSummary{
-			Root:   root,
-			Path:   s.roots[root],
-			Policy: s.rootPolicySummary(root),
+			Root:         root,
+			Path:         s.roots[root],
+			Policy:       s.rootPolicySummary(root),
+			Verification: s.rootVerificationSummary(ctx, root),
 		}
 		if err := s.db.QueryRowContext(ctx,
 			`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(SUM(word_count), 0), COALESCE(MAX(modified_at), '')
@@ -94,6 +93,11 @@ func (s *Store) Browse(ctx context.Context, root, prefix string, limit int) (*Br
 			return nil, fmt.Errorf("scan browse document: %w", err)
 		}
 		rel := doc.Path
+		if err := s.verifyDocumentForConsumer(ctx, doc.Root, doc.Path, "doc_browse"); err != nil {
+			s.logger.Warn("document browse skipped file blocked by signature policy",
+				"root", doc.Root, "path", doc.Path, "error", err)
+			continue
+		}
 		if prefix != "" {
 			if rel != prefix && !strings.HasPrefix(rel, prefix+"/") {
 				continue
@@ -218,6 +222,11 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		if !matchesFrontmatter(doc.Frontmatter, q.Frontmatter) {
 			continue
 		}
+		if err := s.verifyDocumentForConsumer(ctx, doc.Root, doc.Path, "doc_search"); err != nil {
+			s.logger.Warn("document search skipped file blocked by signature policy",
+				"root", doc.Root, "path", doc.Path, "error", err)
+			continue
+		}
 		score := matchScore(doc, q.Query)
 		if q.Query != "" && score == 0 {
 			continue
@@ -257,6 +266,9 @@ func (s *Store) Outline(ctx context.Context, ref string) ([]Section, error) {
 	}
 	root, relPath, err := parseRef(ref)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_outline"); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
@@ -301,6 +313,9 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 	if err != nil {
 		return nil, err
 	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_section"); err != nil {
+		return nil, err
+	}
 	if exists, err := s.documentExists(ctx, root, relPath); err != nil {
 		return nil, err
 	} else if !exists {
@@ -341,73 +356,6 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 		}
 	}
 	return nil, fmt.Errorf("section %q not found in %s", selector, ref)
-}
-
-// Values returns observed frontmatter values for one key.
-func (s *Store) Values(ctx context.Context, root, key string, limit int) ([]ValueCount, error) {
-	return s.values(ctx, root, key, limit, true)
-}
-
-func (s *Store) values(ctx context.Context, root, key string, limit int, refresh bool) ([]ValueCount, error) {
-	if refresh {
-		if err := s.Refresh(ctx); err != nil {
-			return nil, err
-		}
-	}
-	root = strings.TrimSuffix(strings.TrimSpace(root), ":")
-	key = strings.ToLower(strings.TrimSpace(key))
-	if key == "" {
-		return nil, fmt.Errorf("key is required")
-	}
-	if root != "" && !rootExists(s.roots, root) {
-		return nil, fmt.Errorf("unknown document root %q", root)
-	}
-
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if root == "" {
-		rows, err = s.db.QueryContext(ctx, `SELECT tags_json, frontmatter_json FROM indexed_documents`)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `SELECT tags_json, frontmatter_json FROM indexed_documents WHERE root = ?`, root)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query document values: %w", err)
-	}
-	defer rows.Close()
-
-	counts := make(map[string]int)
-	for rows.Next() {
-		var tagsJSON, metaJSON string
-		if err := rows.Scan(&tagsJSON, &metaJSON); err != nil {
-			return nil, fmt.Errorf("scan document values: %w", err)
-		}
-		if key == "tags" {
-			var tags []string
-			if jsonErr := json.Unmarshal([]byte(tagsJSON), &tags); jsonErr == nil {
-				for _, tag := range tags {
-					counts[tag]++
-				}
-			}
-			continue
-		}
-		var meta map[string][]string
-		if jsonErr := json.Unmarshal([]byte(metaJSON), &meta); jsonErr == nil {
-			for _, value := range meta[key] {
-				counts[value]++
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	values := asValueCounts(counts)
-	limit = clampLimit(limit, 20, 100)
-	if len(values) > limit {
-		values = values[:limit]
-	}
-	return values, nil
 }
 
 func (s *Store) documentExists(ctx context.Context, root, relPath string) (bool, error) {
