@@ -260,11 +260,8 @@ func (s *Store) Copy(ctx context.Context, args CopyArgs) (*CopyResult, error) {
 }
 
 func (s *Store) deleteIndexedDocument(ctx context.Context, root, relPath string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_document_sections WHERE root = ? AND rel_path = ?`, root, relPath); err != nil {
-		return fmt.Errorf("delete indexed sections: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_documents WHERE root = ? AND rel_path = ?`, root, relPath); err != nil {
-		return fmt.Errorf("delete indexed document: %w", err)
+	if err := s.deleteIndexedDocumentRows(ctx, root, relPath); err != nil {
+		return err
 	}
 	s.touchLastRefresh(time.Now())
 	return nil

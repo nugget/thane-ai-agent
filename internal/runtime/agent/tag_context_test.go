@@ -449,6 +449,16 @@ func (m *mockTagProvider) TagContext(_ context.Context) (string, error) {
 	return m.content, m.err
 }
 
+type rejectingContextVerifier struct{}
+
+func (rejectingContextVerifier) VerifyRef(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("blocked by signature policy")
+}
+
+func (rejectingContextVerifier) VerifyPath(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("blocked by signature policy")
+}
+
 func TestTagContextAssembler_LiveProvider(t *testing.T) {
 	a := NewTagContextAssembler(TagContextAssemblerConfig{
 		CapTags: map[string]config.CapabilityTagConfig{
@@ -517,6 +527,26 @@ func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
 	// Frontmatter should be stripped.
 	if strings.Contains(result, "tags:") {
 		t.Error("frontmatter should be stripped from KB articles")
+	}
+}
+
+func TestTagContextAssembler_SkipsKBArticleRejectedByVerifier(t *testing.T) {
+	kbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(kbDir, "forge-guide.md"),
+		[]byte("---\ntags: [forge]\n---\nSIGNED_ONLY_CONTEXT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:    kbDir,
+		Verifier: rejectingContextVerifier{},
+		Logger:   slog.Default(),
+	})
+
+	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	if strings.Contains(result, "SIGNED_ONLY_CONTEXT") {
+		t.Fatalf("rejected KB article leaked into tag context:\n%s", result)
 	}
 }
 

@@ -121,13 +121,16 @@ The current policy fields are:
 - `git.enabled`: records that the root participates in git-backed
   provenance.
 - `git.sign_commits`: signs and commits each managed write/delete.
-- `git.verify_signatures`: records the intended consumer policy:
-  `none`, `warn`, or `required`.
+- `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
+  or `required`.
 
 Signature-required roots are the place for high-integrity authored
-knowledge, such as owner-tagged knowledge articles. Broader enforcement
-for loading or activating signed content builds on this root policy
-rather than inventing a separate trust lane.
+knowledge, such as owner-tagged knowledge articles. When verification
+is `required`, Thane blocks document reads, indexed browse/search
+surfaces, loop-declared output context, and tagged context articles when
+the target content is not cleanly covered by trusted signed git history.
+When verification is `warn`, Thane records and logs verification
+failures but still lets the content load.
 
 ## A Few Practical Guidelines
 
@@ -182,8 +185,8 @@ runtime tools:
 The loop sees a matching context block with the current document content
 or recent journal tail, so the document itself remains the durable source
 of truth. The generated tools still write through document roots. That
-keeps path resolution, indexing, provenance, and future root-level
-integrity policy in one subsystem.
+keeps path resolution, indexing, provenance, and root-level integrity
+policy in one subsystem.
 
 ## Special Case: `core`
 

@@ -89,6 +89,9 @@ func (s *Store) Read(ctx context.Context, ref string) (*DocumentRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_read"); err != nil {
+		return nil, err
+	}
 	absPath, err := s.resolveDocumentPath(root, relPath)
 	if err != nil {
 		if os.IsNotExist(err) {

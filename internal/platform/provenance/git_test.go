@@ -2,7 +2,9 @@ package provenance
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,5 +96,85 @@ func TestCommitHasCorrectMessage(t *testing.T) {
 	got := strings.TrimSpace(msgBuf.String())
 	if got != "loop-metacognitive-42" {
 		t.Errorf("commit message = %q, want %q", got, "loop-metacognitive-42")
+	}
+}
+
+func TestVerifierAcceptsSignedCleanFile(t *testing.T) {
+	s := testStore(t)
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-signed"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	verifier, err := NewVerifier(s.path, nil, Options{})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, err := verifier.VerifyFile(t.Context(), "test.md")
+	if err != nil {
+		t.Fatalf("VerifyFile: %v", err)
+	}
+	if !result.Trusted() || result.Commit == "" {
+		t.Fatalf("VerifyFile result = %+v, want trusted commit", result)
+	}
+}
+
+func TestVerifierAcceptsRootWithRepoLocalAllowedSigners(t *testing.T) {
+	s := testStore(t)
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-signed"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	verifier, err := NewVerifier(s.path, nil, Options{})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, err := verifier.VerifyTree(t.Context(), "")
+	if err != nil {
+		t.Fatalf("VerifyTree: %v", err)
+	}
+	if !result.Trusted() || result.Commit == "" {
+		t.Fatalf("VerifyTree result = %+v, want trusted commit", result)
+	}
+}
+
+func TestVerifierRejectsDirtyWorktreeFile(t *testing.T) {
+	s := testStore(t)
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-signed"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := os.WriteFile(s.FilePath("test.md"), []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	verifier, err := NewVerifier(s.path, nil, Options{})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, err := verifier.VerifyFile(t.Context(), "test.md")
+	if err == nil {
+		t.Fatal("VerifyFile returned nil, want dirty worktree error")
+	}
+	if result.Trusted() || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("VerifyFile result/error = %+v / %v, want dirty failure", result, err)
+	}
+}
+
+func TestVerifierRejectsUntrustedSigner(t *testing.T) {
+	s := testStore(t)
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-signed"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	wrongSigner := testSigner(t)
+	allowedPath := filepath.Join(t.TempDir(), "allowed_signers")
+	if err := os.WriteFile(allowedPath, []byte("thane@provenance.local "+wrongSigner.PublicKey()+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile allowed signers: %v", err)
+	}
+	verifier, err := NewVerifier(s.path, nil, Options{AllowedSignersPath: allowedPath})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, err := verifier.VerifyFile(t.Context(), "test.md")
+	if err == nil {
+		t.Fatal("VerifyFile returned nil, want untrusted signer error")
+	}
+	if result.Trusted() {
+		t.Fatalf("VerifyFile result = %+v, want untrusted", result)
 	}
 }

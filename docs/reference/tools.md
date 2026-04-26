@@ -110,9 +110,12 @@ filesystem access. See
 [Document Roots](../understanding/document-roots.md).
 
 `doc_roots` includes each root's policy summary: indexing status,
-authoring mode, and git/signature expectations. Mutation tools obey that
-policy before writing; for example, `read_only` roots reject managed
-writes and git-backed roots route writes through signed commits.
+authoring mode, git/signature expectations, and current verification
+health. Mutation tools obey that policy before writing; for example,
+`read_only` roots reject managed writes and git-backed roots route
+writes through signed commits. Read/search surfaces also respect
+`verify_signatures: required` by blocking content that is not cleanly
+covered by trusted signed git history.
 
 | Tool | Description |
 |------|-------------|

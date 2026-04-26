@@ -92,11 +92,19 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 			kbDir = resolved
 		}
 	}
+	var contextVerifier interface {
+		VerifyRef(ctx context.Context, ref string, consumer string) error
+		VerifyPath(ctx context.Context, path string, consumer string) error
+	}
+	if a.documentStore != nil {
+		contextVerifier = a.documentStore
+	}
 
 	tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
 		CapTags:  resolvedCapTags,
 		KBDir:    kbDir,
 		Resolver: s.resolver,
+		Verifier: contextVerifier,
 		HAInject: a.loop.HAInject(),
 		Logger:   logger.With("component", "tag_context"),
 	})

@@ -35,6 +35,9 @@ func (s *Store) Links(ctx context.Context, ref string, mode string, limit int, p
 	if err != nil {
 		return nil, err
 	}
+	if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_links"); err != nil {
+		return nil, err
+	}
 	mode, err = normalizeLinkMode(mode)
 	if err != nil {
 		return nil, err

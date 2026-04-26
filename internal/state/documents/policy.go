@@ -28,8 +28,8 @@ type VerificationMode string
 const (
 	// VerificationNone disables signature verification enforcement.
 	VerificationNone VerificationMode = "none"
-	// VerificationWarn records verification expectations but does not
-	// block consumers in V1.
+	// VerificationWarn records verification failures without blocking
+	// consumers.
 	VerificationWarn VerificationMode = "warn"
 	// VerificationRequired marks the root as requiring trusted signed
 	// history before high-integrity consumers should load or activate
@@ -70,6 +70,33 @@ type RootGitPolicySummary struct {
 	VerifySignatures VerificationMode `json:"verify_signatures,omitempty"`
 }
 
+// SignatureStatus describes the last known signature verification state
+// for a root or document.
+type SignatureStatus string
+
+const (
+	// SignatureTrusted means the checked content is clean and covered by
+	// trusted signed git history.
+	SignatureTrusted SignatureStatus = "trusted"
+	// SignatureFailed means signature policy could not verify the checked
+	// content.
+	SignatureFailed SignatureStatus = "failed"
+	// SignatureUnavailable means signature verification was requested but
+	// no verifier could be configured.
+	SignatureUnavailable SignatureStatus = "unavailable"
+)
+
+// SignatureVerification is the document package's verifier-neutral
+// signature status shape.
+type SignatureVerification struct {
+	Status    SignatureStatus  `json:"status"`
+	Mode      VerificationMode `json:"mode,omitempty"`
+	Commit    string           `json:"commit,omitempty"`
+	Message   string           `json:"message,omitempty"`
+	CheckedAt string           `json:"checked_at,omitempty"`
+	Consumer  string           `json:"consumer,omitempty"`
+}
+
 // RootWriter applies a managed document mutation to a root. Git-backed
 // roots use this hook to sign and commit writes without exposing git to
 // the model.
@@ -78,11 +105,19 @@ type RootWriter interface {
 	Delete(ctx context.Context, filename, message string) error
 }
 
+// RootVerifier verifies that a git-backed root or file is clean and
+// trusted before policy-sensitive consumers load it.
+type RootVerifier interface {
+	Verify(ctx context.Context, filename string) (SignatureVerification, error)
+	VerifyRoot(ctx context.Context) (SignatureVerification, error)
+}
+
 // StoreOptions configures optional root policy and backing writers for
 // [Store].
 type StoreOptions struct {
-	RootPolicies map[string]RootPolicy
-	RootWriters  map[string]RootWriter
+	RootPolicies  map[string]RootPolicy
+	RootWriters   map[string]RootWriter
+	RootVerifiers map[string]RootVerifier
 }
 
 func defaultRootPolicy() RootPolicy {
@@ -141,6 +176,24 @@ func normalizeRootWriters(roots map[string]string, writers map[string]RootWriter
 	return out
 }
 
+func normalizeRootVerifiers(roots map[string]string, verifiers map[string]RootVerifier) map[string]RootVerifier {
+	if len(verifiers) == 0 {
+		return nil
+	}
+	out := make(map[string]RootVerifier, len(verifiers))
+	for root, verifier := range verifiers {
+		root = normalizeRootName(root)
+		if root == "" || verifier == nil {
+			continue
+		}
+		if _, ok := roots[root]; !ok {
+			continue
+		}
+		out[root] = verifier
+	}
+	return out
+}
+
 func normalizeRootName(root string) string {
 	return strings.TrimSuffix(strings.TrimSpace(root), ":")
 }
@@ -175,4 +228,12 @@ func (s *Store) rootWriter(root string) RootWriter {
 		return nil
 	}
 	return s.rootWriters[root]
+}
+
+func (s *Store) rootVerifier(root string) RootVerifier {
+	root = normalizeRootName(root)
+	if s == nil || len(s.rootVerifiers) == 0 {
+		return nil
+	}
+	return s.rootVerifiers[root]
 }
