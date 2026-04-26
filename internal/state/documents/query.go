@@ -93,11 +93,6 @@ func (s *Store) Browse(ctx context.Context, root, prefix string, limit int) (*Br
 			return nil, fmt.Errorf("scan browse document: %w", err)
 		}
 		rel := doc.Path
-		if err := s.verifyDocumentForConsumer(ctx, doc.Root, doc.Path, "doc_browse"); err != nil {
-			s.logger.Warn("document browse skipped file blocked by signature policy",
-				"root", doc.Root, "path", doc.Path, "error", err)
-			continue
-		}
 		if prefix != "" {
 			if rel != prefix && !strings.HasPrefix(rel, prefix+"/") {
 				continue
@@ -220,11 +215,6 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 			continue
 		}
 		if !matchesFrontmatter(doc.Frontmatter, q.Frontmatter) {
-			continue
-		}
-		if err := s.verifyDocumentForConsumer(ctx, doc.Root, doc.Path, "doc_search"); err != nil {
-			s.logger.Warn("document search skipped file blocked by signature policy",
-				"root", doc.Root, "path", doc.Path, "error", err)
 			continue
 		}
 		score := matchScore(doc, q.Query)

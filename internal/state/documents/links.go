@@ -119,11 +119,6 @@ func (s *Store) loadDocumentIndex(ctx context.Context, includeLinks bool) (*docu
 		} else if err := rows.Scan(&root, &relPath, &title, &modifiedAt); err != nil {
 			return nil, fmt.Errorf("scan document link index: %w", err)
 		}
-		if err := s.verifyDocumentForConsumer(ctx, root, relPath, "doc_links_index"); err != nil {
-			s.logger.Warn("document links skipped file blocked by signature policy",
-				"root", root, "path", relPath, "error", err)
-			continue
-		}
 		var links []string
 		if includeLinks {
 			links, err = decodeDocumentLinks(root, relPath, linksJSON)

@@ -246,6 +246,52 @@ func TestStorePolicyRequiredSignatureBlocksReadAndIndex(t *testing.T) {
 	}
 }
 
+func TestStorePolicyRequiredSignatureRemovesPreviouslyIndexedDocument(t *testing.T) {
+	t.Parallel()
+
+	verifier := fakeRootVerifier{
+		files: map[string]SignatureVerification{
+			"doc.md": {Status: SignatureTrusted, Message: "trusted test content"},
+		},
+	}
+	store, kbDir := newPolicyStoreWithOptions(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+			Git: RootGitPolicy{
+				Enabled:          true,
+				VerifySignatures: VerificationRequired,
+			},
+		},
+	}, nil, map[string]RootVerifier{"kb": verifier})
+	writeFile(t, filepath.Join(kbDir, "doc.md"), "# Trusted\n\nInitially indexed.\n")
+
+	ctx := context.Background()
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("initial Refresh: %v", err)
+	}
+	results, err := store.Search(ctx, SearchQuery{Root: "kb", Query: "Trusted", Limit: 10})
+	if err != nil {
+		t.Fatalf("initial Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("initial Search returned %d results, want 1", len(results))
+	}
+
+	verifier.files["doc.md"] = SignatureVerification{Status: SignatureFailed, Message: "signature revoked"}
+	store.lastRefresh = time.Time{}
+	if err := store.Refresh(ctx); err != nil {
+		t.Fatalf("revoked Refresh: %v", err)
+	}
+	results, err = store.Search(ctx, SearchQuery{Root: "kb", Query: "Trusted", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search after revoked signature: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("Search after revoked signature returned %d results, want 0", len(results))
+	}
+}
+
 func TestStorePolicyWarnSignatureDoesNotBlockReadOrIndex(t *testing.T) {
 	t.Parallel()
 

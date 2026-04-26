@@ -33,9 +33,9 @@ func (s *Store) values(ctx context.Context, root, key string, limit int, refresh
 		err  error
 	)
 	if root == "" {
-		rows, err = s.db.QueryContext(ctx, `SELECT root, rel_path, tags_json, frontmatter_json FROM indexed_documents`)
+		rows, err = s.db.QueryContext(ctx, `SELECT tags_json, frontmatter_json FROM indexed_documents`)
 	} else {
-		rows, err = s.db.QueryContext(ctx, `SELECT root, rel_path, tags_json, frontmatter_json FROM indexed_documents WHERE root = ?`, root)
+		rows, err = s.db.QueryContext(ctx, `SELECT tags_json, frontmatter_json FROM indexed_documents WHERE root = ?`, root)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query document values: %w", err)
@@ -44,14 +44,9 @@ func (s *Store) values(ctx context.Context, root, key string, limit int, refresh
 
 	counts := make(map[string]int)
 	for rows.Next() {
-		var docRoot, relPath, tagsJSON, metaJSON string
-		if err := rows.Scan(&docRoot, &relPath, &tagsJSON, &metaJSON); err != nil {
+		var tagsJSON, metaJSON string
+		if err := rows.Scan(&tagsJSON, &metaJSON); err != nil {
 			return nil, fmt.Errorf("scan document values: %w", err)
-		}
-		if err := s.verifyDocumentForConsumer(ctx, docRoot, relPath, "doc_values"); err != nil {
-			s.logger.Warn("document values skipped file blocked by signature policy",
-				"root", docRoot, "path", relPath, "error", err)
-			continue
 		}
 		if key == "tags" {
 			var tags []string

@@ -249,16 +249,19 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 			return nil
 		}
 		rel = filepath.ToSlash(filepath.Clean(rel))
+		seen[rel] = true
 		if err := s.verifyDocumentForConsumer(ctx, root, rel, "document_index"); err != nil {
 			s.logger.Warn("document index skipped file blocked by signature policy",
 				"root", root, "path", rel, "error", err)
+			if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
+				return err
+			}
 			return nil
 		}
 		if err := s.upsertFile(ctx, root, rel); err != nil {
 			s.logger.Warn("document index skipped file", "root", root, "path", path, "error", err)
 			return nil
 		}
-		seen[rel] = true
 		return nil
 	})
 	if walkErr != nil {
@@ -279,14 +282,21 @@ func (s *Store) refreshRoot(ctx context.Context, root, dir string) error {
 		if seen[rel] {
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_document_sections WHERE root = ? AND rel_path = ?`, root, rel); err != nil {
-			return fmt.Errorf("delete stale sections: %w", err)
-		}
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_documents WHERE root = ? AND rel_path = ?`, root, rel); err != nil {
+		if err := s.deleteIndexedDocumentRows(ctx, root, rel); err != nil {
 			return fmt.Errorf("delete stale document: %w", err)
 		}
 	}
 	return rows.Err()
+}
+
+func (s *Store) deleteIndexedDocumentRows(ctx context.Context, root, relPath string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_document_sections WHERE root = ? AND rel_path = ?`, root, relPath); err != nil {
+		return fmt.Errorf("delete indexed sections: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM indexed_documents WHERE root = ? AND rel_path = ?`, root, relPath); err != nil {
+		return fmt.Errorf("delete indexed document: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) purgeRootIndex(ctx context.Context, root string) error {
