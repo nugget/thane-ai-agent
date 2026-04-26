@@ -17,8 +17,9 @@ import (
 // TagContextAssembler builds the Capability Context section from two
 // sources for each active tag:
 //
-//  1. Tagged KB articles — markdown files with tags: frontmatter in the
-//     knowledge base directory (same pattern as talents)
+//  1. Tagged KB articles — markdown files in the knowledge base
+//     directory with `tags:` (any-of) and/or `tags_all:` (all-of)
+//     frontmatter, same pattern as talents.
 //  2. Live providers — [TagContextProvider] implementations producing
 //     fresh context each turn
 //
@@ -26,19 +27,24 @@ import (
 // to avoid duplicating the assembly logic. The assembler is safe for
 // concurrent use after construction.
 type TagContextAssembler struct {
-	capTags    map[string]config.CapabilityTagConfig
-	kbDir      string
-	resolver   *paths.Resolver
-	kbArticles []kbArticle                // pre-scanned, sorted
-	haInject   homeassistant.StateFetcher // nil-safe — delegates pass nil
-	logger     *slog.Logger
+	capTags  map[string]config.CapabilityTagConfig
+	kbDir    string
+	resolver *paths.Resolver
+	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
+	logger   *slog.Logger
 }
 
 // kbArticle is a knowledge base file with tag affinity parsed from
-// frontmatter. Reuses the talent frontmatter format: tags: [a, b].
+// frontmatter. Reuses the talent frontmatter format: `tags: [a, b]`
+// activates on any (OR), `tags_all: [a, b]` requires all (AND).
+// When both are set, the article injects only when the OR check on
+// Tags AND the AND check on TagsAll both pass — useful for articles
+// that should fire for several entry-point tags but only when paired
+// with a runtime-asserted gate (e.g., owner + signal).
 type kbArticle struct {
 	Path     string   // absolute file path
-	Tags     []string // from frontmatter
+	Tags     []string // any-of activation set, from frontmatter `tags:`
+	TagsAll  []string // all-of activation set, from frontmatter `tags_all:`
 	Kind     string   // frontmatter kind: entry_point or empty/article
 	Teaser   string   // short menu teaser for entry-point docs
 	NextTags []string // suggested next tags from an entry point
@@ -62,32 +68,42 @@ type TagContextAssemblerConfig struct {
 	Logger   *slog.Logger
 }
 
-// NewTagContextAssembler creates an assembler, scanning the KB directory
-// for tagged articles at construction time. KB scan errors are logged
-// but do not prevent construction.
+// NewTagContextAssembler creates an assembler. The KB directory is
+// scanned lazily — the article list (paths and tag affinity) is
+// re-read from disk on every consumer call (Build, KBArticleTags,
+// KBMenuHints), so frontmatter edits, additions, and deletions
+// propagate without a process restart. Scans are cheap (a directory
+// walk plus a frontmatter parse per .md file) and run once per
+// consumer call, not once per article.
 func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-
-	var articles []kbArticle
-	if cfg.KBDir != "" {
-		var err error
-		articles, err = scanKBArticles(cfg.KBDir)
-		if err != nil {
-			cfg.Logger.Warn("failed to scan KB directory for tagged articles",
-				"dir", cfg.KBDir, "error", err)
-		}
-	}
-
 	return &TagContextAssembler{
-		capTags:    cfg.CapTags,
-		kbDir:      cfg.KBDir,
-		resolver:   cfg.Resolver,
-		kbArticles: articles,
-		haInject:   cfg.HAInject,
-		logger:     cfg.Logger,
+		capTags:  cfg.CapTags,
+		kbDir:    cfg.KBDir,
+		resolver: cfg.Resolver,
+		haInject: cfg.HAInject,
+		logger:   cfg.Logger,
 	}
+}
+
+// loadKBArticles returns the current list of tag-aware KB articles by
+// scanning kbDir fresh. Scan errors are logged and the call returns an
+// empty slice, matching the prior constructor behavior. Callers that
+// need a stable snapshot within a single operation (e.g., Build) call
+// this once and iterate the result locally.
+func (a *TagContextAssembler) loadKBArticles() []kbArticle {
+	if a.kbDir == "" {
+		return nil
+	}
+	articles, err := scanKBArticles(a.kbDir)
+	if err != nil {
+		a.logger.Warn("failed to scan KB directory for tagged articles",
+			"dir", a.kbDir, "error", err)
+		return nil
+	}
+	return articles
 }
 
 // Build assembles tag context for the given active tags. Providers
@@ -103,10 +119,13 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 	seen := make(map[string]bool)
 	var buf strings.Builder
 
-	// Phase 1: Tagged KB articles (re-read each turn for freshness).
-	// KB articles declare their tag affinity via frontmatter
-	// (tags: [forge, ha]) and auto-load when matching tags are active.
-	for _, article := range a.kbArticles {
+	// Phase 1: Tagged KB articles (re-scanned and re-read each turn
+	// for freshness — frontmatter edits, additions, and deletions all
+	// propagate without a restart). Articles declare tag affinity via
+	// frontmatter: `tags:` for any-of activation, `tags_all:` for
+	// all-of activation. Both compose; see [articleMatchesTags].
+	articles := a.loadKBArticles()
+	for _, article := range articles {
 		if !articleMatchesTags(article, activeTags) {
 			continue
 		}
@@ -291,15 +310,29 @@ func (a *TagContextAssembler) appendContent(buf *strings.Builder, data []byte) {
 }
 
 // KBArticleTags returns the tag→article count index, useful for
-// enriching the capability manifest with KB article counts.
+// enriching the capability manifest with KB article counts. Both
+// `tags:` (any-of) and `tags_all:` (all-of) memberships count — a
+// `tags_all`-only article would otherwise be invisible to the menu
+// surface despite gating real content. Tags appearing in both lists
+// of the same article count once.
 func (a *TagContextAssembler) KBArticleTags() map[string]int {
 	if a == nil {
 		return nil
 	}
 	counts := make(map[string]int)
-	for _, article := range a.kbArticles {
+	for _, article := range a.loadKBArticles() {
+		seen := make(map[string]bool, len(article.Tags)+len(article.TagsAll))
 		for _, tag := range article.Tags {
-			counts[tag]++
+			if !seen[tag] {
+				seen[tag] = true
+				counts[tag]++
+			}
+		}
+		for _, tag := range article.TagsAll {
+			if !seen[tag] {
+				seen[tag] = true
+				counts[tag]++
+			}
 		}
 	}
 	return counts
@@ -313,7 +346,7 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 		return nil
 	}
 	hints := make(map[string]KBMenuHint)
-	for _, article := range a.kbArticles {
+	for _, article := range a.loadKBArticles() {
 		if !isEntryPointKind(article.Kind) {
 			continue
 		}
@@ -365,13 +398,14 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 		}
 
 		meta, _ := talents.ParseFrontmatterMetadata(string(data))
-		if len(meta.Tags) == 0 {
+		if len(meta.Tags) == 0 && len(meta.TagsAll) == 0 {
 			return nil // untagged KB articles are not auto-loaded
 		}
 
 		articles = append(articles, kbArticle{
 			Path:     path,
 			Tags:     meta.Tags,
+			TagsAll:  append([]string(nil), meta.TagsAll...),
 			Kind:     strings.TrimSpace(meta.Kind),
 			Teaser:   strings.TrimSpace(meta.Teaser),
 			NextTags: append([]string(nil), meta.NextTags...),
@@ -397,9 +431,28 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 	return articles, nil
 }
 
-// articleMatchesTags returns true if any of the article's tags are in
-// the active set.
+// articleMatchesTags reports whether an article should inject given
+// the currently active tag set. Semantics:
+//
+//   - When TagsAll is non-empty, every tag in TagsAll must be active.
+//     This is the AND gate for narrowly-scoped articles.
+//   - When Tags is non-empty, at least one tag must be active. This
+//     is the OR activation set.
+//   - When both are set, the article injects only when both checks
+//     pass — `(any of Tags) AND (all of TagsAll)`.
+//   - When only TagsAll is set (no Tags), the AND check alone gates
+//     the article.
 func articleMatchesTags(a kbArticle, activeTags map[string]bool) bool {
+	if len(a.TagsAll) > 0 {
+		for _, tag := range a.TagsAll {
+			if !activeTags[tag] {
+				return false
+			}
+		}
+		if len(a.Tags) == 0 {
+			return true
+		}
+	}
 	for _, tag := range a.Tags {
 		if activeTags[tag] {
 			return true

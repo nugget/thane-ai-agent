@@ -1105,15 +1105,16 @@ type CapabilityTagConfig struct {
 }
 
 // Validate checks that the capability tag configuration is internally
-// consistent. It ensures a description is present and the tools list is
-// non-empty. Tag names are validated by the caller since they are map
-// keys in the parent Config struct.
+// consistent. A description is required for non-builtin tags so the
+// operator-defined intent is documented in the capability menu. Tools
+// are optional — capability tags also gate talents, KB articles
+// (via `tags:` and `tags_all:` frontmatter), and tag-context providers,
+// so a content-only tag with no tool membership is a legitimate shape.
+// Tag names are validated by the caller since they are map keys in the
+// parent Config struct.
 func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
 	if strings.TrimSpace(c.Description) == "" && !builtin {
 		return fmt.Errorf("capability_tags.%s.description must not be empty", tagName)
-	}
-	if len(c.Tools) == 0 && !builtin {
-		return fmt.Errorf("capability_tags.%s.tools must not be empty", tagName)
 	}
 	return nil
 }

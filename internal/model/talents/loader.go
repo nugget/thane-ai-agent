@@ -31,8 +31,16 @@ type Talent struct {
 
 // Frontmatter captures the subset of markdown metadata Thane currently
 // understands for talents and tagged KB articles.
+//
+// Tags and TagsAll compose with different semantics in the article
+// matcher: any tag in Tags activates the article (OR), every tag in
+// TagsAll must be active (AND). When both are non-empty the matcher
+// requires the OR check to pass AND the AND check to pass — useful
+// for articles that should fire for several entry-point tags but only
+// when paired with a runtime-asserted gate (e.g., owner + signal).
 type Frontmatter struct {
 	Tags     []string
+	TagsAll  []string
 	Kind     string
 	Teaser   string
 	NextTags []string
@@ -215,22 +223,10 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case strings.HasPrefix(line, "tags_all:"):
+			meta.TagsAll = parseFrontmatterTagList(strings.TrimPrefix(line, "tags_all:"))
 		case strings.HasPrefix(line, "tags:"):
-			value := strings.TrimPrefix(line, "tags:")
-			value = strings.TrimSpace(value)
-
-			// Handle [a, b, c] format.
-			value = strings.TrimPrefix(value, "[")
-			value = strings.TrimSuffix(value, "]")
-
-			var tags []string
-			for _, part := range strings.Split(value, ",") {
-				tag := strings.Trim(strings.TrimSpace(part), `"'`)
-				if tag != "" {
-					tags = append(tags, tag)
-				}
-			}
-			meta.Tags = tags
+			meta.Tags = parseFrontmatterTagList(strings.TrimPrefix(line, "tags:"))
 		case strings.HasPrefix(line, "kind:"):
 			value := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
 			value = strings.Trim(value, `"'`)
@@ -240,22 +236,30 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 			value = strings.Trim(value, `"'`)
 			meta.Teaser = value
 		case strings.HasPrefix(line, "next_tags:"):
-			value := strings.TrimSpace(strings.TrimPrefix(line, "next_tags:"))
-			value = strings.TrimPrefix(value, "[")
-			value = strings.TrimSuffix(value, "]")
-			var tags []string
-			for _, part := range strings.Split(value, ",") {
-				tag := strings.Trim(strings.TrimSpace(part), `"'`)
-				if tag != "" {
-					tags = append(tags, tag)
-				}
-			}
-			meta.NextTags = tags
+			meta.NextTags = parseFrontmatterTagList(strings.TrimPrefix(line, "next_tags:"))
 		default:
 			continue
 		}
 	}
 	return meta
+}
+
+// parseFrontmatterTagList parses a YAML inline list of tag-like strings
+// from the value side of a frontmatter line. Accepts the bracket form
+// `[a, b, "c"]` and an unbracketed comma-separated form. Empty entries
+// are skipped and quotes are trimmed.
+func parseFrontmatterTagList(value string) []string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "[")
+	value = strings.TrimSuffix(value, "]")
+	var tags []string
+	for _, part := range strings.Split(value, ",") {
+		tag := strings.Trim(strings.TrimSpace(part), `"'`)
+		if tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
 }
 
 // ManifestEntry describes a capability tag for the auto-generated manifest.
