@@ -964,12 +964,13 @@ type ArchiveConfig struct {
 	// metadata LLM call. Default: 60.
 	SummarizeTimeout int `yaml:"summarize_timeout"`
 
-	// SessionIdleMinutes is the backstop idle timeout for the
-	// summarizer worker. Active sessions with no message activity
-	// for this many minutes are silently closed and become eligible
-	// for summarization. This complements the channel-specific idle
-	// check (e.g. signal.session_idle_minutes) which sends farewell
-	// messages.
+	// SessionIdleMinutes is the idle timeout for the summarizer
+	// worker. Active sessions with no message activity for this many
+	// minutes are silently closed and become eligible for summarization.
+	// This is the sole owner of session idle close — message-channel
+	// continuity across the rotation boundary is delivered via the
+	// message_channel context provider's verbatim tail, not an LLM-
+	// driven carry-forward.
 	//
 	// Pointer type distinguishes "omitted" (nil → inherit from
 	// signal.session_idle_minutes) from "explicitly set to 0"
@@ -1800,11 +1801,10 @@ func (c *Config) applyDefaults() {
 	if c.Archive.SummarizeTimeout == 0 {
 		c.Archive.SummarizeTimeout = 60
 	}
-	// The archive idle timeout is a crash-recovery backstop (silent close
-	// via DB timestamps). The signal idle timeout is the interactive path
-	// (farewell message on next inbound). Inherit when omitted (nil) so
-	// users only need to set signal.session_idle_minutes for both to work.
-	// Explicit 0 disables the backstop without affecting the signal path.
+	// The archive idle timeout drives the summarizer worker's silent
+	// close. Inherit from signal.session_idle_minutes when omitted (nil)
+	// so users still get the same effective threshold without setting
+	// both. Explicit 0 disables the worker's idle close.
 	if c.Signal.HandleTimeout == 0 {
 		c.Signal.HandleTimeout = 10 * time.Minute
 	}

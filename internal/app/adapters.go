@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"sort"
@@ -16,8 +15,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
-	"github.com/nugget/thane-ai-agent/internal/model/llm"
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
@@ -99,135 +96,9 @@ func (a *mqttStatsAdapter) DefaultModel() string { return a.model }
 // LastRequestTime returns the time of the last request processed by the server.
 func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.server.LastRequest() }
 
-// signalSessionRotator implements [sigcli.SessionRotator] with
-// carry-forward context and farewell message generation. When a session
-// is rotated, the rotator generates a farewell message via LLM, sends
-// it to the originating channel, and closes the session with a
-// carry-forward summary injected into the next session.
-type signalSessionRotator struct {
-	loop      *agent.Loop
-	llmClient llm.Client
-	router    *router.Router
-	sender    sigcli.ChannelSender
-	archiver  agent.SessionArchiver
-	logger    *slog.Logger
-}
-
-// RotateIdleSession generates a farewell message and carry-forward
-// summary, sends the farewell to the sender, then gracefully closes
-// the session with carry-forward injected into the next session.
-func (r *signalSessionRotator) RotateIdleSession(ctx context.Context, conversationID, sender string) bool {
-	sid := r.archiver.ActiveSessionID(conversationID)
-	if sid == "" {
-		return false
-	}
-
-	// Get conversation transcript for farewell generation.
-	transcript := r.loop.ConversationTranscript(conversationID)
-
-	// Generate farewell + carry-forward if there's a transcript.
-	var farewell, carryForward string
-	if transcript != "" {
-		farewell, carryForward = r.generateFarewell(ctx, conversationID, transcript, "idle timeout")
-	}
-
-	// Send farewell before closing the session.
-	if farewell != "" && r.sender != nil {
-		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		if err := r.sender.SendMessage(sendCtx, sender, farewell); err != nil {
-			r.logger.Warn("failed to send farewell message",
-				"conversation_id", conversationID,
-				"error", err,
-			)
-		}
-	}
-
-	// Close session with carry-forward (archive + end + clear + new session + inject).
-	if err := r.loop.CloseSession(conversationID, "idle", carryForward); err != nil {
-		r.logger.Warn("idle session close failed",
-			"conversation_id", conversationID,
-			"error", err,
-		)
-		return false
-	}
-
-	r.logger.Info("signal session rotated (idle)",
-		"conversation_id", conversationID,
-		"farewell_sent", farewell != "",
-		"carry_forward_len", len(carryForward),
-	)
-	return true
-}
-
-// generateFarewell calls the LLM to produce a farewell message and
-// carry-forward summary from the conversation transcript. The reason
-// parameter describes why the session is closing (e.g., "idle timeout").
-func (r *signalSessionRotator) generateFarewell(ctx context.Context, conversationID, transcript, reason string) (farewell, carryForward string) {
-	genCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Compute session stats: duration and approximate message count.
-	var parts []string
-	startedAt := r.archiver.ActiveSessionStartedAt(conversationID)
-	if !startedAt.IsZero() {
-		parts = append(parts, "duration: "+time.Since(startedAt).Round(time.Minute).String())
-	}
-	if msgCount := strings.Count(transcript, "\n"); msgCount > 0 {
-		parts = append(parts, "~"+itoa(msgCount)+" messages")
-	}
-	stats := "unknown"
-	if len(parts) > 0 {
-		stats = strings.Join(parts, ", ")
-	}
-
-	// Route model selection for background generation.
-	model, _ := r.router.Route(genCtx, router.Request{
-		Query:    "session farewell generation",
-		Priority: router.PriorityBackground,
-		Hints: map[string]string{
-			router.HintMission:      "background",
-			router.HintQualityFloor: "5",
-		},
-	})
-
-	prompt := prompts.FarewellPrompt(reason, stats, transcript)
-	msgs := []llm.Message{{Role: "user", Content: prompt}}
-
-	resp, err := r.llmClient.Chat(genCtx, model, msgs, nil)
-	if err != nil {
-		r.logger.Warn("farewell generation failed",
-			"conversation_id", conversationID,
-			"model", model,
-			"error", err,
-		)
-		return "", ""
-	}
-
-	farewell, carryForward = parseFarewellResponse(resp.Message.Content)
-	return farewell, carryForward
-}
-
-// parseFarewellResponse extracts farewell and carry_forward fields from
-// the LLM's JSON response. Returns empty strings if parsing fails.
-func parseFarewellResponse(content string) (string, string) {
-	content = strings.TrimPrefix(content, "```json\n")
-	content = strings.TrimPrefix(content, "```\n")
-	content = strings.TrimSuffix(content, "\n```")
-	content = strings.TrimSpace(content)
-
-	var result struct {
-		Farewell     string `json:"farewell"`
-		CarryForward string `json:"carry_forward"`
-	}
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return "", ""
-	}
-	return result.Farewell, result.CarryForward
-}
-
-// signalChannelSender wraps a [sigcli.Client] as a [sigcli.ChannelSender]
-// for delivering farewell messages during session rotation.
+// signalChannelSender wraps a [sigcli.Client] for sending text messages
+// to a Signal recipient. Used by the loop completion dispatcher to
+// deliver detached/async loop results back to the originating channel.
 type signalChannelSender struct {
 	client *sigcli.Client
 }
@@ -1261,28 +1132,4 @@ func cloneStringMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
-}
-
-// itoa converts an int to a string without importing strconv at the top
-// level of this file. A lightweight helper for the farewell generator.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }

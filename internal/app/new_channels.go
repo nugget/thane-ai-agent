@@ -677,19 +677,6 @@ func (a *App) initChannels(s *newState) error {
 			}
 			a.onCloseErr("signal", signalClient.Close)
 
-			idleTimeout := time.Duration(a.cfg.Signal.SessionIdleMinutes) * time.Minute
-			var signalRotator sigcli.SessionRotator
-			if idleTimeout > 0 {
-				signalRotator = &signalSessionRotator{
-					loop:      a.loop,
-					llmClient: a.llmClient,
-					router:    a.rtr,
-					sender:    &signalChannelSender{client: signalClient},
-					archiver:  a.archiveAdapter,
-					logger:    a.logger,
-				}
-			}
-
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
 				Client:        signalClient,
 				Runner:        a.loop,
@@ -697,8 +684,6 @@ func (a *App) initChannels(s *newState) error {
 				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
 				HandleTimeout: a.cfg.Signal.HandleTimeout,
 				Routing:       a.cfg.Signal.Routing,
-				Rotator:       signalRotator,
-				IdleTimeout:   idleTimeout,
 				Resolver: &contactChannelBindingResolver{
 					store:            contactStore,
 					ownerContactName: a.cfg.Identity.OwnerContactName,
@@ -748,7 +733,6 @@ func (a *App) initChannels(s *newState) error {
 				"command", a.cfg.Signal.Command,
 				"account", a.cfg.Signal.Account,
 				"rate_limit", a.cfg.Signal.RateLimitPerMinute,
-				"session_idle_timeout", idleTimeout,
 			)
 			return nil
 		})
