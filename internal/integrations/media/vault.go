@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // AnalysisPage holds the data for a single media analysis markdown file.
@@ -20,11 +22,13 @@ type AnalysisPage struct {
 	Title        string
 	Channel      string
 	URL          string
+	FeedID       string
 	Published    string // YYYY-MM-DD or empty (falls back to today)
 	Topics       []string
 	TrustZone    string
 	QualityScore float64
 	AnalyzedAt   time.Time
+	ManagedRoot  string
 	Content      string // Markdown body written by the agent
 }
 
@@ -98,7 +102,10 @@ func (w *VaultWriter) WriteAnalysis(outputPath string, page *AnalysisPage) (stri
 	filePath := filepath.Join(channelDir, filename)
 
 	// Build the markdown content.
-	content := w.buildMarkdown(page)
+	content, err := w.buildMarkdown(page)
+	if err != nil {
+		return "", fmt.Errorf("build analysis markdown: %w", err)
+	}
 
 	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write analysis file: %w", err)
@@ -122,7 +129,7 @@ func (w *VaultWriter) WriteAnalysis(outputPath string, page *AnalysisPage) (stri
 }
 
 // buildMarkdown assembles the YAML frontmatter and body.
-func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
+func (w *VaultWriter) buildMarkdown(page *AnalysisPage) (string, error) {
 	var sb strings.Builder
 
 	sb.WriteString("---\n")
@@ -152,6 +159,19 @@ func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
 		analyzedAt = time.Now().UTC()
 	}
 	sb.WriteString(fmt.Sprintf("analyzed: %s\n", analyzedAt.Format(time.RFC3339)))
+	generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
+		GeneratedBy:     "media_save_analysis",
+		GeneratedAt:     analyzedAt,
+		SourceRefs:      mediaAnalysisSourceRefs(page),
+		DocumentKind:    documents.DocumentKindMediaAnalysis,
+		RefreshStrategy: documents.RefreshStrategyImmutable,
+		ManagedRoot:     page.ManagedRoot,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render generated document metadata: %w", err)
+	}
+	sb.WriteString(generatedRaw)
+	sb.WriteString("\n")
 
 	sb.WriteString("---\n\n")
 
@@ -163,7 +183,7 @@ func (w *VaultWriter) buildMarkdown(page *AnalysisPage) string {
 		sb.WriteString("\n")
 	}
 
-	return sb.String()
+	return sb.String(), nil
 }
 
 // updateChannelIndex rebuilds the _channel.md index file by scanning
@@ -203,12 +223,25 @@ func (w *VaultWriter) updateChannelIndex(channelDir, channelName, trustZone stri
 	})
 
 	var sb strings.Builder
+	updatedAt := time.Now().UTC()
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("channel: %q\n", channelName))
 	if trustZone != "" {
 		sb.WriteString(fmt.Sprintf("trust_zone: %q\n", trustZone))
 	}
-	sb.WriteString(fmt.Sprintf("updated: %s\n", time.Now().UTC().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("updated: %s\n", updatedAt.Format(time.RFC3339)))
+	generatedRaw, err := documents.RenderGeneratedFrontmatter(documents.GeneratedMetadata{
+		GeneratedBy:     "media_vault_writer",
+		GeneratedAt:     updatedAt,
+		SourceRefs:      []string{"channel:" + channelName},
+		DocumentKind:    documents.DocumentKindMediaChannelIndex,
+		RefreshStrategy: documents.RefreshStrategyReplace,
+	})
+	if err != nil {
+		return fmt.Errorf("render generated channel index metadata: %w", err)
+	}
+	sb.WriteString(generatedRaw)
+	sb.WriteString("\n")
 	sb.WriteString("---\n\n")
 	sb.WriteString(fmt.Sprintf("# %s\n\n", channelName))
 	sb.WriteString("## Analyses\n\n")
@@ -219,6 +252,17 @@ func (w *VaultWriter) updateChannelIndex(channelDir, channelName, trustZone stri
 
 	indexPath := filepath.Join(channelDir, "_channel.md")
 	return os.WriteFile(indexPath, []byte(sb.String()), 0o644)
+}
+
+func mediaAnalysisSourceRefs(page *AnalysisPage) []string {
+	refs := make([]string, 0, 2)
+	if page.URL != "" {
+		refs = append(refs, "url:"+page.URL)
+	}
+	if page.FeedID != "" {
+		refs = append(refs, "feed:"+page.FeedID)
+	}
+	return refs
 }
 
 // extractTitle reads the first markdown heading from a file.

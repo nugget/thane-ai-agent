@@ -92,6 +92,35 @@ time.
 - If a root is very high integrity or operationally sensitive, be
   deliberate about how you want it managed and edited.
 
+## Generated Documents
+
+Generated markdown should be legible to both people and the document
+index. When Thane intentionally writes an artifact into a managed root,
+the file should include document-local provenance in frontmatter:
+
+```yaml
+generated_by: "media_save_analysis"
+generated_at: "2026-04-26T18:14:15Z"
+document_kind: "media_analysis"
+refresh_strategy: "immutable"
+source_refs:
+  - "url:https://example.test/watch?v=abc123"
+  - "feed:security-news"
+managed_root: "generated"
+```
+
+These fields answer a different question than git history. Frontmatter
+tells Thane what kind of generated artifact it is, what source material
+it came from, and how future refreshes should treat it. Root-level git
+history and signature policy can still answer who changed a file and
+whether that change is trusted.
+
+Use `source_refs` for compact, typed references such as URLs,
+conversation IDs, Home Assistant entity IDs, attachment hashes, or feed
+IDs. Use `refresh_strategy` to distinguish one-shot immutable artifacts
+from generated files that are replaced, appended to, or maintained as a
+rolling window.
+
 ## Special Case: `core`
 
 The `core:` root is reserved.

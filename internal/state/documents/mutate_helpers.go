@@ -58,11 +58,17 @@ func renderFrontmatter(meta map[string][]string) string {
 		return ""
 	}
 	priority := map[string]int{
-		"title":       0,
-		"description": 1,
-		"tags":        2,
-		"created":     3,
-		"updated":     4,
+		"title":                       0,
+		"description":                 1,
+		"tags":                        2,
+		GeneratedFieldBy:              3,
+		GeneratedFieldAt:              4,
+		GeneratedFieldDocumentKind:    5,
+		GeneratedFieldRefreshStrategy: 6,
+		GeneratedFieldSourceRefs:      7,
+		GeneratedFieldManagedRoot:     8,
+		"created":                     9,
+		"updated":                     10,
 	}
 	keys := make([]string, 0, len(meta))
 	for key, values := range meta {
@@ -88,6 +94,10 @@ func renderFrontmatter(meta map[string][]string) string {
 	lines := make([]string, 0, len(keys))
 	for _, key := range keys {
 		values := meta[key]
+		if key == GeneratedFieldSourceRefs {
+			lines = appendBlockListFrontmatter(lines, key, values)
+			continue
+		}
 		switch {
 		case len(values) == 1:
 			lines = append(lines, fmt.Sprintf("%s: %s", key, strconv.Quote(values[0])))
@@ -100,6 +110,17 @@ func renderFrontmatter(meta map[string][]string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func appendBlockListFrontmatter(lines []string, key string, values []string) []string {
+	if len(values) == 0 {
+		return lines
+	}
+	lines = append(lines, key+":")
+	for _, value := range values {
+		lines = append(lines, "  - "+strconv.Quote(value))
+	}
+	return lines
 }
 
 func touchDocumentFrontmatter(frontmatterRaw string, record *DocumentRecord, now time.Time) string {
