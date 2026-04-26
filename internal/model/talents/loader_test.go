@@ -492,3 +492,70 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
+
+func TestParseFrontmatterMetadata_TagsAll(t *testing.T) {
+	cases := []struct {
+		name        string
+		raw         string
+		wantTags    []string
+		wantTagsAll []string
+	}{
+		{
+			name: "tags_all alone",
+			raw: `---
+tags_all: [owner, message_channel]
+---
+body`,
+			wantTagsAll: []string{"owner", "message_channel"},
+		},
+		{
+			name: "tags and tags_all together",
+			raw: `---
+tags: [forge, ha]
+tags_all: [owner]
+---
+body`,
+			wantTags:    []string{"forge", "ha"},
+			wantTagsAll: []string{"owner"},
+		},
+		{
+			name: "tags_all with quoted entries",
+			raw: `---
+tags_all: ["a", 'b']
+---
+body`,
+			wantTagsAll: []string{"a", "b"},
+		},
+		{
+			name: "tags_all empty list",
+			raw: `---
+tags_all: []
+---
+body`,
+			wantTagsAll: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta, _ := ParseFrontmatterMetadata(tc.raw)
+			if !equalStrings(meta.Tags, tc.wantTags) {
+				t.Errorf("Tags = %v, want %v", meta.Tags, tc.wantTags)
+			}
+			if !equalStrings(meta.TagsAll, tc.wantTagsAll) {
+				t.Errorf("TagsAll = %v, want %v", meta.TagsAll, tc.wantTagsAll)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -17,8 +17,9 @@ import (
 // TagContextAssembler builds the Capability Context section from two
 // sources for each active tag:
 //
-//  1. Tagged KB articles — markdown files with tags: frontmatter in the
-//     knowledge base directory (same pattern as talents)
+//  1. Tagged KB articles — markdown files in the knowledge base
+//     directory with `tags:` (any-of) and/or `tags_all:` (all-of)
+//     frontmatter, same pattern as talents.
 //  2. Live providers — [TagContextProvider] implementations producing
 //     fresh context each turn
 //
@@ -35,10 +36,16 @@ type TagContextAssembler struct {
 }
 
 // kbArticle is a knowledge base file with tag affinity parsed from
-// frontmatter. Reuses the talent frontmatter format: tags: [a, b].
+// frontmatter. Reuses the talent frontmatter format: `tags: [a, b]`
+// activates on any (OR), `tags_all: [a, b]` requires all (AND).
+// When both are set, the article injects only when the OR check on
+// Tags AND the AND check on TagsAll both pass — useful for articles
+// that should fire for several entry-point tags but only when paired
+// with a runtime-asserted gate (e.g., owner + signal).
 type kbArticle struct {
 	Path     string   // absolute file path
-	Tags     []string // from frontmatter
+	Tags     []string // any-of activation set, from frontmatter `tags:`
+	TagsAll  []string // all-of activation set, from frontmatter `tags_all:`
 	Kind     string   // frontmatter kind: entry_point or empty/article
 	Teaser   string   // short menu teaser for entry-point docs
 	NextTags []string // suggested next tags from an entry point
@@ -104,8 +111,9 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 	var buf strings.Builder
 
 	// Phase 1: Tagged KB articles (re-read each turn for freshness).
-	// KB articles declare their tag affinity via frontmatter
-	// (tags: [forge, ha]) and auto-load when matching tags are active.
+	// KB articles declare tag affinity via frontmatter — `tags:` for
+	// any-of activation and `tags_all:` for all-of (intersection)
+	// activation. Both compose; see [articleMatchesTags].
 	for _, article := range a.kbArticles {
 		if !articleMatchesTags(article, activeTags) {
 			continue
@@ -365,13 +373,14 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 		}
 
 		meta, _ := talents.ParseFrontmatterMetadata(string(data))
-		if len(meta.Tags) == 0 {
+		if len(meta.Tags) == 0 && len(meta.TagsAll) == 0 {
 			return nil // untagged KB articles are not auto-loaded
 		}
 
 		articles = append(articles, kbArticle{
 			Path:     path,
 			Tags:     meta.Tags,
+			TagsAll:  append([]string(nil), meta.TagsAll...),
 			Kind:     strings.TrimSpace(meta.Kind),
 			Teaser:   strings.TrimSpace(meta.Teaser),
 			NextTags: append([]string(nil), meta.NextTags...),
@@ -397,9 +406,28 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 	return articles, nil
 }
 
-// articleMatchesTags returns true if any of the article's tags are in
-// the active set.
+// articleMatchesTags reports whether an article should inject given
+// the currently active tag set. Semantics:
+//
+//   - When TagsAll is non-empty, every tag in TagsAll must be active.
+//     This is the AND gate for narrowly-scoped articles.
+//   - When Tags is non-empty, at least one tag must be active. This
+//     is the OR activation set.
+//   - When both are set, the article injects only when both checks
+//     pass — `(any of Tags) AND (all of TagsAll)`.
+//   - When only TagsAll is set (no Tags), the AND check alone gates
+//     the article.
 func articleMatchesTags(a kbArticle, activeTags map[string]bool) bool {
+	if len(a.TagsAll) > 0 {
+		for _, tag := range a.TagsAll {
+			if !activeTags[tag] {
+				return false
+			}
+		}
+		if len(a.Tags) == 0 {
+			return true
+		}
+	}
 	for _, tag := range a.Tags {
 		if activeTags[tag] {
 			return true

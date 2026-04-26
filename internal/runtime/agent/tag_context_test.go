@@ -618,3 +618,92 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 		t.Error("system prompt should contain capability context heading")
 	}
 }
+
+func TestArticleMatchesTags_OrSemantics(t *testing.T) {
+	a := kbArticle{Tags: []string{"forge", "ha"}}
+
+	if !articleMatchesTags(a, map[string]bool{"forge": true}) {
+		t.Error("expected match when forge is active")
+	}
+	if !articleMatchesTags(a, map[string]bool{"ha": true}) {
+		t.Error("expected match when ha is active")
+	}
+	if !articleMatchesTags(a, map[string]bool{"forge": true, "ha": true}) {
+		t.Error("expected match when both are active")
+	}
+	if articleMatchesTags(a, map[string]bool{"unrelated": true}) {
+		t.Error("expected no match when only an unlisted tag is active")
+	}
+}
+
+func TestArticleMatchesTags_AndSemantics(t *testing.T) {
+	// tags_all only: every tag must be active.
+	a := kbArticle{TagsAll: []string{"owner", "message_channel"}}
+
+	if articleMatchesTags(a, map[string]bool{"owner": true}) {
+		t.Error("expected no match when only owner is active")
+	}
+	if articleMatchesTags(a, map[string]bool{"message_channel": true}) {
+		t.Error("expected no match when only message_channel is active")
+	}
+	if !articleMatchesTags(a, map[string]bool{"owner": true, "message_channel": true}) {
+		t.Error("expected match when both required tags are active")
+	}
+	if !articleMatchesTags(a, map[string]bool{"owner": true, "message_channel": true, "extra": true}) {
+		t.Error("expected match with extra tags active too")
+	}
+}
+
+func TestArticleMatchesTags_OrAndCombined(t *testing.T) {
+	// (any of Tags) AND (all of TagsAll). Useful for "fires for several
+	// entry-point tags, but only when paired with a runtime gate."
+	a := kbArticle{
+		Tags:    []string{"forge", "ha"},
+		TagsAll: []string{"owner"},
+	}
+
+	cases := []struct {
+		name   string
+		active map[string]bool
+		want   bool
+	}{
+		{"or-only", map[string]bool{"forge": true}, false},
+		{"and-only", map[string]bool{"owner": true}, false},
+		{"both-via-forge", map[string]bool{"forge": true, "owner": true}, true},
+		{"both-via-ha", map[string]bool{"ha": true, "owner": true}, true},
+		{"neither", map[string]bool{"unrelated": true}, false},
+		{"all-three", map[string]bool{"forge": true, "ha": true, "owner": true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := articleMatchesTags(a, tc.active); got != tc.want {
+				t.Errorf("active=%v: got %v, want %v", tc.active, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTagContextAssembler_TagsAllArticleInjects(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "owner-signal-bundle.md"),
+		[]byte("---\ntags_all: [owner, message_channel]\n---\n# Owner-Signal Bundle"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"owner": {}, "message_channel": {}},
+		KBDir:   kbDir,
+	})
+
+	// Either tag alone: silent.
+	if got := a.Build(context.Background(), map[string]bool{"owner": true}, nil); strings.Contains(got, "Owner-Signal Bundle") {
+		t.Errorf("article injected with only owner active:\n%s", got)
+	}
+	if got := a.Build(context.Background(), map[string]bool{"message_channel": true}, nil); strings.Contains(got, "Owner-Signal Bundle") {
+		t.Errorf("article injected with only message_channel active:\n%s", got)
+	}
+
+	// Intersection: injects.
+	got := a.Build(context.Background(), map[string]bool{"owner": true, "message_channel": true}, nil)
+	if !strings.Contains(got, "Owner-Signal Bundle") {
+		t.Errorf("article missing when both required tags active:\n%s", got)
+	}
+}
