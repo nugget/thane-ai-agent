@@ -774,6 +774,7 @@ talents_dir: ./talents
 #         instructions: Be concise and focus on high-signal observations.
 #       operation: service
 #       completion: none
+#       outputs: []
 #       conditions:
 #         schedule:
 #           timezone: America/Chicago

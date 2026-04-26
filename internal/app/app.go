@@ -46,6 +46,7 @@ import (
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -87,6 +88,7 @@ type App struct {
 	archiveAdapter            *memory.ArchiveAdapter
 	wmStore                   *memory.WorkingMemoryStore
 	factStore                 *knowledge.Store
+	documentStore             *documents.Store
 	contactStore              *contacts.Store
 	opStore                   *opstate.Store
 	modelPolicyStore          *modelPolicyStore

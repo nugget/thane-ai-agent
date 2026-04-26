@@ -49,6 +49,90 @@ func TestAllowedTools_RestrictsVisibleTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeTools_AreScopedToRequestAndExecutable(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name: "replace_output_status",
+							Arguments: map[string]any{
+								"content": "fresh status",
+							},
+						},
+					}},
+				},
+				InputTokens:  42,
+				OutputTokens: 7,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  43,
+				OutputTokens: 8,
+			},
+		},
+	}
+
+	called := false
+	loop := buildTestLoop(mock, []string{"alpha_tool"})
+	resp, err := loop.Run(context.Background(), &Request{
+		Messages:     []Message{{Role: "user", Content: "update output"}},
+		AllowedTools: []string{"alpha_tool"},
+		RuntimeTools: []*tools.Tool{{
+			Name:        "replace_output_status",
+			Description: "replace status output",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{"content": map[string]any{"type": "string"}}},
+			Handler: func(_ context.Context, args map[string]any) (string, error) {
+				called = true
+				if args["content"] != "fresh status" {
+					t.Fatalf("content arg = %#v, want fresh status", args["content"])
+				}
+				return `{"ok":true}`, nil
+			},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.Content != "Done." {
+		t.Fatalf("Content = %q, want Done.", resp.Content)
+	}
+	if !called {
+		t.Fatal("runtime tool handler was not called")
+	}
+	names := toolNames(mock.calls[0].Tools)
+	if !hasName(names, "replace_output_status") {
+		t.Fatalf("first call tools = %v, want runtime tool", names)
+	}
+
+	mock2 := &mockLLM{
+		responses: []*llm.ChatResponse{{
+			Model:        "test-model",
+			Message:      llm.Message{Role: "assistant", Content: "No tools."},
+			InputTokens:  1,
+			OutputTokens: 1,
+		}},
+	}
+	loop2 := buildTestLoop(mock2, []string{"alpha_tool"})
+	_, err = loop2.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "ordinary request"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if hasName(toolNames(mock2.calls[0].Tools), "replace_output_status") {
+		t.Fatal("runtime tool leaked into unrelated request")
+	}
+}
+
 func TestExplicitSystemPrompt_ContextUsageUsesResolvedModel(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{

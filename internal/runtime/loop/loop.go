@@ -40,6 +40,8 @@ type Request struct {
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
 	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
+	// RuntimeTools are request-scoped tools visible only to this run.
+	RuntimeTools []RuntimeTool `yaml:"-" json:"-"`
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -442,6 +444,9 @@ func (l *Loop) Status() Status {
 	cfgCopy.WaitFunc = nil
 	cfgCopy.Handler = nil
 	cfgCopy.Setup = nil
+	cfgCopy.RuntimeTools = nil
+	cfgCopy.OutputContextBuilder = nil
+	cfgCopy.Outputs = cloneOutputs(l.config.Outputs)
 	if l.config.Tags != nil {
 		cfgCopy.Tags = make([]string, len(l.config.Tags))
 		copy(cfgCopy.Tags, l.config.Tags)
@@ -1290,6 +1295,15 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 	if l.requestInstructions != "" {
 		task = "Instructions: " + l.requestInstructions + "\n\n" + task
 	}
+	if len(l.config.Outputs) > 0 && l.config.OutputContextBuilder != nil {
+		outputContext, err := l.config.OutputContextBuilder(ctx, l.config.Outputs)
+		if err != nil {
+			return nil, fmt.Errorf("output context: %w", err)
+		}
+		if outputContext != "" {
+			task = outputContext + "\n\n" + task
+		}
+	}
 	if signalSummary := summarizeNotifyEnvelopes(signals); signalSummary != "" {
 		task = signalSummary + "\n\n" + task
 	}
@@ -1328,6 +1342,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 		Hints:           hints,
 		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
 		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		RuntimeTools:    cloneRuntimeTools(l.config.RuntimeTools),
 		FallbackContent: firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
 		MaxIterations:   l.requestOverride.MaxIterations,
 		MaxOutputTokens: l.requestOverride.MaxOutputTokens,

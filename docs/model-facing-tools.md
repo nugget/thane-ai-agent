@@ -193,6 +193,18 @@ When writing back to upstream systems:
 This keeps the model-friendly layer separate from the machine-authority
 layer.
 
+### Runtime-scoped tools stay runtime-scoped
+
+Some tools exist only because a specific loop run declared a narrow
+interface. Loop-declared document outputs are the current example:
+`replace_output_<name>` replaces one maintained document, while
+`append_output_<name>` appends to one journal document.
+
+Do not register these tools globally or ask the model to discover the
+underlying file path. Generate them from the loop spec, advertise them
+only for that request, and make errors name the output and document
+reference so the model can recover without broad filesystem access.
+
 ### 8. Make ambiguity explicit and bounded
 
 If multiple targets are plausible, say so and enumerate them when the

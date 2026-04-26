@@ -12,7 +12,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // --- Test helpers ---
@@ -29,28 +28,6 @@ func testConfig() Config {
 		QualityFloor:           3,
 		SupervisorQualityFloor: 8,
 	}
-}
-
-// noopRunner satisfies loop.Runner for tests that don't need real LLM calls.
-type noopRunner struct{}
-
-func (r *noopRunner) Run(_ context.Context, _ loop.RunRequest, _ loop.StreamCallback) (*loop.RunResponse, error) {
-	return &loop.RunResponse{
-		Content:      "ok",
-		Model:        "test-model",
-		InputTokens:  10,
-		OutputTokens: 5,
-	}, nil
-}
-
-// testLoopForTools creates a *loop.Loop suitable for tool handler tests.
-func testLoopForTools(t *testing.T) *loop.Loop {
-	t.Helper()
-	l, err := loop.New(loop.Config{Name: "test-metacog", Task: "test"}, loop.Deps{Runner: &noopRunner{}})
-	if err != nil {
-		t.Fatalf("loop.New: %v", err)
-	}
-	return l
 }
 
 // --- ParseConfig tests ---
@@ -112,53 +89,6 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 	}
 }
 
-// --- readStateFile tests ---
-
-func TestReadStateFile_Missing(t *testing.T) {
-	tmpDir := t.TempDir()
-	_, err := readStateFile(filepath.Join(tmpDir, "metacognitive.md"))
-	if err == nil {
-		t.Fatal("readStateFile should return error for missing file")
-	}
-}
-
-func TestReadStateFile_Present(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateContent := "## Current Sense\nEverything is calm."
-	stateFile := filepath.Join(tmpDir, "metacognitive.md")
-	if err := os.WriteFile(stateFile, []byte(stateContent), 0644); err != nil {
-		t.Fatalf("write state file: %v", err)
-	}
-
-	got, err := readStateFile(stateFile)
-	if err != nil {
-		t.Fatalf("readStateFile: %v", err)
-	}
-	if got != stateContent {
-		t.Errorf("readStateFile = %q, want %q", got, stateContent)
-	}
-}
-
-func TestReadStateFile_Truncated(t *testing.T) {
-	tmpDir := t.TempDir()
-	big := strings.Repeat("x", maxStateBytes+1000)
-	stateFile := filepath.Join(tmpDir, "metacognitive.md")
-	if err := os.WriteFile(stateFile, []byte(big), 0644); err != nil {
-		t.Fatalf("write state file: %v", err)
-	}
-
-	got, err := readStateFile(stateFile)
-	if err != nil {
-		t.Fatalf("readStateFile: %v", err)
-	}
-	if !strings.Contains(got, "truncated") {
-		t.Error("oversized state file should be truncated with marker")
-	}
-	if len(got) <= maxStateBytes {
-		t.Error("truncated content should be roughly maxStateBytes plus marker")
-	}
-}
-
 // --- appendIterationLog tests ---
 
 func TestAppendIterationLog(t *testing.T) {
@@ -176,7 +106,7 @@ func TestAppendIterationLog(t *testing.T) {
 		Model:        "llama3:8b",
 		InputTokens:  12000,
 		OutputTokens: 500,
-		ToolsUsed:    map[string]int{"get_state": 3, "update_metacognitive_state": 1},
+		ToolsUsed:    map[string]int{"get_state": 3, "replace_output_metacognitive_state": 1},
 		Elapsed:      3*time.Minute + 12*time.Second,
 		Supervisor:   false,
 		Sleep:        8 * time.Minute,
@@ -220,7 +150,7 @@ func TestAppendIterationLog(t *testing.T) {
 	if !strings.Contains(s, "get_state x3") {
 		t.Error("should contain tools with counts")
 	}
-	if !strings.Contains(s, "update_metacognitive_state") {
+	if !strings.Contains(s, "replace_output_metacognitive_state") {
 		t.Error("should contain tool names")
 	}
 	if !strings.Contains(s, "elapsed=3m12s") {
@@ -372,14 +302,14 @@ func TestFormatToolsUsed_Empty(t *testing.T) {
 
 func TestFormatToolsUsed_Sorted(t *testing.T) {
 	toolsMap := map[string]int{
-		"set_next_sleep":             1,
-		"get_state":                  3,
-		"update_metacognitive_state": 1,
+		"set_next_sleep":                     1,
+		"get_state":                          3,
+		"replace_output_metacognitive_state": 1,
 	}
 	got := formatToolsUsed(toolsMap)
 
 	// Should be sorted alphabetically.
-	if got != "[get_state x3, set_next_sleep, update_metacognitive_state]" {
+	if got != "[get_state x3, replace_output_metacognitive_state, set_next_sleep]" {
 		t.Errorf("formatToolsUsed = %q, want sorted with counts", got)
 	}
 }
@@ -412,6 +342,15 @@ func TestBuildSpec(t *testing.T) {
 	}
 	if spec.Profile.ExtraHints["source"] != "metacognitive" {
 		t.Errorf("Profile.ExtraHints[source] = %q, want metacognitive", spec.Profile.ExtraHints["source"])
+	}
+	if len(spec.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))
+	}
+	if spec.Outputs[0].Name != "metacognitive_state" {
+		t.Errorf("Outputs[0].Name = %q, want metacognitive_state", spec.Outputs[0].Name)
+	}
+	if spec.Outputs[0].Ref != "core:metacognitive.md" {
+		t.Errorf("Outputs[0].Ref = %q, want core:metacognitive.md", spec.Outputs[0].Ref)
 	}
 }
 
@@ -513,7 +452,8 @@ func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
 		StateFilePath: statePath,
 	}
 
-	// Write a state file for the TaskBuilder to read.
+	// Write a state file that the old TaskBuilder path would have read.
+	// Current content now comes from declared output context instead.
 	stateContent := "## Current Sense\nAll systems nominal."
 	if err := os.WriteFile(statePath, []byte(stateContent), 0644); err != nil {
 		t.Fatalf("write state file: %v", err)
@@ -525,8 +465,11 @@ func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
 		t.Fatalf("TaskBuilder: %v", err)
 	}
 
-	if !strings.Contains(prompt, "All systems nominal") {
-		t.Error("TaskBuilder prompt should include state file content")
+	if strings.Contains(prompt, "All systems nominal") {
+		t.Error("TaskBuilder prompt should not inline state file content")
+	}
+	if !strings.Contains(prompt, "replace_output_metacognitive_state") {
+		t.Error("TaskBuilder prompt should mention generated output tool")
 	}
 }
 
@@ -544,9 +487,11 @@ func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
 		t.Fatalf("TaskBuilder: %v", err)
 	}
 
-	// With no state file, prompt should contain the first-iteration placeholder.
-	if !strings.Contains(prompt, "does not exist yet") {
-		t.Error("TaskBuilder prompt should contain first-iteration placeholder when state file is missing")
+	if strings.Contains(prompt, "does not exist yet") {
+		t.Error("TaskBuilder prompt should not carry old first-iteration placeholder")
+	}
+	if !strings.Contains(prompt, "Declared Durable") {
+		t.Error("TaskBuilder prompt should point to declared output context")
 	}
 }
 
@@ -584,175 +529,5 @@ func TestBuildLoopConfig_PostIterate(t *testing.T) {
 
 	if !strings.Contains(s, "conversation=metacog-post-test") {
 		t.Error("PostIterate should append iteration log with conversation ID")
-	}
-}
-
-// --- update_metacognitive_state tool tests ---
-
-func TestUpdateMetacognitiveState_Valid(t *testing.T) {
-	cfg := testConfig()
-	workspace := t.TempDir()
-	theLoop := testLoopForTools(t)
-
-	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), nil)
-
-	tool := reg.Get("update_metacognitive_state")
-	if tool == nil {
-		t.Fatal("update_metacognitive_state tool not registered")
-	}
-
-	content := "## Current Sense\nEverything is calm. Garage closed. Nobody home. Monitoring continues."
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"content": content,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if !strings.Contains(result, "updated") {
-		t.Errorf("result = %q, want confirmation", result)
-	}
-
-	// Verify file was written.
-	statePath := filepath.Join(workspace, "metacognitive.md")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state file: %v", err)
-	}
-	if !strings.Contains(string(data), "Everything is calm") {
-		t.Error("state file should contain the written content")
-	}
-}
-
-func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
-	cfg := testConfig()
-	workspace := t.TempDir()
-	theLoop := testLoopForTools(t)
-
-	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), nil)
-
-	tool := reg.Get("update_metacognitive_state")
-	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
-
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"content": content,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	statePath := filepath.Join(workspace, "metacognitive.md")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state file: %v", err)
-	}
-
-	s := string(data)
-	// ConvID will be empty in unit tests (loop not running), but footer should still be present.
-	if !strings.Contains(s, "<!-- metacognitive: iteration=") {
-		t.Error("state file should contain metadata footer")
-	}
-	if !strings.Contains(s, "updated=") {
-		t.Error("state file should contain updated timestamp in footer")
-	}
-}
-
-func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
-	cfg := testConfig()
-	workspace := t.TempDir()
-	theLoop := testLoopForTools(t)
-
-	// Write an initial state file.
-	statePath := filepath.Join(workspace, "metacognitive.md")
-	original := "## Original Content\nThis was here before the update."
-	if err := os.WriteFile(statePath, []byte(original), 0o644); err != nil {
-		t.Fatalf("write initial state: %v", err)
-	}
-
-	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), nil)
-
-	tool := reg.Get("update_metacognitive_state")
-	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
-
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"content": newContent,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	// Verify .prev backup exists with original content.
-	prevPath := statePath + ".prev"
-	prevData, err := os.ReadFile(prevPath)
-	if err != nil {
-		t.Fatalf("read .prev file: %v", err)
-	}
-	if string(prevData) != original {
-		t.Errorf(".prev content = %q, want original content", string(prevData))
-	}
-}
-
-func TestUpdateMetacognitiveState_TypedNilProvenanceWriterFallsBackToFileIO(t *testing.T) {
-	cfg := testConfig()
-	workspace := t.TempDir()
-	theLoop := testLoopForTools(t)
-
-	var store ProvenanceWriter = (*panicProvenanceWriter)(nil)
-
-	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), store)
-
-	tool := reg.Get("update_metacognitive_state")
-	content := "## Current Sense\nBattery device drift noted. Watching closely and preserving local fallback path."
-
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"content": content,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if !strings.Contains(result, "updated") {
-		t.Errorf("result = %q, want local file update confirmation", result)
-	}
-
-	statePath := filepath.Join(workspace, "metacognitive.md")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state file: %v", err)
-	}
-	if !strings.Contains(string(data), "Battery device drift noted") {
-		t.Error("state file should be written via direct file I/O when provenance writer is typed nil")
-	}
-}
-
-func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
-	cfg := testConfig()
-	workspace := t.TempDir()
-	theLoop := testLoopForTools(t)
-
-	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), nil)
-
-	tool := reg.Get("update_metacognitive_state")
-
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{"empty", ""},
-		{"too_short", "Short."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := tool.Handler(context.Background(), map[string]any{
-				"content": tt.content,
-			})
-			if err == nil {
-				t.Error("handler should reject short/empty content")
-			}
-		})
 	}
 }
