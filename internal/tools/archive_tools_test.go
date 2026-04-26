@@ -7,37 +7,51 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-func newArchiveTestRegistry(t *testing.T) (*Registry, *memory.ArchiveStore) {
+// newArchiveTestRegistry sets up a unified-mode ArchiveStore over a
+// fresh SQLiteStore — the production wiring shape — and returns a
+// helper that inserts messages via bound time.Time, matching the
+// on-disk format go-sqlite3 produces in production.
+func newArchiveTestRegistry(t *testing.T) (*Registry, *memory.ArchiveStore, func(convID, sessID, role, content string, ts time.Time)) {
 	t.Helper()
-	store, err := memory.NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
+	working, err := memory.NewSQLiteStore(t.TempDir()+"/working.db", 100)
 	if err != nil {
-		t.Fatalf("NewArchiveStore: %v", err)
+		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = working.Close() })
+
+	store, err := memory.NewArchiveStoreFromDB(working.DB(), nil, nil)
+	if err != nil {
+		t.Fatalf("NewArchiveStoreFromDB: %v", err)
+	}
+
 	r := NewEmptyRegistry()
 	r.SetArchiveStore(store)
-	return r, store
-}
 
-func seedArchiveMessages(t *testing.T, store *memory.ArchiveStore, base time.Time, n int, conversationID, sessionID string) {
-	t.Helper()
-	msgs := make([]memory.Message, n)
-	for i := range msgs {
-		msgs[i] = memory.Message{
-			ID:             "msg-" + sessionID + "-" + itoa(i),
-			ConversationID: conversationID,
-			SessionID:      sessionID,
-			Role:           "user",
-			Content:        "message " + itoa(i),
-			Timestamp:      base.Add(time.Duration(i) * time.Minute),
-			ArchiveReason:  "reset",
+	insert := func(convID, sessID, role, content string, ts time.Time) {
+		t.Helper()
+		id, err := uuid.NewV7()
+		if err != nil {
+			t.Fatalf("uuid: %v", err)
+		}
+		_, err = working.DB().Exec(`
+			INSERT INTO messages (id, conversation_id, session_id, role, content, timestamp, status)
+			VALUES (?, ?, ?, ?, ?, ?, 'active')
+		`, id.String(), convID, sessID, role, content, ts)
+		if err != nil {
+			t.Fatalf("insert message: %v", err)
 		}
 	}
-	if err := store.ArchiveMessages(msgs); err != nil {
-		t.Fatalf("ArchiveMessages: %v", err)
+	return r, store, insert
+}
+
+func seedArchiveMessages(t *testing.T, insert func(convID, sessID, role, content string, ts time.Time), base time.Time, n int, conversationID, sessionID string) {
+	t.Helper()
+	for i := range n {
+		insert(conversationID, sessionID, "user", "message "+itoa(i), base.Add(time.Duration(i)*time.Minute))
 	}
 }
 
@@ -64,10 +78,10 @@ func itoa(i int) string {
 }
 
 func TestArchiveRangeTool_TimeWindow(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, _, insert := newArchiveTestRegistry(t)
 	now := time.Now()
 	base := now.Add(-30 * time.Minute)
-	seedArchiveMessages(t, store, base, 10, "conv-1", "sess-1")
+	seedArchiveMessages(t, insert, base, 10, "conv-1", "sess-1")
 
 	tool := r.Get("archive_range")
 	if tool == nil {
@@ -103,10 +117,10 @@ func TestArchiveRangeTool_TimeWindow(t *testing.T) {
 }
 
 func TestArchiveRangeTool_MinMessagesFloor(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, _, insert := newArchiveTestRegistry(t)
 	now := time.Now()
 	base := now.Add(-2 * time.Hour)
-	seedArchiveMessages(t, store, base, 8, "conv-1", "sess-1")
+	seedArchiveMessages(t, insert, base, 8, "conv-1", "sess-1")
 
 	tool := r.Get("archive_range")
 	out, err := tool.Handler(context.Background(), map[string]any{
@@ -135,10 +149,10 @@ func TestArchiveRangeTool_MinMessagesFloor(t *testing.T) {
 }
 
 func TestArchiveRangeTool_MaxMessagesCap(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, _, insert := newArchiveTestRegistry(t)
 	now := time.Now()
 	base := now.Add(-30 * time.Minute)
-	seedArchiveMessages(t, store, base, 20, "conv-1", "sess-1")
+	seedArchiveMessages(t, insert, base, 20, "conv-1", "sess-1")
 
 	tool := r.Get("archive_range")
 	out, err := tool.Handler(context.Background(), map[string]any{
@@ -164,10 +178,10 @@ func TestArchiveRangeTool_MaxMessagesCap(t *testing.T) {
 }
 
 func TestArchiveRangeTool_RFC3339Input(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, _, insert := newArchiveTestRegistry(t)
 	now := time.Now()
 	base := now.Add(-1 * time.Hour)
-	seedArchiveMessages(t, store, base, 5, "conv-1", "sess-1")
+	seedArchiveMessages(t, insert, base, 5, "conv-1", "sess-1")
 
 	tool := r.Get("archive_range")
 	out, err := tool.Handler(context.Background(), map[string]any{
@@ -184,7 +198,7 @@ func TestArchiveRangeTool_RFC3339Input(t *testing.T) {
 }
 
 func TestArchiveRangeTool_InvalidTime(t *testing.T) {
-	r, _ := newArchiveTestRegistry(t)
+	r, _, _ := newArchiveTestRegistry(t)
 	tool := r.Get("archive_range")
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"min_time": "yesterday",
@@ -198,7 +212,7 @@ func TestArchiveRangeTool_InvalidTime(t *testing.T) {
 }
 
 func TestArchiveSessionsTool_JSONOutput(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, store, _ := newArchiveTestRegistry(t)
 
 	sess, err := store.StartSession("conv-1")
 	if err != nil {
@@ -232,22 +246,15 @@ func TestArchiveSessionsTool_JSONOutput(t *testing.T) {
 }
 
 func TestArchiveSessionTranscriptTool_JSONOutput(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, store, insert := newArchiveTestRegistry(t)
 
 	now := time.Now()
 	sess, err := store.StartSession("conv-1")
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
 	}
-	msgs := []memory.Message{
-		{ID: "m1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user",
-			Content: "hello", Timestamp: now.Add(-10 * time.Minute), ArchiveReason: "manual"},
-		{ID: "m2", ConversationID: "conv-1", SessionID: sess.ID, Role: "assistant",
-			Content: "hi", Timestamp: now.Add(-9 * time.Minute), ArchiveReason: "manual"},
-	}
-	if err := store.ArchiveMessages(msgs); err != nil {
-		t.Fatalf("ArchiveMessages: %v", err)
-	}
+	insert("conv-1", sess.ID, "user", "hello", now.Add(-10*time.Minute))
+	insert("conv-1", sess.ID, "assistant", "hi", now.Add(-9*time.Minute))
 
 	tool := r.Get("archive_session_transcript")
 	out, err := tool.Handler(context.Background(), map[string]any{
@@ -272,7 +279,7 @@ func TestArchiveSessionTranscriptTool_JSONOutput(t *testing.T) {
 }
 
 func TestArchiveSessionTranscriptTool_ShortIDPrefix(t *testing.T) {
-	r, store := newArchiveTestRegistry(t)
+	r, store, _ := newArchiveTestRegistry(t)
 
 	sess, err := store.StartSession("conv-1")
 	if err != nil {

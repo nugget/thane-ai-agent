@@ -2119,13 +2119,15 @@ func (s *ArchiveStore) GetMessagesInRange(opts RangeOptions) ([]Message, bool, e
 func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Time, limit int) ([]Message, error) {
 	cols := s.msgSelectCols()
 	table := s.msgTableName
-	// Format bounds with the callsite's zone offset (matches the
-	// existing convention in this package — see GetMessagesByTimeRange
-	// and ArchiveMessages, which also format RFC3339Nano without
-	// normalizing zone). Cross-zone correctness is a known gap that
-	// would require a stored-timestamp normalization migration.
-	fromStr := from.Format(time.RFC3339Nano)
-	toStr := to.Format(time.RFC3339Nano)
+	// Bind time.Time directly rather than pre-formatting as
+	// RFC3339Nano. The unified messages table stores timestamps as
+	// they are emitted by go-sqlite3's time.Time → TEXT conversion,
+	// which uses a space separator ("2026-04-25 10:00:00..."), not a
+	// T separator. Lexically " " (0x20) < "T" (0x54), so comparing
+	// stored space-form rows against an RFC3339Nano-formatted bound
+	// silently excludes the lower edge of the window. Binding
+	// time.Time round-trips through the same driver format as the
+	// stored values, keeping the lexical compare correct.
 	var query string
 	var args []any
 	if conversationID != "" {
@@ -2136,7 +2138,7 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Ti
 			ORDER BY timestamp DESC
 			LIMIT ?
 		`, cols, table)
-		args = []any{conversationID, fromStr, toStr, limit}
+		args = []any{conversationID, from, to, limit}
 	} else {
 		query = fmt.Sprintf(`
 			SELECT %s
@@ -2145,7 +2147,7 @@ func (s *ArchiveStore) queryMessagesDesc(conversationID string, from, to time.Ti
 			ORDER BY timestamp DESC
 			LIMIT ?
 		`, cols, table)
-		args = []any{fromStr, toStr, limit}
+		args = []any{from, to, limit}
 	}
 	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
