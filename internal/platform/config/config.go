@@ -1044,10 +1044,10 @@ type AgentConfig struct {
 // DelegateConfig configures the thane_delegate tool's split-model
 // execution behavior.
 type DelegateConfig struct {
-	// Profiles contains per-profile overrides. The map key is the
-	// profile name (e.g., "general", "ha"). Only fields that are set
-	// override the builtin defaults — omitted fields keep their
-	// compiled-in values.
+	// Profiles contains per-profile budget and timeout overrides. The map
+	// key is the compatibility profile name (e.g., "general", "ha"). Only
+	// fields that are set override the builtin defaults — omitted fields
+	// keep their compiled-in values.
 	Profiles map[string]DelegateProfileConfig `yaml:"profiles"`
 }
 

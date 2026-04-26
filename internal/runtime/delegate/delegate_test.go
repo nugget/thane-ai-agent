@@ -88,6 +88,10 @@ func newTestRegistry() *tools.Registry {
 			return "this should never be called by a delegate", nil
 		},
 	})
+	r.SetTagIndex(map[string][]string{
+		"ha":  {"get_state"},
+		"web": {"web_search"},
+	})
 	return r
 }
 
@@ -235,7 +239,7 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
-	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "Be concise", []string{"homeassistant"}, nil)
+	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "Be concise", nil, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -266,8 +270,8 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if captured.Model != "spark/gpt-oss:20b" {
 		t.Fatalf("captured Model = %q, want spark/gpt-oss:20b", captured.Model)
 	}
-	if captured.SystemPrompt == "" {
-		t.Fatal("SystemPrompt = empty, want delegate prompt")
+	if captured.SystemPrompt != "" {
+		t.Fatalf("SystemPrompt = %q, want loop-built prompt", captured.SystemPrompt)
 	}
 	if len(captured.Messages) != 1 || !strings.Contains(captured.Messages[0].Content, "Check the office light") || !strings.Contains(captured.Messages[0].Content, "Be concise") {
 		t.Fatalf("Messages = %#v", captured.Messages)
@@ -279,7 +283,13 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 		t.Fatalf("delegation gating hint = %q, want disabled", captured.Hints[router.HintDelegationGating])
 	}
 	if captured.SkipTagFilter {
-		t.Fatal("SkipTagFilter = true, want false for explicit tag-scoped delegate")
+		t.Fatal("SkipTagFilter = true, want false for ha profile default tag")
+	}
+	if !containsString(captured.InitialTags, "ha") {
+		t.Fatalf("InitialTags = %#v, want ha", captured.InitialTags)
+	}
+	if len(captured.AllowedTools) != 0 {
+		t.Fatalf("AllowedTools = %#v, want loop tag filtering", captured.AllowedTools)
 	}
 	if captured.UsageRole != "delegate" || captured.UsageTaskName != "ha" {
 		t.Fatalf("usage role/task = %q/%q", captured.UsageRole, captured.UsageTaskName)
@@ -317,11 +327,40 @@ func TestExecute_LoopBackedInheritsCallerTags(t *testing.T) {
 	if containsString(captured.InitialTags, "message_channel") {
 		t.Fatalf("InitialTags = %#v, should not inherit message_channel", captured.InitialTags)
 	}
-	if !containsString(captured.AllowedTools, "web_search") {
-		t.Fatalf("AllowedTools = %#v, want web_search", captured.AllowedTools)
+	if len(captured.AllowedTools) != 0 {
+		t.Fatalf("AllowedTools = %#v, want loop tag filtering", captured.AllowedTools)
 	}
-	if containsString(captured.AllowedTools, "send_reaction") {
-		t.Fatalf("AllowedTools = %#v, should not include send_reaction", captured.AllowedTools)
+}
+
+func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, nil, executionOptions{
+		inheritCallerTags: false,
+		explicitTagScope:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, want := range []string{"get_state", "web_search", "thane_delegate"} {
+		if !containsString(captured.ExcludeTools, want) {
+			t.Fatalf("ExcludeTools = %#v, want %s", captured.ExcludeTools, want)
+		}
 	}
 }
 
@@ -545,7 +584,7 @@ func TestExecute_ContextCancellation(t *testing.T) {
 }
 
 func TestExecute_HAProfileExcludesNonHATools(t *testing.T) {
-	// The HA profile should not have web_search or thane_delegate.
+	// The HA compatibility profile scopes through the ha capability tag.
 	mock := &mockLLMClient{
 		responses: []*llm.ChatResponse{
 			{
@@ -583,7 +622,7 @@ func TestExecute_HAProfileExcludesNonHATools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	// The tool call should fail because web_search is not in the HA profile.
+	// The tool call should fail because web_search is not in the ha tag scope.
 	// The delegate should still complete with the error in the tool result.
 	if result.Content != "Failed to search." {
 		t.Errorf("Content = %q, want %q", result.Content, "Failed to search.")
@@ -709,6 +748,9 @@ func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
 	if ha.RouterHints[router.HintPreferSpeed] != "true" {
 		t.Errorf("ha profile HintPreferSpeed = %q, want %q",
 			ha.RouterHints[router.HintPreferSpeed], "true")
+	}
+	if len(ha.DefaultTags) != 1 || ha.DefaultTags[0] != "ha" {
+		t.Fatalf("ha profile DefaultTags = %#v, want [ha]", ha.DefaultTags)
 	}
 }
 
@@ -1853,6 +1895,34 @@ func TestExecute_CanDisableCallerTagInheritance(t *testing.T) {
 	}
 }
 
+func TestExecute_ExplicitTagsOverrideProfileDefaultTags(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Web only."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+	reg := taggedDelegateTestRegistry()
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+
+	_, err := exec.Execute(context.Background(), "Search only", "ha", "", []string{"web"}, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	toolNames := toolNameSet(mock.calls[0].Tools)
+	if !toolNames["web_search"] {
+		t.Fatalf("web_search should be available with explicit web scope: %v", toolNames)
+	}
+	if toolNames["get_state"] {
+		t.Fatalf("get_state should not be added from ha profile when explicit tags are provided: %v", toolNames)
+	}
+}
+
 func TestExecute_NonDelegableExplicitTagsDoNotFallBackToProfile(t *testing.T) {
 	mock := &mockLLMClient{
 		responses: []*llm.ChatResponse{
@@ -1867,7 +1937,7 @@ func TestExecute_NonDelegableExplicitTagsDoNotFallBackToProfile(t *testing.T) {
 	reg := taggedDelegateTestRegistry()
 	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
 
-	_, err := exec.Execute(context.Background(), "React from a delegate", "general", "", []string{"message_channel"}, nil)
+	_, err := exec.Execute(context.Background(), "React from a delegate", "ha", "", []string{"message_channel"}, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1955,8 +2025,8 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
-	// When tags is nil, profile-based filtering should apply (existing behavior).
+func TestExecute_TagScoping_NilUsesProfileDefaultTags(t *testing.T) {
+	// When tags is nil, the ha compatibility profile applies its default tag.
 	mock := &mockLLMClient{
 		responses: []*llm.ChatResponse{
 			{
@@ -1977,7 +2047,7 @@ func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
 		t.Errorf("Content = %q, want %q", result.Content, "HA result.")
 	}
 
-	// The HA profile has a fixed AllowedTools list. Verify only those appear.
+	// The ha default tag scopes the visible tool surface.
 	if len(mock.calls) < 1 {
 		t.Fatal("expected at least 1 LLM call")
 	}
@@ -1991,14 +2061,14 @@ func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
 		}
 	}
 
-	// web_search and thane_delegate should NOT be in HA profile.
+	// web_search and thane_delegate should NOT be in the ha scope.
 	if toolNames["web_search"] {
 		t.Error("web_search should not appear in HA profile tool definitions")
 	}
 	if toolNames["thane_delegate"] {
 		t.Error("thane_delegate should not appear in HA profile tool definitions")
 	}
-	// get_state should be in HA profile.
+	// get_state should be in the ha scope.
 	if !toolNames["get_state"] {
 		t.Error("get_state should appear in HA profile tool definitions")
 	}

@@ -1,5 +1,11 @@
 package prompts
 
+// DelegateRunInstructions is the reusable execution contract for spawned
+// delegate loops and the legacy delegate runner.
+const DelegateRunInstructions = `Complete the assigned task using the available tools. Report findings clearly and concisely.
+
+Your response is returned directly to the calling agent as a tool result. If you called tools and received data, include the relevant data in your final text response. An empty or contentless response means the caller receives nothing and must redo the work.`
+
 // DelegateToolDescription is the LLM-facing description for the thane_delegate tool.
 const DelegateToolDescription = `Delegate a concrete task to a smaller, cheaper model for execution. The delegate has access to tools and can iterate, but operates without your conversation history or personality.
 
@@ -22,6 +28,6 @@ BAD delegate tasks (keep these yourself):
 
 Use the guidance field to steer execution: provide entity names, file paths, specific focus areas, or output format preferences. More specific guidance means fewer wasted iterations.
 
-Delegates inherit the caller's elective capability tags by default. Set inherit_caller_tags=false only when you need a strict, fresh tool scope.
+Use tags to scope the delegate's capability surface. Delegates inherit the caller's elective capability tags by default. Set inherit_caller_tags=false only when you need a strict, fresh tool scope.
 
 Use mode="async" when you want the delegate to keep running in the background and report the result back into the current conversation later instead of blocking for a direct reply.`
