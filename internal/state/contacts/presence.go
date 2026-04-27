@@ -12,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // PersonPresenceContext is the JSON structure emitted for each tracked
@@ -72,11 +73,12 @@ type StateGetter interface {
 // the room. Observers are called outside the tracker's lock.
 type RoomObserver func(entityID, room, source string)
 
-// PresenceTracker maintains in-memory presence state for configured person
-// entities and provides a context block for system prompt injection.
-// It implements both the StateWatchHandler function signature (for
-// receiving WebSocket state changes) and the agent.ContextProvider
-// interface (for context injection).
+// PresenceTracker maintains in-memory presence state for configured
+// person entities and provides a context block for system prompt
+// injection. It implements both the StateWatchHandler function
+// signature (for receiving WebSocket state changes) and the
+// [agent.TagContextProvider] interface (registered via
+// RegisterAlwaysContextProvider).
 type PresenceTracker struct {
 	people    map[string]*Person // entity_id → Person
 	order     []string           // insertion order for deterministic output
@@ -221,14 +223,15 @@ func (t *PresenceTracker) HandleStateChange(entityID, _, newState string) {
 	}
 }
 
-// GetContext returns a formatted presence block for injection into the
+// TagContext returns a formatted presence block for injection into the
 // agent's system prompt. Returns an empty string if no entities are
-// tracked. This method satisfies the agent.ContextProvider interface.
+// tracked. Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
 //
 // People with known state are formatted as compact JSON with delta-
 // annotated timestamps following #458 conventions. People with unknown
 // or unset state are rendered as plain markdown text.
-func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error) {
+func (t *PresenceTracker) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 

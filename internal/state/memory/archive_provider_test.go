@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
@@ -58,7 +59,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:switch.pool_heater"})
-		got, err := p.GetContext(ctx, "")
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -80,7 +81,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		got, err := p.GetContext(context.Background(), "")
+		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -100,7 +101,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		got, err := p.GetContext(context.Background(), "pool heater schedule")
+		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "pool heater schedule"})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -117,9 +118,9 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		longMsg := strings.Repeat("word ", 30) // 150 chars
-		got, err := p.GetContext(context.Background(), longMsg)
+		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: longMsg})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
 		if got != "" {
 			t.Errorf("expected empty for long message, got %q", got)
@@ -133,7 +134,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		got, err := p.GetContext(context.Background(), "line one\nline two")
+		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "line one\nline two"})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -147,7 +148,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:sensor.fake"})
-		got, err := p.GetContext(ctx, "")
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -161,7 +162,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
-		got, err := p.GetContext(ctx, "")
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("expected nil error on soft fail, got: %v", err)
 		}
@@ -183,7 +184,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 5, 200, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
-		got, err := p.GetContext(ctx, "")
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -204,7 +205,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			"zone:kitchen",
 			"contact:dan@example.com",
 		})
-		_, _ = p.GetContext(ctx, "")
+		_, _ = p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 
 		// Verify all prefixes are stripped.
 		q := mock.lastQuery
@@ -236,7 +237,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			"entity:light.office",
 			"entity:light.office",
 		})
-		_, _ = p.GetContext(ctx, "")
+		_, _ = p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 
 		if mock.lastQuery != "light.office" {
 			t.Errorf("query = %q, want deduplicated 'light.office'", mock.lastQuery)
@@ -248,7 +249,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 7, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:foo"})
-		_, _ = p.GetContext(ctx, "")
+		_, _ = p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 
 		if mock.lastLimit != 7 {
 			t.Errorf("limit = %d, want 7", mock.lastLimit)
@@ -271,7 +272,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:meaning.of.life"})
-		got, err := p.GetContext(ctx, "")
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
 		}
@@ -295,7 +296,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:test"})
-		got, _ := p.GetContext(ctx, "")
+		got, _ := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if !strings.Contains(got, "**[assistant] Important finding.**") {
 			t.Errorf("matched message should be bolded, got:\n%s", got)
 		}

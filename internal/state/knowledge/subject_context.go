@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // subjectCtxKey is the context key for subject-keyed fact injection.
@@ -34,7 +36,7 @@ func SubjectsFromContext(ctx context.Context) []string {
 // context before the model sees the triggering event.
 //
 // Subject keys are passed through the context via [WithSubjects].
-// When no subjects are present in the context, GetContext returns empty.
+// When no subjects are present in the context, TagContext returns empty.
 type SubjectContextProvider struct {
 	store    *Store
 	maxFacts int
@@ -57,13 +59,14 @@ func (p *SubjectContextProvider) SetMaxFacts(n int) {
 	p.maxFacts = n
 }
 
-// GetContext returns subject-keyed facts formatted for the system
-// prompt. Implements the agent.ContextProvider interface.
+// TagContext returns subject-keyed facts formatted for the system
+// prompt. Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
 //
 // Subjects are extracted from the context via [SubjectsFromContext].
-// If no subjects are present, returns empty. The userMessage parameter
-// is unused — subject matching is purely key-based, not semantic.
-func (p *SubjectContextProvider) GetContext(ctx context.Context, _ string) (string, error) {
+// If no subjects are present, returns empty. The request is unused —
+// subject matching is purely key-based, not semantic.
+func (p *SubjectContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	subjects := SubjectsFromContext(ctx)
 	if len(subjects) == 0 {
 		return "", nil

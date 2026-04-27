@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func TestSubjectsContext(t *testing.T) {
@@ -152,7 +153,7 @@ func TestSubjectContextProvider_GetContext(t *testing.T) {
 				ctx = WithSubjects(ctx, tt.subjects)
 			}
 
-			got, err := provider.GetContext(ctx, "ignored")
+			got, err := provider.TagContext(ctx, agentctx.ContextRequest{UserMessage: "ignored"})
 			if err != nil {
 				t.Fatalf("GetContext: %v", err)
 			}
@@ -334,7 +335,7 @@ func TestGetContext_WithRef(t *testing.T) {
 	provider := NewSubjectContextProvider(store, slog.Default())
 	ctx := WithSubjects(context.Background(), []string{"entity:light.office"})
 
-	got, err := provider.GetContext(ctx, "ignored")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{UserMessage: "ignored"})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -359,7 +360,7 @@ func TestGetContext_WithoutRef_NoAnnotation(t *testing.T) {
 	provider := NewSubjectContextProvider(store, slog.Default())
 	ctx := WithSubjects(context.Background(), []string{"entity:light.office"})
 
-	got, err := provider.GetContext(ctx, "ignored")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{UserMessage: "ignored"})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}

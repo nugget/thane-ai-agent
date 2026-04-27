@@ -109,6 +109,12 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		Logger:   logger.With("component", "tag_context"),
 	})
 
+	// Wire the assembler before tag context providers register so the
+	// forge registration below (and any pending always/tag providers
+	// staged during initAwareness) flush directly into the assembler
+	// instead of staying in the pending bucket.
+	a.loop.SetTagContextAssembler(tagCtxAssembler)
+
 	// Register forge as a tag context provider so its account config
 	// and recent operations appear/disappear with the forge capability
 	// tag.
@@ -119,7 +125,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// Build manifest entries with enriched context info.
 	kbCounts := tagCtxAssembler.KBArticleTags()
 	menuHints := tagCtxAssembler.KBMenuHints()
-	liveProviders := a.loop.TagContextProviders()
+	liveProviders := tagCtxAssembler.TaggedProviders()
 
 	// Discover ad-hoc tags from KB articles and talents that aren't in
 	// the config. These can be activated at runtime to load their

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	_ "modernc.org/sqlite"
 )
 
@@ -60,7 +61,7 @@ func setupTestProvider(t *testing.T, ha StateGetter) (*WatchlistProvider, *Watch
 func TestProvider_EmptyWatchlist(t *testing.T) {
 	p, _ := setupTestProvider(t, &fakeHA{})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestProvider_SingleEntity(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestProvider_MultipleEntities(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -306,7 +307,7 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // ContextProvider provides relevant facts as context for the system prompt.
@@ -34,9 +36,11 @@ func (p *ContextProvider) SetMinScore(score float32) {
 	p.minScore = score
 }
 
-// GetContext returns relevant facts formatted for the system prompt.
-// Implements agent.ContextProvider interface.
-func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (string, error) {
+// TagContext returns relevant facts formatted for the system prompt.
+// Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
+func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
+	userMessage := req.UserMessage
 	if userMessage == "" {
 		return "", nil
 	}

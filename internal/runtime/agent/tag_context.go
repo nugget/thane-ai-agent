@@ -7,25 +7,40 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
-// TagContextAssembler builds the Capability Context section from two
-// sources for each active tag:
+// TagContextAssembler builds the Capability Context section from
+// three sources, walked in one ordered pass per call:
 //
 //  1. Tagged KB articles — markdown files in the knowledge base
 //     directory with `tags:` (any-of) and/or `tags_all:` (all-of)
-//     frontmatter, same pattern as talents.
-//  2. Live providers — [TagContextProvider] implementations producing
-//     fresh context each turn
+//     frontmatter, same pattern as talents. Filtered by ActiveTags.
+//  2. Tagged live providers — [TagContextProvider] implementations
+//     registered against a specific capability tag via
+//     [Loop.RegisterTagContextProvider]. Filtered by ActiveTags.
+//  3. Always-on providers — [TagContextProvider] implementations
+//     registered via [Loop.RegisterAlwaysContextProvider]. Gated by
+//     ContextRequest.IncludeAlways: main loop runs include them,
+//     delegate runs do not.
 //
-// Both the main agent loop and delegate executor share a single assembler
-// to avoid duplicating the assembly logic. The assembler is safe for
-// concurrent use after construction.
+// All three sources share one 64 KB aggregate cap, one truncation
+// marker, and one unified [Build] method — there is no parallel
+// always-bucket walker. Tagged vs always is encoded as where each
+// source registered, not as a separate code path. KB articles and
+// explicit context refs flow through the optional managed-root
+// signature verifier; always-providers do not (they return content
+// the agent itself wrote, not disk-managed material).
+//
+// Both the main agent loop and delegate executor share a single
+// assembler. The assembler is safe for concurrent use after
+// construction.
 type TagContextAssembler struct {
 	capTags  map[string]config.CapabilityTagConfig
 	kbDir    string
@@ -36,6 +51,10 @@ type TagContextAssembler struct {
 	}
 	haInject homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger   *slog.Logger
+
+	mu              sync.Mutex
+	tagProviders    map[string]TagContextProvider
+	alwaysProviders []TagContextProvider
 }
 
 // kbArticle is a knowledge base file with tag affinity parsed from
@@ -117,27 +136,87 @@ func (a *TagContextAssembler) loadKBArticles() []kbArticle {
 	return articles
 }
 
-// Build assembles tag context for the given active tags. Providers
-// supply live-computed context and must be passed per-call (typically
-// a snapshot from [Loop.TagContextProviders]) to avoid data races.
-// The ctx should carry any timeout (e.g., the 2-second HA deadline).
-// Returns empty string when no content is produced.
-func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]bool, providers map[string]TagContextProvider) string {
+// RegisterTaggedProvider associates a provider with one capability
+// tag. The provider fires when that tag is active in a Build call.
+// Idempotent on tag — last registration wins.
+func (a *TagContextAssembler) RegisterTaggedProvider(tag string, p TagContextProvider) {
+	if a == nil || p == nil {
+		return
+	}
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tagProviders == nil {
+		a.tagProviders = make(map[string]TagContextProvider)
+	}
+	a.tagProviders[tag] = p
+}
+
+// RegisterAlwaysProvider adds a provider to the always-on bucket.
+// Always-providers fire on every main-loop run but are suppressed for
+// delegate runs that pass IncludeAlways=false. Order is preserved
+// across registrations.
+func (a *TagContextAssembler) RegisterAlwaysProvider(p TagContextProvider) {
+	if a == nil || p == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.alwaysProviders = append(a.alwaysProviders, p)
+}
+
+// TaggedProviders returns a snapshot of the registered tag→provider
+// map. Used by callers that need to inspect what's wired (e.g., the
+// capability surface builder).
+func (a *TagContextAssembler) TaggedProviders() map[string]TagContextProvider {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.tagProviders) == 0 {
+		return nil
+	}
+	out := make(map[string]TagContextProvider, len(a.tagProviders))
+	for k, v := range a.tagProviders {
+		out[k] = v
+	}
+	return out
+}
+
+// Build assembles tag context for the request. The single internal
+// pipeline walks three sources in order — KB articles, tagged
+// providers, always-on providers — sharing one 64 KB aggregate cap
+// and one truncation marker. Always-on providers are gated by
+// req.IncludeAlways; main loop runs include them, delegate runs do
+// not. Returns empty string when no source produces content.
+func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextRequest) string {
 	if a == nil {
 		return ""
 	}
 
+	a.mu.Lock()
+	tagProviders := make(map[string]TagContextProvider, len(a.tagProviders))
+	for k, v := range a.tagProviders {
+		tagProviders[k] = v
+	}
+	alwaysProviders := append([]TagContextProvider(nil), a.alwaysProviders...)
+	a.mu.Unlock()
+
 	seen := make(map[string]bool)
 	var buf strings.Builder
 
-	// Phase 1: Tagged KB articles (re-scanned and re-read each turn
-	// for freshness — frontmatter edits, additions, and deletions all
-	// propagate without a restart). Articles declare tag affinity via
+	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
+	// so frontmatter edits, additions, and deletions propagate
+	// without a restart. Articles declare tag affinity via
 	// frontmatter: `tags:` for any-of activation, `tags_all:` for
 	// all-of activation. Both compose; see [articleMatchesTags].
 	articles := a.loadKBArticles()
 	for _, article := range articles {
-		if !articleMatchesTags(article, activeTags) {
+		if !articleMatchesTags(article, req.ActiveTags) {
 			continue
 		}
 		if seen[article.Path] {
@@ -167,16 +246,16 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		}
 	}
 
-	// Phase 2: Live providers.
-	for tag, active := range activeTags {
+	// Source 2: Tagged live providers, filtered by ActiveTags.
+	for tag, active := range req.ActiveTags {
 		if !active {
 			continue
 		}
-		p, ok := providers[tag]
+		p, ok := tagProviders[tag]
 		if !ok {
 			continue
 		}
-		content, err := p.TagContext(ctx)
+		content, err := p.TagContext(ctx, req)
 		if err != nil {
 			a.logger.Warn("tag context provider failed",
 				"tag", tag, "error", err)
@@ -188,8 +267,31 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		a.appendContent(&buf, []byte(content))
 		if buf.Len() >= maxTagContextBytes {
 			a.logger.Warn("tag context aggregate limit reached",
-				"tag", tag, "source", "provider", "limit_bytes", maxTagContextBytes)
+				"tag", tag, "source", "tagged_provider", "limit_bytes", maxTagContextBytes)
 			return buf.String()
+		}
+	}
+
+	// Source 3: Always-on providers, gated by IncludeAlways. Delegate
+	// runs pass IncludeAlways=false to skip ambient context (presence,
+	// episodic memory, working memory, notification history, etc.)
+	// that the bounded child task does not need.
+	if req.IncludeAlways {
+		for _, p := range alwaysProviders {
+			content, err := p.TagContext(ctx, req)
+			if err != nil {
+				a.logger.Warn("always context provider failed", "error", err)
+				continue
+			}
+			if content == "" {
+				continue
+			}
+			a.appendContent(&buf, []byte(content))
+			if buf.Len() >= maxTagContextBytes {
+				a.logger.Warn("tag context aggregate limit reached",
+					"source", "always_provider", "limit_bytes", maxTagContextBytes)
+				return buf.String()
+			}
 		}
 	}
 

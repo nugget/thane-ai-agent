@@ -11,6 +11,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -445,7 +446,7 @@ type mockTagProvider struct {
 	err     error
 }
 
-func (m *mockTagProvider) TagContext(_ context.Context) (string, error) {
+func (m *mockTagProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	return m.content, m.err
 }
 
@@ -466,10 +467,8 @@ func TestTagContextAssembler_LiveProvider(t *testing.T) {
 		},
 	})
 
-	providers := map[string]TagContextProvider{
-		"forge": &mockTagProvider{content: `{"accounts":["github-primary"]}`},
-	}
-	result := a.Build(context.Background(), map[string]bool{"forge": true}, providers)
+	a.RegisterTaggedProvider("forge", &mockTagProvider{content: `{"accounts":["github-primary"]}`})
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 
 	if !strings.Contains(result, "github-primary") {
 		t.Error("expected live provider content")
@@ -484,11 +483,9 @@ func TestTagContextAssembler_ProviderError(t *testing.T) {
 		},
 	})
 
-	providers := map[string]TagContextProvider{
-		"forge": &mockTagProvider{err: fmt.Errorf("connection failed")},
-		"ha":    &mockTagProvider{content: "ha context ok"},
-	}
-	result := a.Build(context.Background(), map[string]bool{"forge": true, "ha": true}, providers)
+	a.RegisterTaggedProvider("forge", &mockTagProvider{err: fmt.Errorf("connection failed")})
+	a.RegisterTaggedProvider("ha", &mockTagProvider{content: "ha context ok"})
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true, "ha": true}})
 
 	if strings.Contains(result, "connection failed") {
 		t.Error("provider error should not appear in output")
@@ -513,7 +510,7 @@ func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
 		KBDir:   kbDir,
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 
 	if !strings.Contains(result, "Forge Conventions") {
 		t.Error("expected tagged KB article content")
@@ -544,7 +541,7 @@ func TestTagContextAssembler_SkipsKBArticleRejectedByVerifier(t *testing.T) {
 		Logger:   slog.Default(),
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 	if strings.Contains(result, "SIGNED_ONLY_CONTEXT") {
 		t.Fatalf("rejected KB article leaked into tag context:\n%s", result)
 	}
@@ -562,10 +559,8 @@ func TestTagContextAssembler_KBAndLiveProvider(t *testing.T) {
 		KBDir: kbDir,
 	})
 
-	providers := map[string]TagContextProvider{
-		"forge": &mockTagProvider{content: "LIVE_CONTENT"},
-	}
-	result := a.Build(context.Background(), map[string]bool{"forge": true}, providers)
+	a.RegisterTaggedProvider("forge", &mockTagProvider{content: "LIVE_CONTENT"})
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 
 	for _, want := range []string{"KB_CONTENT", "LIVE_CONTENT"} {
 		if !strings.Contains(result, want) {
@@ -576,7 +571,7 @@ func TestTagContextAssembler_KBAndLiveProvider(t *testing.T) {
 
 func TestTagContextAssembler_NilAssembler(t *testing.T) {
 	var a *TagContextAssembler
-	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 	if result != "" {
 		t.Errorf("nil assembler should return empty, got %q", result)
 	}
@@ -724,15 +719,15 @@ func TestTagContextAssembler_TagsAllArticleInjects(t *testing.T) {
 	})
 
 	// Either tag alone: silent.
-	if got := a.Build(context.Background(), map[string]bool{"owner": true}, nil); strings.Contains(got, "Owner-Signal Bundle") {
+	if got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"owner": true}}); strings.Contains(got, "Owner-Signal Bundle") {
 		t.Errorf("article injected with only owner active:\n%s", got)
 	}
-	if got := a.Build(context.Background(), map[string]bool{"message_channel": true}, nil); strings.Contains(got, "Owner-Signal Bundle") {
+	if got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"message_channel": true}}); strings.Contains(got, "Owner-Signal Bundle") {
 		t.Errorf("article injected with only message_channel active:\n%s", got)
 	}
 
 	// Intersection: injects.
-	got := a.Build(context.Background(), map[string]bool{"owner": true, "message_channel": true}, nil)
+	got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"owner": true, "message_channel": true}})
 	if !strings.Contains(got, "Owner-Signal Bundle") {
 		t.Errorf("article missing when both required tags active:\n%s", got)
 	}
@@ -750,7 +745,7 @@ func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
 	})
 
 	// First Build: empty dir, nothing injects.
-	if got := a.Build(context.Background(), map[string]bool{"forge": true}, nil); got != "" {
+	if got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}}); got != "" {
 		t.Errorf("expected empty output before any articles exist, got: %s", got)
 	}
 
@@ -761,7 +756,7 @@ func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
 		[]byte("---\ntags: [forge]\n---\nFORGE_V1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 	if !strings.Contains(got, "FORGE_V1") {
 		t.Errorf("new article not picked up:\n%s", got)
 	}
@@ -771,7 +766,7 @@ func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
 		[]byte("---\ntags: [forge]\n---\nFORGE_V2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got = a.Build(context.Background(), map[string]bool{"forge": true}, nil)
+	got = a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 	if !strings.Contains(got, "FORGE_V2") {
 		t.Errorf("body edit not picked up:\n%s", got)
 	}
@@ -785,10 +780,10 @@ func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
 		[]byte("---\ntags: [ha]\n---\nFORGE_V2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.Build(context.Background(), map[string]bool{"forge": true}, nil); strings.Contains(got, "FORGE_V2") {
+	if got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}}); strings.Contains(got, "FORGE_V2") {
 		t.Errorf("retagged article still firing for forge:\n%s", got)
 	}
-	got = a.Build(context.Background(), map[string]bool{"ha": true}, nil)
+	got = a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"ha": true}})
 	if !strings.Contains(got, "FORGE_V2") {
 		t.Errorf("retagged article not firing for ha:\n%s", got)
 	}
@@ -797,7 +792,7 @@ func TestTagContextAssembler_LiveFrontmatterPickup(t *testing.T) {
 	if err := os.Remove(articlePath); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.Build(context.Background(), map[string]bool{"ha": true}, nil); got != "" {
+	if got := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"ha": true}}); got != "" {
 		t.Errorf("deleted article still appearing:\n%s", got)
 	}
 }

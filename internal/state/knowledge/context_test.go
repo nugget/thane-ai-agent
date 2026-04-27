@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // mockEmbedder returns predictable embeddings for testing.
@@ -49,7 +51,7 @@ func TestContextProvider_GetContext_Empty(t *testing.T) {
 
 	// Empty message should return empty context
 	ctx := context.Background()
-	result, err := provider.GetContext(ctx, "")
+	result, err := provider.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

@@ -30,6 +30,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
@@ -69,6 +70,14 @@ type Request struct {
 	// buildSystemPrompt(). Used by callers that assemble their own
 	// prompt context externally.
 	SystemPrompt string `json:"-"`
+
+	// SuppressAlwaysContext drops the always-on bucket from the
+	// system-prompt assembler's context output. Default false matches
+	// main-loop behavior (include presence, episodic memory, working
+	// memory, notification history, etc.). Delegates set true so the
+	// child agent sees only tag-scoped context appropriate to the
+	// bounded task.
+	SuppressAlwaysContext bool `json:"-"`
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -161,22 +170,27 @@ type FailoverHandler interface {
 	OnFailover(ctx context.Context, fromModel, toModel, reason string) error
 }
 
-// ContextProvider supplies dynamic context for the system prompt.
-type ContextProvider interface {
-	// GetContext returns context to inject into the system prompt.
-	// The userMessage is provided to enable semantic search for relevant knowledge.
-	GetContext(ctx context.Context, userMessage string) (string, error)
-}
+// ContextRequest is re-exported from [agentctx] so callers within the
+// agent package can use the bare type. The canonical definition lives
+// in agentctx so context-producing packages can satisfy
+// [TagContextProvider] without importing agent (which would cycle).
+type ContextRequest = agentctx.ContextRequest
 
-// TagContextProvider supplies live-computed context for a capability tag.
-// Unlike static context files in [config.CapabilityTagConfig.Context],
-// providers generate fresh output each turn. Output should follow #458
-// conventions: delta-annotated timestamps via [promptfmt.FormatDelta],
-// machine-first format, pre-computed relationships.
+// TagContextProvider supplies live-computed context for the system
+// prompt. Implementations either register against a specific
+// capability tag (via [Loop.RegisterTagContextProvider]) — in which
+// case they fire only when that tag is active — or against the
+// always-on bucket (via [Loop.RegisterAlwaysContextProvider]), where
+// they fire on every main-loop run but are suppressed for delegate
+// runs that pass [agentctx.ContextRequest.IncludeAlways] = false.
+//
+// Output should follow #458 conventions: delta-annotated timestamps
+// via [promptfmt.FormatDelta], machine-first format, pre-computed
+// relationships.
 type TagContextProvider interface {
-	// TagContext returns context to inject when the associated tag is active.
-	// The ctx carries the shared HA timeout from prompt assembly.
-	TagContext(ctx context.Context) (string, error)
+	// TagContext returns context to inject. The ctx carries any
+	// per-turn timeout (e.g., the shared 2-second HA deadline).
+	TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error)
 }
 
 // SessionArchiver handles session lifecycle and message archiving.
@@ -221,7 +235,6 @@ type Loop struct {
 	timezone            string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
 	contextWindow       int               // Context window size of default model
 	failoverHandler     FailoverHandler
-	contextProvider     ContextProvider
 	archiver            SessionArchiver
 	extractor           *memory.Extractor
 	orchestratorTools   []string                       // Restricted tool set for orchestrator mode (nil = all tools)
@@ -252,14 +265,16 @@ type Loop struct {
 	lastRunTagsMu sync.Mutex
 	lastRunTags   map[string]bool
 
-	// tagProviders holds live context providers keyed by capability tag.
-	// Registered via RegisterTagContextProvider and called during
-	// system prompt assembly for each active tag.
-	tagProviders   map[string]TagContextProvider
-	tagProvidersMu sync.Mutex
+	// pendingProviders holds context-provider registrations made
+	// before SetTagContextAssembler is called. SetTagContextAssembler
+	// drains them into the assembler at wiring time. After that, the
+	// pending fields are nil and Register* calls forward directly.
+	pendingProvidersMu     sync.Mutex
+	pendingTagProviders    map[string]TagContextProvider
+	pendingAlwaysProviders []TagContextProvider
 
 	// tagContextAssembler builds the Capability Context section from
-	// static config files, tagged KB articles, and live providers.
+	// tagged KB articles, tagged providers, and always-on providers.
 	// Set via SetTagContextAssembler; nil disables tag context.
 	tagContextAssembler *TagContextAssembler
 
@@ -366,37 +381,50 @@ func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
 	l.failoverHandler = handler
 }
 
-// SetContextProvider configures a provider for dynamic system prompt context.
-func (l *Loop) SetContextProvider(provider ContextProvider) {
-	l.contextProvider = provider
-}
-
 // RegisterTagContextProvider registers a live context provider for a
-// capability tag. The provider's TagContext method is called during
-// system prompt assembly for each turn where the tag is active.
-// Only one provider per tag is supported; a second registration for
-// the same tag replaces the previous provider.
+// capability tag. The provider fires when that tag is active during
+// system-prompt assembly. Only one provider per tag is supported; a
+// second registration for the same tag replaces the previous one.
+//
+// If the tag context assembler has been wired (via
+// [Loop.SetTagContextAssembler]) the registration forwards directly;
+// otherwise it stages locally and is drained into the assembler when
+// SetTagContextAssembler runs. This ordering accommodates init phases
+// that register providers before the late-binding capability tag
+// resolution completes.
 func (l *Loop) RegisterTagContextProvider(tag string, p TagContextProvider) {
-	l.tagProvidersMu.Lock()
-	defer l.tagProvidersMu.Unlock()
-	if l.tagProviders == nil {
-		l.tagProviders = make(map[string]TagContextProvider)
+	if p == nil {
+		return
 	}
-	l.tagProviders[tag] = p
+	l.pendingProvidersMu.Lock()
+	if l.tagContextAssembler != nil {
+		l.pendingProvidersMu.Unlock()
+		l.tagContextAssembler.RegisterTaggedProvider(tag, p)
+		return
+	}
+	if l.pendingTagProviders == nil {
+		l.pendingTagProviders = make(map[string]TagContextProvider)
+	}
+	l.pendingTagProviders[tag] = p
+	l.pendingProvidersMu.Unlock()
 }
 
-// TagContextProviders returns a snapshot of the registered tag context
-// providers. The returned map is safe for concurrent use by callers
-// (e.g., delegate executors) since each value is read-only after
-// registration.
-func (l *Loop) TagContextProviders() map[string]TagContextProvider {
-	l.tagProvidersMu.Lock()
-	defer l.tagProvidersMu.Unlock()
-	snapshot := make(map[string]TagContextProvider, len(l.tagProviders))
-	for k, v := range l.tagProviders {
-		snapshot[k] = v
+// RegisterAlwaysContextProvider adds a provider to the always-on
+// bucket. Always-on providers fire on every main-loop run but are
+// suppressed for delegate runs where SuppressAlwaysContext is set.
+// Same staging semantics as [Loop.RegisterTagContextProvider].
+func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
+	if p == nil {
+		return
 	}
-	return snapshot
+	l.pendingProvidersMu.Lock()
+	if l.tagContextAssembler != nil {
+		l.pendingProvidersMu.Unlock()
+		l.tagContextAssembler.RegisterAlwaysProvider(p)
+		return
+	}
+	l.pendingAlwaysProviders = append(l.pendingAlwaysProviders, p)
+	l.pendingProvidersMu.Unlock()
 }
 
 // The setters below remain for test convenience and for callers that
@@ -508,10 +536,27 @@ func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
 }
 
 // SetTagContextAssembler configures the shared assembler that builds
-// the Capability Context section of the system prompt from static
-// files, tagged KB articles, and live providers.
+// the Capability Context section of the system prompt from tagged KB
+// articles, tagged providers, and always-on providers. Drains any
+// provider registrations staged before this call into the assembler.
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
+	l.pendingProvidersMu.Lock()
+	pendingTagged := l.pendingTagProviders
+	pendingAlways := l.pendingAlwaysProviders
+	l.pendingTagProviders = nil
+	l.pendingAlwaysProviders = nil
 	l.tagContextAssembler = a
+	l.pendingProvidersMu.Unlock()
+
+	if a == nil {
+		return
+	}
+	for tag, p := range pendingTagged {
+		a.RegisterTaggedProvider(tag, p)
+	}
+	for _, p := range pendingAlways {
+		a.RegisterAlwaysProvider(p)
+	}
 }
 
 // SetOrchestratorTools configures the restricted tool set for all
@@ -943,18 +988,25 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		seal()
 	}
 
-	// 6. Tag context (capability knowledge — what does my active role need)
-	// Keep it before current conditions for continuity, but uncached.
-	if l.tagContextAssembler != nil && tags != nil {
+	// 6. Capability context (capability knowledge + ambient context)
+	// One unified section assembled by TagContextAssembler from three
+	// sources: tagged KB articles, tagged providers, and always-on
+	// providers. Always-on providers are gated by IncludeAlways: main
+	// loop runs include them; delegate runs (which set
+	// req.SuppressAlwaysContext via the loops launch) do not.
+	if l.tagContextAssembler != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
-		providers := l.TagContextProviders()
-
-		if tagCtx := l.tagContextAssembler.Build(haCtx, tags, providers); tagCtx != "" {
-			mark("TAG CONTEXT")
+		req := ContextRequest{
+			UserMessage:   userMessage,
+			ActiveTags:    tags,
+			IncludeAlways: !tools.SuppressAlwaysContextFromContext(ctx),
+		}
+		if capCtx := l.tagContextAssembler.Build(haCtx, req); capCtx != "" {
+			mark("CAPABILITY CONTEXT")
 			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(tagCtx)
+			sb.WriteString(capCtx)
 			seal()
 		}
 	}
@@ -964,19 +1016,6 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	sb.WriteString("\n\n")
 	sb.WriteString(awareness.CurrentConditions(l.timezone))
 	seal()
-
-	// 8. Dynamic context (what's relevant right now)
-	if l.contextProvider != nil {
-		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
-		if err != nil {
-			l.logger.Warn("failed to get dynamic context", "error", err)
-		} else if dynCtx != "" {
-			mark("DYNAMIC CONTEXT")
-			sb.WriteString("\n\n## Relevant Context\n\n")
-			sb.WriteString(dynCtx)
-			seal()
-		}
-	}
 
 	// 9. Conversation History (structural JSON — earlier messages in this conversation)
 	// Embedding history as JSON in the system prompt creates an unambiguous
@@ -1676,6 +1715,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
+	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection

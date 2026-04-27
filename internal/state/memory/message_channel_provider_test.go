@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // providerTestCtxKey is the context key the test uses to plumb a
@@ -61,7 +63,7 @@ func newMessageChannelTestSetup(t *testing.T) (*MessageChannelProvider, *Archive
 func TestMessageChannelProvider_NoConversationIDIsSilent(t *testing.T) {
 	provider, _, _ := newMessageChannelTestSetup(t)
 
-	got, err := provider.TagContext(context.Background())
+	got, err := provider.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
@@ -103,7 +105,7 @@ func TestMessageChannelProvider_EmitsBothBlocks(t *testing.T) {
 	}
 
 	ctx := providerCtxWithConvID(context.Background(), "conv-1")
-	got, err := provider.TagContext(ctx)
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestMessageChannelProvider_ExcludesActiveSessionMessages(t *testing.T) {
 	insert("conv-1", active.ID, "user", "active-msg", now.Add(-1*time.Minute))
 
 	ctx := providerCtxWithConvID(context.Background(), "conv-1")
-	got, err := provider.TagContext(ctx)
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
@@ -184,7 +186,7 @@ func TestMessageChannelProvider_OlderSessionsExcludesActiveAndInWindow(t *testin
 	insert("conv-1", older.ID, "user", "old-msg", now.Add(-2*time.Hour))
 
 	ctx := providerCtxWithConvID(context.Background(), "conv-1")
-	got, err := provider.TagContext(ctx)
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}

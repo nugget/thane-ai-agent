@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
-// WorkingMemoryProvider implements the agent.ContextProvider interface
-// for auto-injecting working memory into the system prompt. When the
+// WorkingMemoryProvider implements [agent.TagContextProvider] for
+// auto-injecting working memory into the system prompt. When the
 // current conversation has working memory content, it is included
 // under a "### Working Memory" heading so the agent has experiential
-// continuity without needing to explicitly read it.
+// continuity without needing to explicitly read it. Registered via
+// [agent.Loop.RegisterAlwaysContextProvider].
 type WorkingMemoryProvider struct {
 	store            *WorkingMemoryStore
 	conversationFunc func(context.Context) string
@@ -28,10 +31,12 @@ func NewWorkingMemoryProvider(store *WorkingMemoryStore, convFunc func(context.C
 	}
 }
 
-// GetContext returns the working memory content for the current
+// TagContext returns the working memory content for the current
 // conversation, formatted for system prompt injection. Returns empty
-// string if no working memory exists.
-func (p *WorkingMemoryProvider) GetContext(ctx context.Context, _ string) (string, error) {
+// string if no working memory exists. Implements
+// [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
+func (p *WorkingMemoryProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	convID := p.conversationFunc(ctx)
 
 	content, updatedAt, err := p.store.Get(convID)

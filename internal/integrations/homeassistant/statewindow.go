@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // StateWindowEntry records a single state transition observed from the Home
@@ -21,9 +22,9 @@ type StateWindowEntry struct {
 }
 
 // StateWindowProvider maintains a rolling window of recent state changes and
-// implements the agent.ContextProvider interface. It is safe for
-// concurrent use: HandleStateChange writes under a write lock while
-// GetContext reads under a read lock.
+// implements [agent.TagContextProvider]. It is safe for concurrent use:
+// HandleStateChange writes under a write lock while TagContext reads
+// under a read lock.
 type StateWindowProvider struct {
 	mu      sync.RWMutex
 	entries []StateWindowEntry // circular buffer, pre-allocated
@@ -39,7 +40,7 @@ type StateWindowProvider struct {
 // buffer capacity and maximum entry age. The loc parameter controls the
 // timezone used when formatting future-event timestamps in the context
 // output; nil falls back to time.Local. Entries older than maxAge are
-// filtered out at read time in GetContext.
+// filtered out at read time in TagContext.
 func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Location, logger *slog.Logger) *StateWindowProvider {
 	if maxEntries <= 0 {
 		maxEntries = 50
@@ -95,11 +96,12 @@ type stateChangeJSON struct {
 	Ago    string `json:"ago"`
 }
 
-// GetContext returns a formatted context block listing recent state
+// TagContext returns a formatted context block listing recent state
 // changes as compact JSON for injection into the agent's system prompt.
 // Entries older than maxAge are excluded. Returns an empty string when
-// no valid entries exist.
-func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, error) {
+// no valid entries exist. Implements [agent.TagContextProvider];
+// registered via RegisterAlwaysContextProvider.
+func (p *StateWindowProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 

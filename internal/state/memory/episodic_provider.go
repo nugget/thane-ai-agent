@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // ArchiveReader is the subset of [ArchiveStore] needed by the episodic
@@ -45,7 +46,7 @@ type EpisodicConfig struct {
 // usually plenty even after non-content delegate sessions are dropped.
 const recentSessionsListLimit = 20
 
-// EpisodicProvider implements the agent.ContextProvider interface for
+// EpisodicProvider implements [agent.TagContextProvider] for
 // episodic memory. It injects two unrelated context blocks into the
 // system prompt:
 //
@@ -86,10 +87,12 @@ func NewEpisodicProvider(archive ArchiveReader, logger *slog.Logger, cfg Episodi
 	}
 }
 
-// GetContext returns episodic memory context for injection into the
+// TagContext returns episodic memory context for injection into the
 // system prompt. It assembles daily memory notes and the recent-
-// sessions JSON catalog from the archive.
-func (p *EpisodicProvider) GetContext(_ context.Context, _ string) (string, error) {
+// sessions JSON catalog from the archive. Implements
+// [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
+func (p *EpisodicProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	var sb strings.Builder
 
 	daily := p.getDailyMemory()

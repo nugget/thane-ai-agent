@@ -206,6 +206,10 @@ func loopLaunchOverrideProperties() map[string]any {
 			"type":        "boolean",
 			"description": "Disable tag-based tool filtering for this launch. Use with care.",
 		},
+		"suppress_always_context": map[string]any{
+			"type":        "boolean",
+			"description": "Drop always-on ambient context (presence, episodic memory, notification history, etc.) from this launch's system prompt. Tagged context providers and KB articles still fire. Default is false; delegate executions set this to true so child loops aren't billed for the main loop's experiential context.",
+		},
 		"conversation_id": map[string]any{
 			"type":        "string",
 			"description": "Bind this launch to a specific conversation ID instead of deriving one.",

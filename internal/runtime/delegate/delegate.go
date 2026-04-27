@@ -567,6 +567,12 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		CompletionConversationID: completionConversationID,
 		CompletionChannel:        looppkg.CloneCompletionChannelTarget(completionChannel),
 		OnProgress:               onProgress,
+		// Delegate loops are bounded child tasks. They get tagged
+		// providers and KB articles for their declared profile, but
+		// not the always-on ambient context (presence, episodic memory,
+		// notification history, etc.) that is meant for the main loop's
+		// experiential continuity. See #778.
+		SuppressAlwaysContext: true,
 	}
 }
 

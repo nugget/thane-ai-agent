@@ -26,13 +26,14 @@ func (a *App) initAwareness(s *newState) error {
 	logger := a.logger
 
 	// --- Context providers ---
-	// Dynamic system prompt injection. Providers add context based on
-	// current state before each LLM call.
-	contextProvider := agent.NewCompositeContextProvider()
+	// Dynamic system prompt injection. Always-on providers add context
+	// based on current state before each main-loop LLM call. Delegate
+	// loops can opt out of always-on providers by setting
+	// Launch.SuppressAlwaysContext = true.
 	contactLookup := &contactNameLookup{store: a.contactStore, logger: logger}
-	contextProvider.Add(agent.NewChannelProvider(contactLookup))
+	a.loop.RegisterAlwaysContextProvider(agent.NewChannelProvider(contactLookup))
 	a.loop.UseContactLookup(contactLookup)
-	contextProvider.Add(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
+	a.loop.RegisterAlwaysContextProvider(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
 		Phones: &contactPhoneResolver{store: a.contactStore},
 		Hints:  tools.HintsFromContext,
@@ -42,7 +43,7 @@ func (a *App) initAwareness(s *newState) error {
 	// Notification history — injects recent sends (fire-and-forget and
 	// actionable with HITL status) so agents avoid duplicate notifications.
 	if a.notifRecords != nil {
-		contextProvider.Add(notifications.NewHistoryProvider(notifications.HistoryProviderConfig{
+		a.loop.RegisterAlwaysContextProvider(notifications.NewHistoryProvider(notifications.HistoryProviderConfig{
 			Records: a.notifRecords,
 			Logger:  logger,
 		}))
@@ -54,10 +55,10 @@ func (a *App) initAwareness(s *newState) error {
 		LookbackDays:  cfg.Episodic.LookbackDays,
 		HistoryTokens: cfg.Episodic.HistoryTokens,
 	})
-	contextProvider.Add(episodicProvider)
+	a.loop.RegisterAlwaysContextProvider(episodicProvider)
 
 	wmProvider := memory.NewWorkingMemoryProvider(a.wmStore, tools.ConversationIDFromContext)
-	contextProvider.Add(wmProvider)
+	a.loop.RegisterAlwaysContextProvider(wmProvider)
 
 	// Message-channel verbatim tail + older-sessions context. Gated on
 	// the message_channel capability tag, asserted by Signal (and
@@ -84,7 +85,7 @@ func (a *App) initAwareness(s *newState) error {
 
 	if a.ha != nil {
 		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
-		contextProvider.Add(watchlistProvider)
+		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
 		// Register tag-scoped watchlist providers for entities added
 		// with tags. Each distinct tag in the store gets a provider that
@@ -128,7 +129,7 @@ func (a *App) initAwareness(s *newState) error {
 		stateWindowLoc,
 		logger,
 	)
-	contextProvider.Add(stateWindowProvider)
+	a.loop.RegisterAlwaysContextProvider(stateWindowProvider)
 
 	// --- Person tracker ---
 	// Tracks configured household members' presence state and injects
@@ -143,7 +144,7 @@ func (a *App) initAwareness(s *newState) error {
 	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
 		s.personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
-		contextProvider.Add(s.personTracker)
+		a.loop.RegisterAlwaysContextProvider(s.personTracker)
 
 		// Configure device MAC addresses from config.
 		for entityID, devices := range cfg.Person.Devices {
@@ -220,7 +221,7 @@ func (a *App) initAwareness(s *newState) error {
 	if s.embClient != nil {
 		contactEmbedder = s.embClient
 	}
-	contextProvider.Add(contacts.NewContextProvider(a.contactStore, contactEmbedder))
+	a.loop.RegisterAlwaysContextProvider(contacts.NewContextProvider(a.contactStore, contactEmbedder))
 
 	// Subject-keyed fact injection — pre-warm cold-start loops with
 	// facts keyed to specific entities, contacts, zones, etc.
@@ -229,7 +230,7 @@ func (a *App) initAwareness(s *newState) error {
 		if cfg.Prewarm.MaxFacts > 0 {
 			subjectProvider.SetMaxFacts(cfg.Prewarm.MaxFacts)
 		}
-		contextProvider.Add(subjectProvider)
+		a.loop.RegisterAlwaysContextProvider(subjectProvider)
 		logger.Info("context pre-warming enabled", "max_facts", cfg.Prewarm.MaxFacts)
 	}
 
@@ -243,14 +244,13 @@ func (a *App) initAwareness(s *newState) error {
 			cfg.Prewarm.Archive.MaxBytes,
 			logger,
 		)
-		contextProvider.Add(archiveProvider)
+		a.loop.RegisterAlwaysContextProvider(archiveProvider)
 		logger.Info("archive pre-warming enabled",
 			"max_results", cfg.Prewarm.Archive.MaxResults,
 			"max_bytes", cfg.Prewarm.Archive.MaxBytes,
 		)
 	}
 
-	a.loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
 		"episodic_history_tokens", cfg.Episodic.HistoryTokens,

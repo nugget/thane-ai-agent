@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 type mockStateGetter struct {
@@ -40,7 +41,7 @@ func TestNewPresenceTracker(t *testing.T) {
 
 	// All entities should start as Unknown.
 	ctx := context.Background()
-	result, err := tracker.GetContext(ctx, "")
+	result, err := tracker.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestTracker_Initialize(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	result, err := tracker.GetContext(context.Background(), "")
+	result, err := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestTracker_Initialize_PartialFailure(t *testing.T) {
 		t.Fatal("expected error for partial failure")
 	}
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 
 	// Alice should be populated with JSON format.
 	if !strings.Contains(result, `"name":"Alice"`) || !strings.Contains(result, `"state":"home"`) {
@@ -144,7 +145,7 @@ func TestTracker_HandleStateChange(t *testing.T) {
 	// State changes to not_home.
 	tracker.HandleStateChange("person.alice", "home", "not_home")
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, `"state":"away"`) {
 		t.Errorf("expected state:away after state change, got:\n%s", result)
 	}
@@ -157,7 +158,7 @@ func TestTracker_HandleStateChange_IgnoresUntracked(t *testing.T) {
 	tracker.HandleStateChange("person.unknown", "home", "not_home")
 	tracker.HandleStateChange("light.kitchen", "off", "on")
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, "- **Alice**: unknown") {
 		t.Errorf("expected Alice: unknown unchanged, got:\n%s", result)
 	}
@@ -211,7 +212,7 @@ func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
 	// Set a room.
 	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, `"room":"office"`) {
 		t.Errorf("expected room:office in JSON, got:\n%s", result)
 	}
@@ -219,7 +220,7 @@ func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
 	// Transition to not_home should clear room.
 	tracker.HandleStateChange("person.alice", "home", "not_home")
 
-	result, _ = tracker.GetContext(context.Background(), "")
+	result, _ = tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if strings.Contains(result, `"room"`) {
 		t.Errorf("expected room cleared after not_home, got:\n%s", result)
 	}
@@ -249,7 +250,7 @@ func TestTracker_GetContext(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice", "person.bob"}, "America/Chicago", nil)
 	_ = tracker.Initialize(context.Background(), getter)
 
-	result, err := tracker.GetContext(context.Background(), "")
+	result, err := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestTracker_GetContext_WithRoom(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 
 	// Verify room appears in JSON.
 	if !strings.Contains(result, `"room":"office"`) {
@@ -322,7 +323,7 @@ func TestTracker_GetContext_WithoutRoom(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 	_ = tracker.Initialize(context.Background(), getter)
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 
 	// No room field should appear when Room is empty (omitempty).
 	if strings.Contains(result, `"room"`) {
@@ -333,7 +334,7 @@ func TestTracker_GetContext_WithoutRoom(t *testing.T) {
 func TestTracker_GetContext_Empty(t *testing.T) {
 	tracker := NewPresenceTracker(nil, "UTC", nil)
 
-	result, err := tracker.GetContext(context.Background(), "")
+	result, err := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -358,7 +359,7 @@ func TestTracker_GetContext_NotHome(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 	_ = tracker.Initialize(context.Background(), getter)
 
-	result, _ := tracker.GetContext(context.Background(), "")
+	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, `"state":"away"`) {
 		t.Errorf("expected not_home displayed as state:away, got:\n%s", result)
 	}
@@ -506,7 +507,7 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range iterations {
-				_, _ = tracker.GetContext(context.Background(), "")
+				_, _ = tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 			}
 		}()
 	}
@@ -655,7 +656,7 @@ func TestTracker_RoomObserverCalledOutsideLock(t *testing.T) {
 	// Register an observer that calls GetContext (which takes a read lock).
 	// If observers were called under the write lock this would deadlock.
 	tracker.OnRoomChange(func(_, _, _ string) {
-		_, _ = tracker.GetContext(context.Background(), "")
+		_, _ = tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	})
 
 	// Should complete without deadlock.

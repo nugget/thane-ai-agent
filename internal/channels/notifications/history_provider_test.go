@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func newTestHistoryProvider(t *testing.T) (*HistoryProvider, *RecordStore) {
@@ -37,9 +38,9 @@ func newTestHistoryProvider(t *testing.T) (*HistoryProvider, *RecordStore) {
 func TestHistoryProvider_Empty(t *testing.T) {
 	p, _ := newTestHistoryProvider(t)
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext: %v", err)
+		t.Fatalf("TagContext: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected empty string for no notifications, got %q", got)
@@ -64,9 +65,9 @@ func TestHistoryProvider_FireAndForget(t *testing.T) {
 		t.Fatalf("Log: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext: %v", err)
+		t.Fatalf("TagContext: %v", err)
 	}
 
 	if !strings.HasPrefix(got, "### Recent Notifications\n\n") {
@@ -134,9 +135,9 @@ func TestHistoryProvider_ActionableWithHITL(t *testing.T) {
 		t.Fatalf("Respond: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext: %v", err)
+		t.Fatalf("TagContext: %v", err)
 	}
 
 	jsonStr := strings.TrimPrefix(got, "### Recent Notifications\n\n")
@@ -183,9 +184,9 @@ func TestHistoryProvider_WindowFilter(t *testing.T) {
 		t.Fatalf("Log: %v", err)
 	}
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext: %v", err)
+		t.Fatalf("TagContext: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected empty for out-of-window notification, got %q", got)
@@ -196,9 +197,9 @@ func TestHistoryProvider_NilRecords(t *testing.T) {
 	p := NewHistoryProvider(HistoryProviderConfig{
 		Records: nil,
 	})
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext: %v", err)
+		t.Fatalf("TagContext: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected empty for nil records, got %q", got)

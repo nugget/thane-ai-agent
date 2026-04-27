@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
@@ -16,11 +17,12 @@ type ArchiveSearcher interface {
 	Search(opts SearchOptions) ([]SearchResult, error)
 }
 
-// ArchiveContextProvider implements the agent.ContextProvider interface
-// for injecting relevant past conversation excerpts into the system
+// ArchiveContextProvider implements [agent.TagContextProvider] for
+// injecting relevant past conversation excerpts into the system
 // prompt. This is Layer 2 of the pre-warming system: Layer 1 provides
 // knowledge (facts + KB docs), Layer 2 provides experiential judgment
-// (prior reasoning about similar situations).
+// (prior reasoning about similar situations). Registered via
+// [agent.Loop.RegisterAlwaysContextProvider].
 type ArchiveContextProvider struct {
 	store      ArchiveSearcher
 	maxResults int
@@ -44,16 +46,19 @@ func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, 
 	}
 }
 
-// GetContext searches the conversation archive for excerpts relevant to
-// the current wake context. Subjects are extracted from ctx (set by
-// the wake bridge); if no subjects are available but the user message
-// is short, it falls back to searching by message content.
+// TagContext searches the conversation archive for excerpts relevant
+// to the current wake context. Subjects are extracted from ctx (set
+// by the wake bridge); if no subjects are available but
+// req.UserMessage is short, it falls back to searching by message
+// content. Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
 //
-// Returns empty string when there is nothing to search for or no results
-// are found. Errors from the archive store are logged and swallowed —
-// archive injection should never block a wake.
-func (p *ArchiveContextProvider) GetContext(ctx context.Context, userMessage string) (string, error) {
+// Returns empty string when there is nothing to search for or no
+// results are found. Errors from the archive store are logged and
+// swallowed — archive injection should never block a wake.
+func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	subjects := knowledge.SubjectsFromContext(ctx)
+	userMessage := req.UserMessage
 
 	query, querySource := p.buildQuery(subjects, userMessage)
 	if query == "" {
