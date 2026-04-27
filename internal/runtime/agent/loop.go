@@ -272,25 +272,31 @@ type Loop struct {
 }
 
 // LoopOptions declares everything required or optionally configurable
-// at agent loop construction. The required fields (Logger, Memory,
-// Compactor, Router, LLM, Model, ContextWindow, plus HomeAssistant +
-// Scheduler for the registry) are validated by [NewLoop]; everything
-// else is nil-safe and may be left zero-valued.
+// at agent loop construction. [NewLoop] validates Logger, Memory, LLM,
+// and Model — the minimum a runnable loop needs. The remaining fields
+// are configuration-dependent: production runs through internal/app
+// supply Compactor, Router, HomeAssistant, Scheduler, ContextWindow,
+// and the rest, but the CLI ask path constructs a deliberately
+// minimal loop with most fields zero-valued. Treat anything outside
+// the four explicitly-validated fields as optional but recommended
+// for full functionality.
 //
 // Late-binding wiring that depends on subsystems initialized after the
 // loop itself (capability tags, context providers, channel/extractor
 // stores, failover handler) is configured through the loop's grouped
 // Configure* methods rather than this struct.
 type LoopOptions struct {
-	// Required at construction.
-	Logger        *slog.Logger
-	Memory        MemoryStore
+	// Required at construction. Validated by NewLoop.
+	Logger *slog.Logger
+	Memory MemoryStore
+	LLM    llm.Client
+	Model  string
+
+	// Recommended for production use. Optional for minimal/test loops.
 	Compactor     Compactor
 	Router        *router.Router
 	HomeAssistant *homeassistant.Client
 	Scheduler     *scheduler.Scheduler
-	LLM           llm.Client
-	Model         string
 	ContextWindow int
 
 	// Optional, stable at construction.

@@ -33,10 +33,12 @@ type LoopIntentToolDeps struct {
 
 // ConfigureLoopIntentTools registers the intent-shaped loop creation
 // tools on the registry. Requires the document store (for
-// output-target scaffolding) and the loop-definition registry (for
-// spec persistence and launch).
+// output-target scaffolding), the loop-definition registry (for spec
+// persistence), and the LaunchDefinition helper (for actually
+// starting the loop). Missing any of those silently disables the
+// family rather than registering tools that would panic at call time.
 func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
-	if r == nil || deps.DocTools == nil || deps.Registry == nil {
+	if r == nil || deps.DocTools == nil || deps.Registry == nil || deps.LaunchDefinition == nil {
 		return
 	}
 	r.loopIntentDeps = deps
@@ -52,7 +54,7 @@ func (r *Registry) registerThaneCurate() {
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
-			"Returns the document ref, loop definition name, loop_id, and next wake time.",
+			"Returns the document ref, loop definition name, loop_id, output mode, and the derived sleep_min/max/default cadence triple.",
 		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -197,9 +199,17 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	warnings := looppkg.BuildDefinitionWarnings(spec)
 
-	// Scaffold the output document first. Frontmatter records loop
-	// ownership so a future inspector can identify the doc as
-	// loop-managed without consulting the registry.
+	// Refuse to clobber an existing document unless replace=true. The
+	// document store's Write replaces unconditionally, so we have to
+	// preflight here. doc_read returns a non-nil error when the
+	// document doesn't exist; an empty error means it does.
+	if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
+		return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
+	}
+
+	// Scaffold the output document. Frontmatter records loop ownership
+	// so a future inspector can identify the doc as loop-managed
+	// without consulting the registry.
 	body := renderScaffoldBody(outputMode, title, intent)
 	frontmatter := map[string][]string{
 		"loop_definition_name": {name},
@@ -367,8 +377,15 @@ func cadenceFromInterval(d time.Duration) cadence {
 	if jit < 30*time.Second {
 		jit = 30 * time.Second
 	}
+	sleepMin := d - jit
+	// Clamp sleepMin to the same 1-minute floor parseCadence enforces
+	// on the input interval. Without this clamp a 1m cadence with the
+	// 30s minimum jitter would yield sleepMin=30s, breaching the floor.
+	if sleepMin < time.Minute {
+		sleepMin = time.Minute
+	}
 	return cadence{
-		sleepMin:     d - jit,
+		sleepMin:     sleepMin,
 		sleepMax:     d + jit,
 		sleepDefault: d,
 	}

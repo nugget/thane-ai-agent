@@ -51,23 +51,30 @@ func (a *App) initDelegation(s *newState) error {
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
+	// AlwaysAvailable on all three so they survive capability tag
+	// filtering (channel_tags, model-driven activate_capability). Without
+	// this, FilterByTags drops untagged tools when any tag is active and
+	// the model loses access to the recommended delegation surface.
 	a.loop.Tools().Register(&tools.Tool{
-		Name:        "thane_now",
-		Description: delegate.NowToolDescription,
-		Parameters:  delegate.NowToolDefinition(),
-		Handler:     delegate.NowToolHandler(delegateExec),
+		Name:            "thane_now",
+		Description:     delegate.NowToolDescription,
+		Parameters:      delegate.NowToolDefinition(),
+		Handler:         delegate.NowToolHandler(delegateExec),
+		AlwaysAvailable: true,
 	})
 	a.loop.Tools().Register(&tools.Tool{
-		Name:        "thane_assign",
-		Description: delegate.AssignToolDescription,
-		Parameters:  delegate.AssignToolDefinition(),
-		Handler:     delegate.AssignToolHandler(delegateExec),
+		Name:            "thane_assign",
+		Description:     delegate.AssignToolDescription,
+		Parameters:      delegate.AssignToolDefinition(),
+		Handler:         delegate.AssignToolHandler(delegateExec),
+		AlwaysAvailable: true,
 	})
 	a.loop.Tools().Register(&tools.Tool{
-		Name:        "thane_delegate",
-		Description: delegate.ToolDescription,
-		Parameters:  delegate.ToolDefinition(),
-		Handler:     delegate.ToolHandler(delegateExec),
+		Name:            "thane_delegate",
+		Description:     delegate.ToolDescription,
+		Parameters:      delegate.ToolDefinition(),
+		Handler:         delegate.ToolHandler(delegateExec),
+		AlwaysAvailable: true,
 	})
 	a.delegateExec = delegateExec
 	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())

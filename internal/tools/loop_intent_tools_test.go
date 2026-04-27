@@ -80,6 +80,24 @@ func TestParseCadence_RejectsEmpty(t *testing.T) {
 	}
 }
 
+// TestParseCadence_SleepMinNeverDropsBelowMinute guards the floor
+// against a regression where the 30s minimum jitter could push
+// sleep_min below the documented 1-minute floor for short cadences.
+func TestParseCadence_SleepMinNeverDropsBelowMinute(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"1m", "60s", "every 1 minute"} {
+		t.Run(input, func(t *testing.T) {
+			c, err := parseCadence(input)
+			if err != nil {
+				t.Fatalf("parseCadence(%q): %v", input, err)
+			}
+			if c.sleepMin < time.Minute {
+				t.Errorf("sleepMin = %v, want >= 1m (floor)", c.sleepMin)
+			}
+		})
+	}
+}
+
 // TestThaneCurate_EndToEnd exercises the full happy path: scaffold
 // the output document with frontmatter recording loop ownership,
 // register and reconcile a service-loop definition, and launch it.
@@ -280,5 +298,84 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error %q should mention name collision", err)
+	}
+}
+
+// TestThaneCurate_RefusesToClobberDocument verifies the document
+// scaffold preflight: an existing document must not be overwritten
+// without an explicit replace=true. This is a separate safety from
+// the loop-definition collision check above; either trigger should
+// block the call.
+func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	// Pre-seed a document at the target ref via the same writer the
+	// tool uses; simulates a user-authored doc that the loop would
+	// otherwise stomp on.
+	preBody := "# Existing Notes\n\nDo not overwrite.\n"
+	if _, err := docTools.Write(context.Background(), documents.WriteArgs{
+		Ref:   "kb:notes/existing.md",
+		Title: "Existing Notes",
+		Body:  &preBody,
+	}); err != nil {
+		t.Fatalf("seed existing document: %v", err)
+	}
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "should-not-fire"}, nil
+		},
+	})
+
+	tool := reg.Get("thane_curate")
+	_, err = tool.Handler(context.Background(), map[string]any{
+		"name":    "fresh_loop",
+		"intent":  "Track something the doc already covers.",
+		"cadence": "hourly",
+		"output": map[string]any{
+			"mode":     "maintain",
+			"document": "kb:notes/existing.md",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected thane_curate to refuse to clobber existing document")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error %q should mention document collision", err)
+	}
+
+	// The original body must still be on disk untouched.
+	doc, readErr := docTools.Read(context.Background(), documents.RefArgs{Ref: "kb:notes/existing.md"})
+	if readErr != nil {
+		t.Fatalf("read pre-existing doc: %v", readErr)
+	}
+	if !strings.Contains(doc, "Do not overwrite") {
+		t.Errorf("pre-existing document was modified despite refusal:\n%s", doc)
 	}
 }
