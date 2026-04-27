@@ -258,13 +258,30 @@ being reimplemented in each loop prompt.
 | `list_tasks` | List scheduled tasks. |
 | `cancel_task` | Cancel a scheduled task. |
 
-## `loops` — live loop and loop-definition management
+## `thane_*` family — intent-shaped front door for "do work"
+
+Always-available (`thane_now`, `thane_assign`) plus loops-tagged
+(`thane_curate`, `thane_wake`). Pick by lifecycle. `thane_delegate`
+and `notify_loop` remain as deprecated aliases that route into the
+family.
+
+| Tool | Lifecycle | Description |
+|------|-----------|-------------|
+| `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
+| `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
+| `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
+| `thane_wake` | poke existing | Send a one-shot message envelope to a live timer loop, waking it or queueing for the next iteration. |
+
+## `loops` — lower-level loop control and inspection
+
+Below the `thane_*` family. Use these for inspection, control, or
+unusual launch shapes (event-driven, mqtt-wake-only,
+supervisor-randomized metacog) where the canonical family doesn't fit.
 
 | Tool | Description |
 |------|-------------|
 | `loop_status` | Snapshot of currently running loops. |
-| `notify_loop` | Deliver a message envelope to a live loop. |
-| `set_next_sleep` | Request the next sleep duration for the current loop. |
+| `set_next_sleep` | From inside a service loop, request the next sleep duration. |
 | `spawn_loop` | Launch an ad-hoc loop from a definition and input. |
 | `stop_loop` | Stop a running loop. |
 | `loop_definition_list` | List registered loop definitions. |
@@ -275,6 +292,8 @@ being reimplemented in each loop prompt.
 | `loop_definition_launch` | Launch a persistent loop from a definition. |
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
+| `notify_loop` | DEPRECATED alias for `thane_wake`. |
+| `thane_delegate` | DEPRECATED alias routing to `thane_now` (sync) or `thane_assign` (async). |
 
 ## `mqtt` — wake subscriptions
 

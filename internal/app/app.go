@@ -89,6 +89,7 @@ type App struct {
 	wmStore                   *memory.WorkingMemoryStore
 	factStore                 *knowledge.Store
 	documentStore             *documents.Store
+	documentTools             *documents.Tools
 	contactStore              *contacts.Store
 	opStore                   *opstate.Store
 	modelPolicyStore          *modelPolicyStore

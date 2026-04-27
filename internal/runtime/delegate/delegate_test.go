@@ -489,6 +489,77 @@ func TestDefaultBudgets(t *testing.T) {
 	}
 }
 
+// TestNowToolHandler_RoutesToSyncPath verifies that thane_now invokes
+// the sync execution path via the shared executor and returns the
+// formatted SUCCESS header.
+func TestNowToolHandler_RoutesToSyncPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "answer",
+			Model:   "test-model",
+		},
+	}
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
+		"task": "What's the office temperature?",
+	})
+	if err != nil {
+		t.Fatalf("NowToolHandler error: %v", err)
+	}
+	if !strings.Contains(result, "[Delegate SUCCEEDED:") {
+		t.Fatalf("expected SUCCESS header, got: %s", result)
+	}
+	if !strings.Contains(result, "answer") {
+		t.Fatalf("expected delegate content in result, got: %s", result)
+	}
+}
+
+// TestAssignToolHandler_RoutesToAsyncPath verifies that thane_assign
+// invokes the async (background) execution path and returns the
+// STARTED header with a loop_id.
+func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "background answer",
+			Model:   "test-model",
+		},
+	}
+	registry := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(runner, registry)
+	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
+
+	ctx := tools.WithConversationID(context.Background(), "conv-async")
+	result, err := AssignToolHandler(exec)(ctx, map[string]any{
+		"task": "Investigate the slow query.",
+	})
+	if err != nil {
+		t.Fatalf("AssignToolHandler error: %v", err)
+	}
+	if !strings.Contains(result, "[Delegate STARTED:") {
+		t.Fatalf("expected STARTED header, got: %s", result)
+	}
+	if !strings.Contains(result, "loop_id=") {
+		t.Fatalf("expected loop_id in result, got: %s", result)
+	}
+}
+
+// TestToolHandler_AsyncModeLaunchesBackgroundDelegate verifies the
+// deprecated thane_delegate(mode=async) compatibility path still
+// reaches the async executor.
 func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
 	t.Parallel()
 

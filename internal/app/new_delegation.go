@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -50,11 +51,30 @@ func (a *App) initDelegation(s *newState) error {
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
+	// AlwaysAvailable on all three so they survive capability tag
+	// filtering (channel_tags, model-driven activate_capability). Without
+	// this, FilterByTags drops untagged tools when any tag is active and
+	// the model loses access to the recommended delegation surface.
 	a.loop.Tools().Register(&tools.Tool{
-		Name:        "thane_delegate",
-		Description: delegate.ToolDescription,
-		Parameters:  delegate.ToolDefinition(),
-		Handler:     delegate.ToolHandler(delegateExec),
+		Name:            "thane_now",
+		Description:     delegate.NowToolDescription,
+		Parameters:      delegate.NowToolDefinition(),
+		Handler:         delegate.NowToolHandler(delegateExec),
+		AlwaysAvailable: true,
+	})
+	a.loop.Tools().Register(&tools.Tool{
+		Name:            "thane_assign",
+		Description:     delegate.AssignToolDescription,
+		Parameters:      delegate.AssignToolDefinition(),
+		Handler:         delegate.AssignToolHandler(delegateExec),
+		AlwaysAvailable: true,
+	})
+	a.loop.Tools().Register(&tools.Tool{
+		Name:            "thane_delegate",
+		Description:     delegate.ToolDescription,
+		Parameters:      delegate.ToolDefinition(),
+		Handler:         delegate.ToolHandler(delegateExec),
+		AlwaysAvailable: true,
 	})
 	a.delegateExec = delegateExec
 	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
@@ -102,28 +122,14 @@ func (a *App) initDelegation(s *newState) error {
 		logger.Info("notification callback dispatcher and timeout watcher initialized")
 	}
 
-	// --- Orchestrator tool gating ---
-	// When delegation_required is true, the agent loop only sees
-	// lightweight tools (delegate + memory), steering the primary model
-	// toward delegation instead of direct tool use.
-	if cfg.Agent.DelegationRequired {
-		a.loop.SetOrchestratorTools(cfg.Agent.OrchestratorTools)
-		logger.Info("orchestrator tool gating enabled", "tools", cfg.Agent.OrchestratorTools)
-	}
-
-	// --- Channel tags ---
-	// Channel tags don't depend on capability-tag resolution; wire them
-	// immediately.
-	if len(cfg.ChannelTags) > 0 {
-		a.loop.SetChannelTags(cfg.ChannelTags)
-		logger.Info("channel tags configured", "channels", len(cfg.ChannelTags))
-	}
-
-	// --- Behavioral lenses ---
-	// Persistent global context modes backed by opstate. Active lenses
-	// are merged into every Run's capability scope (and every delegate
-	// execution) so their KB articles and talents load globally.
-	// Wired unconditionally — lenses work even without capability_tags.
+	// --- Orchestrator gating, channel tags, and behavioral lenses ---
+	// All three concerns route through ConfigureChannelDelegation in one
+	// pass. Orchestrator gating restricts the primary model to lightweight
+	// tools when delegation_required is true. Channel tags pin capability
+	// tags to specific request sources. Lenses are persistent global
+	// context modes backed by opstate; they're merged into every Run's
+	// capability scope (and every delegate execution) so their KB
+	// articles and talents load globally.
 	lensStore := tools.NewLensStore(a.opStore)
 	a.loop.Tools().SetLensTools(lensStore)
 	lensProviderFn := func() []string {
@@ -134,7 +140,20 @@ func (a *App) initDelegation(s *newState) error {
 		}
 		return lenses
 	}
-	a.loop.SetLensProvider(lensProviderFn)
+
+	wiring := agent.ChannelDelegationWiring{
+		ChannelTags:  cfg.ChannelTags,
+		LensProvider: lensProviderFn,
+	}
+	if cfg.Agent.DelegationRequired {
+		wiring.OrchestratorTools = cfg.Agent.OrchestratorTools
+		logger.Info("orchestrator tool gating enabled", "tools", cfg.Agent.OrchestratorTools)
+	}
+	if len(cfg.ChannelTags) > 0 {
+		logger.Info("channel tags configured", "channels", len(cfg.ChannelTags))
+	}
+	a.loop.ConfigureChannelDelegation(wiring)
+
 	delegateExec.SetLensProvider(lensProviderFn)
 	if lenses, _ := lensStore.ActiveLenses(); len(lenses) > 0 {
 		logger.Info("active lenses loaded from opstate", "lenses", lenses)

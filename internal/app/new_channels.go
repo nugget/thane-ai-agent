@@ -22,6 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -254,7 +255,7 @@ func (a *App) initChannels(s *newState) error {
 			return &result, nil
 		})
 
-		a.loop.SetExtractor(extractor)
+		a.loop.ConfigureSessionStores(agent.SessionStoreWiring{Extractor: extractor})
 	}
 
 	// Git provenance is initialized per managed document root below when
@@ -291,7 +292,8 @@ func (a *App) initChannels(s *newState) error {
 				return fmt.Errorf("create document index: %w", err)
 			}
 			a.documentStore = docStore
-			tools.RegisterDocumentTools(a.loop.Tools(), documents.NewTools(docStore))
+			a.documentTools = documents.NewTools(docStore)
+			tools.RegisterDocumentTools(a.loop.Tools(), a.documentTools)
 			a.deferWorker("documents-index", func(ctx context.Context) error {
 				go docStore.RunRefresher(ctx)
 				return nil
@@ -333,7 +335,11 @@ func (a *App) initChannels(s *newState) error {
 	// --- Usage recording ---
 	// Wire persistent token usage recording into the agent loop and
 	// register the cost_summary tool so the agent can query its own spend.
-	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
+	a.loop.ConfigureSessionStores(agent.SessionStoreWiring{
+		UsageStore:   a.usageStore,
+		Pricing:      a.cfg.Pricing,
+		UsageCatalog: a.modelCatalog,
+	})
 	a.loop.Tools().SetUsageStore(a.usageStore)
 	if a.loopDefinitionRuntime == nil {
 		a.loopDefinitionRuntime = newAppLoopDefinitionRuntime(a)
@@ -357,6 +363,15 @@ func (a *App) initChannels(s *newState) error {
 		Reconcile:        a.reconcileLoopDefinition,
 		LaunchDefinition: a.launchLoopDefinition,
 	})
+	if a.documentTools != nil {
+		a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{
+			DocTools:         a.documentTools,
+			Registry:         a.loopDefinitionRegistry,
+			PersistSpec:      a.persistLoopDefinition,
+			Reconcile:        a.reconcileLoopDefinition,
+			LaunchDefinition: a.launchLoopDefinition,
+		})
+	}
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
 		Registry:   a.loopRegistry,
 		LaunchLoop: a.launchLoop,

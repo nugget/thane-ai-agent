@@ -271,21 +271,94 @@ type Loop struct {
 	nowFunc func() time.Time
 }
 
-// NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel string, parsedTalents []talents.Talent, persona string, contextWindow int) *Loop {
-	return &Loop{
-		logger:        logger,
-		memory:        mem,
-		compactor:     compactor,
-		router:        rtr,
-		llm:           llmClient,
-		tools:         tools.NewRegistry(ha, sched),
-		model:         defaultModel,
-		parsedTalents: parsedTalents,
-		persona:       persona,
-		contextWindow: contextWindow,
-		nowFunc:       time.Now,
+// LoopOptions declares everything required or optionally configurable
+// at agent loop construction. [NewLoop] validates Logger, Memory, LLM,
+// and Model — the minimum a runnable loop needs. The remaining fields
+// are configuration-dependent: production runs through internal/app
+// supply Compactor, Router, HomeAssistant, Scheduler, ContextWindow,
+// and the rest, but the CLI ask path constructs a deliberately
+// minimal loop with most fields zero-valued. Treat anything outside
+// the four explicitly-validated fields as optional but recommended
+// for full functionality.
+//
+// Late-binding wiring that depends on subsystems initialized after the
+// loop itself (capability tags, context providers, channel/extractor
+// stores, failover handler) is configured through the loop's grouped
+// Configure* methods rather than this struct.
+type LoopOptions struct {
+	// Required at construction. Validated by NewLoop.
+	Logger *slog.Logger
+	Memory MemoryStore
+	LLM    llm.Client
+	Model  string
+
+	// Recommended for production use. Optional for minimal/test loops.
+	Compactor     Compactor
+	Router        *router.Router
+	HomeAssistant *homeassistant.Client
+	Scheduler     *scheduler.Scheduler
+	ContextWindow int
+
+	// Optional, stable at construction.
+	Persona             string
+	ParsedTalents       []talents.Talent
+	Timezone            string
+	RecoveryModel       string
+	Archiver            SessionArchiver
+	InjectFiles         []string
+	EgoFile             string
+	ProvenanceStore     *provenance.Store
+	HAInject            homeassistant.StateFetcher
+	ModelRegistry       *fleet.Registry
+	ModelRuntime        *fleet.Runtime
+	LiveRequestRecorder logging.RequestRecordFunc
+	RequestRecorder     logging.RequestRecordFunc
+}
+
+// NewLoop creates a new agent loop. Returns an error when a required
+// LoopOptions field is missing. All optional wiring is applied during
+// construction; late-binding wiring (capability tags, context
+// providers, etc.) is supplied through the loop's grouped Configure*
+// methods after dependent subsystems initialize.
+func NewLoop(opts LoopOptions) (*Loop, error) {
+	if opts.Logger == nil {
+		return nil, errors.New("agent.NewLoop: Logger is required")
 	}
+	if opts.Memory == nil {
+		return nil, errors.New("agent.NewLoop: Memory is required")
+	}
+	if opts.LLM == nil {
+		return nil, errors.New("agent.NewLoop: LLM is required")
+	}
+	if opts.Model == "" {
+		return nil, errors.New("agent.NewLoop: Model is required")
+	}
+
+	l := &Loop{
+		logger:              opts.Logger,
+		memory:              opts.Memory,
+		compactor:           opts.Compactor,
+		router:              opts.Router,
+		llm:                 opts.LLM,
+		tools:               tools.NewRegistry(opts.HomeAssistant, opts.Scheduler),
+		model:               opts.Model,
+		parsedTalents:       opts.ParsedTalents,
+		persona:             opts.Persona,
+		contextWindow:       opts.ContextWindow,
+		timezone:            opts.Timezone,
+		recoveryModel:       opts.RecoveryModel,
+		archiver:            opts.Archiver,
+		injectFiles:         opts.InjectFiles,
+		egoFile:             opts.EgoFile,
+		provenanceStore:     opts.ProvenanceStore,
+		haInject:            opts.HAInject,
+		modelRegistry:       opts.ModelRegistry,
+		modelRuntime:        opts.ModelRuntime,
+		liveRequestRecorder: opts.LiveRequestRecorder,
+		requestRecorder:     opts.RequestRecorder,
+		nowFunc:             time.Now,
+	}
+	return l, nil
 }
 
 // SetFailoverHandler configures a handler to be called before model failover.
@@ -326,49 +399,119 @@ func (l *Loop) TagContextProviders() map[string]TagContextProvider {
 	return snapshot
 }
 
+// The setters below remain for test convenience and for callers that
+// need to mutate a single field after construction. Production wiring
+// in internal/app/* goes through [LoopOptions] at construction and the
+// grouped Configure* methods for late-binding state; new code should
+// prefer those entry points.
+
+// SetEgoFile sets the path to ego.md. The file is read fresh on each
+// turn after this is set.
+func (l *Loop) SetEgoFile(path string) { l.egoFile = path }
+
+// SetInjectFiles sets the file paths whose content is re-read and
+// injected into the system prompt on every turn.
+func (l *Loop) SetInjectFiles(paths []string) { l.injectFiles = paths }
+
+// SetHAInject configures the HA entity state resolver for tag context
+// documents.
+func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) { l.haInject = fetcher }
+
+// UseModelRegistry configures the live model registry used for
+// explicit model resolution and runtime usage attribution.
+func (l *Loop) UseModelRegistry(registry *fleet.Registry) { l.modelRegistry = registry }
+
+// UseModelRuntime configures the live model runtime used for explicit
+// runner preparation flows such as LM Studio context expansion.
+func (l *Loop) UseModelRuntime(runtime *fleet.Runtime) { l.modelRuntime = runtime }
+
+// UseLiveRequestRecorder configures live request detail recording for
+// in-flight turns.
+func (l *Loop) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
+	l.liveRequestRecorder = recorder
+}
+
+// CapabilityWiring bundles the late-binding capability state resolved
+// after the full tool registry is assembled. It groups the four
+// post-construction setters that finalize_capability_tags previously
+// invoked individually so the dependency surface is visible at the
+// call site.
+type CapabilityWiring struct {
+	Tags             map[string]config.CapabilityTagConfig
+	ParsedTalents    []talents.Talent
+	Surface          []toolcatalog.CapabilitySurface
+	Store            CapabilityTagStore
+	ContextAssembler *TagContextAssembler
+}
+
+// ConfigureCapabilityWiring applies the resolved capability tag
+// surface, store, talents, and context assembler. Empty fields are
+// no-ops so callers can stage the wiring incrementally.
+func (l *Loop) ConfigureCapabilityWiring(w CapabilityWiring) {
+	if len(w.Tags) > 0 {
+		l.SetCapabilityTags(w.Tags, w.ParsedTalents)
+	}
+	if len(w.Surface) > 0 {
+		l.UseCapabilitySurface(w.Surface)
+	}
+	if w.Store != nil {
+		l.capTagStore = w.Store
+	}
+	if w.ContextAssembler != nil {
+		l.tagContextAssembler = w.ContextAssembler
+	}
+}
+
+// SessionStoreWiring bundles the late-binding storage handles
+// initialized after the channel/storage subsystem comes online.
+type SessionStoreWiring struct {
+	Extractor    *memory.Extractor
+	UsageStore   *usage.Store
+	Pricing      map[string]config.PricingEntry
+	UsageCatalog *fleet.Catalog
+}
+
+// ConfigureSessionStores applies extractor and usage-recording wiring.
+// Each field is independently optional.
+func (l *Loop) ConfigureSessionStores(w SessionStoreWiring) {
+	if w.Extractor != nil {
+		l.extractor = w.Extractor
+	}
+	if w.UsageStore != nil {
+		l.usageStore = w.UsageStore
+		l.pricing = w.Pricing
+		l.usageCatalog = w.UsageCatalog
+	}
+}
+
+// ChannelDelegationWiring bundles the late-binding routing and
+// delegation policy that depend on the delegation init phase.
+type ChannelDelegationWiring struct {
+	OrchestratorTools []string
+	ChannelTags       map[string][]string
+	LensProvider      func() []string
+}
+
+// ConfigureChannelDelegation applies orchestrator tool gating, channel
+// tag mappings, and the global lens provider. Each field is
+// independently optional.
+func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
+	if w.OrchestratorTools != nil {
+		l.orchestratorTools = w.OrchestratorTools
+	}
+	if w.ChannelTags != nil {
+		l.channelTags = w.ChannelTags
+	}
+	if w.LensProvider != nil {
+		l.lensProvider = w.LensProvider
+	}
+}
+
 // SetTagContextAssembler configures the shared assembler that builds
 // the Capability Context section of the system prompt from static
 // files, tagged KB articles, and live providers.
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	l.tagContextAssembler = a
-}
-
-// SetArchiver configures the session archiver for preserving conversations.
-func (l *Loop) SetArchiver(archiver SessionArchiver) {
-	l.archiver = archiver
-}
-
-// SetExtractor configures the automatic fact extractor.
-func (l *Loop) SetExtractor(e *memory.Extractor) {
-	l.extractor = e
-}
-
-// SetEgoFile sets the path to ego.md. When set, the file is read fresh
-// on each turn and its content is injected into the system prompt.
-func (l *Loop) SetEgoFile(path string) {
-	l.egoFile = path
-}
-
-// SetProvenanceStore sets the provenance store for ego.md. When set,
-// ego.md content is read from the store and delta-relative metadata
-// (last modified time, revision count) is prepended to the system
-// prompt section.
-func (l *Loop) SetProvenanceStore(store *provenance.Store) {
-	l.provenanceStore = store
-}
-
-// SetInjectFiles sets the file paths whose content is re-read and
-// injected into the system prompt on every turn. Paths should already
-// have tilde expansion applied. Missing or unreadable files are
-// silently skipped at read time.
-func (l *Loop) SetInjectFiles(paths []string) {
-	l.injectFiles = paths
-}
-
-// SetTimezone configures the IANA timezone for the Current Conditions
-// section of the system prompt (e.g., "America/Chicago").
-func (l *Loop) SetTimezone(tz string) {
-	l.timezone = tz
 }
 
 // SetOrchestratorTools configures the restricted tool set for all
@@ -380,28 +523,6 @@ func (l *Loop) SetTimezone(tz string) {
 // tools.
 func (l *Loop) SetOrchestratorTools(names []string) {
 	l.orchestratorTools = names
-}
-
-// SetRecoveryModel configures a fast, cheap model used to generate
-// summaries when the primary model times out after completing tool
-// calls. When empty, timeout recovery falls back to a static message.
-// Only wired in the serve path — CLI one-shot requests don't need
-// timeout recovery because they have no multi-turn tool loops.
-func (l *Loop) SetRecoveryModel(model string) {
-	l.recoveryModel = model
-}
-
-// SetRequestRecorder configures request detail recording. When set,
-// completed requests are captured for live inspection and optional
-// persistent retention.
-func (l *Loop) SetRequestRecorder(recorder logging.RequestRecordFunc) {
-	l.requestRecorder = recorder
-}
-
-// UseLiveRequestRecorder configures live request detail recording for
-// in-flight turns. This is typically a lightweight in-memory sink.
-func (l *Loop) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
-	l.liveRequestRecorder = recorder
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -448,18 +569,6 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 	l.usageStore = store
 	l.pricing = pricing
 	l.usageCatalog = cat
-}
-
-// UseModelRegistry configures the live model registry used for
-// explicit model resolution and runtime usage attribution.
-func (l *Loop) UseModelRegistry(registry *fleet.Registry) {
-	l.modelRegistry = registry
-}
-
-// UseModelRuntime configures the live model runtime used for explicit
-// runner preparation flows such as LM Studio context expansion.
-func (l *Loop) UseModelRuntime(runtime *fleet.Runtime) {
-	l.modelRuntime = runtime
 }
 
 // SetChannelTags configures channel-pinned tag activation. When a
@@ -562,13 +671,6 @@ func (l *Loop) SetLensProvider(fn func() []string) {
 // for the same conversation.
 func (l *Loop) SetCapabilityTagStore(store CapabilityTagStore) {
 	l.capTagStore = store
-}
-
-// SetHAInject configures the HA entity state resolver for tag context
-// documents. When set, <!-- ha-inject: ... --> directives in context
-// files are resolved to live entity state on each turn.
-func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
-	l.haInject = fetcher
 }
 
 // HAInject returns the HA entity state fetcher used for resolving

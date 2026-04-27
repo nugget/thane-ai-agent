@@ -24,44 +24,60 @@ func (r *Registry) registerMessageTools() {
 	if r.messageBus == nil {
 		return
 	}
+	wakeParams := wakeToolParameters()
+	r.Register(&Tool{
+		Name: "thane_wake",
+		Description: "Send a one-shot message envelope to a live timer-driven loop, waking it immediately if sleeping or queueing for the next iteration if processing. " +
+			"Use this to tap a sleeping watcher with fresh context or force the next iteration to run in supervisor mode. " +
+			"thane_wake is the family-shaped name for what notify_loop does; reach for thane_wake going forward.",
+		Parameters: wakeParams,
+		Handler:    r.handleNotifyLoop,
+	})
 	r.Register(&Tool{
 		Name: "notify_loop",
-		Description: "Send a one-shot message envelope to a live timer-driven loop. " +
+		Description: "DEPRECATED: prefer thane_wake. notify_loop remains as a compatibility alias and will be removed in a future release. " +
+			"Send a one-shot message envelope to a live timer-driven loop. " +
 			"Use this to tap a sleeping watcher with fresh context or force the next iteration " +
 			"to run in supervisor mode. If the loop is currently sleeping, it wakes immediately; " +
 			"if it is already processing, the message is queued for the next iteration.",
-		Parameters: map[string]any{
-			"type": "object",
-			"anyOf": []any{
-				map[string]any{"required": []string{"loop_id"}},
-				map[string]any{"required": []string{"name"}},
+		Parameters: wakeParams,
+		Handler:    r.handleNotifyLoop,
+	})
+}
+
+// wakeToolParameters returns the JSON schema shared by thane_wake and
+// the deprecated notify_loop alias.
+func wakeToolParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"anyOf": []any{
+			map[string]any{"required": []string{"loop_id"}},
+			map[string]any{"required": []string{"name"}},
+		},
+		"properties": map[string]any{
+			"loop_id": map[string]any{
+				"type":        "string",
+				"description": "Exact live loop ID to signal. Preferred when available from loop_status.",
 			},
-			"properties": map[string]any{
-				"loop_id": map[string]any{
-					"type":        "string",
-					"description": "Exact live loop ID to signal. Preferred when available from loop_status.",
-				},
-				"name": map[string]any{
-					"type":        "string",
-					"description": "Exact live loop name to signal when loop_id is not known.",
-				},
-				"message": map[string]any{
-					"type":        "string",
-					"description": "Optional one-shot context message delivered only to the next loop iteration.",
-				},
-				"force_supervisor": map[string]any{
-					"type":        "boolean",
-					"description": "When true, force the next triggered iteration to run in supervisor mode.",
-				},
-				"priority": map[string]any{
-					"type":        "string",
-					"enum":        []string{"low", "normal", "urgent"},
-					"description": "Optional delivery priority recorded in the envelope audit trail.",
-				},
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Exact live loop name to signal when loop_id is not known.",
+			},
+			"message": map[string]any{
+				"type":        "string",
+				"description": "Optional one-shot context message delivered only to the next loop iteration.",
+			},
+			"force_supervisor": map[string]any{
+				"type":        "boolean",
+				"description": "When true, force the next triggered iteration to run in supervisor mode.",
+			},
+			"priority": map[string]any{
+				"type":        "string",
+				"enum":        []string{"low", "normal", "urgent"},
+				"description": "Optional delivery priority recorded in the envelope audit trail.",
 			},
 		},
-		Handler: r.handleNotifyLoop,
-	})
+	}
 }
 
 func (r *Registry) handleNotifyLoop(ctx context.Context, args map[string]any) (string, error) {

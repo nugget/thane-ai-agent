@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
@@ -68,37 +69,10 @@ func (a *App) initAgentLoop(s *newState) error {
 		}
 	}
 
-	// --- Agent loop ---
-	// The core conversation engine. Receives messages, manages context,
-	// invokes tools, and streams responses. All other components plug
-	// into it.
-	defaultContextWindow := a.modelCatalog.ContextWindowForModel(defaultModel, 200000)
-
-	loop := agent.NewLoop(logger, a.mem, a.compactor, a.rtr, a.ha, a.sched, a.llmClient, defaultModel, s.parsedTalents, s.personaContent, defaultContextWindow)
-	a.loop = loop
-	loop.SetTimezone(cfg.Timezone)
-	loop.UseModelRegistry(a.modelRegistry)
-	loop.UseModelRuntime(a.modelRuntime)
-	if a.liveRequestRecorder != nil {
-		loop.UseLiveRequestRecorder(a.liveRequestRecorder)
-	}
-	if a.requestRecorder != nil {
-		loop.SetRequestRecorder(a.requestRecorder)
-	}
-	if recoveryModel != "" {
-		loop.SetRecoveryModel(recoveryModel)
-		logger.Info("LLM timeout recovery enabled", "recovery_model", recoveryModel)
-	}
-	loop.SetArchiver(a.archiveAdapter)
-	if a.ha != nil {
-		loop.SetHAInject(a.ha)
-	}
-
-	// --- Shared path prefix resolver ---
-	// Build a resolver from the paths: config map. This handles kb:,
-	// scratchpad:, and any future directory-based prefixes. The
-	// resolver expands ~ in base directories at construction time.
-	// core: is reserved and always points at {workspace.path}/core.
+	// --- Path prefix resolver + inject files ---
+	// Resolve workspace-derived paths and core context-injection files
+	// before constructing the agent loop so they can be passed via
+	// LoopOptions instead of post-construction setters.
 	if cfg.Workspace.Path != "" {
 		if cfg.Paths == nil {
 			cfg.Paths = make(map[string]string)
@@ -130,12 +104,11 @@ func (a *App) initAgentLoop(s *newState) error {
 	}
 	s.resolver = resolver
 
-	// --- Context injection ---
 	// Resolve fixed core context files at startup (tilde expansion,
 	// existence check) but defer reading to each agent turn so edits
 	// under workspace/core are visible without restart.
+	var resolvedInjectFiles []string
 	if injectFiles := cfg.CoreInjectFiles(); len(injectFiles) > 0 {
-		var resolved []string
 		for _, path := range injectFiles {
 			path = resolvePath(path, resolver)
 			if _, err := os.Stat(path); err != nil {
@@ -146,11 +119,60 @@ func (a *App) initAgentLoop(s *newState) error {
 				}
 				// Still include the path — the file may appear later.
 			}
-			resolved = append(resolved, path)
+			resolvedInjectFiles = append(resolvedInjectFiles, path)
 			logger.Debug("core context file registered", "path", path)
 		}
-		loop.SetInjectFiles(resolved)
-		logger.Info("core context files registered", "files", len(resolved))
+		logger.Info("core context files registered", "files", len(resolvedInjectFiles))
+	}
+
+	// Resolve ego.md path if a workspace is configured. The agent reads
+	// the file fresh on every turn, so the path is enough at startup.
+	var egoFile string
+	if cfg.Workspace.Path != "" {
+		egoFile = resolvePath(coreFilePath(cfg.Workspace.Path, "ego.md"), nil)
+	}
+
+	// --- Agent loop ---
+	// The core conversation engine. Receives messages, manages context,
+	// invokes tools, and streams responses. All other components plug
+	// into it through LoopOptions at construction or grouped Configure*
+	// methods invoked by later init phases.
+	defaultContextWindow := a.modelCatalog.ContextWindowForModel(defaultModel, 200000)
+
+	var haInject homeassistant.StateFetcher
+	if a.ha != nil {
+		haInject = a.ha
+	}
+
+	loop, err := agent.NewLoop(agent.LoopOptions{
+		Logger:              logger,
+		Memory:              a.mem,
+		Compactor:           a.compactor,
+		Router:              a.rtr,
+		HomeAssistant:       a.ha,
+		Scheduler:           a.sched,
+		LLM:                 a.llmClient,
+		Model:               defaultModel,
+		ContextWindow:       defaultContextWindow,
+		Persona:             s.personaContent,
+		ParsedTalents:       s.parsedTalents,
+		Timezone:            cfg.Timezone,
+		RecoveryModel:       recoveryModel,
+		Archiver:            a.archiveAdapter,
+		InjectFiles:         resolvedInjectFiles,
+		EgoFile:             egoFile,
+		HAInject:            haInject,
+		ModelRegistry:       a.modelRegistry,
+		ModelRuntime:        a.modelRuntime,
+		LiveRequestRecorder: a.liveRequestRecorder,
+		RequestRecorder:     a.requestRecorder,
+	})
+	if err != nil {
+		return fmt.Errorf("build agent loop: %w", err)
+	}
+	a.loop = loop
+	if recoveryModel != "" {
+		logger.Info("LLM timeout recovery enabled", "recovery_model", recoveryModel)
 	}
 
 	// Start initial session
