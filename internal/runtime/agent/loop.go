@@ -396,6 +396,15 @@ func (l *Loop) RegisterTagContextProvider(tag string, p TagContextProvider) {
 	if p == nil {
 		return
 	}
+	// Match the assembler's normalization so staged registrations
+	// can't drift from direct registrations. Without this, "foo" and
+	// "foo " stage as distinct keys but collide on the same trimmed
+	// tag inside the assembler — last-write-wins becomes random map
+	// iteration order.
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return
+	}
 	l.pendingProvidersMu.Lock()
 	if l.tagContextAssembler != nil {
 		l.pendingProvidersMu.Unlock()

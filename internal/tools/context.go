@@ -128,11 +128,12 @@ var suppressAlwaysContextKey = suppressAlwaysContextKeyType{}
 // executor to opt child agents out of ambient providers (presence,
 // episodic memory, working memory, notification history, etc.) that
 // the bounded child task does not need.
+//
+// The flag is always set to the provided value so a caller can
+// explicitly clear an inherited true (e.g. main-loop work running
+// under a context derived from a delegate scope).
 func WithSuppressAlwaysContext(ctx context.Context, suppress bool) context.Context {
-	if !suppress {
-		return ctx
-	}
-	return context.WithValue(ctx, suppressAlwaysContextKey, true)
+	return context.WithValue(ctx, suppressAlwaysContextKey, suppress)
 }
 
 // SuppressAlwaysContextFromContext returns true when the per-Run

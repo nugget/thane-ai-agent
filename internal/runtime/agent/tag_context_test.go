@@ -644,6 +644,71 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 	}
 }
 
+// TestRegisterTagContextProvider_NormalizesTag covers the case where a
+// provider is staged before the assembler is wired. The staged tag must
+// be trimmed at staging time so it collides correctly with later
+// assembler-direct registrations and so the drain order can't make
+// "last write wins" non-deterministic for whitespace-equivalent tags.
+func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
+	t.Run("whitespace tag still resolves at build time", func(t *testing.T) {
+		l := newTagTestLoop()
+		l.RegisterTagContextProvider("  forge  ", &mockTagProvider{
+			content: `{"accounts":["github-primary"]}`,
+		})
+		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+			"forge": {
+				Description:  "Code generation",
+				Tools:        []string{"forge_run"},
+				AlwaysActive: true,
+			},
+		}, nil)
+
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		if !strings.Contains(prompt, "github-primary") {
+			t.Error("provider registered with whitespace-padded tag should fire under the trimmed tag")
+		}
+	})
+
+	t.Run("staged registration with equivalent tags resolves to one", func(t *testing.T) {
+		l := newTagTestLoop()
+		// Stage two providers under whitespace-equivalent tags. After
+		// trimming both should land on the same key, so only one
+		// survives — but importantly, neither leaks past the drain as
+		// a stray un-trimmed key.
+		l.RegisterTagContextProvider("forge", &mockTagProvider{content: "first"})
+		l.RegisterTagContextProvider("forge ", &mockTagProvider{content: "second"})
+		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+			"forge": {Description: "x", Tools: []string{"t"}, AlwaysActive: true},
+		}, nil)
+
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		// Exactly one provider's content must appear; both would
+		// indicate the staging map kept whitespace-distinct keys.
+		hasFirst := strings.Contains(prompt, "first")
+		hasSecond := strings.Contains(prompt, "second")
+		if hasFirst && hasSecond {
+			t.Error("both providers fired; staging keys should have collided after trim")
+		}
+		if !hasFirst && !hasSecond {
+			t.Error("neither provider fired; staged registration should reach the assembler")
+		}
+	})
+
+	t.Run("empty-after-trim tag is dropped", func(t *testing.T) {
+		l := newTagTestLoop()
+		// Should not panic and should not create a stray entry.
+		l.RegisterTagContextProvider("   ", &mockTagProvider{content: "leak"})
+		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+			"forge": {Description: "x", Tools: []string{"t"}, AlwaysActive: true},
+		}, nil)
+
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		if strings.Contains(prompt, "leak") {
+			t.Error("empty-after-trim registration should be dropped, not staged")
+		}
+	})
+}
+
 func TestArticleMatchesTags_OrSemantics(t *testing.T) {
 	a := kbArticle{Tags: []string{"forge", "ha"}}
 
