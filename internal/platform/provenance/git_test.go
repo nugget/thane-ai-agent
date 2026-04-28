@@ -178,3 +178,112 @@ func TestVerifierRejectsUntrustedSigner(t *testing.T) {
 		t.Fatalf("VerifyFile result = %+v, want untrusted", result)
 	}
 }
+
+// TestBootstrapBirthCommitCreatesHEAD covers the case where a managed
+// doc root is first wired up: ensureRepo has run (git init,
+// .allowed_signers present), but no commit exists yet. After
+// BootstrapBirthCommit, HEAD should exist and verify cleanly.
+func TestBootstrapBirthCommitCreatesHEAD(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	s, err := New(dir, testSigner(t), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Sanity: ensureRepo wrote .allowed_signers and ran git init,
+	// but no HEAD yet.
+	if err := s.git(t.Context(), nil, nil, "rev-parse", "--verify", "HEAD^{commit}"); err == nil {
+		t.Fatal("expected fresh repo to have no HEAD yet")
+	}
+
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	// HEAD should now exist and verify cleanly.
+	verifier, err := NewVerifier(s.path, nil, Options{})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	result, err := verifier.VerifyTree(t.Context(), "")
+	if err != nil {
+		t.Fatalf("VerifyTree on bootstrapped repo: %v", err)
+	}
+	if !result.Trusted() {
+		t.Fatalf("VerifyTree result = %+v, want trusted", result)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Errorf("expected .gitignore from birth commit: %v", err)
+	}
+}
+
+// TestBootstrapBirthCommitIsIdempotent verifies the call is a no-op
+// once HEAD exists, so callers can invoke it on every startup.
+func TestBootstrapBirthCommitIsIdempotent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	s := testStore(t)
+	if err := s.Write(t.Context(), "test.md", "first", "first commit"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var beforeBuf bytes.Buffer
+	if err := s.git(t.Context(), nil, &beforeBuf, "rev-parse", "HEAD"); err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	beforeHEAD := strings.TrimSpace(beforeBuf.String())
+
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	var afterBuf bytes.Buffer
+	if err := s.git(t.Context(), nil, &afterBuf, "rev-parse", "HEAD"); err != nil {
+		t.Fatalf("rev-parse HEAD after: %v", err)
+	}
+	if got := strings.TrimSpace(afterBuf.String()); got != beforeHEAD {
+		t.Fatalf("HEAD changed after bootstrap idempotent call: before=%s after=%s", beforeHEAD, got)
+	}
+}
+
+// TestBootstrapBirthCommitLeavesExistingContentUntracked guards the
+// "no auto-import" rule from issue #789. If the operator drops a
+// directory full of pre-existing files in front of us, bootstrap
+// commits only the bootstrap files; the rest stay untracked so the
+// operator must explicitly bring them under signed history.
+func TestBootstrapBirthCommitLeavesExistingContentUntracked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "user-content.md"), []byte("operator data"), 0o644); err != nil {
+		t.Fatalf("seed user content: %v", err)
+	}
+
+	s, err := New(dir, testSigner(t), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	var lsBuf bytes.Buffer
+	if err := s.git(t.Context(), nil, &lsBuf, "ls-files"); err != nil {
+		t.Fatalf("ls-files: %v", err)
+	}
+	tracked := strings.TrimSpace(lsBuf.String())
+	if strings.Contains(tracked, "user-content.md") {
+		t.Errorf("user-content.md was auto-tracked; want untracked. tracked=%q", tracked)
+	}
+	if !strings.Contains(tracked, ".gitignore") {
+		t.Errorf(".gitignore should be tracked after bootstrap. tracked=%q", tracked)
+	}
+}

@@ -21,6 +21,52 @@ const recentEditsCap = 10
 // receive a caller-provided context (e.g., repository initialization).
 const gitTimeout = 30 * time.Second
 
+// defaultBirthGitignore is written by [Store.BootstrapBirthCommit] when
+// the repository has no .gitignore yet. Kept minimal — broader patterns
+// belong to the operator's own .gitignore.
+const defaultBirthGitignore = `.DS_Store
+*~
+.tmp/
+`
+
+// BootstrapBirthCommit creates an initial signed commit on an empty
+// repository so verification has a baseline to verify against. No-op
+// when HEAD already exists. Stages only the bootstrap files
+// (.gitignore and the repo-local .allowed_signers if present);
+// existing user content stays untracked and must be added explicitly.
+func (s *Store) BootstrapBirthCommit(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.git(ctx, nil, nil, "rev-parse", "--verify", "HEAD^{commit}"); err == nil {
+		return nil
+	}
+
+	gitignorePath := filepath.Join(s.path, ".gitignore")
+	if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
+		if err := os.WriteFile(gitignorePath, []byte(defaultBirthGitignore), 0o644); err != nil {
+			return fmt.Errorf("write default .gitignore: %w", err)
+		}
+	}
+
+	bootstrapFiles := []string{".gitignore"}
+	if _, err := os.Stat(filepath.Join(s.path, ".allowed_signers")); err == nil {
+		bootstrapFiles = append(bootstrapFiles, ".allowed_signers")
+	}
+
+	committed, err := s.commitFiles(ctx, bootstrapFiles, "bootstrap document root")
+	if err != nil {
+		return fmt.Errorf("birth commit: %w", err)
+	}
+	if committed {
+		s.logger.Info("created document root birth commit",
+			"path", s.path,
+			"files", bootstrapFiles,
+		)
+	}
+	return nil
+}
+
 // ensureRepo initializes the git repository if it doesn't already
 // exist, configures the committer identity, and writes the
 // .allowed_signers file.
