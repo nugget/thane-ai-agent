@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func TestContextProvider_AccountConfig(t *testing.T) {
@@ -18,7 +20,7 @@ func TestContextProvider_AccountConfig(t *testing.T) {
 	}
 
 	p := NewContextProvider(mgr, nil)
-	got, err := p.TagContext(context.Background())
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext() error: %v", err)
 	}
@@ -52,7 +54,7 @@ func TestContextProvider_WithRecentOps(t *testing.T) {
 	opLog.Record(Operation{Tool: "forge_issue_update", Account: "github-primary", Repo: "nugget/thane", Ref: "#100"})
 
 	p := NewContextProvider(mgr, opLog)
-	got, err := p.TagContext(context.Background())
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext() error: %v", err)
 	}
@@ -98,7 +100,7 @@ func TestContextProvider_NoOps(t *testing.T) {
 	}
 
 	p := NewContextProvider(mgr, NewOperationLog())
-	got, err := p.TagContext(context.Background())
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext() error: %v", err)
 	}
@@ -113,7 +115,7 @@ func TestContextProvider_NilManager(t *testing.T) {
 	t.Parallel()
 
 	p := NewContextProvider(nil, nil)
-	got, err := p.TagContext(context.Background())
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext() error: %v", err)
 	}

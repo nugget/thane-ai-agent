@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // mockLoopSource returns a fixed set of loop snapshots.
@@ -30,7 +32,7 @@ func TestChannelOverview_Empty(t *testing.T) {
 	p := NewChannelOverviewProvider(ChannelOverviewConfig{
 		Loops: &mockLoopSource{},
 	})
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 	})
 	p.nowFunc = func() time.Time { return now }
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +151,7 @@ func TestChannelOverview_YouAreHere(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), testHintsKey{}, testHints)
 
-	got, err := p.GetContext(ctx, "")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +188,7 @@ func TestChannelOverview_NilPhoneResolver(t *testing.T) {
 	})
 	p.nowFunc = func() time.Time { return now }
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}

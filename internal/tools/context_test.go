@@ -297,3 +297,26 @@ func TestLoopCompletionTargetFromContext(t *testing.T) {
 		}
 	})
 }
+
+func TestSuppressAlwaysContext(t *testing.T) {
+	t.Run("default false on bare context", func(t *testing.T) {
+		if SuppressAlwaysContextFromContext(context.Background()) {
+			t.Fatal("default should be false")
+		}
+	})
+
+	t.Run("suppress=true sets the flag", func(t *testing.T) {
+		ctx := WithSuppressAlwaysContext(context.Background(), true)
+		if !SuppressAlwaysContextFromContext(ctx) {
+			t.Fatal("expected suppression to be set")
+		}
+	})
+
+	t.Run("suppress=false clears an inherited true", func(t *testing.T) {
+		parent := WithSuppressAlwaysContext(context.Background(), true)
+		child := WithSuppressAlwaysContext(parent, false)
+		if SuppressAlwaysContextFromContext(child) {
+			t.Fatal("WithSuppressAlwaysContext(ctx, false) must override an inherited true")
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func newTestWorkingMemoryProvider(t *testing.T, convID string) (*WorkingMemoryProvider, *WorkingMemoryStore) {
@@ -31,7 +32,7 @@ func newTestWorkingMemoryProvider(t *testing.T, convID string) (*WorkingMemoryPr
 func TestWorkingMemoryProvider_Empty(t *testing.T) {
 	p, _ := newTestWorkingMemoryProvider(t, "default")
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestWorkingMemoryProvider_WithContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestWorkingMemoryProvider_ConversationScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := pB.GetContext(context.Background(), "")
+	got, err := pB.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestWorkingMemoryProvider_ConversationScoped(t *testing.T) {
 	convFuncA := func(context.Context) string { return "conv-a" }
 	pA := NewWorkingMemoryProvider(store, convFuncA)
 
-	got, err = pA.GetContext(context.Background(), "")
+	got, err = pA.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}

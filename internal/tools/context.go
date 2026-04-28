@@ -115,6 +115,35 @@ func HintsFromContext(ctx context.Context) map[string]string {
 	return nil
 }
 
+// suppressAlwaysContextKey is the context key for the per-Run flag
+// controlling whether the always-on bucket of TagContextAssembler runs
+// during system-prompt assembly. Default false (include always);
+// delegate runs set true to suppress.
+type suppressAlwaysContextKeyType struct{}
+
+var suppressAlwaysContextKey = suppressAlwaysContextKeyType{}
+
+// WithSuppressAlwaysContext stamps the per-Run "skip always-on
+// context providers" flag on the context. Used by the delegate
+// executor to opt child agents out of ambient providers (presence,
+// episodic memory, working memory, notification history, etc.) that
+// the bounded child task does not need.
+//
+// The flag is always set to the provided value so a caller can
+// explicitly clear an inherited true (e.g. main-loop work running
+// under a context derived from a delegate scope).
+func WithSuppressAlwaysContext(ctx context.Context, suppress bool) context.Context {
+	return context.WithValue(ctx, suppressAlwaysContextKey, suppress)
+}
+
+// SuppressAlwaysContextFromContext returns true when the per-Run
+// always-on suppression flag is set. Default false matches main-loop
+// behavior.
+func SuppressAlwaysContextFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(suppressAlwaysContextKey).(bool)
+	return v
+}
+
 // WithChannelBinding adds a typed channel binding to the context. Nil
 // bindings are ignored.
 func WithChannelBinding(ctx context.Context, binding *memory.ChannelBinding) context.Context {

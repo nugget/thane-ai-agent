@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -106,13 +107,13 @@ func NewChannelProvider(contacts ContactLookup) *ChannelProvider {
 	return &ChannelProvider{contacts: contacts}
 }
 
-// GetContext returns a channel context block if the request context
+// TagContext returns a channel context block if the request context
 // carries a "source" hint that matches a known channel. When a contact
 // lookup is available and the sender resolves to a known contact, the
 // block includes a structured JSON contact profile with trust policy,
 // communication channels, and interaction history. Returns an empty
 // string for unrecognized sources or missing hints.
-func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, error) {
+func (p *ChannelProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	hints := tools.HintsFromContext(ctx)
 	if hints == nil {
 		hints = map[string]string{}

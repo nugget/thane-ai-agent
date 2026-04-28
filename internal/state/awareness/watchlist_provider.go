@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // StateGetter abstracts the Home Assistant client methods the watchlist
@@ -18,9 +19,10 @@ type StateGetter interface {
 	GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
 }
 
-// WatchlistProvider implements agent.ContextProvider by fetching live state for
-// all watched entities and formatting them as a markdown block for
-// system prompt injection.
+// WatchlistProvider implements [agent.TagContextProvider] by fetching
+// live state for all watched entities and formatting them as a
+// markdown block for system prompt injection. Registered via
+// [agent.Loop.RegisterAlwaysContextProvider].
 type WatchlistProvider struct {
 	store  *WatchlistStore
 	ha     StateGetter
@@ -39,15 +41,16 @@ func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Lo
 	}
 }
 
-// GetContext returns a formatted block of watched entity states for
+// TagContext returns a formatted block of watched entity states for
 // injection into the agent's system prompt. Returns an empty string
-// when the watchlist is empty. Implements agent.ContextProvider.
+// when the watchlist is empty. Implements [agent.TagContextProvider];
+// registered via RegisterAlwaysContextProvider.
 //
 // Entities with rich domains (weather, climate, light, person) are
 // formatted as compact JSON with relevant attributes. Default domains
 // use a markdown line with state and unit. All timestamps use delta
 // format per #458.
-func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, error) {
+func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	// Only emit untagged entities in the always-on context provider.
 	// Tagged entities are emitted through WatchlistTagProvider when
 	// their capability tag is active.
@@ -88,8 +91,9 @@ func NewWatchlistTagProvider(tag string, store *WatchlistStore, ha StateGetter, 
 }
 
 // TagContext returns context for watched entities tagged with this
-// provider's tag. Implements agent.TagContextProvider.
-func (p *WatchlistTagProvider) TagContext(ctx context.Context) (string, error) {
+// provider's tag. Implements [agent.TagContextProvider]; registered
+// via RegisterTagContextProvider with the matching tag.
+func (p *WatchlistTagProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	entities, err := p.store.ListByTag(p.tag)
 	if err != nil {
 		return "", fmt.Errorf("list watched entities for tag %s: %w", p.tag, err)

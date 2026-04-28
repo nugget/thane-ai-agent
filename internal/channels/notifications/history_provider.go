@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // HistoryProvider injects a compact JSON summary of recent
@@ -14,7 +15,8 @@ import (
 // autonomous loops like metacognitive) awareness of what has already
 // been sent, preventing duplicate notifications.
 //
-// Implements agent.ContextProvider.
+// Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
 type HistoryProvider struct {
 	records *RecordStore
 	nowFunc func() time.Time
@@ -73,10 +75,10 @@ type historySummary struct {
 // in the system prompt. Truncated with "…" suffix.
 const maxSnippetRunes = 100
 
-// GetContext returns a compact JSON summary of recent notifications
+// TagContext returns a compact JSON summary of recent notifications
 // for injection into the system prompt. Returns empty string when
 // no recent notifications exist.
-func (p *HistoryProvider) GetContext(_ context.Context, _ string) (string, error) {
+func (p *HistoryProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	if p.records == nil {
 		return "", nil
 	}

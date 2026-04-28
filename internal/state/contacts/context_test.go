@@ -4,13 +4,15 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func TestContextProvider_NilEmbedder(t *testing.T) {
 	store := newTestStore(t)
 	cp := NewContextProvider(store, nil)
 
-	result, err := cp.GetContext(context.Background(), "hello")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatalf("GetContext() error = %v", err)
 	}
@@ -24,7 +26,7 @@ func TestContextProvider_EmptyMessage(t *testing.T) {
 	emb := &fakeEmbedder{embedding: []float32{1, 0, 0}}
 	cp := NewContextProvider(store, emb)
 
-	result, err := cp.GetContext(context.Background(), "")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext() error = %v", err)
 	}
@@ -38,7 +40,7 @@ func TestContextProvider_NoContacts(t *testing.T) {
 	emb := &fakeEmbedder{embedding: []float32{1, 0, 0}}
 	cp := NewContextProvider(store, emb)
 
-	result, err := cp.GetContext(context.Background(), "hello")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatalf("GetContext() error = %v", err)
 	}
@@ -64,7 +66,7 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	cp := NewContextProvider(store, emb)
 	cp.SetMinScore(0.5)
 
-	result, err := cp.GetContext(context.Background(), "tell me about Alice")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "tell me about Alice"})
 	if err != nil {
 		t.Fatalf("GetContext() error = %v", err)
 	}
@@ -100,7 +102,7 @@ func TestContextProvider_ScoreFiltering(t *testing.T) {
 	cp := NewContextProvider(store, emb)
 	cp.SetMinScore(0.5)
 
-	result, err := cp.GetContext(context.Background(), "query")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "query"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +125,7 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 	cp.SetMaxContacts(2)
 	cp.SetMinScore(0.1)
 
-	result, err := cp.GetContext(context.Background(), "query")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "query"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func TestContextProvider_TrustZoneTag(t *testing.T) {
 	cp := NewContextProvider(store, emb)
 	cp.SetMinScore(0.1)
 
-	result, err := cp.GetContext(context.Background(), "Alice")
+	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "Alice"})
 	if err != nil {
 		t.Fatalf("GetContext() error = %v", err)
 	}

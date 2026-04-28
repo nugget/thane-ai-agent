@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // fixedClock returns a nowFunc that returns a fixed time.
@@ -30,7 +32,7 @@ func advancingClock(start time.Time, step time.Duration) func() time.Time {
 func TestProvider_EmptyBuffer(t *testing.T) {
 	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func TestProvider_SingleEntry(t *testing.T) {
 
 	p.HandleStateChange("binary_sensor.front_door", "off", "on")
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestProvider_MultipleEntries_NewestFirst(t *testing.T) {
 	p.HandleStateChange("light.living_room", "on", "off")
 	p.HandleStateChange("person.nugget", "not_home", "home")
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestProvider_CircularEviction(t *testing.T) {
 	p.HandleStateChange("entity.d", "0", "1")
 	p.HandleStateChange("entity.e", "0", "1")
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +143,7 @@ func TestProvider_AgeEviction(t *testing.T) {
 
 	// Read at "now" — old entry should be filtered out.
 	p.nowFunc = fixedClock(now)
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +167,7 @@ func TestProvider_AllExpired(t *testing.T) {
 
 	// Read at "now" — all entries expired.
 	p.nowFunc = fixedClock(now)
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +186,7 @@ func TestProvider_DeltaFormat(t *testing.T) {
 
 	// Read at "now" — should show 300 second delta.
 	p.nowFunc = fixedClock(now)
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +209,7 @@ func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +230,7 @@ func TestProvider_SameStateSuppressed(t *testing.T) {
 	// Real transition should be recorded.
 	p.HandleStateChange("light.office", "off", "on")
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatal(err)
 	}

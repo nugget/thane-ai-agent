@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // mockArchive implements ArchiveReader for testing.
@@ -37,7 +39,7 @@ func TestEpisodicGetContext_Empty(t *testing.T) {
 		HistoryTokens: 4000,
 	})
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +63,7 @@ func TestEpisodicGetContext_DailyFilesOnly(t *testing.T) {
 	})
 	p.nowFunc = func() time.Time { return fixedNow }
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +108,7 @@ func TestEpisodicGetContext_RecentSessionsJSON(t *testing.T) {
 		HistoryTokens: 4000,
 	})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -160,7 +162,7 @@ func TestEpisodicGetContext_ActiveSessionsExcluded(t *testing.T) {
 	}
 	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -192,7 +194,7 @@ func TestEpisodicGetContext_EmptySessionsSkipped(t *testing.T) {
 	}
 	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
@@ -208,7 +210,7 @@ func TestEpisodicGetContext_ListSessionsErrorIsSilent(t *testing.T) {
 	archive := &mockArchive{listErr: errors.New("boom")}
 	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 4000})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext should not propagate archive error: %v", err)
 	}
@@ -234,7 +236,7 @@ func TestEpisodicGetContext_ByteCapTruncates(t *testing.T) {
 	// Tight token budget → tight byte cap (×4) → truncated catalog.
 	p := NewEpisodicProvider(archive, slog.Default(), EpisodicConfig{HistoryTokens: 100})
 
-	got, err := p.GetContext(context.Background(), "")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}

@@ -43,6 +43,14 @@ type Launch struct {
 	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
 	UsageRole         string                   `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
 	UsageTaskName     string                   `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+
+	// SuppressAlwaysContext drops the always-on context bucket from
+	// the system prompt assembler for this run. Default false matches
+	// main-loop behavior (include presence, episodic memory, working
+	// memory, notification history, etc.). Delegates set true so the
+	// child agent sees only tag-scoped context appropriate to the
+	// bounded task.
+	SuppressAlwaysContext bool `yaml:"suppress_always_context,omitempty" json:"suppress_always_context,omitempty"`
 }
 
 type launchJSON struct {
@@ -69,6 +77,7 @@ type launchJSON struct {
 	ToolTimeout              string                   `json:"tool_timeout,omitempty"`
 	UsageRole                string                   `json:"usage_role,omitempty"`
 	UsageTaskName            string                   `json:"usage_task_name,omitempty"`
+	SuppressAlwaysContext    bool                     `json:"suppress_always_context,omitempty"`
 }
 
 func (l Launch) MarshalJSON() ([]byte, error) {
@@ -96,6 +105,7 @@ func (l Launch) MarshalJSON() ([]byte, error) {
 		ToolTimeout:              durationString(l.ToolTimeout),
 		UsageRole:                l.UsageRole,
 		UsageTaskName:            l.UsageTaskName,
+		SuppressAlwaysContext:    l.SuppressAlwaysContext,
 	}
 	return json.Marshal(wire)
 }
@@ -140,6 +150,7 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		ToolTimeout:              toolTimeout,
 		UsageRole:                wire.UsageRole,
 		UsageTaskName:            wire.UsageTaskName,
+		SuppressAlwaysContext:    wire.SuppressAlwaysContext,
 	}
 	return nil
 }
@@ -172,23 +183,24 @@ func (l *Launch) requestOverride() Request {
 		return Request{}
 	}
 	return Request{
-		Model:           l.Model,
-		ConversationID:  l.ConversationID,
-		ChannelBinding:  l.ChannelBinding.Clone(),
-		SkipContext:     l.SkipContext,
-		AllowedTools:    append([]string(nil), l.AllowedTools...),
-		ExcludeTools:    append([]string(nil), l.ExcludeTools...),
-		SkipTagFilter:   l.SkipTagFilter,
-		Hints:           cloneStringMap(l.Hints),
-		InitialTags:     append([]string(nil), l.InitialTags...),
-		OnProgress:      l.OnProgress,
-		FallbackContent: l.FallbackContent,
-		MaxIterations:   l.MaxIterations,
-		MaxOutputTokens: l.MaxOutputTokens,
-		ToolTimeout:     l.ToolTimeout,
-		UsageRole:       l.UsageRole,
-		UsageTaskName:   l.UsageTaskName,
-		SystemPrompt:    l.SystemPrompt,
+		Model:                 l.Model,
+		ConversationID:        l.ConversationID,
+		ChannelBinding:        l.ChannelBinding.Clone(),
+		SkipContext:           l.SkipContext,
+		AllowedTools:          append([]string(nil), l.AllowedTools...),
+		ExcludeTools:          append([]string(nil), l.ExcludeTools...),
+		SkipTagFilter:         l.SkipTagFilter,
+		Hints:                 cloneStringMap(l.Hints),
+		InitialTags:           append([]string(nil), l.InitialTags...),
+		OnProgress:            l.OnProgress,
+		FallbackContent:       l.FallbackContent,
+		MaxIterations:         l.MaxIterations,
+		MaxOutputTokens:       l.MaxOutputTokens,
+		ToolTimeout:           l.ToolTimeout,
+		UsageRole:             l.UsageRole,
+		UsageTaskName:         l.UsageTaskName,
+		SystemPrompt:          l.SystemPrompt,
+		SuppressAlwaysContext: l.SuppressAlwaysContext,
 	}
 }
 

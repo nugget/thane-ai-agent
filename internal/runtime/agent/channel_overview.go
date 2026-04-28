@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // LoopSnapshot is a subset of loop.Status relevant to channel overview.
@@ -90,9 +91,11 @@ type channelEntry struct {
 	YouAreHere   bool   `json:"you_are_here,omitempty"`
 }
 
-// GetContext returns a compact JSON channel overview for injection into
+// TagContext returns a compact JSON channel overview for injection into
 // the system prompt. Returns empty string when no channel loops exist.
-func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (string, error) {
+// Implements [TagContextProvider]; registered via
+// [Loop.RegisterAlwaysContextProvider].
+func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	if p.loops == nil {
 		return "", nil
 	}

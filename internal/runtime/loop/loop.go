@@ -58,6 +58,14 @@ type Request struct {
 	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
 	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 	FallbackContent string        `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+
+	// SuppressAlwaysContext drops the always-on bucket from the
+	// system-prompt assembler's context output for this run. Default
+	// false (main-loop behavior: include presence, episodic memory,
+	// working memory, notification history, etc.). Delegates set true
+	// so child agents see only tag-scoped context appropriate to the
+	// bounded task.
+	SuppressAlwaysContext bool `yaml:"suppress_always_context,omitempty" json:"suppress_always_context,omitempty"`
 }
 
 // RunRequest is kept as a compatibility alias while loops-ng migrates
@@ -1335,21 +1343,22 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 		Messages: []Message{
 			{Role: "user", Content: task},
 		},
-		SkipContext:     l.requestOverride.SkipContext,
-		AllowedTools:    append([]string(nil), l.requestOverride.AllowedTools...),
-		ExcludeTools:    mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
-		SkipTagFilter:   skipTagFilter,
-		Hints:           hints,
-		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
-		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
-		RuntimeTools:    cloneRuntimeTools(l.config.RuntimeTools),
-		FallbackContent: firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
-		MaxIterations:   l.requestOverride.MaxIterations,
-		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
-		ToolTimeout:     l.requestOverride.ToolTimeout,
-		UsageRole:       l.requestOverride.UsageRole,
-		UsageTaskName:   l.requestOverride.UsageTaskName,
-		SystemPrompt:    l.requestOverride.SystemPrompt,
+		SkipContext:           l.requestOverride.SkipContext,
+		AllowedTools:          append([]string(nil), l.requestOverride.AllowedTools...),
+		ExcludeTools:          mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
+		SkipTagFilter:         skipTagFilter,
+		Hints:                 hints,
+		OnProgress:            composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
+		InitialTags:           mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		RuntimeTools:          cloneRuntimeTools(l.config.RuntimeTools),
+		FallbackContent:       firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
+		MaxIterations:         l.requestOverride.MaxIterations,
+		MaxOutputTokens:       l.requestOverride.MaxOutputTokens,
+		ToolTimeout:           l.requestOverride.ToolTimeout,
+		UsageRole:             l.requestOverride.UsageRole,
+		UsageTaskName:         l.requestOverride.UsageTaskName,
+		SystemPrompt:          l.requestOverride.SystemPrompt,
+		SuppressAlwaysContext: l.requestOverride.SuppressAlwaysContext,
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)

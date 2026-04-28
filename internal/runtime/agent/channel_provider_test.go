@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -98,7 +99,7 @@ func TestChannelProvider_SignalKnownContact(t *testing.T) {
 		"sender_name": "Nugget",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +145,7 @@ func TestChannelProvider_SignalUnknownContact(t *testing.T) {
 		"sender_name": "Unknown Person",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestChannelProvider_SignalFallbackToPhone(t *testing.T) {
 		"sender": "+15551234567",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestChannelProvider_SignalNoSenderInfo(t *testing.T) {
 		"source": "signal",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +210,7 @@ func TestChannelProvider_UsesChannelBindingWhenHintsAreSparse(t *testing.T) {
 		TrustZone:   "known",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +241,7 @@ func TestChannelProvider_NilContactLookup(t *testing.T) {
 		"sender_name": "Nugget",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +296,7 @@ func TestChannelProvider_AdminFullContext(t *testing.T) {
 		"sender_name": "Admin",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func TestChannelProvider_KnownZoneMinimalFields(t *testing.T) {
 		"sender_name": "Known",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +406,7 @@ func TestChannelProvider_NullOrgTitleRole(t *testing.T) {
 		"sender_name": "NullFields",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +435,7 @@ func TestChannelProvider_UnknownSource(t *testing.T) {
 		"source": "api",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +447,7 @@ func TestChannelProvider_UnknownSource(t *testing.T) {
 func TestChannelProvider_NoHints(t *testing.T) {
 	p := NewChannelProvider(nil)
 
-	got, err := p.GetContext(context.Background(), "hello")
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +460,7 @@ func TestChannelProvider_NilHintsMap(t *testing.T) {
 	p := NewChannelProvider(nil)
 	ctx := tools.WithHints(context.Background(), nil)
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +475,7 @@ func TestChannelProvider_EmptySource(t *testing.T) {
 		"source": "",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +511,7 @@ func TestChannelProvider_JSONStructure(t *testing.T) {
 		"sender_name": "Structured",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +556,7 @@ func TestChannelProvider_InteractionRef(t *testing.T) {
 		"sender_name": "Recent",
 	})
 
-	got, err := p.GetContext(ctx, "hello")
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}

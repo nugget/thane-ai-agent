@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // ContextProvider provides relevant contacts as context for the system prompt.
@@ -15,7 +17,7 @@ type ContextProvider struct {
 }
 
 // NewContextProvider creates a context provider. A nil embeddings client
-// is handled gracefully — GetContext returns empty context in that case.
+// is handled gracefully — TagContext returns empty context in that case.
 func NewContextProvider(store *Store, embeddings EmbeddingClient) *ContextProvider {
 	return &ContextProvider{
 		store:       store,
@@ -39,9 +41,11 @@ func (p *ContextProvider) SetMinScore(score float32) {
 	p.minScore = score
 }
 
-// GetContext returns relevant contacts formatted for the system prompt.
-// Implements agent.ContextProvider interface.
-func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (string, error) {
+// TagContext returns relevant contacts formatted for the system prompt.
+// Implements [agent.TagContextProvider]; registered via
+// RegisterAlwaysContextProvider.
+func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
+	userMessage := req.UserMessage
 	if userMessage == "" || p.embeddings == nil {
 		return "", nil
 	}

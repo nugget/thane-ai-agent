@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // ContextProvider injects forge account configuration and recent
-// operations into the system prompt. It implements both
-// agent.ContextProvider (for legacy composite wiring) and
-// agent.TagContextProvider (for tag-gated injection) via structural
-// typing.
+// operations into the system prompt. Implements
+// [agent.TagContextProvider] via structural typing; registered as a
+// tag-gated provider on the forge capability tag.
 //
 // When an OperationLog is provided, the context is dynamic — each
 // call to TagContext includes the latest operation history with
@@ -47,15 +47,9 @@ type recentOpJSON struct {
 	Ago     string `json:"ago"`
 }
 
-// GetContext returns the forge context block. Implements
-// agent.ContextProvider.
-func (p *ContextProvider) GetContext(_ context.Context, _ string) (string, error) {
-	return p.buildContext()
-}
-
 // TagContext returns the forge context block for tag-gated injection.
-// Implements agent.TagContextProvider.
-func (p *ContextProvider) TagContext(_ context.Context) (string, error) {
+// Implements [agent.TagContextProvider].
+func (p *ContextProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	return p.buildContext()
 }
 
