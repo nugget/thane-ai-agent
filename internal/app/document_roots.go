@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -105,7 +106,7 @@ func buildDocumentRoots(resolver *paths.Resolver) map[string]string {
 }
 
 func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolver *paths.Resolver) (documents.StoreOptions, error) {
-	if len(documentRoots) == 0 || a == nil || a.cfg == nil {
+	if a == nil || a.cfg == nil {
 		return documents.StoreOptions{}, nil
 	}
 	opts := documents.StoreOptions{
@@ -113,6 +114,12 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 	}
 	if len(a.cfg.DocRoots) == 0 {
 		return opts, nil
+	}
+	if documentRoots == nil {
+		// The loop below mutates this map when bootstrapping a
+		// missing directory; ensure it is non-nil so we don't
+		// panic on assignment.
+		documentRoots = make(map[string]string)
 	}
 	logger := a.logger
 	if logger == nil {
@@ -123,15 +130,49 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 		if root == "" {
 			continue
 		}
+		policy := documentRootPolicyFromConfig(rootCfg)
+
 		rootPath, ok := documentRoots[root]
 		if !ok {
-			return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s references a document root that is not configured in paths or does not exist on disk", root)
+			// A git-managed signing root is allowed to bootstrap
+			// from a missing directory — we will mkdir, git init,
+			// and birth-commit below. Non-bootstrap configs still
+			// require the directory to already exist.
+			if !policy.Git.Enabled || !policy.Git.SignCommits {
+				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s references a document root that is not configured in paths or does not exist on disk", root)
+			}
+			created, err := bootstrapMissingRootDirectory(root, resolver, logger)
+			if err != nil {
+				return documents.StoreOptions{}, err
+			}
+			documentRoots[root] = created
+			rootPath = created
 		}
-		policy := documentRootPolicyFromConfig(rootCfg)
+
 		opts.RootPolicies[root] = policy
+
+		// Construct the writer first when this root signs commits.
+		// provenance.NewWithOptions runs ensureRepo (mkdir + git
+		// init + .allowed_signers); BootstrapBirthCommit then makes
+		// HEAD exist if the repo was empty. Doing this before the
+		// verifier means the verifier always sees a fully prepared
+		// repo and never silently no-ops because the repo wasn't
+		// ready yet.
+		var writer *documentRootProvenanceWriter
+		if policy.Git.Enabled && policy.Git.SignCommits {
+			w, err := a.newDocumentRootProvenanceWriter(root, rootPath, rootCfg.Git, resolver)
+			if err != nil {
+				return documents.StoreOptions{}, err
+			}
+			writer = w
+		}
+
 		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
 			verifier, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
 			if err != nil {
+				if policy.Git.VerifySignatures == documents.VerificationRequired {
+					return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s verify_signatures=required but verifier unavailable: %w", root, err)
+				}
 				logger.Warn("document root signature verifier unavailable",
 					"root", root,
 					"mode", policy.Git.VerifySignatures,
@@ -144,19 +185,40 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 				opts.RootVerifiers[root] = verifier
 			}
 		}
-		if !policy.Git.Enabled || !policy.Git.SignCommits {
-			continue
+
+		if writer != nil {
+			if opts.RootWriters == nil {
+				opts.RootWriters = make(map[string]documents.RootWriter)
+			}
+			opts.RootWriters[root] = writer
 		}
-		writer, err := a.newDocumentRootProvenanceWriter(root, rootPath, rootCfg.Git, resolver)
-		if err != nil {
-			return documents.StoreOptions{}, err
-		}
-		if opts.RootWriters == nil {
-			opts.RootWriters = make(map[string]documents.RootWriter)
-		}
-		opts.RootWriters[root] = writer
 	}
 	return opts, nil
+}
+
+// bootstrapMissingRootDirectory creates the directory for a git-managed
+// document root that was declared in doc_roots: but has no entry in
+// paths or does not exist on disk. Returns the absolute path. Only
+// callers that are about to construct a signing writer should use this
+// — for non-bootstrap roots the existing "does not exist on disk" error
+// is preserved.
+func bootstrapMissingRootDirectory(root string, resolver *paths.Resolver, logger *slog.Logger) (string, error) {
+	if resolver == nil {
+		return "", fmt.Errorf("doc_roots.%s has no path configured (paths: missing entry for %q)", root, root)
+	}
+	resolved, err := resolver.Resolve(root + ":")
+	if err != nil {
+		return "", fmt.Errorf("doc_roots.%s: %w", root, err)
+	}
+	if err := os.MkdirAll(resolved, 0o755); err != nil {
+		return "", fmt.Errorf("doc_roots.%s create directory: %w", root, err)
+	}
+	absPath, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("doc_roots.%s resolve absolute path: %w", root, err)
+	}
+	logger.Info("bootstrapping new document root", "root", root, "path", absPath)
+	return absPath, nil
 }
 
 func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.RootPolicy {
@@ -228,6 +290,18 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 	if err != nil {
 		return nil, fmt.Errorf("initialize git provenance for document root %s: %w", root, err)
 	}
+
+	// Make sure HEAD exists before any verifier construction. No-op
+	// when the repo already has commits; for a fresh repo this
+	// commits a templated .gitignore plus the repo-local
+	// .allowed_signers (when present) so verification has signed
+	// history to verify against.
+	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := store.BootstrapBirthCommit(bootstrapCtx); err != nil {
+		return nil, fmt.Errorf("doc_roots.%s bootstrap birth commit: %w", root, err)
+	}
+
 	logger.Info("document root provenance enabled",
 		"root", root,
 		"repo", store.Path(),
