@@ -3,7 +3,7 @@ package toolcatalog
 var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"archive":         {Description: "Archive search and transcript retrieval across past conversations."},
 	"attachments":     {Description: "Attachment listing, search, and vision description tools."},
-	"awareness":       {Description: "Watchlist and live-context entity management tools."},
+	"awareness":       {Description: "Subscribe entities and live providers to a loop or conversation's auto-injected context. Reflexive for service loops, optional for single-shots."},
 	"contacts":        {Description: "Structured contact-directory records and vCard administration tools."},
 	"development":     {Description: "Coarse entry point for software, repository, and code-change work. Usually leads to forge, files, web, or shell.", Menu: true},
 	"diagnostics":     {Description: "Logs, usage, version, and operational debugging tools."},
