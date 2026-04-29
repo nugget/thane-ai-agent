@@ -780,9 +780,19 @@ type RootEntry struct {
 // UnmarshalYAML accepts either the bare-string shorthand or the full
 // mapping form for a root entry. Bare strings populate Path with all
 // policy fields defaulted; mappings decode normally.
+//
+// Scalar shorthand requires a non-empty string. Null (e.g. `kb:` with
+// no value) and non-string scalars (numbers, bools) are rejected so a
+// typo can't silently become a path.
 func (r *RootEntry) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
 	case yaml.ScalarNode:
+		if node.Tag != "" && node.Tag != "!!str" {
+			return fmt.Errorf("roots entry shorthand must be a string path, got %s", node.Tag)
+		}
+		if strings.TrimSpace(node.Value) == "" {
+			return fmt.Errorf("roots entry shorthand path must not be empty")
+		}
 		r.Path = node.Value
 		return nil
 	case yaml.MappingNode:
@@ -1847,15 +1857,29 @@ func (c *Config) normalizeRoots() error {
 		if c.DocRoots == nil {
 			c.DocRoots = make(map[string]DocumentRootConfig, len(c.Roots))
 		}
+		seen := make(map[string]string, len(c.Roots))
 		for name, entry := range c.Roots {
 			trimmed := strings.TrimSuffix(strings.TrimSpace(name), ":")
 			if trimmed == "" {
 				return fmt.Errorf("config: roots: contains an empty entry name")
 			}
+			if prev, ok := seen[trimmed]; ok {
+				return fmt.Errorf("config: roots: keys %q and %q both canonicalize to %q", prev, name, trimmed)
+			}
+			seen[trimmed] = name
+			pathValue := strings.TrimSpace(entry.Path)
 			// core: is reserved — its path is always derived from
 			// workspace.path. Allow declaring it in roots: solely
 			// to set policy; ignore any path that was provided.
-			if trimmed != "core" && entry.Path != "" {
+			if trimmed == "core" {
+				if pathValue != "" && !entryHasPolicy(entry) {
+					slog.Default().Warn("config: roots.core path is ignored (core derives from workspace.path); declare core: only when setting policy",
+						"path", entry.Path)
+				}
+			} else {
+				if pathValue == "" {
+					return fmt.Errorf("config: roots.%s.path must be set for non-core roots", trimmed)
+				}
 				c.Paths[trimmed] = entry.Path
 			}
 			if entryHasPolicy(entry) {
