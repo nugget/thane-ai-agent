@@ -162,7 +162,7 @@ func summarizeHistoryWindow(window []homeassistant.State, current *homeassistant
 	if summary, ok := summarizeNumericHistory(window, current, offsetSeconds); ok {
 		return summary
 	}
-	return summarizeDiscreteHistory(window, offsetSeconds)
+	return summarizeDiscreteHistory(window, current, offsetSeconds)
 }
 
 func summarizeNumericHistory(window []homeassistant.State, current *homeassistant.State, offsetSeconds int) (map[string]any, bool) {
@@ -207,9 +207,14 @@ func summarizeNumericHistory(window []homeassistant.State, current *homeassistan
 	return summary, true
 }
 
-func summarizeDiscreteHistory(window []homeassistant.State, offsetSeconds int) map[string]any {
+func summarizeDiscreteHistory(window []homeassistant.State, current *homeassistant.State, offsetSeconds int) map[string]any {
 	if len(window) == 0 {
 		return nil
+	}
+
+	domain, deviceClass := historyClassification(current)
+	label := func(raw string) string {
+		return semanticState(domain, deviceClass, raw)
 	}
 
 	changes := 0
@@ -219,8 +224,9 @@ func summarizeDiscreteHistory(window []homeassistant.State, offsetSeconds int) m
 		if i > 0 && window[i-1].State != state.State {
 			changes++
 		}
-		if len(recent) == 0 || recent[len(recent)-1] != state.State {
-			recent = append(recent, state.State)
+		translated := label(state.State)
+		if len(recent) == 0 || recent[len(recent)-1] != translated {
+			recent = append(recent, translated)
 			if len(recent) > maxWatchlistRecentDiscreteKeys {
 				recent = recent[len(recent)-maxWatchlistRecentDiscreteKeys:]
 				recentTruncated = true
@@ -233,8 +239,8 @@ func summarizeDiscreteHistory(window []homeassistant.State, offsetSeconds int) m
 		"kind":                    "discrete",
 		"sample_count":            len(window),
 		"change_count":            changes,
-		"start_state":             window[0].State,
-		"end_state":               window[len(window)-1].State,
+		"start_state":             label(window[0].State),
+		"end_state":               label(window[len(window)-1].State),
 		"recent_states":           recent,
 		"recent_states_truncated": recentTruncated,
 	}
@@ -242,6 +248,13 @@ func summarizeDiscreteHistory(window []homeassistant.State, offsetSeconds int) m
 		summary["trend"] = "stable"
 	}
 	return summary
+}
+
+func historyClassification(current *homeassistant.State) (domain, deviceClass string) {
+	if current == nil {
+		return "", ""
+	}
+	return entityDomain(current.EntityID), attrString(current.Attributes, "device_class")
 }
 
 func numericTrendLabel(delta float64) string {

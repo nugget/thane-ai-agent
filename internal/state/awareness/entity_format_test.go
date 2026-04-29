@@ -296,6 +296,161 @@ func TestEntityDomain(t *testing.T) {
 	}
 }
 
+func TestFormatDefault_BinarySensorDeviceClassTranslation(t *testing.T) {
+	cases := []struct {
+		name        string
+		entityID    string
+		state       string
+		deviceClass string
+		want        string
+	}{
+		{"door open", "binary_sensor.front_door", "on", "door", "open"},
+		{"door closed", "binary_sensor.front_door", "off", "door", "closed"},
+		{"garage_door open", "binary_sensor.garage", "on", "garage_door", "open"},
+		{"window closed", "binary_sensor.bedroom_window", "off", "window", "closed"},
+		{"motion detected", "binary_sensor.hallway", "on", "motion", "detected"},
+		{"motion clear", "binary_sensor.hallway", "off", "motion", "clear"},
+		{"smoke detected", "binary_sensor.kitchen_smoke", "on", "smoke", "detected"},
+		{"moisture wet", "binary_sensor.basement_leak", "on", "moisture", "wet"},
+		{"occupancy clear", "binary_sensor.office", "off", "occupancy", "clear"},
+		{"connectivity disconnected", "binary_sensor.router", "off", "connectivity", "disconnected"},
+		{"battery low", "binary_sensor.remote_battery", "on", "battery", "low"},
+		{"problem ok", "binary_sensor.printer", "off", "problem", "ok"},
+		{"safety unsafe", "binary_sensor.pool", "on", "safety", "unsafe"},
+		{"tamper ok", "binary_sensor.alarm", "off", "tamper", "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &homeassistant.State{
+				EntityID:    tc.entityID,
+				State:       tc.state,
+				LastChanged: testNow.Add(-30 * time.Second),
+				Attributes: map[string]any{
+					"device_class": tc.deviceClass,
+				},
+			}
+			result := formatEntityContext(state, testNow)
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Fatalf("output should be valid JSON: %v\nGot: %s", err, result)
+			}
+			if got := parsed["state"]; got != tc.want {
+				t.Errorf("state = %v, want %q", got, tc.want)
+			}
+			if got := parsed["device_class"]; got != tc.deviceClass {
+				t.Errorf("device_class = %v, want %q", got, tc.deviceClass)
+			}
+		})
+	}
+}
+
+func TestFormatDefault_BinarySensorPassthroughForUnknownDeviceClass(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "binary_sensor.unmapped",
+		State:       "on",
+		LastChanged: testNow.Add(-10 * time.Second),
+		Attributes: map[string]any{
+			"device_class": "totally_made_up",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, result)
+	}
+	if parsed["state"] != "on" {
+		t.Errorf("unmapped device_class should pass through state, got %v", parsed["state"])
+	}
+}
+
+func TestFormatDefault_BinarySensorPreservesNonBinaryStates(t *testing.T) {
+	// HA emits "unavailable" or "unknown" when integrations drop out.
+	// Translation must not rewrite those into a misleading semantic
+	// label — the model needs to see that the sensor is offline.
+	for _, raw := range []string{"unavailable", "unknown"} {
+		state := &homeassistant.State{
+			EntityID:    "binary_sensor.front_door",
+			State:       raw,
+			LastChanged: testNow,
+			Attributes:  map[string]any{"device_class": "door"},
+		}
+		result := formatEntityContext(state, testNow)
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("invalid JSON for %s: %v", raw, err)
+		}
+		if parsed["state"] != raw {
+			t.Errorf("state = %v, want %q (must not translate non-on/off)", parsed["state"], raw)
+		}
+	}
+}
+
+func TestFormatCover_GarageDoorWithPosition(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "cover.garage",
+		State:       "open",
+		LastChanged: testNow.Add(-120 * time.Second),
+		Attributes: map[string]any{
+			"friendly_name":         "Garage Door",
+			"device_class":          "garage",
+			"current_position":      float64(30),
+			"current_tilt_position": float64(15),
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, result)
+	}
+	if parsed["entity"] != "cover.garage" {
+		t.Error("missing entity")
+	}
+	if parsed["state"] != "open" {
+		t.Errorf("state = %v, want open", parsed["state"])
+	}
+	if parsed["device_class"] != "garage" {
+		t.Errorf("device_class = %v, want garage", parsed["device_class"])
+	}
+	if parsed["position"] != float64(30) {
+		t.Errorf("position = %v, want 30", parsed["position"])
+	}
+	if parsed["tilt_position"] != float64(15) {
+		t.Errorf("tilt_position = %v, want 15", parsed["tilt_position"])
+	}
+	if parsed["since"] != "-120s" {
+		t.Errorf("since = %v, want -120s", parsed["since"])
+	}
+}
+
+func TestFormatCover_OmitsMissingPosition(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "cover.simple",
+		State:       "closed",
+		LastChanged: testNow.Add(-5 * time.Second),
+		Attributes: map[string]any{
+			"device_class": "door",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	if strings.Contains(result, `"position"`) {
+		t.Errorf("position should be omitted when missing, got %s", result)
+	}
+	if strings.Contains(result, `"tilt_position"`) {
+		t.Errorf("tilt_position should be omitted when missing, got %s", result)
+	}
+}
+
+func TestSemanticState_NumericFallthrough(t *testing.T) {
+	// Numeric default-domain states still get device_class precision
+	// rounding even after the binary_sensor translation path was added.
+	if got := semanticState("sensor", "temperature", "72.456"); got != "72.5" {
+		t.Errorf("semanticState numeric = %q, want 72.5", got)
+	}
+	if got := semanticState("binary_sensor", "", "on"); got != "on" {
+		t.Errorf("binary_sensor without device_class should pass through, got %q", got)
+	}
+}
+
 func TestNormalizeBrightness(t *testing.T) {
 	tests := []struct {
 		input any

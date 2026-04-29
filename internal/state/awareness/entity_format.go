@@ -28,6 +28,8 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatPerson(state, now)
 	case "sun":
 		return formatSun(state, now)
+	case "cover":
+		return formatCover(state, now)
 	default:
 		return formatDefault(state, now)
 	}
@@ -48,12 +50,16 @@ type defaultContext struct {
 // formatDefault produces compact JSON for any entity type. Includes
 // device_class when available and last_updated when it differs from
 // last_changed (indicating attribute-only updates). Numeric state
-// values are rounded based on device_class.
+// values are rounded based on device_class. Binary sensor states
+// (on/off) are translated to device_class-specific semantic labels
+// (door → open/closed, motion → detected/clear, etc.) so the model
+// reads the meaning rather than inferring it from the on/off encoding.
 func formatDefault(state *homeassistant.State, now time.Time) string {
 	deviceClass := attrString(state.Attributes, "device_class")
+	domain := entityDomain(state.EntityID)
 	dc := defaultContext{
 		Entity:      state.EntityID,
-		State:       roundState(state.State, deviceClass),
+		State:       semanticState(domain, deviceClass, state.State),
 		Unit:        attrString(state.Attributes, "unit_of_measurement"),
 		DeviceClass: deviceClass,
 		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
@@ -284,6 +290,92 @@ func formatSun(state *homeassistant.State, now time.Time) string {
 	}
 
 	return promptfmt.MarshalCompact(sc)
+}
+
+// coverContext is the JSON structure for cover entity context.
+// Cover state is already semantic (open/closed/opening/closing/stopped)
+// but current_position carries information that the bare state hides:
+// a blind at "open" with position 30 is meaningfully different from
+// fully open. Tilt position is included for venetian-style covers.
+type coverContext struct {
+	Entity      string `json:"entity"`
+	Name        string `json:"name,omitempty"`
+	State       string `json:"state"`
+	DeviceClass string `json:"device_class,omitempty"`
+	Position    any    `json:"position,omitempty"`
+	Tilt        any    `json:"tilt_position,omitempty"`
+	Since       string `json:"since"`
+}
+
+func formatCover(state *homeassistant.State, now time.Time) string {
+	cc := coverContext{
+		Entity:      state.EntityID,
+		State:       state.State,
+		DeviceClass: attrString(state.Attributes, "device_class"),
+		Position:    roundAttr(state.Attributes["current_position"], 0),
+		Tilt:        roundAttr(state.Attributes["current_tilt_position"], 0),
+		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
+		cc.Name = name
+	}
+	return promptfmt.MarshalCompact(cc)
+}
+
+// binarySensorStateLabels maps a binary_sensor device_class to its
+// semantic [off, on] labels. Tracks the canonical Home Assistant
+// device_class catalog. Translation collapses the on/off encoding into
+// the actual fact about the world, so the model does not need to know
+// that device_class:door + state:on means "door is open".
+var binarySensorStateLabels = map[string][2]string{
+	"battery":          {"normal", "low"},
+	"battery_charging": {"not_charging", "charging"},
+	"carbon_monoxide":  {"clear", "detected"},
+	"cold":             {"normal", "cold"},
+	"connectivity":     {"disconnected", "connected"},
+	"door":             {"closed", "open"},
+	"garage_door":      {"closed", "open"},
+	"gas":              {"clear", "detected"},
+	"heat":             {"normal", "hot"},
+	"light":            {"no_light", "light_detected"},
+	"lock":             {"locked", "unlocked"},
+	"moisture":         {"dry", "wet"},
+	"motion":           {"clear", "detected"},
+	"moving":           {"stopped", "moving"},
+	"occupancy":        {"clear", "detected"},
+	"opening":          {"closed", "open"},
+	"plug":             {"unplugged", "plugged_in"},
+	"power":            {"no_power", "powered"},
+	"presence":         {"away", "home"},
+	"problem":          {"ok", "problem"},
+	"running":          {"not_running", "running"},
+	"safety":           {"safe", "unsafe"},
+	"smoke":            {"clear", "detected"},
+	"sound":            {"clear", "detected"},
+	"tamper":           {"ok", "tampering"},
+	"update":           {"up_to_date", "update_available"},
+	"vibration":        {"clear", "detected"},
+	"window":           {"closed", "open"},
+}
+
+// semanticState returns a model-friendly state label for the given
+// (domain, device_class, state) tuple. For binary_sensors with a known
+// device_class, on/off is translated to its semantic pair (e.g. door
+// on/off → open/closed). Numeric default-domain states are rounded by
+// device_class. All other inputs pass through unchanged so unavailable,
+// unknown, and unmapped values are preserved.
+func semanticState(domain, deviceClass, state string) string {
+	if domain == "binary_sensor" && deviceClass != "" {
+		if labels, ok := binarySensorStateLabels[deviceClass]; ok {
+			switch state {
+			case "off":
+				return labels[0]
+			case "on":
+				return labels[1]
+			}
+		}
+	}
+	return roundState(state, deviceClass)
 }
 
 // roundState rounds a numeric state string to appropriate precision
