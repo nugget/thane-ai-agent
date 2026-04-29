@@ -122,6 +122,13 @@ func (r *Registry) SetFileTools(ft *FileTools) {
 	r.registerFileTools()
 }
 
+// FileTools returns the registered file tools, or nil when none are
+// configured. Used by app wiring to install late-binding dependencies
+// (e.g. the doc-root signature verifier) after the doc store exists.
+func (r *Registry) FileTools() *FileTools {
+	return r.fileTools
+}
+
 // SetShellExec adds shell execution tools to the registry.
 func (r *Registry) SetShellExec(se *ShellExec) {
 	r.shellExec = se

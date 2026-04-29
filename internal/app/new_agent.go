@@ -124,6 +124,7 @@ func (a *App) initAgentLoop(s *newState) error {
 		}
 		logger.Info("core context files registered", "files", len(resolvedInjectFiles))
 	}
+	s.resolvedInjectFiles = resolvedInjectFiles
 
 	// Resolve ego.md path if a workspace is configured. The agent reads
 	// the file fresh on every turn, so the path is enough at startup.

@@ -126,11 +126,37 @@ The current policy fields are:
 
 Signature-required roots are the place for high-integrity authored
 knowledge, such as owner-tagged knowledge articles. When verification
-is `required`, Thane blocks document reads, indexed browse/search
-surfaces, loop-declared output context, and tagged context articles when
-the target content is not cleanly covered by trusted signed git history.
+is `required`, Thane blocks the following content paths when the
+target content is not cleanly covered by trusted signed git history:
+
+- Document store reads (`Read`, indexed browse and search surfaces)
+- Loop-declared output context
+- Tagged context articles
+- The model's `read_file` tool when the resolved path lies inside a
+  managed root
+- Inject-files each time they are read into the prompt, with startup
+  fail-fast verification for initially configured files
+- Startup-time talents, loaded only after their source markdown files
+  pass verification
+
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
+
+The raw `write_file` and `edit_file` tools are stricter than read
+verification. They cannot mutate read-only/restricted roots, and they
+cannot mutate roots with signed git provenance; those changes must go
+through managed document tools so root writers can preserve authoring
+policy, git history, and signatures.
+
+Directory-walk surfaces (`list_files`, `tree`, `stat`, `search_files`,
+`grep`) intentionally do not consult the verifier. `list_files`,
+`tree`, `stat`, and `search_files` return only paths and metadata.
+**`grep` is different**: it returns short content excerpts that are
+*not* verified, so under `verify_signatures: required` it can surface
+snippets from files that would be blocked by `read_file`. If a result
+matters to you, re-read it through `read_file` — that path is gated
+and will fail if the underlying content is not covered by trusted
+signed history.
 
 ## A Few Practical Guidelines
 

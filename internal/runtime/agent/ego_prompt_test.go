@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -142,6 +143,33 @@ func TestBuildSystemPrompt_InjectFilesIncluded(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "---") {
 		t.Error("system prompt should contain separator between inject files")
+	}
+}
+
+type rejectingInjectFileVerifier struct{}
+
+func (rejectingInjectFileVerifier) VerifyPath(context.Context, string, string) error {
+	return errors.New("untrusted inject file")
+}
+
+func TestBuildSystemPrompt_InjectFilesVerifierBlocks(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "MEMORY.md")
+	if err := os.WriteFile(f, []byte("blocked context"), 0644); err != nil {
+		t.Fatalf("write inject file: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.SetInjectFiles([]string{f})
+	l.UseInjectFileVerifier(rejectingInjectFileVerifier{}.VerifyPath)
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if strings.Contains(prompt, "blocked context") {
+		t.Fatal("system prompt should not contain content rejected by the inject-file verifier")
+	}
+	if strings.Contains(prompt, "Injected Context") {
+		t.Fatal("system prompt should not include injected context section when all files are rejected")
 	}
 }
 

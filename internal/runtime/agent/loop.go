@@ -232,8 +232,9 @@ type Loop struct {
 	egoFile             string            // Path to ego.md — read fresh each turn for system prompt
 	provenanceStore     *provenance.Store // Optional provenance store for ego.md metadata injection
 	injectFiles         []string          // Paths to context files — re-read each turn
-	timezone            string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow       int               // Context window size of default model
+	injectFileVerifier  func(context.Context, string, string) error
+	timezone            string // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow       int    // Context window size of default model
 	failoverHandler     FailoverHandler
 	archiver            SessionArchiver
 	extractor           *memory.Extractor
@@ -450,6 +451,12 @@ func (l *Loop) SetEgoFile(path string) { l.egoFile = path }
 // injected into the system prompt on every turn.
 func (l *Loop) SetInjectFiles(paths []string) { l.injectFiles = paths }
 
+// UseInjectFileVerifier configures the verifier used before each
+// inject-file read during system-prompt assembly.
+func (l *Loop) UseInjectFileVerifier(verifier func(context.Context, string, string) error) {
+	l.injectFileVerifier = verifier
+}
+
 // SetHAInject configures the HA entity state resolver for tag context
 // documents.
 func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) { l.haInject = fetcher }
@@ -485,6 +492,9 @@ type CapabilityWiring struct {
 // surface, store, talents, and context assembler. Empty fields are
 // no-ops so callers can stage the wiring incrementally.
 func (l *Loop) ConfigureCapabilityWiring(w CapabilityWiring) {
+	if w.ParsedTalents != nil {
+		l.parsedTalents = w.ParsedTalents
+	}
 	if len(w.Tags) > 0 {
 		l.SetCapabilityTags(w.Tags, w.ParsedTalents)
 	}
@@ -934,6 +944,14 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	if len(l.injectFiles) > 0 {
 		var ctxBuf strings.Builder
 		for _, path := range l.injectFiles {
+			if l.injectFileVerifier != nil {
+				if err := l.injectFileVerifier(ctx, path, "inject_files"); err != nil {
+					if l.logger != nil {
+						l.logger.Warn("inject file blocked by verification policy", "path", path, "error", err)
+					}
+					continue
+				}
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				continue
