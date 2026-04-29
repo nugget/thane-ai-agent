@@ -363,25 +363,83 @@ func TestFormatDefault_BinarySensorPassthroughForUnknownDeviceClass(t *testing.T
 	}
 }
 
-func TestFormatDefault_BinarySensorPreservesNonBinaryStates(t *testing.T) {
+func TestFormatEntityContext_SentinelStatesYieldAvailabilityShape(t *testing.T) {
 	// HA emits "unavailable" or "unknown" when integrations drop out.
-	// Translation must not rewrite those into a misleading semantic
-	// label — the model needs to see that the sensor is offline.
+	// These are intercepted before domain dispatch and rendered as a
+	// structured availability payload so the model never sees a
+	// sentinel string in the state field where a domain value belongs.
 	for _, raw := range []string{"unavailable", "unknown"} {
 		state := &homeassistant.State{
 			EntityID:    "binary_sensor.front_door",
 			State:       raw,
-			LastChanged: testNow,
-			Attributes:  map[string]any{"device_class": "door"},
+			LastChanged: testNow.Add(-12 * time.Minute),
+			Attributes: map[string]any{
+				"friendly_name": "Front Door",
+				"device_class":  "door",
+			},
 		}
 		result := formatEntityContext(state, testNow)
 		var parsed map[string]any
 		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 			t.Fatalf("invalid JSON for %s: %v", raw, err)
 		}
-		if parsed["state"] != raw {
-			t.Errorf("state = %v, want %q (must not translate non-on/off)", parsed["state"], raw)
+		if parsed["available"] != false {
+			t.Errorf("[%s] available = %v, want false", raw, parsed["available"])
 		}
+		if parsed["reason"] != raw {
+			t.Errorf("[%s] reason = %v, want %q", raw, parsed["reason"], raw)
+		}
+		if _, hasState := parsed["state"]; hasState {
+			t.Errorf("[%s] state field must be omitted (had %v)", raw, parsed["state"])
+		}
+		if parsed["unavailable_since"] != "-720s" {
+			t.Errorf("[%s] unavailable_since = %v, want -720s", raw, parsed["unavailable_since"])
+		}
+		if parsed["device_class"] != "door" {
+			t.Errorf("[%s] device_class = %v, want door", raw, parsed["device_class"])
+		}
+		if parsed["name"] != "Front Door" {
+			t.Errorf("[%s] name = %v, want Front Door", raw, parsed["name"])
+		}
+	}
+}
+
+func TestFormatEntityContext_SentinelInterceptsAllDomains(t *testing.T) {
+	// The sentinel interception must run before domain dispatch, so
+	// even rich-formatter domains (weather, climate, light, cover)
+	// emit the availability shape rather than their per-domain JSON.
+	for _, entityID := range []string{"weather.home", "climate.thermostat", "light.kitchen", "cover.garage"} {
+		state := &homeassistant.State{
+			EntityID:    entityID,
+			State:       "unavailable",
+			LastChanged: testNow.Add(-30 * time.Second),
+			Attributes:  map[string]any{},
+		}
+		result := formatEntityContext(state, testNow)
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("[%s] invalid JSON: %v", entityID, err)
+		}
+		if parsed["available"] != false {
+			t.Errorf("[%s] expected availability shape, got %v", entityID, parsed)
+		}
+	}
+}
+
+func TestFormatFetchError(t *testing.T) {
+	result := formatFetchError("sensor.gone")
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["entity"] != "sensor.gone" {
+		t.Errorf("entity = %v, want sensor.gone", parsed["entity"])
+	}
+	if parsed["available"] != false {
+		t.Errorf("available = %v, want false", parsed["available"])
+	}
+	if parsed["reason"] != "fetch_error" {
+		t.Errorf("reason = %v, want fetch_error", parsed["reason"])
 	}
 }
 

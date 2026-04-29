@@ -122,7 +122,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 			"entity_id", sub.EntityID,
 			"error", err,
 		)
-		return fmt.Sprintf("- **%s**: unavailable", sub.EntityID)
+		return formatFetchError(sub.EntityID)
 	}
 
 	content := formatEntityContext(state, now)
@@ -154,7 +154,7 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 			"tag", p.tag,
 			"error", err,
 		)
-		return ""
+		return formatFetchError(sub.EntityID)
 	}
 
 	content := formatEntityContext(state, now)

@@ -127,11 +127,21 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(got, "sensor.broken") {
-		t.Error("missing entity_id for failed fetch")
+	// Fetch errors must use the same JSON availability schema as
+	// sentinel-state entities so the model sees one stable shape
+	// regardless of whether the failure was upstream or local.
+	payload := decodeWatchlistPayload(t, got)
+	if payload["entity"] != "sensor.broken" {
+		t.Errorf("entity = %v, want sensor.broken", payload["entity"])
 	}
-	if !strings.Contains(got, "unavailable") {
-		t.Error("failed entity should show as unavailable")
+	if payload["available"] != false {
+		t.Errorf("available = %v, want false", payload["available"])
+	}
+	if payload["reason"] != "fetch_error" {
+		t.Errorf("reason = %v, want fetch_error", payload["reason"])
+	}
+	if _, hasState := payload["state"]; hasState {
+		t.Error("state field must be omitted on fetch_error so the model cannot misread a stale value")
 	}
 }
 
