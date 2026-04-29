@@ -852,11 +852,6 @@ type DocumentRootGitConfig struct {
 	// SigningKey is the SSH private key used to sign managed commits.
 	// Supports ~ expansion at startup.
 	SigningKey string `yaml:"signing_key,omitempty"`
-
-	// AllowedSigners is the OpenSSH allowed signers file to use when
-	// verifying this root. Empty uses the repository-local
-	// .allowed_signers written from signing_key.
-	AllowedSigners string `yaml:"allowed_signers,omitempty"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -1915,7 +1910,7 @@ func entryHasPolicy(entry RootEntry) bool {
 	}
 	g := entry.Git
 	return g.Enabled || g.SignCommits || g.VerifySignatures != "" ||
-		g.RepoPath != "" || g.SigningKey != "" || g.AllowedSigners != ""
+		g.RepoPath != "" || g.SigningKey != ""
 }
 
 // applyDefaults fills zero-value fields with sensible defaults. It is

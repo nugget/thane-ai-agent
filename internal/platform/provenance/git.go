@@ -103,14 +103,21 @@ func (s *Store) ensureRepo() error {
 
 	allowedPath := s.allowedSignersPath
 	if allowedPath == "" {
-		// Write .allowed_signers with the signer's public key.
-		allowedSigners := fmt.Sprintf("thane@provenance.local %s\n", s.signer.PublicKey())
 		allowedPath = filepath.Join(s.path, ".allowed_signers")
-		if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
-			return fmt.Errorf("write .allowed_signers: %w", err)
+		if err := validateAllowedSignersFile(allowedPath); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			// Bootstrap .allowed_signers with the signer's public
+			// key when this repository does not already define its
+			// own trust surface.
+			allowedSigners := fmt.Sprintf("thane@provenance.local %s\n", s.signer.PublicKey())
+			if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
+				return fmt.Errorf("write .allowed_signers: %w", err)
+			}
 		}
-	} else if _, err := os.Stat(allowedPath); err != nil {
-		return fmt.Errorf("stat allowed signers file: %w", err)
+	} else if err := validateAllowedSignersFile(allowedPath); err != nil {
+		return err
 	}
 
 	// Tell git where to find allowed signers for verification.

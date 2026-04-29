@@ -152,6 +152,61 @@ func TestStoreNewWithOptionsUsesExternalAllowedSigners(t *testing.T) {
 	}
 }
 
+func TestStoreNewPreservesExistingRepoLocalAllowedSigners(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	storePath := t.TempDir()
+	existing := "trusted@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForPreservationOnly\n"
+	if err := os.WriteFile(filepath.Join(storePath, ".allowed_signers"), []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile .allowed_signers: %v", err)
+	}
+
+	if _, err := New(storePath, testSigner(t), slog.Default()); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(storePath, ".allowed_signers"))
+	if err != nil {
+		t.Fatalf("ReadFile .allowed_signers: %v", err)
+	}
+	if string(got) != existing {
+		t.Fatalf(".allowed_signers was overwritten:\n got %q\nwant %q", got, existing)
+	}
+}
+
+func TestStoreNewRejectsNonRegularRepoLocalAllowedSigners(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	storePath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(storePath, ".allowed_signers"), 0o755); err != nil {
+		t.Fatalf("Mkdir .allowed_signers: %v", err)
+	}
+
+	_, err := New(storePath, testSigner(t), slog.Default())
+	if err == nil {
+		t.Fatal("New returned nil, want non-regular .allowed_signers error")
+	}
+	if !strings.Contains(err.Error(), "must be a regular file") {
+		t.Fatalf("error = %v, want regular-file message", err)
+	}
+}
+
+func TestVerifierMissingRepoLocalAllowedSignersIncludesPath(t *testing.T) {
+	repoPath := t.TempDir()
+	_, err := NewVerifier(repoPath, nil, Options{})
+	if err == nil {
+		t.Fatal("NewVerifier returned nil, want missing .allowed_signers error")
+	}
+	want := filepath.Join(repoPath, ".allowed_signers")
+	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), repoPath) {
+		t.Fatalf("error = %v, want repo and allowed signers paths", err)
+	}
+}
+
 func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 	s := testStore(t)
 
