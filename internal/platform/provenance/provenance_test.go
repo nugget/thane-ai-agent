@@ -176,6 +176,37 @@ func TestStoreNewPreservesExistingRepoLocalAllowedSigners(t *testing.T) {
 	}
 }
 
+func TestStoreNewRejectsNonRegularRepoLocalAllowedSigners(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	storePath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(storePath, ".allowed_signers"), 0o755); err != nil {
+		t.Fatalf("Mkdir .allowed_signers: %v", err)
+	}
+
+	_, err := New(storePath, testSigner(t), slog.Default())
+	if err == nil {
+		t.Fatal("New returned nil, want non-regular .allowed_signers error")
+	}
+	if !strings.Contains(err.Error(), "must be a regular file") {
+		t.Fatalf("error = %v, want regular-file message", err)
+	}
+}
+
+func TestVerifierMissingRepoLocalAllowedSignersIncludesPath(t *testing.T) {
+	repoPath := t.TempDir()
+	_, err := NewVerifier(repoPath, nil, Options{})
+	if err == nil {
+		t.Fatal("NewVerifier returned nil, want missing .allowed_signers error")
+	}
+	want := filepath.Join(repoPath, ".allowed_signers")
+	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), repoPath) {
+		t.Fatalf("error = %v, want repo and allowed signers paths", err)
+	}
+}
+
 func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 	s := testStore(t)
 

@@ -334,7 +334,7 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if err := configureRepoLocalAllowedSigners(root, absRepoPath); err != nil {
+	if err := configureRepoLocalAllowedSigners(root, absRepoPath, logger); err != nil {
 		return nil, err
 	}
 	verifier, err := provenance.NewVerifier(absRepoPath, logger.With("component", "document_root_verifier", "root", root), provenance.Options{})
@@ -344,19 +344,28 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 	return &documentRootProvenanceVerifier{verifier: verifier, prefix: prefix}, nil
 }
 
-func configureRepoLocalAllowedSigners(root, repoPath string) error {
+func configureRepoLocalAllowedSigners(root, repoPath string, logger *slog.Logger) error {
 	allowedSignersPath := filepath.Join(repoPath, ".allowed_signers")
-	if _, err := os.Stat(allowedSignersPath); err != nil {
+	if info, err := os.Lstat(allowedSignersPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("doc_roots.%s.git requires repo-local .allowed_signers at %s", root, allowedSignersPath)
 		}
 		return fmt.Errorf("doc_roots.%s.git stat .allowed_signers: %w", root, err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("doc_roots.%s.git .allowed_signers must be a regular file, not a symlink: %s", root, allowedSignersPath)
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("doc_roots.%s.git .allowed_signers must be a regular file: %s", root, allowedSignersPath)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), docRootBootstrapTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "gpg.ssh.allowedSignersFile", allowedSignersPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("doc_roots.%s.git config allowedSignersFile: %w: %s", root, err, strings.TrimSpace(string(out)))
+		logger.Warn("document root git config allowedSignersFile failed; verification will still use per-command configuration",
+			"root", root,
+			"repo", repoPath,
+			"allowed_signers", allowedSignersPath,
+			"error", strings.TrimSpace(fmt.Sprintf("%v: %s", err, out)),
+		)
 	}
 	return nil
 }

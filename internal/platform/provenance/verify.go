@@ -63,17 +63,17 @@ func NewVerifier(path string, logger *slog.Logger, opts Options) (*Verifier, err
 		if err != nil {
 			return nil, fmt.Errorf("provenance: resolve verifier allowed signers path: %w", err)
 		}
-		if _, err := os.Stat(allowedSignersPath); err != nil {
-			return nil, fmt.Errorf("provenance: stat verifier allowed signers file: %w", err)
+		if err := validateAllowedSignersFile(allowedSignersPath); err != nil {
+			return nil, err
 		}
 	} else {
 		repoLocal := filepath.Join(absPath, ".allowed_signers")
-		if _, err := os.Stat(repoLocal); err == nil {
+		if err := validateAllowedSignersFile(repoLocal); err == nil {
 			allowedSignersPath = repoLocal
 		} else if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("provenance: repo-local .allowed_signers file is required")
+			return nil, fmt.Errorf("provenance: repo-local .allowed_signers file is required at %s for repository %s", repoLocal, absPath)
 		} else {
-			return nil, fmt.Errorf("provenance: stat repo-local .allowed_signers file: %w", err)
+			return nil, err
 		}
 	}
 	return &Verifier{
@@ -81,6 +81,20 @@ func NewVerifier(path string, logger *slog.Logger, opts Options) (*Verifier, err
 		allowedSignersPath: allowedSignersPath,
 		logger:             logger,
 	}, nil
+}
+
+func validateAllowedSignersFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("provenance: stat allowed signers file %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("provenance: allowed signers file %s must be a regular file, not a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("provenance: allowed signers file %s must be a regular file", path)
+	}
+	return nil
 }
 
 // VerifyFile checks one tracked file. The file must be clean against HEAD,

@@ -104,9 +104,9 @@ func (s *Store) ensureRepo() error {
 	allowedPath := s.allowedSignersPath
 	if allowedPath == "" {
 		allowedPath = filepath.Join(s.path, ".allowed_signers")
-		if _, err := os.Stat(allowedPath); err != nil {
+		if err := validateAllowedSignersFile(allowedPath); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("stat .allowed_signers: %w", err)
+				return err
 			}
 			// Bootstrap .allowed_signers with the signer's public
 			// key when this repository does not already define its
@@ -116,8 +116,8 @@ func (s *Store) ensureRepo() error {
 				return fmt.Errorf("write .allowed_signers: %w", err)
 			}
 		}
-	} else if _, err := os.Stat(allowedPath); err != nil {
-		return fmt.Errorf("stat allowed signers file: %w", err)
+	} else if err := validateAllowedSignersFile(allowedPath); err != nil {
+		return err
 	}
 
 	// Tell git where to find allowed signers for verification.
