@@ -605,7 +605,7 @@ func (a *App) initChannels(s *newState) error {
 			mcp.BridgeOptions{
 				Include:       serverCfg.IncludeTools,
 				Exclude:       serverCfg.ExcludeTools,
-				DefaultTags:   serverCfg.DefaultTags,
+				Tags:          serverCfg.Tags,
 				ToolOverrides: toMCPToolOverrides(serverCfg.Tools),
 			},
 			a.logger,

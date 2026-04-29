@@ -26,7 +26,7 @@ type ToolOverride struct {
 type BridgeOptions struct {
 	Include       []string
 	Exclude       []string
-	DefaultTags   []string
+	Tags          []string
 	ToolOverrides map[string]ToolOverride
 }
 
@@ -78,7 +78,7 @@ func BridgeTools(ctx context.Context, client *Client, serverName string, registr
 		}
 
 		name := ToolName(serverName, td.Name)
-		registry.Register(bridgeTool(client, serverName, name, td, opts.DefaultTags, override))
+		registry.Register(bridgeTool(client, serverName, name, td, opts.Tags, override))
 		count++
 
 		logger.Debug("bridged MCP tool",
@@ -120,7 +120,7 @@ func bridgeTool(client *Client, serverName, name string, td ToolDefinition, defa
 		CanonicalID: canonicalToolID(serverName, mcpName),
 		Source:      "mcp",
 		Origin:      serverName,
-		DefaultTags: append([]string(nil), tags...),
+		Tags:        append([]string(nil), tags...),
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return client.CallTool(ctx, mcpName, args)
 		},

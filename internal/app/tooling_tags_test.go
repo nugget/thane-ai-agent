@@ -10,6 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -33,21 +34,35 @@ func TestResolveCapabilityTags_UsesRegistryMetadataAsBaseline(t *testing.T) {
 	})
 
 	resolved := resolveCapabilityTags(reg, nil)
-	if _, ok := resolved["web"]; !ok {
+	if _, ok := resolved.Configs["web"]; !ok {
 		t.Fatalf("expected web tag in resolved catalog")
 	}
-	if _, ok := resolved["shell"]; !ok {
+	if _, ok := resolved.Configs["shell"]; !ok {
 		t.Fatalf("expected shell tag in resolved catalog")
 	}
-	if len(resolved["web"].Tools) != 1 || resolved["web"].Tools[0] != "web_search" {
-		t.Fatalf("web tools = %#v", resolved["web"].Tools)
+	if got := resolved.Configs["web"].Tools; len(got) != 1 || got[0] != "web_search" {
+		t.Fatalf("web tools = %#v", got)
 	}
-	if resolved["web"].Description == "" {
+	if resolved.Configs["web"].Description == "" {
 		t.Fatal("web description should be populated")
+	}
+	// Source attribution: native catalog declared web_search under web.
+	entries := resolved.ToolEntries["web"]
+	if len(entries) != 1 || entries[0].Name != "web_search" {
+		t.Fatalf("web tool entries = %#v", entries)
+	}
+	if entries[0].Source.Kind != toolcatalog.ToolSourceNative {
+		t.Errorf("web_search source kind = %q, want native", entries[0].Source.Kind)
+	}
+	if entries[0].Source.Origin != "" {
+		t.Errorf("web_search source origin = %q, want empty for native", entries[0].Source.Origin)
+	}
+	if entries[0].State != nil {
+		t.Errorf("active tool should have nil State, got %#v", entries[0].State)
 	}
 }
 
-func TestResolveCapabilityTags_ConfigOverridesReplaceToolsAndDescription(t *testing.T) {
+func TestResolveCapabilityTags_OverlayIncludeAddsTool(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 	reg.Register(&tools.Tool{
 		Name:        "web_search",
@@ -56,26 +71,120 @@ func TestResolveCapabilityTags_ConfigOverridesReplaceToolsAndDescription(t *test
 			return "", nil
 		},
 	})
+	// Register a tool that does NOT declare the "web" tag in its catalog
+	// metadata. The operator overlay should be able to add it via include.
+	reg.Register(&tools.Tool{
+		Name:        "extra_tool",
+		Description: "An extra tool with no native tag",
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
 
 	resolved := resolveCapabilityTags(reg, map[string]config.CapabilityTagConfig{
 		"web": {
 			Description: "Custom web surface",
-			Tools:       []string{"web_fetch"},
-		},
-		"review": {
-			Description: "Custom review tools",
-			Tools:       []string{"file_read", "file_search"},
+			Include:     []string{"extra_tool"},
 		},
 	})
 
-	if resolved["web"].Description != "Custom web surface" {
-		t.Fatalf("web description = %q", resolved["web"].Description)
+	if got := resolved.Configs["web"].Description; got != "Custom web surface" {
+		t.Fatalf("web description = %q, want %q", got, "Custom web surface")
 	}
-	if len(resolved["web"].Tools) != 1 || resolved["web"].Tools[0] != "web_fetch" {
-		t.Fatalf("web tools = %#v", resolved["web"].Tools)
+	if got := resolved.Configs["web"].Tools; !slices.Contains(got, "web_search") {
+		t.Fatalf("web tools missing native web_search; got %#v", got)
 	}
-	if len(resolved["review"].Tools) != 2 {
-		t.Fatalf("review tools = %#v", resolved["review"].Tools)
+	if got := resolved.Configs["web"].Tools; !slices.Contains(got, "extra_tool") {
+		t.Fatalf("web tools missing overlay-included extra_tool; got %#v", got)
+	}
+
+	var extraEntry *toolcatalog.CapabilityToolEntry
+	for i, e := range resolved.ToolEntries["web"] {
+		if e.Name == "extra_tool" {
+			extraEntry = &resolved.ToolEntries["web"][i]
+			break
+		}
+	}
+	if extraEntry == nil {
+		t.Fatal("expected extra_tool entry under web tag")
+	}
+	if extraEntry.Source.Kind != toolcatalog.ToolSourceOverlay {
+		t.Errorf("extra_tool source kind = %q, want overlay", extraEntry.Source.Kind)
+	}
+	if extraEntry.Source.Origin != "capability_tags.web.include" {
+		t.Errorf("extra_tool source origin = %q, want capability_tags.web.include", extraEntry.Source.Origin)
+	}
+}
+
+func TestResolveCapabilityTags_OverlayExcludeRemovesTool(t *testing.T) {
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "web_search",
+		Description: "Search the web",
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "web_fetch",
+		Description: "Fetch a page",
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+
+	resolved := resolveCapabilityTags(reg, map[string]config.CapabilityTagConfig{
+		"web": {
+			Exclude: []string{"web_fetch"},
+		},
+	})
+
+	if got := resolved.Configs["web"].Tools; slices.Contains(got, "web_fetch") {
+		t.Fatalf("web tools should not contain excluded web_fetch; got %#v", got)
+	}
+	if got := resolved.Configs["web"].Tools; !slices.Contains(got, "web_search") {
+		t.Fatalf("web tools should still contain web_search; got %#v", got)
+	}
+
+	excluded := resolved.ExcludedTools["web"]
+	if len(excluded) != 1 || excluded[0].Name != "web_fetch" {
+		t.Fatalf("excluded entries = %#v, want web_fetch", excluded)
+	}
+	if excluded[0].State == nil || excluded[0].State.Status != toolcatalog.ToolStateExcluded {
+		t.Errorf("excluded tool should have Status %q, got state %#v", toolcatalog.ToolStateExcluded, excluded[0].State)
+	}
+	if excluded[0].State.Reason != "capability_tags.web.exclude" {
+		t.Errorf("excluded reason = %q, want capability_tags.web.exclude", excluded[0].State.Reason)
+	}
+	// Source attribution survives the move into excluded.
+	if excluded[0].Source.Kind != toolcatalog.ToolSourceNative {
+		t.Errorf("excluded source kind = %q, want native", excluded[0].Source.Kind)
+	}
+}
+
+func TestResolveCapabilityTags_MCPSourceAttribution(t *testing.T) {
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "mcp_demo_search",
+		Description: "Bridged MCP search tool",
+		Source:      "mcp",
+		Origin:      "demo",
+		Tags:        []string{"web"},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+
+	resolved := resolveCapabilityTags(reg, nil)
+	entries := resolved.ToolEntries["web"]
+	if len(entries) != 1 || entries[0].Name != "mcp_demo_search" {
+		t.Fatalf("expected single mcp_demo_search entry, got %#v", entries)
+	}
+	if entries[0].Source.Kind != toolcatalog.ToolSourceMCP {
+		t.Errorf("source kind = %q, want mcp", entries[0].Source.Kind)
+	}
+	if entries[0].Source.Origin != "demo" {
+		t.Errorf("source origin = %q, want demo", entries[0].Source.Origin)
 	}
 }
 
@@ -96,20 +205,12 @@ func TestResolveCapabilityTags_SortsBaselineTools(t *testing.T) {
 		},
 	})
 
-	got := resolvedToolNames(resolveCapabilityTags(reg, nil), "web")
+	got := resolveCapabilityTags(reg, nil).Configs["web"].Tools
 	want := append([]string(nil), got...)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("web tools = %#v, want sorted %#v", got, want)
 	}
-}
-
-func resolvedToolNames(resolved map[string]config.CapabilityTagConfig, tag string) []string {
-	spec, ok := resolved[tag]
-	if !ok {
-		return nil
-	}
-	return spec.Tools
 }
 
 // TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider is the
@@ -142,7 +243,7 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 	// demonstrates a clean delta.
 	before := resolveCapabilityTags(reg, nil)
 	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
-		if slices.Contains(before["awareness"].Tools, name) {
+		if slices.Contains(before.Configs["awareness"].Tools, name) {
 			t.Fatalf("precondition: %q should not appear in awareness tag before provider registration", name)
 		}
 	}
@@ -152,9 +253,9 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 	after := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"add_context_entity", "list_context_entities", "remove_context_entity"}
 	for _, name := range wantTools {
-		if !slices.Contains(after["awareness"].Tools, name) {
+		if !slices.Contains(after.Configs["awareness"].Tools, name) {
 			t.Errorf("awareness tag missing %q after provider registration; got %v",
-				name, after["awareness"].Tools)
+				name, after.Configs["awareness"].Tools)
 		}
 	}
 }
@@ -187,9 +288,9 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 	resolved := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"mqtt_wake_add", "mqtt_wake_list", "mqtt_wake_remove"}
 	for _, name := range wantTools {
-		if !slices.Contains(resolved["mqtt"].Tools, name) {
+		if !slices.Contains(resolved.Configs["mqtt"].Tools, name) {
 			t.Errorf("mqtt tag missing %q after SetMQTTSubscriptionTools; got %v",
-				name, resolved["mqtt"].Tools)
+				name, resolved.Configs["mqtt"].Tools)
 		}
 	}
 }

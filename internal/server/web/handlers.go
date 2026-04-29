@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
@@ -44,10 +45,71 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if stats := s.systemStatus.RouterStats(); stats != nil {
 		body["router_stats"] = stats
 	}
-	if catalog := s.systemStatus.CapabilityCatalog(); catalog != nil {
+	if catalog := s.systemStatus.CapabilityCatalog(toolcatalog.CatalogViewOptions{IncludeDelegate: true}); catalog != nil {
 		body["capability_catalog"] = catalog
 	}
 	s.writeJSON(w, body)
+}
+
+// handleCapabilities returns the resolved capability catalog as a
+// dedicated endpoint. By default the response includes only active
+// tools per tag; pass ?include=excluded to also surface
+// operator-disabled tools. Future states (deprecated, unhealthy) plug
+// in via the same query parameter.
+func (s *WebServer) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if s.systemStatus == nil {
+		s.writeJSONError(w, "capability catalog unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	opts := parseCapabilityViewOptions(r)
+	catalog := s.systemStatus.CapabilityCatalog(opts)
+	if catalog == nil {
+		s.writeJSONError(w, "capability catalog unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.writeJSON(w, catalog)
+}
+
+// handleCapability returns the resolved view of a single capability
+// tag. 404s when the tag is not present in the current surface.
+// Honors the same ?include=excluded query parameter as the catalog
+// endpoint.
+func (s *WebServer) handleCapability(w http.ResponseWriter, r *http.Request) {
+	if s.systemStatus == nil {
+		s.writeJSONError(w, "capability catalog unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	tag := r.PathValue("tag")
+	if strings.TrimSpace(tag) == "" {
+		s.writeJSONError(w, "missing tag", http.StatusBadRequest)
+		return
+	}
+	opts := parseCapabilityViewOptions(r)
+	entry := s.systemStatus.CapabilityEntry(tag, opts)
+	if entry == nil {
+		s.writeJSONError(w, fmt.Sprintf("unknown capability tag %q", tag), http.StatusNotFound)
+		return
+	}
+	s.writeJSON(w, entry)
+}
+
+// parseCapabilityViewOptions interprets the comma-separated ?include=
+// query parameter. Today only "excluded" is recognized; unknown
+// values are silently ignored so future states can be added without a
+// breaking change for older clients.
+func parseCapabilityViewOptions(r *http.Request) toolcatalog.CatalogViewOptions {
+	opts := toolcatalog.CatalogViewOptions{IncludeDelegate: true}
+	include := strings.ToLower(r.URL.Query().Get("include"))
+	if include == "" {
+		return opts
+	}
+	for _, token := range strings.Split(include, ",") {
+		switch strings.TrimSpace(token) {
+		case "excluded":
+			opts.IncludeExcluded = true
+		}
+	}
+	return opts
 }
 
 // handleLoops returns a JSON array of all loop statuses.

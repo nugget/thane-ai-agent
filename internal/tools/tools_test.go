@@ -73,8 +73,8 @@ func TestRegister_AppliesCompiledToolMetadata(t *testing.T) {
 	if tool.CanonicalID != "native:web_search" {
 		t.Fatalf("CanonicalID = %q", tool.CanonicalID)
 	}
-	if len(tool.DefaultTags) != 1 || tool.DefaultTags[0] != "web" {
-		t.Fatalf("DefaultTags = %#v", tool.DefaultTags)
+	if len(tool.Tags) != 1 || tool.Tags[0] != "web" {
+		t.Fatalf("Tags = %#v", tool.Tags)
 	}
 }
 

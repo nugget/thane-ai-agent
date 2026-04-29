@@ -83,7 +83,7 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 		CapabilityMenu:  make(map[string]capabilityMenuEntry, len(entries)),
 	}
 
-	for _, rendered := range BuildCapabilityCatalogView(selectCapabilityMenuEntries(entries), true).Capabilities {
+	for _, rendered := range BuildCapabilityCatalogView(selectCapabilityMenuEntries(entries), CatalogViewOptions{IncludeDelegate: true}).Capabilities {
 		payload.CapabilityMenu[rendered.Tag] = capabilityMenuEntry{
 			Status:      rendered.Status,
 			Description: rendered.Description,

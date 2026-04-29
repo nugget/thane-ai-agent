@@ -135,6 +135,8 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
 	case "version":
 		return runVersion(stdout, outputFmt)
+	case "caps":
+		return runCaps(ctx, stdout, configPath, outputFmt, cmdArgs)
 	case "":
 		return printUsage(stdout)
 	default:
@@ -172,6 +174,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  init [dir]   Initialize working directory with defaults (default: .)")
 	fmt.Fprintln(w, "  ask          Ask a single question (for testing)")
 	fmt.Fprintln(w, "  ingest       Import markdown docs into fact store")
+	fmt.Fprintln(w, "  caps         Show resolved capability tags from a running daemon")
 	fmt.Fprintln(w, "  version      Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
