@@ -313,11 +313,13 @@ func TestFormatDefault_BinarySensorDeviceClassTranslation(t *testing.T) {
 		{"smoke detected", "binary_sensor.kitchen_smoke", "on", "smoke", "detected"},
 		{"moisture wet", "binary_sensor.basement_leak", "on", "moisture", "wet"},
 		{"occupancy clear", "binary_sensor.office", "off", "occupancy", "clear"},
+		{"occupancy occupied", "binary_sensor.office", "on", "occupancy", "occupied"},
 		{"connectivity disconnected", "binary_sensor.router", "off", "connectivity", "disconnected"},
 		{"battery low", "binary_sensor.remote_battery", "on", "battery", "low"},
 		{"problem ok", "binary_sensor.printer", "off", "problem", "ok"},
 		{"safety unsafe", "binary_sensor.pool", "on", "safety", "unsafe"},
-		{"tamper ok", "binary_sensor.alarm", "off", "tamper", "ok"},
+		{"tamper clear", "binary_sensor.alarm", "off", "tamper", "clear"},
+		{"tamper tampering", "binary_sensor.alarm", "on", "tamper", "tampering"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -440,6 +442,133 @@ func TestFormatFetchError(t *testing.T) {
 	}
 	if parsed["reason"] != "fetch_error" {
 		t.Errorf("reason = %v, want fetch_error", parsed["reason"])
+	}
+}
+
+func TestFormatDefault_SurfacesStateClass(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "sensor.utility_meter",
+		State:       "8421.5",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"device_class":        "energy",
+			"state_class":         "total_increasing",
+			"unit_of_measurement": "kWh",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["state_class"] != "total_increasing" {
+		t.Errorf("state_class = %v, want total_increasing", parsed["state_class"])
+	}
+}
+
+func TestFormatDefault_SurfacesAssumedState(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "switch.assumed",
+		State:       "on",
+		LastChanged: testNow,
+		Attributes: map[string]any{
+			"assumed_state": true,
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["assumed_state"] != true {
+		t.Errorf("assumed_state = %v, want true", parsed["assumed_state"])
+	}
+}
+
+func TestFormatDefault_OmitsAssumedStateWhenFalse(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "switch.real",
+		State:       "on",
+		LastChanged: testNow,
+		Attributes:  map[string]any{},
+	}
+	result := formatEntityContext(state, testNow)
+	if strings.Contains(result, "assumed_state") {
+		t.Errorf("assumed_state must be omitted when not asserted true, got %s", result)
+	}
+}
+
+func TestFormatClimate_SurfacesHVACAction(t *testing.T) {
+	// hvac_mode is "heat" (the user setting); hvac_action is "idle"
+	// (what the unit is actually doing right now). The model needs
+	// both to answer "is the heat running?".
+	state := &homeassistant.State{
+		EntityID:    "climate.thermostat",
+		State:       "heat",
+		LastChanged: testNow.Add(-600 * time.Second),
+		Attributes: map[string]any{
+			"current_temperature": 70.0,
+			"temperature":         72.0,
+			"hvac_mode":           "heat",
+			"hvac_action":         "idle",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["hvac_action"] != "idle" {
+		t.Errorf("hvac_action = %v, want idle", parsed["hvac_action"])
+	}
+	if parsed["hvac_mode"] != "heat" {
+		t.Errorf("hvac_mode = %v, want heat", parsed["hvac_mode"])
+	}
+}
+
+func TestFormatLight_OmitsStaleAttributesWhenOff(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "light.bedroom",
+		State:       "off",
+		LastChanged: testNow.Add(-300 * time.Second),
+		Attributes: map[string]any{
+			"brightness":        float64(255),
+			"color_temp_kelvin": float64(4000),
+			"rgb_color":         []any{255, 0, 0},
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["state"] != "off" {
+		t.Errorf("state = %v, want off", parsed["state"])
+	}
+	for _, k := range []string{"brightness", "color_temp", "rgb_color"} {
+		if _, has := parsed[k]; has {
+			t.Errorf("%s must be omitted when light is off (was %v)", k, parsed[k])
+		}
+	}
+}
+
+func TestFormatLight_IncludesAttributesWhenOn(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "light.bedroom",
+		State:       "on",
+		LastChanged: testNow.Add(-30 * time.Second),
+		Attributes: map[string]any{
+			"brightness":        float64(255),
+			"color_temp_kelvin": float64(4000),
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, has := parsed["brightness"]; !has {
+		t.Error("brightness should be present when light is on")
 	}
 }
 
