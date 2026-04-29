@@ -117,6 +117,13 @@ func (a *App) initAwareness(s *newState) error {
 		Logger: logger,
 	}))
 
+	if a.ha != nil {
+		a.loop.Tools().RegisterProvider(awareness.NewAreaActivityTools(awareness.AreaActivityToolsConfig{
+			Client: a.ha,
+			Logger: logger,
+		}))
+	}
+
 	// --- State change window ---
 	// Maintains a rolling buffer of recent HA state changes, injected
 	// into the system prompt on every agent run for ambient awareness.
