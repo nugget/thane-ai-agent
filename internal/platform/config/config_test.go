@@ -800,7 +800,6 @@ doc_roots:
       sign_commits: false
       verify_signatures: required
       repo_path: ./knowledge
-      allowed_signers: ./allowed_signers
 `), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -816,7 +815,7 @@ doc_roots:
 	if root.Authoring != "read_only" {
 		t.Fatalf("DocRoots[kb].Authoring = %q, want read_only", root.Authoring)
 	}
-	if !root.Git.Enabled || root.Git.VerifySignatures != "required" || root.Git.AllowedSigners != "./allowed_signers" {
+	if !root.Git.Enabled || root.Git.VerifySignatures != "required" {
 		t.Fatalf("DocRoots[kb].Git = %#v, want enabled required verification", root.Git)
 	}
 }

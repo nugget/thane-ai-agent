@@ -124,6 +124,13 @@ The current policy fields are:
 - `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
   or `required`.
 
+Signature verification always uses the repository-local
+`.allowed_signers` file. For signer-backed roots, Thane creates that
+file from the configured signing key when it is missing; after that, the
+file itself is the trust configuration surface. Adding additional
+signers should be done by editing and committing `.allowed_signers`
+through trusted history.
+
 Signature-required roots are the place for high-integrity authored
 knowledge, such as owner-tagged knowledge articles. When verification
 is `required`, Thane blocks the following content paths when the

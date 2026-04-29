@@ -70,6 +70,10 @@ func NewVerifier(path string, logger *slog.Logger, opts Options) (*Verifier, err
 		repoLocal := filepath.Join(absPath, ".allowed_signers")
 		if _, err := os.Stat(repoLocal); err == nil {
 			allowedSignersPath = repoLocal
+		} else if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("provenance: repo-local .allowed_signers file is required")
+		} else {
+			return nil, fmt.Errorf("provenance: stat repo-local .allowed_signers file: %w", err)
 		}
 	}
 	return &Verifier{

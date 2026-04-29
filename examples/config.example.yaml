@@ -217,10 +217,6 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
-      # AllowedSigners is the OpenSSH allowed signers file to use when
-      # verifying this root. Empty uses the repository-local
-      # .allowed_signers written from signing_key.
-      allowed_signers: ""
   kb:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -254,10 +250,6 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ~/.ssh/id_ed25519
-      # AllowedSigners is the OpenSSH allowed signers file to use when
-      # verifying this root. Empty uses the repository-local
-      # .allowed_signers written from signing_key.
-      allowed_signers: ""
   scratchpad:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -291,10 +283,6 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
-      # AllowedSigners is the OpenSSH allowed signers file to use when
-      # verifying this root. Empty uses the repository-local
-      # .allowed_signers written from signing_key.
-      allowed_signers: ""
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
 # paths: {}

@@ -152,6 +152,30 @@ func TestStoreNewWithOptionsUsesExternalAllowedSigners(t *testing.T) {
 	}
 }
 
+func TestStoreNewPreservesExistingRepoLocalAllowedSigners(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	storePath := t.TempDir()
+	existing := "trusted@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForPreservationOnly\n"
+	if err := os.WriteFile(filepath.Join(storePath, ".allowed_signers"), []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile .allowed_signers: %v", err)
+	}
+
+	if _, err := New(storePath, testSigner(t), slog.Default()); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(storePath, ".allowed_signers"))
+	if err != nil {
+		t.Fatalf("ReadFile .allowed_signers: %v", err)
+	}
+	if string(got) != existing {
+		t.Fatalf(".allowed_signers was overwritten:\n got %q\nwant %q", got, existing)
+	}
+}
+
 func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 	s := testStore(t)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -248,7 +249,6 @@ func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.R
 		policy.Git.VerifySignatures = documents.VerificationMode(verify)
 	}
 	policy.Git.RepoPath = strings.TrimSpace(gitCfg.RepoPath)
-	policy.Git.AllowedSigners = strings.TrimSpace(gitCfg.AllowedSigners)
 	return policy
 }
 
@@ -278,10 +278,6 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
 	}
 
-	allowedSigners := strings.TrimSpace(gitCfg.AllowedSigners)
-	if allowedSigners != "" {
-		allowedSigners = resolvePath(allowedSigners, resolver)
-	}
 	signer, err := provenance.NewSSHFileSigner(signingKey)
 	if err != nil {
 		return nil, fmt.Errorf("doc_roots.%s.git.signing_key: %w", root, err)
@@ -290,9 +286,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store, err := provenance.NewWithOptions(absRepoPath, signer, logger.With("component", "document_root_provenance", "root", root), provenance.Options{
-		AllowedSignersPath: allowedSigners,
-	})
+	store, err := provenance.New(absRepoPath, signer, logger.With("component", "document_root_provenance", "root", root))
 	if err != nil {
 		return nil, fmt.Errorf("initialize git provenance for document root %s: %w", root, err)
 	}
@@ -312,7 +306,6 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		"root", root,
 		"repo", store.Path(),
 		"prefix", prefix,
-		"allowed_signers", allowedSigners != "",
 	)
 	return &documentRootProvenanceWriter{store: store, prefix: prefix}, nil
 }
@@ -337,21 +330,35 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
 	}
 
-	allowedSigners := strings.TrimSpace(gitCfg.AllowedSigners)
-	if allowedSigners != "" {
-		allowedSigners = resolvePath(allowedSigners, resolver)
-	}
 	logger := a.logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	verifier, err := provenance.NewVerifier(absRepoPath, logger.With("component", "document_root_verifier", "root", root), provenance.Options{
-		AllowedSignersPath: allowedSigners,
-	})
+	if err := configureRepoLocalAllowedSigners(root, absRepoPath); err != nil {
+		return nil, err
+	}
+	verifier, err := provenance.NewVerifier(absRepoPath, logger.With("component", "document_root_verifier", "root", root), provenance.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("initialize git verifier for document root %s: %w", root, err)
 	}
 	return &documentRootProvenanceVerifier{verifier: verifier, prefix: prefix}, nil
+}
+
+func configureRepoLocalAllowedSigners(root, repoPath string) error {
+	allowedSignersPath := filepath.Join(repoPath, ".allowed_signers")
+	if _, err := os.Stat(allowedSignersPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("doc_roots.%s.git requires repo-local .allowed_signers at %s", root, allowedSignersPath)
+		}
+		return fmt.Errorf("doc_roots.%s.git stat .allowed_signers: %w", root, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), docRootBootstrapTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "gpg.ssh.allowedSignersFile", allowedSignersPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("doc_roots.%s.git config allowedSignersFile: %w: %s", root, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func rootPrefixWithinRepo(repoPath, rootPath string) (string, error) {

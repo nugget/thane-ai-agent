@@ -52,7 +52,6 @@ type RootGitPolicy struct {
 	SignCommits      bool             `json:"sign_commits,omitempty"`
 	VerifySignatures VerificationMode `json:"verify_signatures,omitempty"`
 	RepoPath         string           `json:"-"`
-	AllowedSigners   string           `json:"-"`
 }
 
 // RootPolicySummary is the model-facing form of [RootPolicy]. It omits
