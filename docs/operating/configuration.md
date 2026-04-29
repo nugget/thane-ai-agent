@@ -220,10 +220,11 @@ reserves the root for narrower future flows.
 
 `git.sign_commits` turns each managed document write/delete into a
 signed git commit. By default the root itself is the repository; set
-`git.repo_path` when several roots live under one larger repo. Set
-`git.allowed_signers` to use an existing OpenSSH allowed signers file;
-otherwise Thane writes a repository-local `.allowed_signers` file from
-the signing key.
+`git.repo_path` when several roots live under one larger repo. Thane
+uses the repository-local `.allowed_signers` file for SSH signature
+verification. For signer-backed roots, Thane creates that file from the
+configured signing key when it is missing; after that, the file itself is
+the trust configuration surface.
 
 `git.verify_signatures` controls read-side enforcement. `none` disables
 checks, `warn` logs and reports verification failures without blocking,
