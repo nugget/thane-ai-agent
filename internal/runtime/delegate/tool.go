@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // ToolDescription is the LLM-facing description for the deprecated
@@ -20,6 +21,7 @@ var ToolDescription = "DEPRECATED: prefer thane_now (sync answer) or thane_assig
 // sync member of the thane_* family.
 const NowToolDescription = "Synchronously delegate a bounded task to a sub-agent and return the result inline. " +
 	"Use when the calling model needs the answer in this turn — investigation, research, summarization, controlled tool execution. " +
+	"Uses compact task context by default; set context_mode=full only for continuity-sensitive work. " +
 	"Blocks until the delegate completes or exhausts its budget. " +
 	"For fire-and-forget background work, use thane_assign instead. " +
 	"For recurring document-anchored work on a schedule, use thane_curate."
@@ -28,6 +30,7 @@ const NowToolDescription = "Synchronously delegate a bounded task to a sub-agent
 // the async one-shot member of the thane_* family.
 const AssignToolDescription = "Assign a bounded task to a sub-agent that runs in the background and reports its result back through the current conversation or interactive channel when complete. " +
 	"Use when the work will take long enough that the calling model should not block waiting — multi-step investigation, deferred report generation, anything where the caller wants to move on while the delegate completes. " +
+	"Uses compact task context by default; set context_mode=full only for continuity-sensitive work. " +
 	"For an answer needed in this turn, use thane_now. " +
 	"For recurring scheduled work, use thane_curate."
 
@@ -101,6 +104,12 @@ func commonDelegateProperties() map[string]any {
 			"default":     true,
 			"description": "Whether to inherit elective capability tags from the caller. Runtime and channel affordance tags such as message_channel are never inherited.",
 		},
+		"context_mode": map[string]any{
+			"type":        "string",
+			"enum":        []string{"task", "full"},
+			"default":     "task",
+			"description": "Prompt/context shape for the delegate. task is compact and omits full identity files, inject files, always-on talents, and conversation-history dressing. full opts into the normal Thane prompt when the delegate truly needs that continuity.",
+		},
 	}
 }
 
@@ -160,13 +169,14 @@ type delegateRequest struct {
 	inheritCallerTags bool
 	tags              []string
 	tagsProvided      bool
+	contextMode       agentctx.PromptMode
 }
 
 // parseDelegateArgs extracts the shared args for the family.
 // The profile field is read from args for thane_delegate compatibility
 // but defaults to "general" for the family tools that don't expose it.
 func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
-	req := delegateRequest{inheritCallerTags: true, profileName: "general"}
+	req := delegateRequest{inheritCallerTags: true, profileName: "general", contextMode: agentctx.PromptModeTask}
 
 	task, _ := args["task"].(string)
 	if task == "" {
@@ -180,6 +190,13 @@ func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
 	req.guidance, _ = args["guidance"].(string)
 	if rawInherit, ok := args["inherit_caller_tags"].(bool); ok {
 		req.inheritCallerTags = rawInherit
+	}
+	if rawMode, ok := args["context_mode"].(string); ok && rawMode != "" {
+		mode, err := agentctx.ParsePromptMode(rawMode)
+		if err != nil {
+			return req, "Error: context_mode must be one of [task, full]"
+		}
+		req.contextMode = mode
 	}
 	if rawTags, ok := args["tags"].([]any); ok {
 		req.tagsProvided = true
@@ -199,6 +216,7 @@ func runAssign(ctx context.Context, exec *Executor, req delegateRequest) string 
 	opts := executionOptions{
 		inheritCallerTags: req.inheritCallerTags,
 		explicitTagScope:  req.tagsProvided,
+		promptMode:        req.contextMode,
 	}
 	loopID, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
 	if err != nil {
@@ -214,6 +232,7 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 	opts := executionOptions{
 		inheritCallerTags: req.inheritCallerTags,
 		explicitTagScope:  req.tagsProvided,
+		promptMode:        req.contextMode,
 	}
 	result, err := exec.execute(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
 	if err != nil {

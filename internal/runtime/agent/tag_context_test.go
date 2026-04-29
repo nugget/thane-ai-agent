@@ -230,7 +230,7 @@ func TestBuildSystemPrompt_TagContextChannelPinnedBuiltinTagIncluded(t *testing.
 	}
 }
 
-func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
+func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 	dir := t.TempDir()
 	injected := filepath.Join(dir, "injected.md")
 	os.WriteFile(injected, []byte("INJECTED_MARKER"), 0644)
@@ -272,12 +272,13 @@ func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 		t.Fatal("prompt should contain current conditions")
 	}
 
-	// Tag context should appear between injected context and conditions.
-	if tagCtxIdx < injectedIdx {
-		t.Error("tag context should appear after injected context")
+	// Core context now enters through the always-on provider bucket,
+	// after tagged context and before current conditions.
+	if injectedIdx < tagCtxIdx {
+		t.Error("core context should appear after tagged context")
 	}
-	if tagCtxIdx > conditionsIdx {
-		t.Error("tag context should appear before current conditions")
+	if injectedIdx > conditionsIdx {
+		t.Error("core context should appear before current conditions")
 	}
 }
 

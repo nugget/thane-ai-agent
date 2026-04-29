@@ -51,24 +51,24 @@ alphabetically and injected into the system prompt. Talents are tag-filtered
 — each can declare required capability tags via YAML frontmatter, loading
 only when those tags are active.
 
-### 3. Inject Files (`inject_files`)
+### 3. Core Context Providers
 
 **Purpose:** Knowledge — what the agent *knows*.
 
-Inject files provide reference material: identity details, user profiles,
-tool documentation, memory. They're the agent's knowledge base, loaded
-from the filesystem.
+Core context providers publish curated reference material such as
+`core/ego.md` and `core/mission.md` through the same runtime context
+pipeline as working memory, presence, notification history, and other
+ambient state. They are read fresh each turn, verified when managed-root
+policy applies, and suppressed for task-focused delegate runs.
 
 **Contains:** Factual information, user preferences, infrastructure notes,
 memory files, identity documents.
 
 **Does NOT contain:** Behavioral directives, personality definitions.
 
-**Common inject files:**
-- `MEMORY.md` — curated long-term memory
-- `IDENTITY.md` — name, avatar, technical identity
-- `USER.md` — information about the primary user
-- `TOOLS.md` — infrastructure and credential locations
+**Common core context files:**
+- `ego.md` — self-reflection and continuity notes
+- `mission.md` — deployment-specific mission context
 
 ### 4. Session Context (dynamic)
 
@@ -85,14 +85,16 @@ compaction context.
 The system prompt is assembled in this order:
 
 1. **Persona** — identity (who am I)
-2. **Inject files** — knowledge (what do I know)
-3. **Current conditions** — environment (where/when am I)
-4. **Talents** — behavior (how should I act)
-5. **Dynamic context** — facts, memory (what's relevant now)
-6. **Compaction summary** — continuity (what happened before)
+2. **Runtime contract** — execution semantics
+3. **Talents** — behavior (how should I act)
+4. **Active capabilities** — currently loaded tool and context surface
+5. **Capability context** — tagged KB, tagged providers, and always-on providers
+6. **Current conditions** — environment (where/when am I)
+7. **Conversation history** — continuity for full-context runs
 
-This mirrors natural orientation: identity, knowledge, awareness, norms,
-memory.
+Task-focused delegate runs keep the compact worker persona, runtime
+contract, active capabilities, tagged context, and current conditions,
+but omit full identity/continuity providers and conversation history.
 
 ## Anti-Patterns
 
@@ -100,12 +102,10 @@ memory.
 |---|---|---|
 | Tool rules in persona | Suppresses personality (e.g., "only use tools when asked" kills proactive behavior) | Move to `tool-guidance.md` talent |
 | Identity in talents | Confusing — talent says "you are X" but persona says "you are Y" | Keep identity in persona only |
-| Behavioral directives in inject files | Inject files are knowledge, not instructions | Move directives to talents |
+| Behavioral directives in core context | Core context is knowledge, not instructions | Move directives to talents |
 | Static time in build info | Model treats version metadata as ignorable | Use Current Conditions section |
 
 ## Related
 
 - [Anthropic Caching](../anthropic-caching.md) — how the layer
-  boundaries map onto Anthropic cache TTLs (persona and inject-file
-  layers cache at 1h; dynamic context and current conditions are
-  uncached so they don't churn the prefix).
+  boundaries map onto Anthropic cache TTLs.
