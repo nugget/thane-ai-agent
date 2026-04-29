@@ -93,7 +93,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs and modified-time deltas like `kb:article.md`, not full bodies.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

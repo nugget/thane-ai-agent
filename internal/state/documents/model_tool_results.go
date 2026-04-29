@@ -276,7 +276,7 @@ func modelDeltaValueCounts(values []ValueCount, now time.Time) []ValueCount {
 	for _, value := range values {
 		delta := modelDelta(value.Value, now)
 		if delta == "" {
-			delta = "unparseable_timestamp"
+			continue
 		}
 		counts[delta] += value.Count
 	}
@@ -294,9 +294,12 @@ func modelFrontmatter(frontmatter map[string][]string, now time.Time) map[string
 			for _, value := range values {
 				delta := modelDelta(value, now)
 				if delta == "" {
-					delta = "unparseable_timestamp"
+					continue
 				}
 				deltas = append(deltas, delta)
+			}
+			if len(deltas) == 0 {
+				continue
 			}
 			out[deltaKey] = deltas
 			continue
