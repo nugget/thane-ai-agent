@@ -282,10 +282,10 @@ func TestChannelProvider_AdminFullContext(t *testing.T) {
 					"email":  []string{"admin@example.com"},
 				},
 				LastInteraction: &InteractionRef{
-					AgoSeconds: -3600,
-					Channel:    "signal",
-					SessionID:  "sess-abc",
-					Topics:     []string{"HVAC", "cameras"},
+					Ago:       "-3600s",
+					Channel:   "signal",
+					SessionID: "sess-abc",
+					Topics:    []string{"HVAC", "cameras"},
 				},
 			},
 		},
@@ -326,8 +326,8 @@ func TestChannelProvider_AdminFullContext(t *testing.T) {
 	if contact.LastInteraction == nil {
 		t.Fatal("expected last_interaction")
 	}
-	if contact.LastInteraction.AgoSeconds != -3600 {
-		t.Errorf("ago_seconds: got %d", contact.LastInteraction.AgoSeconds)
+	if contact.LastInteraction.Ago != "-3600s" {
+		t.Errorf("ago: got %q", contact.LastInteraction.Ago)
 	}
 	if contact.LastInteraction.Channel != "signal" {
 		t.Errorf("interaction channel: got %q", contact.LastInteraction.Channel)
@@ -542,10 +542,10 @@ func TestChannelProvider_InteractionRef(t *testing.T) {
 					SendGating:        "confirmation",
 				},
 				LastInteraction: &InteractionRef{
-					AgoSeconds: -7200,
-					Channel:    "signal",
-					SessionID:  "sess-xyz",
-					Topics:     []string{"weather", "schedule"},
+					Ago:       "-7200s",
+					Channel:   "signal",
+					SessionID: "sess-xyz",
+					Topics:    []string{"weather", "schedule"},
 				},
 			},
 		},
@@ -565,8 +565,8 @@ func TestChannelProvider_InteractionRef(t *testing.T) {
 	if contact.LastInteraction == nil {
 		t.Fatal("expected last_interaction")
 	}
-	if contact.LastInteraction.AgoSeconds != -7200 {
-		t.Errorf("ago_seconds: got %d, want -7200", contact.LastInteraction.AgoSeconds)
+	if contact.LastInteraction.Ago != "-7200s" {
+		t.Errorf("ago: got %q, want -7200s", contact.LastInteraction.Ago)
 	}
 	if len(contact.LastInteraction.Topics) != 2 {
 		t.Errorf("topics: got %v", contact.LastInteraction.Topics)

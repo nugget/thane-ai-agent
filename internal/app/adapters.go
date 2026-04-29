@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
@@ -349,7 +350,7 @@ func buildContactContext(c *contacts.Contact, props []contacts.Property, policy 
 	// Interaction history (trusted+).
 	if !c.LastInteraction.IsZero() {
 		ref := &agent.InteractionRef{
-			AgoSeconds: int64(c.LastInteraction.Sub(now).Truncate(time.Second).Seconds()),
+			Ago: promptfmt.FormatDeltaOnly(c.LastInteraction, now),
 		}
 		if c.LastInteractionMeta != nil {
 			ref.Channel = c.LastInteractionMeta.Channel

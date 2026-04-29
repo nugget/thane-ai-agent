@@ -153,6 +153,9 @@ func TestToolsList_Basic(t *testing.T) {
 	if summaries[0].Name != "photo.jpg" {
 		t.Errorf("name = %q, want photo.jpg", summaries[0].Name)
 	}
+	if summaries[0].ReceivedDelta == "" {
+		t.Error("expected received_delta")
+	}
 }
 
 func TestToolsList_Empty(t *testing.T) {
@@ -298,6 +301,9 @@ func TestToolsSearch_Basic(t *testing.T) {
 	}
 	if summaries[0].Name != "landscape.jpg" {
 		t.Errorf("name = %q, want landscape.jpg", summaries[0].Name)
+	}
+	if summaries[0].ReceivedDelta == "" {
+		t.Error("expected received_delta")
 	}
 }
 

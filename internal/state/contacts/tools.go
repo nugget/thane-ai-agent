@@ -16,6 +16,7 @@ import (
 
 	"github.com/emersion/go-vcard"
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // EmbeddingClient generates embeddings for semantic search.
@@ -1026,7 +1027,7 @@ func (t *Tools) formatOwnerActivitySummary() string {
 		ConversationID string `json:"conversation_id,omitempty"`
 		ContactName    string `json:"contact_name,omitempty"`
 		State          string `json:"state,omitempty"`
-		LastActive     string `json:"last_active,omitempty"`
+		LastActive     string `json:"last_active_delta,omitempty"`
 	}
 	payload := struct {
 		ActiveOwnerChannels []activityView `json:"active_owner_channels"`
@@ -1034,7 +1035,7 @@ func (t *Tools) formatOwnerActivitySummary() string {
 		Total               int            `json:"total"`
 		Displayed           int            `json:"displayed,omitempty"`
 		Omitted             int            `json:"omitted,omitempty"`
-		MostRecentActive    string         `json:"most_recent_active,omitempty"`
+		MostRecentActive    string         `json:"most_recent_active_delta,omitempty"`
 	}{
 		ActiveOwnerChannels: make([]activityView, 0, min(len(channels), ownerActivitySummaryLimit)),
 		ByChannel:           make(map[string]int),
@@ -1051,6 +1052,7 @@ func (t *Tools) formatOwnerActivitySummary() string {
 	}
 	payload.Displayed = len(visible)
 
+	now := time.Now()
 	for _, ch := range visible {
 		view := activityView{
 			Channel:        ch.Channel,
@@ -1061,7 +1063,7 @@ func (t *Tools) formatOwnerActivitySummary() string {
 			State:          ch.State,
 		}
 		if !ch.LastActive.IsZero() {
-			view.LastActive = ch.LastActive.UTC().Format(time.RFC3339)
+			view.LastActive = promptfmt.FormatDeltaOnly(ch.LastActive, now)
 			if payload.MostRecentActive == "" {
 				payload.MostRecentActive = view.LastActive
 			}
