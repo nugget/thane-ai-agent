@@ -2,6 +2,7 @@
 package talents
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,11 @@ type Loader struct {
 	dir string
 }
 
+// VerifyPathFunc verifies whether a filesystem path may be loaded by a
+// model-facing consumer. It keeps talents independent of the documents
+// package while letting startup wire document-root verification in.
+type VerifyPathFunc func(ctx context.Context, path string, consumer string) error
+
 // NewLoader creates a talent loader for the given directory.
 func NewLoader(dir string) *Loader {
 	return &Loader{dir: dir}
@@ -23,10 +29,11 @@ func NewLoader(dir string) *Loader {
 
 // Talent represents a parsed talent file with optional tag metadata.
 type Talent struct {
-	Name    string   // Filename without .md extension
-	Tags    []string // Tags from YAML frontmatter (nil = untagged)
-	Kind    string   // Optional frontmatter kind (for example entry_point)
-	Content string   // Markdown content (frontmatter stripped)
+	Name       string   // Filename without .md extension
+	Tags       []string // Tags from YAML frontmatter (nil = untagged)
+	Kind       string   // Optional frontmatter kind (for example entry_point)
+	Content    string   // Markdown content (frontmatter stripped)
+	SourcePath string   // Filesystem path loaded for verification/debugging
 }
 
 // Frontmatter captures the subset of markdown metadata Thane currently
@@ -74,19 +81,36 @@ func (l *Loader) listFiles() ([]string, error) {
 // from frontmatter; Content has the frontmatter stripped. Use
 // FilterByTags to select the subset matching active capability tags.
 func (l *Loader) Talents() ([]Talent, error) {
+	return l.TalentsVerified(context.Background(), nil, "")
+}
+
+// TalentsVerified reads all .md files from the talents directory after
+// passing each file through verifier. Verification runs immediately
+// before the file read so callers that have a document-root verifier can
+// avoid loading untrusted behavioral guidance into memory.
+func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, consumer string) ([]Talent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	files, err := l.listFiles()
 	if err != nil {
 		return nil, err
 	}
 	var ts []Talent
 	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(l.dir, f))
+		path := filepath.Join(l.dir, f)
+		if verifier != nil {
+			if err := verifier(ctx, path, consumer); err != nil {
+				return nil, fmt.Errorf("verify talent %s: %w", f, err)
+			}
+		}
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
 		name := strings.TrimSuffix(f, ".md")
 		meta, content := ParseFrontmatterMetadata(string(data))
-		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content})
+		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content, SourcePath: path})
 	}
 	return ts, nil
 }

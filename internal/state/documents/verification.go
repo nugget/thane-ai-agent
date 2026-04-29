@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -77,12 +78,45 @@ func (s *Store) VerifyPath(ctx context.Context, path string, consumer string) er
 	return s.verifyDocumentForConsumer(ctx, root, relPath, consumer)
 }
 
+// VerifyMutationPath reports whether a raw filesystem mutation is
+// allowed for path. Paths outside configured roots are ignored.
+//
+// This is deliberately stricter than [Store.VerifyPath]. A trusted
+// file inside a signed root may be safe to read, but raw writes would
+// dirty the tree without using the root writer that signs managed
+// document mutations. Read-only/restricted roots are also blocked here
+// so file tools cannot bypass root authoring policy.
+func (s *Store) VerifyMutationPath(_ context.Context, path string, consumer string) error {
+	if s == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	root, relPath, ok, err := s.rootRefForPath(path)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	policy := s.rootPolicy(root)
+	switch policy.Authoring {
+	case "", AuthoringManaged:
+	case AuthoringReadOnly, AuthoringRestricted:
+		return fmt.Errorf("document %s:%s blocked by authoring policy for %s: root authoring is %q", root, relPath, consumer, policy.Authoring)
+	default:
+		return fmt.Errorf("document %s:%s blocked by authoring policy for %s: unsupported authoring mode %q", root, relPath, consumer, policy.Authoring)
+	}
+	if policy.Git.Enabled && (policy.Git.SignCommits || policy.Git.VerifySignatures == VerificationRequired) {
+		return fmt.Errorf("document %s:%s blocked by mutation policy for %s: raw file mutation would bypass signed document-root provenance; use managed document tools", root, relPath, consumer)
+	}
+	return nil
+}
+
 func (s *Store) rootRefForPath(path string) (root string, relPath string, ok bool, err error) {
 	targetAbs, err := filepath.Abs(path)
 	if err != nil {
 		return "", "", false, fmt.Errorf("resolve document path for verification: %w", err)
 	}
-	targetResolved, err := filepath.EvalSymlinks(targetAbs)
+	targetResolved, err := evalSymlinksAllowingMissing(targetAbs)
 	if err != nil {
 		return "", "", false, fmt.Errorf("resolve document path for verification: %w", err)
 	}
@@ -113,6 +147,55 @@ func (s *Store) rootRefForPath(path string) (root string, relPath string, ok boo
 		return "", "", false, fmt.Errorf("compute managed document ref: %w", err)
 	}
 	return candidates[0].root, filepath.ToSlash(filepath.Clean(rel)), true, nil
+}
+
+// evalSymlinksAllowingMissing resolves symlinks in path the same way
+// [filepath.EvalSymlinks] does, but tolerates a missing leaf (or an
+// arbitrarily long missing tail) by walking up to the longest
+// existing prefix, resolving symlinks there, then re-joining the
+// non-existent components verbatim.
+//
+// Verifier callers exercise this on three legitimate "file does not
+// exist" paths:
+//   - file-tool writes that create a new file inside a managed root
+//   - inject-files configured but not yet present on disk
+//   - edits where the dir tree leading up to the file exists but the
+//     file itself was just removed
+//
+// Returning an error in those cases would either make required-mode
+// startup brittle (any missing inject-file becomes fatal for a reason
+// unrelated to signing) or silently disable verification for
+// new-file writes. Both are worse than carrying the abstract path
+// through the rest of the lookup, which still correctly classifies
+// the path as in-root or out-of-root via prefix containment.
+func evalSymlinksAllowingMissing(path string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	// Walk up to the longest existing ancestor.
+	current := path
+	var trailing []string
+	for {
+		parent := filepath.Dir(current)
+		trailing = append([]string{filepath.Base(current)}, trailing...)
+		if parent == current {
+			// Reached the root without finding an existing
+			// ancestor — return the abstract abs path; downstream
+			// prefix-containment will classify it as outside any
+			// managed root.
+			return filepath.Clean(path), nil
+		}
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, trailing...)...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		current = parent
+	}
 }
 
 func (s *Store) handleVerificationFailure(root, relPath, consumer string, result SignatureVerification) error {
