@@ -2,23 +2,21 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
+	"log/slog"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // verifyStartupReads closes the doc-root verification bypass paths
 // surfaced by issue #788. The model's file tools are gated at call
-// time once the verifier is installed; inject-files and talents are
-// loaded once at startup and bypass the doc store entirely. Run them
-// through Store.VerifyPath here so each root's verify_signatures
-// policy applies.
+// time once the verifier is installed; inject-files are model-facing
+// content that bypass the doc store. Run them through Store.VerifyPath
+// here so each root's verify_signatures policy fails fast during
+// startup. The agent loop also verifies inject-files again each time
+// they are read into the prompt.
 //
 // Behavior matches the policy mode of the enclosing root:
 //   - none: no check (VerifyPath returns nil)
@@ -27,8 +25,7 @@ import (
 //     a wrapped error identifying the consumer site
 //
 // Paths outside any managed root are no-ops inside VerifyPath, so
-// non-managed inject-files / talent dirs keep their original
-// unverified behavior.
+// non-managed inject-files keep their original unverified behavior.
 func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, injectFiles []string) error {
 	if store == nil {
 		return nil
@@ -46,43 +43,28 @@ func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, in
 		}
 	}
 
-	if dir := strings.TrimSpace(a.cfg.TalentsDir); dir != "" {
-		paths, err := listTalentFiles(dir)
-		if err != nil {
-			return fmt.Errorf("talents verification: %w", err)
-		}
-		for _, p := range paths {
-			if err := store.VerifyPath(ctx, p, "talents"); err != nil {
-				return fmt.Errorf("talents verification: %w", err)
-			}
-		}
-	}
-
 	return nil
 }
 
-// listTalentFiles returns paths of .md files in dir (joined with dir
-// as-is, so the result is absolute when dir is absolute and relative
-// when dir is relative — [documents.Store.VerifyPath] handles both
-// via [filepath.Abs]). Sorted for deterministic verification order.
-// Returns nil (no error) when dir does not exist, matching
-// [talents.Loader] which silently ignores a missing talents
-// directory.
-func listTalentFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+func (a *App) loadTalents(ctx context.Context, verifier talents.VerifyPathFunc) ([]talents.Talent, error) {
+	if a == nil || a.cfg == nil {
+		return nil, nil
+	}
+	loader := talents.NewLoader(a.cfg.TalentsDir)
+	parsedTalents, err := loader.TalentsVerified(ctx, verifier, "talents")
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read talents dir: %w", err)
+		return nil, fmt.Errorf("load talents: %w", err)
 	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
+	if len(parsedTalents) > 0 {
+		names := make([]string, 0, len(parsedTalents))
+		for _, talent := range parsedTalents {
+			names = append(names, talent.Name)
 		}
-		out = append(out, filepath.Join(dir, e.Name()))
+		logger := a.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Info("talents loaded", "dir", a.cfg.TalentsDir, "count", len(parsedTalents), "talents", names)
 	}
-	sort.Strings(out)
-	return out, nil
+	return parsedTalents, nil
 }

@@ -37,7 +37,7 @@ func (v fakeRootVerifier) VerifyRoot(_ context.Context) (documents.SignatureVeri
 
 // newVerifyTestStore wires a documents.Store with one root ("kb")
 // rooted at kbDir, the supplied policy, and the supplied verifier.
-// The store has no writers — verifyStartupReads only needs read-side
+// The store has no writers — these tests only need read-side
 // verification.
 func newVerifyTestStore(t *testing.T, kbDir string, policy documents.RootPolicy, verifier documents.RootVerifier) *documents.Store {
 	t.Helper()
@@ -189,11 +189,11 @@ func TestVerifyStartupReads_OutsideAnyRootIsPassthrough(t *testing.T) {
 	}
 }
 
-// TestVerifyStartupReads_BlocksUnsignedTalent confirms that talent
-// markdown files inside a managed required-mode root are checked the
-// same way as inject-files. A loader that bypasses the doc store can
-// otherwise serve untrusted behavioral guidance.
-func TestVerifyStartupReads_BlocksUnsignedTalent(t *testing.T) {
+// TestLoadTalents_BlocksUnsignedTalent confirms that talent markdown
+// files inside a managed required-mode root are checked immediately
+// before loading. A loader that bypasses the doc store can otherwise
+// serve untrusted behavioral guidance.
+func TestLoadTalents_BlocksUnsignedTalent(t *testing.T) {
 	t.Parallel()
 
 	rootDir := t.TempDir()
@@ -212,12 +212,12 @@ func TestVerifyStartupReads_BlocksUnsignedTalent(t *testing.T) {
 	}, verifier)
 
 	a := &App{cfg: &config.Config{TalentsDir: talentDir}}
-	err := a.verifyStartupReads(context.Background(), store, nil)
+	_, err := a.loadTalents(context.Background(), store.VerifyPath)
 	if err == nil {
-		t.Fatal("verifyStartupReads should block unsigned talent under required mode")
+		t.Fatal("loadTalents should block unsigned talent under required mode")
 	}
-	if !strings.Contains(err.Error(), "talents verification") {
-		t.Fatalf("error = %v, want talents verification wrapper", err)
+	if !strings.Contains(err.Error(), "load talents") {
+		t.Fatalf("error = %v, want load talents wrapper", err)
 	}
 }
 

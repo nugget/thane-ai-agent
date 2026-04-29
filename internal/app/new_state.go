@@ -18,7 +18,8 @@ import (
 type newState struct {
 	ctx context.Context
 
-	// Loaded in initStores, consumed by initAgentLoop and initDelegation.
+	// Loaded in initChannels after document-root verification wiring,
+	// consumed by finalizeCapabilityTags.
 	parsedTalents  []talents.Talent
 	personaContent string
 

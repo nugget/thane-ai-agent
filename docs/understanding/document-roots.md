@@ -134,10 +134,10 @@ target content is not cleanly covered by trusted signed git history:
 - Tagged context articles
 - The model's `read_file` tool when the resolved path lies inside a
   managed root
-- Startup-time inject-files (the fixed core context the agent sees on
-  every turn)
-- Startup-time talents (behavioral guidance markdown loaded from the
-  configured talents directory)
+- Inject-files each time they are read into the prompt, with startup
+  fail-fast verification for initially configured files
+- Startup-time talents, loaded only after their source markdown files
+  pass verification
 
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
