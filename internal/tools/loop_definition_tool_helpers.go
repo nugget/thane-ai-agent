@@ -198,6 +198,11 @@ func loopLaunchOverrideProperties() map[string]any {
 			"type":        "string",
 			"description": "Override the system prompt for this launch.",
 		},
+		"prompt_mode": map[string]any{
+			"type":        "string",
+			"enum":        []string{"full", "task"},
+			"description": "Select the system-prompt shape. full is the normal Thane prompt. task is a compact worker prompt that suppresses full identity and always-on continuity context.",
+		},
 		"skip_context": map[string]any{
 			"type":        "boolean",
 			"description": "Skip context providers (awareness, archive prewarm, etc.) for this launch.",

@@ -246,15 +246,15 @@ operator guide.
 ## Persona & Talents
 
 ```yaml
-persona_file: ~/Thane/persona.md
+workspace:
+  path: ~/Thane
 talents_dir: ~/Thane/talents
-inject_files:
-  - ~/Thane/IDENTITY.md
-  - ~/Thane/USER.md
 ```
 
 See [Context Layers](../understanding/context-layers.md) for how these
-fit into the system prompt.
+fit into the system prompt. `workspace.path` derives the protected
+`core` root; `core/persona.md`, `core/ego.md`, and `core/mission.md`
+are picked up by the runtime without a separate inject-file list.
 
 ## Scheduler
 

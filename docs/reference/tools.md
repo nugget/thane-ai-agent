@@ -290,6 +290,14 @@ family.
 | `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
 | `thane_wake` | poke existing | Send a one-shot message envelope to a live timer loop, waking it or queueing for the next iteration. |
 
+`thane_now`, `thane_assign`, and the deprecated `thane_delegate` alias
+accept `context_mode`. The default, `task`, gives the child run a compact
+task-worker prompt with active capabilities, tagged context, and current
+conditions, but without full Thane identity files, inject files,
+always-on talents, or conversation-history dressing. Use
+`context_mode=full` only when the delegated work genuinely needs that
+continuity.
+
 ## `loops` — lower-level loop control and inspection
 
 Below the `thane_*` family. Use these for inspection, control, or

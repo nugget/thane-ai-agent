@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 func newMinimalLoop() *Loop {
@@ -217,5 +220,49 @@ func TestBuildSystemPrompt_InjectFilesEmpty(t *testing.T) {
 
 	if strings.Contains(prompt, "Injected Context") {
 		t.Error("system prompt should not contain injected context section when no files configured")
+	}
+}
+
+func TestBuildSystemPrompt_TaskModeOmitsIdentityContinuityContext(t *testing.T) {
+	dir := t.TempDir()
+	egoPath := filepath.Join(dir, "ego.md")
+	injectPath := filepath.Join(dir, "metacognitive.md")
+	if err := os.WriteFile(egoPath, []byte("EGO_MARKER"), 0o644); err != nil {
+		t.Fatalf("write ego.md: %v", err)
+	}
+	if err := os.WriteFile(injectPath, []byte("INJECT_MARKER"), 0o644); err != nil {
+		t.Fatalf("write inject file: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.persona = "PERSONA_MARKER"
+	l.SetEgoFile(egoPath)
+	l.SetInjectFiles([]string{injectPath})
+
+	ctx := agentctx.WithPromptMode(context.Background(), agentctx.PromptModeTask)
+	history := []memory.Message{{Role: "user", Content: "HISTORY_MARKER"}}
+	prompt := l.buildSystemPrompt(ctx, "hello", history)
+
+	for _, marker := range []string{
+		"PERSONA_MARKER",
+		"EGO_MARKER",
+		"INJECT_MARKER",
+		"HISTORY_MARKER",
+		"Self-Reflection (ego.md)",
+		"Injected Context",
+		"Conversation History",
+	} {
+		if strings.Contains(prompt, marker) {
+			t.Fatalf("task prompt contains %q:\n%s", marker, prompt)
+		}
+	}
+	for _, marker := range []string{
+		"bounded task worker",
+		"## Runtime Contract",
+		"Current Conditions",
+	} {
+		if !strings.Contains(prompt, marker) {
+			t.Fatalf("task prompt missing %q:\n%s", marker, prompt)
+		}
 	}
 }

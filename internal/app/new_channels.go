@@ -303,7 +303,7 @@ func (a *App) initChannels(s *newState) error {
 			a.logger.LogAttrs(context.Background(), slog.LevelInfo, "document index enabled", attrs...)
 
 			// Close the verification bypass paths surfaced by #788:
-			// the model's file tools and startup inject-files read raw
+			// the model's file tools and core context provider read raw
 			// filesystem paths that may fall inside a managed root.
 			// Route those through the store's verification policies.
 			// Paths outside any managed root are no-ops inside VerifyPath,

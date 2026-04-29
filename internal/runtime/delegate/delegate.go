@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -42,10 +43,21 @@ const (
 type executionOptions struct {
 	inheritCallerTags bool
 	explicitTagScope  bool
+	promptMode        agentctx.PromptMode
 }
 
 func defaultExecutionOptions() executionOptions {
-	return executionOptions{inheritCallerTags: true}
+	return executionOptions{
+		inheritCallerTags: true,
+		promptMode:        agentctx.PromptModeTask,
+	}
+}
+
+func (o executionOptions) effectivePromptMode() agentctx.PromptMode {
+	if o.promptMode == "" {
+		return agentctx.PromptModeTask
+	}
+	return o.promptMode
 }
 
 func mergeDelegateScopeTags(ctx context.Context, explicitTags []string, inheritCallerTags bool, explicitTagScope bool) (scopeTags []string, inheritedTags []string, droppedTags []string, explicitScopeRequested bool) {
@@ -433,6 +445,7 @@ type preparedExecution struct {
 	maxOutputTokens  int
 	maxDuration      time.Duration
 	toolTimeout      time.Duration
+	promptMode       agentctx.PromptMode
 }
 
 func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*Result, error) {
@@ -548,6 +561,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 				"delegate_task":     truncate(task, 500),
 				"delegate_profile":  prep.profile.Name,
 				"delegate_guidance": truncate(guidance, 500),
+				"prompt_mode":       string(prep.promptMode),
 			},
 		},
 		Task:                     prep.userMessage,
@@ -564,16 +578,18 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ToolTimeout:              prep.toolTimeout,
 		UsageRole:                "delegate",
 		UsageTaskName:            prep.profile.Name,
+		PromptMode:               prep.promptMode,
 		RunTimeout:               prep.maxDuration,
 		CompletionConversationID: completionConversationID,
 		CompletionChannel:        looppkg.CloneCompletionChannelTarget(completionChannel),
 		OnProgress:               onProgress,
-		// Delegate loops are bounded child tasks. They get tagged
-		// providers and KB articles for their declared profile, but
-		// not the always-on ambient context (presence, episodic memory,
-		// notification history, etc.) that is meant for the main loop's
-		// experiential continuity. See #778.
-		SuppressAlwaysContext: true,
+		// Task-focused delegates are bounded child tasks. They get
+		// tagged providers and KB articles for their declared profile,
+		// but not the always-on ambient context (presence, episodic
+		// memory, notification history, etc.) that is meant for the
+		// main loop's experiential continuity. Full-context delegates
+		// opt back into that richer prompt shape intentionally.
+		SuppressAlwaysContext: prep.promptMode != agentctx.PromptModeFull,
 	}
 }
 
@@ -805,6 +821,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		maxOutputTokens:  maxOutputTokens,
 		maxDuration:      maxDuration,
 		toolTimeout:      toolTimeout,
+		promptMode:       opts.effectivePromptMode(),
 	}, nil
 }
 

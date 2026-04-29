@@ -158,16 +158,15 @@ The system prompt is assembled from four layers, each with a distinct
 purpose. Mixing concerns across layers degrades agent behavior — this
 was learned empirically, not theorized.
 
-**Persona** is identity: who the agent is, its voice and values.
-**Inject files** are knowledge: factual reference material the agent
-needs. **Current conditions** are awareness: time, environment, active
-state. **Talents** are behavior: how the agent should act in specific
-situations.
+**Persona** is identity: who the agent is, its voice and values. **Core
+context providers** publish curated knowledge and continuity such as
+`core/ego.md` and `core/mission.md`. **Current conditions** are
+awareness: time, environment, active state. **Talents** are behavior:
+how the agent should act in specific situations.
 
-The assembly order mirrors natural orientation: I know who I am, I know
-what I know, I know where and when I am, I know how to behave. Putting
-tool rules in the persona suppresses personality. Putting identity in
-talents creates contradictions. The layer separation isn't arbitrary —
+Putting tool rules in the persona suppresses personality. Putting
+identity in talents creates contradictions. The layer separation isn't
+arbitrary —
 each anti-pattern was discovered by watching the agent behave badly
 when concerns were mixed. See [Context Layers](context-layers.md).
 
