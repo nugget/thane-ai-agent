@@ -117,6 +117,11 @@ writes through signed commits. Read/search surfaces also respect
 `verify_signatures: required` by blocking content that is not cleanly
 covered by trusted signed git history.
 
+Document tool results use model-facing time deltas such as
+`modified_delta`, `created_delta`, and `checked_delta` instead of raw
+absolute timestamps. Timestamp filter inputs still accept RFC3339 values
+or signed deltas like `-604800s`.
+
 | Tool | Description |
 |------|-------------|
 | `doc_roots` | List configured document roots with policy, health, and counts. |

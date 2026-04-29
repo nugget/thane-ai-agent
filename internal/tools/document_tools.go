@@ -45,7 +45,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_roots",
-		Description: "List indexed markdown roots with helpful corpus summaries such as document counts, total size, last modification, top tags, top directories, and recent example documents. Use first when the answer probably lives in a managed document corpus but you do not yet know which root to browse.",
+		Description: "List indexed markdown roots with helpful corpus summaries such as document counts, total size, last modification delta, top tags, top directories, and recent example documents. Use first when the answer probably lives in a managed document corpus but you do not yet know which root to browse.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -93,7 +93,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md`, not full bodies.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs and modified-time deltas like `kb:article.md`, not full bodies.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -273,7 +273,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_values",
-		Description: "List observed values for one frontmatter key across indexed roots, especially keys like `tags`, `status`, or `area`. Use this to discover the corpus vocabulary before narrowing a search.",
+		Description: "List observed values for one frontmatter key across indexed roots, especially keys like `tags`, `status`, or `area`. Timestamp-valued keys are returned as deltas. Use this to discover the corpus vocabulary before narrowing a search.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

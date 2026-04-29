@@ -32,9 +32,79 @@ func TestToolsRootsOmitAbsolutePath(t *testing.T) {
 	if _, ok := payload.Roots[0]["path"]; ok {
 		t.Fatalf("Roots() leaked root filesystem path: %s", got)
 	}
-	for _, want := range []string{`"total_size_bytes"`, `"last_modified_at"`, `"top_directories"`, `"recent_documents"`} {
+	for _, want := range []string{`"total_size_bytes"`, `"last_modified_delta"`, `"top_directories"`, `"recent_documents"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Roots() = %s, want field %s", got, want)
+		}
+	}
+	for _, rawTimeField := range []string{`"last_modified_at"`, `"modified_at"`} {
+		if strings.Contains(got, rawTimeField) {
+			t.Fatalf("Roots() = %s, should not expose raw timestamp field %s", got, rawTimeField)
+		}
+	}
+}
+
+func TestDocumentToolsUseDeltaTimeFields(t *testing.T) {
+	t.Parallel()
+
+	tools := newDocumentToolsTestFixture(t)
+	ctx := context.Background()
+
+	outputs := map[string]string{}
+	var err error
+	outputs["roots"], err = tools.Roots(ctx)
+	if err != nil {
+		t.Fatalf("Roots: %v", err)
+	}
+	outputs["browse"], err = tools.Browse(ctx, BrowseArgs{Root: "kb"})
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	outputs["search"], err = tools.Search(ctx, SearchArgs{
+		Root:            "kb",
+		Query:           "note",
+		FrontmatterKeys: []string{"created"},
+		ModifiedAfter:   "-3600s",
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	outputs["read"], err = tools.Read(ctx, RefArgs{Ref: "kb:note.md"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	outputs["write"], err = tools.Write(ctx, WriteArgs{
+		Ref:   "kb:written.md",
+		Title: "Written",
+		Body:  stringPtr("# Written\n\nBody."),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	outputs["read_written"], err = tools.Read(ctx, RefArgs{Ref: "kb:written.md"})
+	if err != nil {
+		t.Fatalf("Read written: %v", err)
+	}
+	outputs["values_created"], err = tools.Values(ctx, ValuesArgs{Root: "kb", Key: "created"})
+	if err != nil {
+		t.Fatalf("Values created: %v", err)
+	}
+
+	for name, got := range outputs {
+		if strings.Contains(got, `"modified_at"`) ||
+			strings.Contains(got, `"last_modified_at"`) ||
+			strings.Contains(got, `"created_at"`) ||
+			strings.Contains(got, `"updated_at"`) ||
+			strings.Contains(got, `"checked_at"`) ||
+			strings.Contains(got, `"modified_after":`) ||
+			strings.Contains(got, `"modified_before":`) ||
+			strings.Contains(got, `"created":`) ||
+			strings.Contains(got, `"updated":`) ||
+			strings.Contains(got, `"generated_at":`) {
+			t.Fatalf("%s output exposes raw timestamp field: %s", name, got)
+		}
+		if !strings.Contains(got, `_delta"`) {
+			t.Fatalf("%s output = %s, want at least one delta time field", name, got)
 		}
 	}
 }
