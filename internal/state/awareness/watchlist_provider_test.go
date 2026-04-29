@@ -127,11 +127,21 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(got, "sensor.broken") {
-		t.Error("missing entity_id for failed fetch")
+	// Fetch errors must use the same JSON availability schema as
+	// sentinel-state entities so the model sees one stable shape
+	// regardless of whether the failure was upstream or local.
+	payload := decodeWatchlistPayload(t, got)
+	if payload["entity"] != "sensor.broken" {
+		t.Errorf("entity = %v, want sensor.broken", payload["entity"])
 	}
-	if !strings.Contains(got, "unavailable") {
-		t.Error("failed entity should show as unavailable")
+	if payload["available"] != false {
+		t.Errorf("available = %v, want false", payload["available"])
+	}
+	if payload["reason"] != "fetch_error" {
+		t.Errorf("reason = %v, want fetch_error", payload["reason"])
+	}
+	if _, hasState := payload["state"]; hasState {
+		t.Error("state field must be omitted on fetch_error so the model cannot misread a stale value")
 	}
 }
 
@@ -335,6 +345,70 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 	if summary["recent_states_truncated"] != false {
 		t.Fatalf("recent_states_truncated = %#v, want false", summary["recent_states_truncated"])
+	}
+}
+
+func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
+	now := time.Now().UTC().Round(time.Second)
+	ha := &fakeHA{
+		states: map[string]*homeassistant.State{
+			"binary_sensor.front_door": {
+				EntityID:    "binary_sensor.front_door",
+				State:       "off",
+				LastChanged: now,
+				Attributes: map[string]any{
+					"friendly_name": "Front Door",
+					"device_class":  "door",
+				},
+			},
+		},
+		history: map[string][]homeassistant.State{
+			"binary_sensor.front_door": {
+				{EntityID: "binary_sensor.front_door", State: "off", LastChanged: now.Add(-25 * time.Hour)},
+				{EntityID: "binary_sensor.front_door", State: "on", LastChanged: now.Add(-20 * time.Hour)},
+				{EntityID: "binary_sensor.front_door", State: "off", LastChanged: now.Add(-2 * time.Hour)},
+			},
+		},
+	}
+
+	p, store := setupTestProvider(t, ha)
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	payload := decodeWatchlistPayload(t, got)
+	if payload["state"] != "closed" {
+		t.Errorf("current state = %v, want closed", payload["state"])
+	}
+
+	history, ok := payload["history"].([]any)
+	if !ok || len(history) != 1 {
+		t.Fatalf("history = %#v, want one summary", payload["history"])
+	}
+	summary := history[0].(map[string]any)
+	if summary["start_state"] != "closed" {
+		t.Errorf("start_state = %v, want closed", summary["start_state"])
+	}
+	if summary["end_state"] != "closed" {
+		t.Errorf("end_state = %v, want closed", summary["end_state"])
+	}
+	recent, ok := summary["recent_states"].([]any)
+	if !ok {
+		t.Fatalf("recent_states = %#v", summary["recent_states"])
+	}
+	want := []string{"closed", "open", "closed"}
+	if len(recent) != len(want) {
+		t.Fatalf("recent_states len = %d, want %d (%v)", len(recent), len(want), recent)
+	}
+	for i, w := range want {
+		if recent[i] != w {
+			t.Errorf("recent_states[%d] = %v, want %q", i, recent[i], w)
+		}
 	}
 }
 

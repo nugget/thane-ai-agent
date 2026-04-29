@@ -296,6 +296,348 @@ func TestEntityDomain(t *testing.T) {
 	}
 }
 
+func TestFormatDefault_BinarySensorDeviceClassTranslation(t *testing.T) {
+	cases := []struct {
+		name        string
+		entityID    string
+		state       string
+		deviceClass string
+		want        string
+	}{
+		{"door open", "binary_sensor.front_door", "on", "door", "open"},
+		{"door closed", "binary_sensor.front_door", "off", "door", "closed"},
+		{"garage_door open", "binary_sensor.garage", "on", "garage_door", "open"},
+		{"window closed", "binary_sensor.bedroom_window", "off", "window", "closed"},
+		{"motion detected", "binary_sensor.hallway", "on", "motion", "detected"},
+		{"motion clear", "binary_sensor.hallway", "off", "motion", "clear"},
+		{"smoke detected", "binary_sensor.kitchen_smoke", "on", "smoke", "detected"},
+		{"moisture wet", "binary_sensor.basement_leak", "on", "moisture", "wet"},
+		{"occupancy clear", "binary_sensor.office", "off", "occupancy", "clear"},
+		{"occupancy occupied", "binary_sensor.office", "on", "occupancy", "occupied"},
+		{"connectivity disconnected", "binary_sensor.router", "off", "connectivity", "disconnected"},
+		{"battery low", "binary_sensor.remote_battery", "on", "battery", "low"},
+		{"problem ok", "binary_sensor.printer", "off", "problem", "ok"},
+		{"safety unsafe", "binary_sensor.pool", "on", "safety", "unsafe"},
+		{"tamper clear", "binary_sensor.alarm", "off", "tamper", "clear"},
+		{"tamper tampering", "binary_sensor.alarm", "on", "tamper", "tampering"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &homeassistant.State{
+				EntityID:    tc.entityID,
+				State:       tc.state,
+				LastChanged: testNow.Add(-30 * time.Second),
+				Attributes: map[string]any{
+					"device_class": tc.deviceClass,
+				},
+			}
+			result := formatEntityContext(state, testNow)
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Fatalf("output should be valid JSON: %v\nGot: %s", err, result)
+			}
+			if got := parsed["state"]; got != tc.want {
+				t.Errorf("state = %v, want %q", got, tc.want)
+			}
+			if got := parsed["device_class"]; got != tc.deviceClass {
+				t.Errorf("device_class = %v, want %q", got, tc.deviceClass)
+			}
+		})
+	}
+}
+
+func TestFormatDefault_BinarySensorPassthroughForUnknownDeviceClass(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "binary_sensor.unmapped",
+		State:       "on",
+		LastChanged: testNow.Add(-10 * time.Second),
+		Attributes: map[string]any{
+			"device_class": "totally_made_up",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, result)
+	}
+	if parsed["state"] != "on" {
+		t.Errorf("unmapped device_class should pass through state, got %v", parsed["state"])
+	}
+}
+
+func TestFormatEntityContext_SentinelStatesYieldAvailabilityShape(t *testing.T) {
+	// HA emits "unavailable" or "unknown" when integrations drop out.
+	// These are intercepted before domain dispatch and rendered as a
+	// structured availability payload so the model never sees a
+	// sentinel string in the state field where a domain value belongs.
+	for _, raw := range []string{"unavailable", "unknown"} {
+		state := &homeassistant.State{
+			EntityID:    "binary_sensor.front_door",
+			State:       raw,
+			LastChanged: testNow.Add(-12 * time.Minute),
+			Attributes: map[string]any{
+				"friendly_name": "Front Door",
+				"device_class":  "door",
+			},
+		}
+		result := formatEntityContext(state, testNow)
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("invalid JSON for %s: %v", raw, err)
+		}
+		if parsed["available"] != false {
+			t.Errorf("[%s] available = %v, want false", raw, parsed["available"])
+		}
+		if parsed["reason"] != raw {
+			t.Errorf("[%s] reason = %v, want %q", raw, parsed["reason"], raw)
+		}
+		if _, hasState := parsed["state"]; hasState {
+			t.Errorf("[%s] state field must be omitted (had %v)", raw, parsed["state"])
+		}
+		if parsed["unavailable_since"] != "-720s" {
+			t.Errorf("[%s] unavailable_since = %v, want -720s", raw, parsed["unavailable_since"])
+		}
+		if parsed["device_class"] != "door" {
+			t.Errorf("[%s] device_class = %v, want door", raw, parsed["device_class"])
+		}
+		if parsed["name"] != "Front Door" {
+			t.Errorf("[%s] name = %v, want Front Door", raw, parsed["name"])
+		}
+	}
+}
+
+func TestFormatEntityContext_SentinelInterceptsAllDomains(t *testing.T) {
+	// The sentinel interception must run before domain dispatch, so
+	// even rich-formatter domains (weather, climate, light, cover)
+	// emit the availability shape rather than their per-domain JSON.
+	for _, entityID := range []string{"weather.home", "climate.thermostat", "light.kitchen", "cover.garage"} {
+		state := &homeassistant.State{
+			EntityID:    entityID,
+			State:       "unavailable",
+			LastChanged: testNow.Add(-30 * time.Second),
+			Attributes:  map[string]any{},
+		}
+		result := formatEntityContext(state, testNow)
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("[%s] invalid JSON: %v", entityID, err)
+		}
+		if parsed["available"] != false {
+			t.Errorf("[%s] expected availability shape, got %v", entityID, parsed)
+		}
+	}
+}
+
+func TestFormatFetchError(t *testing.T) {
+	result := formatFetchError("sensor.gone")
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["entity"] != "sensor.gone" {
+		t.Errorf("entity = %v, want sensor.gone", parsed["entity"])
+	}
+	if parsed["available"] != false {
+		t.Errorf("available = %v, want false", parsed["available"])
+	}
+	if parsed["reason"] != "fetch_error" {
+		t.Errorf("reason = %v, want fetch_error", parsed["reason"])
+	}
+}
+
+func TestFormatDefault_SurfacesStateClass(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "sensor.utility_meter",
+		State:       "8421.5",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"device_class":        "energy",
+			"state_class":         "total_increasing",
+			"unit_of_measurement": "kWh",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["state_class"] != "total_increasing" {
+		t.Errorf("state_class = %v, want total_increasing", parsed["state_class"])
+	}
+}
+
+func TestFormatDefault_SurfacesAssumedState(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "switch.assumed",
+		State:       "on",
+		LastChanged: testNow,
+		Attributes: map[string]any{
+			"assumed_state": true,
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["assumed_state"] != true {
+		t.Errorf("assumed_state = %v, want true", parsed["assumed_state"])
+	}
+}
+
+func TestFormatDefault_OmitsAssumedStateWhenFalse(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "switch.real",
+		State:       "on",
+		LastChanged: testNow,
+		Attributes:  map[string]any{},
+	}
+	result := formatEntityContext(state, testNow)
+	if strings.Contains(result, "assumed_state") {
+		t.Errorf("assumed_state must be omitted when not asserted true, got %s", result)
+	}
+}
+
+func TestFormatClimate_SurfacesHVACAction(t *testing.T) {
+	// hvac_mode is "heat" (the user setting); hvac_action is "idle"
+	// (what the unit is actually doing right now). The model needs
+	// both to answer "is the heat running?".
+	state := &homeassistant.State{
+		EntityID:    "climate.thermostat",
+		State:       "heat",
+		LastChanged: testNow.Add(-600 * time.Second),
+		Attributes: map[string]any{
+			"current_temperature": 70.0,
+			"temperature":         72.0,
+			"hvac_mode":           "heat",
+			"hvac_action":         "idle",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["hvac_action"] != "idle" {
+		t.Errorf("hvac_action = %v, want idle", parsed["hvac_action"])
+	}
+	if parsed["hvac_mode"] != "heat" {
+		t.Errorf("hvac_mode = %v, want heat", parsed["hvac_mode"])
+	}
+}
+
+func TestFormatLight_OmitsStaleAttributesWhenOff(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "light.bedroom",
+		State:       "off",
+		LastChanged: testNow.Add(-300 * time.Second),
+		Attributes: map[string]any{
+			"brightness":        float64(255),
+			"color_temp_kelvin": float64(4000),
+			"rgb_color":         []any{255, 0, 0},
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["state"] != "off" {
+		t.Errorf("state = %v, want off", parsed["state"])
+	}
+	for _, k := range []string{"brightness", "color_temp", "rgb_color"} {
+		if _, has := parsed[k]; has {
+			t.Errorf("%s must be omitted when light is off (was %v)", k, parsed[k])
+		}
+	}
+}
+
+func TestFormatLight_IncludesAttributesWhenOn(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "light.bedroom",
+		State:       "on",
+		LastChanged: testNow.Add(-30 * time.Second),
+		Attributes: map[string]any{
+			"brightness":        float64(255),
+			"color_temp_kelvin": float64(4000),
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, has := parsed["brightness"]; !has {
+		t.Error("brightness should be present when light is on")
+	}
+}
+
+func TestFormatCover_GarageDoorWithPosition(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "cover.garage",
+		State:       "open",
+		LastChanged: testNow.Add(-120 * time.Second),
+		Attributes: map[string]any{
+			"friendly_name":         "Garage Door",
+			"device_class":          "garage",
+			"current_position":      float64(30),
+			"current_tilt_position": float64(15),
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, result)
+	}
+	if parsed["entity"] != "cover.garage" {
+		t.Error("missing entity")
+	}
+	if parsed["state"] != "open" {
+		t.Errorf("state = %v, want open", parsed["state"])
+	}
+	if parsed["device_class"] != "garage" {
+		t.Errorf("device_class = %v, want garage", parsed["device_class"])
+	}
+	if parsed["position"] != float64(30) {
+		t.Errorf("position = %v, want 30", parsed["position"])
+	}
+	if parsed["tilt_position"] != float64(15) {
+		t.Errorf("tilt_position = %v, want 15", parsed["tilt_position"])
+	}
+	if parsed["since"] != "-120s" {
+		t.Errorf("since = %v, want -120s", parsed["since"])
+	}
+}
+
+func TestFormatCover_OmitsMissingPosition(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "cover.simple",
+		State:       "closed",
+		LastChanged: testNow.Add(-5 * time.Second),
+		Attributes: map[string]any{
+			"device_class": "door",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	if strings.Contains(result, `"position"`) {
+		t.Errorf("position should be omitted when missing, got %s", result)
+	}
+	if strings.Contains(result, `"tilt_position"`) {
+		t.Errorf("tilt_position should be omitted when missing, got %s", result)
+	}
+}
+
+func TestSemanticState_NumericFallthrough(t *testing.T) {
+	// Numeric default-domain states still get device_class precision
+	// rounding even after the binary_sensor translation path was added.
+	if got := semanticState("sensor", "temperature", "72.456"); got != "72.5" {
+		t.Errorf("semanticState numeric = %q, want 72.5", got)
+	}
+	if got := semanticState("binary_sensor", "", "on"); got != "on" {
+		t.Errorf("binary_sensor without device_class should pass through, got %q", got)
+	}
+}
+
 func TestNormalizeBrightness(t *testing.T) {
 	tests := []struct {
 		input any

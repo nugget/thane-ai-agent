@@ -26,6 +26,20 @@ type CategoryRegistryEntry struct {
 	ModifiedAt float64 `json:"modified_at"`
 }
 
+// ConfigEntry represents one entry in Home Assistant's config_entries
+// list — an installed integration. State is the lifecycle status:
+// "loaded" when healthy, "setup_error", "setup_retry", "not_loaded",
+// "failed_unload", or "setup_in_progress" when not. Reason carries
+// the integration's own error description when state != "loaded".
+type ConfigEntry struct {
+	EntryID string `json:"entry_id"`
+	Domain  string `json:"domain"`
+	Title   string `json:"title"`
+	Source  string `json:"source"`
+	State   string `json:"state"`
+	Reason  string `json:"reason"`
+}
+
 // DeviceRegistryEntry represents a Home Assistant device registry row.
 type DeviceRegistryEntry struct {
 	ID                    string               `json:"id"`
@@ -110,6 +124,18 @@ func (c *Client) GetDeviceRegistry(ctx context.Context) ([]DeviceRegistryEntry, 
 		return nil, err
 	}
 	return ws.GetDeviceRegistry(ctx)
+}
+
+// GetConfigEntries retrieves all installed integrations and their
+// lifecycle state. Used to attribute an unavailable entity's failure
+// to its owning integration ("Z-Wave is in setup_error" explains
+// every unavailable Z-Wave entity at once).
+func (c *Client) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
+	ws, err := c.requireWS()
+	if err != nil {
+		return nil, err
+	}
+	return ws.GetConfigEntries(ctx)
 }
 
 // GetEntityRegistryEntry retrieves the extended registry entry for an entity.
@@ -218,6 +244,16 @@ func (c *WSClient) GetDeviceRegistry(ctx context.Context) ([]DeviceRegistryEntry
 		return nil, fmt.Errorf("get device registry: %w", err)
 	}
 	return devices, nil
+}
+
+// GetConfigEntries retrieves config entries (installed integrations)
+// via WebSocket.
+func (c *WSClient) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
+	var entries []ConfigEntry
+	if err := c.call(ctx, "config_entries/get", nil, &entries); err != nil {
+		return nil, fmt.Errorf("get config entries: %w", err)
+	}
+	return entries, nil
 }
 
 // GetLabelRegistry retrieves labels via WebSocket.

@@ -11,10 +11,21 @@ import (
 )
 
 // formatEntityContext returns a context line for an entity, choosing
-// the format based on the entity domain. Rich domains (weather, climate,
-// light) emit compact JSON with relevant attributes following #458
-// conventions. Default domains use the original markdown line format.
+// the format based on the entity domain. Every domain emits compact
+// JSON: rich domains (weather, climate, light, cover, lock,
+// media_player, fan, vacuum, update) include domain-relevant
+// attributes following #458 conventions, and default domains use the
+// generic entity shape (defaultContext + promptfmt.MarshalCompact).
+//
+// Sentinel states (unavailable, unknown) are intercepted before domain
+// dispatch and rendered as a structured availability payload so the
+// model reads available:false instead of inferring from a magic state
+// string.
 func formatEntityContext(state *homeassistant.State, now time.Time) string {
+	if isSentinelState(state.State) {
+		return formatUnavailable(state, now)
+	}
+
 	domain := entityDomain(state.EntityID)
 
 	switch domain {
@@ -28,6 +39,18 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatPerson(state, now)
 	case "sun":
 		return formatSun(state, now)
+	case "cover":
+		return formatCover(state, now)
+	case "lock":
+		return formatLock(state, now)
+	case "media_player":
+		return formatMediaPlayer(state, now)
+	case "fan":
+		return formatFan(state, now)
+	case "vacuum":
+		return formatVacuum(state, now)
+	case "update":
+		return formatUpdate(state, now)
 	default:
 		return formatDefault(state, now)
 	}
@@ -36,27 +59,35 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 // defaultContext is the JSON structure for entities without a
 // domain-specific formatter.
 type defaultContext struct {
-	Entity      string `json:"entity"`
-	Name        string `json:"name,omitempty"`
-	State       string `json:"state"`
-	Unit        string `json:"unit,omitempty"`
-	DeviceClass string `json:"device_class,omitempty"`
-	Since       string `json:"since"`
-	Updated     string `json:"updated,omitempty"` // only when differs from since
+	Entity       string `json:"entity"`
+	Name         string `json:"name,omitempty"`
+	State        string `json:"state"`
+	Unit         string `json:"unit,omitempty"`
+	DeviceClass  string `json:"device_class,omitempty"`
+	StateClass   string `json:"state_class,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
+	Updated      string `json:"updated,omitempty"` // only when differs from since
 }
 
 // formatDefault produces compact JSON for any entity type. Includes
 // device_class when available and last_updated when it differs from
 // last_changed (indicating attribute-only updates). Numeric state
-// values are rounded based on device_class.
+// values are rounded based on device_class. Binary sensor states
+// (on/off) are translated to device_class-specific semantic labels
+// (door → open/closed, motion → detected/clear, etc.) so the model
+// reads the meaning rather than inferring it from the on/off encoding.
 func formatDefault(state *homeassistant.State, now time.Time) string {
 	deviceClass := attrString(state.Attributes, "device_class")
+	domain := entityDomain(state.EntityID)
 	dc := defaultContext{
-		Entity:      state.EntityID,
-		State:       roundState(state.State, deviceClass),
-		Unit:        attrString(state.Attributes, "unit_of_measurement"),
-		DeviceClass: deviceClass,
-		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Entity:       state.EntityID,
+		State:        semanticState(domain, deviceClass, state.State),
+		Unit:         attrString(state.Attributes, "unit_of_measurement"),
+		DeviceClass:  deviceClass,
+		StateClass:   attrString(state.Attributes, "state_class"),
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
 		dc.Name = name
@@ -139,53 +170,71 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 }
 
 // climateContext is the JSON structure for climate entity context.
+// State is the user-facing mode setting (heat/cool/auto/off);
+// HVACAction is what the unit is currently doing right now
+// (heating/cooling/idle/fan/drying). The distinction matters: a
+// thermostat in "heat" mode that is currently "idle" tells the model
+// the heat is set but not running, which is different from heat that
+// is actively running.
 type climateContext struct {
-	Entity      string `json:"entity"`
-	State       string `json:"state"`
-	CurrentTemp any    `json:"current_temp,omitempty"`
-	TargetTemp  any    `json:"target_temp,omitempty"`
-	TargetHigh  any    `json:"target_high,omitempty"`
-	TargetLow   any    `json:"target_low,omitempty"`
-	Humidity    any    `json:"humidity,omitempty"`
-	HVACMode    string `json:"hvac_mode,omitempty"`
-	PresetMode  string `json:"preset_mode,omitempty"`
-	Since       string `json:"since"`
+	Entity       string `json:"entity"`
+	State        string `json:"state"`
+	HVACAction   string `json:"hvac_action,omitempty"`
+	CurrentTemp  any    `json:"current_temp,omitempty"`
+	TargetTemp   any    `json:"target_temp,omitempty"`
+	TargetHigh   any    `json:"target_high,omitempty"`
+	TargetLow    any    `json:"target_low,omitempty"`
+	Humidity     any    `json:"humidity,omitempty"`
+	HVACMode     string `json:"hvac_mode,omitempty"`
+	PresetMode   string `json:"preset_mode,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
 }
 
 func formatClimate(state *homeassistant.State, now time.Time) string {
 	cc := climateContext{
-		Entity:      state.EntityID,
-		State:       state.State,
-		CurrentTemp: roundAttr(state.Attributes["current_temperature"], 1),
-		TargetTemp:  roundAttr(state.Attributes["temperature"], 1),
-		TargetHigh:  roundAttr(state.Attributes["target_temp_high"], 1),
-		TargetLow:   roundAttr(state.Attributes["target_temp_low"], 1),
-		Humidity:    roundAttr(state.Attributes["current_humidity"], 0),
-		HVACMode:    attrString(state.Attributes, "hvac_mode"),
-		PresetMode:  attrString(state.Attributes, "preset_mode"),
-		Since:       promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Entity:       state.EntityID,
+		State:        state.State,
+		HVACAction:   attrString(state.Attributes, "hvac_action"),
+		CurrentTemp:  roundAttr(state.Attributes["current_temperature"], 1),
+		TargetTemp:   roundAttr(state.Attributes["temperature"], 1),
+		TargetHigh:   roundAttr(state.Attributes["target_temp_high"], 1),
+		TargetLow:    roundAttr(state.Attributes["target_temp_low"], 1),
+		Humidity:     roundAttr(state.Attributes["current_humidity"], 0),
+		HVACMode:     attrString(state.Attributes, "hvac_mode"),
+		PresetMode:   attrString(state.Attributes, "preset_mode"),
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	return promptfmt.MarshalCompact(cc)
 }
 
 // lightContext is the JSON structure for light entity context.
 type lightContext struct {
-	Entity     string `json:"entity"`
-	State      string `json:"state"`
-	Brightness any    `json:"brightness,omitempty"`
-	ColorTemp  any    `json:"color_temp,omitempty"`
-	RGBColor   any    `json:"rgb_color,omitempty"`
-	Since      string `json:"since"`
+	Entity       string `json:"entity"`
+	State        string `json:"state"`
+	Brightness   any    `json:"brightness,omitempty"`
+	ColorTemp    any    `json:"color_temp,omitempty"`
+	RGBColor     any    `json:"rgb_color,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
 }
 
+// formatLight emits brightness, color_temp, and rgb_color only when
+// the light is on. When the light is off those attributes describe
+// the *last* on-state, which is misleading for a model trying to
+// reason about right now.
 func formatLight(state *homeassistant.State, now time.Time) string {
 	lc := lightContext{
-		Entity:     state.EntityID,
-		State:      state.State,
-		Brightness: normalizeBrightness(state.Attributes["brightness"]),
-		ColorTemp:  state.Attributes["color_temp_kelvin"],
-		RGBColor:   state.Attributes["rgb_color"],
-		Since:      promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Entity:       state.EntityID,
+		State:        state.State,
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+	if state.State == "on" {
+		lc.Brightness = normalizeBrightness(state.Attributes["brightness"])
+		lc.ColorTemp = state.Attributes["color_temp_kelvin"]
+		lc.RGBColor = state.Attributes["rgb_color"]
 	}
 	return promptfmt.MarshalCompact(lc)
 }
@@ -224,6 +273,15 @@ func attrString(attrs map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+// attrBool extracts a boolean attribute, returning false if missing or
+// not a bool.
+func attrBool(attrs map[string]any, key string) bool {
+	if v, ok := attrs[key].(bool); ok {
+		return v
+	}
+	return false
 }
 
 // personContext is the JSON structure for person entity context.
