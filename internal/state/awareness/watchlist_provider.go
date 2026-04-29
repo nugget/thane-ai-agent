@@ -24,9 +24,10 @@ type StateGetter interface {
 // markdown block for system prompt injection. Registered via
 // [agent.Loop.RegisterAlwaysContextProvider].
 type WatchlistProvider struct {
-	store  *WatchlistStore
-	ha     StateGetter
-	logger *slog.Logger
+	store      *WatchlistStore
+	ha         StateGetter
+	registries HARegistryClient // optional; nil disables unavailable enrichment
+	logger     *slog.Logger
 }
 
 // NewWatchlistProvider creates a watchlist context provider.
@@ -39,6 +40,14 @@ func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Lo
 		ha:     ha,
 		logger: logger,
 	}
+}
+
+// SetRegistryClient enables device/sibling/gateway/integration
+// enrichment for unavailable entities. Pass nil to disable. The
+// concrete homeassistant.Client satisfies HARegistryClient out of
+// the box.
+func (p *WatchlistProvider) SetRegistryClient(registries HARegistryClient) {
+	p.registries = registries
 }
 
 // TagContext returns a formatted block of watched entity states for
@@ -63,12 +72,13 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	}
 
 	now := time.Now()
+	registries := newRenderRegistries(ctx, p.registries)
 
 	var sb strings.Builder
 	sb.WriteString("### Watched Entities\n\n")
 
 	for _, sub := range subs {
-		sb.WriteString(p.renderSubscriptionContext(ctx, sub, now))
+		sb.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
 		sb.WriteByte('\n')
 	}
 
@@ -79,15 +89,22 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 // capability tag. Implements agent.TagContextProvider via structural
 // typing. Entities are fetched fresh each turn.
 type WatchlistTagProvider struct {
-	tag    string
-	store  *WatchlistStore
-	ha     StateGetter
-	logger *slog.Logger
+	tag        string
+	store      *WatchlistStore
+	ha         StateGetter
+	registries HARegistryClient
+	logger     *slog.Logger
 }
 
 // NewWatchlistTagProvider creates a tag-scoped watchlist provider.
 func NewWatchlistTagProvider(tag string, store *WatchlistStore, ha StateGetter, logger *slog.Logger) *WatchlistTagProvider {
 	return &WatchlistTagProvider{tag: tag, store: store, ha: ha, logger: logger}
+}
+
+// SetRegistryClient enables unavailability enrichment for this
+// tag-scoped provider. See WatchlistProvider.SetRegistryClient.
+func (p *WatchlistTagProvider) SetRegistryClient(registries HARegistryClient) {
+	p.registries = registries
 }
 
 // TagContext returns context for watched entities tagged with this
@@ -103,19 +120,20 @@ func (p *WatchlistTagProvider) TagContext(ctx context.Context, _ agentctx.Contex
 	}
 
 	now := time.Now()
+	registries := newRenderRegistries(ctx, p.registries)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "### Watched Entities (%s)\n\n", p.tag)
 
 	for _, e := range entities {
-		sb.WriteString(p.renderSubscriptionContext(ctx, e, now))
+		sb.WriteString(p.renderSubscriptionContext(ctx, e, now, registries))
 		sb.WriteByte('\n')
 	}
 
 	return sb.String(), nil
 }
 
-func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time) string {
+func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
 	state, err := p.ha.GetState(ctx, sub.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch watched entity state",
@@ -127,6 +145,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 
 	content := formatEntityContext(state, now)
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
+	content = enrichUnavailable(content, state, registries)
 	if len(sub.History) == 0 {
 		return content
 	}
@@ -147,7 +166,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 	return mergeHistoryIntoEntityContext(content, summaries, truncated)
 }
 
-func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time) string {
+func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
 	state, err := p.ha.GetState(ctx, sub.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch tagged entity state",
@@ -160,6 +179,7 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 
 	content := formatEntityContext(state, now)
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
+	content = enrichUnavailable(content, state, registries)
 	if len(sub.History) == 0 {
 		return content
 	}

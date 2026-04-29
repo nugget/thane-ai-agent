@@ -85,6 +85,7 @@ func (a *App) initAwareness(s *newState) error {
 
 	if a.ha != nil {
 		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
+		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
 		// Register tag-scoped watchlist providers for entities added
@@ -92,8 +93,9 @@ func (a *App) initAwareness(s *newState) error {
 		// emits those entities only when the tag is active.
 		if taggedTags, err := watchlistStore.DistinctTags(); err == nil && len(taggedTags) > 0 {
 			for _, tag := range taggedTags {
-				a.loop.RegisterTagContextProvider(tag,
-					awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger))
+				tagProvider := awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger)
+				tagProvider.SetRegistryClient(a.ha)
+				a.loop.RegisterTagContextProvider(tag, tagProvider)
 			}
 			logger.Info("tagged watchlist entities registered",
 				"tags", taggedTags)
@@ -108,8 +110,9 @@ func (a *App) initAwareness(s *newState) error {
 			if a.ha == nil || strings.TrimSpace(tag) == "" {
 				return
 			}
-			a.loop.RegisterTagContextProvider(tag,
-				awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger))
+			tagProvider := awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger)
+			tagProvider.SetRegistryClient(a.ha)
+			a.loop.RegisterTagContextProvider(tag, tagProvider)
 		},
 		Logger: logger,
 	}))
