@@ -17,6 +17,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
+// docRootBootstrapTimeout bounds the per-root birth-commit work
+// (stat/write .gitignore, stage, sign commit). Matches the
+// 30s ceiling provenance uses for its own startup git operations
+// so the budget stays consistent across the boot path.
+const docRootBootstrapTimeout = 30 * time.Second
+
 type documentRootProvenanceWriter struct {
 	store  *provenance.Store
 	prefix string
@@ -296,7 +302,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 	// commits a templated .gitignore plus the repo-local
 	// .allowed_signers (when present) so verification has signed
 	// history to verify against.
-	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	bootstrapCtx, cancel := context.WithTimeout(context.Background(), docRootBootstrapTimeout)
 	defer cancel()
 	if err := store.BootstrapBirthCommit(bootstrapCtx); err != nil {
 		return nil, fmt.Errorf("doc_roots.%s bootstrap birth commit: %w", root, err)

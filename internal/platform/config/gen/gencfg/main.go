@@ -66,6 +66,7 @@ var optionalKeys = map[string]bool{
 	"extra_path":      true,
 	"pricing":         true,
 	"debug":           true,
+	"paths":           true,
 	"doc_roots":       true,
 	"log_level":       true,
 	"log_format":      true,

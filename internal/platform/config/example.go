@@ -103,14 +103,10 @@ func ExampleConfig() *Config {
 		DataDir:    "./db",
 		TalentsDir: "./talents",
 
-		Paths: map[string]string{
-			"generated":  "./generated",
-			"kb":         "./knowledge",
-			"scratchpad": "./scratchpad",
-		},
-
-		DocRoots: map[string]DocumentRootConfig{
+		Roots: map[string]RootEntry{
+			"generated": {Path: "./generated"},
 			"kb": {
+				Path:      "./knowledge",
 				Indexing:  &docRootIndexing,
 				Authoring: "managed",
 				Git: DocumentRootGitConfig{
@@ -121,6 +117,7 @@ func ExampleConfig() *Config {
 				},
 			},
 			"scratchpad": {
+				Path:      "./scratchpad",
 				Authoring: "managed",
 			},
 		},

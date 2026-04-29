@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -16,8 +15,9 @@ import (
 )
 
 // writeTestSigningKey generates a fresh ed25519 SSH signing key,
-// writes it to a temp path, and returns the path. The matching public
-// key is also written for tests that need .allowed_signers.
+// writes the private key to a temp path, and returns the path along
+// with the matching public key as a string. Callers that need
+// .allowed_signers should write the returned public key themselves.
 func writeTestSigningKey(t *testing.T) (privPath, pub string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -161,7 +161,7 @@ func TestBuildDocumentStoreOptionsBootstrapsMissingDirectory(t *testing.T) {
 		t.Fatalf("bootstrap should have run git init: %v", err)
 	}
 	// HEAD should exist (birth commit).
-	cmd := exec.CommandContext(context.Background(), "git", "-C", targetPath, "rev-parse", "--verify", "HEAD^{commit}")
+	cmd := exec.CommandContext(t.Context(), "git", "-C", targetPath, "rev-parse", "--verify", "HEAD^{commit}")
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("birth commit not found: %v", err)
 	}
