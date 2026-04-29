@@ -222,20 +222,28 @@ func splitActiveExcluded(tag string, sources map[string]toolcatalog.CapabilityTo
 // reference tools in free-form prose rather than a structured field.
 //
 // The check fires only for tools that are unreachable everywhere — a
-// tool excluded from one tag but still active in another is fine.
-func auditExcludedToolReferences(logger *slog.Logger, excludedByTag map[string][]toolcatalog.CapabilityToolEntry, orchestratorTools []string, _ []talents.Talent) {
-	if logger == nil || len(excludedByTag) == 0 {
+// tool excluded from one tag but still active in another is fine, so
+// we cross-reference resolved.Configs[*].Tools to confirm the tool is
+// not reachable via any other capability tag before warning.
+func auditExcludedToolReferences(logger *slog.Logger, resolved resolvedCapabilityTags, orchestratorTools []string, _ []talents.Talent) {
+	if logger == nil || len(resolved.ExcludedTools) == 0 {
 		return
 	}
 	excludedByTool := make(map[string][]string)
-	for tag, entries := range excludedByTag {
+	for tag, entries := range resolved.ExcludedTools {
 		for _, e := range entries {
 			excludedByTool[e.Name] = append(excludedByTool[e.Name], tag)
 		}
 	}
+	activeAnywhere := make(map[string]bool)
+	for _, cfg := range resolved.Configs {
+		for _, name := range cfg.Tools {
+			activeAnywhere[name] = true
+		}
+	}
 	for _, name := range orchestratorTools {
 		tags, ok := excludedByTool[name]
-		if !ok {
+		if !ok || activeAnywhere[name] {
 			continue
 		}
 		logger.Warn("orchestrator allowlist references excluded tool",

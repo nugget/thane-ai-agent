@@ -87,7 +87,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// be available. Personas/talents and the orchestrator allowlist
 	// are the most common silent-breakage paths when an exclude turns
 	// off a tool another subsystem assumed was present.
-	auditExcludedToolReferences(logger, resolved.ExcludedTools, cfg.Agent.OrchestratorTools, s.parsedTalents)
+	auditExcludedToolReferences(logger, resolved, cfg.Agent.OrchestratorTools, s.parsedTalents)
 
 	// Build the shared tag context assembler. KB article counts feed
 	// the manifest; live providers (registered during initAwareness
