@@ -39,6 +39,16 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatSun(state, now)
 	case "cover":
 		return formatCover(state, now)
+	case "lock":
+		return formatLock(state, now)
+	case "media_player":
+		return formatMediaPlayer(state, now)
+	case "fan":
+		return formatFan(state, now)
+	case "vacuum":
+		return formatVacuum(state, now)
+	case "update":
+		return formatUpdate(state, now)
 	default:
 		return formatDefault(state, now)
 	}
