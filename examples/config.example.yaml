@@ -472,12 +472,11 @@ talents_dir: ./talents
 #       ExcludeTools is an optional blocklist of MCP tool names to skip.
 #       Cannot be used together with IncludeTools.
 #       exclude_tools: []
-#       DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
-#       from this server unless a per-tool override replaces them. Prefer
-#       using this to attach MCP tools to existing capability/toolbox
-#       groups instead of hand-maintaining every bridged tool name inside
-#       capability_tags.*.tools.
-#       default_tags: []
+#       Tags lists capability tags assigned to every bridged MCP tool from
+#       this server unless a per-tool override replaces them. Use this to
+#       attach MCP tools to existing capability tags so the model gates
+#       them behind activate_capability the same as native tools.
+#       tags: []
 #       Tools contains optional metadata overrides keyed by the raw MCP tool
 #       name reported by the server.
 #       tools: {}

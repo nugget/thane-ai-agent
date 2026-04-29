@@ -70,8 +70,12 @@ type SystemStatusProvider interface {
 	ModelRegistry() *fleet.RegistrySnapshot
 	// RouterStats returns the current router statistics snapshot.
 	RouterStats() *router.Stats
-	// CapabilityCatalog returns the resolved runtime capability catalog.
-	CapabilityCatalog() *toolcatalog.CapabilityCatalogView
+	// CapabilityCatalog returns the resolved runtime capability catalog
+	// rendered with the supplied options.
+	CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView
+	// CapabilityEntry returns the resolved view of a single capability
+	// tag, or nil when the tag is unknown.
+	CapabilityEntry(tag string, opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry
 }
 
 // ServiceHealth describes the health of a single watched service.
@@ -136,6 +140,8 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /static/{file...}", s.handleStatic)
 	mux.HandleFunc("GET /api/system", s.handleSystem)
+	mux.HandleFunc("GET /api/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /api/capabilities/{tag}", s.handleCapability)
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)

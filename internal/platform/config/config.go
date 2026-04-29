@@ -1181,29 +1181,31 @@ type DelegateProfileConfig struct {
 	MaxTokens int `yaml:"max_tokens"`
 }
 
-// CapabilityTagConfig defines a named group of tools (and optionally
-// talents) that can be loaded together. For compiled-in tags, empty
-// Description and Tools act as "keep the built-in defaults". Tags
-// marked AlwaysActive are included in every session unconditionally.
-// Tags marked Protected are runtime-asserted and cannot be manually
-// activated or deactivated by the model. Runtime-only tags such as
-// owner and message_channel should be asserted by the integration or
-// trusted channel binding that has current-run evidence, not by
-// channel_tags or contact origin policy.
+// CapabilityTagConfig is the operator overlay for a capability tag.
+// Membership is computed by the resolver as the union of native catalog
+// declarations, MCP server tag bindings, and operator-supplied Include,
+// minus operator-supplied Exclude. Description, AlwaysActive, and
+// Protected override the compiled-in builtin tag spec when non-zero.
+//
+// Runtime-only tags such as owner and message_channel should be
+// asserted by the integration or trusted channel binding that has
+// current-run evidence, not by channel_tags or contact origin policy.
 type CapabilityTagConfig struct {
 	// Description is a human-readable summary shown in the capability
 	// manifest so the agent knows what activating this tag provides. For
 	// compiled-in tags, empty keeps the built-in description.
 	Description string `yaml:"description"`
 
-	// Tools lists the tool names belonging to this tag. A tool can
-	// appear in multiple tags; it loads when any of its tags is active.
-	//
-	// For compiled-in tags, empty keeps the built-in tool membership.
-	// Prefer leaving this empty for built-in or MCP-backed tags unless
-	// you intentionally want to replace the compiled/operator-derived
-	// membership with an explicit list.
-	Tools []string `yaml:"tools"`
+	// Include adds tools to this tag beyond what native catalog and MCP
+	// server tag bindings already contribute. Use this for the rare
+	// case where a tool's natural source does not declare the tag and
+	// you want it grouped here at this site.
+	Include []string `yaml:"include"`
+
+	// Exclude removes tools from this tag's resolved membership at this
+	// site. Useful when a default-shipped tool should not be reachable
+	// in this deployment without removing it everywhere.
+	Exclude []string `yaml:"exclude"`
 
 	// AlwaysActive tags cannot be deactivated. They are included in
 	// every session regardless of channel or agent requests.
@@ -1214,6 +1216,11 @@ type CapabilityTagConfig struct {
 	// They are visible to the model when active, but cannot be toggled
 	// via activate_capability or deactivate_capability.
 	Protected bool `yaml:"protected"`
+
+	// Tools is the resolved tool membership populated by the resolver
+	// as native ∪ mcp ∪ Include − Exclude. Not user-supplied via YAML.
+	// Available to runtime consumers that need the final set.
+	Tools []string `yaml:"-"`
 }
 
 // Validate checks that the capability tag configuration is internally
@@ -1450,12 +1457,11 @@ type MCPServerConfig struct {
 	// Cannot be used together with IncludeTools.
 	ExcludeTools []string `yaml:"exclude_tools"`
 
-	// DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
-	// from this server unless a per-tool override replaces them. Prefer
-	// using this to attach MCP tools to existing capability/toolbox
-	// groups instead of hand-maintaining every bridged tool name inside
-	// capability_tags.*.tools.
-	DefaultTags []string `yaml:"default_tags"`
+	// Tags lists capability tags assigned to every bridged MCP tool from
+	// this server unless a per-tool override replaces them. Use this to
+	// attach MCP tools to existing capability tags so the model gates
+	// them behind activate_capability the same as native tools.
+	Tags []string `yaml:"tags"`
 
 	// Tools contains optional metadata overrides keyed by the raw MCP tool
 	// name reported by the server.
@@ -1780,7 +1786,7 @@ func Load(path string) (*Config, error) {
 
 	expanded := os.ExpandEnv(string(data))
 
-	if err := rejectRetiredTopLevelKeys([]byte(expanded)); err != nil {
+	if err := rejectRetiredKeys([]byte(expanded)); err != nil {
 		return nil, err
 	}
 
@@ -1802,14 +1808,21 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// rejectRetiredTopLevelKeys returns an actionable error when the YAML
-// document contains a top-level key that was renamed and whose silent
-// removal could leave a real subsystem misconfigured. yaml.v3's default
-// is to ignore unknown keys, which is fine for fields where the surface
-// area is small but dangerous for whole subsystem blocks (the Companion
-// section, formerly platform:, is the canonical example: silent ignore
-// would leave Companion unconfigured without any signal to the operator).
-func rejectRetiredTopLevelKeys(data []byte) error {
+// rejectRetiredKeys returns an actionable error when the YAML
+// document contains a key that was renamed or removed and whose
+// silent ignore could leave a real subsystem misconfigured. yaml.v3's
+// default is to ignore unknown keys, which is fine for fields where
+// the surface area is small but dangerous for whole subsystem blocks
+// (the Companion section, formerly platform:, is the canonical
+// example: silent ignore would leave Companion unconfigured without
+// any signal to the operator).
+//
+// The walker handles both top-level keys (platform → companion) and
+// targeted nested-path checks: capability_tags.<tag>.tools (replaced
+// by include/exclude) and mcp.servers[].default_tags (renamed to
+// tags). Each retired key gets a specific message pointing the
+// operator at the new shape.
+func rejectRetiredKeys(data []byte) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		// Defer parse-error reporting to the caller's main Unmarshal.
@@ -1823,10 +1836,75 @@ func rejectRetiredTopLevelKeys(data []byte) error {
 		return nil
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		key := root.Content[i].Value
-		switch key {
+		keyNode := root.Content[i]
+		valueNode := root.Content[i+1]
+		switch keyNode.Value {
 		case "platform":
 			return fmt.Errorf("config has top-level platform: section, which was renamed to companion: in v0.9.x. Rename it (the field shape is unchanged) and re-load")
+		case "capability_tags":
+			if err := rejectRetiredCapabilityTagKeys(valueNode); err != nil {
+				return err
+			}
+		case "mcp":
+			if err := rejectRetiredMCPKeys(valueNode); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// rejectRetiredCapabilityTagKeys walks each capability_tags.<tag>
+// entry and rejects the legacy tools: key, which was replaced by the
+// additive include/exclude pair.
+func rejectRetiredCapabilityTagKeys(node *yaml.Node) error {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		tagName := node.Content[i].Value
+		entry := node.Content[i+1]
+		if entry == nil || entry.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(entry.Content); j += 2 {
+			if entry.Content[j].Value == "tools" {
+				return fmt.Errorf("capability_tags.%s.tools: was removed; capability membership is now native ∪ mcp ∪ include − exclude. Move site-specific additions to capability_tags.%s.include: and removals to capability_tags.%s.exclude:, then drop the tools: key", tagName, tagName, tagName)
+			}
+		}
+	}
+	return nil
+}
+
+// rejectRetiredMCPKeys walks mcp.servers[] entries and rejects the
+// legacy default_tags: key, which was renamed to tags:.
+func rejectRetiredMCPKeys(node *yaml.Node) error {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != "servers" {
+			continue
+		}
+		seq := node.Content[i+1]
+		if seq == nil || seq.Kind != yaml.SequenceNode {
+			continue
+		}
+		for idx, entry := range seq.Content {
+			if entry == nil || entry.Kind != yaml.MappingNode {
+				continue
+			}
+			serverName := fmt.Sprintf("[%d]", idx)
+			for j := 0; j+1 < len(entry.Content); j += 2 {
+				if entry.Content[j].Value == "name" {
+					serverName = entry.Content[j+1].Value
+				}
+			}
+			for j := 0; j+1 < len(entry.Content); j += 2 {
+				if entry.Content[j].Value == "default_tags" {
+					return fmt.Errorf("mcp.servers[%s].default_tags: was renamed to tags: (drop the default_ prefix; semantics are unchanged)", serverName)
+				}
+			}
 		}
 	}
 	return nil
@@ -2239,7 +2317,7 @@ func (c *Config) Validate() error {
 		allowedTags[tagName] = true
 	}
 	for _, srv := range c.MCP.Servers {
-		for _, tag := range srv.DefaultTags {
+		for _, tag := range srv.Tags {
 			if trimmed := strings.TrimSpace(tag); trimmed != "" {
 				allowedTags[trimmed] = true
 			}

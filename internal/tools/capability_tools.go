@@ -47,6 +47,7 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	r.registerDeactivateCapability(mgr, tagManifest)
 	r.registerResetCapabilities(mgr, tagManifest)
 	r.registerListLoadedCapabilities(mgr, tagManifest)
+	r.registerInspectCapability(tagManifest)
 }
 
 // extractTag extracts the tag parameter from args, accepting common
@@ -280,6 +281,53 @@ func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagMani
 			out, err := json.Marshal(payload)
 			if err != nil {
 				return "", fmt.Errorf("marshal loaded capabilities: %w", err)
+			}
+			return string(out), nil
+		},
+	})
+}
+
+// registerInspectCapability registers the inspect_capability tool,
+// which returns the full per-tool breakdown of a single capability
+// tag — description, status, active tools with their source
+// attribution (native / mcp / overlay), and optionally
+// operator-excluded tools. Use this to audit "where did this tool
+// come from" or "what's actually in the ha tag at this site".
+func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityManifest) {
+	r.Register(&Tool{
+		Name:            "inspect_capability",
+		AlwaysAvailable: true,
+		Description:     "Inspect a single capability tag and return a structured breakdown of its tools with source attribution (native, mcp, overlay). Use to audit what a tag exposes and where each tool came from. Pass include_excluded: true to also surface operator-disabled tools.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"tag": map[string]any{
+					"type":        "string",
+					"description": "The capability tag to inspect (e.g., \"ha\", \"forge\").",
+				},
+				"include_excluded": map[string]any{
+					"type":        "boolean",
+					"description": "When true, the response includes tools the operator has disabled at this site.",
+				},
+			},
+			"required": []string{"tag"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			tag := extractTag(args)
+			if tag == "" {
+				return "", fmt.Errorf("tag is required (e.g., inspect_capability(tag: \"ha\"))")
+			}
+			manifest, ok := tagManifest[tag]
+			if !ok {
+				return "", fmt.Errorf("unknown capability tag %q; use list_loaded_capabilities or activate_capability to discover available tags", tag)
+			}
+			includeExcluded, _ := args["include_excluded"].(bool)
+			entry := toolcatalog.RenderCapabilityCatalogEntry(manifest, toolcatalog.CatalogViewOptions{
+				IncludeExcluded: includeExcluded,
+			})
+			out, err := json.Marshal(entry)
+			if err != nil {
+				return "", fmt.Errorf("marshal capability inspection: %w", err)
 			}
 			return string(out), nil
 		},

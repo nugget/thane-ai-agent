@@ -323,7 +323,7 @@ func TestBridgeTools_MetadataOverrides(t *testing.T) {
 	enabled := false
 
 	count, err := BridgeTools(context.Background(), client, "github", registry, BridgeOptions{
-		DefaultTags: []string{"forge"},
+		Tags: []string{"forge"},
 		ToolOverrides: map[string]ToolOverride{
 			"create_pull_request": {
 				Description: "Open a pull request in GitHub",
@@ -354,8 +354,8 @@ func TestBridgeTools_MetadataOverrides(t *testing.T) {
 	if tool.CanonicalID != "mcp:github/create_pull_request" {
 		t.Fatalf("CanonicalID = %q", tool.CanonicalID)
 	}
-	if len(tool.DefaultTags) != 2 || tool.DefaultTags[0] != "forge" || tool.DefaultTags[1] != "publish" {
-		t.Fatalf("DefaultTags = %#v", tool.DefaultTags)
+	if len(tool.Tags) != 2 || tool.Tags[0] != "forge" || tool.Tags[1] != "publish" {
+		t.Fatalf("Tags = %#v", tool.Tags)
 	}
 	if registry.Get("mcp_github_delete_branch") != nil {
 		t.Fatal("delete_branch should be disabled by override")

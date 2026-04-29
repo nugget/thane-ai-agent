@@ -145,6 +145,63 @@ platform:
 	}
 }
 
+// TestLoad_RetiredCapabilityToolsKeyRejected guards the capability_tag
+// schema redesign: the legacy tools: replace-list was retired in favor
+// of the additive include:/exclude: pair. Load must fail with an
+// actionable error pointing at the new shape rather than silently
+// ignoring the field and leaving the tag with an unexpected member set.
+func TestLoad_RetiredCapabilityToolsKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+capability_tags:
+  ha:
+    description: Home Assistant
+    tools:
+      - get_state
+      - call_service
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject capability_tags.<tag>.tools: key")
+	}
+	if !strings.Contains(err.Error(), "capability_tags.ha.tools") {
+		t.Errorf("error %q should reference capability_tags.ha.tools", err)
+	}
+	if !strings.Contains(err.Error(), "include") || !strings.Contains(err.Error(), "exclude") {
+		t.Errorf("error %q should point operator at include:/exclude:", err)
+	}
+}
+
+// TestLoad_RetiredMCPDefaultTagsKeyRejected guards the MCP server
+// schema cleanup: default_tags: was renamed to plain tags: when the
+// "default" framing stopped being meaningful. Load must reject the
+// retired key with a rename hint instead of silently ignoring it.
+func TestLoad_RetiredMCPDefaultTagsKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+mcp:
+  servers:
+    - name: home-assistant
+      transport: stdio
+      command: /bin/true
+      default_tags: [ha]
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject mcp.servers[].default_tags: key")
+	}
+	if !strings.Contains(err.Error(), "default_tags") || !strings.Contains(err.Error(), "tags:") {
+		t.Errorf("error %q should mention rename from default_tags to tags", err)
+	}
+	if !strings.Contains(err.Error(), "home-assistant") {
+		t.Errorf("error %q should name the offending server (home-assistant)", err)
+	}
+}
+
 func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

@@ -37,7 +37,8 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
 
-	resolvedCapTags := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
+	resolved := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
+	resolvedCapTags := resolved.Configs
 	if len(resolvedCapTags) == 0 {
 		return nil
 	}
@@ -81,6 +82,12 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 			}
 		}
 	}
+
+	// Audit operator-excluded tools that downstream wiring expects to
+	// be available. Personas/talents and the orchestrator allowlist
+	// are the most common silent-breakage paths when an exclude turns
+	// off a tool another subsystem assumed was present.
+	auditExcludedToolReferences(logger, resolved, cfg.Agent.OrchestratorTools, s.parsedTalents)
 
 	// Build the shared tag context assembler. KB article counts feed
 	// the manifest; live providers (registered during initAwareness
@@ -153,7 +160,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		liveTags[tag] = true
 	}
 
-	capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, menuHints, liveTags, adHocTags)
+	capSurface := buildCapabilitySurface(resolved, kbCounts, menuHints, liveTags, adHocTags)
 	a.capSurface = capSurface
 
 	if manifestTalent := talents.GenerateManifest(capSurface); manifestTalent != nil {

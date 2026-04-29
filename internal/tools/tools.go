@@ -41,7 +41,7 @@ type Tool struct {
 	CanonicalID          string                                                         `json:"-"`
 	Source               string                                                         `json:"-"`
 	Origin               string                                                         `json:"-"`
-	DefaultTags          []string                                                       `json:"-"`
+	Tags                 []string                                                       `json:"-"`
 }
 
 // Registry holds available tools.
@@ -878,7 +878,7 @@ func (r *Registry) Register(t *Tool) {
 		if t.Source == "" {
 			t.Source = string(spec.Source)
 		}
-		t.DefaultTags = mergeUniqueStrings(spec.DefaultTags, t.DefaultTags)
+		t.Tags = mergeUniqueStrings(spec.Tags, t.Tags)
 	}
 	if t.CanonicalID == "" {
 		t.CanonicalID = t.Name
@@ -992,7 +992,7 @@ func (r *Registry) MetadataTagIndex() map[string][]string {
 	}
 	tagIndex := make(map[string][]string)
 	for name, t := range r.tools {
-		for _, tag := range t.DefaultTags {
+		for _, tag := range t.Tags {
 			tag = strings.TrimSpace(tag)
 			if tag == "" {
 				continue

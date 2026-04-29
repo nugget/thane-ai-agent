@@ -80,8 +80,19 @@ func (s *stubSystemStatus) ModelRegistry() *fleet.RegistrySnapshot {
 	return s.modelRegistry
 }
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
-func (s *stubSystemStatus) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
+func (s *stubSystemStatus) CapabilityCatalog(_ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
 	return s.capCatalog
+}
+func (s *stubSystemStatus) CapabilityEntry(tag string, _ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry {
+	if s.capCatalog == nil {
+		return nil
+	}
+	for _, entry := range s.capCatalog.Capabilities {
+		if entry.Tag == tag {
+			return &entry
+		}
+	}
+	return nil
 }
 
 // --- Tests ---
@@ -681,5 +692,107 @@ func TestHandleRequestDetail_AllowsLiteralProbeRequestID(t *testing.T) {
 	}
 	if cq.lastRequestID != "_probe" {
 		t.Fatalf("queried request id = %q, want _probe", cq.lastRequestID)
+	}
+}
+
+func TestHandleCapabilities_ReturnsCatalog(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		capCatalog: &toolcatalog.CapabilityCatalogView{
+			Kind:            "capability_catalog",
+			ActivationTools: toolcatalog.CapabilityActionTools{Activate: "activate_capability"},
+			Capabilities: []toolcatalog.CapabilityCatalogEntry{
+				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 3, Tools: []string{"call_service", "get_state", "list_entities"}},
+				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 1, Tools: []string{"forge_pr_get"}},
+			},
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/capabilities", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var view toolcatalog.CapabilityCatalogView
+	if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Capabilities) != 2 {
+		t.Fatalf("got %d capabilities, want 2", len(view.Capabilities))
+	}
+}
+
+func TestHandleCapability_ReturnsSingleEntry(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		capCatalog: &toolcatalog.CapabilityCatalogView{
+			Kind: "capability_catalog",
+			Capabilities: []toolcatalog.CapabilityCatalogEntry{
+				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 1, Tools: []string{"get_state"}},
+			},
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/capabilities/ha", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var entry toolcatalog.CapabilityCatalogEntry
+	if err := json.NewDecoder(w.Body).Decode(&entry); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if entry.Tag != "ha" {
+		t.Errorf("tag = %q, want ha", entry.Tag)
+	}
+}
+
+func TestHandleCapability_UnknownTagReturns404(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		capCatalog: &toolcatalog.CapabilityCatalogView{
+			Capabilities: []toolcatalog.CapabilityCatalogEntry{
+				{Tag: "ha", Status: "available"},
+			},
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/capabilities/nonexistent", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }

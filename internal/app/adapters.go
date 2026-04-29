@@ -928,17 +928,42 @@ func (a *systemStatusAdapter) RouterStats() *router.Stats {
 }
 
 // CapabilityCatalog returns the runtime capability catalog used by the
-// agent prompt/tooling layer.
-func (a *systemStatusAdapter) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
-	var surface []toolcatalog.CapabilitySurface
-	if a.capSurface != nil {
-		surface = a.capSurface()
-	}
+// agent prompt/tooling layer, rendered with the supplied options. The
+// per-call options struct lets API consumers opt in to surfaces such
+// as operator-excluded tools without changing the underlying surface
+// snapshot. Callers that want thane_delegate in the activation tools
+// block must pass IncludeDelegate: true explicitly — the canonical
+// dashboard and /api/capabilities handlers already do.
+func (a *systemStatusAdapter) CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
+	surface := a.currentCapSurface()
 	if len(surface) == 0 {
 		return nil
 	}
-	view := toolcatalog.BuildCapabilityCatalogView(surface, true)
+	view := toolcatalog.BuildCapabilityCatalogView(surface, opts)
 	return &view
+}
+
+// CapabilityEntry returns the resolved view of a single capability
+// tag, or nil when the tag is not present in the current surface
+// snapshot. The same options struct as [CapabilityCatalog] controls
+// optional sections (e.g. excluded tools).
+func (a *systemStatusAdapter) CapabilityEntry(tag string, opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry {
+	surface := a.currentCapSurface()
+	for _, entry := range surface {
+		if entry.Tag != tag {
+			continue
+		}
+		rendered := toolcatalog.RenderCapabilityCatalogEntry(entry, opts)
+		return &rendered
+	}
+	return nil
+}
+
+func (a *systemStatusAdapter) currentCapSurface() []toolcatalog.CapabilitySurface {
+	if a.capSurface == nil {
+		return nil
+	}
+	return a.capSurface()
 }
 
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting
