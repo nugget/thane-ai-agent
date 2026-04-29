@@ -126,6 +126,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 	}
 
 	content := formatEntityContext(state, now)
+	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
 	if len(sub.History) == 0 {
 		return content
 	}
@@ -158,6 +159,7 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 	}
 
 	content := formatEntityContext(state, now)
+	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
 	if len(sub.History) == 0 {
 		return content
 	}
