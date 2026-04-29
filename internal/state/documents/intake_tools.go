@@ -144,13 +144,13 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		return "", err
 	}
 	t.forgetIntake(args.IntakeID)
-	return marshalToolResult(CommitResult{
+	return marshalToolResult(toModelCommitResult(CommitResult{
 		IntakeID: args.IntakeID,
 		Action:   action,
 		Ref:      ref,
 		Status:   status,
 		Result:   out,
-	})
+	}, nowUTC()))
 }
 
 func (t *Tools) rememberIntake(result *IntakeResult) {

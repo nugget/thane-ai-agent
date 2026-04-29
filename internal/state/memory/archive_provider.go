@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
@@ -219,10 +220,7 @@ func formatResultBlock(r SearchResult) string {
 	var sb strings.Builder
 
 	// Header: date and session ID prefix.
-	sessionShort := r.SessionID
-	if len(sessionShort) > 8 {
-		sessionShort = sessionShort[:8]
-	}
+	sessionShort := promptfmt.ShortIDPrefix(r.SessionID)
 	date := r.Match.Timestamp.Format(time.DateOnly)
 	sb.WriteString(fmt.Sprintf("**%s — Session %s:**\n", date, sessionShort))
 

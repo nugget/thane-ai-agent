@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -38,6 +39,7 @@ type Launch struct {
 	SkipTagFilter     bool                     `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
 	SystemPrompt      string                   `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 	FallbackContent   string                   `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+	PromptMode        agentctx.PromptMode      `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
 	MaxIterations     int                      `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 	MaxOutputTokens   int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
@@ -72,6 +74,7 @@ type launchJSON struct {
 	SkipTagFilter            bool                     `json:"skip_tag_filter,omitempty"`
 	SystemPrompt             string                   `json:"system_prompt,omitempty"`
 	FallbackContent          string                   `json:"fallback_content,omitempty"`
+	PromptMode               agentctx.PromptMode      `json:"prompt_mode,omitempty"`
 	MaxIterations            int                      `json:"max_iterations,omitempty"`
 	MaxOutputTokens          int                      `json:"max_output_tokens,omitempty"`
 	ToolTimeout              string                   `json:"tool_timeout,omitempty"`
@@ -100,6 +103,7 @@ func (l Launch) MarshalJSON() ([]byte, error) {
 		SkipTagFilter:            l.SkipTagFilter,
 		SystemPrompt:             l.SystemPrompt,
 		FallbackContent:          l.FallbackContent,
+		PromptMode:               l.PromptMode,
 		MaxIterations:            l.MaxIterations,
 		MaxOutputTokens:          l.MaxOutputTokens,
 		ToolTimeout:              durationString(l.ToolTimeout),
@@ -145,6 +149,7 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		SkipTagFilter:            wire.SkipTagFilter,
 		SystemPrompt:             wire.SystemPrompt,
 		FallbackContent:          wire.FallbackContent,
+		PromptMode:               wire.PromptMode,
 		MaxIterations:            wire.MaxIterations,
 		MaxOutputTokens:          wire.MaxOutputTokens,
 		ToolTimeout:              toolTimeout,
@@ -162,6 +167,9 @@ func (l *Launch) Validate() error {
 	}
 	if l.RunTimeout < 0 {
 		return fmt.Errorf("loop: run timeout must be >= 0")
+	}
+	if !l.PromptMode.Valid() {
+		return fmt.Errorf("loop: invalid prompt_mode %q", l.PromptMode)
 	}
 	if l.Spec.Completion == CompletionConversation && strings.TrimSpace(l.CompletionConversationID) == "" {
 		return fmt.Errorf("loop: completion conversation ID is required for conversation completion")
@@ -200,6 +208,7 @@ func (l *Launch) requestOverride() Request {
 		UsageRole:             l.UsageRole,
 		UsageTaskName:         l.UsageTaskName,
 		SystemPrompt:          l.SystemPrompt,
+		PromptMode:            l.PromptMode,
 		SuppressAlwaysContext: l.SuppressAlwaysContext,
 	}
 }

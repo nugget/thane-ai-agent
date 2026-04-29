@@ -137,37 +137,47 @@ type Config struct {
 	// mission.md, and metacognitive.md.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
-	// Paths maps named prefixes to directory paths for file resolution.
-	// Each entry creates a prefix (e.g., "kb" → kb:path resolves to
-	// the configured directory). Supports ~ expansion at resolver
-	// construction time.
+	// Roots is the unified document-root config. Each entry names one
+	// managed root and combines its path with optional per-root policy
+	// (indexing, authoring, git-backed provenance, signing, signature
+	// verification). See docs/understanding/document-roots.md for the
+	// operator-facing contract.
 	//
-	// These prefixes also define the managed local document roots used by
-	// the documents capability. Any configured root that exists on disk is
-	// eligible for indexed browse/search/section retrieval via doc_* tools,
-	// so users can add their own custom corpora here without code changes.
-	// See docs/understanding/document-roots.md for the operator-facing
-	// contract; keep that document in sync with changes here.
+	// Each entry accepts either a bare-string shorthand (path only,
+	// default policy) or a full mapping form. Both forms are valid in
+	// the same block:
 	//
-	// Typical prefixes are:
-	//   - kb:         curated knowledge / indexed documents
-	//   - generated:  model-produced durable outputs (reports, dailies)
-	//   - scratchpad: low-integrity writable work area
-	//   - dossiers:   private dossiers or long-form reference material
+	//   roots:
+	//     kb: ~/Sync/Vault                  # bare string, defaults
+	//     scratchpad:
+	//       path: ~/Thane/scratchpad
+	//       authoring: managed
+	//     secure:
+	//       path: ~/secure/notes
+	//       git:
+	//         enabled: true
+	//         sign_commits: true
+	//         verify_signatures: required
+	//         signing_key: ~/Thane/core/identity/signing_ed25519
 	//
-	// The core: prefix is reserved and always derived from
-	// {workspace.path}/core; it is not configured here.
-	Paths map[string]string `yaml:"paths"`
+	// Typical names: kb (curated knowledge), generated (model-produced
+	// durable outputs), scratchpad (low-integrity work area), dossiers.
+	// The core: name is reserved and always derived from
+	// {workspace.path}/core; declaring it under roots: lets you set
+	// policy for it but the path is ignored.
+	Roots map[string]RootEntry `yaml:"roots,omitempty"`
 
-	// DocRoots configures per-root document policy keyed by paths root name.
-	// Keys match roots defined in paths plus the derived core root.
-	// Omitted roots use the default policy: indexed, managed-authorable,
-	// and not git-backed.
-	//
-	// This is a policy overlay, not a replacement for paths:. Use
-	// paths: to name the root and doc_roots: to say whether it is
-	// indexed, model-authorable, git-backed, signed, or verified.
-	DocRoots map[string]DocumentRootConfig `yaml:"doc_roots"`
+	// Paths is the legacy directory-mapping block. Replaced by roots:.
+	// Still parsed for backwards compatibility with a deprecation
+	// warning. Cannot be used in the same config as roots:. New
+	// configs should use roots: instead.
+	Paths map[string]string `yaml:"paths,omitempty"`
+
+	// DocRoots is the legacy per-root policy overlay. Replaced by
+	// roots: (where path and policy live in the same entry). Still
+	// parsed for backwards compatibility with a deprecation warning.
+	// Cannot be used in the same config as roots:.
+	DocRoots map[string]DocumentRootConfig `yaml:"doc_roots,omitempty"`
 
 	// ExtraPath lists additional directories to prepend to the process
 	// PATH at startup, ensuring exec.LookPath finds binaries installed
@@ -742,6 +752,63 @@ func (c ProvenanceConfig) Configured() bool {
 	return c.Path != "" && c.SigningKey != ""
 }
 
+// RootEntry combines a managed root's path with its per-root policy
+// in the unified roots: block. Accepts either a bare-string shorthand
+// (the entire entry is the path, all policy fields default) or a
+// mapping with explicit path: and policy fields.
+type RootEntry struct {
+	// Path is the directory the root resolves to. Supports ~
+	// expansion at resolver construction time. For the reserved
+	// core: name this is ignored; the path is always derived from
+	// workspace.path.
+	Path string `yaml:"path"`
+
+	// Indexing controls whether markdown files in this root are
+	// scanned into the document index. Omit to keep indexing enabled.
+	Indexing *bool `yaml:"indexing,omitempty"`
+
+	// Authoring controls whether managed document mutation tools may
+	// write this root. Empty defaults to "managed". Supported values:
+	// "managed", "read_only", "restricted".
+	Authoring string `yaml:"authoring,omitempty"`
+
+	// Git configures optional git-backed write provenance for this
+	// root. Same fields as the legacy doc_roots[name].git block.
+	Git DocumentRootGitConfig `yaml:"git,omitempty"`
+}
+
+// UnmarshalYAML accepts either the bare-string shorthand or the full
+// mapping form for a root entry. Bare strings populate Path with all
+// policy fields defaulted; mappings decode normally.
+//
+// Scalar shorthand requires a non-empty string. Null (e.g. `kb:` with
+// no value) and non-string scalars (numbers, bools) are rejected so a
+// typo can't silently become a path.
+func (r *RootEntry) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag != "" && node.Tag != "!!str" {
+			return fmt.Errorf("roots entry shorthand must be a string path, got %s", node.Tag)
+		}
+		if strings.TrimSpace(node.Value) == "" {
+			return fmt.Errorf("roots entry shorthand path must not be empty")
+		}
+		r.Path = node.Value
+		return nil
+	case yaml.MappingNode:
+		// Use a type alias to avoid recursing into this method.
+		type rawRootEntry RootEntry
+		var raw rawRootEntry
+		if err := node.Decode(&raw); err != nil {
+			return err
+		}
+		*r = RootEntry(raw)
+		return nil
+	default:
+		return fmt.Errorf("roots entry must be a string path or a mapping, got node kind %d", node.Kind)
+	}
+}
+
 // DocumentRootConfig configures policy for one managed document root.
 // The root itself is still named under paths:, except for core:, which
 // is derived from workspace.path.
@@ -785,11 +852,6 @@ type DocumentRootGitConfig struct {
 	// SigningKey is the SSH private key used to sign managed commits.
 	// Supports ~ expansion at startup.
 	SigningKey string `yaml:"signing_key,omitempty"`
-
-	// AllowedSigners is the OpenSSH allowed signers file to use when
-	// verifying this root. Empty uses the repository-local
-	// .allowed_signers written from signing_key.
-	AllowedSigners string `yaml:"allowed_signers,omitempty"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -1711,8 +1773,11 @@ type StateWindowConfig struct {
 //  1. Read the file.
 //  2. Expand environment variables (e.g., ${HOME}, ${ANTHROPIC_API_KEY}).
 //  3. Unmarshal YAML into a [Config].
-//  4. Apply defaults via [Config.applyDefaults].
-//  5. Validate via [Config.Validate].
+//  4. Normalize via [Config.normalizeRoots] (desugar roots: into
+//     legacy paths/doc_roots; emit deprecation warning for legacy
+//     shape).
+//  5. Apply defaults via [Config.applyDefaults].
+//  6. Validate via [Config.Validate].
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1727,6 +1792,10 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{}
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.normalizeRoots(); err != nil {
 		return nil, err
 	}
 
@@ -1839,6 +1908,87 @@ func rejectRetiredMCPKeys(node *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+// normalizeRoots desugars the unified roots: block into the legacy
+// Paths and DocRoots maps so downstream consumers (resolver
+// construction, doc-store options) keep working unchanged. It also
+// rejects configs that declare both shapes simultaneously, and emits
+// a deprecation warning for the legacy shape.
+//
+// Called from [Load] between yaml.Unmarshal and applyDefaults.
+// Programmatic constructions that bypass Load can call this directly
+// after populating Roots.
+func (c *Config) normalizeRoots() error {
+	if len(c.Roots) > 0 {
+		if len(c.Paths) > 0 || len(c.DocRoots) > 0 {
+			return fmt.Errorf("config: cannot declare both roots: and the legacy paths:/doc_roots: blocks; pick one (roots: is preferred)")
+		}
+		if c.Paths == nil {
+			c.Paths = make(map[string]string, len(c.Roots))
+		}
+		if c.DocRoots == nil {
+			c.DocRoots = make(map[string]DocumentRootConfig, len(c.Roots))
+		}
+		seen := make(map[string]string, len(c.Roots))
+		for name, entry := range c.Roots {
+			trimmed := strings.TrimSuffix(strings.TrimSpace(name), ":")
+			if trimmed == "" {
+				return fmt.Errorf("config: roots: contains an empty entry name")
+			}
+			if prev, ok := seen[trimmed]; ok {
+				return fmt.Errorf("config: roots: keys %q and %q both canonicalize to %q", prev, name, trimmed)
+			}
+			seen[trimmed] = name
+			pathValue := strings.TrimSpace(entry.Path)
+			// core: is reserved — its path is always derived from
+			// workspace.path. Allow declaring it in roots: solely
+			// to set policy; ignore any path that was provided.
+			if trimmed == "core" {
+				if pathValue != "" && !entryHasPolicy(entry) {
+					slog.Default().Warn("config: roots.core path is ignored (core derives from workspace.path); declare core: only when setting policy",
+						"path", entry.Path)
+				}
+			} else {
+				if pathValue == "" {
+					return fmt.Errorf("config: roots.%s.path must be set for non-core roots", trimmed)
+				}
+				c.Paths[trimmed] = entry.Path
+			}
+			if entryHasPolicy(entry) {
+				c.DocRoots[trimmed] = DocumentRootConfig{
+					Indexing:  entry.Indexing,
+					Authoring: entry.Authoring,
+					Git:       entry.Git,
+				}
+			}
+		}
+		// Clear Roots after desugaring so there is exactly one
+		// canonical representation downstream and no risk of drift.
+		c.Roots = nil
+		return nil
+	}
+
+	if len(c.Paths) > 0 || len(c.DocRoots) > 0 {
+		slog.Default().Warn("config: paths: and doc_roots: are deprecated in favor of the unified roots: block; see docs/understanding/document-roots.md for the new shape")
+	}
+	return nil
+}
+
+// entryHasPolicy reports whether a root entry has any policy fields
+// set beyond its path. Used to decide whether to emit a DocRoots
+// entry during normalization (entries with only a path get default
+// policy and need no DocRoots row).
+func entryHasPolicy(entry RootEntry) bool {
+	if entry.Indexing != nil {
+		return true
+	}
+	if strings.TrimSpace(entry.Authoring) != "" {
+		return true
+	}
+	g := entry.Git
+	return g.Enabled || g.SignCommits || g.VerifySignatures != "" ||
+		g.RepoPath != "" || g.SigningKey != ""
 }
 
 // applyDefaults fills zero-value fields with sensible defaults. It is

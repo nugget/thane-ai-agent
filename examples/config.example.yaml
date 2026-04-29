@@ -155,99 +155,140 @@ workspace:
   # must remain outside Thane's writable authority, such as a legacy
   # workspace or an external vault mirror.
   read_only_dirs: []
-# Paths maps named prefixes to directory paths for file resolution.
-# Each entry creates a prefix (e.g., "kb" → kb:path resolves to
-# the configured directory). Supports ~ expansion at resolver
-# construction time.
+# Roots is the unified document-root config. Each entry names one
+# managed root and combines its path with optional per-root policy
+# (indexing, authoring, git-backed provenance, signing, signature
+# verification). See docs/understanding/document-roots.md for the
+# operator-facing contract.
 # 
-# These prefixes also define the managed local document roots used by
-# the documents capability. Any configured root that exists on disk is
-# eligible for indexed browse/search/section retrieval via doc_* tools,
-# so users can add their own custom corpora here without code changes.
-# See docs/understanding/document-roots.md for the operator-facing
-# contract; keep that document in sync with changes here.
+# Each entry accepts either a bare-string shorthand (path only,
+# default policy) or a full mapping form. Both forms are valid in
+# the same block:
 # 
-# Typical prefixes are:
-#   - kb:         curated knowledge / indexed documents
-#   - generated:  model-produced durable outputs (reports, dailies)
-#   - scratchpad: low-integrity writable work area
-#   - dossiers:   private dossiers or long-form reference material
+#   roots:
+#     kb: ~/Sync/Vault                  # bare string, defaults
+#     scratchpad:
+#       path: ~/Thane/scratchpad
+#       authoring: managed
+#     secure:
+#       path: ~/secure/notes
+#       git:
+#         enabled: true
+#         sign_commits: true
+#         verify_signatures: required
+#         signing_key: ~/Thane/core/identity/signing_ed25519
 # 
-# The core: prefix is reserved and always derived from
-# {workspace.path}/core; it is not configured here.
-paths:
-  generated: ./generated
-  kb: ./knowledge
-  scratchpad: ./scratchpad
+# Typical names: kb (curated knowledge), generated (model-produced
+# durable outputs), scratchpad (low-integrity work area), dossiers.
+# The core: name is reserved and always derived from
+# {workspace.path}/core; declaring it under roots: lets you set
+# policy for it but the path is ignored.
+roots:
+  generated:
+    # Path is the directory the root resolves to. Supports ~
+    # expansion at resolver construction time. For the reserved
+    # core: name this is ignored; the path is always derived from
+    # workspace.path.
+    path: ./generated
+    # Indexing controls whether markdown files in this root are
+    # scanned into the document index. Omit to keep indexing enabled.
+    indexing: false
+    # Authoring controls whether managed document mutation tools may
+    # write this root. Empty defaults to "managed". Supported values:
+    # "managed", "read_only", "restricted".
+    authoring: ""
+    # Git configures optional git-backed write provenance for this
+    # root. Same fields as the legacy doc_roots[name].git block.
+    git:
+      # Enabled controls whether this root participates in git-backed
+      # provenance. When false, git settings are ignored.
+      enabled: false
+      # SignCommits creates a signed git commit for each managed document
+      # mutation. Requires signing_key.
+      sign_commits: false
+      # VerifySignatures is the verification policy for consumers of this
+      # root: "none", "warn", or "required". Required roots block managed
+      # reads, indexed results, and tagged context injection when content
+      # is not covered by trusted signed git history.
+      verify_signatures: ""
+      # RepoPath optionally points at the git repository to use for this
+      # root. Empty means the root directory itself is the repository.
+      repo_path: ""
+      # SigningKey is the SSH private key used to sign managed commits.
+      # Supports ~ expansion at startup.
+      signing_key: ""
+  kb:
+    # Path is the directory the root resolves to. Supports ~
+    # expansion at resolver construction time. For the reserved
+    # core: name this is ignored; the path is always derived from
+    # workspace.path.
+    path: ./knowledge
+    # Indexing controls whether markdown files in this root are
+    # scanned into the document index. Omit to keep indexing enabled.
+    indexing: true
+    # Authoring controls whether managed document mutation tools may
+    # write this root. Empty defaults to "managed". Supported values:
+    # "managed", "read_only", "restricted".
+    authoring: managed
+    # Git configures optional git-backed write provenance for this
+    # root. Same fields as the legacy doc_roots[name].git block.
+    git:
+      # Enabled controls whether this root participates in git-backed
+      # provenance. When false, git settings are ignored.
+      enabled: true
+      # SignCommits creates a signed git commit for each managed document
+      # mutation. Requires signing_key.
+      sign_commits: true
+      # VerifySignatures is the verification policy for consumers of this
+      # root: "none", "warn", or "required". Required roots block managed
+      # reads, indexed results, and tagged context injection when content
+      # is not covered by trusted signed git history.
+      verify_signatures: warn
+      # RepoPath optionally points at the git repository to use for this
+      # root. Empty means the root directory itself is the repository.
+      repo_path: ""
+      # SigningKey is the SSH private key used to sign managed commits.
+      # Supports ~ expansion at startup.
+      signing_key: ~/.ssh/id_ed25519
+  scratchpad:
+    # Path is the directory the root resolves to. Supports ~
+    # expansion at resolver construction time. For the reserved
+    # core: name this is ignored; the path is always derived from
+    # workspace.path.
+    path: ./scratchpad
+    # Indexing controls whether markdown files in this root are
+    # scanned into the document index. Omit to keep indexing enabled.
+    indexing: false
+    # Authoring controls whether managed document mutation tools may
+    # write this root. Empty defaults to "managed". Supported values:
+    # "managed", "read_only", "restricted".
+    authoring: managed
+    # Git configures optional git-backed write provenance for this
+    # root. Same fields as the legacy doc_roots[name].git block.
+    git:
+      # Enabled controls whether this root participates in git-backed
+      # provenance. When false, git settings are ignored.
+      enabled: false
+      # SignCommits creates a signed git commit for each managed document
+      # mutation. Requires signing_key.
+      sign_commits: false
+      # VerifySignatures is the verification policy for consumers of this
+      # root: "none", "warn", or "required". Required roots block managed
+      # reads, indexed results, and tagged context injection when content
+      # is not covered by trusted signed git history.
+      verify_signatures: ""
+      # RepoPath optionally points at the git repository to use for this
+      # root. Empty means the root directory itself is the repository.
+      repo_path: ""
+      # SigningKey is the SSH private key used to sign managed commits.
+      # Supports ~ expansion at startup.
+      signing_key: ""
 #
-# (optional) DocRoots configures per-root document policy keyed by paths root name.
-# doc_roots:
-#   kb:
-#     Indexing controls whether markdown files in this root are scanned
-#     into the document index. Omit to keep indexing enabled.
-#     indexing: true
-#     Authoring controls whether managed document mutation tools may
-#     write this root. Empty defaults to "managed". Supported values:
-#     "managed", "read_only", and "restricted". Restricted is intended
-#     for high-integrity roots whose writes must come from narrower
-#     future flows.
-#     authoring: managed
-#     Git configures optional git-backed write provenance for this root.
-#     git:
-#       Enabled controls whether this root participates in git-backed
-#       provenance. When false, git settings are ignored.
-#       enabled: true
-#       SignCommits creates a signed git commit for each managed document
-#       mutation. Requires signing_key.
-#       sign_commits: true
-#       VerifySignatures is the verification policy for consumers of this
-#       root: "none", "warn", or "required". Required roots block managed
-#       reads, indexed results, and tagged context injection when content
-#       is not covered by trusted signed git history.
-#       verify_signatures: warn
-#       RepoPath optionally points at the git repository to use for this
-#       root. Empty means the root directory itself is the repository.
-#       repo_path: ""
-#       SigningKey is the SSH private key used to sign managed commits.
-#       Supports ~ expansion at startup.
-#       signing_key: ~/.ssh/id_ed25519
-#       AllowedSigners is the OpenSSH allowed signers file to use when
-#       verifying this root. Empty uses the repository-local
-#       .allowed_signers written from signing_key.
-#       allowed_signers: ""
-#   scratchpad:
-#     Indexing controls whether markdown files in this root are scanned
-#     into the document index. Omit to keep indexing enabled.
-#     indexing: false
-#     Authoring controls whether managed document mutation tools may
-#     write this root. Empty defaults to "managed". Supported values:
-#     "managed", "read_only", and "restricted". Restricted is intended
-#     for high-integrity roots whose writes must come from narrower
-#     future flows.
-#     authoring: managed
-#     Git configures optional git-backed write provenance for this root.
-#     git:
-#       Enabled controls whether this root participates in git-backed
-#       provenance. When false, git settings are ignored.
-#       enabled: false
-#       SignCommits creates a signed git commit for each managed document
-#       mutation. Requires signing_key.
-#       sign_commits: false
-#       VerifySignatures is the verification policy for consumers of this
-#       root: "none", "warn", or "required". Required roots block managed
-#       reads, indexed results, and tagged context injection when content
-#       is not covered by trusted signed git history.
-#       verify_signatures: ""
-#       RepoPath optionally points at the git repository to use for this
-#       root. Empty means the root directory itself is the repository.
-#       repo_path: ""
-#       SigningKey is the SSH private key used to sign managed commits.
-#       Supports ~ expansion at startup.
-#       signing_key: ""
-#       AllowedSigners is the OpenSSH allowed signers file to use when
-#       verifying this root. Empty uses the repository-local
-#       .allowed_signers written from signing_key.
-#       allowed_signers: ""
+# (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
+# paths: {}
+#
+# (optional) DocRoots is the legacy per-root policy overlay. Replaced by
+# doc_roots: {}
 #
 # (optional) ExtraPath lists additional directories to prepend to the process
 # extra_path:

@@ -35,8 +35,9 @@ import (
 // always-bucket walker. Tagged vs always is encoded as where each
 // source registered, not as a separate code path. KB articles and
 // explicit context refs flow through the optional managed-root
-// signature verifier; always-providers do not (they return content
-// the agent itself wrote, not disk-managed material).
+// signature verifier. Providers that read disk-managed material are
+// responsible for applying their own verification before returning
+// model-facing content.
 //
 // Both the main agent loop and delegate executor share a single
 // assembler. The assembler is safe for concurrent use after

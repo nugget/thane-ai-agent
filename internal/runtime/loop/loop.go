@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -51,13 +52,14 @@ type Request struct {
 	// progress reporting.
 	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
 
-	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
-	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
-	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
-	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
-	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
-	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	FallbackContent string        `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+	MaxIterations   int                 `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int                 `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration       `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string              `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string              `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	SystemPrompt    string              `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	FallbackContent string              `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+	PromptMode      agentctx.PromptMode `yaml:"prompt_mode,omitempty" json:"prompt_mode,omitempty"`
 
 	// SuppressAlwaysContext drops the always-on bucket from the
 	// system-prompt assembler's context output for this run. Default
@@ -1358,6 +1360,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 		UsageRole:             l.requestOverride.UsageRole,
 		UsageTaskName:         l.requestOverride.UsageTaskName,
 		SystemPrompt:          l.requestOverride.SystemPrompt,
+		PromptMode:            l.requestOverride.PromptMode,
 		SuppressAlwaysContext: l.requestOverride.SuppressAlwaysContext,
 	}
 

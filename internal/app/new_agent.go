@@ -105,8 +105,9 @@ func (a *App) initAgentLoop(s *newState) error {
 	s.resolver = resolver
 
 	// Resolve fixed core context files at startup (tilde expansion,
-	// existence check) but defer reading to each agent turn so edits
-	// under workspace/core are visible without restart.
+	// existence check) but defer reading to the core context provider
+	// each agent turn so edits under workspace/core are visible without
+	// restart.
 	var resolvedInjectFiles []string
 	if injectFiles := cfg.CoreInjectFiles(); len(injectFiles) > 0 {
 		for _, path := range injectFiles {
@@ -124,9 +125,11 @@ func (a *App) initAgentLoop(s *newState) error {
 		}
 		logger.Info("core context files registered", "files", len(resolvedInjectFiles))
 	}
+	s.resolvedInjectFiles = resolvedInjectFiles
 
-	// Resolve ego.md path if a workspace is configured. The agent reads
-	// the file fresh on every turn, so the path is enough at startup.
+	// Resolve ego.md path if a workspace is configured. The core context
+	// provider reads the file fresh on every turn, so the path is enough
+	// at startup.
 	var egoFile string
 	if cfg.Workspace.Path != "" {
 		egoFile = resolvePath(coreFilePath(cfg.Workspace.Path, "ego.md"), nil)

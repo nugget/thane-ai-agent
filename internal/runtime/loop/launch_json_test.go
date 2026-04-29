@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
@@ -16,6 +18,7 @@ func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
 		ToolTimeout:     45 * time.Second,
 		AllowedTools:    []string{"get_state"},
 		FallbackContent: "please try again",
+		PromptMode:      agentctx.PromptModeTask,
 	})
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
@@ -30,6 +33,9 @@ func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
 	if !strings.Contains(body, `"fallback_content":"please try again"`) {
 		t.Fatalf("marshal output missing fallback_content: %s", body)
 	}
+	if !strings.Contains(body, `"prompt_mode":"task"`) {
+		t.Fatalf("marshal output missing prompt_mode: %s", body)
+	}
 }
 
 func TestLaunchUnmarshalJSONParsesDurationStrings(t *testing.T) {
@@ -41,6 +47,7 @@ func TestLaunchUnmarshalJSONParsesDurationStrings(t *testing.T) {
 		"run_timeout":"90s",
 		"tool_timeout":"30s",
 		"fallback_content":"please try again",
+		"prompt_mode":"task",
 		"completion_channel":{"channel":"owu","conversation_id":"conv-1"}
 	}`), &launch); err != nil {
 		t.Fatalf("UnmarshalJSON: %v", err)
@@ -57,6 +64,9 @@ func TestLaunchUnmarshalJSONParsesDurationStrings(t *testing.T) {
 	if launch.FallbackContent != "please try again" {
 		t.Fatalf("FallbackContent = %q, want %q", launch.FallbackContent, "please try again")
 	}
+	if launch.PromptMode != agentctx.PromptModeTask {
+		t.Fatalf("PromptMode = %q, want task", launch.PromptMode)
+	}
 }
 
 func TestLaunchUnmarshalJSONRejectsInvalidDurationStrings(t *testing.T) {
@@ -66,5 +76,21 @@ func TestLaunchUnmarshalJSONRejectsInvalidDurationStrings(t *testing.T) {
 	err := json.Unmarshal([]byte(`{"run_timeout":"definitely-not-a-duration"}`), &launch)
 	if err == nil || !strings.Contains(err.Error(), "run_timeout") {
 		t.Fatalf("UnmarshalJSON error = %v, want run_timeout parse error", err)
+	}
+}
+
+func TestLaunchValidateRejectsInvalidPromptMode(t *testing.T) {
+	t.Parallel()
+
+	launch := Launch{
+		Spec: Spec{
+			Name: "bad-prompt-mode",
+			Task: "do work",
+		},
+		PromptMode: agentctx.PromptMode("everything"),
+	}
+	err := launch.Validate()
+	if err == nil || !strings.Contains(err.Error(), "prompt_mode") {
+		t.Fatalf("Validate error = %v, want prompt_mode validation error", err)
 	}
 }

@@ -67,6 +67,9 @@ needs a strict fresh tool scope.
 | `list_context_entities` | List current watchlist subscriptions (scoped and always-visible). |
 | `remove_context_entity` | Remove a watched entity or a scoped subscription. |
 
+Subscription expiry is reported as `expires_delta`, not a raw timestamp,
+so the model does not need to do clock arithmetic.
+
 ## `ha` / `homeassistant` — Home Assistant state and control
 
 | Tool | Description |
@@ -116,6 +119,11 @@ health. Mutation tools obey that policy before writing; for example,
 writes through signed commits. Read/search surfaces also respect
 `verify_signatures: required` by blocking content that is not cleanly
 covered by trusted signed git history.
+
+Document tool results use model-facing time deltas such as
+`modified_delta`, `created_delta`, and `checked_delta` instead of raw
+absolute timestamps. Timestamp filter inputs still accept RFC3339 values
+or signed deltas like `-604800s`.
 
 | Tool | Description |
 |------|-------------|
@@ -178,6 +186,9 @@ being reimplemented in each loop prompt.
 |------|-------------|
 | `owner_contact` | Return the runtime owner identity. Protected tag. |
 
+Owner channel activity recency is reported with delta fields such as
+`last_active_delta`.
+
 ## `files` — workspace filesystem access
 
 | Tool | Description |
@@ -191,6 +202,8 @@ being reimplemented in each loop prompt.
 | `file_stat` | Get file metadata. |
 | `file_tree` | Render a directory tree. |
 | `create_temp_file` | Create a temp file with a labelled path. |
+
+`file_stat` reports modification recency as `modified_delta`.
 
 ## `shell` — host command execution
 
@@ -228,6 +241,9 @@ being reimplemented in each loop prompt.
 | `attachment_search` | Semantic or tag search over attachment descriptions. |
 | `attachment_describe` | Produce/refresh a vision description for an attachment. |
 
+Attachment list and search results report arrival recency as
+`received_delta`.
+
 ## `forge` — GitHub/code collaboration
 
 | Tool | Description |
@@ -258,6 +274,8 @@ being reimplemented in each loop prompt.
 | `list_tasks` | List scheduled tasks. |
 | `cancel_task` | Cancel a scheduled task. |
 
+Task next-run values include a model-facing delta.
+
 ## `thane_*` family — intent-shaped front door for "do work"
 
 Always-available (`thane_now`, `thane_assign`) plus loops-tagged
@@ -271,6 +289,14 @@ family.
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
 | `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
 | `thane_wake` | poke existing | Send a one-shot message envelope to a live timer loop, waking it or queueing for the next iteration. |
+
+`thane_now`, `thane_assign`, and the deprecated `thane_delegate` alias
+accept `context_mode`. The default, `task`, gives the child run a compact
+task-worker prompt with active capabilities, tagged context, and current
+conditions, but without full Thane identity files, inject files,
+always-on talents, or conversation-history dressing. Use
+`context_mode=full` only when the delegated work genuinely needs that
+continuity.
 
 ## `loops` — lower-level loop control and inspection
 

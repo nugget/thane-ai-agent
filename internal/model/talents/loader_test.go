@@ -1,7 +1,9 @@
 package talents
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +280,9 @@ func TestTalents(t *testing.T) {
 	if !strings.Contains(talents[0].Content, "Always loaded") {
 		t.Errorf("talents[0].Content missing expected text")
 	}
+	if talents[0].SourcePath != filepath.Join(dir, "core.md") {
+		t.Errorf("talents[0].SourcePath = %q, want core.md path", talents[0].SourcePath)
+	}
 
 	if talents[1].Name != "ha-tools" {
 		t.Errorf("talents[1].Name = %q, want %q", talents[1].Name, "ha-tools")
@@ -297,6 +302,39 @@ func TestTalents(t *testing.T) {
 	}
 	if talents[2].Tags[0] != "web" || talents[2].Tags[1] != "remote" {
 		t.Errorf("talents[2].Tags = %v, want [web remote]", talents[2].Tags)
+	}
+}
+
+type recordingTalentVerifier struct {
+	err       error
+	paths     []string
+	consumers []string
+}
+
+func (v *recordingTalentVerifier) VerifyPath(_ context.Context, path string, consumer string) error {
+	v.paths = append(v.paths, path)
+	v.consumers = append(v.consumers, consumer)
+	return v.err
+}
+
+func TestTalentsVerified_VerifiesBeforeRead(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "core.md", "# Core\n")
+
+	loader := NewLoader(dir)
+	verifier := &recordingTalentVerifier{err: errors.New("untrusted talent")}
+	_, err := loader.TalentsVerified(context.Background(), verifier.VerifyPath, "talents")
+	if err == nil {
+		t.Fatal("TalentsVerified should fail when verifier rejects a talent file")
+	}
+	if !strings.Contains(err.Error(), "verify talent core.md") {
+		t.Fatalf("error = %v, want verify talent wrapper", err)
+	}
+	if len(verifier.paths) != 1 || verifier.paths[0] != filepath.Join(dir, "core.md") {
+		t.Fatalf("verified paths = %v, want core.md", verifier.paths)
+	}
+	if len(verifier.consumers) != 1 || verifier.consumers[0] != "talents" {
+		t.Fatalf("verified consumers = %v, want talents", verifier.consumers)
 	}
 }
 

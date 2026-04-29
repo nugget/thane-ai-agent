@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
@@ -120,6 +121,13 @@ func (r *Registry) SetFactTools(ft *knowledge.Tools) {
 func (r *Registry) SetFileTools(ft *FileTools) {
 	r.fileTools = ft
 	r.registerFileTools()
+}
+
+// FileTools returns the registered file tools, or nil when none are
+// configured. Used by app wiring to install late-binding dependencies
+// (e.g. the doc-root signature verifier) after the doc store exists.
+func (r *Registry) FileTools() *FileTools {
+	return r.fileTools
 }
 
 // SetShellExec adds shell execution tools to the registry.
@@ -1416,8 +1424,13 @@ func (r *Registry) handleScheduleTask(ctx context.Context, args map[string]any) 
 		return "", err
 	}
 
-	nextRun, _ := task.NextRun(time.Now())
-	return fmt.Sprintf("Task '%s' scheduled (ID: %s). Next run: %s", name, task.ID, nextRun.Format(time.RFC3339)), nil
+	now := time.Now()
+	nextRun, hasNext := task.NextRun(now)
+	next := "(none)"
+	if hasNext {
+		next = promptfmt.FormatDelta(nextRun, now)
+	}
+	return fmt.Sprintf("Task '%s' scheduled (ID: %s). Next run: %s", name, task.ID, next), nil
 }
 
 func (r *Registry) handleListTasks(ctx context.Context, args map[string]any) (string, error) {
@@ -1442,16 +1455,17 @@ func (r *Registry) handleListTasks(ctx context.Context, args map[string]any) (st
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("Found %d task(s):\n", len(tasks)))
 
+	now := time.Now()
 	for _, t := range tasks {
-		next, hasNext := t.NextRun(time.Now())
+		next, hasNext := t.NextRun(now)
 		status := "enabled"
 		if !t.Enabled {
 			status = "disabled"
 		}
 
-		result.WriteString(fmt.Sprintf("- %s (%s): %s", t.Name, t.ID[:8], status))
+		result.WriteString(fmt.Sprintf("- %s (%s): %s", t.Name, promptfmt.ShortIDPrefix(t.ID), status))
 		if hasNext {
-			result.WriteString(fmt.Sprintf(", next: %s", next.Format("2006-01-02 15:04")))
+			result.WriteString(fmt.Sprintf(", next: %s", promptfmt.FormatDelta(next, now)))
 		}
 		result.WriteString("\n")
 	}

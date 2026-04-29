@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // maxToolResultBytes caps JSON tool output to prevent context flooding.
@@ -30,17 +32,17 @@ func NewTools(store *Store, analyzer *Analyzer) *Tools {
 // attachmentSummary is the JSON-serializable summary returned by list
 // and search operations.
 type attachmentSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	ContentType string `json:"content_type"`
-	Size        int64  `json:"size"`
-	Channel     string `json:"channel,omitempty"`
-	Sender      string `json:"sender,omitempty"`
-	ReceivedAt  string `json:"received_at"`
-	Description string `json:"description,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	ContentType   string `json:"content_type"`
+	Size          int64  `json:"size"`
+	Channel       string `json:"channel,omitempty"`
+	Sender        string `json:"sender,omitempty"`
+	ReceivedDelta string `json:"received_delta"`
+	Description   string `json:"description,omitempty"`
 }
 
-func summarizeRecord(rec *Record) attachmentSummary {
+func summarizeRecord(rec *Record, now time.Time) attachmentSummary {
 	desc := rec.Description
 	// Truncate long descriptions in list view on rune boundaries
 	// to avoid splitting multi-byte UTF-8 characters.
@@ -49,14 +51,14 @@ func summarizeRecord(rec *Record) attachmentSummary {
 		desc = string(runes[:197]) + "..."
 	}
 	return attachmentSummary{
-		ID:          rec.ID,
-		Name:        rec.OriginalName,
-		ContentType: rec.ContentType,
-		Size:        rec.Size,
-		Channel:     rec.Channel,
-		Sender:      rec.Sender,
-		ReceivedAt:  rec.ReceivedAt.UTC().Format(time.RFC3339),
-		Description: desc,
+		ID:            rec.ID,
+		Name:          rec.OriginalName,
+		ContentType:   rec.ContentType,
+		Size:          rec.Size,
+		Channel:       rec.Channel,
+		Sender:        rec.Sender,
+		ReceivedDelta: promptfmt.FormatDeltaOnly(rec.ReceivedAt, now),
+		Description:   desc,
 	}
 }
 
@@ -103,9 +105,10 @@ func (t *Tools) List(ctx context.Context, args map[string]any) (string, error) {
 		return "No attachments found matching the given filters.", nil
 	}
 
+	now := time.Now()
 	summaries := make([]attachmentSummary, len(records))
 	for i, rec := range records {
-		summaries[i] = summarizeRecord(rec)
+		summaries[i] = summarizeRecord(rec, now)
 	}
 
 	data, err := json.Marshal(summaries)
@@ -206,9 +209,10 @@ func (t *Tools) Search(ctx context.Context, args map[string]any) (string, error)
 		return "No attachments found matching the query.", nil
 	}
 
+	now := time.Now()
 	summaries := make([]attachmentSummary, len(records))
 	for i, rec := range records {
-		summaries[i] = summarizeRecord(rec)
+		summaries[i] = summarizeRecord(rec, now)
 	}
 
 	data, err := json.Marshal(summaries)

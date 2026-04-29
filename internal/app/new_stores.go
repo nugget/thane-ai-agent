@@ -13,7 +13,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
@@ -283,23 +282,6 @@ func (a *App) initStores(s *newState) error {
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, mem, logger)
 	a.archiveAdapter = archiveAdapter
-
-	// --- Talents ---
-	// Talents are markdown files that extend the system prompt with
-	// domain-specific knowledge and instructions.
-	talentLoader := talents.NewLoader(cfg.TalentsDir)
-	parsedTalents, err := talentLoader.Talents()
-	if err != nil {
-		return fmt.Errorf("load talents: %w", err)
-	}
-	if len(parsedTalents) > 0 {
-		talentNames := make([]string, len(parsedTalents))
-		for i, t := range parsedTalents {
-			talentNames[i] = t.Name
-		}
-		logger.Info("talents loaded", "count", len(parsedTalents), "talents", talentNames)
-	}
-	s.parsedTalents = parsedTalents
 
 	// --- Persona --- A curated core/persona.md file can replace the
 	// default system prompt, giving the agent a custom identity and

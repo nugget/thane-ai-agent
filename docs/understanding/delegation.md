@@ -117,8 +117,13 @@ if a server exists, Thane can host it.
 ## Delegation Profiles
 
 Delegation profiles are compatibility hints for budget and routing defaults.
-They do not own a separate system prompt or fixed tool allowlist. Capability
-tags determine the delegate's tool and context scope.
+By default they use a task-focused prompt mode: compact worker identity,
+tool-use contract, active capability summaries, tagged context, and
+current conditions. The full Thane prompt can still be requested for
+continuity-sensitive work, but ordinary delegates should stay in task mode
+so small local models are not flooded with persona, ego, injected core
+files, always-on talents, or conversation-history dressing. Capability tags
+determine the delegate's tool and tagged context scope.
 
 | Profile | Default Tags | Routing Bias | Use For |
 |---------|--------------|--------------|---------|
@@ -141,6 +146,10 @@ Runtime/channel affordance tags such as `message_channel` and trust tags
 such as `owner` are not inherited as model-requested tags; they must be
 asserted again by trusted runtime context. Use `inherit_caller_tags=false`
 for a strict fresh scope.
+
+Use `context_mode=full` sparingly when a delegate truly needs the same rich
+identity and continuity context as the caller. The default `task` mode is
+the normal execution path.
 
 ## Writing Good Delegation Prompts
 

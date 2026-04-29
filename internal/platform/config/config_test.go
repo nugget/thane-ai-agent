@@ -857,7 +857,6 @@ doc_roots:
       sign_commits: false
       verify_signatures: required
       repo_path: ./knowledge
-      allowed_signers: ./allowed_signers
 `), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -873,7 +872,7 @@ doc_roots:
 	if root.Authoring != "read_only" {
 		t.Fatalf("DocRoots[kb].Authoring = %q, want read_only", root.Authoring)
 	}
-	if !root.Git.Enabled || root.Git.VerifySignatures != "required" || root.Git.AllowedSigners != "./allowed_signers" {
+	if !root.Git.Enabled || root.Git.VerifySignatures != "required" {
 		t.Fatalf("DocRoots[kb].Git = %#v, want enabled required verification", root.Git)
 	}
 }
@@ -923,3 +922,310 @@ func TestValidate_DocumentRootConfig(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestLoad_RootsBlockBareString covers the bare-string shorthand:
+// `name: ~/path` desugars into Paths with default policy.
+func TestLoad_RootsBlockBareString(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb: ./knowledge
+  scratchpad: ./scratch
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Paths["kb"] != "./knowledge" {
+		t.Errorf("Paths[kb] = %q, want ./knowledge", cfg.Paths["kb"])
+	}
+	if cfg.Paths["scratchpad"] != "./scratch" {
+		t.Errorf("Paths[scratchpad] = %q, want ./scratch", cfg.Paths["scratchpad"])
+	}
+	// Bare-string entries should not produce DocRoots rows
+	// because they have no policy fields.
+	if _, ok := cfg.DocRoots["kb"]; ok {
+		t.Errorf("bare-string entry should not produce a DocRoots row: %#v", cfg.DocRoots)
+	}
+	// Roots is cleared after normalize.
+	if cfg.Roots != nil {
+		t.Errorf("Roots should be cleared after normalize, got %#v", cfg.Roots)
+	}
+}
+
+// TestLoad_RootsBlockMixedForms verifies that bare-string and full
+// mapping forms can coexist in the same roots: block.
+func TestLoad_RootsBlockMixedForms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb: ./knowledge
+  scratchpad:
+    path: ./scratch
+    authoring: managed
+  secure:
+    path: ./secure
+    indexing: false
+    git:
+      enabled: true
+      sign_commits: true
+      verify_signatures: required
+      signing_key: ./id_ed25519
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Paths["kb"] != "./knowledge" || cfg.Paths["scratchpad"] != "./scratch" || cfg.Paths["secure"] != "./secure" {
+		t.Errorf("Paths = %#v, want all three roots", cfg.Paths)
+	}
+	if _, ok := cfg.DocRoots["kb"]; ok {
+		t.Errorf("kb (bare string) should not have DocRoots entry")
+	}
+	if cfg.DocRoots["scratchpad"].Authoring != "managed" {
+		t.Errorf("scratchpad authoring = %q, want managed", cfg.DocRoots["scratchpad"].Authoring)
+	}
+	secure := cfg.DocRoots["secure"]
+	if secure.Indexing == nil || *secure.Indexing {
+		t.Errorf("secure indexing = %v, want false pointer", secure.Indexing)
+	}
+	if !secure.Git.Enabled || !secure.Git.SignCommits || secure.Git.VerifySignatures != "required" || secure.Git.SigningKey != "./id_ed25519" {
+		t.Errorf("secure.Git = %#v, want enabled+signed+required", secure.Git)
+	}
+}
+
+// TestLoad_RootsBlockRejectsLegacyMix guards against silently
+// accepting both shapes — the operator must pick one.
+func TestLoad_RootsBlockRejectsLegacyMix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb: ./knowledge
+paths:
+  scratchpad: ./scratch
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load should error when both roots: and paths: are present")
+	}
+	if !strings.Contains(err.Error(), "roots:") || !strings.Contains(err.Error(), "paths:") {
+		t.Fatalf("error = %v, want explanation that the two shapes can't coexist", err)
+	}
+}
+
+// TestLoad_RootsBlockReservedCoreNamePolicyOnly verifies that core:
+// can be declared in roots: solely to set policy; the path is
+// ignored (the runtime always derives core from workspace.path).
+func TestLoad_RootsBlockReservedCoreNamePolicyOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  core:
+    path: /should/be/ignored
+    authoring: managed
+    git:
+      enabled: true
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if _, ok := cfg.Paths["core"]; ok {
+		t.Errorf("core path should not be set from roots: (it's reserved); Paths = %#v", cfg.Paths)
+	}
+	if !cfg.DocRoots["core"].Git.Enabled {
+		t.Errorf("core policy should still apply even when path is ignored: %#v", cfg.DocRoots["core"])
+	}
+}
+
+// TestLoad_LegacyShapeStillWorks verifies the legacy paths:+doc_roots:
+// shape continues to load successfully (with a deprecation warning
+// emitted to slog.Default — not asserted here, since tests don't
+// capture default slog).
+func TestLoad_LegacyShapeStillWorks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+paths:
+  kb: ./knowledge
+doc_roots:
+  kb:
+    authoring: read_only
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Paths["kb"] != "./knowledge" {
+		t.Errorf("legacy Paths still expected; got %#v", cfg.Paths)
+	}
+	if cfg.DocRoots["kb"].Authoring != "read_only" {
+		t.Errorf("legacy DocRoots still expected; got %#v", cfg.DocRoots)
+	}
+}
+
+// TestNormalizeRoots_Programmatic exercises the normalize step on a
+// hand-built Config (the Default+populate path some callers use).
+func TestNormalizeRoots_Programmatic(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Roots: map[string]RootEntry{
+			"kb": {Path: "/k"},
+			"sp": {Path: "/s", Authoring: "managed"},
+		},
+	}
+	if err := cfg.normalizeRoots(); err != nil {
+		t.Fatalf("normalizeRoots: %v", err)
+	}
+	if cfg.Paths["kb"] != "/k" || cfg.Paths["sp"] != "/s" {
+		t.Errorf("Paths = %#v", cfg.Paths)
+	}
+	if _, ok := cfg.DocRoots["kb"]; ok {
+		t.Errorf("kb has no policy, should not produce DocRoots row")
+	}
+	if cfg.DocRoots["sp"].Authoring != "managed" {
+		t.Errorf("sp.Authoring = %q, want managed", cfg.DocRoots["sp"].Authoring)
+	}
+	if cfg.Roots != nil {
+		t.Errorf("Roots should be cleared after normalize")
+	}
+}
+
+// TestLoad_RootsBlockRejectsNullShorthand guards against `kb:` (null
+// scalar) silently becoming an empty path. yaml.v3 doesn't invoke
+// UnmarshalYAML for a null map value, so the null is caught by the
+// normalize-time empty-path check rather than the scalar guard.
+func TestLoad_RootsBlockRejectsNullShorthand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb:
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load should error on null roots entry")
+	}
+	if !strings.Contains(err.Error(), "roots.kb.path") {
+		t.Fatalf("error = %v, want empty-path or scalar-tag message", err)
+	}
+}
+
+// TestLoad_RootsBlockRejectsNonStringScalar guards against typos like
+// `kb: 42` or `kb: true` that would otherwise become path strings.
+func TestLoad_RootsBlockRejectsNonStringScalar(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb: 42
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load should error on non-string scalar shorthand")
+	}
+	if !strings.Contains(err.Error(), "must be a string") {
+		t.Fatalf("error = %v, want non-string scalar message", err)
+	}
+}
+
+// TestLoad_RootsBlockRejectsMappingWithoutPath guards against a
+// non-core entry whose mapping omits path: — easy to do when
+// templating policy without a path.
+func TestLoad_RootsBlockRejectsMappingWithoutPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+roots:
+  kb:
+    authoring: managed
+`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load should error when a non-core root mapping has no path")
+	}
+	if !strings.Contains(err.Error(), "roots.kb.path") {
+		t.Fatalf("error = %v, want roots.kb.path message", err)
+	}
+}
+
+// TestNormalizeRoots_RejectsEmptyPathProgrammatic mirrors the
+// mapping-without-path case for callers that bypass YAML.
+func TestNormalizeRoots_RejectsEmptyPathProgrammatic(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Roots: map[string]RootEntry{
+			"kb": {Authoring: "managed"},
+		},
+	}
+	err := cfg.normalizeRoots()
+	if err == nil {
+		t.Fatal("normalizeRoots should error on empty path for non-core root")
+	}
+	if !strings.Contains(err.Error(), "roots.kb.path") {
+		t.Fatalf("error = %v, want roots.kb.path message", err)
+	}
+}
+
+// TestNormalizeRoots_DetectsCanonicalCollision verifies that two keys
+// that canonicalize to the same trimmed name (e.g. `kb` and `kb:`)
+// are rejected rather than silently overwriting each other.
+func TestNormalizeRoots_DetectsCanonicalCollision(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Roots: map[string]RootEntry{
+			"kb":  {Path: "/a"},
+			"kb:": {Path: "/b"},
+		},
+	}
+	err := cfg.normalizeRoots()
+	if err == nil {
+		t.Fatal("normalizeRoots should error on canonical-name collision")
+	}
+	if !strings.Contains(err.Error(), "canonicalize") {
+		t.Fatalf("error = %v, want canonicalize collision message", err)
+	}
+}
+
+// TestNormalizeRoots_CoreReservedAcceptsPolicyOnly confirms that
+// declaring core: with policy fields and no path is the supported
+// shape (no warning, no error).
+func TestNormalizeRoots_CoreReservedAcceptsPolicyOnly(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		Roots: map[string]RootEntry{
+			"core": {Authoring: "managed"},
+		},
+	}
+	if err := cfg.normalizeRoots(); err != nil {
+		t.Fatalf("normalizeRoots: %v", err)
+	}
+	if _, ok := cfg.Paths["core"]; ok {
+		t.Errorf("core path must not be populated; Paths = %#v", cfg.Paths)
+	}
+	if cfg.DocRoots["core"].Authoring != "managed" {
+		t.Errorf("core policy not applied: %#v", cfg.DocRoots["core"])
+	}
+}

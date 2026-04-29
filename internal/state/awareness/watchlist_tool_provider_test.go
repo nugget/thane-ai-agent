@@ -180,7 +180,7 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 			EntityID      string `json:"entity_id"`
 			Scope         string `json:"scope"`
 			AlwaysVisible bool   `json:"always_visible"`
-			ExpiresAt     string `json:"expires_at"`
+			ExpiresDelta  string `json:"expires_delta"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
@@ -195,8 +195,8 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 	if payload.Items[0].AlwaysVisible {
 		t.Fatal("tagged subscription should not be always visible")
 	}
-	if payload.Items[0].ExpiresAt == "" {
-		t.Fatal("expected expires_at in payload")
+	if payload.Items[0].ExpiresDelta == "" {
+		t.Fatal("expected expires_delta in payload")
 	}
 }
 

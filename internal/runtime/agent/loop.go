@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +64,7 @@ type Request struct {
 	UsageRole       string                 `json:"-"`               // Optional usage role override (e.g., "delegate")
 	UsageTaskName   string                 `json:"-"`               // Optional usage task name override
 	FallbackContent string                 `json:"-"`               // Optional static fallback text when the run yields no content
+	PromptMode      agentctx.PromptMode    `json:"-"`               // Optional system-prompt shape override.
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -98,8 +98,9 @@ const (
 	KindLLMStart      = llm.KindLLMStart
 )
 
-// maxEgoBytes is the maximum size of ego.md content injected into the
-// system prompt. Content beyond this limit is truncated with a marker.
+// maxEgoBytes is the maximum size of ego.md content published through
+// the core context provider. Content beyond this limit is truncated
+// with a marker.
 const maxEgoBytes = 16 * 1024
 
 // maxTagContextBytes is the aggregate size limit for all tag context
@@ -226,14 +227,12 @@ type Loop struct {
 	llm                 llm.Client
 	tools               *tools.Registry
 	model               string
-	recoveryModel       string            // Fast model for timeout recovery summaries (empty = disabled)
-	retryBaseDelay      time.Duration     // Base backoff delay between timeout retries (0 = use default)
-	persona             string            // Persona content (replaces base system prompt if set)
-	egoFile             string            // Path to ego.md — read fresh each turn for system prompt
-	provenanceStore     *provenance.Store // Optional provenance store for ego.md metadata injection
-	injectFiles         []string          // Paths to context files — re-read each turn
-	timezone            string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow       int               // Context window size of default model
+	recoveryModel       string        // Fast model for timeout recovery summaries (empty = disabled)
+	retryBaseDelay      time.Duration // Base backoff delay between timeout retries (0 = use default)
+	persona             string        // Persona content (replaces base system prompt if set)
+	coreContextProvider *CoreContextProvider
+	timezone            string // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow       int    // Context window size of default model
 	failoverHandler     FailoverHandler
 	archiver            SessionArchiver
 	extractor           *memory.Extractor
@@ -363,15 +362,17 @@ func NewLoop(opts LoopOptions) (*Loop, error) {
 		timezone:            opts.Timezone,
 		recoveryModel:       opts.RecoveryModel,
 		archiver:            opts.Archiver,
-		injectFiles:         opts.InjectFiles,
-		egoFile:             opts.EgoFile,
-		provenanceStore:     opts.ProvenanceStore,
 		haInject:            opts.HAInject,
 		modelRegistry:       opts.ModelRegistry,
 		modelRuntime:        opts.ModelRuntime,
 		liveRequestRecorder: opts.LiveRequestRecorder,
 		requestRecorder:     opts.RequestRecorder,
 		nowFunc:             time.Now,
+	}
+	if opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+		l.ensureCoreContextProvider().updateEgoFile(opts.EgoFile)
+		l.coreContextProvider.updateProvenanceStore(opts.ProvenanceStore)
+		l.coreContextProvider.updateInjectFiles(opts.InjectFiles)
 	}
 	return l, nil
 }
@@ -442,13 +443,35 @@ func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
 // grouped Configure* methods for late-binding state; new code should
 // prefer those entry points.
 
-// SetEgoFile sets the path to ego.md. The file is read fresh on each
-// turn after this is set.
-func (l *Loop) SetEgoFile(path string) { l.egoFile = path }
+// SetEgoFile sets the path to ego.md. The file is published through
+// the always-on context-provider pipeline and read fresh on each turn.
+func (l *Loop) SetEgoFile(path string) {
+	l.ensureCoreContextProvider().updateEgoFile(path)
+}
 
-// SetInjectFiles sets the file paths whose content is re-read and
-// injected into the system prompt on every turn.
-func (l *Loop) SetInjectFiles(paths []string) { l.injectFiles = paths }
+// SetInjectFiles sets the core context files published through the
+// always-on context-provider pipeline on each turn.
+func (l *Loop) SetInjectFiles(paths []string) {
+	l.ensureCoreContextProvider().updateInjectFiles(paths)
+}
+
+// UseInjectFileVerifier configures the verifier used before each
+// core context file read during system-prompt assembly.
+func (l *Loop) UseInjectFileVerifier(verifier func(context.Context, string, string) error) {
+	l.ensureCoreContextProvider().updateInjectFileVerifier(verifier)
+}
+
+func (l *Loop) ensureCoreContextProvider() *CoreContextProvider {
+	if l.coreContextProvider != nil {
+		return l.coreContextProvider
+	}
+	l.coreContextProvider = NewCoreContextProvider(CoreContextProviderConfig{
+		Logger: l.logger,
+		Now:    l.nowFunc,
+	})
+	l.RegisterAlwaysContextProvider(l.coreContextProvider)
+	return l.coreContextProvider
+}
 
 // SetHAInject configures the HA entity state resolver for tag context
 // documents.
@@ -485,6 +508,9 @@ type CapabilityWiring struct {
 // surface, store, talents, and context assembler. Empty fields are
 // no-ops so callers can stage the wiring incrementally.
 func (l *Loop) ConfigureCapabilityWiring(w CapabilityWiring) {
+	if w.ParsedTalents != nil {
+		l.parsedTalents = w.ParsedTalents
+	}
 	if len(w.Tags) > 0 {
 		l.SetCapabilityTags(w.Tags, w.ParsedTalents)
 	}
@@ -563,9 +589,46 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	for tag, p := range pendingTagged {
 		a.RegisterTaggedProvider(tag, p)
 	}
+	coreRegistered := false
 	for _, p := range pendingAlways {
 		a.RegisterAlwaysProvider(p)
+		if p == l.coreContextProvider {
+			coreRegistered = true
+		}
 	}
+	if l.coreContextProvider != nil && !coreRegistered {
+		a.RegisterAlwaysProvider(l.coreContextProvider)
+	}
+}
+
+func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
+	l.pendingProvidersMu.Lock()
+	assembler := l.tagContextAssembler
+	if assembler != nil {
+		l.pendingProvidersMu.Unlock()
+		return assembler
+	}
+	pendingTagged := make(map[string]TagContextProvider, len(l.pendingTagProviders))
+	for tag, p := range l.pendingTagProviders {
+		pendingTagged[tag] = p
+	}
+	pendingAlways := append([]TagContextProvider(nil), l.pendingAlwaysProviders...)
+	l.pendingProvidersMu.Unlock()
+
+	if len(pendingTagged) == 0 && len(pendingAlways) == 0 {
+		return nil
+	}
+	assembler = NewTagContextAssembler(TagContextAssemblerConfig{
+		HAInject: l.haInject,
+		Logger:   l.logger,
+	})
+	for tag, p := range pendingTagged {
+		assembler.RegisterTaggedProvider(tag, p)
+	}
+	for _, p := range pendingAlways {
+		assembler.RegisterAlwaysProvider(p)
+	}
+	return assembler
 }
 
 // SetOrchestratorTools configures the restricted tool set for all
@@ -901,6 +964,8 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 
 func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMessage string, history []memory.Message, profile llm.ModelInteractionProfile) (string, []llm.PromptSection) {
 	var sb strings.Builder
+	promptMode := agentctx.PromptModeFromContext(ctx)
+	taskPrompt := promptMode == agentctx.PromptModeTask
 
 	// Snapshot active tags from the per-Run capability scope.
 	tags := snapshotTagsFromContext(ctx)
@@ -912,44 +977,24 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 
 	// 1. Persona (identity — who am I)
 	mark("PERSONA")
-	if l.persona != "" {
+	if taskPrompt {
+		sb.WriteString(prompts.DelegateSystemPrompt())
+	} else if l.persona != "" {
 		sb.WriteString(l.persona)
 	} else {
 		sb.WriteString(prompts.BaseSystemPrompt())
 	}
 	seal()
 
-	// 2. Ego (self-reflection — what have I been noticing/thinking)
-	l.injectEgo(ctx, &sb, mark, seal)
-
-	// 2b. Runtime contract (execution semantics — how should I use tools)
+	// 2. Runtime contract (execution semantics — how should I use tools)
 	mark("RUNTIME CONTRACT")
 	sb.WriteString("\n\n")
-	sb.WriteString(prompts.RuntimeContract())
-	seal()
-
-	// 3. Injected context (knowledge — what do I know)
-	// Re-read registered core context files each turn so external edits
-	// (for example mission.md updates) are visible without restart.
-	if len(l.injectFiles) > 0 {
-		var ctxBuf strings.Builder
-		for _, path := range l.injectFiles {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			if ctxBuf.Len() > 0 {
-				ctxBuf.WriteString("\n\n---\n\n")
-			}
-			ctxBuf.Write(data)
-		}
-		if ctxBuf.Len() > 0 {
-			mark("INJECTED CONTEXT")
-			sb.WriteString("\n\n## Injected Context\n\n")
-			sb.WriteString(ctxBuf.String())
-			seal()
-		}
+	if taskPrompt {
+		sb.WriteString(prompts.DelegateRuntimeContract())
+	} else {
+		sb.WriteString(prompts.RuntimeContract())
 	}
+	seal()
 
 	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
 		mark("TOOL CALLING CONTRACT")
@@ -963,7 +1008,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// Keep always-on guidance ahead of volatile context so provider-side
 	// prompt caching can retain the stable behavioral prefix.
 	alwaysOnTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, tags)
-	if alwaysOnTalents != "" {
+	if !taskPrompt && alwaysOnTalents != "" {
 		mark("TALENTS ALWAYS ON")
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")
 		sb.WriteString(alwaysOnTalents)
@@ -971,7 +1016,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	}
 	if taggedTalents != "" {
 		mark("TALENTS TAGGED")
-		if alwaysOnTalents != "" {
+		if !taskPrompt && alwaysOnTalents != "" {
 			sb.WriteString("\n\n---\n\n")
 		} else {
 			sb.WriteString("\n\n## Behavioral Guidance\n\n")
@@ -990,11 +1035,13 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	}
 
 	// 5b. Session origin policy (runtime data about why this run was shaped).
-	if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
-		mark("SESSION ORIGIN CONTEXT")
-		sb.WriteString("\n\n## Session Origin Context\n\n")
-		sb.WriteString(originCtx)
-		seal()
+	if !taskPrompt {
+		if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
+			mark("SESSION ORIGIN CONTEXT")
+			sb.WriteString("\n\n## Session Origin Context\n\n")
+			sb.WriteString(originCtx)
+			seal()
+		}
 	}
 
 	// 6. Capability context (capability knowledge + ambient context)
@@ -1003,16 +1050,16 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// providers. Always-on providers are gated by IncludeAlways: main
 	// loop runs include them; delegate runs (which set
 	// req.SuppressAlwaysContext via the loops launch) do not.
-	if l.tagContextAssembler != nil {
+	if assembler := l.contextAssemblerForPrompt(); assembler != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
 		req := ContextRequest{
 			UserMessage:   userMessage,
 			ActiveTags:    tags,
-			IncludeAlways: !tools.SuppressAlwaysContextFromContext(ctx),
+			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
 		}
-		if capCtx := l.tagContextAssembler.Build(haCtx, req); capCtx != "" {
+		if capCtx := assembler.Build(haCtx, req); capCtx != "" {
 			mark("CAPABILITY CONTEXT")
 			sb.WriteString("\n\n## Capability Context\n\n")
 			sb.WriteString(capCtx)
@@ -1030,7 +1077,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// Embedding history as JSON in the system prompt creates an unambiguous
 	// boundary between "what happened before" and "what just arrived." The
 	// new user input follows as a standard chat message after this prompt.
-	if len(history) > 0 {
+	if !taskPrompt && len(history) > 0 {
 		mark("CONVERSATION HISTORY")
 		sb.WriteString("\n\n## Conversation History\n\n")
 		sb.WriteString("The following fenced JSON array contains prior messages in this conversation. ")
@@ -1076,10 +1123,10 @@ func (l *Loop) renderSessionOriginContext(ctx context.Context) string {
 	sb.Write(data)
 	sb.WriteString("\n```\n")
 
-	if l.tagContextAssembler != nil && len(result.ContextRefs) > 0 {
+	if assembler := l.contextAssemblerForPrompt(); assembler != nil && len(result.ContextRefs) > 0 {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
-		if refs := l.tagContextAssembler.BuildRefs(haCtx, result.ContextRefs); refs != "" {
+		if refs := assembler.BuildRefs(haCtx, result.ContextRefs); refs != "" {
 			sb.WriteString("\n\n### Context Refs\n\n")
 			sb.WriteString(refs)
 		}
@@ -1316,84 +1363,6 @@ func canonicalCapabilityAlias(value string) string {
 	return strings.Trim(value, "_")
 }
 
-// injectEgo injects the ego.md content into the system prompt. When a
-// provenance store is configured, delta-relative metadata (time since
-// last modification, revision count) is prepended. Otherwise, the file
-// is read directly from disk.
-func (l *Loop) injectEgo(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
-	if l.provenanceStore != nil {
-		l.injectEgoFromProvenance(ctx, sb, mark, seal)
-		return
-	}
-
-	// Fallback: direct file read.
-	if l.egoFile == "" {
-		return
-	}
-	data, err := os.ReadFile(l.egoFile)
-	if err != nil || len(data) == 0 {
-		return
-	}
-	mark("EGO")
-	sb.WriteString("\n\n## Self-Reflection (ego.md)\n\n")
-	if len(data) > maxEgoBytes {
-		sb.WriteString(string(data[:maxEgoBytes]))
-		sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
-	} else {
-		sb.WriteString(string(data))
-	}
-	seal()
-}
-
-// injectEgoFromProvenance reads ego.md from the provenance store and
-// prepends delta-relative metadata derived from git history.
-func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
-	content, err := l.provenanceStore.Read("ego.md")
-	if err != nil || len(content) == 0 {
-		return
-	}
-
-	mark("EGO")
-	sb.WriteString("\n\n## Self-Reflection (ego.md)\n")
-
-	// Inject delta-relative metadata from git history.
-	if hist, err := l.provenanceStore.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
-		ago := time.Since(hist.LastModified).Truncate(time.Second)
-		sb.WriteString(fmt.Sprintf("(updated %s ago by %s, revision %d)\n",
-			formatDeltaDuration(ago), hist.LastMessage, hist.RevisionCount))
-	}
-
-	sb.WriteString("\n")
-	if len(content) > maxEgoBytes {
-		sb.WriteString(content[:maxEgoBytes])
-		sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
-	} else {
-		sb.WriteString(content)
-	}
-	seal()
-}
-
-// formatDeltaDuration formats a duration as a human-readable delta
-// string (e.g., "3h", "2d", "45m"). Uses the largest natural unit.
-func formatDeltaDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", max(int(d.Seconds()), 1))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		m := int(d.Minutes()) % 60
-		if m == 0 {
-			return fmt.Sprintf("%dh", h)
-		}
-		return fmt.Sprintf("%dh%dm", h, m)
-	default:
-		days := int(d.Hours()) / 24
-		return fmt.Sprintf("%dd", days)
-	}
-}
-
 // generateRequestID returns a human-scannable identifier for a single
 // user-message turn (e.g., "r_7f3ab2c1d5e6f7a8"). It uses 8 random
 // bytes from a UUIDv7 (bytes 8-15), giving ~62 bits of effective
@@ -1486,6 +1455,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"kind", events.KindRequestStart,
 		"message_count", len(req.Messages),
 		"mission", req.Hints["mission"],
+		"prompt_mode", req.PromptMode.OrDefault(),
 		"skip_context", req.SkipContext,
 		"max_iterations", req.MaxIterations,
 	)
@@ -1721,6 +1691,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
+	ctx = agentctx.WithPromptMode(ctx, req.PromptMode)
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)

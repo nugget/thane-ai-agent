@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
@@ -50,7 +51,7 @@ func (p *WorkingMemoryProvider) TagContext(ctx context.Context, _ agentctx.Conte
 	var sb strings.Builder
 	sb.WriteString("### Working Memory\n\n")
 	if !updatedAt.IsZero() {
-		sb.WriteString(fmt.Sprintf("*Last updated: %s*\n\n", updatedAt.Format(time.RFC3339)))
+		sb.WriteString(fmt.Sprintf("*Last updated: %s*\n\n", promptfmt.FormatDeltaOnly(updatedAt, time.Now())))
 	}
 	sb.WriteString(content)
 

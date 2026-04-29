@@ -64,10 +64,10 @@ preserving decisions, facts, and preferences.
 
 ### Context Layer
 
-One of four distinct sections of the system prompt, each with a specific
-purpose: *Persona* (identity), *Talents* (behavior), *Inject Files*
-(knowledge), and *Session Context* (current state). Mixing concerns across
-layers degrades agent behavior.
+One of the distinct sections of the system prompt, each with a specific
+purpose: *Persona* (identity), *Talents* (behavior), *Core Context*
+(curated knowledge and continuity), and *Session Context* (current
+state). Mixing concerns across layers degrades agent behavior.
 See [Context Layers](context-layers.md).
 
 ### Delegate

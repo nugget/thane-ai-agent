@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -16,8 +15,8 @@ import (
 )
 
 // writeTestSigningKey generates a fresh ed25519 SSH signing key,
-// writes it to a temp path, and returns the path. The matching public
-// key is also written for tests that need .allowed_signers.
+// writes the private key to a temp path, and returns the path along
+// with the matching public key as a string.
 func writeTestSigningKey(t *testing.T) (privPath, pub string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -78,7 +77,6 @@ func TestBuildDocumentStoreOptionsMapsConfigPolicy(t *testing.T) {
 					Enabled:          true,
 					VerifySignatures: "warn",
 					RepoPath:         "~/repo",
-					AllowedSigners:   "~/allowed_signers",
 				},
 			},
 		},
@@ -160,8 +158,11 @@ func TestBuildDocumentStoreOptionsBootstrapsMissingDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetPath, ".git")); err != nil {
 		t.Fatalf("bootstrap should have run git init: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(targetPath, ".allowed_signers")); err != nil {
+		t.Fatalf("bootstrap should have written repo-local .allowed_signers: %v", err)
+	}
 	// HEAD should exist (birth commit).
-	cmd := exec.CommandContext(context.Background(), "git", "-C", targetPath, "rev-parse", "--verify", "HEAD^{commit}")
+	cmd := exec.CommandContext(t.Context(), "git", "-C", targetPath, "rev-parse", "--verify", "HEAD^{commit}")
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("birth commit not found: %v", err)
 	}
@@ -211,6 +212,9 @@ func TestBuildDocumentStoreOptionsBootstrapsEmptyDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetPath, ".gitignore")); err != nil {
 		t.Fatalf("birth commit should have written .gitignore: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(targetPath, ".allowed_signers")); err != nil {
+		t.Fatalf("provenance init should have written .allowed_signers: %v", err)
+	}
 	if opts.RootVerifiers["kb"] == nil {
 		t.Fatal("verifier missing on freshly bootstrapped root")
 	}
@@ -225,7 +229,6 @@ func TestBuildDocumentStoreOptionsRequiredVerifierUnavailableIsFatal(t *testing.
 
 	targetPath := t.TempDir()
 	resolver := paths.New(map[string]string{"kb": targetPath})
-	missingAllowedSigners := filepath.Join(t.TempDir(), "does-not-exist")
 
 	app := &App{
 		logger: slog.Default(),
@@ -236,7 +239,6 @@ func TestBuildDocumentStoreOptionsRequiredVerifierUnavailableIsFatal(t *testing.
 						Enabled:          true,
 						SignCommits:      false, // verifier-only path
 						VerifySignatures: "required",
-						AllowedSigners:   missingAllowedSigners,
 					},
 				},
 			},
@@ -249,6 +251,94 @@ func TestBuildDocumentStoreOptionsRequiredVerifierUnavailableIsFatal(t *testing.
 	}
 	if !strings.Contains(err.Error(), "verify_signatures=required but verifier unavailable") {
 		t.Fatalf("error = %v, want required-but-unavailable message", err)
+	}
+}
+
+func TestBuildDocumentStoreOptionsVerifierUsesRepoLocalAllowedSigners(t *testing.T) {
+	targetPath := t.TempDir()
+	signingKey, publicKey := writeTestSigningKey(t)
+
+	app := &App{
+		logger: slog.Default(),
+		cfg: &config.Config{
+			DocRoots: map[string]config.DocumentRootConfig{
+				"kb": {
+					Git: config.DocumentRootGitConfig{
+						Enabled:          true,
+						SignCommits:      true,
+						VerifySignatures: "required",
+						SigningKey:       signingKey,
+					},
+				},
+			},
+		},
+	}
+	resolver := paths.New(map[string]string{"kb": targetPath})
+	opts, err := app.buildDocumentStoreOptions(buildDocumentRoots(resolver), resolver)
+	if err != nil {
+		t.Fatalf("initial buildDocumentStoreOptions: %v", err)
+	}
+	if opts.RootVerifiers["kb"] == nil {
+		t.Fatal("initial verifier missing")
+	}
+
+	allowedPath := filepath.Join(targetPath, ".allowed_signers")
+	data, err := os.ReadFile(allowedPath)
+	if err != nil {
+		t.Fatalf("ReadFile .allowed_signers: %v", err)
+	}
+	if !strings.Contains(string(data), publicKey) {
+		t.Fatalf(".allowed_signers = %q, want generated public key", data)
+	}
+
+	cfgOut, err := exec.CommandContext(t.Context(), "git", "-C", targetPath, "config", "gpg.ssh.allowedSignersFile").Output()
+	if err != nil {
+		t.Fatalf("git config allowedSignersFile: %v", err)
+	}
+	if got := strings.TrimSpace(string(cfgOut)); got != allowedPath {
+		t.Fatalf("allowedSignersFile = %q, want %q", got, allowedPath)
+	}
+
+	app.cfg.DocRoots["kb"] = config.DocumentRootConfig{
+		Git: config.DocumentRootGitConfig{
+			Enabled:          true,
+			SignCommits:      false,
+			VerifySignatures: "required",
+		},
+	}
+	opts, err = app.buildDocumentStoreOptions(buildDocumentRoots(resolver), resolver)
+	if err != nil {
+		t.Fatalf("verifier-only buildDocumentStoreOptions: %v", err)
+	}
+	if opts.RootVerifiers["kb"] == nil {
+		t.Fatal("verifier-only root should use repo-local .allowed_signers")
+	}
+}
+
+func TestConfigureRepoLocalAllowedSignersBestEffortGitConfig(t *testing.T) {
+	targetPath := t.TempDir()
+	allowedPath := filepath.Join(targetPath, ".allowed_signers")
+	if err := os.WriteFile(allowedPath, []byte("thane@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForConfigOnly\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile .allowed_signers: %v", err)
+	}
+
+	if err := configureRepoLocalAllowedSigners("kb", targetPath, slog.Default()); err != nil {
+		t.Fatalf("configureRepoLocalAllowedSigners() = %v, want nil despite non-git dir", err)
+	}
+}
+
+func TestConfigureRepoLocalAllowedSignersRejectsNonRegularFile(t *testing.T) {
+	targetPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(targetPath, ".allowed_signers"), 0o755); err != nil {
+		t.Fatalf("Mkdir .allowed_signers: %v", err)
+	}
+
+	err := configureRepoLocalAllowedSigners("kb", targetPath, slog.Default())
+	if err == nil {
+		t.Fatal("configureRepoLocalAllowedSigners() returned nil, want non-regular file error")
+	}
+	if !strings.Contains(err.Error(), "must be a regular file") {
+		t.Fatalf("error = %v, want regular-file message", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -49,6 +50,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		UsageRole:       "delegate",
 		UsageTaskName:   "spec-probe",
 		SystemPrompt:    "custom prompt",
+		PromptMode:      agentctx.PromptModeTask,
 	}
 
 	got := compileLoopAgentRequest(req)
@@ -78,6 +80,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	}
 	if got.SystemPrompt != "custom prompt" {
 		t.Fatalf("SystemPrompt = %q", got.SystemPrompt)
+	}
+	if got.PromptMode != agentctx.PromptModeTask {
+		t.Fatalf("PromptMode = %q, want task", got.PromptMode)
 	}
 
 	got.AllowedTools[0] = "changed"

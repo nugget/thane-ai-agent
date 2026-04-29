@@ -301,8 +301,33 @@ func (a *App) initChannels(s *newState) error {
 			roots := sortedDocumentRootNames(documentRoots)
 			attrs := append([]slog.Attr{slog.Any("roots", roots)}, documentRootPolicyAttrs(docOptions, roots)...)
 			a.logger.LogAttrs(context.Background(), slog.LevelInfo, "document index enabled", attrs...)
+
+			// Close the verification bypass paths surfaced by #788:
+			// the model's file tools and core context provider read raw
+			// filesystem paths that may fall inside a managed root.
+			// Route those through the store's verification policies.
+			// Paths outside any managed root are no-ops inside VerifyPath,
+			// so non-managed workspaces keep their existing behavior.
+			if ft := a.loop.Tools().FileTools(); ft != nil {
+				ft.SetPathVerifier(docStore)
+			}
+			a.loop.UseInjectFileVerifier(docStore.VerifyPath)
+			if err := a.verifyStartupReads(s.ctx, docStore, s.resolvedInjectFiles); err != nil {
+				return err
+			}
 		}
 	}
+
+	var talentVerifier func(context.Context, string, string) error
+	if a.documentStore != nil {
+		talentVerifier = a.documentStore.VerifyPath
+	}
+	parsedTalents, err := a.loadTalents(s.ctx, talentVerifier)
+	if err != nil {
+		return err
+	}
+	s.parsedTalents = parsedTalents
+	a.loop.ConfigureCapabilityWiring(agent.CapabilityWiring{ParsedTalents: parsedTalents})
 
 	// --- Temp file store ---
 	// Provides create_temp_file tool for orchestrator-delegate data passing.

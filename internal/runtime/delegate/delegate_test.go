@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -164,6 +165,12 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	}
 	if captured.SystemPrompt != "" {
 		t.Fatalf("SystemPrompt = %q, want loop-built prompt", captured.SystemPrompt)
+	}
+	if captured.PromptMode != agentctx.PromptModeTask {
+		t.Fatalf("PromptMode = %q, want task", captured.PromptMode)
+	}
+	if !captured.SuppressAlwaysContext {
+		t.Fatal("SuppressAlwaysContext = false, want true for task-mode delegate")
 	}
 	if len(captured.Messages) != 1 || !strings.Contains(captured.Messages[0].Content, "Check the office light") || !strings.Contains(captured.Messages[0].Content, "Be concise") {
 		t.Fatalf("Messages = %#v", captured.Messages)
@@ -515,6 +522,58 @@ func TestNowToolHandler_RoutesToSyncPath(t *testing.T) {
 	}
 	if !strings.Contains(result, "answer") {
 		t.Fatalf("expected delegate content in result, got: %s", result)
+	}
+}
+
+func TestNowToolHandler_ContextModeFull(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "answer",
+			Model:   "test-model",
+		},
+	}
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
+		"task":         "Inspect the continuity-sensitive issue.",
+		"context_mode": "full",
+	})
+	if err != nil {
+		t.Fatalf("NowToolHandler error: %v", err)
+	}
+	if !strings.Contains(result, "[Delegate SUCCEEDED:") {
+		t.Fatalf("expected SUCCESS header, got: %s", result)
+	}
+	if captured.PromptMode != agentctx.PromptModeFull {
+		t.Fatalf("PromptMode = %q, want full", captured.PromptMode)
+	}
+	if captured.SuppressAlwaysContext {
+		t.Fatal("SuppressAlwaysContext = true, want false for full-context delegate")
+	}
+}
+
+func TestNowToolHandler_InvalidContextMode(t *testing.T) {
+	t.Parallel()
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(&mockLoopRunner{}, looppkg.NewRegistry())
+
+	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
+		"task":         "Do something.",
+		"context_mode": "everything",
+	})
+	if err != nil {
+		t.Fatalf("NowToolHandler error: %v", err)
+	}
+	if !strings.Contains(result, "context_mode must be one of [task, full]") {
+		t.Fatalf("unexpected result: %s", result)
 	}
 }
 

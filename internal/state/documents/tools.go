@@ -97,7 +97,7 @@ func (t *Tools) Read(ctx context.Context, args RefArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(doc)
+	return marshalToolResult(toModelDocumentRecord(doc, nowUTC()))
 }
 
 // Roots returns summaries of the indexed document roots.
@@ -109,8 +109,9 @@ func (t *Tools) Roots(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	now := nowUTC()
 	return marshalToolResult(map[string]any{
-		"roots": roots,
+		"roots": modelRootSummaries(roots, now),
 	})
 }
 
@@ -126,7 +127,7 @@ func (t *Tools) Browse(ctx context.Context, args BrowseArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelBrowseResult(result, nowUTC()))
 }
 
 // Search returns compact summaries for documents matching the structured filters.
@@ -165,20 +166,7 @@ func (t *Tools) Search(ctx context.Context, args SearchArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(map[string]any{
-		"filters": map[string]any{
-			"root":             args.Root,
-			"path_prefix":      args.PathPrefix,
-			"query":            args.Query,
-			"tags":             args.Tags,
-			"frontmatter":      args.Frontmatter,
-			"frontmatter_keys": args.FrontmatterKeys,
-			"modified_after":   args.ModifiedAfter,
-			"modified_before":  args.ModifiedBefore,
-			"limit":            query.Limit,
-		},
-		"results": results,
-	})
+	return marshalToolResult(toModelSearchResult(args, query, results, now))
 }
 
 // Outline returns the heading tree for one indexed document.
@@ -226,11 +214,7 @@ func (t *Tools) Values(ctx context.Context, args ValuesArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(map[string]any{
-		"root":   args.Root,
-		"key":    args.Key,
-		"values": values,
-	})
+	return marshalToolResult(toModelValuesResult(args.Root, args.Key, values, nowUTC()))
 }
 
 // Links returns outgoing links, backlinks, or both for one indexed document.
@@ -251,7 +235,7 @@ func (t *Tools) Links(ctx context.Context, args LinksArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(links)
+	return marshalToolResult(toModelLinksResult(links, nowUTC()))
 }
 
 // Write creates or replaces one managed document.
@@ -266,7 +250,7 @@ func (t *Tools) Write(ctx context.Context, args WriteArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelMutationResult(result, nowUTC()))
 }
 
 // Edit applies one structured edit to a managed document.
@@ -281,7 +265,7 @@ func (t *Tools) Edit(ctx context.Context, args EditArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelMutationResult(result, nowUTC()))
 }
 
 // JournalUpdate appends one journal-window entry to a managed document.
@@ -296,7 +280,7 @@ func (t *Tools) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (stri
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelMutationResult(result, nowUTC()))
 }
 
 // Delete removes one managed document.
@@ -311,7 +295,7 @@ func (t *Tools) Delete(ctx context.Context, args DeleteArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelDeleteResult(result, nowUTC()))
 }
 
 // Move relocates one managed document to a new semantic ref.
@@ -329,7 +313,7 @@ func (t *Tools) Move(ctx context.Context, args MoveArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelMoveResult(result, nowUTC()))
 }
 
 // Copy clones one managed document to a new semantic ref.
@@ -347,7 +331,7 @@ func (t *Tools) Copy(ctx context.Context, args CopyArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelCopyResult(result, nowUTC()))
 }
 
 // CopySection copies one section into another managed document.
@@ -368,7 +352,7 @@ func (t *Tools) CopySection(ctx context.Context, args SectionTransferArgs) (stri
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelSectionTransferResult(result, nowUTC()))
 }
 
 // MoveSection moves one section into another managed document.
@@ -389,7 +373,7 @@ func (t *Tools) MoveSection(ctx context.Context, args SectionTransferArgs) (stri
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(result)
+	return marshalToolResult(toModelSectionTransferResult(result, nowUTC()))
 }
 
 func marshalToolResult(v any) (string, error) {

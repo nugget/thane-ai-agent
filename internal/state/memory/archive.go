@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
@@ -2573,10 +2574,7 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 // ShortID safely truncates an ID to 8 characters for display.
 // Returns the full string if shorter than 8 characters.
 func ShortID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
+	return promptfmt.ShortIDPrefix(id)
 }
 
 func nullString(s string) any {
