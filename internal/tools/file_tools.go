@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 )
 
@@ -635,6 +636,7 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 	pathList := strings.Split(paths, ",")
 
 	var results []string
+	now := time.Now()
 	for _, p := range pathList {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -665,8 +667,8 @@ func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
 		}
 
 		results = append(results, fmt.Sprintf(
-			"%s: type=%s size=%s permissions=%s modified=%s",
-			p, kind, humanSize(info.Size()), info.Mode().Perm(), info.ModTime().Format(time.RFC3339),
+			"%s: type=%s size=%s permissions=%s modified_delta=%s",
+			p, kind, humanSize(info.Size()), info.Mode().Perm(), promptfmt.FormatDeltaOnly(info.ModTime(), now),
 		))
 	}
 

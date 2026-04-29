@@ -1376,9 +1376,8 @@ func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder,
 
 	// Inject delta-relative metadata from git history.
 	if hist, err := l.provenanceStore.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
-		ago := time.Since(hist.LastModified).Truncate(time.Second)
-		sb.WriteString(fmt.Sprintf("(updated %s ago by %s, revision %d)\n",
-			formatDeltaDuration(ago), hist.LastMessage, hist.RevisionCount))
+		sb.WriteString(fmt.Sprintf("(updated %s by %s, revision %d)\n",
+			promptfmt.FormatDeltaOnly(hist.LastModified, time.Now()), hist.LastMessage, hist.RevisionCount))
 	}
 
 	sb.WriteString("\n")
@@ -1389,27 +1388,6 @@ func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder,
 		sb.WriteString(content)
 	}
 	seal()
-}
-
-// formatDeltaDuration formats a duration as a human-readable delta
-// string (e.g., "3h", "2d", "45m"). Uses the largest natural unit.
-func formatDeltaDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", max(int(d.Seconds()), 1))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		m := int(d.Minutes()) % 60
-		if m == 0 {
-			return fmt.Sprintf("%dh", h)
-		}
-		return fmt.Sprintf("%dh%dm", h, m)
-	default:
-		days := int(d.Hours()) / 24
-		return fmt.Sprintf("%dd", days)
-	}
 }
 
 // generateRequestID returns a human-scannable identifier for a single

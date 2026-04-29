@@ -67,6 +67,9 @@ needs a strict fresh tool scope.
 | `list_context_entities` | List current watchlist subscriptions (scoped and always-visible). |
 | `remove_context_entity` | Remove a watched entity or a scoped subscription. |
 
+Subscription expiry is reported as `expires_delta`, not a raw timestamp,
+so the model does not need to do clock arithmetic.
+
 ## `ha` / `homeassistant` — Home Assistant state and control
 
 | Tool | Description |
@@ -183,6 +186,9 @@ being reimplemented in each loop prompt.
 |------|-------------|
 | `owner_contact` | Return the runtime owner identity. Protected tag. |
 
+Owner channel activity recency is reported with delta fields such as
+`last_active_delta`.
+
 ## `files` — workspace filesystem access
 
 | Tool | Description |
@@ -196,6 +202,8 @@ being reimplemented in each loop prompt.
 | `file_stat` | Get file metadata. |
 | `file_tree` | Render a directory tree. |
 | `create_temp_file` | Create a temp file with a labelled path. |
+
+`file_stat` reports modification recency as `modified_delta`.
 
 ## `shell` — host command execution
 
@@ -233,6 +241,9 @@ being reimplemented in each loop prompt.
 | `attachment_search` | Semantic or tag search over attachment descriptions. |
 | `attachment_describe` | Produce/refresh a vision description for an attachment. |
 
+Attachment list and search results report arrival recency as
+`received_delta`.
+
 ## `forge` — GitHub/code collaboration
 
 | Tool | Description |
@@ -262,6 +273,8 @@ being reimplemented in each loop prompt.
 | `schedule_task` | Schedule a future task. |
 | `list_tasks` | List scheduled tasks. |
 | `cancel_task` | Cancel a scheduled task. |
+
+Task next-run values include a model-facing delta.
 
 ## `thane_*` family — intent-shaped front door for "do work"
 

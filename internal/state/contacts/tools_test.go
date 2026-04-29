@@ -995,6 +995,9 @@ func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
 	if !strings.Contains(result, "\"owu\"") || !strings.Contains(result, "\"signal\"") {
 		t.Fatalf("OwnerContact() = %q, want both owner channels", result)
 	}
+	if !strings.Contains(result, "last_active_delta") || strings.Contains(result, "last_active\"") {
+		t.Fatalf("OwnerContact() = %q, want delta-oriented owner channel activity", result)
+	}
 }
 
 func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -383,7 +384,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 		return "", fmt.Errorf("background delegation requires a target conversation")
 	}
 
-	loopName := "delegate-" + prep.id[:8]
+	loopName := "delegate-" + promptfmt.ShortIDPrefix(prep.id)
 	loopMaxDuration := prep.maxDuration + 5*time.Second
 	if loopMaxDuration <= 0 {
 		loopMaxDuration = prep.maxDuration
@@ -440,7 +441,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 		return nil, err
 	}
 
-	loopName := "delegate-" + prep.id[:8]
+	loopName := "delegate-" + promptfmt.ShortIDPrefix(prep.id)
 	loopMaxDuration := prep.maxDuration + 5*time.Second
 	if loopMaxDuration <= 0 {
 		loopMaxDuration = prep.maxDuration
@@ -671,7 +672,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 
 	delegateID, _ := uuid.NewV7()
 	did := delegateID.String()
-	conversationID := "delegate-" + did[:8]
+	conversationID := "delegate-" + promptfmt.ShortIDPrefix(did)
 
 	log := logging.Logger(ctx).With(
 		"subsystem", logging.SubsystemDelegate,

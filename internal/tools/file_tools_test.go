@@ -597,6 +597,9 @@ func TestFileTools_Stat(t *testing.T) {
 			if !strings.Contains(result, tt.wantMatch) {
 				t.Errorf("Stat() result missing %q:\n%s", tt.wantMatch, result)
 			}
+			if strings.Contains(result, "type=") && !strings.Contains(result, "modified_delta=") {
+				t.Errorf("Stat() result missing modified_delta:\n%s", result)
+			}
 		})
 	}
 

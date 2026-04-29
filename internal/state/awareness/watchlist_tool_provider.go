@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -205,6 +206,7 @@ func (w *WatchlistTools) handleListContextEntities(_ context.Context, args map[s
 		return "", fmt.Errorf("list watchlist subscriptions: %w", err)
 	}
 
+	now := time.Now()
 	items := make([]map[string]any, 0, len(subs))
 	for _, sub := range subs {
 		if entityID != "" && sub.EntityID != entityID {
@@ -219,7 +221,7 @@ func (w *WatchlistTools) handleListContextEntities(_ context.Context, args map[s
 			item["history"] = append([]int(nil), sub.History...)
 		}
 		if sub.ExpiresAt != nil {
-			item["expires_at"] = sub.ExpiresAt.Format(time.RFC3339)
+			item["expires_delta"] = promptfmt.FormatDeltaOnly(*sub.ExpiresAt, now)
 		}
 		items = append(items, item)
 	}

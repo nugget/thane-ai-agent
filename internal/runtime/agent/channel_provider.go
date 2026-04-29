@@ -51,12 +51,12 @@ type RelatedContact struct {
 }
 
 // InteractionRef summarizes the contact's most recent interaction for
-// temporal context. AgoSeconds is negative for past interactions.
+// temporal context. Ago is a signed-second delta such as "-3600s".
 type InteractionRef struct {
-	AgoSeconds int64    `json:"ago_seconds"`
-	Channel    string   `json:"channel,omitempty"`
-	SessionID  string   `json:"session_id,omitempty"`
-	Topics     []string `json:"topics,omitempty"`
+	Ago       string   `json:"ago"`
+	Channel   string   `json:"channel,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+	Topics    []string `json:"topics,omitempty"`
 }
 
 // ContactLookup resolves contact identity into trust-gated profile and
