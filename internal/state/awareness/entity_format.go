@@ -11,9 +11,11 @@ import (
 )
 
 // formatEntityContext returns a context line for an entity, choosing
-// the format based on the entity domain. Rich domains (weather, climate,
-// light) emit compact JSON with relevant attributes following #458
-// conventions. Default domains use the original markdown line format.
+// the format based on the entity domain. Every domain emits compact
+// JSON: rich domains (weather, climate, light, cover, lock,
+// media_player, fan, vacuum, update) include domain-relevant
+// attributes following #458 conventions, and default domains use the
+// generic entity shape (defaultContext + promptfmt.MarshalCompact).
 //
 // Sentinel states (unavailable, unknown) are intercepted before domain
 // dispatch and rendered as a structured availability payload so the

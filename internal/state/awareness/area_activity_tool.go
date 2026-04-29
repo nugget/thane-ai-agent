@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -110,8 +111,12 @@ func (a *AreaActivityTools) handleAreaActivity(ctx context.Context, args map[str
 }
 
 // optionalIntArg pulls an optional integer argument out of the
-// model-supplied args map. Returns nil when the key is absent,
-// errors when the key is present but not an integer.
+// model-supplied args map. Returns nil when the key is absent or
+// JSON null. Errors when the value is not numeric, when a float
+// carries a fractional part (3600.5 is a mistake, not a truncatable
+// value), when the value falls outside int range, or when negative
+// — every callsite using this helper rejects negatives, so reject
+// them once here.
 func optionalIntArg(args map[string]any, key string) (*int, error) {
 	raw, ok := args[key]
 	if !ok || raw == nil {
@@ -119,11 +124,32 @@ func optionalIntArg(args map[string]any, key string) (*int, error) {
 	}
 	switch v := raw.(type) {
 	case int:
+		if v < 0 {
+			return nil, fmt.Errorf("%s must be >= 0", key)
+		}
 		return &v, nil
 	case int64:
+		if v < math.MinInt || v > math.MaxInt {
+			return nil, fmt.Errorf("%s out of range", key)
+		}
+		if v < 0 {
+			return nil, fmt.Errorf("%s must be >= 0", key)
+		}
 		x := int(v)
 		return &x, nil
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("%s must be a finite number", key)
+		}
+		if v != math.Trunc(v) {
+			return nil, fmt.Errorf("%s must be a whole number", key)
+		}
+		if v < math.MinInt || v > math.MaxInt {
+			return nil, fmt.Errorf("%s out of range", key)
+		}
+		if v < 0 {
+			return nil, fmt.Errorf("%s must be >= 0", key)
+		}
 		x := int(v)
 		return &x, nil
 	}

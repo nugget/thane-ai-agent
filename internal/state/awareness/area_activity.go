@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,8 +68,9 @@ var ambientNumericClasses = map[string]bool{
 // logbook events, buckets them by relevance, and returns a single
 // JSON object describing the area for model consumption. Caps and
 // orderings follow the model-facing-context conventions: most
-// actionable items first, deterministic sort, explicit truncation
-// markers instead of silent drops.
+// actionable items first, deterministic sort, and bounded output
+// with explicit *_truncated_count fields whenever a bucket or the
+// timeline gets capped.
 func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req AreaActivityRequest, now time.Time) (string, error) {
 	if client == nil {
 		return "", fmt.Errorf("area_activity: client is required")
@@ -132,7 +132,9 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 	anomalies := classifier.anomalies
 	active := classifier.active
 	recent := classifier.recentChanges
+	recentTruncated := 0
 	if len(recent) > areaActivityMaxRecentChanges {
+		recentTruncated = len(recent) - areaActivityMaxRecentChanges
 		recent = recent[:areaActivityMaxRecentChanges]
 	}
 	ambient := classifier.ambient
@@ -143,7 +145,7 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 		stable = stable[:maxStable]
 	}
 
-	timeline, err := buildAreaTimeline(ctx, client, members, cutoff, now)
+	timeline, timelineTruncated, err := buildAreaTimeline(ctx, client, members, cutoff, now)
 	if err != nil {
 		return "", fmt.Errorf("area_activity: build timeline: %w", err)
 	}
@@ -160,11 +162,17 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 		"ambient":        ambient,
 		"stable":         stable,
 	}
+	if recentTruncated > 0 {
+		payload["recent_changes_truncated_count"] = recentTruncated
+	}
 	if stableTruncated > 0 {
 		payload["stable_truncated_count"] = stableTruncated
 	}
 	if len(timeline) > 0 {
 		payload["timeline"] = timeline
+	}
+	if timelineTruncated > 0 {
+		payload["timeline_truncated_count"] = timelineTruncated
 	}
 
 	return promptfmt.MarshalCompact(payload), nil
@@ -416,82 +424,4 @@ func registryDeviceClass(entry homeassistant.EntityRegistryEntry, state *homeass
 		return ""
 	}
 	return attrString(state.Attributes, "device_class")
-}
-
-// buildAreaTimeline fetches the logbook for the member entity_ids
-// and projects a compact event stream. Filters out noisy numeric
-// sensor transitions (a temperature reading drifting up and down is
-// not an "event") while keeping discrete-state and alarm-class
-// transitions. Newest first, capped.
-func buildAreaTimeline(
-	ctx context.Context,
-	client AreaActivityClient,
-	members []areaMember,
-	cutoff, now time.Time,
-) ([]map[string]any, error) {
-	if len(members) == 0 {
-		return nil, nil
-	}
-	entityIDs := make([]string, 0, len(members))
-	classByEntity := make(map[string]string, len(members))
-	for _, m := range members {
-		entityIDs = append(entityIDs, m.entry.EntityID)
-		classByEntity[m.entry.EntityID] = registryDeviceClass(m.entry, nil)
-	}
-
-	events, err := client.GetLogbookEvents(ctx, cutoff, now, entityIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	type tlEntry struct {
-		when   time.Time
-		entity string
-		state  string
-	}
-
-	kept := make([]tlEntry, 0, len(events))
-	for _, ev := range events {
-		when := ev.WhenTime()
-		if when.IsZero() || isSentinelState(ev.State) {
-			continue
-		}
-		if !timelineEventInteresting(ev, classByEntity[ev.EntityID]) {
-			continue
-		}
-		kept = append(kept, tlEntry{when: when, entity: ev.EntityID, state: ev.State})
-	}
-
-	// Newest first by actual timestamp — string comparison on delta
-	// strings does not give chronological order.
-	sort.SliceStable(kept, func(i, j int) bool {
-		return kept[i].when.After(kept[j].when)
-	})
-	if len(kept) > areaActivityMaxTimelineEvents {
-		kept = kept[:areaActivityMaxTimelineEvents]
-	}
-
-	out := make([]map[string]any, 0, len(kept))
-	for _, e := range kept {
-		out = append(out, map[string]any{
-			"t":      promptfmt.FormatDeltaOnly(e.when, now),
-			"entity": e.entity,
-			"state":  e.state,
-		})
-	}
-	return out, nil
-}
-
-// timelineEventInteresting filters numeric-sensor noise. Discrete
-// state transitions (light on/off, door open/closed, motion clear/
-// detected) are always kept. Numeric sensor transitions are only
-// kept for alarm-class device_classes.
-func timelineEventInteresting(ev homeassistant.LogbookEntry, deviceClass string) bool {
-	if ev.Domain != "sensor" {
-		return true
-	}
-	if _, err := strconv.ParseFloat(ev.State, 64); err != nil {
-		return true // non-numeric sensor transitions are interesting
-	}
-	return alarmSecurityClasses[deviceClass]
 }

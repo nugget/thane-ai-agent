@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -195,10 +196,17 @@ func TestComputeAreaActivity_TimelineFiltersNumericNoiseKeepsAlarms(t *testing.T
 			t.Errorf("timeline contains non-motion entry: %v", obj)
 		}
 	}
-	// Newest first.
+	// Newest first — and translated through semanticState so the
+	// motion-off entry reads as "clear", not raw "off". Timeline
+	// vocabulary matches the bucketed-entity vocabulary for the
+	// same device_class.
 	first := timeline[0].(map[string]any)
-	if first["state"] != "off" {
-		t.Errorf("first timeline entry should be the most recent (off), got %v", first["state"])
+	if first["state"] != "clear" {
+		t.Errorf("first timeline state = %v, want clear (motion off translated)", first["state"])
+	}
+	second := timeline[1].(map[string]any)
+	if second["state"] != "detected" {
+		t.Errorf("second timeline state = %v, want detected (motion on translated)", second["state"])
 	}
 }
 
@@ -268,3 +276,85 @@ func TestComputeAreaActivity_AreasFetchErrorPropagates(t *testing.T) {
 		t.Fatal("expected error when area fetch fails")
 	}
 }
+
+func TestComputeAreaActivity_RecentChangesTruncatedCount(t *testing.T) {
+	now := testNow
+	areas := []homeassistant.Area{{AreaID: "z", Name: "Zone"}}
+	entities := make([]homeassistant.EntityRegistryEntry, 0, 12)
+	states := make([]homeassistant.State, 0, 12)
+	for i := 0; i < 12; i++ {
+		eid := "switch.r" + strconv.Itoa(i)
+		entities = append(entities, homeassistant.EntityRegistryEntry{EntityID: eid, AreaID: "z"})
+		// Each switch is "off" but changed within the lookback window —
+		// they all land in recent_changes, exceeding the cap of 10.
+		states = append(states, homeassistant.State{
+			EntityID:    eid,
+			State:       "off",
+			LastChanged: now.Add(-time.Duration(i+1) * time.Minute),
+		})
+	}
+	client := &fakeAreaClient{areas: areas, entities: entities, states: states}
+
+	got, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "Zone"}, now)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var parsed map[string]any
+	_ = json.Unmarshal([]byte(got), &parsed)
+
+	recent, _ := parsed["recent_changes"].([]any)
+	if len(recent) != 10 {
+		t.Errorf("recent_changes len = %d, want 10 (cap)", len(recent))
+	}
+	if parsed["recent_changes_truncated_count"] != float64(2) {
+		t.Errorf("recent_changes_truncated_count = %v, want 2", parsed["recent_changes_truncated_count"])
+	}
+}
+
+func TestOptionalIntArg_Validation(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      map[string]any
+		key       string
+		wantValue *int
+		wantErr   bool
+	}{
+		{name: "missing returns nil", args: map[string]any{}, key: "x"},
+		{name: "json null returns nil", args: map[string]any{"x": nil}, key: "x"},
+		{name: "valid float64 whole number", args: map[string]any{"x": float64(3600)}, key: "x", wantValue: ptrInt(3600)},
+		{name: "valid int", args: map[string]any{"x": 3600}, key: "x", wantValue: ptrInt(3600)},
+		{name: "fractional float rejected", args: map[string]any{"x": 3600.5}, key: "x", wantErr: true},
+		{name: "NaN rejected", args: map[string]any{"x": math.NaN()}, key: "x", wantErr: true},
+		{name: "Inf rejected", args: map[string]any{"x": math.Inf(1)}, key: "x", wantErr: true},
+		{name: "negative rejected", args: map[string]any{"x": float64(-1)}, key: "x", wantErr: true},
+		{name: "negative int rejected", args: map[string]any{"x": -5}, key: "x", wantErr: true},
+		{name: "zero allowed", args: map[string]any{"x": 0}, key: "x", wantValue: ptrInt(0)},
+		{name: "string rejected", args: map[string]any{"x": "3600"}, key: "x", wantErr: true},
+		{name: "out-of-range float rejected", args: map[string]any{"x": float64(1e30)}, key: "x", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := optionalIntArg(tc.args, tc.key)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got value=%v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantValue == nil {
+				if got != nil {
+					t.Errorf("got %v, want nil", *got)
+				}
+				return
+			}
+			if got == nil || *got != *tc.wantValue {
+				t.Errorf("got %v, want %d", got, *tc.wantValue)
+			}
+		})
+	}
+}
+
+func ptrInt(v int) *int { return &v }
