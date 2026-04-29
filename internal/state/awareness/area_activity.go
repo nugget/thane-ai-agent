@@ -145,7 +145,7 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 		stable = stable[:maxStable]
 	}
 
-	timeline, timelineTruncated, err := buildAreaTimeline(ctx, client, members, cutoff, now)
+	timeline, timelineTruncated, err := buildAreaTimeline(ctx, client, members, statesByID, cutoff, now)
 	if err != nil {
 		return "", fmt.Errorf("area_activity: build timeline: %w", err)
 	}

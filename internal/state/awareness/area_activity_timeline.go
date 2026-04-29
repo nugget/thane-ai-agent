@@ -20,10 +20,18 @@ import (
 // "open"/"closed" in the other). Newest first; truncated count is
 // returned separately so the caller can mark it explicitly in the
 // payload rather than dropping silently.
+//
+// statesByID is consulted for the device_class fallback when the
+// entity registry doesn't carry one — some integrations expose the
+// device_class only as a live-state attribute. Without that
+// fallback the timeline would silently emit raw on/off for those
+// entities while the buckets translated them, breaking the "one
+// vocabulary" guarantee.
 func buildAreaTimeline(
 	ctx context.Context,
 	client AreaActivityClient,
 	members []areaMember,
+	statesByID map[string]*homeassistant.State,
 	cutoff, now time.Time,
 ) ([]map[string]any, int, error) {
 	if len(members) == 0 {
@@ -33,7 +41,7 @@ func buildAreaTimeline(
 	classByEntity := make(map[string]string, len(members))
 	for _, m := range members {
 		entityIDs = append(entityIDs, m.entry.EntityID)
-		classByEntity[m.entry.EntityID] = registryDeviceClass(m.entry, nil)
+		classByEntity[m.entry.EntityID] = registryDeviceClass(m.entry, statesByID[m.entry.EntityID])
 	}
 
 	events, err := client.GetLogbookEvents(ctx, cutoff, now, entityIDs)

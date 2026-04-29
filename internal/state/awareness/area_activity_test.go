@@ -277,6 +277,53 @@ func TestComputeAreaActivity_AreasFetchErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestComputeAreaActivity_TimelineUsesStateAttributeDeviceClass(t *testing.T) {
+	// Some integrations expose device_class only as a live-state
+	// attribute, not on the entity registry row. The timeline must
+	// still translate via semanticState in that case so its
+	// vocabulary stays consistent with the bucketed entity output.
+	now := testNow
+	areas := []homeassistant.Area{{AreaID: "kitchen", Name: "Kitchen"}}
+	entities := []homeassistant.EntityRegistryEntry{
+		// Registry has no device_class set.
+		{EntityID: "binary_sensor.kitchen_door", AreaID: "kitchen"},
+	}
+	states := []homeassistant.State{
+		// State carries the device_class instead.
+		{
+			EntityID:    "binary_sensor.kitchen_door",
+			State:       "off",
+			LastChanged: now.Add(-30 * time.Minute),
+			Attributes:  map[string]any{"device_class": "door"},
+		},
+	}
+	logbook := []homeassistant.LogbookEntry{
+		{When: float64(now.Add(-10 * time.Minute).Unix()), EntityID: "binary_sensor.kitchen_door", State: "on", Domain: "binary_sensor"},
+		{When: float64(now.Add(-2 * time.Minute).Unix()), EntityID: "binary_sensor.kitchen_door", State: "off", Domain: "binary_sensor"},
+	}
+
+	client := &fakeAreaClient{areas: areas, entities: entities, states: states, logbook: logbook}
+	got, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "Kitchen"}, now)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var parsed map[string]any
+	_ = json.Unmarshal([]byte(got), &parsed)
+
+	timeline, _ := parsed["timeline"].([]any)
+	if len(timeline) != 2 {
+		t.Fatalf("timeline len = %d, want 2: %v", len(timeline), timeline)
+	}
+	first := timeline[0].(map[string]any)
+	if first["state"] != "closed" {
+		t.Errorf("first timeline state = %v, want closed (door off translated even though device_class is only on the live state)", first["state"])
+	}
+	second := timeline[1].(map[string]any)
+	if second["state"] != "open" {
+		t.Errorf("second timeline state = %v, want open (door on translated)", second["state"])
+	}
+}
+
 func TestComputeAreaActivity_RecentChangesTruncatedCount(t *testing.T) {
 	now := testNow
 	areas := []homeassistant.Area{{AreaID: "z", Name: "Zone"}}

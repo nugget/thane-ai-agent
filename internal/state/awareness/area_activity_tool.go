@@ -129,7 +129,10 @@ func optionalIntArg(args map[string]any, key string) (*int, error) {
 		}
 		return &v, nil
 	case int64:
-		if v < math.MinInt || v > math.MaxInt {
+		// On 64-bit platforms int == int64 so the bounds check is a
+		// no-op; on 32-bit it correctly rejects values that overflow
+		// int. Explicit casts make the comparison's type unambiguous.
+		if v < int64(math.MinInt) || v > int64(math.MaxInt) {
 			return nil, fmt.Errorf("%s out of range", key)
 		}
 		if v < 0 {
@@ -144,7 +147,11 @@ func optionalIntArg(args map[string]any, key string) (*int, error) {
 		if v != math.Trunc(v) {
 			return nil, fmt.Errorf("%s must be a whole number", key)
 		}
-		if v < math.MinInt || v > math.MaxInt {
+		// Explicit float64 casts on the int bounds — float64 has a
+		// 53-bit mantissa so very large ints lose precision, but the
+		// comparison still correctly rejects values that would
+		// overflow int when converted.
+		if v < float64(math.MinInt) || v > float64(math.MaxInt) {
 			return nil, fmt.Errorf("%s out of range", key)
 		}
 		if v < 0 {
