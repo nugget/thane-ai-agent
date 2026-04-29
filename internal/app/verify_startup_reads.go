@@ -61,10 +61,13 @@ func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, in
 	return nil
 }
 
-// listTalentFiles returns absolute paths of .md files in dir, sorted
-// for deterministic verification order. Returns nil (no error) when
-// dir does not exist — matches [talents.Loader] which silently
-// ignores a missing talents directory.
+// listTalentFiles returns paths of .md files in dir (joined with dir
+// as-is, so the result is absolute when dir is absolute and relative
+// when dir is relative — [documents.Store.VerifyPath] handles both
+// via [filepath.Abs]). Sorted for deterministic verification order.
+// Returns nil (no error) when dir does not exist, matching
+// [talents.Loader] which silently ignores a missing talents
+// directory.
 func listTalentFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

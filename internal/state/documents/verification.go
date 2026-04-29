@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -82,7 +83,7 @@ func (s *Store) rootRefForPath(path string) (root string, relPath string, ok boo
 	if err != nil {
 		return "", "", false, fmt.Errorf("resolve document path for verification: %w", err)
 	}
-	targetResolved, err := filepath.EvalSymlinks(targetAbs)
+	targetResolved, err := evalSymlinksAllowingMissing(targetAbs)
 	if err != nil {
 		return "", "", false, fmt.Errorf("resolve document path for verification: %w", err)
 	}
@@ -113,6 +114,55 @@ func (s *Store) rootRefForPath(path string) (root string, relPath string, ok boo
 		return "", "", false, fmt.Errorf("compute managed document ref: %w", err)
 	}
 	return candidates[0].root, filepath.ToSlash(filepath.Clean(rel)), true, nil
+}
+
+// evalSymlinksAllowingMissing resolves symlinks in path the same way
+// [filepath.EvalSymlinks] does, but tolerates a missing leaf (or an
+// arbitrarily long missing tail) by walking up to the longest
+// existing prefix, resolving symlinks there, then re-joining the
+// non-existent components verbatim.
+//
+// Verifier callers exercise this on three legitimate "file does not
+// exist" paths:
+//   - file-tool writes that create a new file inside a managed root
+//   - inject-files configured but not yet present on disk
+//   - edits where the dir tree leading up to the file exists but the
+//     file itself was just removed
+//
+// Returning an error in those cases would either make required-mode
+// startup brittle (any missing inject-file becomes fatal for a reason
+// unrelated to signing) or silently disable verification for
+// new-file writes. Both are worse than carrying the abstract path
+// through the rest of the lookup, which still correctly classifies
+// the path as in-root or out-of-root via prefix containment.
+func evalSymlinksAllowingMissing(path string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	// Walk up to the longest existing ancestor.
+	current := path
+	var trailing []string
+	for {
+		parent := filepath.Dir(current)
+		trailing = append([]string{filepath.Base(current)}, trailing...)
+		if parent == current {
+			// Reached the root without finding an existing
+			// ancestor — return the abstract abs path; downstream
+			// prefix-containment will classify it as outside any
+			// managed root.
+			return filepath.Clean(path), nil
+		}
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, trailing...)...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		current = parent
+	}
 }
 
 func (s *Store) handleVerificationFailure(root, relPath, consumer string, result SignatureVerification) error {

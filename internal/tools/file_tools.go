@@ -58,9 +58,13 @@ var skipDirs = map[string]bool{
 // Verifier is consulted in [FileTools.Read], [FileTools.Write], and
 // [FileTools.Edit] so a managed root with `verify_signatures: required`
 // blocks the model from bypassing the doc store via raw filesystem
-// access. Directory-walk tools (List, Search, Grep, Tree, Stat)
-// currently surface metadata only and are not gated; see
-// docs/understanding/document-roots.md.
+// access. The directory-walk tools (List, Tree, Stat, Search, Grep)
+// are intentionally not gated: List/Tree/Stat/Search return only
+// path/metadata, while Grep can surface short content excerpts that
+// remain unverified. Operators relying on signature gating should
+// route trust-sensitive content through `read_file` (which goes
+// through the verifier) rather than grep results. See
+// docs/understanding/document-roots.md for the full boundary.
 type PathVerifier interface {
 	VerifyPath(ctx context.Context, path string, consumer string) error
 }

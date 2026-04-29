@@ -143,11 +143,14 @@ When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
 
 Directory-walk surfaces (`list_files`, `tree`, `stat`, `search_files`,
-`grep`) currently return metadata or may surface excerpts without
-consulting the verifier. They reveal file existence and structure but
-not signed content. If you need belt-and-suspenders coverage on grep
-content, route the read through `read_file` afterwards — that path is
-gated.
+`grep`) intentionally do not consult the verifier. `list_files`,
+`tree`, `stat`, and `search_files` return only paths and metadata.
+**`grep` is different**: it returns short content excerpts that are
+*not* verified, so under `verify_signatures: required` it can surface
+snippets from files that would be blocked by `read_file`. If a result
+matters to you, re-read it through `read_file` — that path is gated
+and will fail if the underlying content is not covered by trusted
+signed history.
 
 ## A Few Practical Guidelines
 
