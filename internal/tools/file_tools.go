@@ -58,15 +58,20 @@ var skipDirs = map[string]bool{
 // Verifier is consulted in [FileTools.Read], [FileTools.Write], and
 // [FileTools.Edit] so a managed root with `verify_signatures: required`
 // blocks the model from bypassing the doc store via raw filesystem
-// access. The directory-walk tools (List, Tree, Stat, Search, Grep)
-// are intentionally not gated: List/Tree/Stat/Search return only
+// access. Write/Edit use VerifyMutationPath rather than VerifyPath so
+// raw filesystem mutations cannot dirty signed or read-only document
+// roots after a pre-write trust check passes.
+//
+// The directory-walk tools (List, Tree, Stat, Search, Grep) are
+// intentionally not gated: List/Tree/Stat/Search return only
 // path/metadata, while Grep can surface short content excerpts that
 // remain unverified. Operators relying on signature gating should
 // route trust-sensitive content through `read_file` (which goes
-// through the verifier) rather than grep results. See
+// through VerifyPath) rather than grep results. See
 // docs/understanding/document-roots.md for the full boundary.
 type PathVerifier interface {
 	VerifyPath(ctx context.Context, path string, consumer string) error
+	VerifyMutationPath(ctx context.Context, path string, consumer string) error
 }
 
 // FileTools provides file read/write/edit capabilities within a workspace.
@@ -127,6 +132,17 @@ func (ft *FileTools) verifyPath(ctx context.Context, absPath, consumer string) e
 		return nil
 	}
 	return ft.verifier.VerifyPath(ctx, absPath, consumer)
+}
+
+// verifyMutationPath delegates raw mutation checks to the installed
+// verifier when set. Read verification asks whether the current content
+// is trusted; mutation verification asks whether this tool is allowed
+// to change the path outside the managed document writer.
+func (ft *FileTools) verifyMutationPath(ctx context.Context, absPath, consumer string) error {
+	if ft.verifier == nil {
+		return nil
+	}
+	return ft.verifier.VerifyMutationPath(ctx, absPath, consumer)
 }
 
 // resolvePath converts a relative path to an absolute path within allowed directories.
@@ -264,7 +280,7 @@ func (ft *FileTools) Write(ctx context.Context, path, content string) error {
 		return fmt.Errorf("path is read-only: %s", path)
 	}
 
-	if err := ft.verifyPath(ctx, absPath, "file_tools_write"); err != nil {
+	if err := ft.verifyMutationPath(ctx, absPath, "file_tools_write"); err != nil {
 		return err
 	}
 
@@ -292,7 +308,7 @@ func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) er
 		return fmt.Errorf("path is read-only: %s", path)
 	}
 
-	if err := ft.verifyPath(ctx, absPath, "file_tools_edit"); err != nil {
+	if err := ft.verifyMutationPath(ctx, absPath, "file_tools_edit"); err != nil {
 		return err
 	}
 

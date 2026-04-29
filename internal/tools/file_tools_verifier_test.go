@@ -12,8 +12,9 @@ import (
 // call and returns whatever err is configured (nil for trusted reads,
 // non-nil to simulate a required-policy block).
 type fakePathVerifier struct {
-	err   error
-	calls []verifyCall
+	err         error
+	mutationErr error
+	calls       []verifyCall
 }
 
 type verifyCall struct {
@@ -23,6 +24,14 @@ type verifyCall struct {
 
 func (f *fakePathVerifier) VerifyPath(_ context.Context, path string, consumer string) error {
 	f.calls = append(f.calls, verifyCall{path: path, consumer: consumer})
+	return f.err
+}
+
+func (f *fakePathVerifier) VerifyMutationPath(_ context.Context, path string, consumer string) error {
+	f.calls = append(f.calls, verifyCall{path: path, consumer: consumer})
+	if f.mutationErr != nil {
+		return f.mutationErr
+	}
 	return f.err
 }
 
@@ -89,6 +98,25 @@ func TestFileTools_Write_VerifierBlocks(t *testing.T) {
 
 	if err := ft.Write(context.Background(), "out.md", "data"); err == nil {
 		t.Fatal("Write should propagate verifier error")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("file should not have been written; stat err = %v", err)
+	}
+	if len(verifier.calls) != 1 || verifier.calls[0].consumer != "file_tools_write" {
+		t.Errorf("verifier calls = %#v, want exactly one file_tools_write", verifier.calls)
+	}
+}
+
+func TestFileTools_Write_UsesMutationVerifier(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "out.md")
+
+	ft := NewFileTools(workspace, nil)
+	verifier := &fakePathVerifier{mutationErr: errors.New("raw mutation blocked")}
+	ft.SetPathVerifier(verifier)
+
+	if err := ft.Write(context.Background(), "out.md", "data"); err == nil {
+		t.Fatal("Write should propagate mutation verifier error")
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("file should not have been written; stat err = %v", err)

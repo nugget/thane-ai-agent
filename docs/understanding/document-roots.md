@@ -126,14 +126,14 @@ The current policy fields are:
 
 Signature-required roots are the place for high-integrity authored
 knowledge, such as owner-tagged knowledge articles. When verification
-is `required`, Thane blocks the following read paths when the target
-content is not cleanly covered by trusted signed git history:
+is `required`, Thane blocks the following content paths when the
+target content is not cleanly covered by trusted signed git history:
 
 - Document store reads (`Read`, indexed browse and search surfaces)
 - Loop-declared output context
 - Tagged context articles
-- The model's `read_file`, `write_file`, and `edit_file` tools when
-  the resolved path lies inside a managed root
+- The model's `read_file` tool when the resolved path lies inside a
+  managed root
 - Startup-time inject-files (the fixed core context the agent sees on
   every turn)
 - Startup-time talents (behavioral guidance markdown loaded from the
@@ -141,6 +141,12 @@ content is not cleanly covered by trusted signed git history:
 
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
+
+The raw `write_file` and `edit_file` tools are stricter than read
+verification. They cannot mutate read-only/restricted roots, and they
+cannot mutate roots with signed git provenance; those changes must go
+through managed document tools so root writers can preserve authoring
+policy, git history, and signatures.
 
 Directory-walk surfaces (`list_files`, `tree`, `stat`, `search_files`,
 `grep`) intentionally do not consult the verifier. `list_files`,

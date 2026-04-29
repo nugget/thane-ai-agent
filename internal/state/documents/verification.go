@@ -78,6 +78,39 @@ func (s *Store) VerifyPath(ctx context.Context, path string, consumer string) er
 	return s.verifyDocumentForConsumer(ctx, root, relPath, consumer)
 }
 
+// VerifyMutationPath reports whether a raw filesystem mutation is
+// allowed for path. Paths outside configured roots are ignored.
+//
+// This is deliberately stricter than [Store.VerifyPath]. A trusted
+// file inside a signed root may be safe to read, but raw writes would
+// dirty the tree without using the root writer that signs managed
+// document mutations. Read-only/restricted roots are also blocked here
+// so file tools cannot bypass root authoring policy.
+func (s *Store) VerifyMutationPath(_ context.Context, path string, consumer string) error {
+	if s == nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	root, relPath, ok, err := s.rootRefForPath(path)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	policy := s.rootPolicy(root)
+	switch policy.Authoring {
+	case "", AuthoringManaged:
+	case AuthoringReadOnly, AuthoringRestricted:
+		return fmt.Errorf("document %s:%s blocked by authoring policy for %s: root authoring is %q", root, relPath, consumer, policy.Authoring)
+	default:
+		return fmt.Errorf("document %s:%s blocked by authoring policy for %s: unsupported authoring mode %q", root, relPath, consumer, policy.Authoring)
+	}
+	if policy.Git.Enabled && (policy.Git.SignCommits || policy.Git.VerifySignatures == VerificationRequired) {
+		return fmt.Errorf("document %s:%s blocked by mutation policy for %s: raw file mutation would bypass signed document-root provenance; use managed document tools", root, relPath, consumer)
+	}
+	return nil
+}
+
 func (s *Store) rootRefForPath(path string) (root string, relPath string, ok bool, err error) {
 	targetAbs, err := filepath.Abs(path)
 	if err != nil {

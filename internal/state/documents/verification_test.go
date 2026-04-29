@@ -130,3 +130,73 @@ func TestStoreVerifyPath_MissingFileWarnModeDoesNotBlock(t *testing.T) {
 		t.Fatalf("warn mode should not block a missing file; got %v", err)
 	}
 }
+
+func TestStoreVerifyMutationPath_BlocksSignedRootEvenWhenContentTrusted(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStoreWithOptions(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+			Git: RootGitPolicy{
+				Enabled:          true,
+				SignCommits:      true,
+				VerifySignatures: VerificationRequired,
+			},
+		},
+	}, nil, map[string]RootVerifier{
+		"kb": fakeRootVerifier{files: map[string]SignatureVerification{
+			"trusted.md": {Status: SignatureTrusted, Message: "trusted test document"},
+		}},
+	})
+	target := filepath.Join(kbDir, "trusted.md")
+	writeFile(t, target, "# Trusted\n")
+
+	if err := store.VerifyPath(context.Background(), target, "file_tools_read"); err != nil {
+		t.Fatalf("trusted read verification should pass: %v", err)
+	}
+
+	err := store.VerifyMutationPath(context.Background(), target, "file_tools_write")
+	if err == nil {
+		t.Fatal("VerifyMutationPath should block raw writes inside signed roots")
+	}
+	if !strings.Contains(err.Error(), "raw file mutation would bypass signed document-root provenance") {
+		t.Fatalf("error = %v, want signed provenance mutation block", err)
+	}
+}
+
+func TestStoreVerifyMutationPath_BlocksReadOnlyRoot(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStore(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringReadOnly,
+		},
+	}, nil)
+	target := filepath.Join(kbDir, "blocked.md")
+
+	err := store.VerifyMutationPath(context.Background(), target, "file_tools_write")
+	if err == nil {
+		t.Fatal("VerifyMutationPath should block raw writes inside read-only roots")
+	}
+	if !strings.Contains(err.Error(), `root authoring is "read_only"`) {
+		t.Fatalf("error = %v, want read_only mutation block", err)
+	}
+}
+
+func TestStoreVerifyMutationPath_AllowsUnprotectedManagedRoot(t *testing.T) {
+	t.Parallel()
+
+	store, kbDir := newPolicyStore(t, map[string]RootPolicy{
+		"kb": {
+			Indexing:  true,
+			Authoring: AuthoringManaged,
+		},
+	}, nil)
+	target := filepath.Join(kbDir, "plain.md")
+
+	if err := store.VerifyMutationPath(context.Background(), target, "file_tools_write"); err != nil {
+		t.Fatalf("unprotected managed root should allow raw file mutation: %v", err)
+	}
+}
