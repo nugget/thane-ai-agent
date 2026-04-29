@@ -301,6 +301,21 @@ func (a *App) initChannels(s *newState) error {
 			roots := sortedDocumentRootNames(documentRoots)
 			attrs := append([]slog.Attr{slog.Any("roots", roots)}, documentRootPolicyAttrs(docOptions, roots)...)
 			a.logger.LogAttrs(context.Background(), slog.LevelInfo, "document index enabled", attrs...)
+
+			// Close the verification bypass paths surfaced by #788:
+			// the model's file tools, startup inject-files, and the
+			// talents loader all read raw filesystem paths that may
+			// fall inside a managed root. Route those through the
+			// store's VerifyPath so each root's verify_signatures
+			// policy applies. Paths outside any managed root are
+			// no-ops inside VerifyPath, so non-managed workspaces
+			// keep their existing behavior.
+			if ft := a.loop.Tools().FileTools(); ft != nil {
+				ft.SetPathVerifier(docStore)
+			}
+			if err := a.verifyStartupReads(s.ctx, docStore, s.resolvedInjectFiles); err != nil {
+				return err
+			}
 		}
 	}
 

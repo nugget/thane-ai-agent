@@ -22,6 +22,10 @@ type newState struct {
 	parsedTalents  []talents.Talent
 	personaContent string
 
+	// Resolved in initAgentLoop, consumed by initChannels for startup
+	// verification once the document store exists.
+	resolvedInjectFiles []string
+
 	// Forward-declared in initStores (for connwatch OnReady closure),
 	// constructed in initAwareness.
 	personTracker *contacts.PresenceTracker

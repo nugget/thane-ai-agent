@@ -48,11 +48,29 @@ var skipDirs = map[string]bool{
 	".cache":       true,
 }
 
+// PathVerifier reports whether a path inside a managed document root
+// satisfies that root's signature policy. Implementations must treat
+// paths outside any configured root as a no-op (nil error). The
+// concrete implementation is [documents.Store.VerifyPath]; this
+// interface is used to keep file_tools free of an upward dependency
+// on the documents package.
+//
+// Verifier is consulted in [FileTools.Read], [FileTools.Write], and
+// [FileTools.Edit] so a managed root with `verify_signatures: required`
+// blocks the model from bypassing the doc store via raw filesystem
+// access. Directory-walk tools (List, Search, Grep, Tree, Stat)
+// currently surface metadata only and are not gated; see
+// docs/understanding/document-roots.md.
+type PathVerifier interface {
+	VerifyPath(ctx context.Context, path string, consumer string) error
+}
+
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
 	workspacePath string
 	readOnlyDirs  []string        // Additional read-only directories
 	resolver      *paths.Resolver // Shared prefix resolver (kb:, scratchpad:, etc.)
+	verifier      PathVerifier    // Optional doc-root signature verifier
 	maxVisited    int             // Traversal entry cap; 0 uses defaultMaxVisited
 }
 
@@ -87,6 +105,24 @@ func (ft *FileTools) WorkspacePath() string {
 // checks.
 func (ft *FileTools) SetResolver(r *paths.Resolver) {
 	ft.resolver = r
+}
+
+// SetPathVerifier installs the doc-root signature verifier consulted
+// by Read/Write/Edit. A nil verifier disables verification. Paths
+// outside any managed doc root are passthrough — the verifier itself
+// is responsible for that classification.
+func (ft *FileTools) SetPathVerifier(v PathVerifier) {
+	ft.verifier = v
+}
+
+// verifyPath delegates to the installed verifier when set. Returns
+// nil when no verifier is configured so workspaces without doc roots
+// keep the original behavior.
+func (ft *FileTools) verifyPath(ctx context.Context, absPath, consumer string) error {
+	if ft.verifier == nil {
+		return nil
+	}
+	return ft.verifier.VerifyPath(ctx, absPath, consumer)
 }
 
 // resolvePath converts a relative path to an absolute path within allowed directories.
@@ -165,6 +201,10 @@ func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (
 		return "", err
 	}
 
+	if err := ft.verifyPath(ctx, absPath, "file_tools_read"); err != nil {
+		return "", err
+	}
+
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -220,6 +260,10 @@ func (ft *FileTools) Write(ctx context.Context, path, content string) error {
 		return fmt.Errorf("path is read-only: %s", path)
 	}
 
+	if err := ft.verifyPath(ctx, absPath, "file_tools_write"); err != nil {
+		return err
+	}
+
 	// Create parent directories
 	dir := filepath.Dir(absPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -242,6 +286,10 @@ func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) er
 	}
 	if readOnly {
 		return fmt.Errorf("path is read-only: %s", path)
+	}
+
+	if err := ft.verifyPath(ctx, absPath, "file_tools_edit"); err != nil {
+		return err
 	}
 
 	// Read current content
