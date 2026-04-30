@@ -76,6 +76,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				if err != nil {
 					return &Result{
 						Model:                      model,
+						UpstreamRequestID:          latestUpstreamRequestID(iterations),
 						InputTokens:                totalInput,
 						OutputTokens:               totalOutput,
 						CacheCreationInputTokens:   totalCacheCreate,
@@ -95,6 +96,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			} else {
 				return &Result{
 					Model:                      model,
+					UpstreamRequestID:          latestUpstreamRequestID(iterations),
 					InputTokens:                totalInput,
 					OutputTokens:               totalOutput,
 					CacheCreationInputTokens:   totalCacheCreate,
@@ -129,6 +131,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			budgetRec := IterationRecord{
 				Index:                      i,
 				Model:                      llmResp.Model,
+				UpstreamRequestID:          llmResp.UpstreamRequestID,
 				InputTokens:                llmResp.InputTokens,
 				OutputTokens:               llmResp.OutputTokens,
 				CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
@@ -144,6 +147,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			iterations = append(iterations, budgetRec)
 			partial := &Result{
 				Model:                      model,
+				UpstreamRequestID:          latestUpstreamRequestID(iterations),
 				InputTokens:                totalInput,
 				OutputTokens:               totalOutput,
 				CacheCreationInputTokens:   totalCacheCreate,
@@ -185,6 +189,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterRec := IterationRecord{
 			Index:                      i,
 			Model:                      llmResp.Model,
+			UpstreamRequestID:          llmResp.UpstreamRequestID,
 			InputTokens:                llmResp.InputTokens,
 			OutputTokens:               llmResp.OutputTokens,
 			CacheCreationInputTokens:   llmResp.CacheCreationInputTokens,
@@ -419,6 +424,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		return &Result{
 			Content:                    llmResp.Message.Content,
 			Model:                      model,
+			UpstreamRequestID:          latestUpstreamRequestID(iterations),
 			InputTokens:                totalInput,
 			OutputTokens:               totalOutput,
 			CacheCreationInputTokens:   totalCacheCreate,
@@ -441,6 +447,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 	return e.forceText(ctx, cfg, model, messages, &Result{
 		Model:                      model,
+		UpstreamRequestID:          latestUpstreamRequestID(iterations),
 		InputTokens:                totalInput,
 		OutputTokens:               totalOutput,
 		CacheCreationInputTokens:   totalCacheCreate,
@@ -497,6 +504,7 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.Iterations = append(partial.Iterations, IterationRecord{
 			Index:                      len(partial.Iterations),
 			Model:                      resp.Model,
+			UpstreamRequestID:          resp.UpstreamRequestID,
 			InputTokens:                resp.InputTokens,
 			OutputTokens:               resp.OutputTokens,
 			CacheCreationInputTokens:   resp.CacheCreationInputTokens,
@@ -512,6 +520,20 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 		partial.Content = content
 	}
 
+	partial.UpstreamRequestID = latestUpstreamRequestID(partial.Iterations)
 	partial.Messages = messages
 	return partial, nil
+}
+
+// latestUpstreamRequestID returns the most recent non-empty upstream
+// request ID across iterations, or "" when none captured one. Used to
+// surface the final iteration's provider-side ID on Result without
+// forcing every Result construction site to dig into Iterations.
+func latestUpstreamRequestID(iters []IterationRecord) string {
+	for i := len(iters) - 1; i >= 0; i-- {
+		if iters[i].UpstreamRequestID != "" {
+			return iters[i].UpstreamRequestID
+		}
+	}
+	return ""
 }

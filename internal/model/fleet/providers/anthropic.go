@@ -263,10 +263,11 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, errBody)
 	}
 
+	upstreamRequestID := resp.Header.Get("x-request-id")
 	if !stream {
-		return c.handleNonStreaming(ctx, resp.Body)
+		return c.handleNonStreaming(ctx, resp.Body, upstreamRequestID)
 	}
-	return c.handleStreaming(ctx, resp.Body, callback)
+	return c.handleStreaming(ctx, resp.Body, callback, upstreamRequestID)
 }
 
 // Ping checks if the Anthropic API is reachable.
@@ -307,12 +308,13 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader) (*llm.ChatResponse, error) {
+func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader, upstreamRequestID string) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	result := convertFromAnthropic(&resp)
+	result.UpstreamRequestID = upstreamRequestID
 
 	c.logger.Debug("response received",
 		"model", result.Model,
@@ -322,13 +324,14 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"cache_read_input_tokens", result.CacheReadInputTokens,
 		"cache_hit_rate", result.CacheHitRate(),
 		"tool_calls", len(result.Message.ToolCalls),
+		"upstream_request_id", upstreamRequestID,
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 
 	return result, nil
 }
 
-func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
+func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback llm.StreamCallback, upstreamRequestID string) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	// Increase scanner buffer for large responses
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -434,6 +437,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			ToolCalls: toolCalls,
 		},
 		Done:                     true,
+		UpstreamRequestID:        upstreamRequestID,
 		InputTokens:              usage.InputTokens,
 		OutputTokens:             usage.OutputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
@@ -456,6 +460,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"cache_hit_rate", resp.CacheHitRate(),
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
+		"upstream_request_id", upstreamRequestID,
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
 

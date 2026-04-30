@@ -1576,7 +1576,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheCreation5mInputTokens, llmResp.CacheCreation1hInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
+		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheCreation5mInputTokens, llmResp.CacheCreation1hInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID, llmResp.UpstreamRequestID)
 
 		return &Response{
 			Content:                  llmResp.Message.Content,
@@ -2375,7 +2375,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
 
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
+	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
 	// Content retention is fire-and-forget with a short deadline so it
@@ -3196,7 +3196,11 @@ func formatHistoryJSON(messages []memory.Message, tz string) string {
 // the provider exposes the breakdown (Anthropic). Pass 0/0 when the
 // provider doesn't attribute the writes; pricing falls back to the 5m
 // rate for the unattributed portion.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn int, convID, sessionTag, requestID string) {
+//
+// upstreamRequestID is the provider-side request ID (e.g. Anthropic's
+// `x-request-id` response header) when the provider exposes one. Pass
+// "" when no upstream ID is available; the column accepts empty.
+func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheCreate5m, cacheCreate1h, cacheReadIn int, convID, sessionTag, requestID, upstreamRequestID string) {
 	if l.usageStore == nil {
 		return
 	}
@@ -3224,6 +3228,7 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 	rec := usage.Record{
 		Timestamp:                  time.Now(),
 		RequestID:                  requestID,
+		UpstreamRequestID:          upstreamRequestID,
 		SessionID:                  sessionTag,
 		ConversationID:             convID,
 		Model:                      identity.Model,

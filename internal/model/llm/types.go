@@ -54,6 +54,13 @@ type ChatResponse struct {
 	Message   Message
 	Done      bool
 
+	// UpstreamRequestID is the provider-side request identifier when the
+	// provider exposes one (e.g. Anthropic's `x-request-id` response
+	// header). Empty when the provider does not return one. Captured
+	// for support escalation, billing reconciliation, and correlating
+	// our local r_* request IDs to upstream invoice line items.
+	UpstreamRequestID string
+
 	// Token usage (provider-neutral)
 	InputTokens              int
 	OutputTokens             int
