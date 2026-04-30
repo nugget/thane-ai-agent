@@ -1,0 +1,375 @@
+// Package entitycontext renders Home Assistant entity states into compact,
+// model-facing context.
+package entitycontext
+
+import (
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+)
+
+// Format returns a context line for an entity, choosing the format based on
+// the entity domain.
+func Format(state *homeassistant.State, now time.Time) string {
+	return formatEntityContext(state, now)
+}
+
+// EntityDomain extracts the domain from an entity ID (e.g., "weather" from
+// "weather.home").
+func EntityDomain(entityID string) string {
+	return entityDomain(entityID)
+}
+
+// AttrString extracts a string attribute, returning "" if missing or not a
+// string.
+func AttrString(attrs map[string]any, key string) string {
+	return attrString(attrs, key)
+}
+
+// SemanticState returns a model-friendly state label for the given Home
+// Assistant domain and device class.
+func SemanticState(domain, deviceClass, state string) string {
+	return semanticState(domain, deviceClass, state)
+}
+
+// NormalizeBrightness converts HA's 0-255 brightness to a 0-100 percentage.
+func NormalizeBrightness(v any) any {
+	return normalizeBrightness(v)
+}
+
+// StatePrecision returns the number of decimal places to keep for a device
+// class.
+func StatePrecision(deviceClass string) int {
+	return statePrecision(deviceClass)
+}
+
+// RoundFloat formats a float to the given decimal places, stripping trailing
+// zeros for cleanliness.
+func RoundFloat(f float64, places int) string {
+	return roundFloat(f, places)
+}
+
+// RoundAttr rounds a numeric attribute value to the given decimal places.
+func RoundAttr(v any, places int) any {
+	return roundAttr(v, places)
+}
+
+// formatEntityContext returns a context line for an entity, choosing
+// the format based on the entity domain. Every domain emits compact
+// JSON: rich domains (weather, climate, light, cover, lock,
+// media_player, fan, vacuum, update) include domain-relevant
+// attributes following #458 conventions, and default domains use the
+// generic entity shape (defaultContext + promptfmt.MarshalCompact).
+//
+// Sentinel states (unavailable, unknown) are intercepted before domain
+// dispatch and rendered as a structured availability payload so the
+// model reads available:false instead of inferring from a magic state
+// string.
+func formatEntityContext(state *homeassistant.State, now time.Time) string {
+	if isSentinelState(state.State) {
+		return formatUnavailable(state, now)
+	}
+
+	domain := entityDomain(state.EntityID)
+
+	switch domain {
+	case "weather":
+		return formatWeather(state, now)
+	case "climate":
+		return formatClimate(state, now)
+	case "light":
+		return formatLight(state, now)
+	case "person":
+		return formatPerson(state, now)
+	case "sun":
+		return formatSun(state, now)
+	case "cover":
+		return formatCover(state, now)
+	case "lock":
+		return formatLock(state, now)
+	case "media_player":
+		return formatMediaPlayer(state, now)
+	case "fan":
+		return formatFan(state, now)
+	case "vacuum":
+		return formatVacuum(state, now)
+	case "update":
+		return formatUpdate(state, now)
+	default:
+		return formatDefault(state, now)
+	}
+}
+
+// defaultContext is the JSON structure for entities without a
+// domain-specific formatter.
+type defaultContext struct {
+	Entity       string `json:"entity"`
+	Name         string `json:"name,omitempty"`
+	State        string `json:"state"`
+	Unit         string `json:"unit,omitempty"`
+	DeviceClass  string `json:"device_class,omitempty"`
+	StateClass   string `json:"state_class,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
+	Updated      string `json:"updated,omitempty"` // only when differs from since
+}
+
+// formatDefault produces compact JSON for any entity type. Includes
+// device_class when available and last_updated when it differs from
+// last_changed (indicating attribute-only updates). Numeric state
+// values are rounded based on device_class. Binary sensor states
+// (on/off) are translated to device_class-specific semantic labels
+// (door → open/closed, motion → detected/clear, etc.) so the model
+// reads the meaning rather than inferring it from the on/off encoding.
+func formatDefault(state *homeassistant.State, now time.Time) string {
+	deviceClass := attrString(state.Attributes, "device_class")
+	domain := entityDomain(state.EntityID)
+	dc := defaultContext{
+		Entity:       state.EntityID,
+		State:        semanticState(domain, deviceClass, state.State),
+		Unit:         attrString(state.Attributes, "unit_of_measurement"),
+		DeviceClass:  deviceClass,
+		StateClass:   attrString(state.Attributes, "state_class"),
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
+		dc.Name = name
+	}
+	// Include last_updated when it meaningfully differs from
+	// last_changed (attribute-only updates vs state changes).
+	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
+		dc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
+	}
+	return promptfmt.MarshalCompact(dc)
+}
+
+// climateContext is the JSON structure for climate entity context.
+// State is the user-facing mode setting (heat/cool/auto/off);
+// HVACAction is what the unit is currently doing right now
+// (heating/cooling/idle/fan/drying). The distinction matters: a
+// thermostat in "heat" mode that is currently "idle" tells the model
+// the heat is set but not running, which is different from heat that
+// is actively running.
+type climateContext struct {
+	Entity       string `json:"entity"`
+	State        string `json:"state"`
+	HVACAction   string `json:"hvac_action,omitempty"`
+	CurrentTemp  any    `json:"current_temp,omitempty"`
+	TargetTemp   any    `json:"target_temp,omitempty"`
+	TargetHigh   any    `json:"target_high,omitempty"`
+	TargetLow    any    `json:"target_low,omitempty"`
+	Humidity     any    `json:"humidity,omitempty"`
+	HVACMode     string `json:"hvac_mode,omitempty"`
+	PresetMode   string `json:"preset_mode,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
+}
+
+func formatClimate(state *homeassistant.State, now time.Time) string {
+	cc := climateContext{
+		Entity:       state.EntityID,
+		State:        state.State,
+		HVACAction:   attrString(state.Attributes, "hvac_action"),
+		CurrentTemp:  roundAttr(state.Attributes["current_temperature"], 1),
+		TargetTemp:   roundAttr(state.Attributes["temperature"], 1),
+		TargetHigh:   roundAttr(state.Attributes["target_temp_high"], 1),
+		TargetLow:    roundAttr(state.Attributes["target_temp_low"], 1),
+		Humidity:     roundAttr(state.Attributes["current_humidity"], 0),
+		HVACMode:     attrString(state.Attributes, "hvac_mode"),
+		PresetMode:   attrString(state.Attributes, "preset_mode"),
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+	return promptfmt.MarshalCompact(cc)
+}
+
+// lightContext is the JSON structure for light entity context.
+type lightContext struct {
+	Entity       string `json:"entity"`
+	State        string `json:"state"`
+	Brightness   any    `json:"brightness,omitempty"`
+	ColorTemp    any    `json:"color_temp,omitempty"`
+	RGBColor     any    `json:"rgb_color,omitempty"`
+	AssumedState bool   `json:"assumed_state,omitempty"`
+	Since        string `json:"since"`
+}
+
+// formatLight emits brightness, color_temp, and rgb_color only when
+// the light is on. When the light is off those attributes describe
+// the *last* on-state, which is misleading for a model trying to
+// reason about right now.
+func formatLight(state *homeassistant.State, now time.Time) string {
+	lc := lightContext{
+		Entity:       state.EntityID,
+		State:        state.State,
+		AssumedState: attrBool(state.Attributes, "assumed_state"),
+		Since:        promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+	if state.State == "on" {
+		lc.Brightness = normalizeBrightness(state.Attributes["brightness"])
+		lc.ColorTemp = state.Attributes["color_temp_kelvin"]
+		lc.RGBColor = state.Attributes["rgb_color"]
+	}
+	return promptfmt.MarshalCompact(lc)
+}
+
+// normalizeBrightness converts HA's 0-255 brightness to a 0-100
+// percentage for easier model reasoning.
+func normalizeBrightness(v any) any {
+	if v == nil {
+		return nil
+	}
+	switch b := v.(type) {
+	case float64:
+		pct := int(b / 255.0 * 100.0)
+		return pct
+	case int:
+		pct := int(float64(b) / 255.0 * 100.0)
+		return pct
+	default:
+		return v
+	}
+}
+
+// entityDomain extracts the domain from an entity ID
+// (e.g., "weather" from "weather.home").
+func entityDomain(entityID string) string {
+	if idx := strings.IndexByte(entityID, '.'); idx > 0 {
+		return entityID[:idx]
+	}
+	return ""
+}
+
+// attrString extracts a string attribute, returning "" if missing or
+// not a string.
+func attrString(attrs map[string]any, key string) string {
+	if v, ok := attrs[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// attrBool extracts a boolean attribute, returning false if missing or
+// not a bool.
+func attrBool(attrs map[string]any, key string) bool {
+	if v, ok := attrs[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// personContext is the JSON structure for person entity context.
+// This is the watchlist version; the PresenceTracker has richer data
+// (room, device MACs) that the raw HA state doesn't carry.
+type personContext struct {
+	Entity string `json:"entity"`
+	State  string `json:"state"`
+	Since  string `json:"since"`
+	Source string `json:"source,omitempty"`
+}
+
+func formatPerson(state *homeassistant.State, now time.Time) string {
+	pc := personContext{
+		Entity: state.EntityID,
+		State:  state.State,
+		Since:  promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Source: attrString(state.Attributes, "source"),
+	}
+	return promptfmt.MarshalCompact(pc)
+}
+
+// sunContext is the JSON structure for the sun.sun entity.
+// Provides above/below horizon state with delta-annotated next
+// sunrise and sunset times — critical for a home agent's awareness
+// of lighting, security, and automation context.
+type sunContext struct {
+	Entity    string `json:"entity"`
+	State     string `json:"state"` // above_horizon or below_horizon
+	NextRise  string `json:"next_rising,omitempty"`
+	NextSet   string `json:"next_setting,omitempty"`
+	Elevation any    `json:"elevation,omitempty"`
+	Since     string `json:"since"`
+}
+
+func formatSun(state *homeassistant.State, now time.Time) string {
+	sc := sunContext{
+		Entity:    state.EntityID,
+		State:     state.State,
+		Elevation: roundAttr(state.Attributes["elevation"], 1),
+		Since:     promptfmt.FormatDeltaOnly(state.LastChanged, now),
+	}
+
+	// Delta-annotate next rising/setting times.
+	if rising, ok := state.Attributes["next_rising"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, rising); err == nil {
+			sc.NextRise = promptfmt.FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, rising); err == nil {
+			sc.NextRise = promptfmt.FormatDeltaOnly(t, now)
+		}
+	}
+	if setting, ok := state.Attributes["next_setting"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, setting); err == nil {
+			sc.NextSet = promptfmt.FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, setting); err == nil {
+			sc.NextSet = promptfmt.FormatDeltaOnly(t, now)
+		}
+	}
+
+	return promptfmt.MarshalCompact(sc)
+}
+
+// roundState rounds a numeric state string to appropriate precision
+// based on device_class. Non-numeric states pass through unchanged.
+func roundState(state, deviceClass string) string {
+	f, err := strconv.ParseFloat(state, 64)
+	if err != nil {
+		return state // non-numeric, pass through
+	}
+
+	places := statePrecision(deviceClass)
+	return roundFloat(f, places)
+}
+
+func statePrecision(deviceClass string) int {
+	switch deviceClass {
+	case "temperature":
+		return 1
+	case "humidity", "battery":
+		return 0
+	case "power", "energy", "voltage", "current":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// roundFloat formats a float to the given decimal places, stripping
+// trailing zeros for cleanliness.
+func roundFloat(f float64, places int) string {
+	mult := math.Pow10(places)
+	rounded := math.Round(f*mult) / mult
+	return strconv.FormatFloat(rounded, 'f', -1, 64)
+}
+
+// roundAttr rounds a numeric attribute value (any type) to the given
+// decimal places. Returns nil for nil input. Non-numeric values pass
+// through unchanged.
+func roundAttr(v any, places int) any {
+	if v == nil {
+		return nil
+	}
+	switch n := v.(type) {
+	case float64:
+		mult := math.Pow10(places)
+		return math.Round(n*mult) / mult
+	case int:
+		return n
+	default:
+		return v
+	}
+}

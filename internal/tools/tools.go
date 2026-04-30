@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/entitycontext"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
@@ -1163,22 +1164,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 // consumption. Used by get_state, control_device post-action verification,
 // and context injection.
 func FormatEntityState(state *homeassistant.State) string {
-	result := fmt.Sprintf("Entity: %s\nState: %s\n", state.EntityID, state.State)
-
-	if name, ok := state.Attributes["friendly_name"].(string); ok {
-		result += fmt.Sprintf("Name: %s\n", name)
-	}
-	if unit, ok := state.Attributes["unit_of_measurement"].(string); ok {
-		result += fmt.Sprintf("Unit: %s\n", unit)
-	}
-	if brightness, ok := state.Attributes["brightness"].(float64); ok {
-		result += fmt.Sprintf("Brightness: %.0f%%\n", brightness/255*100)
-	}
-	if temp, ok := state.Attributes["temperature"].(float64); ok {
-		result += fmt.Sprintf("Temperature: %.1f\n", temp)
-	}
-
-	return result
+	return entitycontext.Format(state, time.Now())
 }
 
 func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) (string, error) {

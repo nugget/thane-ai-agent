@@ -1,4 +1,4 @@
-package awareness
+package entitycontext
 
 // binarySensorStateLabels maps a binary_sensor device_class to its
 // semantic [off, on] labels. Tracks the canonical Home Assistant
