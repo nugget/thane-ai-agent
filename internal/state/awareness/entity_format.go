@@ -4,45 +4,45 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/entitycontext"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 )
 
 func formatEntityContext(state *homeassistant.State, now time.Time) string {
-	return entitycontext.Format(state, now)
+	return contextfmt.Format(state, now)
 }
 
 func formatFetchError(entityID string) string {
-	return entitycontext.FormatFetchError(entityID)
+	return contextfmt.FormatFetchError(entityID)
 }
 
 func isSentinelState(state string) bool {
-	return entitycontext.IsSentinelState(state)
+	return contextfmt.IsSentinelState(state)
 }
 
 func entityDomain(entityID string) string {
-	return entitycontext.EntityDomain(entityID)
+	return contextfmt.EntityDomain(entityID)
 }
 
 func attrString(attrs map[string]any, key string) string {
-	return entitycontext.AttrString(attrs, key)
+	return contextfmt.AttrString(attrs, key)
 }
 
 func semanticState(domain, deviceClass, state string) string {
-	return entitycontext.SemanticState(domain, deviceClass, state)
+	return contextfmt.SemanticState(domain, deviceClass, state)
 }
 
 func normalizeBrightness(v any) any {
-	return entitycontext.NormalizeBrightness(v)
+	return contextfmt.NormalizeBrightness(v)
 }
 
 func statePrecision(deviceClass string) int {
-	return entitycontext.StatePrecision(deviceClass)
+	return contextfmt.StatePrecision(deviceClass)
 }
 
 func roundFloat(f float64, places int) string {
-	return entitycontext.RoundFloat(f, places)
+	return contextfmt.RoundFloat(f, places)
 }
 
 func hasActiveMedia(state string) bool {
-	return entitycontext.HasActiveMedia(state)
+	return contextfmt.HasActiveMedia(state)
 }

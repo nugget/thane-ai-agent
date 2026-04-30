@@ -1,6 +1,6 @@
-// Package entitycontext renders Home Assistant entity states into compact,
+// Package contextfmt renders Home Assistant entity states into compact,
 // model-facing context.
-package entitycontext
+package contextfmt
 
 import (
 	"math"

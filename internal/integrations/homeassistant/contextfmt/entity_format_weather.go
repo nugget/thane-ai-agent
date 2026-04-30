@@ -1,4 +1,4 @@
-package entitycontext
+package contextfmt
 
 import (
 	"fmt"

@@ -14,7 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/entitycontext"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
@@ -1164,7 +1164,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 // consumption. Used by get_state, control_device post-action verification,
 // and context injection.
 func FormatEntityState(state *homeassistant.State) string {
-	return entitycontext.Format(state, time.Now())
+	return contextfmt.Format(state, time.Now())
 }
 
 func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) (string, error) {
