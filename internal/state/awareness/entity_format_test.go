@@ -232,6 +232,46 @@ func TestFormatWeather_NWSMETAR(t *testing.T) {
 	}
 }
 
+func TestFormatWeather_StationInferenceSkipsProviderWords(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "weather.local_metar",
+		State:       "cloudy",
+		LastChanged: testNow,
+		Attributes: map[string]any{
+			"friendly_name": "NOAA METAR observation KLBX",
+			"attribution":   "Data from National Weather Service/NOAA",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("weather output should be valid JSON: %v\nGot: %s", err, result)
+	}
+	if got := parsed["station"]; got != "KLBX" {
+		t.Errorf("station = %v, want KLBX", got)
+	}
+}
+
+func TestFormatWeather_StationInferencePrefersEntitySuffix(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "weather.nws_msrh_klbx",
+		State:       "cloudy",
+		LastChanged: testNow,
+		Attributes: map[string]any{
+			"friendly_name": "NOAA METAR KXYZ",
+			"attribution":   "Data from National Weather Service/NOAA",
+		},
+	}
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("weather output should be valid JSON: %v\nGot: %s", err, result)
+	}
+	if got := parsed["station"]; got != "KLBX" {
+		t.Errorf("station = %v, want KLBX from entity suffix", got)
+	}
+}
+
 func TestFormatClimate(t *testing.T) {
 	state := &homeassistant.State{
 		EntityID:    "climate.thermostat",

@@ -160,14 +160,14 @@ func weatherStationID(state *homeassistant.State) string {
 	if !looksLikeMETARWeather(state) {
 		return ""
 	}
-	for _, field := range strings.Fields(attrString(state.Attributes, "friendly_name")) {
-		candidate := strings.Trim(field, " \t\r\n()[]{}.,;:")
+	if idx := strings.LastIndexByte(state.EntityID, '_'); idx >= 0 && idx+1 < len(state.EntityID) {
+		candidate := state.EntityID[idx+1:]
 		if looksLikeStationID(candidate) {
 			return strings.ToUpper(candidate)
 		}
 	}
-	if idx := strings.LastIndexByte(state.EntityID, '_'); idx >= 0 && idx+1 < len(state.EntityID) {
-		candidate := state.EntityID[idx+1:]
+	for _, field := range strings.Fields(attrString(state.Attributes, "friendly_name")) {
+		candidate := strings.Trim(field, " \t\r\n()[]{}.,;:")
 		if looksLikeStationID(candidate) {
 			return strings.ToUpper(candidate)
 		}
@@ -188,11 +188,16 @@ func looksLikeMETARWeather(state *homeassistant.State) bool {
 }
 
 func looksLikeStationID(candidate string) bool {
-	if len(candidate) < 3 || len(candidate) > 5 {
+	candidate = strings.ToUpper(strings.TrimSpace(candidate))
+	switch candidate {
+	case "METAR", "NOAA", "NWS", "ICAO", "ASOS", "AWOS", "AUTO", "DATA", "FROM":
+		return false
+	}
+	if len(candidate) != 4 {
 		return false
 	}
 	for _, r := range candidate {
-		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+		if r < 'A' || r > 'Z' {
 			return false
 		}
 	}
