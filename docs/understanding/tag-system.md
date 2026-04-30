@@ -137,10 +137,12 @@ read the test for the case you're touching.
 
 ### The two-layer delegate exclusion (this is load-bearing)
 
-The `delegateFamilyToolNames` slice (`thane_delegate`, `thane_now`,
-`thane_assign`) is the recursion guard that prevents a delegate from
-spawning further delegates of its own. **It must be applied at two
-levels**, and getting either one wrong breaks the guard silently.
+The `delegateFamilyToolNames` slice is the recursion guard that
+prevents a delegate from spawning further delegates of its own. It must
+contain every registered delegation front door: `thane_now`,
+`thane_assign`, and the deprecated `thane_delegate` alias on branches
+that still register that compatibility shim. **It must be applied at
+two levels**, and getting either one wrong breaks the guard silently.
 
 **Layer 1 — in-process registry filter.** [`delegateToolRegistry`][delegate-tool-registry]
 applies `FilteredCopyExcluding(delegateFamilyToolNames)` to the
