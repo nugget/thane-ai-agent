@@ -101,9 +101,12 @@ type Spec struct {
 	// unless blocked by policy.
 	Conditions Conditions `yaml:"conditions,omitempty" json:"conditions,omitempty"`
 
-	// Tags are capability tags for tool scoping. When non-empty,
-	// the loop's tool registry is filtered to tools matching these
-	// tags (plus always-active tags).
+	// Tags are the capability tags scoping this loop. They are
+	// activated at iteration 0 — seeding the active-tag set used for
+	// tool-registry scope filtering, KB article exposure, and any
+	// other tag-driven context surface — and remain active across
+	// iterations unless the model deactivates them. Per-invocation
+	// runtime overrides layer on top via [Launch.InitialTags].
 	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 
 	// ExcludeTools lists tool names to exclude from the loop's
@@ -302,7 +305,7 @@ func (s *Spec) profileRequest() Request {
 		Model:        opts.Model,
 		Hints:        opts.Hints,
 		ExcludeTools: opts.ExcludeTools,
-		InitialTags:  opts.InitialTags,
+		InitialTags:  append([]string(nil), s.Tags...),
 		RuntimeTools: cloneRuntimeTools(s.RuntimeTools),
 	}
 }

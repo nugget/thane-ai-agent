@@ -1312,6 +1312,11 @@ type SubscriptionConfig struct {
 	// profile's routing configuration. When nil, messages are received
 	// for ambient awareness only (debug-logged, not acted upon).
 	Wake *router.LoopProfile `yaml:"wake,omitempty"`
+
+	// InitialTags lists capability tags activated at the start of the
+	// agent run dispatched for matching messages. Only meaningful when
+	// Wake is non-nil.
+	InitialTags []string `yaml:"initial_tags,omitempty"`
 }
 
 // TelemetryConfig configures MQTT telemetry publishing. When Enabled
@@ -1569,8 +1574,8 @@ type SignalRoutingConfig struct {
 // LoopProfile representation used by wake-style entrypoints.
 //
 // It intentionally maps only the fields exposed by SignalRoutingConfig.
-// LoopProfile-only fields such as ExcludeTools and InitialTags are omitted
-// until Signal grows explicit config for them.
+// LoopProfile-only fields such as ExcludeTools are omitted until Signal
+// grows explicit config for them.
 func (c SignalRoutingConfig) LoopProfile() router.LoopProfile {
 	return router.LoopProfile{
 		Model:            c.Model,

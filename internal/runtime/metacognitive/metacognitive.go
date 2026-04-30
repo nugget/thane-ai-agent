@@ -175,10 +175,10 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		SleepDefault: cfg.DefaultSleep,
 		Jitter:       loop.Float64Ptr(cfg.Jitter),
 		ExcludeTools: metacogExcludeTools,
+		Tags:         []string{"metacognitive"},
 		Profile: router.LoopProfile{
 			Mission:          "metacognitive",
 			DelegationGating: "disabled",
-			InitialTags:      []string{"metacognitive"},
 			ExtraHints:       map[string]string{"source": "metacognitive"},
 		},
 

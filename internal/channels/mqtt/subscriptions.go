@@ -16,14 +16,25 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
-// WakeSubscription pairs an MQTT topic filter with the LoopProfile
-// configuration used to wake the agent when a message arrives.
+// WakeSubscription pairs an MQTT topic filter with the routing profile
+// and capability tag overlay used to wake the agent when a message
+// arrives on the topic.
 type WakeSubscription struct {
-	ID        string             `json:"id"`
-	Topic     string             `json:"topic"`
-	Profile   router.LoopProfile `json:"profile"`
-	Source    string             `json:"source"` // "config" or "runtime"
-	CreatedAt time.Time          `json:"created_at"`
+	ID    string `json:"id"`
+	Topic string `json:"topic"`
+
+	// Profile shapes the agent run dispatched on each matching message
+	// (model selection, mission, hints, exclude_tools, instructions).
+	// Routing/configuration only — capability tags live on InitialTags.
+	Profile router.LoopProfile `json:"profile"`
+
+	// InitialTags lists capability tags activated at the start of the
+	// dispatched agent run. They merge with whatever tags the
+	// dispatched run would otherwise activate from its loop spec.
+	InitialTags []string `json:"initial_tags,omitempty"`
+
+	Source    string    `json:"source"` // "config" or "runtime"
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // SubscriptionStore manages wake-enabled MQTT subscriptions with
@@ -58,6 +69,13 @@ func NewSubscriptionStore(db *sql.DB, logger *slog.Logger) (*SubscriptionStore, 
 		return nil, fmt.Errorf("create mqtt_wake_subscriptions table: %w", err)
 	}
 
+	// Capability tags moved off the embedded LoopProfile onto a
+	// dedicated WakeSubscription field; persist them in their own
+	// column so the seed_json blob stays a pure routing profile.
+	if err := database.AddColumn(db, "mqtt_wake_subscriptions", "initial_tags_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return nil, fmt.Errorf("migrate mqtt_wake_subscriptions schema: %w", err)
+	}
+
 	s := &SubscriptionStore{
 		db:     db,
 		logger: logger,
@@ -72,7 +90,7 @@ func NewSubscriptionStore(db *sql.DB, logger *slog.Logger) (*SubscriptionStore, 
 
 // loadRuntime reads persisted runtime subscriptions from SQLite.
 func (s *SubscriptionStore) loadRuntime() error {
-	rows, err := s.db.Query(`SELECT id, topic, seed_json, source, created_at FROM mqtt_wake_subscriptions`)
+	rows, err := s.db.Query(`SELECT id, topic, seed_json, initial_tags_json, source, created_at FROM mqtt_wake_subscriptions`)
 	if err != nil {
 		return err
 	}
@@ -80,14 +98,27 @@ func (s *SubscriptionStore) loadRuntime() error {
 
 	for rows.Next() {
 		var ws WakeSubscription
-		var profileJSON, createdAt string
-		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &ws.Source, &createdAt); err != nil {
+		var profileJSON, initialTagsJSON, createdAt string
+		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &initialTagsJSON, &ws.Source, &createdAt); err != nil {
 			return err
 		}
+		// Pre-migration rows stored InitialTags inside the profile JSON.
+		// Hoist any legacy value out before unmarshaling so the field
+		// reaches its new home on WakeSubscription.
+		ws.InitialTags = extractLegacyInitialTags(profileJSON)
 		if err := json.Unmarshal([]byte(profileJSON), &ws.Profile); err != nil {
 			s.logger.Warn("skipping subscription with invalid profile JSON",
 				"id", ws.ID, "error", err)
 			continue
+		}
+		if initialTagsJSON != "" {
+			var tags []string
+			if err := json.Unmarshal([]byte(initialTagsJSON), &tags); err != nil {
+				s.logger.Warn("subscription initial_tags_json invalid, ignoring",
+					"id", ws.ID, "error", err)
+			} else if len(tags) > 0 {
+				ws.InitialTags = tags
+			}
 		}
 		ts, err := database.ParseTimestamp(createdAt)
 		if err != nil {
@@ -149,14 +180,39 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake profile: %w", i, sc.Topic, err)
 		}
 		s.subs = append(s.subs, WakeSubscription{
-			ID:        fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
-			Topic:     sc.Topic,
-			Profile:   *sc.Wake,
-			Source:    "config",
-			CreatedAt: time.Now(),
+			ID:          fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
+			Topic:       sc.Topic,
+			Profile:     *sc.Wake,
+			InitialTags: append([]string(nil), sc.InitialTags...),
+			Source:      "config",
+			CreatedAt:   time.Now(),
 		})
 	}
 	return nil
+}
+
+// extractLegacyInitialTags returns any "initial_tags" value embedded in
+// a pre-migration LoopProfile JSON blob. Pre-migration rows stored
+// InitialTags inside the profile object; the field has since moved onto
+// WakeSubscription, so during load we hoist any legacy value here.
+// Returns nil when the JSON is malformed or the field is absent.
+func extractLegacyInitialTags(profileJSON string) []string {
+	if profileJSON == "" {
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(profileJSON), &raw); err != nil {
+		return nil
+	}
+	tagsRaw, ok := raw["initial_tags"]
+	if !ok {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal(tagsRaw, &tags); err != nil {
+		return nil
+	}
+	return tags
 }
 
 // SetSubscribeHook registers a callback that is invoked after a runtime
@@ -173,7 +229,7 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 // returns the new subscription. The topic filter and profile are validated
 // before persistence — invalid values are rejected early rather than
 // stored and retried forever.
-func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile) (WakeSubscription, error) {
+func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile, initialTags []string) (WakeSubscription, error) {
 	if err := router.ValidateTopicFilter(topic); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
 	}
@@ -182,21 +238,26 @@ func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile) (WakeS
 	}
 
 	ws := WakeSubscription{
-		ID:        fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
-		Topic:     topic,
-		Profile:   profile,
-		Source:    "runtime",
-		CreatedAt: time.Now(),
+		ID:          fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
+		Topic:       topic,
+		Profile:     profile,
+		InitialTags: append([]string(nil), initialTags...),
+		Source:      "runtime",
+		CreatedAt:   time.Now(),
 	}
 
 	profileJSON, err := json.Marshal(ws.Profile)
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("marshal profile: %w", err)
 	}
+	initialTagsJSON, err := json.Marshal(ws.InitialTags)
+	if err != nil {
+		return WakeSubscription{}, fmt.Errorf("marshal initial_tags: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, source, created_at) VALUES (?, ?, ?, ?, ?)`,
-		ws.ID, ws.Topic, string(profileJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		ws.ID, ws.Topic, string(profileJSON), string(initialTagsJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("insert subscription: %w", err)

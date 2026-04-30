@@ -141,6 +141,66 @@ func TestSpecToConfigAppliesOneShotOperationDefaults(t *testing.T) {
 	}
 }
 
+func TestSpecProfileRequestSeedsInitialTagsFromSpecTags(t *testing.T) {
+	t.Run("Spec.Tags seeds Request.InitialTags", func(t *testing.T) {
+		spec := &Spec{
+			Name:       "weekend_observer",
+			Task:       "watch the weekend",
+			Operation:  OperationService,
+			Completion: CompletionConversation,
+			Tags:       []string{"ha", "hpde", "documents"},
+			Profile: router.LoopProfile{
+				Mission: "background",
+			},
+		}
+
+		got := spec.profileRequest().InitialTags
+
+		want := []string{"ha", "hpde", "documents"}
+		if len(got) != len(want) {
+			t.Fatalf("InitialTags = %v, want %v", got, want)
+		}
+		for i, tag := range want {
+			if got[i] != tag {
+				t.Fatalf("InitialTags[%d] = %q, want %q", i, got[i], tag)
+			}
+		}
+	})
+
+	t.Run("empty Spec.Tags yields empty InitialTags", func(t *testing.T) {
+		spec := &Spec{
+			Name:       "weekend_observer",
+			Task:       "watch the weekend",
+			Operation:  OperationService,
+			Completion: CompletionConversation,
+			Profile: router.LoopProfile{
+				Mission: "background",
+			},
+		}
+
+		if got := spec.profileRequest().InitialTags; len(got) != 0 {
+			t.Fatalf("InitialTags = %v, want empty", got)
+		}
+	})
+
+	t.Run("seeded slice does not alias Spec.Tags", func(t *testing.T) {
+		spec := &Spec{
+			Name:       "weekend_observer",
+			Task:       "watch the weekend",
+			Operation:  OperationService,
+			Completion: CompletionConversation,
+			Tags:       []string{"ha", "hpde"},
+		}
+
+		req := spec.profileRequest()
+		req.InitialTags[0] = "mutated"
+
+		if spec.Tags[0] != "ha" {
+			t.Fatalf("spec.Tags[0] = %q, want ha (slice was aliased)", spec.Tags[0])
+		}
+	})
+}
+
 func TestSpecValidatePersistableRejectsRuntimeHooks(t *testing.T) {
 	spec := &Spec{
 		Name: "dynamic-loop",
@@ -163,9 +223,9 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		Task:       "Watch the office.",
 		Operation:  OperationService,
 		Completion: CompletionConversation,
+		Tags:       []string{"homeassistant"},
 		Profile: router.LoopProfile{
 			Mission:      "background",
-			InitialTags:  []string{"homeassistant"},
 			Instructions: "Be concise.",
 		},
 		Conditions: Conditions{

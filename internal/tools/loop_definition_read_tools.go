@@ -18,7 +18,6 @@ type loopDefinitionLintEffective struct {
 	Mission          string             `json:"mission,omitempty"`
 	DelegationGating string             `json:"delegation_gating,omitempty"`
 	Tags             []string           `json:"tags,omitempty"`
-	InitialTags      []string           `json:"initial_tags,omitempty"`
 }
 
 func (r *Registry) handleLoopDefinitionSummary(_ context.Context, _ map[string]any) (string, error) {
@@ -200,7 +199,6 @@ func (r *Registry) handleLoopDefinitionLint(_ context.Context, args map[string]a
 		Mission:          spec.Profile.Mission,
 		DelegationGating: spec.Profile.DelegationGating,
 		Tags:             append([]string(nil), spec.Tags...),
-		InitialTags:      append([]string(nil), spec.Profile.InitialTags...),
 	}
 
 	resp := map[string]any{

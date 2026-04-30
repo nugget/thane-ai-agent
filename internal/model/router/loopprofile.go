@@ -43,10 +43,6 @@ type LoopProfile struct {
 	// ExcludeTools lists tool names to filter out of the agent run.
 	ExcludeTools []string `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 
-	// InitialTags lists capability tags to activate at the start of the
-	// agent run.
-	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
-
 	// ExtraHints carries arbitrary key-value routing hints that are
 	// merged last, allowing callers to override or extend the typed
 	// fields above.
@@ -64,7 +60,6 @@ type RequestOptions struct {
 	Model        string
 	Hints        map[string]string
 	ExcludeTools []string
-	InitialTags  []string
 }
 
 // Hints builds a routing hints map from the profile's typed fields.
@@ -185,9 +180,6 @@ func (s *LoopProfile) RequestOptions() RequestOptions {
 
 	if len(s.ExcludeTools) > 0 {
 		opts.ExcludeTools = append([]string(nil), s.ExcludeTools...)
-	}
-	if len(s.InitialTags) > 0 {
-		opts.InitialTags = append([]string(nil), s.InitialTags...)
 	}
 
 	return opts

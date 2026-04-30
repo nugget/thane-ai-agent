@@ -28,7 +28,6 @@ func (m *mockTaskLauncher) Launch(_ context.Context, launch looppkg.Launch, deps
 	capturedLaunch.Spec.Metadata = cloneTestStringMap(launch.Spec.Metadata)
 	capturedLaunch.Spec.ExcludeTools = append([]string(nil), launch.Spec.ExcludeTools...)
 	capturedLaunch.Spec.Profile.ExcludeTools = append([]string(nil), launch.Spec.Profile.ExcludeTools...)
-	capturedLaunch.Spec.Profile.InitialTags = append([]string(nil), launch.Spec.Profile.InitialTags...)
 	capturedLaunch.Spec.Profile.ExtraHints = cloneTestStringMap(launch.Spec.Profile.ExtraHints)
 	m.launch = &capturedLaunch
 	capturedDeps := deps

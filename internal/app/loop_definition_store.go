@@ -80,7 +80,8 @@ func (s *loopDefinitionStore) LoadInto(registry *looppkg.DefinitionRegistry, log
 	records := make(map[string]looppkg.DefinitionRecord, len(entries))
 	for _, key := range keys {
 		var record looppkg.DefinitionRecord
-		if err := json.Unmarshal([]byte(entries[key]), &record); err != nil {
+		raw := []byte(entries[key])
+		if err := json.Unmarshal(raw, &record); err != nil {
 			if logger != nil {
 				logger.Warn("skipping invalid persisted loop definition", "name", key, "error", err)
 			}
@@ -89,12 +90,64 @@ func (s *loopDefinitionStore) LoadInto(registry *looppkg.DefinitionRegistry, log
 		if strings.TrimSpace(record.Spec.Name) == "" {
 			record.Spec.Name = key
 		}
+		// Pre-migration records may have stored capability tags under
+		// spec.profile.initial_tags. The field has since moved to
+		// spec.tags as the single source of truth. Hoist any legacy
+		// value forward so operators don't lose configured tags.
+		if legacy := extractLegacyProfileInitialTags(raw); len(legacy) > 0 {
+			record.Spec.Tags = mergePreservingOrder(record.Spec.Tags, legacy)
+			if logger != nil {
+				logger.Info("migrated legacy spec.profile.initial_tags to spec.tags",
+					"name", key, "tags", legacy)
+			}
+		}
 		records[key] = record
 	}
 	if len(records) == 0 {
 		return nil
 	}
 	return registry.ReplaceOverlay(records)
+}
+
+// extractLegacyProfileInitialTags returns any non-empty
+// spec.profile.initial_tags slice from a persisted definition record's
+// raw JSON. The field moved off LoopProfile, so this is the only path
+// that can recover values written by pre-migration servers.
+func extractLegacyProfileInitialTags(raw []byte) []string {
+	var envelope struct {
+		Spec struct {
+			Profile struct {
+				InitialTags []string `json:"initial_tags"`
+			} `json:"profile"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	return envelope.Spec.Profile.InitialTags
+}
+
+// mergePreservingOrder returns a deduplicated slice containing first the
+// existing entries and then any new entries not already present. Order
+// of first appearance is preserved.
+func mergePreservingOrder(existing, additional []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(additional))
+	out := make([]string, 0, len(existing)+len(additional))
+	for _, v := range existing {
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range additional {
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func (a *App) persistLoopDefinition(spec looppkg.Spec, updatedAt time.Time) error {
