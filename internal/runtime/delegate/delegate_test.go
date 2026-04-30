@@ -450,6 +450,130 @@ func TestEmptyResponseError_PropagatesChildLastError(t *testing.T) {
 	}
 }
 
+// TestEmptyResponseError_TruncatesOversizedLastError ensures a child
+// loop's runaway LastError (e.g. a stack trace, a multi-KB response
+// body dump) is truncated before it becomes the parent's tool-call
+// result. Without this, a single misbehaving error could inflate
+// every subsequent parent prompt by however much the loop runtime
+// happened to capture.
+func TestEmptyResponseError_TruncatesOversizedLastError(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("x", childLastErrorMaxLen*4)
+	err := emptyResponseError(looppkg.LaunchResult{
+		FinalStatus: &looppkg.Status{LastError: huge},
+	})
+	if err == nil {
+		t.Fatal("emptyResponseError() = nil, want truncated error")
+	}
+	const prefix = "delegate failed: "
+	got := err.Error()
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("error = %q, want prefix %q", got, prefix)
+	}
+	// The body after the prefix is the truncated LastError, possibly
+	// with a "..." marker appended by truncate().
+	body := got[len(prefix):]
+	if len(body) > childLastErrorMaxLen+len("...") {
+		t.Fatalf("body length = %d, want <= %d (cap %d + ellipsis)", len(body), childLastErrorMaxLen+len("..."), childLastErrorMaxLen)
+	}
+	if !strings.HasSuffix(body, "...") {
+		t.Fatalf("body = %q, want truncation marker", body)
+	}
+}
+
+// TestMergeExcludeToolNames pins the dedup invariant for the
+// composed exclusion list. The launched-loop path always appends
+// delegateFamilyToolNames, and the explicit-empty-scope branch
+// independently sources AllToolNames (which already contains the
+// family). Both contributing without dedup produces noise; the
+// merge helper must collapse to a single sorted set.
+func TestMergeExcludeToolNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		groups [][]string
+		want   []string
+	}{
+		{
+			name:   "empty input returns nil",
+			groups: nil,
+			want:   nil,
+		},
+		{
+			name:   "single group sorted and deduped",
+			groups: [][]string{{"b", "a", "b", ""}},
+			want:   []string{"a", "b"},
+		},
+		{
+			name: "overlapping groups dedup to a single sorted slice",
+			groups: [][]string{
+				{"get_state", "thane_now", "thane_assign"},
+				{"thane_delegate", "thane_now", "thane_assign"},
+			},
+			want: []string{"get_state", "thane_assign", "thane_delegate", "thane_now"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mergeExcludeToolNames(tc.groups...)
+			if len(got) != len(tc.want) {
+				t.Fatalf("mergeExcludeToolNames() = %#v, want %#v", got, tc.want)
+			}
+			for i, name := range tc.want {
+				if got[i] != name {
+					t.Fatalf("mergeExcludeToolNames()[%d] = %q, want %q (got=%#v)", i, got[i], name, got)
+				}
+			}
+		})
+	}
+}
+
+// TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes pins the
+// dedup contract through the actual launch path. When AllToolNames
+// (which contains the family) and delegateFamilyToolNames both
+// contribute, ExcludeTools must contain each family name exactly once.
+func TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, executionOptions{
+		inheritCallerTags: false,
+		explicitTagScope:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, name := range delegateFamilyToolNames {
+		count := 0
+		for _, got := range captured.ExcludeTools {
+			if got == name {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("ExcludeTools = %#v contains %q %d times, want exactly 1 (recursion guard must dedup against AllToolNames)", captured.ExcludeTools, name, count)
+		}
+	}
+}
+
 func TestExecute_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
 	exec.ConfigureLoopExecution(&mockLoopRunner{}, looppkg.NewRegistry())
