@@ -15,6 +15,7 @@ type WatchedSubscription struct {
 	EntityID  string
 	Scope     string
 	History   []int
+	Forecast  string
 	ExpiresAt *time.Time
 }
 
@@ -59,12 +60,12 @@ func (s *WatchlistStore) Add(entityID string) error {
 }
 
 // AddWithOptions inserts or updates entity subscriptions with tag scopes,
-// historical offsets, and an optional TTL. Empty tags means the entity is
-// always visible in context.
-func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int) error {
+// historical offsets, optional weather forecast type, and an optional TTL.
+// Empty tags means the entity is always visible in context.
+func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error {
 	scopes := normalizeScopes(tags)
 
-	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds)
+	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast)
 	if err != nil {
 		return fmt.Errorf("marshal options: %w", err)
 	}
@@ -243,6 +244,7 @@ func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]W
 			EntityID:  entityID,
 			Scope:     scope,
 			History:   append([]int(nil), opts.History...),
+			Forecast:  opts.Forecast,
 			ExpiresAt: cloneTimePtr(opts.ExpiresAt),
 		})
 	}
@@ -290,17 +292,24 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 
 type watchlistOptions struct {
 	History   []int
+	Forecast  string
 	ExpiresAt *time.Time
 }
 
 type watchlistOptionsWire struct {
 	History   []int  `json:"history,omitempty"`
+	Forecast  string `json:"forecast,omitempty"`
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
-func marshalWatchlistOptions(history []int, ttlSeconds int) ([]byte, error) {
+func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string) ([]byte, error) {
+	forecast, err := normalizeForecastType(forecast)
+	if err != nil {
+		return nil, err
+	}
 	wire := watchlistOptionsWire{
-		History: append([]int(nil), history...),
+		History:  append([]int(nil), history...),
+		Forecast: forecast,
 	}
 	if ttlSeconds > 0 {
 		wire.ExpiresAt = time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second).Format(time.RFC3339)
@@ -318,6 +327,9 @@ func parseWatchlistOptions(optsJSON string) watchlistOptions {
 	}
 	out := watchlistOptions{
 		History: append([]int(nil), wire.History...),
+	}
+	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {
+		out.Forecast = forecast
 	}
 	if wire.ExpiresAt != "" {
 		if ts, err := time.Parse(time.RFC3339, wire.ExpiresAt); err == nil {
@@ -350,6 +362,19 @@ func normalizeScopes(tags []string) []string {
 		return []string{""}
 	}
 	return scopes
+}
+
+func normalizeForecastType(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "", "none":
+		return "", nil
+	case "daily", "hourly", "twice_daily":
+		return value, nil
+	default:
+		return "", fmt.Errorf("forecast must be one of daily, hourly, twice_daily, or none")
+	}
 }
 
 func cloneTimePtr(src *time.Time) *time.Time {

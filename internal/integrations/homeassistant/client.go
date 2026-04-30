@@ -81,6 +81,10 @@ type State struct {
 	LastUpdated time.Time      `json:"last_updated"`
 }
 
+type weatherForecastResponse struct {
+	Forecast []map[string]any `json:"forecast"`
+}
+
 // APIStatus represents the HA API status response.
 type APIStatus struct {
 	Message string `json:"message"`
@@ -175,6 +179,35 @@ func (c *Client) GetStateHistory(ctx context.Context, entityID string, startTime
 		}
 	}
 	return states, nil
+}
+
+// GetWeatherForecasts retrieves forecast rows for a weather entity using Home
+// Assistant's weather.get_forecasts response API. forecastType must be daily,
+// hourly, or twice_daily.
+func (c *Client) GetWeatherForecasts(ctx context.Context, entityID, forecastType string) ([]map[string]any, error) {
+	if entityID == "" {
+		return nil, nil
+	}
+	if forecastType == "" {
+		forecastType = "daily"
+	}
+
+	var response struct {
+		ServiceResponse map[string]weatherForecastResponse `json:"service_response"`
+	}
+	body := map[string]any{
+		"entity_id": entityID,
+		"type":      forecastType,
+	}
+	if err := c.post(ctx, "/api/services/weather/get_forecasts?return_response", body, &response); err != nil {
+		return nil, err
+	}
+
+	item, ok := response.ServiceResponse[entityID]
+	if !ok {
+		return nil, fmt.Errorf("weather forecast response missing entity %q", entityID)
+	}
+	return append([]map[string]any(nil), item.Forecast...), nil
 }
 
 // CallService calls a Home Assistant service.

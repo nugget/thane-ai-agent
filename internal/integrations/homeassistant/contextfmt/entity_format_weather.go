@@ -35,15 +35,29 @@ type weatherContext struct {
 	Precipitation any               `json:"precipitation,omitempty"`
 	Since         string            `json:"since"`
 	Updated       string            `json:"updated,omitempty"`
+	ForecastType  string            `json:"forecast_type,omitempty"`
 	Forecast      []weatherForecast `json:"forecast,omitempty"`
 }
 
 // weatherForecast is a single forecast entry.
 type weatherForecast struct {
-	Delta     string `json:"dt"`
-	Condition string `json:"condition,omitempty"`
-	TempHigh  any    `json:"high,omitempty"`
-	TempLow   any    `json:"low,omitempty"`
+	Delta                    string `json:"dt"`
+	Condition                string `json:"condition,omitempty"`
+	ShortDescription         string `json:"short_description,omitempty"`
+	TempHigh                 any    `json:"high,omitempty"`
+	TempLow                  any    `json:"low,omitempty"`
+	ApparentTemp             any    `json:"apparent_temperature,omitempty"`
+	DewPoint                 any    `json:"dew_point,omitempty"`
+	Precipitation            any    `json:"precipitation,omitempty"`
+	PrecipitationProbability any    `json:"precipitation_probability,omitempty"`
+	WindSpeed                any    `json:"wind_speed,omitempty"`
+	WindGustSpeed            any    `json:"wind_gust_speed,omitempty"`
+	WindBearing              any    `json:"wind_bearing,omitempty"`
+	Humidity                 any    `json:"humidity,omitempty"`
+	CloudCoverage            any    `json:"cloud_coverage,omitempty"`
+	Pressure                 any    `json:"pressure,omitempty"`
+	UVIndex                  any    `json:"uv_index,omitempty"`
+	IsDaytime                any    `json:"is_daytime,omitempty"`
 }
 
 func formatWeather(state *homeassistant.State, now time.Time) string {
@@ -71,6 +85,7 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
 		wc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
 	}
+	wc.ForecastType = attrString(state.Attributes, "forecast_type")
 
 	// Extract forecast entries (HA returns []any of map[string]any).
 	if rawForecast, ok := state.Attributes["forecast"].([]any); ok {
@@ -84,9 +99,22 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 				continue
 			}
 			fc := weatherForecast{
-				Condition: attrString(entry, "condition"),
-				TempHigh:  measuredFirstAttr(entry, []string{"temperature"}, attrString(state.Attributes, "temperature_unit"), 1),
-				TempLow:   measuredFirstAttr(entry, []string{"templow"}, attrString(state.Attributes, "temperature_unit"), 1),
+				Condition:                attrString(entry, "condition"),
+				ShortDescription:         attrString(entry, "short_description"),
+				TempHigh:                 measuredFirstAttr(entry, []string{"temperature"}, attrString(state.Attributes, "temperature_unit"), 1),
+				TempLow:                  measuredFirstAttr(entry, []string{"templow"}, attrString(state.Attributes, "temperature_unit"), 1),
+				ApparentTemp:             measuredFirstAttr(entry, []string{"apparent_temperature"}, attrString(state.Attributes, "temperature_unit"), 1),
+				DewPoint:                 measuredFirstAttr(entry, []string{"dew_point", "dewpoint"}, attrString(state.Attributes, "temperature_unit"), 1),
+				Precipitation:            measuredFirstAttr(entry, []string{"precipitation"}, attrString(state.Attributes, "precipitation_unit"), 2),
+				PrecipitationProbability: roundAttr(entry["precipitation_probability"], 0),
+				WindSpeed:                measuredFirstAttr(entry, []string{"wind_speed"}, attrString(state.Attributes, "wind_speed_unit"), 1),
+				WindGustSpeed:            measuredFirstAttr(entry, []string{"wind_gust_speed", "wind_gust"}, firstNonEmpty(attrString(state.Attributes, "wind_gust_speed_unit"), attrString(state.Attributes, "wind_speed_unit")), 1),
+				WindBearing:              roundAttr(entry["wind_bearing"], 0),
+				Humidity:                 roundAttr(entry["humidity"], 0),
+				CloudCoverage:            roundAttr(firstAttr(entry, "cloud_coverage", "cloudcover", "clouds"), 0),
+				Pressure:                 measuredFirstAttr(entry, []string{"pressure"}, attrString(state.Attributes, "pressure_unit"), 1),
+				UVIndex:                  roundAttr(firstAttr(entry, "uv_index", "uv"), 1),
+				IsDaytime:                firstAttr(entry, "is_daytime"),
 			}
 			// Delta-annotate forecast time if available. HA may include
 			// fractional seconds, so try RFC3339Nano first.

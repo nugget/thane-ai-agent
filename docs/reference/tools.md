@@ -70,6 +70,12 @@ needs a strict fresh tool scope.
 Subscription expiry is reported as `expires_delta`, not a raw timestamp,
 so the model does not need to do clock arithmetic.
 
+For `weather.*` subscriptions, `add_context_entity` accepts
+`forecast: daily`, `forecast: hourly`, or `forecast: twice_daily` to
+fetch Home Assistant forecast response data each turn and include a
+compact forecast in the injected entity context. Use `forecast: none` to
+clear forecast fetching for that subscription.
+
 ## `ha` / `homeassistant` — Home Assistant state and control
 
 | Tool | Description |

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestStore_RemoveNonExistent(t *testing.T) {
 func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus", "interactive", "battery_focus"}, []int{600, 3600}, 300); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus", "interactive", "battery_focus"}, []int{600, 3600}, 300, "daily"); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -154,8 +155,23 @@ func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	if !slices.Equal(batteryFocus[0].History, []int{600, 3600}) {
 		t.Fatalf("history = %v, want [600 3600]", batteryFocus[0].History)
 	}
+	if batteryFocus[0].Forecast != "daily" {
+		t.Fatalf("forecast = %q, want daily", batteryFocus[0].Forecast)
+	}
 	if batteryFocus[0].ExpiresAt == nil {
 		t.Fatal("expected expiration to be set")
+	}
+}
+
+func TestStore_AddWithOptionsRejectsInvalidForecast(t *testing.T) {
+	store := setupTestStore(t)
+
+	err := store.AddWithOptions("weather.home", nil, nil, 0, "monthly")
+	if err == nil {
+		t.Fatal("expected invalid forecast error")
+	}
+	if !strings.Contains(err.Error(), "forecast must be one of") {
+		t.Fatalf("error = %q, want forecast validation", err.Error())
 	}
 }
 
@@ -165,7 +181,7 @@ func TestStore_RemoveWithScopesPreservesOtherSubscriptions(t *testing.T) {
 	if err := store.Add("sensor.battery"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
