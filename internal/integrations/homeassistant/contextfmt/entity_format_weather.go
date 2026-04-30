@@ -47,6 +47,13 @@ type weatherContext struct {
 	// Pairs with ForecastTotalCount; the model can compute how many
 	// entries were dropped.
 	ForecastTruncated bool `json:"forecast_truncated,omitempty"`
+	// ForecastUnavailable is true when a forecast was requested for
+	// this entity but could not be retrieved (fetch error, empty
+	// result). Pairs with ForecastType: the model knows which
+	// forecast type was asked for and that it was not delivered, so
+	// it can avoid acting as though current conditions are the full
+	// picture.
+	ForecastUnavailable bool `json:"forecast_unavailable,omitempty"`
 }
 
 // weatherForecastRenderLimit caps the number of forecast entries
@@ -102,6 +109,9 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		wc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
 	}
 	wc.ForecastType = attrString(state.Attributes, "forecast_type")
+	if unavailable, _ := state.Attributes["forecast_unavailable"].(bool); unavailable {
+		wc.ForecastUnavailable = true
+	}
 
 	// Extract forecast entries (HA returns []any of map[string]any).
 	if rawForecast, ok := state.Attributes["forecast"].([]any); ok {

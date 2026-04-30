@@ -159,6 +159,39 @@ func TestFormatWeather_TruncatedForecastSurfacesMarker(t *testing.T) {
 	}
 }
 
+func TestFormatWeather_ForecastUnavailableSurfacesMarker(t *testing.T) {
+	// State carrying the forecast_unavailable marker — set upstream by
+	// stateMarkedForecastUnavailable when fetch fails — should render
+	// the marker into model-facing JSON alongside the requested type.
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature":          72.0,
+			"forecast_type":        "daily",
+			"forecast_unavailable": true,
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	if got := parsed["forecast_type"]; got != "daily" {
+		t.Errorf("forecast_type = %v, want daily", got)
+	}
+	if got := parsed["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %v, want true", got)
+	}
+	if _, present := parsed["forecast"]; present {
+		t.Errorf("forecast array should be absent when forecast is unavailable, got %v", parsed["forecast"])
+	}
+}
+
 func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {
 	state := &homeassistant.State{
 		EntityID:    "weather.rooftop",
