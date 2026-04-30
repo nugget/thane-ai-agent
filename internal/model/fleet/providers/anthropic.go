@@ -205,6 +205,8 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),
 	}
 
+	logOutboundCacheMarkers(c.logger, &req)
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -598,6 +600,64 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 		blocks[i].CacheControl = nil
 		excess--
 	}
+}
+
+// logOutboundCacheMarkers emits a structured debug line describing every
+// cache_control breakpoint that will land in the outbound request bytes.
+// A 0% cache-read rate combined with a payload that omits markers points
+// at a different bug than one where markers are present but the prefix
+// isn't matching, so this log is the cheapest way to disambiguate.
+func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
+	systemBlocks := 0
+	systemBreakpoints := 0
+	systemTotalChars := 0
+	systemTTLs := make([]string, 0, 4)
+	systemBreakpointPrefixChars := make([]int, 0, 4)
+	if blocks, ok := req.System.([]anthropicContent); ok {
+		systemBlocks = len(blocks)
+		prefix := 0
+		for _, b := range blocks {
+			prefix += len(b.Text)
+			if b.CacheControl != nil {
+				systemBreakpoints++
+				ttl := b.CacheControl.TTL
+				if ttl == "" {
+					ttl = "default"
+				}
+				systemTTLs = append(systemTTLs, ttl)
+				systemBreakpointPrefixChars = append(systemBreakpointPrefixChars, prefix)
+			}
+		}
+		systemTotalChars = prefix
+	}
+
+	toolBreakpointTTL := ""
+	if n := len(req.Tools); n > 0 && req.Tools[n-1].CacheControl != nil {
+		toolBreakpointTTL = req.Tools[n-1].CacheControl.TTL
+		if toolBreakpointTTL == "" {
+			toolBreakpointTTL = "default"
+		}
+	}
+
+	requestLevelTTL := ""
+	if req.CacheControl != nil {
+		requestLevelTTL = req.CacheControl.TTL
+		if requestLevelTTL == "" {
+			requestLevelTTL = "default"
+		}
+	}
+
+	logger.Debug("outbound cache markers",
+		"model", req.Model,
+		"system_blocks", systemBlocks,
+		"system_breakpoints", systemBreakpoints,
+		"system_breakpoint_ttls", systemTTLs,
+		"system_breakpoint_prefix_chars", systemBreakpointPrefixChars,
+		"system_total_chars", systemTotalChars,
+		"tools", len(req.Tools),
+		"tool_breakpoint_ttl", toolBreakpointTTL,
+		"request_cache_control_ttl", requestLevelTTL,
+	)
 }
 
 type promptCacheRun struct {
