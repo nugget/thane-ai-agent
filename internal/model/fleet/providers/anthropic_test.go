@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
@@ -621,4 +623,210 @@ func TestAnthropicClient_HandleStreamingCapturesUpstreamRequestID(t *testing.T) 
 	if resp.UpstreamRequestID != "req_streamed_999" {
 		t.Fatalf("UpstreamRequestID = %q, want %q", resp.UpstreamRequestID, "req_streamed_999")
 	}
+}
+
+func TestApplyCacheBreakpointGuards_ReturnsUnderMinimumDrops(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Two short blocks with breakpoints; opus minimum is 4096 tokens
+	// (~16384 chars). Both runs sit well below the threshold.
+	blocks := []anthropicContent{
+		{Type: "text", Text: strings.Repeat("a", 1000), CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+		{Type: "text", Text: strings.Repeat("b", 500), CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "5m"}},
+	}
+	tools := []anthropicTool{}
+
+	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", logger)
+
+	if len(drops) != 2 {
+		t.Fatalf("drops = %d, want 2", len(drops))
+	}
+	for _, d := range drops {
+		if d.Reason != "under_minimum_prefix" {
+			t.Errorf("drop reason = %q, want under_minimum_prefix", d.Reason)
+		}
+		if d.Scope != "system" {
+			t.Errorf("drop scope = %q, want system", d.Scope)
+		}
+	}
+	if blocks[0].CacheControl != nil || blocks[1].CacheControl != nil {
+		t.Fatalf("expected breakpoints stripped from both blocks: %+v", blocks)
+	}
+}
+
+func TestApplyCacheBreakpointGuards_ReturnsToolCapDrop(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Five system breakpoints plus a tool breakpoint = 6 total. Under
+	// the cap policy the tool drop fires first; an additional system
+	// drop brings us to 4. Use opus-sized blocks (>16k chars each) so
+	// the under-minimum guard doesn't pre-drop them.
+	long := strings.Repeat("x", 20000)
+	blocks := []anthropicContent{
+		{Type: "text", Text: long, CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+		{Type: "text", Text: long, CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+		{Type: "text", Text: long, CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+		{Type: "text", Text: long, CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+		{Type: "text", Text: long, CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "5m"}},
+	}
+	tools := []anthropicTool{
+		{Name: "first"},
+		{Name: "last", CacheControl: &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}},
+	}
+
+	drops := applyCacheBreakpointGuards(blocks, tools, "claude-opus-4-20250514", logger)
+
+	if len(drops) < 1 {
+		t.Fatalf("drops = %d, want at least 1", len(drops))
+	}
+	// First drop should be the tool breakpoint per the policy.
+	if drops[0].Reason != "over_cap_tool_breakpoint" || drops[0].Scope != "tools" {
+		t.Errorf("first drop = %+v, want over_cap_tool_breakpoint/tools", drops[0])
+	}
+	if tools[1].CacheControl != nil {
+		t.Errorf("tool breakpoint should be stripped: %+v", tools[1].CacheControl)
+	}
+	// Trailing system drops (if any) should follow with the right reason.
+	for _, d := range drops[1:] {
+		if d.Reason != "over_cap_trailing_system" {
+			t.Errorf("subsequent drop reason = %q, want over_cap_trailing_system", d.Reason)
+		}
+	}
+}
+
+func TestParseRateLimitHeaders_AllFieldsPresent(t *testing.T) {
+	h := http.Header{}
+	h.Set("anthropic-ratelimit-requests-limit", "5000")
+	h.Set("anthropic-ratelimit-requests-remaining", "4999")
+	h.Set("anthropic-ratelimit-requests-reset", "2026-04-30T08:00:00Z")
+	h.Set("anthropic-ratelimit-tokens-limit", "1000000")
+	h.Set("anthropic-ratelimit-tokens-remaining", "950000")
+	h.Set("anthropic-ratelimit-input-tokens-limit", "800000")
+	h.Set("anthropic-ratelimit-input-tokens-remaining", "750000")
+	h.Set("anthropic-ratelimit-output-tokens-limit", "200000")
+	h.Set("anthropic-ratelimit-output-tokens-remaining", "199000")
+	h.Set("retry-after", "30")
+
+	now := time.Date(2026, 4, 30, 7, 30, 0, 0, time.UTC)
+	snap := parseRateLimitHeaders(h, "req_xyz", now)
+
+	if snap == nil {
+		t.Fatal("parseRateLimitHeaders returned nil with headers present")
+	}
+	if snap.UpstreamRequestID != "req_xyz" {
+		t.Errorf("UpstreamRequestID = %q, want req_xyz", snap.UpstreamRequestID)
+	}
+	if snap.RequestsRemaining != 4999 {
+		t.Errorf("RequestsRemaining = %d, want 4999", snap.RequestsRemaining)
+	}
+	if snap.TokensLimit != 1000000 {
+		t.Errorf("TokensLimit = %d, want 1000000", snap.TokensLimit)
+	}
+	if snap.InputTokensRemaining != 750000 {
+		t.Errorf("InputTokensRemaining = %d, want 750000", snap.InputTokensRemaining)
+	}
+	if snap.OutputTokensRemaining != 199000 {
+		t.Errorf("OutputTokensRemaining = %d, want 199000", snap.OutputTokensRemaining)
+	}
+	if snap.RetryAfter != 30*time.Second {
+		t.Errorf("RetryAfter = %v, want 30s", snap.RetryAfter)
+	}
+	if !snap.CapturedAt.Equal(now) {
+		t.Errorf("CapturedAt = %v, want %v", snap.CapturedAt, now)
+	}
+}
+
+func TestParseRateLimitHeaders_NoneMeansNil(t *testing.T) {
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	if snap := parseRateLimitHeaders(h, "req_xyz", time.Now()); snap != nil {
+		t.Fatalf("expected nil when no rate-limit headers, got %+v", snap)
+	}
+}
+
+func TestAnthropicClient_RateLimitSnapshot_StoreReturnsCopy(t *testing.T) {
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if got := c.RateLimitSnapshot(); got != nil {
+		t.Fatalf("expected nil before any response captured, got %+v", got)
+	}
+
+	original := &RateLimitSnapshot{
+		CapturedAt:        time.Now(),
+		UpstreamRequestID: "req_a",
+		RequestsRemaining: 4000,
+	}
+	c.storeRateLimitSnapshot(original)
+
+	snap := c.RateLimitSnapshot()
+	if snap == nil {
+		t.Fatal("RateLimitSnapshot returned nil after store")
+	}
+	if snap.RequestsRemaining != 4000 {
+		t.Errorf("RequestsRemaining = %d, want 4000", snap.RequestsRemaining)
+	}
+	// Verify we got a copy, not the original pointer — a downstream
+	// mutation must not race with future stores.
+	snap.RequestsRemaining = 0
+	if c.RateLimitSnapshot().RequestsRemaining != 4000 {
+		t.Fatal("RateLimitSnapshot returned shared pointer; expected defensive copy")
+	}
+}
+
+func TestAnthropicClient_PingCapturesRateLimitSnapshot(t *testing.T) {
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h := http.Header{}
+		h.Set("x-request-id", "req_ping")
+		h.Set("anthropic-ratelimit-requests-remaining", "123")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     h,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping returned error: %v", err)
+	}
+	snap := c.RateLimitSnapshot()
+	if snap == nil {
+		t.Fatal("RateLimitSnapshot returned nil after Ping response")
+	}
+	if snap.UpstreamRequestID != "req_ping" {
+		t.Errorf("UpstreamRequestID = %q, want req_ping", snap.UpstreamRequestID)
+	}
+	if snap.RequestsRemaining != 123 {
+		t.Errorf("RequestsRemaining = %d, want 123", snap.RequestsRemaining)
+	}
+}
+
+func TestLogRateLimitSnapshot_OmitsMissingResetFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logRateLimitSnapshot(logger, &RateLimitSnapshot{
+		UpstreamRequestID: "req_missing_resets",
+		RequestsLimit:     5000,
+		RequestsRemaining: 4999,
+	})
+
+	got := buf.String()
+	if strings.Contains(got, "0001-01-01T00:00:00Z") {
+		t.Fatalf("zero time leaked into rate-limit log: %s", got)
+	}
+	for _, absent := range []string{
+		"requests_reset",
+		"tokens_reset",
+		"input_tokens_reset",
+		"output_tokens_reset",
+		"retry_after",
+	} {
+		if strings.Contains(got, absent) {
+			t.Errorf("log should omit %q when missing/zero: %s", absent, got)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
