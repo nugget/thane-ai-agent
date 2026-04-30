@@ -150,10 +150,15 @@ capability_tags:
 ### Delegation Pressure
 
 When the orchestrator model starts with only ~15-20 tools (the always-active
-set), it naturally reaches for `thane_delegate` when it encounters a request
+set), it naturally reaches for the delegate family — `thane_now` for a
+synchronous answer it can fold into the current turn, or `thane_assign` for
+an async one-shot that reports back later — when it encounters a request
 that needs capabilities outside its active tags. This is delegation pressure
 by architecture, not instruction — the model delegates because it literally
-doesn't have the tools to do the work directly.
+doesn't have the tools to do the work directly. (`thane_delegate` is a
+deprecated compatibility alias routing to one or the other based on a
+`mode` parameter; new code should call `thane_now` / `thane_assign`
+directly.)
 
 The orchestrator can also activate tags explicitly when it wants direct
 access rather than delegation. The choice between "activate the tag and do

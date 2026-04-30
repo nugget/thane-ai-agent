@@ -42,10 +42,14 @@ When delegation is enabled (`delegation_required: true`), tools are
 partitioned:
 
 **Orchestrator sees:**
-- `thane_delegate` — delegate tasks to local models
+- `thane_now` — synchronous delegation; the orchestrator waits for the delegate's answer in this turn
+- `thane_assign` — async one-shot; the delegate runs in the background and reports back through the conversation/channel when complete
+- `thane_delegate` — DEPRECATED compatibility alias that routes to `thane_now` (sync) or `thane_assign` (async) based on a `mode` parameter; will be removed
 - `remember_fact` / `recall_fact` — memory operations
 - `session_working_memory` — session scratchpad
 - `archive_search` — conversation history search
+
+Pick by lifecycle: reach for `thane_now` when the orchestrator needs the result inline to continue reasoning, `thane_assign` when the work is fire-and-forget and a later message is acceptable.
 
 **Delegates see tools** through their capability tags:
 - HA-tagged native and MCP tools for device control or entity queries

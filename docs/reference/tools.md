@@ -36,7 +36,9 @@ These tools load on every turn regardless of active tags.
 | `activate_lens` | Activate a persistent global behavioural lens. |
 | `deactivate_lens` | Deactivate a global behavioural lens. |
 | `list_lenses` | List currently active behavioural lenses. |
-| `thane_delegate` | Delegate a task to a cheaper/faster model via the delegate executor. |
+| `thane_now` | Synchronously delegate a bounded task and return the result inline. |
+| `thane_assign` | Assign a task to a sub-agent that runs in the background and reports back when complete. |
+| `thane_delegate` | DEPRECATED compatibility alias routing to `thane_now` (sync) or `thane_assign` (async) based on a `mode` parameter. |
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
 | `archive_session_transcript` | Retrieve a full session transcript. |
@@ -46,9 +48,11 @@ These tools load on every turn regardless of active tags.
 | `conversation_reset` | Reset the current conversation's message history. |
 | `send_notification` | Provider-agnostic fire-and-forget notification. |
 
-`thane_delegate` uses capability tags as its primary tool and context
-scope. It inherits elective caller tags by default so child work keeps
-the same task context; explicit `tags` override profile default tags.
+The delegate family (`thane_now`, `thane_assign`, and the deprecated
+`thane_delegate` alias) uses capability tags as its primary tool and
+context scope. Delegates inherit elective caller tags by default so
+child work keeps the same task context; explicit `tags` override
+profile default tags.
 Use root entry-point tags such as `development`, `home`, `operations`,
 `knowledge`, `media`, `interactive`, or `people` when the delegate should
 read the menu guidance and choose a narrower branch. Use leaf tags such
