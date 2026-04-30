@@ -1229,3 +1229,163 @@ func TestNormalizeRoots_CoreReservedAcceptsPolicyOnly(t *testing.T) {
 		t.Errorf("core policy not applied: %#v", cfg.DocRoots["core"])
 	}
 }
+
+// --- Ego loop validation ---
+
+// egoBaseConfig returns a Config with the ego loop enabled and a workspace
+// path set, so individual tests can mutate one field at a time to exercise
+// each validation rule.
+func egoBaseConfig() *Config {
+	cfg := Default()
+	cfg.Workspace.Path = "/tmp/thane-test-workspace"
+	cfg.Ego = EgoConfig{
+		Enabled:      true,
+		MinSleep:     "30m",
+		MaxSleep:     "24h",
+		DefaultSleep: "6h",
+	}
+	cfg.applyDefaults()
+	return cfg
+}
+
+func TestValidateEgo_Disabled_NoOp(t *testing.T) {
+	cfg := Default()
+	cfg.Ego = EgoConfig{Enabled: false, MinSleep: "junk"} // would fail if enabled
+	if err := cfg.validateEgo(); err != nil {
+		t.Fatalf("validateEgo with Enabled=false should be a no-op, got: %v", err)
+	}
+}
+
+func TestValidateEgo_RequiresWorkspace(t *testing.T) {
+	cfg := egoBaseConfig()
+	cfg.Workspace.Path = ""
+	err := cfg.validateEgo()
+	if err == nil {
+		t.Fatal("expected error when workspace.path is unset")
+	}
+	if !strings.Contains(err.Error(), "workspace.path") {
+		t.Errorf("error should mention workspace.path, got: %v", err)
+	}
+}
+
+func TestValidateEgo_DurationParsing(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+		expect string
+	}{
+		{"min_sleep", func(c *Config) { c.Ego.MinSleep = "junk" }, "ego.min_sleep"},
+		{"max_sleep", func(c *Config) { c.Ego.MaxSleep = "junk" }, "ego.max_sleep"},
+		{"default_sleep", func(c *Config) { c.Ego.DefaultSleep = "junk" }, "ego.default_sleep"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := egoBaseConfig()
+			tc.mutate(cfg)
+			err := cfg.validateEgo()
+			if err == nil {
+				t.Fatalf("expected error for invalid %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.expect) {
+				t.Errorf("error should mention %s, got: %v", tc.expect, err)
+			}
+		})
+	}
+}
+
+func TestValidateEgo_MinExceedsMax(t *testing.T) {
+	cfg := egoBaseConfig()
+	cfg.Ego.MinSleep = "2h"
+	cfg.Ego.MaxSleep = "1h"
+	err := cfg.validateEgo()
+	if err == nil {
+		t.Fatal("expected error when min_sleep exceeds max_sleep")
+	}
+	if !strings.Contains(err.Error(), "min_sleep") || !strings.Contains(err.Error(), "max_sleep") {
+		t.Errorf("error should mention min_sleep and max_sleep, got: %v", err)
+	}
+}
+
+func TestValidateEgo_DefaultOutOfRange(t *testing.T) {
+	cfg := egoBaseConfig()
+	cfg.Ego.DefaultSleep = "48h" // exceeds max
+	err := cfg.validateEgo()
+	if err == nil {
+		t.Fatal("expected error when default_sleep is outside [min_sleep, max_sleep]")
+	}
+	if !strings.Contains(err.Error(), "default_sleep") {
+		t.Errorf("error should mention default_sleep, got: %v", err)
+	}
+}
+
+func TestValidateEgo_JitterOutOfRange(t *testing.T) {
+	cases := []float64{-0.1, 1.5}
+	for _, v := range cases {
+		cfg := egoBaseConfig()
+		cfg.Ego.Jitter = &v
+		err := cfg.validateEgo()
+		if err == nil {
+			t.Fatalf("expected error for jitter=%v", v)
+		}
+		if !strings.Contains(err.Error(), "ego.jitter") {
+			t.Errorf("error should mention ego.jitter, got: %v", err)
+		}
+	}
+}
+
+func TestValidateEgo_SupervisorProbabilityOutOfRange(t *testing.T) {
+	cases := []float64{-0.1, 1.5}
+	for _, v := range cases {
+		cfg := egoBaseConfig()
+		cfg.Ego.SupervisorProbability = &v
+		err := cfg.validateEgo()
+		if err == nil {
+			t.Fatalf("expected error for supervisor_probability=%v", v)
+		}
+		if !strings.Contains(err.Error(), "ego.supervisor_probability") {
+			t.Errorf("error should mention ego.supervisor_probability, got: %v", err)
+		}
+	}
+}
+
+// TestApplyDefaults_EgoZeroFloatsArePreserved guards the regression
+// pointed out in PR review: explicit 0.0 for Jitter or
+// SupervisorProbability must survive applyDefaults rather than being
+// silently overwritten by the default value.
+func TestApplyDefaults_EgoZeroFloatsArePreserved(t *testing.T) {
+	zero := 0.0
+	cfg := Default()
+	cfg.Workspace.Path = "/tmp/thane-test-workspace"
+	cfg.Ego = EgoConfig{
+		Enabled:               true,
+		MinSleep:              "30m",
+		MaxSleep:              "24h",
+		DefaultSleep:          "6h",
+		Jitter:                &zero,
+		SupervisorProbability: &zero,
+	}
+	cfg.applyDefaults()
+	if cfg.Ego.Jitter == nil || *cfg.Ego.Jitter != 0.0 {
+		t.Errorf("Jitter = %v, want explicit 0.0 to survive applyDefaults", cfg.Ego.Jitter)
+	}
+	if cfg.Ego.SupervisorProbability == nil || *cfg.Ego.SupervisorProbability != 0.0 {
+		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Ego.SupervisorProbability)
+	}
+}
+
+// TestApplyDefaults_MetacognitiveZeroFloatsArePreserved guards the same
+// regression in the metacognitive config schema, which has the same
+// pointer shape.
+func TestApplyDefaults_MetacognitiveZeroFloatsArePreserved(t *testing.T) {
+	zero := 0.0
+	cfg := Default()
+	cfg.Metacognitive.Jitter = &zero
+	cfg.Metacognitive.SupervisorProbability = &zero
+	cfg.applyDefaults()
+	if cfg.Metacognitive.Jitter == nil || *cfg.Metacognitive.Jitter != 0.0 {
+		t.Errorf("Jitter = %v, want explicit 0.0 to survive applyDefaults", cfg.Metacognitive.Jitter)
+	}
+	if cfg.Metacognitive.SupervisorProbability == nil || *cfg.Metacognitive.SupervisorProbability != 0.0 {
+		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Metacognitive.SupervisorProbability)
+	}
+}

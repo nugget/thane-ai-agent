@@ -873,10 +873,11 @@ ego:
   # Default: "6h".
   default_sleep: 6h
   # Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
+  # Set to 0.0 for deterministic timing.
   jitter: 0.2
   # SupervisorProbability is the chance (0.0–1.0) that each wake
   # uses a frontier model with supervisor-augmented prompt.
-  # Default: 0.2.
+  # Default: 0.2. Set to 0.0 to disable supervisor iterations.
   supervisor_probability: 0.2
   # Router configures model routing for normal iterations.
   router:

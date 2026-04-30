@@ -10,13 +10,14 @@ import (
 )
 
 func TestParseConfig_Valid(t *testing.T) {
+	jitter, supervisor := 0.2, 0.2
 	raw := config.EgoConfig{
 		Enabled:               true,
 		MinSleep:              "30m",
 		MaxSleep:              "24h",
 		DefaultSleep:          "6h",
-		Jitter:                0.2,
-		SupervisorProbability: 0.2,
+		Jitter:                &jitter,
+		SupervisorProbability: &supervisor,
 		Router:                config.EgoRouterConfig{QualityFloor: 5},
 		SupervisorRouter:      config.EgoRouterConfig{QualityFloor: 8},
 	}

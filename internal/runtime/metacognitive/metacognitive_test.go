@@ -33,13 +33,14 @@ func testConfig() Config {
 // --- ParseConfig tests ---
 
 func TestParseConfig_Valid(t *testing.T) {
+	jitter, supervisor := 0.2, 0.1
 	raw := config.MetacognitiveConfig{
 		Enabled:               true,
 		MinSleep:              "2m",
 		MaxSleep:              "30m",
 		DefaultSleep:          "10m",
-		Jitter:                0.2,
-		SupervisorProbability: 0.1,
+		Jitter:                &jitter,
+		SupervisorProbability: &supervisor,
 		Router:                config.MetacognitiveRouterConfig{QualityFloor: 3},
 		SupervisorRouter:      config.MetacognitiveRouterConfig{QualityFloor: 8},
 	}

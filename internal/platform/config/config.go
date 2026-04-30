@@ -1720,12 +1720,12 @@ type MetacognitiveConfig struct {
 	// Jitter is the sleep randomization factor (0.0–1.0). A value of
 	// 0.2 means the actual sleep varies by ±20% of the computed
 	// duration. Default: 0.2. Set to 0.0 for deterministic timing.
-	Jitter float64 `yaml:"jitter"`
+	Jitter *float64 `yaml:"jitter,omitempty"`
 
 	// SupervisorProbability is the chance (0.0–1.0) that each wake
 	// uses a frontier model with supervisor-augmented prompt.
 	// Default: 0.1. Set to 0.0 to disable supervisor iterations.
-	SupervisorProbability float64 `yaml:"supervisor_probability"`
+	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
 	// iterations.
@@ -1764,12 +1764,13 @@ type EgoConfig struct {
 	DefaultSleep string `yaml:"default_sleep"`
 
 	// Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
-	Jitter float64 `yaml:"jitter"`
+	// Set to 0.0 for deterministic timing.
+	Jitter *float64 `yaml:"jitter,omitempty"`
 
 	// SupervisorProbability is the chance (0.0–1.0) that each wake
 	// uses a frontier model with supervisor-augmented prompt.
-	// Default: 0.2.
-	SupervisorProbability float64 `yaml:"supervisor_probability"`
+	// Default: 0.2. Set to 0.0 to disable supervisor iterations.
+	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal iterations.
 	Router EgoRouterConfig `yaml:"router"`
@@ -2195,11 +2196,13 @@ func (c *Config) applyDefaults() {
 	if c.Metacognitive.DefaultSleep == "" {
 		c.Metacognitive.DefaultSleep = "10m"
 	}
-	if c.Metacognitive.Jitter == 0 {
-		c.Metacognitive.Jitter = 0.2
+	if c.Metacognitive.Jitter == nil {
+		v := 0.2
+		c.Metacognitive.Jitter = &v
 	}
-	if c.Metacognitive.SupervisorProbability == 0 {
-		c.Metacognitive.SupervisorProbability = 0.1
+	if c.Metacognitive.SupervisorProbability == nil {
+		v := 0.1
+		c.Metacognitive.SupervisorProbability = &v
 	}
 	if c.Metacognitive.Router.QualityFloor == 0 {
 		c.Metacognitive.Router.QualityFloor = 3
@@ -2218,11 +2221,13 @@ func (c *Config) applyDefaults() {
 	if c.Ego.DefaultSleep == "" {
 		c.Ego.DefaultSleep = "6h"
 	}
-	if c.Ego.Jitter == 0 {
-		c.Ego.Jitter = 0.2
+	if c.Ego.Jitter == nil {
+		v := 0.2
+		c.Ego.Jitter = &v
 	}
-	if c.Ego.SupervisorProbability == 0 {
-		c.Ego.SupervisorProbability = 0.2
+	if c.Ego.SupervisorProbability == nil {
+		v := 0.2
+		c.Ego.SupervisorProbability = &v
 	}
 	if c.Ego.Router.QualityFloor == 0 {
 		c.Ego.Router.QualityFloor = 5
@@ -2612,11 +2617,11 @@ func (c *Config) validateMetacognitive() error {
 		return fmt.Errorf("metacognitive.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
 			defaultSleep, minSleep, maxSleep)
 	}
-	if c.Metacognitive.Jitter < 0 || c.Metacognitive.Jitter > 1.0 {
-		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", c.Metacognitive.Jitter)
+	if c.Metacognitive.Jitter != nil && (*c.Metacognitive.Jitter < 0 || *c.Metacognitive.Jitter > 1.0) {
+		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", *c.Metacognitive.Jitter)
 	}
-	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
-		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
+	if c.Metacognitive.SupervisorProbability != nil && (*c.Metacognitive.SupervisorProbability < 0 || *c.Metacognitive.SupervisorProbability > 1.0) {
+		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Metacognitive.SupervisorProbability)
 	}
 	return nil
 }
@@ -2649,11 +2654,11 @@ func (c *Config) validateEgo() error {
 		return fmt.Errorf("ego.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
 			defaultSleep, minSleep, maxSleep)
 	}
-	if c.Ego.Jitter < 0 || c.Ego.Jitter > 1.0 {
-		return fmt.Errorf("ego.jitter %.2f must be in [0.0, 1.0]", c.Ego.Jitter)
+	if c.Ego.Jitter != nil && (*c.Ego.Jitter < 0 || *c.Ego.Jitter > 1.0) {
+		return fmt.Errorf("ego.jitter %.2f must be in [0.0, 1.0]", *c.Ego.Jitter)
 	}
-	if c.Ego.SupervisorProbability < 0 || c.Ego.SupervisorProbability > 1.0 {
-		return fmt.Errorf("ego.supervisor_probability %.2f must be in [0.0, 1.0]", c.Ego.SupervisorProbability)
+	if c.Ego.SupervisorProbability != nil && (*c.Ego.SupervisorProbability < 0 || *c.Ego.SupervisorProbability > 1.0) {
+		return fmt.Errorf("ego.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Ego.SupervisorProbability)
 	}
 	return nil
 }

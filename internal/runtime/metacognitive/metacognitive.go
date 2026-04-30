@@ -112,11 +112,22 @@ func ParseConfig(raw config.MetacognitiveConfig) (Config, error) {
 		MinSleep:               minSleep,
 		MaxSleep:               maxSleep,
 		DefaultSleep:           defaultSleep,
-		Jitter:                 raw.Jitter,
-		SupervisorProbability:  raw.SupervisorProbability,
+		Jitter:                 derefFloat(raw.Jitter, 0.2),
+		SupervisorProbability:  derefFloat(raw.SupervisorProbability, 0.1),
 		QualityFloor:           raw.Router.QualityFloor,
 		SupervisorQualityFloor: raw.SupervisorRouter.QualityFloor,
 	}, nil
+}
+
+// derefFloat returns *p when non-nil, otherwise def. Used to apply
+// the package-level fallback when ParseConfig is called with a raw
+// config struct that bypassed [config.Config.applyDefaults] (typically
+// in tests).
+func derefFloat(p *float64, def float64) float64 {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // Opts holds options for [BuildLoopConfig] that are not part of [Config].

@@ -377,8 +377,8 @@ func ExampleConfig() *Config {
 			MinSleep:              "2m",
 			MaxSleep:              "30m",
 			DefaultSleep:          "10m",
-			Jitter:                0.2,
-			SupervisorProbability: 0.1,
+			Jitter:                floatPtr(0.2),
+			SupervisorProbability: floatPtr(0.1),
 			Router:                MetacognitiveRouterConfig{QualityFloor: 3},
 			SupervisorRouter:      MetacognitiveRouterConfig{QualityFloor: 8},
 		},
@@ -388,8 +388,8 @@ func ExampleConfig() *Config {
 			MinSleep:              "30m",
 			MaxSleep:              "24h",
 			DefaultSleep:          "6h",
-			Jitter:                0.2,
-			SupervisorProbability: 0.2,
+			Jitter:                floatPtr(0.2),
+			SupervisorProbability: floatPtr(0.2),
 			Router:                EgoRouterConfig{QualityFloor: 5},
 			SupervisorRouter:      EgoRouterConfig{QualityFloor: 8},
 		},
@@ -458,3 +458,8 @@ func ExampleConfig() *Config {
 		},
 	}
 }
+
+// floatPtr returns a pointer to v. Used by [ExampleConfig] for *float64
+// fields (e.g. Metacognitive.Jitter) so values are explicitly set rather
+// than ambiguously zero.
+func floatPtr(v float64) *float64 { return &v }
