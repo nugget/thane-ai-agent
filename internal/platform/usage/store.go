@@ -19,11 +19,17 @@ import (
 
 // Record represents a single LLM interaction's token usage and cost.
 type Record struct {
-	ID                       string
-	Timestamp                time.Time
-	RequestID                string
-	SessionID                string
-	ConversationID           string
+	ID             string
+	Timestamp      time.Time
+	RequestID      string
+	SessionID      string
+	ConversationID string
+	// UpstreamRequestID is the provider-side request identifier when
+	// available (e.g. Anthropic's `x-request-id` response header).
+	// Empty when the provider does not return one or the call failed
+	// before headers arrived. Captured for support escalation and to
+	// correlate our local r_* IDs with upstream invoice line items.
+	UpstreamRequestID        string
 	Model                    string // Selected deployment ID when known
 	UpstreamModel            string
 	Resource                 string
@@ -152,6 +158,13 @@ func (s *Store) migrate() error {
 	if err := database.AddColumn(s.db, "usage_records", "cache_creation_1h_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// upstream_request_id captures Anthropic's `x-request-id` response
+	// header (and any equivalent from future providers) for billing
+	// correlation. Rows from before this migration have "" — fine,
+	// the column is informational and never participates in joins.
+	if err := database.AddColumn(s.db, "usage_records", "upstream_request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -171,13 +184,14 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_records
-			(id, timestamp, request_id, session_id, conversation_id, model, upstream_model, resource, provider,
+			(id, timestamp, request_id, upstream_request_id, session_id, conversation_id, model, upstream_model, resource, provider,
 			 input_tokens, output_tokens, cache_creation_input_tokens, cache_creation_5m_input_tokens,
 			 cache_creation_1h_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
+		rec.UpstreamRequestID,
 		rec.SessionID,
 		rec.ConversationID,
 		rec.Model,

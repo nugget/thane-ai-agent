@@ -734,3 +734,47 @@ func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
 		t.Fatal("expected cache_read_input_tokens column after migration")
 	}
 }
+
+func TestRecord_PersistsUpstreamRequestID(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	rec := Record{
+		Timestamp:         now,
+		RequestID:         "r_local_001",
+		UpstreamRequestID: "req_anthropic_xyz",
+		Model:             "claude-opus-4-20250514",
+		Provider:          "anthropic",
+		InputTokens:       100,
+		OutputTokens:      50,
+		Role:              "interactive",
+	}
+	if err := s.Record(ctx, rec); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	row := s.db.QueryRow(`SELECT upstream_request_id FROM usage_records WHERE request_id = ?`, "r_local_001")
+	var got string
+	if err := row.Scan(&got); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if got != "req_anthropic_xyz" {
+		t.Errorf("upstream_request_id = %q, want %q", got, "req_anthropic_xyz")
+	}
+}
+
+func TestMigrate_AddsUpstreamRequestIDColumn(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := NewStore(db); err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if !database.HasColumn(db, "usage_records", "upstream_request_id") {
+		t.Fatal("expected upstream_request_id column after migration")
+	}
+}

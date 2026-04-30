@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -576,5 +577,48 @@ func TestAnthropicClient_SetLogger_NilGuards(t *testing.T) {
 	c.SetLogger(nil)
 	if c.logger != before {
 		t.Fatal("nil logger argument must not replace existing logger")
+	}
+}
+
+func TestAnthropicClient_HandleNonStreamingCapturesUpstreamRequestID(t *testing.T) {
+	body := strings.NewReader(`{
+		"id":"msg_01",
+		"type":"message",
+		"role":"assistant",
+		"content":[{"type":"text","text":"hi"}],
+		"model":"claude-opus-4-20250514",
+		"stop_reason":"end_turn",
+		"usage":{"input_tokens":10,"output_tokens":5}
+	}`)
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	resp, err := c.handleNonStreaming(context.Background(), body, "req_xyz789")
+	if err != nil {
+		t.Fatalf("handleNonStreaming: %v", err)
+	}
+	if resp.UpstreamRequestID != "req_xyz789" {
+		t.Fatalf("UpstreamRequestID = %q, want %q", resp.UpstreamRequestID, "req_xyz789")
+	}
+}
+
+func TestAnthropicClient_HandleStreamingCapturesUpstreamRequestID(t *testing.T) {
+	// Minimal SSE stream: message_start with usage, then message_stop.
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_x","model":"claude-opus-4-20250514","usage":{"input_tokens":10,"output_tokens":0}}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+		``,
+	}, "\n")
+
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "req_streamed_999")
+	if err != nil {
+		t.Fatalf("handleStreaming: %v", err)
+	}
+	if resp.UpstreamRequestID != "req_streamed_999" {
+		t.Fatalf("UpstreamRequestID = %q, want %q", resp.UpstreamRequestID, "req_streamed_999")
 	}
 }

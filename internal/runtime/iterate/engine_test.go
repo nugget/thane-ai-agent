@@ -840,3 +840,75 @@ func TestEngine_ToolDefsNamesEmpty(t *testing.T) {
 		t.Errorf("names = %v, want nil", names)
 	}
 }
+
+func TestEngine_PropagatesUpstreamRequestID(t *testing.T) {
+	first := textResponse("Hello back!")
+	first.UpstreamRequestID = "req_anthropic_abc123"
+	mock := &mockLLM{responses: []*llm.ChatResponse{first}}
+	exec := &mockExecutor{results: map[string]string{}}
+	cfg := baseCfg(mock, exec)
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.UpstreamRequestID != "req_anthropic_abc123" {
+		t.Errorf("Result.UpstreamRequestID = %q, want %q", result.UpstreamRequestID, "req_anthropic_abc123")
+	}
+	if len(result.Iterations) != 1 {
+		t.Fatalf("iterations = %d, want 1", len(result.Iterations))
+	}
+	if result.Iterations[0].UpstreamRequestID != "req_anthropic_abc123" {
+		t.Errorf("Iterations[0].UpstreamRequestID = %q, want %q", result.Iterations[0].UpstreamRequestID, "req_anthropic_abc123")
+	}
+}
+
+func TestEngine_UpstreamRequestID_LatestNonEmptyWins(t *testing.T) {
+	// Multi-iteration: tool call then text. The final text response carries
+	// the upstream ID; an empty middle ID must not blank out the result.
+	tc := toolCallResponse(makeToolCall("search", map[string]any{"q": "x"}))
+	tc.UpstreamRequestID = "req_first"
+	final := textResponse("done")
+	final.UpstreamRequestID = "req_final"
+	mock := &mockLLM{responses: []*llm.ChatResponse{tc, final}}
+	exec := &mockExecutor{results: map[string]string{"search": "ok"}}
+	cfg := baseCfg(mock, exec)
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.UpstreamRequestID != "req_final" {
+		t.Errorf("Result.UpstreamRequestID = %q, want %q (most recent iteration wins)", result.UpstreamRequestID, "req_final")
+	}
+	if len(result.Iterations) != 2 {
+		t.Fatalf("iterations = %d, want 2", len(result.Iterations))
+	}
+	if result.Iterations[0].UpstreamRequestID != "req_first" || result.Iterations[1].UpstreamRequestID != "req_final" {
+		t.Errorf("per-iteration IDs lost: %q, %q", result.Iterations[0].UpstreamRequestID, result.Iterations[1].UpstreamRequestID)
+	}
+}
+
+func TestLatestUpstreamRequestID(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []IterationRecord
+		want string
+	}{
+		{name: "empty", in: nil, want: ""},
+		{name: "all empty", in: []IterationRecord{{}, {}, {}}, want: ""},
+		{name: "single id", in: []IterationRecord{{UpstreamRequestID: "abc"}}, want: "abc"},
+		{name: "later wins", in: []IterationRecord{{UpstreamRequestID: "first"}, {UpstreamRequestID: "second"}}, want: "second"},
+		{name: "skips trailing empty", in: []IterationRecord{{UpstreamRequestID: "kept"}, {}}, want: "kept"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := latestUpstreamRequestID(tt.in)
+			if got != tt.want {
+				t.Errorf("latestUpstreamRequestID(%+v) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

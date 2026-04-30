@@ -21,6 +21,7 @@ const (
 type IterationRecord struct {
 	Index                      int
 	Model                      string
+	UpstreamRequestID          string
 	InputTokens                int
 	OutputTokens               int
 	CacheCreationInputTokens   int
@@ -44,6 +45,14 @@ type Result struct {
 	// differ from the initially configured model if error recovery
 	// or failover changed it.
 	Model string
+
+	// UpstreamRequestID is the provider-side request ID of the final
+	// iteration when the provider returned one (e.g. Anthropic's
+	// `x-request-id` header). Empty when the provider doesn't expose
+	// one or the run had no successful iterations. Per-iteration IDs
+	// remain available on Iterations[i].UpstreamRequestID for cases
+	// where billing escalation or correlation needs the full chain.
+	UpstreamRequestID string
 
 	// InputTokens is the cumulative input token count across all iterations.
 	InputTokens int
