@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
+	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
@@ -73,6 +74,12 @@ func (a *App) initServers(s *newState) error {
 			result[name] = ds
 		}
 		return result
+	})
+	server.ConfigureAnthropicRateLimitSnapshotSource(func() *fleet.AnthropicRateLimitSnapshot {
+		if a.modelRuntime == nil {
+			return nil
+		}
+		return a.modelRuntime.AnthropicRateLimitSnapshot()
 	})
 	a.server = server
 
@@ -498,8 +505,14 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurfaceGetter()},
-			Logger:       logger,
+			SystemStatus: &systemStatusAdapter{
+				connMgr:       a.connMgr,
+				modelRegistry: a.modelRegistry,
+				modelRuntime:  a.modelRuntime,
+				router:        a.rtr,
+				capSurface:    a.capSurfaceGetter(),
+			},
+			Logger: logger,
 		}
 		if a.liveRequestStore != nil {
 			webCfg.ContentQuerier = a.liveRequestStore

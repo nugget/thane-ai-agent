@@ -91,6 +91,7 @@ type Server struct {
 	deleteLoopDefinitionPolicy         func(string) error
 	reconcileLoopDefinition            func(context.Context, string) error
 	launchLoopDefinition               func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
+	anthropicRateLimitSnapshot         func() *fleet.AnthropicRateLimitSnapshot
 	logger                             *slog.Logger
 	server                             *http.Server
 	stats                              *SessionStats
@@ -104,6 +105,12 @@ func (s *Server) SetOWUTracker(t *OWUTracker) {
 // SetConnManager sets the dependency health provider for the /health endpoint.
 func (s *Server) SetConnManager(fn HealthStatusFunc) {
 	s.healthDeps = fn
+}
+
+// ConfigureAnthropicRateLimitSnapshotSource configures the provider for the
+// latest Anthropic rate-limit snapshot included in router stats.
+func (s *Server) ConfigureAnthropicRateLimitSnapshotSource(fn func() *fleet.AnthropicRateLimitSnapshot) {
+	s.anthropicRateLimitSnapshot = fn
 }
 
 // SetTokenObserver registers an observer that is notified after each
@@ -883,6 +890,11 @@ func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) 
 
 // Router introspection handlers
 
+type routerStatsResponse struct {
+	router.Stats
+	AnthropicRateLimit *fleet.AnthropicRateLimitSnapshot `json:"anthropic_rate_limit,omitempty"`
+}
+
 func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
 	if s.router == nil {
 		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
@@ -890,8 +902,12 @@ func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.router.GetStats()
+	response := routerStatsResponse{Stats: stats}
+	if s.anthropicRateLimitSnapshot != nil {
+		response.AnthropicRateLimit = s.anthropicRateLimitSnapshot()
+	}
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, stats, s.logger)
+	writeJSON(w, response, s.logger)
 }
 
 func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {

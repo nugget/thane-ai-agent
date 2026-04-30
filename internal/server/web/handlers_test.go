@@ -70,6 +70,7 @@ type stubSystemStatus struct {
 	version       map[string]string
 	modelRegistry *fleet.RegistrySnapshot
 	routerStats   *router.Stats
+	rateLimit     *fleet.AnthropicRateLimitSnapshot
 	capCatalog    *toolcatalog.CapabilityCatalogView
 }
 
@@ -80,6 +81,9 @@ func (s *stubSystemStatus) ModelRegistry() *fleet.RegistrySnapshot {
 	return s.modelRegistry
 }
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
+func (s *stubSystemStatus) AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot {
+	return s.rateLimit
+}
 func (s *stubSystemStatus) CapabilityCatalog(_ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
 	return s.capCatalog
 }
@@ -335,6 +339,7 @@ func TestHandleLoopEvents_Snapshot(t *testing.T) {
 func TestHandleSystem_Healthy(t *testing.T) {
 	t.Parallel()
 
+	capturedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
 	sys := &stubSystemStatus{
 		health: map[string]ServiceHealth{
 			"mqtt":          {Name: "MQTT", Ready: true, LastCheck: "2025-01-01T00:00:00Z"},
@@ -357,6 +362,14 @@ func TestHandleSystem_Healthy(t *testing.T) {
 			TotalRequests: 3,
 			DeploymentStats: map[string]router.DeploymentStats{
 				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
+			},
+		},
+		rateLimit: &fleet.AnthropicRateLimitSnapshot{
+			CapturedAt:        capturedAt,
+			UpstreamRequestID: "req_dashboard",
+			Requests: &fleet.AnthropicRateLimitBucket{
+				Limit:     5000,
+				Remaining: 4999,
 			},
 		},
 		capCatalog: &toolcatalog.CapabilityCatalogView{
@@ -424,6 +437,13 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	}
 	if routerStats["total_requests"] != float64(3) {
 		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
+	}
+	rateLimit, ok := body["anthropic_rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatal("anthropic_rate_limit field missing or not a map")
+	}
+	if rateLimit["upstream_request_id"] != "req_dashboard" {
+		t.Errorf("upstream_request_id = %v, want req_dashboard", rateLimit["upstream_request_id"])
 	}
 	capCatalog, ok := body["capability_catalog"].(map[string]any)
 	if !ok {

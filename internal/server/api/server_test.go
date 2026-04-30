@@ -375,6 +375,63 @@ func TestHandleModelRegistry(t *testing.T) {
 	}
 }
 
+func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+
+	capturedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+	resetAt := capturedAt.Add(time.Minute)
+	server.ConfigureAnthropicRateLimitSnapshotSource(func() *fleet.AnthropicRateLimitSnapshot {
+		return &fleet.AnthropicRateLimitSnapshot{
+			CapturedAt:        capturedAt,
+			UpstreamRequestID: "req_rate",
+			Requests: &fleet.AnthropicRateLimitBucket{
+				Limit:     5000,
+				Remaining: 0,
+				Reset:     &resetAt,
+			},
+			RetryAfterSeconds: 30,
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/router/stats", nil)
+	rec := httptest.NewRecorder()
+	server.handleRouterStats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := body["total_requests"]; !ok {
+		t.Fatal("total_requests missing from router stats response")
+	}
+	limit, ok := body["anthropic_rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatal("anthropic_rate_limit missing or not a map")
+	}
+	if limit["upstream_request_id"] != "req_rate" {
+		t.Fatalf("upstream_request_id = %v, want req_rate", limit["upstream_request_id"])
+	}
+	if limit["retry_after_seconds"] != float64(30) {
+		t.Fatalf("retry_after_seconds = %v, want 30", limit["retry_after_seconds"])
+	}
+	requests, ok := limit["requests"].(map[string]any)
+	if !ok {
+		t.Fatal("requests bucket missing or not a map")
+	}
+	if requests["remaining"] != float64(0) {
+		t.Fatalf("requests.remaining = %v, want 0", requests["remaining"])
+	}
+	if requests["reset"] != resetAt.Format(time.RFC3339) {
+		t.Fatalf("requests.reset = %v, want %s", requests["reset"], resetAt.Format(time.RFC3339))
+	}
+}
+
 func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
