@@ -848,7 +848,7 @@ func (e *Executor) profileForScope(profileName string, scopeTags []string) *Prof
 			return profile
 		}
 	}
-	if containsTag(scopeTags, "ha") {
+	if hasAnyTag(scopeTags, "ha", "ha_admin") {
 		if profile := e.profiles["ha"]; profile != nil {
 			return profile
 		}
@@ -859,10 +859,12 @@ func (e *Executor) profileForScope(profileName string, scopeTags []string) *Prof
 	return e.profiles["general"]
 }
 
-func containsTag(tags []string, want string) bool {
+func hasAnyTag(tags []string, wants ...string) bool {
 	for _, tag := range tags {
-		if tag == want {
-			return true
+		for _, want := range wants {
+			if tag == want {
+				return true
+			}
 		}
 	}
 	return false

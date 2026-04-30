@@ -208,39 +208,51 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 	t.Parallel()
 
-	var captured looppkg.Request
-	runner := &mockLoopRunner{
-		onRun: func(req looppkg.Request) {
-			captured = req
-		},
-		resp: &looppkg.Response{
-			Content: "delegate answer",
-			Model:   "deepslate/google/gemma-3-4b",
-		},
-	}
+	for _, tc := range []struct {
+		name string
+		tags []string
+	}{
+		{name: "ha", tags: []string{"ha"}},
+		{name: "ha_admin", tags: []string{"ha_admin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured looppkg.Request
+			runner := &mockLoopRunner{
+				onRun: func(req looppkg.Request) {
+					captured = req
+				},
+				resp: &looppkg.Response{
+					Content: "delegate answer",
+					Model:   "deepslate/google/gemma-3-4b",
+				},
+			}
 
-	exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
-	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+			exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
+			exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
-	_, err := exec.execute(context.Background(), "Check the hallway light", "general", "", []string{"ha"}, executionOptions{
-		explicitTagScope: true,
-		promptMode:       agentctx.PromptModeTask,
-	})
-	if err != nil {
-		t.Fatalf("execute() error = %v", err)
-	}
+			_, err := exec.execute(context.Background(), "Check the hallway light", "general", "", tc.tags, executionOptions{
+				explicitTagScope: true,
+				promptMode:       agentctx.PromptModeTask,
+			})
+			if err != nil {
+				t.Fatalf("execute() error = %v", err)
+			}
 
-	if captured.UsageTaskName != "ha" {
-		t.Fatalf("UsageTaskName = %q, want ha profile derived from ha tag", captured.UsageTaskName)
-	}
-	if captured.Hints[router.HintMission] != "device_control" {
-		t.Fatalf("mission hint = %q, want device_control", captured.Hints[router.HintMission])
-	}
-	if captured.Hints[router.HintQualityFloor] != "4" {
-		t.Fatalf("quality_floor hint = %q, want 4", captured.Hints[router.HintQualityFloor])
-	}
-	if !containsString(captured.InitialTags, "ha") {
-		t.Fatalf("InitialTags = %#v, want ha", captured.InitialTags)
+			if captured.UsageTaskName != "ha" {
+				t.Fatalf("UsageTaskName = %q, want ha profile derived from %v tags", captured.UsageTaskName, tc.tags)
+			}
+			if captured.Hints[router.HintMission] != "device_control" {
+				t.Fatalf("mission hint = %q, want device_control", captured.Hints[router.HintMission])
+			}
+			if captured.Hints[router.HintQualityFloor] != "4" {
+				t.Fatalf("quality_floor hint = %q, want 4", captured.Hints[router.HintQualityFloor])
+			}
+			for _, tag := range tc.tags {
+				if !containsString(captured.InitialTags, tag) {
+					t.Fatalf("InitialTags = %#v, want %s", captured.InitialTags, tag)
+				}
+			}
+		})
 	}
 }
 
