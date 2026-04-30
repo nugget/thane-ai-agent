@@ -273,6 +273,45 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 	}
 }
 
+// TestExecute_LoopBackedTagScopedExcludesDelegateFamily exercises the
+// common delegate-launch path: caller specifies non-empty tags, so the
+// AllToolNames-based wholesale exclusion at the explicit-empty-scope
+// branch does not apply. This is the path the production failures
+// from 2026-04-30 traversed — three consecutive delegates whose
+// effective_tools log payloads still contained thane_now, thane_assign,
+// and thane_delegate. The recursion guard must extend through this
+// branch as well, not only the explicit-empty-scope one.
+func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "task", "ha", "", []string{"web"}, executionOptions{
+		explicitTagScope: true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, want := range delegateFamilyToolNames {
+		if !containsString(captured.ExcludeTools, want) {
+			t.Fatalf("ExcludeTools = %#v, want %s — delegate-family recursion guard must hold on the tag-scoped path too", captured.ExcludeTools, want)
+		}
+	}
+}
+
 // TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
 // test for #820. Delegate registries must exclude every member of the
 // thane_* family — thane_delegate (deprecated), thane_now, and
@@ -349,8 +388,65 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 	if containsString(captured.InitialTags, "ha") {
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
-	if len(captured.ExcludeTools) != 0 {
-		t.Fatalf("ExcludeTools = %#v, want tag filtering through always-active tags", captured.ExcludeTools)
+	// ExcludeTools may carry the delegate-family recursion guard, but
+	// must not include any of the regular tag-gated tools — the
+	// always-active tags should expand the filter scope so tag-based
+	// filtering does the work via InitialTags, not via wholesale
+	// AllToolNames exclusion.
+	for _, got := range captured.ExcludeTools {
+		if !containsString(delegateFamilyToolNames, got) {
+			t.Fatalf("ExcludeTools = %#v, includes non-family tool %q — tag filtering should route through InitialTags", captured.ExcludeTools, got)
+		}
+	}
+}
+
+// TestEmptyResponseError_PropagatesChildLastError pins the error
+// surface for the case where a delegate's joined launch finishes
+// without a Response. Production failures on 2026-04-30 surfaced as
+// "delegate failed: joined launch completed without response" — a
+// generic message that hid the child loop's underlying tool-call
+// parse error from gpt-oss:120b. The parent had no way to decide
+// whether to retry or change strategy. With FinalStatus populated,
+// the helper must surface the child's LastError verbatim.
+func TestEmptyResponseError_PropagatesChildLastError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		result looppkg.LaunchResult
+		want   string
+	}{
+		{
+			name:   "no final status falls back to opaque message",
+			result: looppkg.LaunchResult{},
+			want:   "delegate failed: joined launch completed without response",
+		},
+		{
+			name: "final status with empty last error falls back to opaque message",
+			result: looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{LastError: ""},
+			},
+			want: "delegate failed: joined launch completed without response",
+		},
+		{
+			name: "final status with last error surfaces the child error verbatim",
+			result: looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{
+					LastError: `loop LLM call: API error 500: error parsing tool call: raw='{"account":"github":"primary"}'`,
+				},
+			},
+			want: `delegate failed: loop LLM call: API error 500: error parsing tool call: raw='{"account":"github":"primary"}'`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := emptyResponseError(tc.result)
+			if got == nil || got.Error() != tc.want {
+				t.Fatalf("emptyResponseError() = %v, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
