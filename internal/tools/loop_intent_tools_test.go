@@ -228,6 +228,16 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if !strings.Contains(doc, "output_mode") {
 		t.Errorf("scaffold missing output_mode frontmatter:\n%s", doc)
 	}
+	rawDoc, err := os.ReadFile(filepath.Join(kbDir, "dashboards", "pr-watchlist.md"))
+	if err != nil {
+		t.Fatalf("read raw scaffold doc: %v", err)
+	}
+	if strings.Contains(string(rawDoc), "created_at:") {
+		t.Errorf("scaffold should use canonical created frontmatter, got created_at:\n%s", rawDoc)
+	}
+	if !strings.Contains(string(rawDoc), "created:") {
+		t.Errorf("scaffold missing canonical created frontmatter:\n%s", rawDoc)
+	}
 	if !strings.Contains(doc, "Current State") {
 		t.Errorf("maintain scaffold should include Current State heading:\n%s", doc)
 	}

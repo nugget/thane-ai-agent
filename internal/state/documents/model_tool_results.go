@@ -1,6 +1,7 @@
 package documents
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -288,8 +289,18 @@ func modelFrontmatter(frontmatter map[string][]string, now time.Time) map[string
 		return nil
 	}
 	out := make(map[string][]string, len(frontmatter))
-	for key, values := range frontmatter {
+	keys := make([]string, 0, len(frontmatter))
+	for key := range frontmatter {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		values := frontmatter[key]
 		if deltaKey, ok := frontmatterDeltaFieldName(key); ok {
+			if _, exists := out[deltaKey]; exists {
+				continue
+			}
 			deltas := make([]string, 0, len(values))
 			for _, value := range values {
 				delta := modelDelta(value, now)
@@ -311,9 +322,9 @@ func modelFrontmatter(frontmatter map[string][]string, now time.Time) map[string
 
 func frontmatterDeltaFieldName(key string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "created":
+	case "created", "created_at":
 		return "created_delta", true
-	case "updated":
+	case "updated", "updated_at":
 		return "updated_delta", true
 	case GeneratedFieldAt:
 		return "generated_delta", true
