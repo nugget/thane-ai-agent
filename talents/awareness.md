@@ -46,9 +46,10 @@ Subscribing entities to your context is a service-loop reflex. Take
 what you need, release it when the work is done; the cost is light and
 the reward is sustained attention without re-querying.
 
-- `add_context_entity` — subscribe an entity or live provider so its
-  current state auto-loads into your context each turn. Use when this
-  loop or conversation will keep caring about the same surface.
+- `add_context_entity` — subscribe a Home Assistant entity by
+  `entity_id` so its current state auto-loads into your context each
+  turn. Use when this loop or conversation will keep caring about the
+  same surface.
 - `list_context_entities` — see what is already subscribed for this
   scope.
 - `remove_context_entity` — drop a subscription when its work is done.
