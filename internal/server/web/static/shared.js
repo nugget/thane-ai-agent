@@ -156,8 +156,20 @@ function formatToolTooltip(entry) {
   return lines.join('\n');
 }
 
-// parseDelegateArgs extracts task/profile/guidance from a thane_delegate
-// tool call's args (which may be a JSON string or object).
+const delegateToolNames = new Set(['thane_now', 'thane_assign', 'thane_delegate']);
+
+function isDelegateTool(name) {
+  return delegateToolNames.has(name);
+}
+
+function delegateToolLabel(name) {
+  if (name === 'thane_now') return 'sync';
+  if (name === 'thane_assign') return 'async';
+  return 'legacy';
+}
+
+// parseDelegateArgs extracts task/guidance/tags from a delegate tool
+// call's args (which may be a JSON string or object).
 function parseDelegateArgs(args) {
   if (!args) return {};
   try {
@@ -171,11 +183,12 @@ function extractDelegateCalls(liveTools) {
   if (!liveTools || liveTools.length === 0) return [];
   const calls = [];
   for (const entry of liveTools) {
-    if (entry.tool !== 'thane_delegate') continue;
+    if (!isDelegateTool(entry.tool)) continue;
     const parsed = parseDelegateArgs(entry.args);
     calls.push({
       task: parsed.task || '',
       profile: parsed.profile || '',
+      mode: parsed.mode || delegateToolLabel(entry.tool),
       guidance: truncate(parsed.guidance || '', 200),
       tags: parsed.tags || [],
       status: entry.status || 'done',
@@ -1509,7 +1522,7 @@ function buildLiveCard(loop) {
     for (const entry of tools) {
       const li = document.createElement('li');
       li.className = 'live-tool live-tool--' + entry.status;
-      if (entry.tool === 'thane_delegate') {
+      if (isDelegateTool(entry.tool)) {
         // Show delegate task inline instead of bare tool name.
         const parsed = parseDelegateArgs(entry.args);
         li.innerHTML = '';
@@ -1521,12 +1534,11 @@ function buildLiveCard(loop) {
         taskSpan.className = 'live-tool__delegate-task';
         taskSpan.textContent = truncate(parsed.task || 'delegate', 80);
         li.appendChild(taskSpan);
-        if (parsed.profile) {
-          const prof = document.createElement('span');
-          prof.className = 'live-tool__delegate-profile';
-          prof.textContent = parsed.profile;
-          li.appendChild(prof);
-        }
+        const label = parsed.profile || delegateToolLabel(entry.tool);
+        const prof = document.createElement('span');
+        prof.className = 'live-tool__delegate-profile';
+        prof.textContent = label;
+        li.appendChild(prof);
       } else {
         li.textContent = entry.tool;
       }
@@ -1674,7 +1686,7 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     body.appendChild(toolsDiv);
   }
 
-  // Delegate calls (rich inline display for thane_delegate tool uses).
+  // Delegate calls (rich inline display for thane_now/thane_assign tool uses).
   if (snap.delegate_calls && snap.delegate_calls.length > 0) {
     const delDiv = document.createElement('div');
     delDiv.className = 'iter-card__delegates';
@@ -1689,10 +1701,11 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
       task.className = 'iter-card__delegate-task';
       task.textContent = truncate(dc.task || 'delegate', 100);
       item.appendChild(task);
-      if (dc.profile) {
+      const label = dc.profile || dc.mode;
+      if (label) {
         const prof = document.createElement('span');
         prof.className = 'iter-card__delegate-profile';
-        prof.textContent = dc.profile;
+        prof.textContent = label;
         item.appendChild(prof);
       }
       if (dc.status === 'error' && dc.error) {

@@ -211,7 +211,7 @@ func (r *Registry) registerAIEscalation(deps EscalationDeps) {
 			"required": []string{"question"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return "", fmt.Errorf("request_ai_escalation is not yet implemented; use request_human_escalation or thane_delegate with a high quality_floor hint")
+			return "", fmt.Errorf("request_ai_escalation is not yet implemented; use request_human_escalation, or escalate by selecting a higher-quality routing profile (e.g. thane:premium) on the orchestrator side")
 		},
 	})
 }

@@ -217,7 +217,7 @@ type Config struct {
 	// tool gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
 
-	// Delegate configures the thane_delegate tool's split-model execution.
+	// Delegate configures the thane_* delegation tools' split-model execution.
 	Delegate DelegateConfig `yaml:"delegate"`
 
 	// CapabilityTags optionally overlays the compiled-in capability-tag catalog.
@@ -1147,7 +1147,8 @@ type EpisodicConfig struct {
 type AgentConfig struct {
 	// OrchestratorTools lists tool names to advertise when
 	// DelegationRequired is true. If empty, a sensible default set
-	// is applied (thane_delegate plus lightweight memory tools).
+	// is applied (the thane_now / thane_assign delegation front
+	// doors plus lightweight memory tools).
 	OrchestratorTools []string `yaml:"orchestrator_tools"`
 
 	// DelegationRequired enables orchestrator tool gating. When false
@@ -1155,13 +1156,13 @@ type AgentConfig struct {
 	DelegationRequired bool `yaml:"delegation_required"`
 }
 
-// DelegateConfig configures the thane_delegate tool's split-model
+// DelegateConfig configures the thane_* delegation tools' split-model
 // execution behavior.
 type DelegateConfig struct {
 	// Profiles contains per-profile budget and timeout overrides. The map
-	// key is the compatibility profile name (e.g., "general", "ha"). Only
-	// fields that are set override the builtin defaults — omitted fields
-	// keep their compiled-in values.
+	// key is the profile name (e.g., "general", "ha"). Only fields that
+	// are set override the builtin defaults — omitted fields keep their
+	// compiled-in values.
 	Profiles map[string]DelegateProfileConfig `yaml:"profiles"`
 }
 
@@ -2243,7 +2244,8 @@ func (c *Config) applyDefaults() {
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
 		c.Agent.OrchestratorTools = []string{
-			"thane_delegate",
+			"thane_now",
+			"thane_assign",
 			"recall_fact",
 			"remember_fact",
 			"save_contact",

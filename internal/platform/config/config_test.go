@@ -216,7 +216,7 @@ func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 		t.Fatal("expected delegation_required to be true")
 	}
 
-	want := []string{"thane_delegate", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "owner_contact", "session_working_memory", "session_close", "archive_search"}
+	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "owner_contact", "session_working_memory", "session_close", "archive_search"}
 	if len(cfg.Agent.OrchestratorTools) != len(want) {
 		t.Fatalf("orchestrator_tools length = %d, want %d; got %v", len(cfg.Agent.OrchestratorTools), len(want), cfg.Agent.OrchestratorTools)
 	}
@@ -230,7 +230,7 @@ func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 func TestAgentConfig_CustomOrchestratorTools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  orchestrator_tools:\n    - thane_delegate\n    - recall_fact\n"), 0600)
+	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  orchestrator_tools:\n    - thane_now\n    - recall_fact\n"), 0600)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -240,8 +240,8 @@ func TestAgentConfig_CustomOrchestratorTools(t *testing.T) {
 	if len(cfg.Agent.OrchestratorTools) != 2 {
 		t.Fatalf("orchestrator_tools length = %d, want 2; got %v", len(cfg.Agent.OrchestratorTools), cfg.Agent.OrchestratorTools)
 	}
-	if cfg.Agent.OrchestratorTools[0] != "thane_delegate" || cfg.Agent.OrchestratorTools[1] != "recall_fact" {
-		t.Errorf("orchestrator_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.OrchestratorTools)
+	if cfg.Agent.OrchestratorTools[0] != "thane_now" || cfg.Agent.OrchestratorTools[1] != "recall_fact" {
+		t.Errorf("orchestrator_tools = %v, want [thane_now recall_fact]", cfg.Agent.OrchestratorTools)
 	}
 }
 

@@ -38,7 +38,6 @@ These tools load on every turn regardless of active tags.
 | `list_lenses` | List currently active behavioural lenses. |
 | `thane_now` | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | Assign a task to a sub-agent that runs in the background and reports back when complete. |
-| `thane_delegate` | DEPRECATED compatibility alias routing to `thane_now` (sync) or `thane_assign` (async) based on a `mode` parameter. |
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
 | `archive_session_transcript` | Retrieve a full session transcript. |
@@ -48,11 +47,13 @@ These tools load on every turn regardless of active tags.
 | `conversation_reset` | Reset the current conversation's message history. |
 | `send_notification` | Provider-agnostic fire-and-forget notification. |
 
-The delegate family (`thane_now`, `thane_assign`, and the deprecated
-`thane_delegate` alias) uses capability tags as its primary tool and
-context scope. Delegates inherit elective caller tags by default so
-child work keeps the same task context; explicit `tags` override
-profile default tags.
+The delegate family (`thane_now`, `thane_assign`) uses capability tags as
+its primary tool and context scope. Delegates inherit elective caller tags
+by default so child work keeps the same task context; explicit `tags`
+override profile default tags.
+When the resulting scope includes `ha` or `ha_admin`, the executor uses
+HA-oriented budget and routing hints automatically; otherwise it uses the
+general delegate defaults.
 Use root entry-point tags such as `development`, `home`, `operations`,
 `knowledge`, `media`, `interactive`, or `people` when the delegate should
 read the menu guidance and choose a narrower branch. Use leaf tags such
@@ -289,9 +290,8 @@ Task next-run values include a model-facing delta.
 ## `thane_*` family — intent-shaped front door for "do work"
 
 Always-available (`thane_now`, `thane_assign`) plus loops-tagged
-(`thane_curate`, `thane_wake`). Pick by lifecycle. `thane_delegate`
-and `notify_loop` remain as deprecated aliases that route into the
-family.
+(`thane_curate`, `thane_wake`). Pick by lifecycle. `notify_loop`
+remains as a deprecated alias that routes into the family.
 
 | Tool | Lifecycle | Description |
 |------|-----------|-------------|
@@ -300,8 +300,8 @@ family.
 | `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
 | `thane_wake` | poke existing | Send a one-shot message envelope to a live timer loop, waking it or queueing for the next iteration. |
 
-`thane_now`, `thane_assign`, and the deprecated `thane_delegate` alias
-accept `context_mode`. The default, `task`, gives the child run a compact
+`thane_now` and `thane_assign` accept `context_mode`. The default,
+`task`, gives the child run a compact
 task-worker prompt with active capabilities, tagged context, and current
 conditions, but without full Thane identity files, inject files,
 always-on talents, or conversation-history dressing. Use
@@ -329,7 +329,6 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
 | `notify_loop` | DEPRECATED alias for `thane_wake`. |
-| `thane_delegate` | DEPRECATED alias routing to `thane_now` (sync) or `thane_assign` (async). |
 
 ## `mqtt` — wake subscriptions
 

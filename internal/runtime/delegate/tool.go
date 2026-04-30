@@ -6,16 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
-
-// ToolDescription is the LLM-facing description for the deprecated
-// thane_delegate tool. New code should use NowToolDescription /
-// AssignToolDescription on the family-shaped tools.
-var ToolDescription = "DEPRECATED: prefer thane_now (sync answer) or thane_assign (async one-shot). " +
-	"thane_delegate remains as a compatibility alias and routes to the appropriate family member based on the mode parameter; it will be removed in a future release. " +
-	"\n\n" + prompts.DelegateToolDescription
 
 // NowToolDescription is the LLM-facing description for thane_now, the
 // sync member of the thane_* family.
@@ -33,29 +25,6 @@ const AssignToolDescription = "Assign a bounded task to a sub-agent that runs in
 	"Uses compact task context by default; set context_mode=full only for continuity-sensitive work. " +
 	"For an answer needed in this turn, use thane_now. " +
 	"For recurring scheduled work, use thane_curate."
-
-// ToolDefinition returns the JSON schema for the deprecated
-// thane_delegate tool. Routes to thane_now or thane_assign internally
-// based on the mode parameter.
-func ToolDefinition() map[string]any {
-	props := commonDelegateProperties()
-	props["profile"] = map[string]any{
-		"type":        "string",
-		"default":     "general",
-		"description": "Compatibility profile for budget and routing defaults. Prefer tags for capability scoping. The ha profile adds the ha tag only when tags are omitted.",
-	}
-	props["mode"] = map[string]any{
-		"type":        "string",
-		"enum":        []string{"sync", "async"},
-		"default":     "sync",
-		"description": "DEPRECATED. mode=sync routes to thane_now; mode=async routes to thane_assign. Prefer calling those tools directly.",
-	}
-	return map[string]any{
-		"type":       "object",
-		"properties": props,
-		"required":   []string{"task"},
-	}
-}
 
 // NowToolDefinition returns the JSON schema for thane_now.
 func NowToolDefinition() map[string]any {
@@ -79,7 +48,7 @@ func AssignToolDefinition() map[string]any {
 }
 
 // commonDelegateProperties returns the JSON schema property block
-// shared by thane_now, thane_assign, and thane_delegate.
+// shared by thane_now and thane_assign.
 func commonDelegateProperties() map[string]any {
 	return map[string]any{
 		"task": map[string]any{
@@ -110,31 +79,6 @@ func commonDelegateProperties() map[string]any {
 			"default":     "task",
 			"description": "Prompt/context shape for the delegate. task is compact and omits full identity files, inject files, always-on talents, and conversation-history dressing. full opts into the normal Thane prompt when the delegate truly needs that continuity.",
 		},
-	}
-}
-
-// ToolHandler returns the handler for thane_delegate. Routes to the
-// thane_now or thane_assign code paths based on the mode parameter.
-// Errors from the delegate are returned as tool result strings (not
-// Go errors) so the calling model can decide what to do.
-func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) (string, error) {
-	return func(ctx context.Context, args map[string]any) (string, error) {
-		mode, _ := args["mode"].(string)
-		if mode == "" {
-			mode = "sync"
-		}
-		if mode != "sync" && mode != "async" {
-			return "Error: mode must be one of [sync, async]", nil
-		}
-
-		req, errMsg := parseDelegateArgs(args)
-		if errMsg != "" {
-			return errMsg, nil
-		}
-		if mode == "async" {
-			return runAssign(ctx, exec, req), nil
-		}
-		return runNow(ctx, exec, req), nil
 	}
 }
 
@@ -173,8 +117,6 @@ type delegateRequest struct {
 }
 
 // parseDelegateArgs extracts the shared args for the family.
-// The profile field is read from args for thane_delegate compatibility
-// but defaults to "general" for the family tools that don't expose it.
 func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
 	req := delegateRequest{inheritCallerTags: true, profileName: "general", contextMode: agentctx.PromptModeTask}
 
@@ -184,9 +126,6 @@ func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
 	}
 	req.task = task
 
-	if profile, ok := args["profile"].(string); ok && profile != "" {
-		req.profileName = profile
-	}
 	req.guidance, _ = args["guidance"].(string)
 	if rawInherit, ok := args["inherit_caller_tags"].(bool); ok {
 		req.inheritCallerTags = rawInherit
@@ -210,24 +149,26 @@ func parseDelegateArgs(args map[string]any) (delegateRequest, string) {
 	return req, ""
 }
 
-// runAssign executes the async path. Used by both thane_assign and
-// thane_delegate(mode=async).
+// runAssign executes the async path for thane_assign.
 func runAssign(ctx context.Context, exec *Executor, req delegateRequest) string {
 	opts := executionOptions{
 		inheritCallerTags: req.inheritCallerTags,
 		explicitTagScope:  req.tagsProvided,
 		promptMode:        req.contextMode,
 	}
-	loopID, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
-	if err != nil {
-		return fmt.Sprintf("[Delegate error: profile=%s, mode=async] %s", req.profileName, err.Error())
+	loopID, profileName, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
+	if profileName == "" {
+		profileName = req.profileName
 	}
-	return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", req.profileName, loopID)
+	if err != nil {
+		return fmt.Sprintf("[Delegate error: profile=%s, mode=async] %s", profileName, err.Error())
+	}
+	return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID)
 }
 
-// runNow executes the sync path. Used by both thane_now and
-// thane_delegate(mode=sync). Returns a fully formatted tool-result
-// string with success/exhaustion headers and execution summary.
+// runNow executes the sync path for thane_now. Returns a fully
+// formatted tool-result string with success/exhaustion headers and
+// execution summary.
 func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 	opts := executionOptions{
 		inheritCallerTags: req.inheritCallerTags,
@@ -237,6 +178,10 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 	result, err := exec.execute(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
 	if err != nil {
 		return fmt.Sprintf("[Delegate error: profile=%s] %s", req.profileName, err.Error())
+	}
+	profileName := req.profileName
+	if result.ProfileName != "" {
+		profileName = result.ProfileName
 	}
 	summary := formatExecSummary(result)
 
@@ -248,16 +193,16 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 			// empty-after-tool-calls as ExhaustNoOutput.
 			return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
 				"\n\nDelegate completed without producing results.\n\n%s",
-				req.profileName, result.Model, result.Iterations, summary)
+				profileName, result.Model, result.Iterations, summary)
 		}
 		header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
-			req.profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
+			profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
 		return header + "\n\n" + result.Content + "\n\n" + summary
 	}
 
 	// Exhausted delegation — provide actionable context for retry.
 	header := fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
-		req.profileName, result.Model, result.ExhaustReason, result.Iterations,
+		profileName, result.Model, result.ExhaustReason, result.Iterations,
 		formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
 
 	var out strings.Builder

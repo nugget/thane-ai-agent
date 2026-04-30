@@ -186,7 +186,7 @@ func TestResetCapabilities(t *testing.T) {
 	manifest := []CapabilityManifest{
 		{Tag: "forge", Description: "Forge tools", Tools: []string{"forge_pr_get"}},
 		{Tag: "web", Description: "Web tools", Tools: []string{"web_fetch"}},
-		{Tag: "core", Description: "Core tools", Tools: []string{"thane_delegate"}, AlwaysActive: true},
+		{Tag: "core", Description: "Core tools", Tools: []string{"thane_now"}, AlwaysActive: true},
 	}
 
 	reg := NewEmptyRegistry()
@@ -228,7 +228,7 @@ func TestResetCapabilities_TruncatesRemovedTools(t *testing.T) {
 	manifest := []CapabilityManifest{
 		{Tag: "alpha", Tools: []string{"a1", "a2", "a3", "a4", "a5"}},
 		{Tag: "beta", Tools: []string{"b1", "b2", "b3", "b4", "b5"}},
-		{Tag: "core", Tools: []string{"thane_delegate"}, AlwaysActive: true},
+		{Tag: "core", Tools: []string{"thane_now"}, AlwaysActive: true},
 	}
 
 	reg := NewEmptyRegistry()

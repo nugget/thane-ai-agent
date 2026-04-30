@@ -44,7 +44,6 @@ partitioned:
 **Orchestrator sees:**
 - `thane_now` — synchronous delegation; the orchestrator waits for the delegate's answer in this turn
 - `thane_assign` — async one-shot; the delegate runs in the background and reports back through the conversation/channel when complete
-- `thane_delegate` — DEPRECATED compatibility alias that routes to `thane_now` (sync) or `thane_assign` (async) based on a `mode` parameter; will be removed
 - `remember_fact` / `recall_fact` — memory operations
 - `session_working_memory` — session scratchpad
 - `archive_search` — conversation history search
@@ -132,7 +131,12 @@ determine the delegate's tool and tagged context scope.
 | Profile | Default Tags | Routing Bias | Use For |
 |---------|--------------|--------------|---------|
 | `general` | none | local, general purpose | Most tasks |
-| `ha` | `ha` when no explicit tags are supplied | local, device-control mission | Legacy HA delegations |
+| `ha` | `ha` when no explicit tags are supplied | local, device-control mission | HA-domain delegations |
+
+The model-facing tools do not expose a `profile` knob. When a delegate's
+scope includes the `ha` or `ha_admin` tag, the executor selects the `ha`
+profile's budget and routing hints automatically; otherwise it uses
+`general`.
 
 Delegates inherit elective caller capability tags by default. This keeps
 task context such as activated domain tags or KB articles attached to

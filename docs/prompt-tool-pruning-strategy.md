@@ -195,9 +195,7 @@ The desired model posture is:
 - activate one capability at a time
 - after activation, reassess before activating anything else
 - if the task clearly spans several domains, prefer `thane_now`
-  (sync) or `thane_assign` (async) over serial capability churn.
-  `thane_delegate` is a deprecated compatibility alias that routes to
-  one of these based on a `mode` parameter
+  (sync) or `thane_assign` (async) over serial capability churn
 
 This is the opposite of a "browse and load everything" posture.
 

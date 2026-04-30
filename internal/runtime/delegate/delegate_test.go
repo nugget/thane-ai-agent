@@ -152,6 +152,9 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if result.Model != "deepslate/google/gemma-3-4b" {
 		t.Fatalf("Model = %q", result.Model)
 	}
+	if result.ProfileName != "ha" {
+		t.Fatalf("ProfileName = %q, want ha", result.ProfileName)
+	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
@@ -202,6 +205,61 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	}
 	if captured.UsageRole != "delegate" || captured.UsageTaskName != "ha" {
 		t.Fatalf("usage role/task = %q/%q", captured.UsageRole, captured.UsageTaskName)
+	}
+	assertContainsDelegateFamily(t, captured.ExcludeTools)
+}
+
+func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		tags []string
+	}{
+		{name: "ha", tags: []string{"ha"}},
+		{name: "ha_admin", tags: []string{"ha_admin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured looppkg.Request
+			runner := &mockLoopRunner{
+				onRun: func(req looppkg.Request) {
+					captured = req
+				},
+				resp: &looppkg.Response{
+					Content: "delegate answer",
+					Model:   "deepslate/google/gemma-3-4b",
+				},
+			}
+
+			exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
+			exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+			result, err := exec.execute(context.Background(), "Check the hallway light", "general", "", tc.tags, executionOptions{
+				explicitTagScope: true,
+				promptMode:       agentctx.PromptModeTask,
+			})
+			if err != nil {
+				t.Fatalf("execute() error = %v", err)
+			}
+			if result.ProfileName != "ha" {
+				t.Fatalf("ProfileName = %q, want ha profile derived from %v tags", result.ProfileName, tc.tags)
+			}
+
+			if captured.UsageTaskName != "ha" {
+				t.Fatalf("UsageTaskName = %q, want ha profile derived from %v tags", captured.UsageTaskName, tc.tags)
+			}
+			if captured.Hints[router.HintMission] != "device_control" {
+				t.Fatalf("mission hint = %q, want device_control", captured.Hints[router.HintMission])
+			}
+			if captured.Hints[router.HintQualityFloor] != "4" {
+				t.Fatalf("quality_floor hint = %q, want 4", captured.Hints[router.HintQualityFloor])
+			}
+			for _, tag := range tc.tags {
+				if !containsString(captured.InitialTags, tag) {
+					t.Fatalf("InitialTags = %#v, want %s", captured.InitialTags, tag)
+				}
+			}
+		})
 	}
 }
 
@@ -315,11 +373,10 @@ func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
 
 // TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
 // test for #820. Delegate registries must exclude every member of the
-// thane_* family — thane_delegate (deprecated), thane_now, and
-// thane_assign — to prevent a delegate from spawning another delegate
-// via the new front doors. Both branches of delegateToolRegistry are
-// exercised: the tag-scoped branch (FilterByTags result) and the
-// fall-through branch (no scope).
+// thane_* family — thane_now and thane_assign — to prevent a delegate
+// from spawning another delegate via the front doors. Both branches of
+// delegateToolRegistry are exercised: the tag-scoped branch
+// (FilterByTags result) and the fall-through branch (no scope).
 func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	t.Parallel()
 
@@ -389,6 +446,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 	if containsString(captured.InitialTags, "ha") {
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
+	assertContainsDelegateFamily(t, captured.ExcludeTools)
 	// ExcludeTools may carry the delegate-family recursion guard, but
 	// must not include any of the regular tag-gated tools — the
 	// always-active tags should expand the filter scope so tag-based
@@ -641,21 +699,21 @@ func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
 	}
 }
 
-func TestToolHandler_EmptyTask(t *testing.T) {
+func TestNowToolHandler_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	handler := ToolHandler(exec)
+	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{})
 
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v, want nil", err)
+		t.Fatalf("NowToolHandler() error = %v, want nil", err)
 	}
 	if !strings.Contains(result, "Error: task is required") {
 		t.Errorf("result = %q, want to contain 'task is required'", result)
 	}
 }
 
-func TestToolHandler_DefaultProfile(t *testing.T) {
+func TestNowToolHandler_DefaultProfile(t *testing.T) {
 	mock := &mockLLMClient{
 		responses: []*llm.ChatResponse{
 			{
@@ -668,14 +726,14 @@ func TestToolHandler_DefaultProfile(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	handler := ToolHandler(exec)
+	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{
 		"task": "Do something",
 	})
 
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v", err)
+		t.Fatalf("NowToolHandler() error = %v", err)
 	}
 	if !strings.Contains(result, "profile=general") {
 		t.Errorf("result = %q, want to contain 'profile=general'", result)
@@ -898,6 +956,7 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	ctx := tools.WithConversationID(context.Background(), "conv-async")
 	result, err := AssignToolHandler(exec)(ctx, map[string]any{
 		"task": "Investigate the slow query.",
+		"tags": []any{"ha"},
 	})
 	if err != nil {
 		t.Fatalf("AssignToolHandler error: %v", err)
@@ -908,12 +967,15 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	if !strings.Contains(result, "loop_id=") {
 		t.Fatalf("expected loop_id in result, got: %s", result)
 	}
+	if !strings.Contains(result, "profile=ha") {
+		t.Fatalf("expected derived ha profile in result, got: %s", result)
+	}
 }
 
-// TestToolHandler_AsyncModeLaunchesBackgroundDelegate verifies the
-// deprecated thane_delegate(mode=async) compatibility path still
-// reaches the async executor.
-func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
+// TestAssignToolHandler_LaunchesBackgroundDelegate verifies that the
+// thane_assign handler routes through to the async executor and that
+// the completion sink receives a delivery for the parent conversation.
+func TestAssignToolHandler_LaunchesBackgroundDelegate(t *testing.T) {
 	t.Parallel()
 
 	runner := &mockLoopRunner{
@@ -934,14 +996,13 @@ func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
 	exec.ConfigureLoopExecution(runner, registry)
 	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
 
-	handler := ToolHandler(exec)
+	handler := AssignToolHandler(exec)
 	ctx := tools.WithConversationID(context.Background(), "conv-async")
 	result, err := handler(ctx, map[string]any{
 		"task": "Check the office light",
-		"mode": "async",
 	})
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v", err)
+		t.Fatalf("AssignToolHandler() error = %v", err)
 	}
 	if !strings.Contains(result, "[Delegate STARTED:") {
 		t.Fatalf("result = %q, want async started header", result)
@@ -1061,14 +1122,16 @@ func taggedDelegateTestRegistry() *tools.Registry {
 			return "owner", nil
 		},
 	})
-	reg.Register(&tools.Tool{
-		Name:        "thane_delegate",
-		Description: "Delegate",
-		Parameters:  map[string]any{},
-		Handler: func(_ context.Context, _ map[string]any) (string, error) {
-			return "should not be called", nil
-		},
-	})
+	for _, name := range delegateFamilyToolNames {
+		reg.Register(&tools.Tool{
+			Name:        name,
+			Description: "delegate-family tool — should be excluded from delegate registries",
+			Parameters:  map[string]any{},
+			Handler: func(_ context.Context, _ map[string]any) (string, error) {
+				return "should not be called", nil
+			},
+		})
+	}
 	reg.SetTagIndex(map[string][]string{
 		"web":             {"web_search"},
 		"ha":              {"get_state"},
@@ -1085,4 +1148,13 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertContainsDelegateFamily(t *testing.T, toolNames []string) {
+	t.Helper()
+	for _, want := range delegateFamilyToolNames {
+		if !containsString(toolNames, want) {
+			t.Fatalf("tool names = %#v, want delegate-family exclusion %s", toolNames, want)
+		}
+	}
 }

@@ -1,6 +1,10 @@
-// Package delegate implements the thane_delegate meta-tool for split-model
-// execution. A calling model delegates subtasks to cheaper/local models that
-// run with minimal context and a filtered tool set.
+// Package delegate implements the thane_now and thane_assign delegation
+// tools for split-model execution. A calling model delegates subtasks to
+// cheaper/local models that run with minimal context and a filtered tool
+// set. thane_now is the synchronous front door (the caller blocks for the
+// result); thane_assign is the async one-shot front door (the result is
+// delivered back through the conversation/channel when the delegate
+// completes).
 package delegate
 
 import (
@@ -45,7 +49,7 @@ const (
 	defaultToolTimeout = 30 * time.Second
 )
 
-// builtinProfiles returns compatibility profiles for legacy callers.
+// builtinProfiles returns budget and routing defaults for delegate runs.
 func builtinProfiles() map[string]*Profile {
 	return map[string]*Profile{
 		"general": {

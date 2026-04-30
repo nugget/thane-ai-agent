@@ -30,8 +30,8 @@ Pick by lifecycle:
   for forcing the next iteration into supervisor mode or delivering
   fresh context to a watcher.
 
-`thane_delegate` and `notify_loop` are deprecated aliases that route
-into the family. Prefer the family names directly.
+`notify_loop` is a deprecated alias that routes into the family.
+Prefer the family names directly.
 
 Below the family, the lower-level definition and runtime tools remain
 for inspection, control, and unusual launch shapes (event-driven,

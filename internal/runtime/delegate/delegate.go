@@ -31,12 +31,10 @@ import (
 // registries to prevent recursion. All members of the delegate family
 // must appear here: a delegate that can call any of them can spawn
 // another delegate, which is exactly the structural recursion the
-// exclusion is meant to prevent. The family currently includes the
-// deprecated thane_delegate alias plus its replacements thane_now
-// (sync) and thane_assign (async). When adding a new family member,
-// add its name here in the same change.
+// exclusion is meant to prevent. The family currently includes
+// thane_now (sync) and thane_assign (async). When adding a new
+// family member, add its name here in the same change.
 var delegateFamilyToolNames = []string{
-	"thane_delegate",
 	"thane_now",
 	"thane_assign",
 }
@@ -199,6 +197,7 @@ type ToolCallOutcome struct {
 
 // Result is the outcome of a delegated task execution.
 type Result struct {
+	ProfileName              string            `json:"profile"`
 	Content                  string            `json:"content"`
 	Model                    string            `json:"model"`
 	Iterations               int               `json:"iterations"`
@@ -387,25 +386,26 @@ func (e *Executor) execute(ctx context.Context, task, profileName, guidance stri
 // StartBackground launches a detached delegate loop that reports its
 // completion back into the current conversation.
 func (e *Executor) StartBackground(ctx context.Context, task, profileName, guidance string, tags []string) (string, error) {
-	return e.startBackground(ctx, task, profileName, guidance, tags, defaultExecutionOptions())
+	loopID, _, err := e.startBackground(ctx, task, profileName, guidance, tags, defaultExecutionOptions())
+	return loopID, err
 }
 
-func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (string, error) {
+func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (string, string, error) {
 	if e.loopRunner == nil || e.loopRegistry == nil {
-		return "", fmt.Errorf("background delegation requires loops-ng execution")
+		return "", "", fmt.Errorf("background delegation requires loops-ng execution")
 	}
 	if e.completionSink == nil {
-		return "", fmt.Errorf("background delegation requires a completion sink")
+		return "", "", fmt.Errorf("background delegation requires a completion sink")
 	}
 
 	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, opts)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	completion, targetConversationID, targetChannel := tools.LoopCompletionTargetFromContext(ctx)
 	if completion == looppkg.CompletionConversation && targetConversationID == "" {
-		return "", fmt.Errorf("background delegation requires a target conversation")
+		return "", prep.profile.Name, fmt.Errorf("background delegation requires a target conversation")
 	}
 
 	loopName := "delegate-" + promptfmt.ShortIDPrefix(prep.id)
@@ -422,7 +422,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 	})
 	if err != nil {
 		e.finishLoopExecution(prep)
-		return "", fmt.Errorf("delegate failed to start in background: %w", err)
+		return "", prep.profile.Name, fmt.Errorf("delegate failed to start in background: %w", err)
 	}
 
 	prep.log.Info("delegate background started",
@@ -434,7 +434,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 	)
 
 	e.finishDetachedLoopExecution(launchResult.LoopID, prep)
-	return launchResult.LoopID, nil
+	return launchResult.LoopID, prep.profile.Name, nil
 }
 
 type preparedExecution struct {
@@ -499,6 +499,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 			toolCallsMu.Lock()
 			defer toolCallsMu.Unlock()
 			return &Result{
+				ProfileName:   prep.profile.Name,
 				Content:       "Delegate was unable to complete the task within its time limit.",
 				Model:         prep.model,
 				Exhausted:     true,
@@ -535,6 +536,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	}
 
 	return &Result{
+		ProfileName:              prep.profile.Name,
 		Content:                  resp.Content,
 		Model:                    resp.Model,
 		Iterations:               resp.Iterations,
@@ -732,14 +734,11 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		}
 	}
 
-	profile := e.profiles[profileName]
-	if profile == nil {
-		profile = e.profiles["general"]
-	}
 	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags, opts.explicitTagScope)
 	if len(droppedTags) > 0 {
 		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
 	}
+	profile := e.profileForScope(profileName, scopeTags)
 	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
 
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
@@ -845,6 +844,34 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		toolTimeout:      toolTimeout,
 		promptMode:       opts.effectivePromptMode(),
 	}, nil
+}
+
+func (e *Executor) profileForScope(profileName string, scopeTags []string) *Profile {
+	if profileName != "" && profileName != "general" {
+		if profile := e.profiles[profileName]; profile != nil {
+			return profile
+		}
+	}
+	if hasAnyTag(scopeTags, "ha", "ha_admin") {
+		if profile := e.profiles["ha"]; profile != nil {
+			return profile
+		}
+	}
+	if profile := e.profiles[profileName]; profile != nil {
+		return profile
+	}
+	return e.profiles["general"]
+}
+
+func hasAnyTag(tags []string, wants ...string) bool {
+	for _, tag := range tags {
+		for _, want := range wants {
+			if tag == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // selectModel picks a model for the delegate via the router or falls back to the default.

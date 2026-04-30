@@ -408,18 +408,19 @@ talents_dir: ./talents
 # agent:
 #   OrchestratorTools lists tool names to advertise when
 #   DelegationRequired is true. If empty, a sensible default set
-#   is applied (thane_delegate plus lightweight memory tools).
+#   is applied (the thane_now / thane_assign delegation front
+#   doors plus lightweight memory tools).
 #   orchestrator_tools: []
 #   DelegationRequired enables orchestrator tool gating. When false
 #   (the default), all tools are available on every iteration.
 #   delegation_required: false
 #
-# (optional) Delegate configures the thane_delegate tool's split-model execution.
+# (optional) Delegate configures the thane_* delegation tools' split-model execution.
 # delegate:
 #   Profiles contains per-profile budget and timeout overrides. The map
-#   key is the compatibility profile name (e.g., "general", "ha"). Only
-#   fields that are set override the builtin defaults — omitted fields
-#   keep their compiled-in values.
+#   key is the profile name (e.g., "general", "ha"). Only fields that
+#   are set override the builtin defaults — omitted fields keep their
+#   compiled-in values.
 #   profiles:
 #     general:
 #       ToolTimeout is the maximum time a single tool call may run
