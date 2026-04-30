@@ -134,6 +134,67 @@ func TestModelFrontmatterSkipsUnparseableTimestampValues(t *testing.T) {
 	}
 }
 
+func TestModelFrontmatterNormalizesTimestampAliases(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	got := modelFrontmatter(map[string][]string{
+		"created_at":     {now.Add(-1 * time.Hour).Format(time.RFC3339)},
+		"updated_at":     {now.Add(-2 * time.Hour).Format(time.RFC3339)},
+		GeneratedFieldAt: {now.Add(-3 * time.Hour).Format(time.RFC3339)},
+	}, now)
+
+	tests := map[string]string{
+		"created_delta":   "-3600s",
+		"updated_delta":   "-7200s",
+		"generated_delta": "-10800s",
+	}
+	for key, want := range tests {
+		if values := got[key]; len(values) != 1 || values[0] != want {
+			t.Fatalf("%s = %#v, want [%s]", key, values, want)
+		}
+	}
+}
+
+func TestModelFrontmatterCanonicalTimestampWinsOverAlias(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	got := modelFrontmatter(map[string][]string{
+		"created":    {now.Add(-1 * time.Hour).Format(time.RFC3339)},
+		"created_at": {now.Add(-2 * time.Hour).Format(time.RFC3339)},
+	}, now)
+
+	if values := got["created_delta"]; len(values) != 1 || values[0] != "-3600s" {
+		t.Fatalf("created_delta = %#v, want canonical created value [-3600s]", values)
+	}
+}
+
+func TestFrontmatterDeltaFieldName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		key  string
+		want string
+		ok   bool
+	}{
+		{key: "created", want: "created_delta", ok: true},
+		{key: "created_at", want: "created_delta", ok: true},
+		{key: "updated", want: "updated_delta", ok: true},
+		{key: "updated_at", want: "updated_delta", ok: true},
+		{key: GeneratedFieldAt, want: "generated_delta", ok: true},
+		{key: "status", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			got, ok := frontmatterDeltaFieldName(tt.key)
+			if ok != tt.ok || got != tt.want {
+				t.Fatalf("frontmatterDeltaFieldName(%q) = %q, %v; want %q, %v", tt.key, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func assertModelOutputDeltaContract(t *testing.T, name, got string) {
 	t.Helper()
 

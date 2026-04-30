@@ -216,7 +216,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_intent":          {intent},
 		"output_mode":          {outputMode},
 		"cadence":              {cadenceInput},
-		"created_at":           {time.Now().UTC().Format(time.RFC3339)},
+		"created":              {time.Now().UTC().Format(time.RFC3339)},
 	}
 	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
 		Ref:         documentRef,
