@@ -40,6 +40,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
+	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
@@ -179,6 +180,9 @@ type App struct {
 
 	// Metacognitive config (stored for loop-definition hydration)
 	metacogCfg *metacognitive.Config
+
+	// Ego loop config (stored for loop-definition hydration)
+	egoCfg *ego.Config
 
 	// Event bus
 	eventBus *events.Bus

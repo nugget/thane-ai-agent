@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -246,123 +243,6 @@ func TestRunScheduledTask_LauncherError(t *testing.T) {
 	}
 	if !errors.Is(err, launcher.err) {
 		t.Errorf("error = %v, want wrapped %v", err, launcher.err)
-	}
-}
-
-func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
-	// Create a workspace with a core/ego.md file.
-	workspace := t.TempDir()
-	coreDir := filepath.Join(workspace, "core")
-	if err := os.MkdirAll(coreDir, 0o755); err != nil {
-		t.Fatalf("mkdir core: %v", err)
-	}
-	egoContent := "# My Reflections\n\nI notice the lights change at sunset."
-	if err := os.WriteFile(filepath.Join(coreDir, "ego.md"), []byte(egoContent), 0644); err != nil {
-		t.Fatalf("write ego.md: %v", err)
-	}
-
-	launcher := &mockTaskLauncher{
-		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "Updated ego.md"}},
-	}
-
-	task := &scheduler.Task{
-		ID:   "task-reflect",
-		Name: periodicReflectionTaskName,
-		Payload: scheduler.Payload{
-			Kind: scheduler.PayloadWake,
-			Data: map[string]any{"message": "periodic_reflection"},
-		},
-	}
-	exec := &scheduler.Execution{}
-
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
-		launch:        launcher.Launch,
-		runner:        stubLoopRunner{},
-		logger:        slog.Default(),
-		workspacePath: workspace,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	msg := launcher.launch.Task
-	if !strings.Contains(msg, "periodic reflection") {
-		t.Error("message should contain reflection prompt text")
-	}
-	if !strings.Contains(msg, egoContent) {
-		t.Error("message should contain current ego.md content")
-	}
-	if strings.Contains(msg, "does not exist yet") {
-		t.Error("message should not contain first-run placeholder when ego.md exists")
-	}
-}
-
-func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
-	// Workspace exists but core/ego.md does not.
-	workspace := t.TempDir()
-
-	launcher := &mockTaskLauncher{
-		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "Created ego.md"}},
-	}
-
-	task := &scheduler.Task{
-		ID:   "task-reflect-new",
-		Name: periodicReflectionTaskName,
-		Payload: scheduler.Payload{
-			Kind: scheduler.PayloadWake,
-			Data: map[string]any{"message": "periodic_reflection"},
-		},
-	}
-	exec := &scheduler.Execution{}
-
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
-		launch:        launcher.Launch,
-		runner:        stubLoopRunner{},
-		logger:        slog.Default(),
-		workspacePath: workspace,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	msg := launcher.launch.Task
-	if !strings.Contains(msg, "does not exist yet") {
-		t.Error("message should contain first-run placeholder when ego.md is missing")
-	}
-	if !strings.Contains(msg, "periodic reflection") {
-		t.Error("message should still contain reflection prompt text")
-	}
-}
-
-func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
-	// No workspace path — falls through to raw payload message.
-	launcher := &mockTaskLauncher{
-		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
-	}
-
-	task := &scheduler.Task{
-		ID:   "task-reflect-nows",
-		Name: periodicReflectionTaskName,
-		Payload: scheduler.Payload{
-			Kind: scheduler.PayloadWake,
-			Data: map[string]any{"message": "periodic_reflection"},
-		},
-	}
-	exec := &scheduler.Execution{}
-
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
-		launch: launcher.Launch,
-		runner: stubLoopRunner{},
-		logger: slog.Default(),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Without a workspace, the raw message should be used.
-	msg := launcher.launch.Task
-	if msg != "periodic_reflection" {
-		t.Errorf("message = %q, want raw payload %q", msg, "periodic_reflection")
 	}
 }
 

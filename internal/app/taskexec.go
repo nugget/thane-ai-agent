@@ -2,14 +2,10 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"os"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -17,10 +13,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
-
-// periodicReflectionTaskName is the well-known name for the self-reflection
-// scheduled task. Used for startup registration and context injection.
-const periodicReflectionTaskName = "periodic_reflection"
 
 // agentRunner abstracts direct agent dispatch sites that still bypass
 // loops-ng launch semantics (for example, handler-triggered wake paths
@@ -33,11 +25,10 @@ type agentRunner interface {
 // executor. Using a struct avoids a growing parameter list as more
 // task types are added.
 type taskExecDeps struct {
-	launch        func(context.Context, looppkg.Launch, looppkg.Deps) (looppkg.LaunchResult, error)
-	runner        looppkg.Runner
-	eventBus      *events.Bus
-	logger        *slog.Logger
-	workspacePath string
+	launch   func(context.Context, looppkg.Launch, looppkg.Deps) (looppkg.LaunchResult, error)
+	runner   looppkg.Runner
+	eventBus *events.Bus
+	logger   *slog.Logger
 }
 
 // runScheduledTask handles execution of a scheduled task by compiling it
@@ -66,7 +57,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		return fmt.Errorf("scheduled task %q: loop runner is not configured", task.Name)
 	}
 
-	launch := buildScheduledTaskLaunch(ctx, task, exec, deps.workspacePath, deps.logger)
+	launch := buildScheduledTaskLaunch(ctx, task, exec)
 	result, err := deps.launch(ctx, launch, looppkg.Deps{
 		Runner:   deps.runner,
 		Logger:   deps.logger,
@@ -91,17 +82,10 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 // buildScheduledTaskLaunch compiles a persisted scheduler task and one
 // execution record into a loops-ng launch with scheduler-specific
 // routing, metadata, and timeout inheritance.
-func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, workspacePath string, logger *slog.Logger) looppkg.Launch {
+func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) looppkg.Launch {
 	msg, _ := task.Payload.Data["message"].(string)
 	if msg == "" {
 		msg = "Scheduled wake: " + task.Name
-	}
-
-	// Context injection for periodic_reflection: read ego.md and build
-	// the reflection prompt with its current contents.
-	if task.Name == periodicReflectionTaskName && workspacePath != "" {
-		egoContent := readEgoMD(workspacePath, logger)
-		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
 	profile := buildScheduledTaskLoopProfile(task)
@@ -166,30 +150,4 @@ func buildScheduledTaskLoopProfile(task *scheduler.Task) router.LoopProfile {
 			"task":   task.Name,
 		},
 	}
-}
-
-// maxEgoBytes is the maximum ego.md content passed to the reflection
-// prompt. Content beyond this limit is truncated with a marker.
-const maxEgoBytes = 16 * 1024
-
-// readEgoMD reads the ego.md file from the fixed workspace/core root.
-// Returns an empty string if the file does not exist (first reflection
-// creates it).
-// Content is capped at maxEgoBytes to bound prompt size.
-func readEgoMD(workspacePath string, logger *slog.Logger) string {
-	egoPath := coreFilePath(workspacePath, "ego.md")
-	data, err := os.ReadFile(egoPath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			logger.Warn("failed to read ego.md for reflection",
-				"path", egoPath,
-				"error", err,
-			)
-		}
-		return ""
-	}
-	if len(data) > maxEgoBytes {
-		return string(data[:maxEgoBytes]) + "\n\n[ego.md truncated — exceeded 16 KB limit]"
-	}
-	return string(data)
 }

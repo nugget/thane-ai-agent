@@ -383,6 +383,17 @@ func ExampleConfig() *Config {
 			SupervisorRouter:      MetacognitiveRouterConfig{QualityFloor: 8},
 		},
 
+		Ego: EgoConfig{
+			Enabled:               false,
+			MinSleep:              "30m",
+			MaxSleep:              "24h",
+			DefaultSleep:          "6h",
+			Jitter:                0.2,
+			SupervisorProbability: 0.2,
+			Router:                EgoRouterConfig{QualityFloor: 5},
+			SupervisorRouter:      EgoRouterConfig{QualityFloor: 8},
+		},
+
 		Agent: AgentConfig{
 			DelegationRequired: false,
 		},

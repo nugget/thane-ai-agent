@@ -264,17 +264,15 @@ scheduler:
     email_poll:
       cron: "*/5 * * * *"
       message: "Check for new email"
-    periodic_reflection:
-      cron: "0 3 * * *"
-      message: "Daily reflection"
-      model: claude-sonnet-4-20250514
-      routing:
-        quality_floor: 7
 ```
 
 Cron-style task scheduling. Each task can override the model and routing
 hints. See [Event Sources](../reference/event-sources.md) for how scheduled
 tasks integrate with the agent loop.
+
+Self-reflection (`ego.md` maintenance) runs as the `ego` loops-ng service,
+not as a scheduled task. See the `ego:` block in the example config for
+sleep bounds, supervisor randomization, and routing.
 
 ## Shell Execution
 
