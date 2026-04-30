@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -532,5 +534,47 @@ func TestShouldUseAnthropicPromptCaching(t *testing.T) {
 				t.Fatalf("shouldUseAnthropicPromptCaching() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAnthropicClient_SetLogger_ReboundLoggerEmitsDebug(t *testing.T) {
+	bootBuf := &bytes.Buffer{}
+	bootLogger := slog.New(slog.NewJSONHandler(bootBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	c := NewAnthropicClient("k", bootLogger)
+
+	if c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("bootstrap logger unexpectedly enabled at Debug")
+	}
+	c.logger.Debug("preflight", "stage", "boot")
+	if bootBuf.Len() != 0 {
+		t.Fatalf("bootstrap Info-level logger should drop Debug, got: %s", bootBuf.String())
+	}
+
+	prodBuf := &bytes.Buffer{}
+	prodLogger := slog.New(slog.NewJSONHandler(prodBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c.SetLogger(prodLogger)
+
+	if !c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("rebound logger should be Debug-enabled")
+	}
+	c.logger.Debug("after rebind", "stage", "prod")
+	if !strings.Contains(prodBuf.String(), `"msg":"after rebind"`) {
+		t.Fatalf("expected Debug line after rebind, got: %s", prodBuf.String())
+	}
+	if !strings.Contains(prodBuf.String(), `"provider":"anthropic"`) {
+		t.Fatalf("rebound logger lost provider attribute, got: %s", prodBuf.String())
+	}
+}
+
+func TestAnthropicClient_SetLogger_NilGuards(t *testing.T) {
+	var c *AnthropicClient
+	c.SetLogger(slog.Default()) // must not panic on nil receiver
+
+	c = NewAnthropicClient("k", slog.Default())
+	before := c.logger
+	c.SetLogger(nil)
+	if c.logger != before {
+		t.Fatal("nil logger argument must not replace existing logger")
 	}
 }

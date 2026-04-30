@@ -60,6 +60,27 @@ func NewLMStudioClientWithTTL(baseURL, apiKey string, logger *slog.Logger, idleT
 	}
 }
 
+// SetLogger rebinds the request-level logger. See AnthropicClient.SetLogger
+// for the late-bind rationale; the same caveat about httpkit retries applies.
+//
+// Not safe to call concurrently with in-flight requests; intended to be
+// invoked once during init.
+func (c *LMStudioClient) SetLogger(logger *slog.Logger) {
+	if c == nil || logger == nil {
+		return
+	}
+	c.logger = logger.With("provider", "lmstudio")
+}
+
+// Logger returns the request-level logger. Exposed for tests and
+// late-bind verification — production callers should not depend on it.
+func (c *LMStudioClient) Logger() *slog.Logger {
+	if c == nil {
+		return nil
+	}
+	return c.logger
+}
+
 // AttachWatcher sets the connection watcher for health status queries.
 func (c *LMStudioClient) AttachWatcher(w llm.ReadyWatcher) {
 	c.watcher = w

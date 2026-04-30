@@ -20,6 +20,11 @@ type ClientBundle struct {
 	HealthClients   map[string]ResourceHealthClient
 	OllamaClients   map[string]*modelproviders.OllamaClient
 	LMStudioClients map[string]*modelproviders.LMStudioClient
+	// AnthropicClient is the singleton Anthropic provider shared across
+	// all anthropic-backed resources, retained here so late-bind
+	// machinery (e.g., Runtime.SetLogger) can find it without scanning
+	// ResourceClients for the *AnthropicClient type.
+	AnthropicClient *modelproviders.AnthropicClient
 }
 
 // ResourceHealthClient is the minimal health/watch surface that app
@@ -85,6 +90,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		HealthClients:   healthClients,
 		OllamaClients:   ollamaClients,
 		LMStudioClients: lmstudioClients,
+		AnthropicClient: anthropicClient,
 	}
 	client, err := bundle.BuildRoutedClient(cat)
 	if err != nil {

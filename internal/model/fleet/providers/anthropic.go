@@ -44,6 +44,11 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 	return &AnthropicClient{
 		apiKey: apiKey,
 		logger: providerLogger,
+		// httpClient retains its own copy of providerLogger for retry
+		// diagnostics; SetLogger only refreshes c.logger because httpkit
+		// has no setter and rebuilding the client would drop the
+		// connection pool. Retry logs from the bootstrap logger may be
+		// suppressed; request-level Debug/Info/Warn flow through c.logger.
 		httpClient: httpkit.NewClient(
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
@@ -62,6 +67,30 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 			httpkit.WithLogger(providerLogger),
 		),
 	}
+}
+
+// SetLogger rebinds the request-level logger. Late binding lets the
+// app pass the dataset-routed, debug-level logger into clients that
+// were constructed during bootstrap with an Info-only stdout logger.
+// See [internal/app/new_logging.go] for the wider lifecycle.
+//
+// Not safe to call concurrently with in-flight requests; intended to
+// be invoked once during init, before the runtime starts servicing
+// traffic.
+func (c *AnthropicClient) SetLogger(logger *slog.Logger) {
+	if c == nil || logger == nil {
+		return
+	}
+	c.logger = logger.With("provider", "anthropic")
+}
+
+// Logger returns the request-level logger. Exposed for tests and
+// late-bind verification — production callers should not depend on it.
+func (c *AnthropicClient) Logger() *slog.Logger {
+	if c == nil {
+		return nil
+	}
+	return c.logger
 }
 
 // Anthropic request/response types
