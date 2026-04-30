@@ -634,10 +634,10 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 // SetOrchestratorTools configures the restricted tool set for all
 // iterations of the agent loop. When set, only the named tools are
 // advertised on every LLM call, keeping the primary model in
-// orchestrator mode and steering it toward delegation. If
-// thane_delegate is not registered in the tool registry, gating is
-// silently disabled to avoid leaving the agent without actionable
-// tools.
+// orchestrator mode and steering it toward delegation. If neither
+// thane_now nor thane_assign is registered in the tool registry,
+// gating is silently disabled to avoid leaving the agent without
+// any way to delegate.
 func (l *Loop) SetOrchestratorTools(names []string) {
 	l.orchestratorTools = names
 }
@@ -1782,7 +1782,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Determine whether tool gating is active before model selection so
 	// both router decisions and explicit-model preflight can reason
 	// about the actual tool surface this run will expose.
-	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
+	gatingActive := len(l.orchestratorTools) > 0 && (l.tools.Get("thane_now") != nil || l.tools.Get("thane_assign") != nil)
 	if req.Hints[router.HintDelegationGating] == "disabled" {
 		gatingActive = false
 	}

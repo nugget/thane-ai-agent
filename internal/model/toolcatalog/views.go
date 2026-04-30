@@ -121,9 +121,9 @@ type LoadedCapabilityView struct {
 // active tool members are surfaced. Callers opt in to nuances such as
 // excluded tools via this struct.
 type CatalogViewOptions struct {
-	// IncludeDelegate adds the thane_delegate tool to the activation
-	// tools block in the rendered view. Set false for surfaces where
-	// delegation is not relevant.
+	// IncludeDelegate adds the thane_now delegation tool to the
+	// activation tools block in the rendered view. Set false for
+	// surfaces where delegation is not relevant.
 	IncludeDelegate bool
 
 	// IncludeExcluded surfaces operator-excluded tools per tag in
@@ -141,7 +141,7 @@ func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 		Inspect:    "inspect_capability",
 	}
 	if includeDelegate {
-		tools.Delegate = "thane_delegate"
+		tools.Delegate = "thane_now"
 	}
 	return tools
 }

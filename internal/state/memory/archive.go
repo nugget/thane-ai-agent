@@ -106,7 +106,7 @@ func WithParentSession(id string) SessionOption {
 }
 
 // WithParentToolCall sets the tool call ID that triggered this child
-// session (e.g. the thane_delegate tool call in the parent).
+// session (e.g. the thane_now or thane_assign call in the parent).
 func WithParentToolCall(id string) SessionOption {
 	return func(s *Session) { s.ParentToolCallID = id }
 }

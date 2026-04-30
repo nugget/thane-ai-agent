@@ -941,9 +941,9 @@ func (a *systemStatusAdapter) AnthropicRateLimitSnapshot() *fleet.AnthropicRateL
 // agent prompt/tooling layer, rendered with the supplied options. The
 // per-call options struct lets API consumers opt in to surfaces such
 // as operator-excluded tools without changing the underlying surface
-// snapshot. Callers that want thane_delegate in the activation tools
-// block must pass IncludeDelegate: true explicitly — the canonical
-// dashboard and /api/capabilities handlers already do.
+// snapshot. Callers that want the thane_* delegation tools in the
+// activation tools block must pass IncludeDelegate: true explicitly —
+// the canonical dashboard and /api/capabilities handlers already do.
 func (a *systemStatusAdapter) CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
 	surface := a.currentCapSurface()
 	if len(surface) == 0 {

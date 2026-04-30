@@ -25,8 +25,9 @@ func (a *App) initDelegation(s *newState) error {
 	logger := a.logger
 
 	// --- Delegation ---
-	// Register thane_delegate tool AFTER all other tools so the delegate
-	// executor's parent registry snapshot includes the full tool set.
+	// Register the thane_* delegation tools AFTER all other tools so
+	// the delegate executor's parent registry snapshot includes the
+	// full tool set.
 	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
 	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
 	completionDispatcher := a.ensureLoopCompletionDispatcher()
@@ -51,10 +52,11 @@ func (a *App) initDelegation(s *newState) error {
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
-	// AlwaysAvailable on all three so they survive capability tag
-	// filtering (channel_tags, model-driven activate_capability). Without
-	// this, FilterByTags drops untagged tools when any tag is active and
-	// the model loses access to the recommended delegation surface.
+	// AlwaysAvailable on both family front doors so they survive
+	// capability tag filtering (channel_tags, model-driven
+	// activate_capability). Without this, FilterByTags drops untagged
+	// tools when any tag is active and the model loses access to the
+	// recommended delegation surface.
 	a.loop.Tools().Register(&tools.Tool{
 		Name:            "thane_now",
 		Description:     delegate.NowToolDescription,
@@ -67,13 +69,6 @@ func (a *App) initDelegation(s *newState) error {
 		Description:     delegate.AssignToolDescription,
 		Parameters:      delegate.AssignToolDefinition(),
 		Handler:         delegate.AssignToolHandler(delegateExec),
-		AlwaysAvailable: true,
-	})
-	a.loop.Tools().Register(&tools.Tool{
-		Name:            "thane_delegate",
-		Description:     delegate.ToolDescription,
-		Parameters:      delegate.ToolDefinition(),
-		Handler:         delegate.ToolHandler(delegateExec),
 		AlwaysAvailable: true,
 	})
 	a.delegateExec = delegateExec

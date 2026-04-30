@@ -315,11 +315,10 @@ func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
 
 // TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
 // test for #820. Delegate registries must exclude every member of the
-// thane_* family — thane_delegate (deprecated), thane_now, and
-// thane_assign — to prevent a delegate from spawning another delegate
-// via the new front doors. Both branches of delegateToolRegistry are
-// exercised: the tag-scoped branch (FilterByTags result) and the
-// fall-through branch (no scope).
+// thane_* family — thane_now and thane_assign — to prevent a delegate
+// from spawning another delegate via the front doors. Both branches of
+// delegateToolRegistry are exercised: the tag-scoped branch
+// (FilterByTags result) and the fall-through branch (no scope).
 func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	t.Parallel()
 
@@ -641,21 +640,21 @@ func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
 	}
 }
 
-func TestToolHandler_EmptyTask(t *testing.T) {
+func TestNowToolHandler_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	handler := ToolHandler(exec)
+	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{})
 
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v, want nil", err)
+		t.Fatalf("NowToolHandler() error = %v, want nil", err)
 	}
 	if !strings.Contains(result, "Error: task is required") {
 		t.Errorf("result = %q, want to contain 'task is required'", result)
 	}
 }
 
-func TestToolHandler_DefaultProfile(t *testing.T) {
+func TestNowToolHandler_DefaultProfile(t *testing.T) {
 	mock := &mockLLMClient{
 		responses: []*llm.ChatResponse{
 			{
@@ -668,14 +667,14 @@ func TestToolHandler_DefaultProfile(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	handler := ToolHandler(exec)
+	handler := NowToolHandler(exec)
 
 	result, err := handler(context.Background(), map[string]any{
 		"task": "Do something",
 	})
 
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v", err)
+		t.Fatalf("NowToolHandler() error = %v", err)
 	}
 	if !strings.Contains(result, "profile=general") {
 		t.Errorf("result = %q, want to contain 'profile=general'", result)
@@ -910,10 +909,10 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	}
 }
 
-// TestToolHandler_AsyncModeLaunchesBackgroundDelegate verifies the
-// deprecated thane_delegate(mode=async) compatibility path still
-// reaches the async executor.
-func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
+// TestAssignToolHandler_LaunchesBackgroundDelegate verifies that the
+// thane_assign handler routes through to the async executor and that
+// the completion sink receives a delivery for the parent conversation.
+func TestAssignToolHandler_LaunchesBackgroundDelegate(t *testing.T) {
 	t.Parallel()
 
 	runner := &mockLoopRunner{
@@ -934,14 +933,13 @@ func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
 	exec.ConfigureLoopExecution(runner, registry)
 	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
 
-	handler := ToolHandler(exec)
+	handler := AssignToolHandler(exec)
 	ctx := tools.WithConversationID(context.Background(), "conv-async")
 	result, err := handler(ctx, map[string]any{
 		"task": "Check the office light",
-		"mode": "async",
 	})
 	if err != nil {
-		t.Fatalf("ToolHandler() error = %v", err)
+		t.Fatalf("AssignToolHandler() error = %v", err)
 	}
 	if !strings.Contains(result, "[Delegate STARTED:") {
 		t.Fatalf("result = %q, want async started header", result)
@@ -1061,14 +1059,16 @@ func taggedDelegateTestRegistry() *tools.Registry {
 			return "owner", nil
 		},
 	})
-	reg.Register(&tools.Tool{
-		Name:        "thane_delegate",
-		Description: "Delegate",
-		Parameters:  map[string]any{},
-		Handler: func(_ context.Context, _ map[string]any) (string, error) {
-			return "should not be called", nil
-		},
-	})
+	for _, name := range delegateFamilyToolNames {
+		reg.Register(&tools.Tool{
+			Name:        name,
+			Description: "delegate-family tool — should be excluded from delegate registries",
+			Parameters:  map[string]any{},
+			Handler: func(_ context.Context, _ map[string]any) (string, error) {
+				return "should not be called", nil
+			},
+		})
+	}
 	reg.SetTagIndex(map[string][]string{
 		"web":             {"web_search"},
 		"ha":              {"get_state"},

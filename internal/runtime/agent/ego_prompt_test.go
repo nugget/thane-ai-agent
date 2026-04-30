@@ -116,7 +116,7 @@ func TestBuildSystemPrompt_RuntimeContractIncluded(t *testing.T) {
 	if !strings.Contains(prompt, "`kb:article.md`") {
 		t.Fatal("runtime contract should teach kb: path references")
 	}
-	if !strings.Contains(prompt, "`thane_delegate`") {
+	if !strings.Contains(prompt, "`thane_now`") {
 		t.Fatal("runtime contract should mention delegation when top-level tools are gated")
 	}
 }

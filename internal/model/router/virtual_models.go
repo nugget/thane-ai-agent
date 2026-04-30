@@ -28,8 +28,9 @@ type VirtualModelRuntime struct {
 // virtual model names such as "thane:premium".
 //
 // TopLevel controls the initial orchestrator loop. Delegate controls child
-// loops launched via thane_delegate. Future revisions may also derive these
-// policies dynamically from the live registry without changing callers.
+// loops launched via thane_now or thane_assign. Future revisions may also
+// derive these policies dynamically from the live registry without
+// changing callers.
 type VirtualModel struct {
 	Name        string
 	Description string

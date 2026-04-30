@@ -31,12 +31,10 @@ import (
 // registries to prevent recursion. All members of the delegate family
 // must appear here: a delegate that can call any of them can spawn
 // another delegate, which is exactly the structural recursion the
-// exclusion is meant to prevent. The family currently includes the
-// deprecated thane_delegate alias plus its replacements thane_now
-// (sync) and thane_assign (async). When adding a new family member,
-// add its name here in the same change.
+// exclusion is meant to prevent. The family currently includes
+// thane_now (sync) and thane_assign (async). When adding a new
+// family member, add its name here in the same change.
 var delegateFamilyToolNames = []string{
-	"thane_delegate",
 	"thane_now",
 	"thane_assign",
 }

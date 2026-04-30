@@ -33,7 +33,7 @@ func RuntimeContract() string {
 		"- Treat capability activation as a coarse-to-fine menu. Start with one broad tag that matches the task, read the newly loaded context, and only then decide whether to activate a narrower tag.",
 		"- In capability guidance, keep the verbs crisp and literal: `activate <tag>` for activatable tags, `use <tool>` for visible tools, `delegate with <tags>` for handoff, `read <reference>` for specific semantic paths or files, and `respond` when you already have enough.",
 		"- Some capabilities mainly load guidance and recommended next tags. Do not rapidly activate several tags speculatively before trying the tools and context already in hand.",
-		"- Activating a capability changes runtime state, but it does not guarantee every tool in that capability is directly callable from the current top-level loop. If the tool you want is not currently available, use `thane_delegate` or choose another visible tool.",
+		"- Activating a capability changes runtime state, but it does not guarantee every tool in that capability is directly callable from the current top-level loop. If the tool you want is not currently available, use `thane_now` (sync) or `thane_assign` (async) to delegate, or choose another visible tool.",
 		"- Path-like references such as `kb:article.md`, `core:persona.md`, `scratchpad:note.md`, and `temp:label` are semantic references. Preserve them exactly. Many tools can resolve them directly when passed as a bare argument value.",
 		"- If a tool is unavailable in this context, do not retry with guessed names. Either pick an available tool, delegate, or answer directly.",
 	}, "\n")

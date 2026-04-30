@@ -44,7 +44,6 @@ partitioned:
 **Orchestrator sees:**
 - `thane_now` — synchronous delegation; the orchestrator waits for the delegate's answer in this turn
 - `thane_assign` — async one-shot; the delegate runs in the background and reports back through the conversation/channel when complete
-- `thane_delegate` — DEPRECATED compatibility alias that routes to `thane_now` (sync) or `thane_assign` (async) based on a `mode` parameter; will be removed
 - `remember_fact` / `recall_fact` — memory operations
 - `session_working_memory` — session scratchpad
 - `archive_search` — conversation history search
