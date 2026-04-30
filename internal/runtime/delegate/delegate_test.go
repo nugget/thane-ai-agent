@@ -77,14 +77,23 @@ func newTestRegistry() *tools.Registry {
 			return "search results", nil
 		},
 	})
-	r.Register(&tools.Tool{
-		Name:        "thane_delegate",
-		Description: "Should be excluded",
-		Parameters:  map[string]any{},
-		Handler: func(_ context.Context, _ map[string]any) (string, error) {
-			return "this should never be called by a delegate", nil
-		},
-	})
+	// All delegate-family tools are registered so tests can verify
+	// the full recursion guard, not just the deprecated alias. See
+	// #820 — thane_now and thane_assign were originally missed by
+	// the exclusion list. Iterating over the production
+	// delegateFamilyToolNames slice keeps fixture coverage in lock-step
+	// with the real exclusion list, so a future family addition
+	// automatically extends the test surface.
+	for _, name := range delegateFamilyToolNames {
+		r.Register(&tools.Tool{
+			Name:        name,
+			Description: "delegate-family tool — should be excluded from delegate registries",
+			Parameters:  map[string]any{},
+			Handler: func(_ context.Context, _ map[string]any) (string, error) {
+				return "this should never be called by a delegate", nil
+			},
+		})
+	}
 	r.SetTagIndex(map[string][]string{
 		"ha":  {"get_state"},
 		"web": {"web_search"},
@@ -256,11 +265,53 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 		t.Fatalf("execute() error = %v", err)
 	}
 
-	for _, want := range []string{"get_state", "web_search", "thane_delegate"} {
+	wantExcluded := append([]string{"get_state", "web_search"}, delegateFamilyToolNames...)
+	for _, want := range wantExcluded {
 		if !containsString(captured.ExcludeTools, want) {
 			t.Fatalf("ExcludeTools = %#v, want %s", captured.ExcludeTools, want)
 		}
 	}
+}
+
+// TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
+// test for #820. Delegate registries must exclude every member of the
+// thane_* family — thane_delegate (deprecated), thane_now, and
+// thane_assign — to prevent a delegate from spawning another delegate
+// via the new front doors. Both branches of delegateToolRegistry are
+// exercised: the tag-scoped branch (FilterByTags result) and the
+// fall-through branch (no scope).
+func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
+	t.Parallel()
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+
+	t.Run("tag-scoped branch", func(t *testing.T) {
+		reg := exec.delegateToolRegistry([]string{"web"}, false)
+		names := reg.AllToolNames()
+		for _, want := range delegateFamilyToolNames {
+			if containsString(names, want) {
+				t.Errorf("tag-scoped delegate registry contains %q; full family must be excluded (registry: %v)", want, names)
+			}
+		}
+		// Sanity: the tag-matching tool should still be present.
+		if !containsString(names, "web_search") {
+			t.Errorf("tag-scoped delegate registry missing tag-matching tool web_search (registry: %v)", names)
+		}
+	})
+
+	t.Run("fall-through branch", func(t *testing.T) {
+		reg := exec.delegateToolRegistry(nil, false)
+		names := reg.AllToolNames()
+		for _, want := range delegateFamilyToolNames {
+			if containsString(names, want) {
+				t.Errorf("fall-through delegate registry contains %q; full family must be excluded (registry: %v)", want, names)
+			}
+		}
+		// Sanity: non-family tools survive.
+		if !containsString(names, "get_state") {
+			t.Errorf("fall-through delegate registry missing non-family tool get_state (registry: %v)", names)
+		}
+	})
 }
 
 func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFiltering(t *testing.T) {

@@ -26,8 +26,19 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// delegateToolName is the tool name excluded from delegate registries to prevent recursion.
-const delegateToolName = "thane_delegate"
+// delegateFamilyToolNames are the tool names excluded from delegate
+// registries to prevent recursion. All members of the delegate family
+// must appear here: a delegate that can call any of them can spawn
+// another delegate, which is exactly the structural recursion the
+// exclusion is meant to prevent. The family currently includes the
+// deprecated thane_delegate alias plus its replacements thane_now
+// (sync) and thane_assign (async). When adding a new family member,
+// add its name here in the same change.
+var delegateFamilyToolNames = []string{
+	"thane_delegate",
+	"thane_now",
+	"thane_assign",
+}
 
 // Exhaustion reason constants are defined in the [iterate] package.
 // These aliases preserve backward compatibility for consumers that
@@ -155,9 +166,9 @@ func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequest
 		} else {
 			reg = e.parentReg.FilteredCopy(nil)
 		}
-		return reg.FilteredCopyExcluding([]string{delegateToolName})
+		return reg.FilteredCopyExcluding(delegateFamilyToolNames)
 	}
-	return e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
+	return e.parentReg.FilteredCopyExcluding(delegateFamilyToolNames)
 }
 
 func mergeTagLists(tagGroups ...[]string) []string {
