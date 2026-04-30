@@ -13,11 +13,11 @@ import (
 func TestFormatHistoryJSON_Basic(t *testing.T) {
 	now := time.Date(2026, 2, 21, 15, 0, 0, 0, time.UTC)
 	messages := []memory.Message{
-		{Role: "user", Content: "What is the weather?", Timestamp: now},
-		{Role: "assistant", Content: "Let me check.", Timestamp: now.Add(5 * time.Second)},
+		{Role: "user", Content: "What is the weather?", Timestamp: now.Add(-time.Hour)},
+		{Role: "assistant", Content: "Let me check.", Timestamp: now.Add(-55 * time.Minute)},
 	}
 
-	result := formatHistoryJSON(messages, "UTC")
+	result := formatHistoryJSON(messages, now)
 
 	// Must be valid JSON.
 	var entries []historyEntry
@@ -35,17 +35,20 @@ func TestFormatHistoryJSON_Basic(t *testing.T) {
 	if entries[0].Text != "What is the weather?" {
 		t.Errorf("entries[0].Text = %q, want %q", entries[0].Text, "What is the weather?")
 	}
-	if !strings.Contains(entries[0].Timestamp, "2026-02-21T15:00:00") {
-		t.Errorf("entries[0].Timestamp = %q, want RFC3339 with 2026-02-21T15:00:00", entries[0].Timestamp)
+	if entries[0].AgeDelta != "-3600s" {
+		t.Errorf("entries[0].AgeDelta = %q, want %q", entries[0].AgeDelta, "-3600s")
 	}
 
 	if entries[1].Role != "assistant" {
 		t.Errorf("entries[1].Role = %q, want %q", entries[1].Role, "assistant")
 	}
+	if entries[1].AgeDelta != "-3300s" {
+		t.Errorf("entries[1].AgeDelta = %q, want %q", entries[1].AgeDelta, "-3300s")
+	}
 }
 
 func TestFormatHistoryJSON_EmptyMessages(t *testing.T) {
-	result := formatHistoryJSON(nil, "UTC")
+	result := formatHistoryJSON(nil, time.Now())
 
 	if result != "[]" {
 		t.Errorf("expected empty JSON array, got: %s", result)
@@ -62,20 +65,21 @@ func TestFormatHistoryJSON_EmptyMessages(t *testing.T) {
 }
 
 func TestFormatHistoryJSON_CompactionSummary(t *testing.T) {
+	now := time.Date(2026, 2, 21, 14, 0, 0, 0, time.UTC)
 	messages := []memory.Message{
 		{
 			Role:      "system",
 			Content:   "[Conversation Summary] The user asked about email polling.",
-			Timestamp: time.Date(2026, 2, 21, 10, 0, 0, 0, time.UTC),
+			Timestamp: now.Add(-4 * time.Hour),
 		},
 		{
 			Role:      "user",
 			Content:   "Any new emails?",
-			Timestamp: time.Date(2026, 2, 21, 14, 0, 0, 0, time.UTC),
+			Timestamp: now,
 		},
 	}
 
-	result := formatHistoryJSON(messages, "UTC")
+	result := formatHistoryJSON(messages, now)
 
 	var entries []historyEntry
 	if err := json.Unmarshal([]byte(result), &entries); err != nil {
@@ -90,39 +94,41 @@ func TestFormatHistoryJSON_CompactionSummary(t *testing.T) {
 	}
 }
 
-func TestFormatHistoryJSON_TimezoneConversion(t *testing.T) {
-	utcTime := time.Date(2026, 2, 21, 20, 0, 0, 0, time.UTC)
+func TestFormatHistoryJSON_AgeDeltaIsTimezoneIndependent(t *testing.T) {
+	// Two equivalent moments in different zones should yield the same
+	// delta — the field is a duration, not a wall-clock string.
+	utc := time.Date(2026, 2, 21, 20, 0, 0, 0, time.UTC)
+	cstZone := time.FixedZone("CST", -6*60*60)
+	cst := utc.In(cstZone)
+
 	messages := []memory.Message{
-		{Role: "user", Content: "hello", Timestamp: utcTime},
+		{Role: "user", Content: "hello", Timestamp: utc.Add(-time.Hour)},
+	}
+	resultUTC := formatHistoryJSON(messages, utc)
+	resultCST := formatHistoryJSON(messages, cst)
+
+	if resultUTC != resultCST {
+		t.Fatalf("delta should not depend on the now-zone:\nUTC: %s\nCST: %s", resultUTC, resultCST)
+	}
+}
+
+func TestFormatHistoryJSON_FuturePinnedReturnsPositiveDelta(t *testing.T) {
+	// Defensive: if a message timestamp ever ends up in the future
+	// relative to now (clock skew, test fixture), the delta should
+	// flip sign rather than panic or hide the anomaly.
+	now := time.Date(2026, 2, 21, 15, 0, 0, 0, time.UTC)
+	messages := []memory.Message{
+		{Role: "user", Content: "hello", Timestamp: now.Add(60 * time.Second)},
 	}
 
-	result := formatHistoryJSON(messages, "America/Chicago")
+	result := formatHistoryJSON(messages, now)
 
 	var entries []historyEntry
 	if err := json.Unmarshal([]byte(result), &entries); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-
-	// UTC 20:00 → CST 14:00 (UTC-6)
-	if !strings.Contains(entries[0].Timestamp, "14:00:00") {
-		t.Errorf("expected CST time with 14:00:00, got: %s", entries[0].Timestamp)
-	}
-}
-
-func TestFormatHistoryJSON_InvalidTimezone(t *testing.T) {
-	messages := []memory.Message{
-		{Role: "user", Content: "hello", Timestamp: time.Now()},
-	}
-
-	// Should not panic with invalid timezone — falls back to local.
-	result := formatHistoryJSON(messages, "Not/A/Timezone")
-
-	var entries []historyEntry
-	if err := json.Unmarshal([]byte(result), &entries); err != nil {
-		t.Fatalf("invalid JSON with bad timezone: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Errorf("expected 1 entry, got %d", len(entries))
+	if entries[0].AgeDelta != "+60s" {
+		t.Errorf("future-timestamp AgeDelta = %q, want %q", entries[0].AgeDelta, "+60s")
 	}
 }
 
@@ -147,6 +153,9 @@ func TestBuildSystemPrompt_ConversationHistoryJSON(t *testing.T) {
 	}
 	if !strings.Contains(prompt, `"role":"assistant"`) {
 		t.Error("system prompt should contain assistant role in JSON")
+	}
+	if !strings.Contains(prompt, `"age_delta":`) {
+		t.Error("system prompt should expose age_delta on history entries (model-facing recency convention)")
 	}
 
 	// Verify fenced code block and untrusted data instruction.
