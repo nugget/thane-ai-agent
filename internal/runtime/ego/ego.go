@@ -107,10 +107,10 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		SleepDefault: cfg.DefaultSleep,
 		Jitter:       loop.Float64Ptr(cfg.Jitter),
 		ExcludeTools: egoExcludeTools,
+		Tags:         []string{"ego"},
 		Profile: router.LoopProfile{
 			Mission:          "ego",
 			DelegationGating: "disabled",
-			InitialTags:      []string{"ego"},
 			ExtraHints:       map[string]string{"source": "ego"},
 		},
 		Supervisor:             cfg.SupervisorProbability > 0,

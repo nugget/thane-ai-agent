@@ -154,7 +154,6 @@ func TestLoopProfileRequestOptions(t *testing.T) {
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"resolve_anticipation", "cancel_anticipation"},
-		InitialTags:      []string{"scheduler", "wake"},
 		ExtraHints: map[string]string{
 			"source": "scheduler",
 		},
@@ -174,17 +173,10 @@ func TestLoopProfileRequestOptions(t *testing.T) {
 	if len(opts.ExcludeTools) != len(seed.ExcludeTools) {
 		t.Fatalf("ExcludeTools len = %d, want %d", len(opts.ExcludeTools), len(seed.ExcludeTools))
 	}
-	if len(opts.InitialTags) != len(seed.InitialTags) {
-		t.Fatalf("InitialTags len = %d, want %d", len(opts.InitialTags), len(seed.InitialTags))
-	}
 
 	opts.ExcludeTools[0] = "changed"
-	opts.InitialTags[0] = "changed"
 	if seed.ExcludeTools[0] != "resolve_anticipation" {
 		t.Fatalf("seed ExcludeTools mutated to %q", seed.ExcludeTools[0])
-	}
-	if seed.InitialTags[0] != "scheduler" {
-		t.Fatalf("seed InitialTags mutated to %q", seed.InitialTags[0])
 	}
 }
 
@@ -227,7 +219,6 @@ func TestLoopProfileJSONRoundTrip(t *testing.T) {
 		DelegationGating: "disabled",
 		PreferSpeed:      "true",
 		ExcludeTools:     []string{"shell_exec", "web_fetch"},
-		InitialTags:      []string{"homeassistant", "security"},
 		ExtraHints:       map[string]string{"source": "frigate"},
 		Instructions:     "Analyse the camera event and decide if action is needed.",
 	}
@@ -269,14 +260,6 @@ func TestLoopProfileJSONRoundTrip(t *testing.T) {
 	for i, v := range original.ExcludeTools {
 		if restored.ExcludeTools[i] != v {
 			t.Errorf("ExcludeTools[%d] = %q, want %q", i, restored.ExcludeTools[i], v)
-		}
-	}
-	if len(restored.InitialTags) != len(original.InitialTags) {
-		t.Fatalf("InitialTags len = %d, want %d", len(restored.InitialTags), len(original.InitialTags))
-	}
-	for i, v := range original.InitialTags {
-		if restored.InitialTags[i] != v {
-			t.Errorf("InitialTags[%d] = %q, want %q", i, restored.InitialTags[i], v)
 		}
 	}
 	if len(restored.ExtraHints) != len(original.ExtraHints) {

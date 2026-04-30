@@ -518,9 +518,12 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
+#       InitialTags lists capability tags activated at the start of the
+#       agent run dispatched for matching messages. Only meaningful when
+#       Wake is non-nil.
+#       initial_tags: []
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: frigate/events
@@ -536,9 +539,12 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
+#       InitialTags lists capability tags activated at the start of the
+#       agent run dispatched for matching messages. Only meaningful when
+#       Wake is non-nil.
+#       initial_tags: []
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: automation/wake/security
@@ -554,10 +560,13 @@ talents_dir: ./talents
 #         delegation_gating: disabled
 #         prefer_speed: ""
 #         exclude_tools: []
-#         initial_tags:
-#           - homeassistant
 #         extra_hints: {}
 #         instructions: Evaluate the security event and decide if action is needed.
+#       InitialTags lists capability tags activated at the start of the
+#       agent run dispatched for matching messages. Only meaningful when
+#       Wake is non-nil.
+#       initial_tags:
+#         - homeassistant
 #   Telemetry configures operational metric publishing. When enabled,
 #   a separate mqtt-telemetry loop publishes system health, token usage,
 #   loop states, and other operational data as native HA sensors.
@@ -911,8 +920,6 @@ ego:
 #         delegation_gating: disabled
 #         prefer_speed: ""
 #         exclude_tools: []
-#         initial_tags:
-#           - homeassistant
 #         extra_hints: {}
 #         instructions: Be concise and focus on high-signal observations.
 #       operation: service
@@ -930,7 +937,8 @@ ego:
 #                 - fri
 #               start: 08:30
 #               end: 18:00
-#       tags: []
+#       tags:
+#         - homeassistant
 #       exclude_tools: []
 #       sleep_min: 2m
 #       sleep_max: 10m

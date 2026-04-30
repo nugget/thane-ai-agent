@@ -89,8 +89,8 @@ func TestToolsHandleAddWithSeedArrays(t *testing.T) {
 	if len(subs[0].Profile.ExcludeTools) != 2 {
 		t.Errorf("exclude_tools len = %d, want 2", len(subs[0].Profile.ExcludeTools))
 	}
-	if len(subs[0].Profile.InitialTags) != 2 {
-		t.Errorf("initial_tags len = %d, want 2", len(subs[0].Profile.InitialTags))
+	if len(subs[0].InitialTags) != 2 {
+		t.Errorf("initial_tags len = %d, want 2", len(subs[0].InitialTags))
 	}
 }
 

@@ -81,8 +81,10 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 	if raw, ok := args["exclude_tools"]; ok {
 		profile.ExcludeTools = toStringSlice(raw)
 	}
+
+	var initialTags []string
 	if raw, ok := args["initial_tags"]; ok {
-		profile.InitialTags = toStringSlice(raw)
+		initialTags = toStringSlice(raw)
 	}
 
 	// Validate the profile before persisting — fail fast with a clear
@@ -91,7 +93,7 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		return "", fmt.Errorf("invalid profile: %w", err)
 	}
 
-	ws, err := t.store.Add(topic, profile)
+	ws, err := t.store.Add(topic, profile, initialTags)
 	if err != nil {
 		return "", err
 	}

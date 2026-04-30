@@ -297,7 +297,6 @@ func cloneSpec(s Spec) Spec {
 	clone.Hints = cloneStringMap(s.Hints)
 	clone.Metadata = cloneStringMap(s.Metadata)
 	clone.Profile = s.Profile
-	clone.Profile.InitialTags = append([]string(nil), s.Profile.InitialTags...)
 	clone.Profile.ExcludeTools = append([]string(nil), s.Profile.ExcludeTools...)
 	clone.Profile.ExtraHints = cloneStringMap(s.Profile.ExtraHints)
 	return clone

@@ -571,7 +571,6 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		Model:           opts.Model,
 		Hints:           opts.Hints,
 		ExcludeTools:    opts.ExcludeTools,
-		InitialTags:     opts.InitialTags,
 		RuntimeTags:     []string{"message_channel"},
 		FallbackContent: fallbackContent,
 	}
@@ -702,7 +701,6 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		Model:           opts.Model,
 		Hints:           opts.Hints,
 		ExcludeTools:    opts.ExcludeTools,
-		InitialTags:     opts.InitialTags,
 		RuntimeTags:     []string{"message_channel"},
 		FallbackContent: fallbackContent,
 	}

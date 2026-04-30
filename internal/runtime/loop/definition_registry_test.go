@@ -33,9 +33,9 @@ func TestDefinitionRegistrySnapshotIncludesConfigAndOverlay(t *testing.T) {
 		Task:       "Watch the office and report meaningful changes.",
 		Operation:  OperationService,
 		Completion: CompletionConversation,
+		Tags:       []string{"homeassistant"},
 		Profile: router.LoopProfile{
 			Mission:      "background",
-			InitialTags:  []string{"homeassistant"},
 			ExcludeTools: []string{"shell_exec"},
 		},
 	}, updatedAt); err != nil {

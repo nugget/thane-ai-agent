@@ -453,11 +453,11 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 			Task:       "base task",
 			Operation:  OperationRequestReply,
 			Completion: CompletionReturn,
+			Tags:       []string{"profile_tag"},
 			Profile: router.LoopProfile{
 				Model:        "spark/base",
 				Mission:      "automation",
 				ExcludeTools: []string{"profile_block"},
-				InitialTags:  []string{"profile_tag"},
 				Instructions: "profile guidance",
 			},
 			Hints: map[string]string{

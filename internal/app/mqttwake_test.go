@@ -318,7 +318,6 @@ func TestApplyLoopProfile(t *testing.T) {
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"shell_exec"},
-		InitialTags:      []string{"homeassistant"},
 		ExtraHints:       map[string]string{"custom": "value"},
 	}
 
@@ -348,8 +347,11 @@ func TestApplyLoopProfile(t *testing.T) {
 	if len(req.ExcludeTools) != 2 || req.ExcludeTools[0] != "files_read" || req.ExcludeTools[1] != "shell_exec" {
 		t.Errorf("ExcludeTools = %v, want [files_read shell_exec]", req.ExcludeTools)
 	}
-	if len(req.InitialTags) != 2 || req.InitialTags[0] != "baseline" || req.InitialTags[1] != "homeassistant" {
-		t.Errorf("InitialTags = %v, want [baseline homeassistant]", req.InitialTags)
+	// applyLoopProfile is purely routing/configuration; capability tags
+	// are no longer part of LoopProfile and are applied separately by
+	// the caller (e.g., from WakeSubscription.InitialTags).
+	if len(req.InitialTags) != 1 || req.InitialTags[0] != "baseline" {
+		t.Errorf("InitialTags = %v, want [baseline] (profile must not touch tags)", req.InitialTags)
 	}
 }
 
