@@ -607,16 +607,26 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 // A 0% cache-read rate combined with a payload that omits markers points
 // at a different bug than one where markers are present but the prefix
 // isn't matching, so this log is the cheapest way to disambiguate.
+//
+// The function short-circuits when Debug is disabled so the loops and
+// slice allocations don't run on every request in production.
 func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
+	if logger == nil || !logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+
+	systemPayloadKind := "none"
 	systemBlocks := 0
 	systemBreakpoints := 0
 	systemTotalChars := 0
 	systemTTLs := make([]string, 0, 4)
 	systemBreakpointPrefixChars := make([]int, 0, 4)
-	if blocks, ok := req.System.([]anthropicContent); ok {
-		systemBlocks = len(blocks)
+	switch system := req.System.(type) {
+	case []anthropicContent:
+		systemPayloadKind = "blocks"
+		systemBlocks = len(system)
 		prefix := 0
-		for _, b := range blocks {
+		for _, b := range system {
 			prefix += len(b.Text)
 			if b.CacheControl != nil {
 				systemBreakpoints++
@@ -629,6 +639,16 @@ func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
 			}
 		}
 		systemTotalChars = prefix
+	case string:
+		// Fallback path from anthropicSystemPayload when no
+		// PromptSections are present. The system content still ships,
+		// just as a single un-cached string — record its size so
+		// operators can correlate prefix length even without blocks.
+		if system != "" {
+			systemPayloadKind = "string"
+			systemBlocks = 1
+			systemTotalChars = len(system)
+		}
 	}
 
 	toolBreakpointTTL := ""
@@ -649,6 +669,7 @@ func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
 
 	logger.Debug("outbound cache markers",
 		"model", req.Model,
+		"system_payload_kind", systemPayloadKind,
 		"system_blocks", systemBlocks,
 		"system_breakpoints", systemBreakpoints,
 		"system_breakpoint_ttls", systemTTLs,
