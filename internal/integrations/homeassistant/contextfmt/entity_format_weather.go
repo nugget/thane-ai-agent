@@ -37,7 +37,23 @@ type weatherContext struct {
 	Updated       string            `json:"updated,omitempty"`
 	ForecastType  string            `json:"forecast_type,omitempty"`
 	Forecast      []weatherForecast `json:"forecast,omitempty"`
+	// ForecastTotalCount is the total number of forecast entries the
+	// upstream provider returned, before this formatter capped the
+	// rendered list. Surfaced so the model can tell a short forecast
+	// apart from a truncated long one. Zero is omitted.
+	ForecastTotalCount int `json:"forecast_total_count,omitempty"`
+	// ForecastTruncated is true when the rendered Forecast slice
+	// contains fewer entries than the upstream provider returned.
+	// Pairs with ForecastTotalCount; the model can compute how many
+	// entries were dropped.
+	ForecastTruncated bool `json:"forecast_truncated,omitempty"`
 }
+
+// weatherForecastRenderLimit caps the number of forecast entries
+// rendered into model-facing context. Forecasts longer than this are
+// truncated and the truncation is signaled via ForecastTruncated /
+// ForecastTotalCount; never silently dropped.
+const weatherForecastRenderLimit = 3
 
 // weatherForecast is a single forecast entry.
 type weatherForecast struct {
@@ -89,8 +105,11 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 
 	// Extract forecast entries (HA returns []any of map[string]any).
 	if rawForecast, ok := state.Attributes["forecast"].([]any); ok {
-		limit := 3
-		if len(rawForecast) < limit {
+		wc.ForecastTotalCount = len(rawForecast)
+		limit := weatherForecastRenderLimit
+		if len(rawForecast) > limit {
+			wc.ForecastTruncated = true
+		} else {
 			limit = len(rawForecast)
 		}
 		for i := 0; i < limit; i++ {

@@ -106,6 +106,57 @@ func TestFormatWeather(t *testing.T) {
 	if dt, ok := fc0["dt"].(string); !ok || !strings.HasPrefix(dt, "+") {
 		t.Errorf("forecast dt should be positive delta, got %v", fc0["dt"])
 	}
+
+	// Forecast within the render limit: total count surfaced, truncated
+	// flag absent (omitempty for the false case).
+	if got := parsed["forecast_total_count"]; got != float64(2) {
+		t.Errorf("forecast_total_count = %v, want 2", got)
+	}
+	if _, present := parsed["forecast_truncated"]; present {
+		t.Errorf("forecast_truncated should be omitted when forecast fits the render limit, got %v", parsed["forecast_truncated"])
+	}
+}
+
+func TestFormatWeather_TruncatedForecastSurfacesMarker(t *testing.T) {
+	// Build a 7-entry forecast — well past the 3-entry render cap.
+	rawForecast := make([]any, 0, 7)
+	for i := 0; i < 7; i++ {
+		rawForecast = append(rawForecast, map[string]any{
+			"datetime":  testNow.Add(time.Duration(i+1) * 6 * time.Hour).Format(time.RFC3339),
+			"condition": "cloudy",
+		})
+	}
+
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature": 72.0,
+			"forecast":    rawForecast,
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	forecast, ok := parsed["forecast"].([]any)
+	if !ok {
+		t.Fatal("missing forecast array")
+	}
+	if len(forecast) != 3 {
+		t.Errorf("rendered forecast len = %d, want 3 (cap)", len(forecast))
+	}
+	if got := parsed["forecast_total_count"]; got != float64(7) {
+		t.Errorf("forecast_total_count = %v, want 7", got)
+	}
+	if got := parsed["forecast_truncated"]; got != true {
+		t.Errorf("forecast_truncated = %v, want true", got)
+	}
 }
 
 func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {
