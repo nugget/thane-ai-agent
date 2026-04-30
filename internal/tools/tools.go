@@ -895,10 +895,19 @@ func (r *Registry) Get(name string) *Tool {
 	return r.tools[name]
 }
 
-// List returns all tools for the LLM.
+// List returns all tools for the LLM, sorted by name. Deterministic
+// order is required for Anthropic prompt caching: tools land first in
+// the cache key, so a randomized order (Go map iteration) makes every
+// turn miss the prefix even when the tool set is unchanged.
 func (r *Registry) List() []map[string]any {
-	var result []map[string]any
-	for _, t := range r.tools {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		t := r.tools[name]
 		result = append(result, map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -911,12 +920,13 @@ func (r *Registry) List() []map[string]any {
 	return result
 }
 
-// AllToolNames returns the names of all registered tools.
+// AllToolNames returns the names of all registered tools, sorted.
 func (r *Registry) AllToolNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
