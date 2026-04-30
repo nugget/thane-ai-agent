@@ -53,9 +53,9 @@ func TestLoopDefinitionStoreSaveAndLoadIntoRegistry(t *testing.T) {
 		Task:       "Monitor the front room and surface noteworthy changes.",
 		Operation:  looppkg.OperationService,
 		Completion: looppkg.CompletionConversation,
+		Tags:       []string{"homeassistant"},
 		Profile: router.LoopProfile{
 			Mission:          "background",
-			InitialTags:      []string{"homeassistant"},
 			Instructions:     "Be concise.",
 			DelegationGating: "disabled",
 		},
@@ -86,8 +86,8 @@ func TestLoopDefinitionStoreSaveAndLoadIntoRegistry(t *testing.T) {
 		if !def.UpdatedAt.Equal(updatedAt) {
 			t.Fatalf("UpdatedAt = %v, want %v", def.UpdatedAt, updatedAt)
 		}
-		if def.Spec.Profile.InitialTags[0] != "homeassistant" {
-			t.Fatalf("InitialTags = %v, want homeassistant", def.Spec.Profile.InitialTags)
+		if len(def.Spec.Tags) != 1 || def.Spec.Tags[0] != "homeassistant" {
+			t.Fatalf("Spec.Tags = %v, want [homeassistant]", def.Spec.Tags)
 		}
 	}
 	if !found {

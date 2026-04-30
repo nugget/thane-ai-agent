@@ -84,7 +84,7 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	}
 
 	// Add a subscription.
-	ws, err := s.Add("test/topic", router.LoopProfile{Mission: "automation"})
+	ws, err := s.Add("test/topic", router.LoopProfile{Mission: "automation"}, nil)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 		t.Fatalf("new store 1: %v", err)
 	}
 
-	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: "5"})
+	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: "5"}, nil)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -255,6 +255,100 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 	}
 }
 
+// TestSubscriptionStoreLegacyInitialTagsMigration verifies that rows
+// written by a pre-migration server (initial_tags embedded inside the
+// LoopProfile seed_json blob, no initial_tags_json column populated)
+// are hoisted onto WakeSubscription.InitialTags on first load AND
+// written back to the new column so the migration is durable.
+func TestSubscriptionStoreLegacyInitialTagsMigration(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("new store (init schema): %v", err)
+	}
+
+	// Synthesize a pre-migration row: LoopProfile JSON includes the
+	// removed initial_tags field, and initial_tags_json is empty.
+	legacyJSON := `{"mission":"automation","initial_tags":["homeassistant","security"]}`
+	if _, err := db.Exec(
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"legacy-row", "legacy/topic", legacyJSON, "[]", "runtime", "2026-04-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	// First load — hoists from seed_json, writes back to the column.
+	s1, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	subs := s1.List()
+	if len(subs) != 1 {
+		t.Fatalf("first load len = %d, want 1", len(subs))
+	}
+	if got := subs[0].InitialTags; len(got) != 2 || got[0] != "homeassistant" || got[1] != "security" {
+		t.Fatalf("first-load InitialTags = %v, want [homeassistant security]", got)
+	}
+
+	// Verify the write-back actually landed in the column.
+	var stored string
+	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, "legacy-row").Scan(&stored); err != nil {
+		t.Fatalf("select after migration: %v", err)
+	}
+	if stored != `["homeassistant","security"]` {
+		t.Fatalf("initial_tags_json after migration = %q, want JSON array", stored)
+	}
+
+	// Second load — should read from the column directly. The legacy
+	// extractor would still fire (seed_json is unchanged), but the
+	// column wins and the result is identical.
+	s2, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	subs = s2.List()
+	if len(subs) != 1 {
+		t.Fatalf("second load len = %d, want 1", len(subs))
+	}
+	if got := subs[0].InitialTags; len(got) != 2 || got[0] != "homeassistant" || got[1] != "security" {
+		t.Fatalf("second-load InitialTags = %v, want [homeassistant security]", got)
+	}
+}
+
+// TestSubscriptionStoreAddPersistsEmptyTagsAsArray verifies that a
+// subscription added with no InitialTags writes "[]" rather than
+// "null" — matching the column's default and keeping the on-disk
+// shape consistent.
+func TestSubscriptionStoreAddPersistsEmptyTagsAsArray(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	s, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	ws, err := s.Add("empty/tags", router.LoopProfile{Mission: "automation"}, nil)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID).Scan(&stored); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if stored != "[]" {
+		t.Fatalf("initial_tags_json = %q, want %q", stored, "[]")
+	}
+}
+
 func TestSubscriptionStoreTopics(t *testing.T) {
 	s := newTestStore(t)
 
@@ -264,7 +358,7 @@ func TestSubscriptionStoreTopics(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if _, err := s.Add("topic/b", profile); err != nil {
+	if _, err := s.Add("topic/b", profile, nil); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -290,7 +384,7 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 		hookedTopics = append(hookedTopics, topics...)
 	})
 
-	_, err := s.Add("hook/test", router.LoopProfile{Mission: "automation"})
+	_, err := s.Add("hook/test", router.LoopProfile{Mission: "automation"}, nil)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -304,7 +398,7 @@ func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
 	s := newTestStore(t)
 
 	// No hook set — Add should not panic.
-	_, err := s.Add("no-hook/test", router.LoopProfile{})
+	_, err := s.Add("no-hook/test", router.LoopProfile{}, nil)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -314,25 +408,25 @@ func TestSubscriptionStoreAddValidation(t *testing.T) {
 	s := newTestStore(t)
 
 	// Invalid topic filter.
-	_, err := s.Add("", router.LoopProfile{})
+	_, err := s.Add("", router.LoopProfile{}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty topic")
 	}
 
 	// Invalid topic with bad wildcard.
-	_, err = s.Add("foo/ba#r", router.LoopProfile{})
+	_, err = s.Add("foo/ba#r", router.LoopProfile{}, nil)
 	if err == nil {
 		t.Fatal("expected error for bad wildcard in topic")
 	}
 
 	// Invalid seed.
-	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: "99"})
+	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: "99"}, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid quality_floor")
 	}
 
 	// Valid — should succeed.
-	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: "7"})
+	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: "7"}, nil)
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}

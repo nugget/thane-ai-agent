@@ -115,8 +115,8 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 	if spec.Profile.DelegationGating != "disabled" {
 		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
 	}
-	if len(spec.Profile.InitialTags) != 1 || spec.Profile.InitialTags[0] != "ego" {
-		t.Errorf("Profile.InitialTags = %v, want [ego]", spec.Profile.InitialTags)
+	if len(spec.Tags) != 1 || spec.Tags[0] != "ego" {
+		t.Errorf("Tags = %v, want [ego]", spec.Tags)
 	}
 }
 

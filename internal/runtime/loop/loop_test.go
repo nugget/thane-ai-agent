@@ -944,11 +944,11 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 		SleepDefault: 1 * time.Millisecond,
 		Jitter:       Float64Ptr(0),
 		MaxIter:      1,
+		Tags:         []string{"homeassistant"},
 		Profile: router.LoopProfile{
 			Model:        "spark/gpt-oss:20b",
 			Mission:      "automation",
 			ExcludeTools: []string{"shell_exec"},
-			InitialTags:  []string{"homeassistant"},
 			Instructions: "stay concise",
 			PreferSpeed:  "true",
 			LocalOnly:    "false",

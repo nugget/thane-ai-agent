@@ -84,6 +84,9 @@ func mqttWakeHandler(
 					Messages:       []agent.Message{{Role: "user", Content: msg}},
 				}
 				applyLoopProfile(&ws.Profile, req)
+				if len(ws.InitialTags) > 0 {
+					req.InitialTags = append(req.InitialTags, ws.InitialTags...)
+				}
 
 				// Always tag the source so tools and logging can identify
 				// MQTT-triggered conversations.
@@ -262,10 +265,12 @@ func sanitizePayload(payload []byte) string {
 	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
 }
 
-// applyLoopProfile applies a LoopProfile's configuration to an agent.Request.
-// It sets the model, merges routing hints, and copies tool exclusions
-// and initial tags. This function lives in the app package rather than on
-// LoopProfile itself to avoid a circular import between router and agent.
+// applyLoopProfile applies a LoopProfile's routing configuration to an
+// agent.Request. It sets the model, merges routing hints, and copies tool
+// exclusions. Capability tags are not part of the routing profile and
+// are applied separately by the caller. This function lives in the app
+// package rather than on LoopProfile itself to avoid a circular import
+// between router and agent.
 func applyLoopProfile(profile *router.LoopProfile, req *agent.Request) {
 	opts := profile.RequestOptions()
 
@@ -284,8 +289,5 @@ func applyLoopProfile(profile *router.LoopProfile, req *agent.Request) {
 
 	if len(opts.ExcludeTools) > 0 {
 		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
-	}
-	if len(opts.InitialTags) > 0 {
-		req.InitialTags = append(req.InitialTags, opts.InitialTags...)
 	}
 }

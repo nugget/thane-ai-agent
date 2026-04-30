@@ -189,9 +189,9 @@ func ExampleConfig() *Config {
 						Mission:          "automation",
 						LocalOnly:        "false",
 						DelegationGating: "disabled",
-						InitialTags:      []string{"homeassistant"},
 						Instructions:     "Evaluate the security event and decide if action is needed.",
 					},
+					InitialTags: []string{"homeassistant"},
 				},
 			},
 			Telemetry: TelemetryConfig{
@@ -284,9 +284,9 @@ func ExampleConfig() *Config {
 					Profile: router.LoopProfile{
 						Mission:          "background",
 						DelegationGating: "disabled",
-						InitialTags:      []string{"homeassistant"},
 						Instructions:     "Be concise and focus on high-signal observations.",
 					},
+					Tags:         []string{"homeassistant"},
 					SleepMin:     2 * time.Minute,
 					SleepMax:     10 * time.Minute,
 					SleepDefault: 5 * time.Minute,
