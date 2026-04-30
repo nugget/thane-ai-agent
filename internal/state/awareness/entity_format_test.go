@@ -106,6 +106,137 @@ func TestFormatWeather(t *testing.T) {
 	if dt, ok := fc0["dt"].(string); !ok || !strings.HasPrefix(dt, "+") {
 		t.Errorf("forecast dt should be positive delta, got %v", fc0["dt"])
 	}
+
+	// Forecast within the render limit: total count surfaced, truncated
+	// flag absent (omitempty for the false case).
+	if got := parsed["forecast_total_count"]; got != float64(2) {
+		t.Errorf("forecast_total_count = %v, want 2", got)
+	}
+	if _, present := parsed["forecast_truncated"]; present {
+		t.Errorf("forecast_truncated should be omitted when forecast fits the render limit, got %v", parsed["forecast_truncated"])
+	}
+}
+
+func TestFormatWeather_TruncatedForecastSurfacesMarker(t *testing.T) {
+	// Build a 7-entry forecast — well past the 3-entry render cap.
+	rawForecast := make([]any, 0, 7)
+	for i := 0; i < 7; i++ {
+		rawForecast = append(rawForecast, map[string]any{
+			"datetime":  testNow.Add(time.Duration(i+1) * 6 * time.Hour).Format(time.RFC3339),
+			"condition": "cloudy",
+		})
+	}
+
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature": 72.0,
+			"forecast":    rawForecast,
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	forecast, ok := parsed["forecast"].([]any)
+	if !ok {
+		t.Fatal("missing forecast array")
+	}
+	if len(forecast) != 3 {
+		t.Errorf("rendered forecast len = %d, want 3 (cap)", len(forecast))
+	}
+	if got := parsed["forecast_total_count"]; got != float64(7) {
+		t.Errorf("forecast_total_count = %v, want 7", got)
+	}
+	if got := parsed["forecast_truncated"]; got != true {
+		t.Errorf("forecast_truncated = %v, want true", got)
+	}
+}
+
+func TestFormatWeather_ForecastUnavailableSurfacesMarker(t *testing.T) {
+	// State carrying the forecast_unavailable marker — set upstream by
+	// stateMarkedForecastUnavailable when fetch fails — should render
+	// the marker into model-facing JSON alongside the requested type.
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature":          72.0,
+			"forecast_type":        "daily",
+			"forecast_unavailable": true,
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	if got := parsed["forecast_type"]; got != "daily" {
+		t.Errorf("forecast_type = %v, want daily", got)
+	}
+	if got := parsed["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %v, want true", got)
+	}
+	if _, present := parsed["forecast"]; present {
+		t.Errorf("forecast array should be absent when forecast is unavailable, got %v", parsed["forecast"])
+	}
+}
+
+func TestFormatWeather_ForecastUnavailableShortCircuitsRenderingEvenWithStaleForecastAttr(t *testing.T) {
+	// Defensive case: even if an upstream path were to leave a
+	// forecast array next to the unavailable marker (HA component
+	// quirks, race in state mutation, etc.), the formatter must keep
+	// the rendered JSON internally consistent — never report
+	// forecast_unavailable: true *and* a forecast array. This is the
+	// short-circuit defense that pairs with
+	// stateMarkedForecastUnavailable's source-side scrub.
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature":          72.0,
+			"forecast_type":        "daily",
+			"forecast_unavailable": true,
+			"forecast": []any{
+				map[string]any{
+					"datetime":    testNow.Add(6 * time.Hour).Format(time.RFC3339),
+					"condition":   "stale",
+					"temperature": 99.0,
+				},
+			},
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	if got := parsed["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %v, want true", got)
+	}
+	if _, present := parsed["forecast"]; present {
+		t.Errorf("forecast array must be absent when forecast_unavailable: true, got %v", parsed["forecast"])
+	}
+	if _, present := parsed["forecast_total_count"]; present {
+		t.Errorf("forecast_total_count must be absent when forecast_unavailable: true, got %v", parsed["forecast_total_count"])
+	}
+	if _, present := parsed["forecast_truncated"]; present {
+		t.Errorf("forecast_truncated must be absent when forecast_unavailable: true, got %v", parsed["forecast_truncated"])
+	}
 }
 
 func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {

@@ -37,7 +37,30 @@ type weatherContext struct {
 	Updated       string            `json:"updated,omitempty"`
 	ForecastType  string            `json:"forecast_type,omitempty"`
 	Forecast      []weatherForecast `json:"forecast,omitempty"`
+	// ForecastTotalCount is the total number of forecast entries the
+	// upstream provider returned, before this formatter capped the
+	// rendered list. Surfaced so the model can tell a short forecast
+	// apart from a truncated long one. Zero is omitted.
+	ForecastTotalCount int `json:"forecast_total_count,omitempty"`
+	// ForecastTruncated is true when the rendered Forecast slice
+	// contains fewer entries than the upstream provider returned.
+	// Pairs with ForecastTotalCount; the model can compute how many
+	// entries were dropped.
+	ForecastTruncated bool `json:"forecast_truncated,omitempty"`
+	// ForecastUnavailable is true when a forecast was requested for
+	// this entity but could not be retrieved (fetch error, empty
+	// result). Pairs with ForecastType: the model knows which
+	// forecast type was asked for and that it was not delivered, so
+	// it can avoid acting as though current conditions are the full
+	// picture.
+	ForecastUnavailable bool `json:"forecast_unavailable,omitempty"`
 }
+
+// weatherForecastRenderLimit caps the number of forecast entries
+// rendered into model-facing context. Forecasts longer than this are
+// truncated and the truncation is signaled via ForecastTruncated /
+// ForecastTotalCount; never silently dropped.
+const weatherForecastRenderLimit = 3
 
 // weatherForecast is a single forecast entry.
 type weatherForecast struct {
@@ -86,11 +109,28 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		wc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
 	}
 	wc.ForecastType = attrString(state.Attributes, "forecast_type")
+	if unavailable, _ := state.Attributes["forecast_unavailable"].(bool); unavailable {
+		wc.ForecastUnavailable = true
+	}
+
+	// Short-circuit forecast rendering when the state is marked
+	// unavailable. Defense in depth alongside the source-side scrub
+	// in stateMarkedForecastUnavailable: even if an upstream path
+	// were to leave a forecast attribute next to the unavailable
+	// marker, the rendered JSON stays self-consistent — the model
+	// either gets a forecast array, or gets the unavailability
+	// marker, never both.
+	if wc.ForecastUnavailable {
+		return promptfmt.MarshalCompact(wc)
+	}
 
 	// Extract forecast entries (HA returns []any of map[string]any).
 	if rawForecast, ok := state.Attributes["forecast"].([]any); ok {
-		limit := 3
-		if len(rawForecast) < limit {
+		wc.ForecastTotalCount = len(rawForecast)
+		limit := weatherForecastRenderLimit
+		if len(rawForecast) > limit {
+			wc.ForecastTruncated = true
+		} else {
 			limit = len(rawForecast)
 		}
 		for i := 0; i < limit; i++ {

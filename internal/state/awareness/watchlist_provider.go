@@ -233,21 +233,38 @@ func watchlistStateWithForecast(
 		}
 		fields = append(fields, extraLogFields...)
 		logger.Warn(warnMsg, fields...)
-		return state
 	}
+	// next carries the unavailability marker on failure; the original
+	// behavior of "return state silently on error" hid the requested
+	// forecast from the model entirely. Always thread the marker-bearing
+	// state through so the formatter can surface the gap.
 	return next
 }
 
+// stateWithWeatherForecast returns a state with forecast attributes
+// reflecting the outcome of fetching forecastType from Home Assistant.
+//
+// Three cases:
+//
+//   - The request is not applicable (no forecast requested, non-weather
+//     entity, sentinel state): the original state is returned unchanged.
+//   - The fetch succeeds: a clone is returned with attrs["forecast"]
+//     and attrs["forecast_type"] set.
+//   - The fetch fails (non-nil err) or returns no entries: a clone is
+//     returned with attrs["forecast_type"] and
+//     attrs["forecast_unavailable"] set so the model-facing formatter
+//     can render an explicit "asked but missing" marker rather than
+//     silently presenting state without forecast.
 func stateWithWeatherForecast(ctx context.Context, ha StateGetter, state *homeassistant.State, forecastType string) (*homeassistant.State, error) {
 	if state == nil || forecastType == "" || entityDomain(state.EntityID) != "weather" || isSentinelState(state.State) {
 		return state, nil
 	}
 	forecast, err := ha.GetWeatherForecasts(ctx, state.EntityID, forecastType)
 	if err != nil {
-		return state, err
+		return stateMarkedForecastUnavailable(state, forecastType), err
 	}
 	if len(forecast) == 0 {
-		return state, nil
+		return stateMarkedForecastUnavailable(state, forecastType), nil
 	}
 
 	next := *state
@@ -263,4 +280,29 @@ func stateWithWeatherForecast(ctx context.Context, ha StateGetter, state *homeas
 	attrs["forecast_type"] = forecastType
 	next.Attributes = attrs
 	return &next, nil
+}
+
+// stateMarkedForecastUnavailable returns a clone of state with
+// forecast_type and forecast_unavailable attributes set so the
+// formatter can render an explicit unavailability marker for a
+// forecast that was requested but could not be returned.
+//
+// Any pre-existing "forecast" attribute on the source state is
+// dropped on the clone. Some HA components include a forecast array
+// on /api/states; without this scrub, the rendered context could
+// claim forecast_unavailable: true while still carrying a (probably
+// stale) forecast array, which would mislead the model.
+func stateMarkedForecastUnavailable(state *homeassistant.State, forecastType string) *homeassistant.State {
+	next := *state
+	attrs := make(map[string]any, len(state.Attributes)+2)
+	for key, value := range state.Attributes {
+		if key == "forecast" {
+			continue
+		}
+		attrs[key] = value
+	}
+	attrs["forecast_type"] = forecastType
+	attrs["forecast_unavailable"] = true
+	next.Attributes = attrs
+	return &next
 }

@@ -368,6 +368,95 @@ func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
 	}
 }
 
+func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
+	// When the forecast fetch errors, the model must see an explicit
+	// "asked but unavailable" marker — not silently fall back to current
+	// conditions only. Pre-fix, the failure was logged operator-side and
+	// the original state was returned, so the model couldn't tell the
+	// difference between an unsubscribed entity and one whose forecast
+	// just failed to load.
+	now := time.Now().UTC().Round(time.Second)
+	ha := &fakeHA{
+		states: map[string]*homeassistant.State{
+			"weather.home": {
+				EntityID:    "weather.home",
+				State:       "cloudy",
+				LastChanged: now.Add(-5 * time.Minute),
+				Attributes: map[string]any{
+					"friendly_name":    "Home Forecast",
+					"temperature":      70.0,
+					"temperature_unit": "°F",
+				},
+			},
+		},
+		forecastErr: errors.New("upstream 503"),
+	}
+
+	p, store := setupTestProvider(t, ha)
+	if err := store.AddWithOptions("weather.home", nil, nil, 0, "daily"); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+
+	if len(ha.forecastRequests) != 1 || ha.forecastRequests[0] != "weather.home:daily" {
+		t.Fatalf("forecastRequests = %v, want [weather.home:daily]", ha.forecastRequests)
+	}
+
+	payload := decodeWatchlistPayload(t, got)
+	if payload["forecast_type"] != "daily" {
+		t.Errorf("forecast_type = %#v, want daily (the requested type must remain visible to the model)", payload["forecast_type"])
+	}
+	if payload["forecast_unavailable"] != true {
+		t.Errorf("forecast_unavailable = %#v, want true", payload["forecast_unavailable"])
+	}
+	if _, present := payload["forecast"]; present {
+		t.Errorf("forecast array should be absent on fetch failure, got %v", payload["forecast"])
+	}
+	// Sanity: current-conditions data still passes through.
+	if payload["temperature"] != "70 °F" {
+		t.Errorf("temperature = %#v, want 70 °F (current conditions should still render)", payload["temperature"])
+	}
+}
+
+func TestStateMarkedForecastUnavailable_ScrubsExistingForecastAttr(t *testing.T) {
+	// Some HA components emit a forecast array on /api/states even
+	// when a follow-up fetch fails. stateMarkedForecastUnavailable
+	// must drop that stale array on the marked clone so downstream
+	// formatters don't end up rendering both forecast_unavailable: true
+	// and a forecast list (the contradiction Copilot flagged on #830).
+	stale := []any{
+		map[string]any{"datetime": "2026-04-30T18:00:00Z", "condition": "stale"},
+	}
+	state := &homeassistant.State{
+		EntityID: "weather.home",
+		State:    "sunny",
+		Attributes: map[string]any{
+			"temperature": 72.0,
+			"forecast":    stale,
+		},
+	}
+
+	marked := stateMarkedForecastUnavailable(state, "daily")
+
+	if _, present := marked.Attributes["forecast"]; present {
+		t.Errorf("marked.Attributes still contains forecast = %#v; expected scrub", marked.Attributes["forecast"])
+	}
+	if got := marked.Attributes["forecast_type"]; got != "daily" {
+		t.Errorf("forecast_type = %#v, want daily", got)
+	}
+	if got := marked.Attributes["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %#v, want true", got)
+	}
+	// Source state must remain untouched — the scrub is on the clone.
+	if _, present := state.Attributes["forecast"]; !present {
+		t.Errorf("source state.Attributes[\"forecast\"] should not be modified by the helper")
+	}
+}
+
 func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	now := time.Now().UTC().Round(time.Second)
 	ha := &fakeHA{
