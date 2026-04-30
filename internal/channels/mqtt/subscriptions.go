@@ -29,8 +29,10 @@ type WakeSubscription struct {
 	Profile router.LoopProfile `json:"profile"`
 
 	// InitialTags lists capability tags activated at the start of the
-	// dispatched agent run. They merge with whatever tags the
-	// dispatched run would otherwise activate from its loop spec.
+	// dispatched agent run. The dispatcher builds the agent.Request
+	// directly (no loop spec), so these are the only tags on the
+	// request itself; the agent's capability resolver then layers
+	// always-active tags on top.
 	InitialTags []string `json:"initial_tags,omitempty"`
 
 	Source    string    `json:"source"` // "config" or "runtime"
@@ -96,6 +98,17 @@ func (s *SubscriptionStore) loadRuntime() error {
 	}
 	defer rows.Close()
 
+	// Rows whose initial_tags_json is empty/default but whose seed_json
+	// still carries a legacy `initial_tags` key need a one-time write
+	// back so the migration is durable. Collect them and apply after
+	// the read iterator closes — sqlite doesn't love INSERT/UPDATE
+	// against the same connection while a SELECT cursor is open.
+	type pendingMigration struct {
+		id   string
+		tags []string
+	}
+	var pending []pendingMigration
+
 	for rows.Next() {
 		var ws WakeSubscription
 		var profileJSON, initialTagsJSON, createdAt string
@@ -105,12 +118,14 @@ func (s *SubscriptionStore) loadRuntime() error {
 		// Pre-migration rows stored InitialTags inside the profile JSON.
 		// Hoist any legacy value out before unmarshaling so the field
 		// reaches its new home on WakeSubscription.
-		ws.InitialTags = extractLegacyInitialTags(profileJSON)
+		legacyTags := extractLegacyInitialTags(profileJSON)
+		ws.InitialTags = legacyTags
 		if err := json.Unmarshal([]byte(profileJSON), &ws.Profile); err != nil {
 			s.logger.Warn("skipping subscription with invalid profile JSON",
 				"id", ws.ID, "error", err)
 			continue
 		}
+		columnHasTags := false
 		if initialTagsJSON != "" {
 			var tags []string
 			if err := json.Unmarshal([]byte(initialTagsJSON), &tags); err != nil {
@@ -118,7 +133,15 @@ func (s *SubscriptionStore) loadRuntime() error {
 					"id", ws.ID, "error", err)
 			} else if len(tags) > 0 {
 				ws.InitialTags = tags
+				columnHasTags = true
 			}
+		}
+		// Schedule a write-back when we recovered tags from legacy
+		// seed_json but the new column is still at its default. After
+		// this runs once, subsequent loads find tags in the column and
+		// the legacy extraction becomes a no-op for that row.
+		if !columnHasTags && len(legacyTags) > 0 {
+			pending = append(pending, pendingMigration{id: ws.ID, tags: legacyTags})
 		}
 		ts, err := database.ParseTimestamp(createdAt)
 		if err != nil {
@@ -146,7 +169,33 @@ func (s *SubscriptionStore) loadRuntime() error {
 		s.subs = append(s.subs, ws)
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, p := range pending {
+		tagsJSON, err := json.Marshal(p.tags)
+		if err != nil {
+			s.logger.Warn("failed to marshal hoisted initial_tags, leaving row legacy",
+				"id", p.id, "error", err)
+			continue
+		}
+		if _, err := s.db.Exec(
+			`UPDATE mqtt_wake_subscriptions SET initial_tags_json = ? WHERE id = ?`,
+			string(tagsJSON), p.id,
+		); err != nil {
+			s.logger.Warn("failed to persist hoisted initial_tags, will retry next load",
+				"id", p.id, "error", err)
+			continue
+		}
+		s.logger.Info("migrated legacy seed_json initial_tags to initial_tags_json column",
+			"id", p.id, "tags", p.tags)
+	}
+
+	return nil
 }
 
 // LoadConfig loads config-defined wake subscriptions. Only entries with
@@ -183,7 +232,7 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 			ID:          fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
 			Topic:       sc.Topic,
 			Profile:     *sc.Wake,
-			InitialTags: append([]string(nil), sc.InitialTags...),
+			InitialTags: append([]string{}, sc.InitialTags...),
 			Source:      "config",
 			CreatedAt:   time.Now(),
 		})
@@ -241,7 +290,7 @@ func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile, initia
 		ID:          fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
 		Topic:       topic,
 		Profile:     profile,
-		InitialTags: append([]string(nil), initialTags...),
+		InitialTags: append([]string{}, initialTags...),
 		Source:      "runtime",
 		CreatedAt:   time.Now(),
 	}
@@ -250,6 +299,9 @@ func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile, initia
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("marshal profile: %w", err)
 	}
+	// Marshal from a non-nil slice so the column always stores a JSON
+	// array (matching the column's '[]' default). json.Marshal(nil)
+	// produces "null", which would be inconsistent.
 	initialTagsJSON, err := json.Marshal(ws.InitialTags)
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("marshal initial_tags: %w", err)

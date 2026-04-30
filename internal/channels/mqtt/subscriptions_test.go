@@ -255,6 +255,100 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 	}
 }
 
+// TestSubscriptionStoreLegacyInitialTagsMigration verifies that rows
+// written by a pre-migration server (initial_tags embedded inside the
+// LoopProfile seed_json blob, no initial_tags_json column populated)
+// are hoisted onto WakeSubscription.InitialTags on first load AND
+// written back to the new column so the migration is durable.
+func TestSubscriptionStoreLegacyInitialTagsMigration(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("new store (init schema): %v", err)
+	}
+
+	// Synthesize a pre-migration row: LoopProfile JSON includes the
+	// removed initial_tags field, and initial_tags_json is empty.
+	legacyJSON := `{"mission":"automation","initial_tags":["homeassistant","security"]}`
+	if _, err := db.Exec(
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"legacy-row", "legacy/topic", legacyJSON, "[]", "runtime", "2026-04-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	// First load — hoists from seed_json, writes back to the column.
+	s1, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	subs := s1.List()
+	if len(subs) != 1 {
+		t.Fatalf("first load len = %d, want 1", len(subs))
+	}
+	if got := subs[0].InitialTags; len(got) != 2 || got[0] != "homeassistant" || got[1] != "security" {
+		t.Fatalf("first-load InitialTags = %v, want [homeassistant security]", got)
+	}
+
+	// Verify the write-back actually landed in the column.
+	var stored string
+	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, "legacy-row").Scan(&stored); err != nil {
+		t.Fatalf("select after migration: %v", err)
+	}
+	if stored != `["homeassistant","security"]` {
+		t.Fatalf("initial_tags_json after migration = %q, want JSON array", stored)
+	}
+
+	// Second load — should read from the column directly. The legacy
+	// extractor would still fire (seed_json is unchanged), but the
+	// column wins and the result is identical.
+	s2, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	subs = s2.List()
+	if len(subs) != 1 {
+		t.Fatalf("second load len = %d, want 1", len(subs))
+	}
+	if got := subs[0].InitialTags; len(got) != 2 || got[0] != "homeassistant" || got[1] != "security" {
+		t.Fatalf("second-load InitialTags = %v, want [homeassistant security]", got)
+	}
+}
+
+// TestSubscriptionStoreAddPersistsEmptyTagsAsArray verifies that a
+// subscription added with no InitialTags writes "[]" rather than
+// "null" — matching the column's default and keeping the on-disk
+// shape consistent.
+func TestSubscriptionStoreAddPersistsEmptyTagsAsArray(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	s, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	ws, err := s.Add("empty/tags", router.LoopProfile{Mission: "automation"}, nil)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID).Scan(&stored); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if stored != "[]" {
+		t.Fatalf("initial_tags_json = %q, want %q", stored, "[]")
+	}
+}
+
 func TestSubscriptionStoreTopics(t *testing.T) {
 	s := newTestStore(t)
 
