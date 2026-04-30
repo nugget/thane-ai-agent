@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -459,26 +460,48 @@ func TestEmptyResponseError_PropagatesChildLastError(t *testing.T) {
 func TestEmptyResponseError_TruncatesOversizedLastError(t *testing.T) {
 	t.Parallel()
 
-	huge := strings.Repeat("x", childLastErrorMaxLen*4)
-	err := emptyResponseError(looppkg.LaunchResult{
-		FinalStatus: &looppkg.Status{LastError: huge},
-	})
-	if err == nil {
-		t.Fatal("emptyResponseError() = nil, want truncated error")
+	cases := []struct {
+		name string
+		huge string
+	}{
+		{
+			name: "ascii",
+			huge: strings.Repeat("x", childLastErrorMaxLen*4),
+		},
+		{
+			name: "utf8 boundary",
+			huge: strings.Repeat("€", childLastErrorMaxLen),
+		},
 	}
-	const prefix = "delegate failed: "
-	got := err.Error()
-	if !strings.HasPrefix(got, prefix) {
-		t.Fatalf("error = %q, want prefix %q", got, prefix)
-	}
-	// The body after the prefix is the truncated LastError, possibly
-	// with a "..." marker appended by truncate().
-	body := got[len(prefix):]
-	if len(body) > childLastErrorMaxLen+len("...") {
-		t.Fatalf("body length = %d, want <= %d (cap %d + ellipsis)", len(body), childLastErrorMaxLen+len("..."), childLastErrorMaxLen)
-	}
-	if !strings.HasSuffix(body, "...") {
-		t.Fatalf("body = %q, want truncation marker", body)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := emptyResponseError(looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{LastError: tc.huge},
+			})
+			if err == nil {
+				t.Fatal("emptyResponseError() = nil, want truncated error")
+			}
+			const prefix = "delegate failed: "
+			got := err.Error()
+			if !strings.HasPrefix(got, prefix) {
+				t.Fatalf("error = %q, want prefix %q", got, prefix)
+			}
+			// The body after the prefix is the truncated LastError, possibly
+			// with a "..." marker appended by truncate().
+			body := got[len(prefix):]
+			if len(body) > childLastErrorMaxLen+len("...") {
+				t.Fatalf("body length = %d, want <= %d (cap %d + ellipsis)", len(body), childLastErrorMaxLen+len("..."), childLastErrorMaxLen)
+			}
+			if !utf8.ValidString(body) {
+				t.Fatalf("body is not valid UTF-8: %q", body)
+			}
+			if !strings.HasSuffix(body, "...") {
+				t.Fatalf("body = %q, want truncation marker", body)
+			}
+		})
 	}
 }
 

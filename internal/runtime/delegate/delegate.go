@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -893,10 +894,14 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%.1fK", math.Round(float64(n)/100)/10)
 }
 
-// truncate shortens a string to maxLen characters, adding "..." if truncated.
+// truncate shortens a string to maxLen bytes without splitting a UTF-8
+// sequence, adding "..." if truncated.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
+	}
+	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
+		maxLen--
 	}
 	return s[:maxLen] + "..."
 }
