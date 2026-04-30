@@ -49,7 +49,7 @@ const (
 	defaultToolTimeout = 30 * time.Second
 )
 
-// builtinProfiles returns compatibility profiles for legacy callers.
+// builtinProfiles returns budget and routing defaults for delegate runs.
 func builtinProfiles() map[string]*Profile {
 	return map[string]*Profile{
 		"general": {

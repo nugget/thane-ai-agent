@@ -730,14 +730,11 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		}
 	}
 
-	profile := e.profiles[profileName]
-	if profile == nil {
-		profile = e.profiles["general"]
-	}
 	scopeTags, inheritedTags, droppedTags, explicitScopeRequested := mergeDelegateScopeTags(ctx, tags, opts.inheritCallerTags, opts.explicitTagScope)
 	if len(droppedTags) > 0 {
 		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
 	}
+	profile := e.profileForScope(profileName, scopeTags)
 	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
 
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
@@ -843,6 +840,32 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		toolTimeout:      toolTimeout,
 		promptMode:       opts.effectivePromptMode(),
 	}, nil
+}
+
+func (e *Executor) profileForScope(profileName string, scopeTags []string) *Profile {
+	if profileName != "" && profileName != "general" {
+		if profile := e.profiles[profileName]; profile != nil {
+			return profile
+		}
+	}
+	if containsTag(scopeTags, "ha") {
+		if profile := e.profiles["ha"]; profile != nil {
+			return profile
+		}
+	}
+	if profile := e.profiles[profileName]; profile != nil {
+		return profile
+	}
+	return e.profiles["general"]
+}
+
+func containsTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
 }
 
 // selectModel picks a model for the delegate via the router or falls back to the default.
