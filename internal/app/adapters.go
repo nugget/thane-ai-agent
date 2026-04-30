@@ -878,6 +878,7 @@ func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.
 type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
 	modelRegistry *fleet.Registry
+	modelRuntime  *fleet.Runtime
 	router        *router.Router
 	capSurface    func() []toolcatalog.CapabilitySurface
 }
@@ -925,6 +926,15 @@ func (a *systemStatusAdapter) RouterStats() *router.Stats {
 	}
 	stats := a.router.GetStats()
 	return &stats
+}
+
+// AnthropicRateLimitSnapshot returns the latest Anthropic rate-limit
+// snapshot captured by the shared model runtime.
+func (a *systemStatusAdapter) AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot {
+	if a.modelRuntime == nil {
+		return nil
+	}
+	return a.modelRuntime.AnthropicRateLimitSnapshot()
 }
 
 // CapabilityCatalog returns the runtime capability catalog used by the

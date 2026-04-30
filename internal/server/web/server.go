@@ -70,6 +70,9 @@ type SystemStatusProvider interface {
 	ModelRegistry() *fleet.RegistrySnapshot
 	// RouterStats returns the current router statistics snapshot.
 	RouterStats() *router.Stats
+	// AnthropicRateLimitSnapshot returns the latest Anthropic
+	// rate-limit snapshot, or nil when Anthropic has not been observed.
+	AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot
 	// CapabilityCatalog returns the resolved runtime capability catalog
 	// rendered with the supplied options.
 	CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView
