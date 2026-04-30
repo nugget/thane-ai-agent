@@ -769,3 +769,64 @@ func TestAnthropicClient_RateLimitSnapshot_StoreReturnsCopy(t *testing.T) {
 		t.Fatal("RateLimitSnapshot returned shared pointer; expected defensive copy")
 	}
 }
+
+func TestAnthropicClient_PingCapturesRateLimitSnapshot(t *testing.T) {
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		h := http.Header{}
+		h.Set("x-request-id", "req_ping")
+		h.Set("anthropic-ratelimit-requests-remaining", "123")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     h,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping returned error: %v", err)
+	}
+	snap := c.RateLimitSnapshot()
+	if snap == nil {
+		t.Fatal("RateLimitSnapshot returned nil after Ping response")
+	}
+	if snap.UpstreamRequestID != "req_ping" {
+		t.Errorf("UpstreamRequestID = %q, want req_ping", snap.UpstreamRequestID)
+	}
+	if snap.RequestsRemaining != 123 {
+		t.Errorf("RequestsRemaining = %d, want 123", snap.RequestsRemaining)
+	}
+}
+
+func TestLogRateLimitSnapshot_OmitsMissingResetFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logRateLimitSnapshot(logger, &RateLimitSnapshot{
+		UpstreamRequestID: "req_missing_resets",
+		RequestsLimit:     5000,
+		RequestsRemaining: 4999,
+	})
+
+	got := buf.String()
+	if strings.Contains(got, "0001-01-01T00:00:00Z") {
+		t.Fatalf("zero time leaked into rate-limit log: %s", got)
+	}
+	for _, absent := range []string{
+		"requests_reset",
+		"tokens_reset",
+		"input_tokens_reset",
+		"output_tokens_reset",
+		"retry_after",
+	} {
+		if strings.Contains(got, absent) {
+			t.Errorf("log should omit %q when missing/zero: %s", absent, got)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

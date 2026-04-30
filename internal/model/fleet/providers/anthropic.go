@@ -33,10 +33,10 @@ type AnthropicClient struct {
 	rateLimitSnapshot *RateLimitSnapshot
 }
 
-// RateLimitSnapshot is the most recent set of rate-limit headers
-// returned by Anthropic. Captured on every response so smarter backoff
-// decisions and dashboards can reason about remaining capacity rather
-// than reacting blindly to 429s. Zero values indicate the header was
+// RateLimitSnapshot is the most recent set of rate-limit headers returned by
+// Anthropic. Captured on every response from AnthropicClient request paths so
+// smarter backoff decisions and dashboards can reason about remaining capacity
+// rather than reacting blindly to 429s. Zero values indicate the header was
 // absent (different deployments expose different subsets).
 type RateLimitSnapshot struct {
 	CapturedAt        time.Time
@@ -151,6 +151,16 @@ func (c *AnthropicClient) storeRateLimitSnapshot(snap *RateLimitSnapshot) {
 	c.rateLimitMu.Lock()
 	c.rateLimitSnapshot = snap
 	c.rateLimitMu.Unlock()
+}
+
+func (c *AnthropicClient) captureRateLimitHeaders(h http.Header) {
+	if c == nil {
+		return
+	}
+	if snap := parseRateLimitHeaders(h, h.Get("x-request-id"), time.Now()); snap != nil {
+		c.storeRateLimitSnapshot(snap)
+		logRateLimitSnapshot(c.logger, snap)
+	}
 }
 
 // parseRateLimitHeaders extracts Anthropic's documented rate-limit
@@ -380,10 +390,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	// Provider-side observability: capture rate-limit headers regardless
 	// of status, so 429s and 5xx still update the snapshot. The headers
 	// are documented per-call invariants, not per-success.
-	if snap := parseRateLimitHeaders(resp.Header, resp.Header.Get("x-request-id"), time.Now()); snap != nil {
-		c.storeRateLimitSnapshot(snap)
-		logRateLimitSnapshot(c.logger, snap)
-	}
+	c.captureRateLimitHeaders(resp.Header)
 
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
@@ -406,20 +413,33 @@ func logRateLimitSnapshot(logger *slog.Logger, snap *RateLimitSnapshot) {
 	if logger == nil || snap == nil || !logger.Enabled(context.Background(), slog.LevelDebug) {
 		return
 	}
-	logger.Debug("anthropic rate limits",
+	args := []any{
 		"upstream_request_id", snap.UpstreamRequestID,
 		"requests_limit", snap.RequestsLimit,
 		"requests_remaining", snap.RequestsRemaining,
-		"requests_reset", snap.RequestsReset.Format(time.RFC3339),
 		"tokens_limit", snap.TokensLimit,
 		"tokens_remaining", snap.TokensRemaining,
-		"tokens_reset", snap.TokensReset.Format(time.RFC3339),
 		"input_tokens_limit", snap.InputTokensLimit,
 		"input_tokens_remaining", snap.InputTokensRemaining,
 		"output_tokens_limit", snap.OutputTokensLimit,
 		"output_tokens_remaining", snap.OutputTokensRemaining,
-		"retry_after", snap.RetryAfter.String(),
-	)
+	}
+	if !snap.RequestsReset.IsZero() {
+		args = append(args, "requests_reset", snap.RequestsReset.Format(time.RFC3339))
+	}
+	if !snap.TokensReset.IsZero() {
+		args = append(args, "tokens_reset", snap.TokensReset.Format(time.RFC3339))
+	}
+	if !snap.InputTokensReset.IsZero() {
+		args = append(args, "input_tokens_reset", snap.InputTokensReset.Format(time.RFC3339))
+	}
+	if !snap.OutputTokensReset.IsZero() {
+		args = append(args, "output_tokens_reset", snap.OutputTokensReset.Format(time.RFC3339))
+	}
+	if snap.RetryAfter > 0 {
+		args = append(args, "retry_after", snap.RetryAfter.String())
+	}
+	logger.Debug("anthropic rate limits", args...)
 }
 
 // Ping checks if the Anthropic API is reachable.
@@ -450,6 +470,8 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
+
+	c.captureRateLimitHeaders(httpResp.Header)
 
 	if httpResp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("invalid API key")
