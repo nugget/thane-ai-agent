@@ -19,9 +19,17 @@ const (
 // identical iterationRecord structs that were independently defined in
 // the agent and delegate packages.
 type IterationRecord struct {
-	Index                      int
-	Model                      string
-	UpstreamRequestID          string
+	Index             int
+	Model             string
+	UpstreamRequestID string
+	// StopReason mirrors the provider's termination signal in the form
+	// llm.ChatResponse.StopReason exposes (Anthropic: "end_turn",
+	// "tool_use", "max_tokens", "stop_sequence", "pause_turn").
+	// "pause_turn" in particular signals server-side context pressure
+	// and warrants operator visibility — surfacing it here lets agent
+	// loops and trace dashboards react without reaching into provider
+	// internals.
+	StopReason                 string
 	InputTokens                int
 	OutputTokens               int
 	CacheCreationInputTokens   int

@@ -582,6 +582,24 @@ func TestAnthropicClient_SetLogger_NilGuards(t *testing.T) {
 	}
 }
 
+func TestConvertFromAnthropic_PopulatesStopReason(t *testing.T) {
+	cases := []string{"end_turn", "tool_use", "max_tokens", "stop_sequence", "pause_turn"}
+	for _, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			resp := &anthropicResponse{
+				Model:      "claude-opus-4-20250514",
+				Role:       "assistant",
+				Content:    []anthropicContent{{Type: "text", Text: "hi"}},
+				StopReason: want,
+			}
+			out := convertFromAnthropic(resp)
+			if out.StopReason != want {
+				t.Errorf("StopReason = %q, want %q", out.StopReason, want)
+			}
+		})
+	}
+}
+
 func TestAnthropicClient_HandleNonStreamingCapturesUpstreamRequestID(t *testing.T) {
 	body := strings.NewReader(`{
 		"id":"msg_01",
@@ -622,6 +640,55 @@ func TestAnthropicClient_HandleStreamingCapturesUpstreamRequestID(t *testing.T) 
 	}
 	if resp.UpstreamRequestID != "req_streamed_999" {
 		t.Fatalf("UpstreamRequestID = %q, want %q", resp.UpstreamRequestID, "req_streamed_999")
+	}
+}
+
+func TestAnthropicClient_HandleStreamingPropagatesStopReason(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_x","model":"claude-opus-4-20250514","usage":{"input_tokens":10,"output_tokens":0}}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":5}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	if err != nil {
+		t.Fatalf("handleStreaming: %v", err)
+	}
+	if resp.StopReason != "pause_turn" {
+		t.Fatalf("StopReason = %q, want pause_turn", resp.StopReason)
+	}
+}
+
+func TestAnthropicClient_HandleStreamingPreservesStopReasonAcrossMessageDeltas(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_x","model":"claude-opus-4-20250514","usage":{"input_tokens":10,"output_tokens":0}}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":5}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{},"usage":{"output_tokens":9}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	if err != nil {
+		t.Fatalf("handleStreaming: %v", err)
+	}
+	if resp.StopReason != "pause_turn" {
+		t.Fatalf("StopReason = %q, want pause_turn", resp.StopReason)
 	}
 }
 
