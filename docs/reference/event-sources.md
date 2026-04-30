@@ -77,9 +77,11 @@ Cron-style scheduling stored in SQLite. Each task defines:
 - Optional model and routing overrides
 - Missed execution recovery (fires on next startup if the window was missed)
 
-Built-in scheduled tasks include `periodic_reflection` (daily
-self-reflection) and `email_poll` (periodic IMAP checks). Custom tasks can
-be created via the `schedule_task` tool.
+Custom tasks can be created via the `schedule_task` tool. Built-in
+recurring work runs as loops-ng service definitions instead — for
+example, the `ego` loop maintains `core/ego.md` with bounded voluntary
+sleep and supervisor randomization, and the `email-poller` loop drives
+IMAP polling.
 
 ## RSS/Atom Feed Polling
 

@@ -33,13 +33,14 @@ func testConfig() Config {
 // --- ParseConfig tests ---
 
 func TestParseConfig_Valid(t *testing.T) {
+	jitter, supervisor := 0.2, 0.1
 	raw := config.MetacognitiveConfig{
 		Enabled:               true,
 		MinSleep:              "2m",
 		MaxSleep:              "30m",
 		DefaultSleep:          "10m",
-		Jitter:                0.2,
-		SupervisorProbability: 0.1,
+		Jitter:                &jitter,
+		SupervisorProbability: &supervisor,
 		Router:                config.MetacognitiveRouterConfig{QualityFloor: 3},
 		SupervisorRouter:      config.MetacognitiveRouterConfig{QualityFloor: 8},
 	}
@@ -342,6 +343,9 @@ func TestBuildSpec(t *testing.T) {
 	}
 	if spec.Profile.ExtraHints["source"] != "metacognitive" {
 		t.Errorf("Profile.ExtraHints[source] = %q, want metacognitive", spec.Profile.ExtraHints["source"])
+	}
+	if len(spec.Profile.InitialTags) != 1 || spec.Profile.InitialTags[0] != "metacognitive" {
+		t.Errorf("Profile.InitialTags = %v, want [metacognitive]", spec.Profile.InitialTags)
 	}
 	if len(spec.Outputs) != 1 {
 		t.Fatalf("Outputs len = %d, want 1", len(spec.Outputs))

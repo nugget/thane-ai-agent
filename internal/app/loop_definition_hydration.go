@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
@@ -32,6 +33,17 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, metacognitive.DefinitionSpec(metacogCfg))
 		}
 	}
+	_, hasEgoDefinition := seen[ego.DefinitionName]
+	if a.cfg.Ego.Enabled || hasEgoDefinition {
+		egoCfg, err := ego.ParseConfig(a.cfg.Ego)
+		if err != nil {
+			return nil, fmt.Errorf("ego config: %w", err)
+		}
+		a.egoCfg = &egoCfg
+		if a.cfg.Ego.Enabled && !hasEgoDefinition {
+			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, ego.DefinitionSpec(egoCfg))
+		}
+	}
 	return baseDefinitions, nil
 }
 
@@ -50,6 +62,12 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			StateFilePath: stateFilePath,
 			StateFileName: stateFileName,
 		})
+		return a.hydrateLoopOutputs(runtimeSpec)
+	case ego.DefinitionName:
+		if a.egoCfg == nil {
+			return looppkg.Spec{}, fmt.Errorf("ego definition requires ego config")
+		}
+		runtimeSpec := ego.HydrateSpec(spec, *a.egoCfg)
 		return a.hydrateLoopOutputs(runtimeSpec)
 	case unifiPollerDefinitionName:
 		if a.unifiPoller == nil {

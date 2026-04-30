@@ -308,6 +308,11 @@ type Config struct {
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
 
+	// Ego configures the self-reflection loop. When enabled, a long-cycle
+	// service loop maintains core/ego.md via a declared maintained-document
+	// output, with supervisor randomization for periodic frontier review.
+	Ego EgoConfig `yaml:"ego"`
+
 	// Loops configures immutable loop definitions loaded from the config
 	// file. These definitions become the base layer for the loops-ng
 	// definition registry, with a persistent dynamic overlay applied at
@@ -1715,12 +1720,12 @@ type MetacognitiveConfig struct {
 	// Jitter is the sleep randomization factor (0.0–1.0). A value of
 	// 0.2 means the actual sleep varies by ±20% of the computed
 	// duration. Default: 0.2. Set to 0.0 for deterministic timing.
-	Jitter float64 `yaml:"jitter"`
+	Jitter *float64 `yaml:"jitter,omitempty"`
 
 	// SupervisorProbability is the chance (0.0–1.0) that each wake
 	// uses a frontier model with supervisor-augmented prompt.
 	// Default: 0.1. Set to 0.0 to disable supervisor iterations.
-	SupervisorProbability float64 `yaml:"supervisor_probability"`
+	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
 	// iterations.
@@ -1735,6 +1740,50 @@ type MetacognitiveConfig struct {
 type MetacognitiveRouterConfig struct {
 	// QualityFloor is the minimum quality rating (1–10) for model
 	// selection. Default: 3 for normal iterations, 8 for supervisor.
+	QualityFloor int `yaml:"quality_floor"`
+}
+
+// EgoConfig configures the self-reflection ego loop. The loop runs as a
+// loops-ng service: bounded voluntary sleep, supervisor randomization,
+// and a declared maintained-document output at core/ego.md. Replaces the
+// legacy periodic_reflection scheduled task.
+type EgoConfig struct {
+	// Enabled controls whether the ego loop starts. Default: false.
+	Enabled bool `yaml:"enabled"`
+
+	// MinSleep is the minimum allowed sleep duration between iterations.
+	// Default: "30m". Parsed as a Go duration string.
+	MinSleep string `yaml:"min_sleep"`
+
+	// MaxSleep is the maximum allowed sleep duration between iterations.
+	// Default: "24h".
+	MaxSleep string `yaml:"max_sleep"`
+
+	// DefaultSleep is used when the LLM does not call set_next_sleep.
+	// Default: "6h".
+	DefaultSleep string `yaml:"default_sleep"`
+
+	// Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
+	// Set to 0.0 for deterministic timing.
+	Jitter *float64 `yaml:"jitter,omitempty"`
+
+	// SupervisorProbability is the chance (0.0–1.0) that each wake
+	// uses a frontier model with supervisor-augmented prompt.
+	// Default: 0.2. Set to 0.0 to disable supervisor iterations.
+	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
+
+	// Router configures model routing for normal iterations.
+	Router EgoRouterConfig `yaml:"router"`
+
+	// SupervisorRouter configures model routing for supervisor
+	// iterations (frontier model with augmented prompt).
+	SupervisorRouter EgoRouterConfig `yaml:"supervisor_router"`
+}
+
+// EgoRouterConfig holds routing hints for ego iterations.
+type EgoRouterConfig struct {
+	// QualityFloor is the minimum quality rating (1–10) for model
+	// selection. Default: 5 for normal iterations, 8 for supervisor.
 	QualityFloor int `yaml:"quality_floor"`
 }
 
@@ -2147,17 +2196,44 @@ func (c *Config) applyDefaults() {
 	if c.Metacognitive.DefaultSleep == "" {
 		c.Metacognitive.DefaultSleep = "10m"
 	}
-	if c.Metacognitive.Jitter == 0 {
-		c.Metacognitive.Jitter = 0.2
+	if c.Metacognitive.Jitter == nil {
+		v := 0.2
+		c.Metacognitive.Jitter = &v
 	}
-	if c.Metacognitive.SupervisorProbability == 0 {
-		c.Metacognitive.SupervisorProbability = 0.1
+	if c.Metacognitive.SupervisorProbability == nil {
+		v := 0.1
+		c.Metacognitive.SupervisorProbability = &v
 	}
 	if c.Metacognitive.Router.QualityFloor == 0 {
 		c.Metacognitive.Router.QualityFloor = 3
 	}
 	if c.Metacognitive.SupervisorRouter.QualityFloor == 0 {
 		c.Metacognitive.SupervisorRouter.QualityFloor = 8
+	}
+
+	// Ego loop defaults.
+	if c.Ego.MinSleep == "" {
+		c.Ego.MinSleep = "30m"
+	}
+	if c.Ego.MaxSleep == "" {
+		c.Ego.MaxSleep = "24h"
+	}
+	if c.Ego.DefaultSleep == "" {
+		c.Ego.DefaultSleep = "6h"
+	}
+	if c.Ego.Jitter == nil {
+		v := 0.2
+		c.Ego.Jitter = &v
+	}
+	if c.Ego.SupervisorProbability == nil {
+		v := 0.2
+		c.Ego.SupervisorProbability = &v
+	}
+	if c.Ego.Router.QualityFloor == 0 {
+		c.Ego.Router.QualityFloor = 5
+	}
+	if c.Ego.SupervisorRouter.QualityFloor == 0 {
+		c.Ego.SupervisorRouter.QualityFloor = 8
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
@@ -2433,6 +2509,9 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
+	if err := c.validateEgo(); err != nil {
+		return err
+	}
 	if err := c.validateLoops(); err != nil {
 		return err
 	}
@@ -2538,11 +2617,48 @@ func (c *Config) validateMetacognitive() error {
 		return fmt.Errorf("metacognitive.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
 			defaultSleep, minSleep, maxSleep)
 	}
-	if c.Metacognitive.Jitter < 0 || c.Metacognitive.Jitter > 1.0 {
-		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", c.Metacognitive.Jitter)
+	if c.Metacognitive.Jitter != nil && (*c.Metacognitive.Jitter < 0 || *c.Metacognitive.Jitter > 1.0) {
+		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", *c.Metacognitive.Jitter)
 	}
-	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
-		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
+	if c.Metacognitive.SupervisorProbability != nil && (*c.Metacognitive.SupervisorProbability < 0 || *c.Metacognitive.SupervisorProbability > 1.0) {
+		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Metacognitive.SupervisorProbability)
+	}
+	return nil
+}
+
+// validateEgo checks ego loop configuration for internal consistency.
+// No-op when the loop is disabled.
+func (c *Config) validateEgo() error {
+	if !c.Ego.Enabled {
+		return nil
+	}
+	if c.Workspace.Path == "" {
+		return fmt.Errorf("ego requires workspace.path (state file lives under workspace/core)")
+	}
+	minSleep, err := time.ParseDuration(c.Ego.MinSleep)
+	if err != nil {
+		return fmt.Errorf("ego.min_sleep %q: %w", c.Ego.MinSleep, err)
+	}
+	maxSleep, err := time.ParseDuration(c.Ego.MaxSleep)
+	if err != nil {
+		return fmt.Errorf("ego.max_sleep %q: %w", c.Ego.MaxSleep, err)
+	}
+	defaultSleep, err := time.ParseDuration(c.Ego.DefaultSleep)
+	if err != nil {
+		return fmt.Errorf("ego.default_sleep %q: %w", c.Ego.DefaultSleep, err)
+	}
+	if minSleep > maxSleep {
+		return fmt.Errorf("ego.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
+	}
+	if defaultSleep < minSleep || defaultSleep > maxSleep {
+		return fmt.Errorf("ego.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+			defaultSleep, minSleep, maxSleep)
+	}
+	if c.Ego.Jitter != nil && (*c.Ego.Jitter < 0 || *c.Ego.Jitter > 1.0) {
+		return fmt.Errorf("ego.jitter %.2f must be in [0.0, 1.0]", *c.Ego.Jitter)
+	}
+	if c.Ego.SupervisorProbability != nil && (*c.Ego.SupervisorProbability < 0 || *c.Ego.SupervisorProbability > 1.0) {
+		return fmt.Errorf("ego.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Ego.SupervisorProbability)
 	}
 	return nil
 }

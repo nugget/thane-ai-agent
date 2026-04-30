@@ -128,10 +128,19 @@ See [Delegation](delegation.md).
 
 ### Metacognitive Loop
 
-A scheduled self-reflection process where the agent analyzes recent
-interactions and updates its personality file (`ego.md`). Runs on a
-quality-floor model. Constrained to observation — reads files and
-memory but doesn't execute tools or interact with external systems.
+A perpetual attention loop that observes the system, reasons via LLM,
+adapts its own sleep cycle, and maintains `core/metacognitive.md` via a
+declared maintained-document output. Supervisor iterations randomly use
+a frontier model to catch blind spots.
+
+### Ego Loop
+
+A long-cycle self-reflection loop that maintains `core/ego.md` — the
+agent's own evolving notes on how its thinking is changing, what
+patterns it observes in itself, and honest self-assessment. Runs as a
+loops-ng service with bounded voluntary sleep, supervisor randomization,
+and a declared maintained-document output. The interactive agent reads
+`ego.md` every turn; the ego loop is the sole writer.
 
 ### Orchestrator
 
