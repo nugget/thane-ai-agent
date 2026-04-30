@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -520,7 +521,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	e.finishLoopExecution(prep)
 	resp := launchResult.Response
 	if resp == nil {
-		return nil, fmt.Errorf("delegate failed: joined launch completed without response")
+		return nil, emptyResponseError(launchResult)
 	}
 
 	toolCallsMu.Lock()
@@ -744,11 +745,21 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
 	filterTags := mergeTagLists(scopeTags, e.alwaysActiveTags)
+	// The delegate-family recursion guard must hold on every code
+	// path. The loop-backed launch rebuilds the catalog from the
+	// parent registry filtered by the launched loop's request, so the
+	// family has to be expressed as a request-level exclusion to
+	// survive that rebuild — the in-process delegateToolRegistry
+	// filter alone is not enough.
+	//
+	// The explicit-empty-scope branch (AllToolNames) already includes
+	// the family names, so dedup before sorting to avoid duplicate
+	// entries when both sources contribute.
 	var excludeTools []string
 	if explicitScopeRequested && len(filterTags) == 0 {
 		excludeTools = e.parentReg.AllToolNames()
-		sort.Strings(excludeTools)
 	}
+	excludeTools = mergeExcludeToolNames(excludeTools, delegateFamilyToolNames)
 	tagFilterActive := len(scopeTags) > 0 || explicitScopeRequested
 
 	log = log.With("profile", profile.Name)
@@ -883,10 +894,70 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%.1fK", math.Round(float64(n)/100)/10)
 }
 
-// truncate shortens a string to maxLen characters, adding "..." if truncated.
+// truncate shortens a string to maxLen bytes without splitting a UTF-8
+// sequence, adding "..." if truncated.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
+	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
+		maxLen--
+	}
 	return s[:maxLen] + "..."
+}
+
+// childLastErrorMaxLen caps the size of a child loop's LastError
+// string when it's surfaced through emptyResponseError. The child
+// stores LastError as a raw err.Error() with no truncation, so a
+// runaway error (a full stack trace, an LLM body dump) could
+// otherwise inflate the parent's tool result and burn parent tokens.
+// 1024 is comfortably enough for the error shapes we've actually seen
+// in production (tool-call parse failures, API-5xx bodies) while
+// keeping a hard ceiling on pathological cases.
+const childLastErrorMaxLen = 1024
+
+// emptyResponseError builds the error returned to the parent when a
+// joined launch finishes without producing a Response. The naive form
+// — "joined launch completed without response" — is opaque: it doesn't
+// distinguish a transient timeout from a deterministic LLM-API
+// failure, so a parent retrying blind burns tokens for no diagnostic
+// gain. When the child loop captured a terminal error in its final
+// status (e.g. tool-call parse failures from local models, LLM-API
+// 5xx, exhausted retries), surface that string (truncated to
+// childLastErrorMaxLen) so the parent can decide whether to retry,
+// change strategy, or escalate.
+func emptyResponseError(launchResult looppkg.LaunchResult) error {
+	if launchResult.FinalStatus != nil && launchResult.FinalStatus.LastError != "" {
+		return fmt.Errorf("delegate failed: %s", truncate(launchResult.FinalStatus.LastError, childLastErrorMaxLen))
+	}
+	return fmt.Errorf("delegate failed: joined launch completed without response")
+}
+
+// mergeExcludeToolNames combines two tool-name slices into a sorted,
+// deduplicated slice. Used by the delegate launch path so the
+// AllToolNames-based wholesale exclusion (from the explicit-empty-
+// scope branch) and the always-applied delegateFamilyToolNames guard
+// don't produce duplicate entries when both contribute.
+func mergeExcludeToolNames(groups ...[]string) []string {
+	if len(groups) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, name := range group {
+			if name == "" {
+				continue
+			}
+			seen[name] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	merged := make([]string, 0, len(seen))
+	for name := range seen {
+		merged = append(merged, name)
+	}
+	sort.Strings(merged)
+	return merged
 }

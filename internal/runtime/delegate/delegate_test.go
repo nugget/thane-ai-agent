@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -273,6 +274,45 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 	}
 }
 
+// TestExecute_LoopBackedTagScopedExcludesDelegateFamily exercises the
+// common delegate-launch path: caller specifies non-empty tags, so the
+// AllToolNames-based wholesale exclusion at the explicit-empty-scope
+// branch does not apply. This is the path the production failures
+// from 2026-04-30 traversed — three consecutive delegates whose
+// effective_tools log payloads still contained thane_now, thane_assign,
+// and thane_delegate. The recursion guard must extend through this
+// branch as well, not only the explicit-empty-scope one.
+func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "task", "ha", "", []string{"web"}, executionOptions{
+		explicitTagScope: true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, want := range delegateFamilyToolNames {
+		if !containsString(captured.ExcludeTools, want) {
+			t.Fatalf("ExcludeTools = %#v, want %s — delegate-family recursion guard must hold on the tag-scoped path too", captured.ExcludeTools, want)
+		}
+	}
+}
+
 // TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
 // test for #820. Delegate registries must exclude every member of the
 // thane_* family — thane_delegate (deprecated), thane_now, and
@@ -349,8 +389,211 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 	if containsString(captured.InitialTags, "ha") {
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
-	if len(captured.ExcludeTools) != 0 {
-		t.Fatalf("ExcludeTools = %#v, want tag filtering through always-active tags", captured.ExcludeTools)
+	// ExcludeTools may carry the delegate-family recursion guard, but
+	// must not include any of the regular tag-gated tools — the
+	// always-active tags should expand the filter scope so tag-based
+	// filtering does the work via InitialTags, not via wholesale
+	// AllToolNames exclusion.
+	for _, got := range captured.ExcludeTools {
+		if !containsString(delegateFamilyToolNames, got) {
+			t.Fatalf("ExcludeTools = %#v, includes non-family tool %q — tag filtering should route through InitialTags", captured.ExcludeTools, got)
+		}
+	}
+}
+
+// TestEmptyResponseError_PropagatesChildLastError pins the error
+// surface for the case where a delegate's joined launch finishes
+// without a Response. Production failures on 2026-04-30 surfaced as
+// "delegate failed: joined launch completed without response" — a
+// generic message that hid the child loop's underlying tool-call
+// parse error from gpt-oss:120b. The parent had no way to decide
+// whether to retry or change strategy. With FinalStatus populated,
+// the helper must surface the child's LastError verbatim.
+func TestEmptyResponseError_PropagatesChildLastError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		result looppkg.LaunchResult
+		want   string
+	}{
+		{
+			name:   "no final status falls back to opaque message",
+			result: looppkg.LaunchResult{},
+			want:   "delegate failed: joined launch completed without response",
+		},
+		{
+			name: "final status with empty last error falls back to opaque message",
+			result: looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{LastError: ""},
+			},
+			want: "delegate failed: joined launch completed without response",
+		},
+		{
+			name: "final status with last error surfaces the child error verbatim",
+			result: looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{
+					LastError: `loop LLM call: API error 500: error parsing tool call: raw='{"account":"github":"primary"}'`,
+				},
+			},
+			want: `delegate failed: loop LLM call: API error 500: error parsing tool call: raw='{"account":"github":"primary"}'`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := emptyResponseError(tc.result)
+			if got == nil || got.Error() != tc.want {
+				t.Fatalf("emptyResponseError() = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEmptyResponseError_TruncatesOversizedLastError ensures a child
+// loop's runaway LastError (e.g. a stack trace, a multi-KB response
+// body dump) is truncated before it becomes the parent's tool-call
+// result. Without this, a single misbehaving error could inflate
+// every subsequent parent prompt by however much the loop runtime
+// happened to capture.
+func TestEmptyResponseError_TruncatesOversizedLastError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		huge string
+	}{
+		{
+			name: "ascii",
+			huge: strings.Repeat("x", childLastErrorMaxLen*4),
+		},
+		{
+			name: "utf8 boundary",
+			huge: strings.Repeat("€", childLastErrorMaxLen),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := emptyResponseError(looppkg.LaunchResult{
+				FinalStatus: &looppkg.Status{LastError: tc.huge},
+			})
+			if err == nil {
+				t.Fatal("emptyResponseError() = nil, want truncated error")
+			}
+			const prefix = "delegate failed: "
+			got := err.Error()
+			if !strings.HasPrefix(got, prefix) {
+				t.Fatalf("error = %q, want prefix %q", got, prefix)
+			}
+			// The body after the prefix is the truncated LastError, possibly
+			// with a "..." marker appended by truncate().
+			body := got[len(prefix):]
+			if len(body) > childLastErrorMaxLen+len("...") {
+				t.Fatalf("body length = %d, want <= %d (cap %d + ellipsis)", len(body), childLastErrorMaxLen+len("..."), childLastErrorMaxLen)
+			}
+			if !utf8.ValidString(body) {
+				t.Fatalf("body is not valid UTF-8: %q", body)
+			}
+			if !strings.HasSuffix(body, "...") {
+				t.Fatalf("body = %q, want truncation marker", body)
+			}
+		})
+	}
+}
+
+// TestMergeExcludeToolNames pins the dedup invariant for the
+// composed exclusion list. The launched-loop path always appends
+// delegateFamilyToolNames, and the explicit-empty-scope branch
+// independently sources AllToolNames (which already contains the
+// family). Both contributing without dedup produces noise; the
+// merge helper must collapse to a single sorted set.
+func TestMergeExcludeToolNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		groups [][]string
+		want   []string
+	}{
+		{
+			name:   "empty input returns nil",
+			groups: nil,
+			want:   nil,
+		},
+		{
+			name:   "single group sorted and deduped",
+			groups: [][]string{{"b", "a", "b", ""}},
+			want:   []string{"a", "b"},
+		},
+		{
+			name: "overlapping groups dedup to a single sorted slice",
+			groups: [][]string{
+				{"get_state", "thane_now", "thane_assign"},
+				{"thane_delegate", "thane_now", "thane_assign"},
+			},
+			want: []string{"get_state", "thane_assign", "thane_delegate", "thane_now"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mergeExcludeToolNames(tc.groups...)
+			if len(got) != len(tc.want) {
+				t.Fatalf("mergeExcludeToolNames() = %#v, want %#v", got, tc.want)
+			}
+			for i, name := range tc.want {
+				if got[i] != name {
+					t.Fatalf("mergeExcludeToolNames()[%d] = %q, want %q (got=%#v)", i, got[i], name, got)
+				}
+			}
+		})
+	}
+}
+
+// TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes pins the
+// dedup contract through the actual launch path. When AllToolNames
+// (which contains the family) and delegateFamilyToolNames both
+// contribute, ExcludeTools must contain each family name exactly once.
+func TestExecute_LoopBackedExplicitEmptyScopeNoDuplicateExcludes(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, executionOptions{
+		inheritCallerTags: false,
+		explicitTagScope:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, name := range delegateFamilyToolNames {
+		count := 0
+		for _, got := range captured.ExcludeTools {
+			if got == name {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("ExcludeTools = %#v contains %q %d times, want exactly 1 (recursion guard must dedup against AllToolNames)", captured.ExcludeTools, name, count)
+		}
 	}
 }
 
