@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
@@ -79,6 +80,7 @@ func TestRegister_AppliesCompiledToolMetadata(t *testing.T) {
 }
 
 func TestFormatEntityState(t *testing.T) {
+	changed := time.Now().Add(-time.Minute)
 	tests := []struct {
 		name       string
 		state      *homeassistant.State
@@ -88,25 +90,26 @@ func TestFormatEntityState(t *testing.T) {
 		{
 			name: "light with brightness",
 			state: &homeassistant.State{
-				EntityID: "light.office",
-				State:    "on",
+				EntityID:    "light.office",
+				State:       "on",
+				LastChanged: changed,
 				Attributes: map[string]any{
 					"friendly_name": "Office Light",
 					"brightness":    float64(255),
 				},
 			},
 			wantParts: []string{
-				"Entity: light.office",
-				"State: on",
-				"Name: Office Light",
-				"Brightness: 100%",
+				`"entity":"light.office"`,
+				`"state":"on"`,
+				`"brightness":100`,
 			},
 		},
 		{
 			name: "sensor with unit",
 			state: &homeassistant.State{
-				EntityID: "sensor.temperature",
-				State:    "22.5",
+				EntityID:    "sensor.temperature",
+				State:       "22.5",
+				LastChanged: changed,
 				Attributes: map[string]any{
 					"friendly_name":       "Living Room Temp",
 					"unit_of_measurement": "°C",
@@ -114,41 +117,43 @@ func TestFormatEntityState(t *testing.T) {
 				},
 			},
 			wantParts: []string{
-				"Entity: sensor.temperature",
-				"State: 22.5",
-				"Unit: °C",
-				"Temperature: 22.5",
+				`"entity":"sensor.temperature"`,
+				`"state":"22.5"`,
+				`"name":"Living Room Temp"`,
+				`"unit":"°C"`,
 			},
 		},
 		{
 			name: "minimal state no attributes",
 			state: &homeassistant.State{
-				EntityID:   "switch.pump",
-				State:      "off",
-				Attributes: map[string]any{},
+				EntityID:    "switch.pump",
+				State:       "off",
+				LastChanged: changed,
+				Attributes:  map[string]any{},
 			},
 			wantParts: []string{
-				"Entity: switch.pump",
-				"State: off",
+				`"entity":"switch.pump"`,
+				`"state":"off"`,
 			},
 			wantAbsent: []string{
-				"Name:",
-				"Brightness:",
-				"Temperature:",
-				"Unit:",
+				`"name":`,
+				`"brightness":`,
+				`"temperature":`,
+				`"unit":`,
 			},
 		},
 		{
 			name: "partial brightness",
 			state: &homeassistant.State{
-				EntityID: "light.lamp",
-				State:    "on",
+				EntityID:    "light.lamp",
+				State:       "on",
+				LastChanged: changed,
 				Attributes: map[string]any{
 					"brightness": float64(127.5),
 				},
 			},
 			wantParts: []string{
-				"Brightness: 50%",
+				`"brightness":50`,
 			},
 		},
 	}

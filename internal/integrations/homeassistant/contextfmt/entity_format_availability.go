@@ -1,4 +1,4 @@
-package awareness
+package contextfmt
 
 import (
 	"time"
@@ -12,6 +12,13 @@ import (
 // reporting a real state.
 func isSentinelState(state string) bool {
 	return state == "unavailable" || state == "unknown"
+}
+
+// IsSentinelState reports whether the given state is one of the Home
+// Assistant sentinel values that indicate the entity is not currently
+// reporting a real state.
+func IsSentinelState(state string) bool {
+	return isSentinelState(state)
 }
 
 // unavailableContext is the JSON structure for entities in a sentinel
@@ -55,4 +62,10 @@ func formatFetchError(entityID string) string {
 		Available: false,
 		Reason:    "fetch_error",
 	})
+}
+
+// FormatFetchError renders the structured availability payload for an entity
+// whose state could not be fetched at all.
+func FormatFetchError(entityID string) string {
+	return formatFetchError(entityID)
 }

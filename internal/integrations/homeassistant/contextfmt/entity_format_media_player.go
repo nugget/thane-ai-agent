@@ -1,4 +1,4 @@
-package awareness
+package contextfmt
 
 import (
 	"time"
@@ -60,6 +60,12 @@ func hasActiveMedia(state string) bool {
 		return true
 	}
 	return false
+}
+
+// HasActiveMedia reports whether a media_player state means the entity is
+// actively presenting or preparing media.
+func HasActiveMedia(state string) bool {
+	return hasActiveMedia(state)
 }
 
 // normalizeVolume converts HA's 0.0-1.0 volume_level to a 0-100
