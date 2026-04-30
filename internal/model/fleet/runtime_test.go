@@ -10,11 +10,60 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
+
+func TestAnthropicRateLimitSnapshotFromProvider(t *testing.T) {
+	t.Parallel()
+
+	capturedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+	resetAt := capturedAt.Add(30 * time.Second)
+	snap := anthropicRateLimitSnapshotFromProvider(&modelproviders.RateLimitSnapshot{
+		CapturedAt:        capturedAt,
+		UpstreamRequestID: "req_123",
+		RequestsLimit:     5000,
+		RequestsRemaining: 0,
+		RequestsReset:     resetAt,
+		TokensLimit:       1_000_000,
+		TokensRemaining:   900_000,
+		RetryAfter:        30 * time.Second,
+	})
+
+	if snap == nil {
+		t.Fatal("snapshot is nil")
+	}
+	if !snap.CapturedAt.Equal(capturedAt) {
+		t.Fatalf("CapturedAt = %v, want %v", snap.CapturedAt, capturedAt)
+	}
+	if snap.UpstreamRequestID != "req_123" {
+		t.Fatalf("UpstreamRequestID = %q, want req_123", snap.UpstreamRequestID)
+	}
+	if snap.RetryAfterSeconds != 30 {
+		t.Fatalf("RetryAfterSeconds = %d, want 30", snap.RetryAfterSeconds)
+	}
+	if snap.Requests == nil {
+		t.Fatal("Requests bucket is nil")
+	}
+	if snap.Requests.Limit != 5000 || snap.Requests.Remaining != 0 {
+		t.Fatalf("Requests = %+v, want limit 5000 remaining 0", snap.Requests)
+	}
+	if snap.Requests.Reset == nil || !snap.Requests.Reset.Equal(resetAt) {
+		t.Fatalf("Requests.Reset = %v, want %v", snap.Requests.Reset, resetAt)
+	}
+	if snap.Tokens == nil || snap.Tokens.Limit != 1_000_000 || snap.Tokens.Remaining != 900_000 {
+		t.Fatalf("Tokens = %+v, want limit 1000000 remaining 900000", snap.Tokens)
+	}
+	if snap.InputTokens != nil {
+		t.Fatalf("InputTokens = %+v, want nil", snap.InputTokens)
+	}
+	if snap.OutputTokens != nil {
+		t.Fatalf("OutputTokens = %+v, want nil", snap.OutputTokens)
+	}
+}
 
 func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 	t.Parallel()

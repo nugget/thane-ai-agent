@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	modelproviders "github.com/nugget/thane-ai-agent/internal/model/fleet/providers"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -35,6 +36,27 @@ type Runtime struct {
 	client   *llm.DynamicClient
 
 	refreshMu sync.Mutex
+}
+
+// AnthropicRateLimitSnapshot is a JSON-friendly view of the latest
+// Anthropic rate-limit response headers captured by the shared provider
+// client.
+type AnthropicRateLimitSnapshot struct {
+	CapturedAt        time.Time                 `json:"captured_at"`
+	UpstreamRequestID string                    `json:"upstream_request_id,omitempty"`
+	Requests          *AnthropicRateLimitBucket `json:"requests,omitempty"`
+	Tokens            *AnthropicRateLimitBucket `json:"tokens,omitempty"`
+	InputTokens       *AnthropicRateLimitBucket `json:"input_tokens,omitempty"`
+	OutputTokens      *AnthropicRateLimitBucket `json:"output_tokens,omitempty"`
+	RetryAfterSeconds int64                     `json:"retry_after_seconds,omitempty"`
+}
+
+// AnthropicRateLimitBucket is one Anthropic rate-limit quota family:
+// requests, total tokens, input tokens, or output tokens.
+type AnthropicRateLimitBucket struct {
+	Limit     int        `json:"limit"`
+	Remaining int        `json:"remaining"`
+	Reset     *time.Time `json:"reset,omitempty"`
 }
 
 // NewRuntime builds the initial registry, performs a first inventory
@@ -146,6 +168,49 @@ func (r *Runtime) InventoryClientCount() int {
 		return 0
 	}
 	return len(r.bundle.OllamaClients) + len(r.bundle.LMStudioClients)
+}
+
+// AnthropicRateLimitSnapshot returns the latest captured Anthropic
+// rate-limit snapshot, or nil when the Anthropic provider is not
+// configured or no Anthropic response has been observed yet.
+func (r *Runtime) AnthropicRateLimitSnapshot() *AnthropicRateLimitSnapshot {
+	if r == nil || r.bundle == nil || r.bundle.AnthropicClient == nil {
+		return nil
+	}
+	return anthropicRateLimitSnapshotFromProvider(r.bundle.AnthropicClient.RateLimitSnapshot())
+}
+
+func anthropicRateLimitSnapshotFromProvider(snap *modelproviders.RateLimitSnapshot) *AnthropicRateLimitSnapshot {
+	if snap == nil {
+		return nil
+	}
+	out := &AnthropicRateLimitSnapshot{
+		CapturedAt:        snap.CapturedAt,
+		UpstreamRequestID: snap.UpstreamRequestID,
+		Requests:          anthropicRateLimitBucket(snap.RequestsLimit, snap.RequestsRemaining, snap.RequestsReset),
+		Tokens:            anthropicRateLimitBucket(snap.TokensLimit, snap.TokensRemaining, snap.TokensReset),
+		InputTokens:       anthropicRateLimitBucket(snap.InputTokensLimit, snap.InputTokensRemaining, snap.InputTokensReset),
+		OutputTokens:      anthropicRateLimitBucket(snap.OutputTokensLimit, snap.OutputTokensRemaining, snap.OutputTokensReset),
+	}
+	if snap.RetryAfter > 0 {
+		out.RetryAfterSeconds = int64(snap.RetryAfter / time.Second)
+	}
+	return out
+}
+
+func anthropicRateLimitBucket(limit, remaining int, reset time.Time) *AnthropicRateLimitBucket {
+	if limit == 0 && remaining == 0 && reset.IsZero() {
+		return nil
+	}
+	var resetPtr *time.Time
+	if !reset.IsZero() {
+		resetPtr = &reset
+	}
+	return &AnthropicRateLimitBucket{
+		Limit:     limit,
+		Remaining: remaining,
+		Reset:     resetPtr,
+	}
 }
 
 // Refresh probes provider inventory, updates the registry overlay, and

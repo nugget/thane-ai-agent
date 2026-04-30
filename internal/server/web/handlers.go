@@ -45,6 +45,9 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if stats := s.systemStatus.RouterStats(); stats != nil {
 		body["router_stats"] = stats
 	}
+	if snapshot := s.systemStatus.AnthropicRateLimitSnapshot(); snapshot != nil {
+		body["anthropic_rate_limit"] = snapshot
+	}
 	if catalog := s.systemStatus.CapabilityCatalog(toolcatalog.CatalogViewOptions{IncludeDelegate: true}); catalog != nil {
 		body["capability_catalog"] = catalog
 	}
