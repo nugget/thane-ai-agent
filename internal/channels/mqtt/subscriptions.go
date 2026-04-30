@@ -98,34 +98,17 @@ func (s *SubscriptionStore) loadRuntime() error {
 	}
 	defer rows.Close()
 
-	// Rows whose initial_tags_json is empty/default but whose seed_json
-	// still carries a legacy `initial_tags` key need a one-time write
-	// back so the migration is durable. Collect them and apply after
-	// the read iterator closes — sqlite doesn't love INSERT/UPDATE
-	// against the same connection while a SELECT cursor is open.
-	type pendingMigration struct {
-		id   string
-		tags []string
-	}
-	var pending []pendingMigration
-
 	for rows.Next() {
 		var ws WakeSubscription
 		var profileJSON, initialTagsJSON, createdAt string
 		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &initialTagsJSON, &ws.Source, &createdAt); err != nil {
 			return err
 		}
-		// Pre-migration rows stored InitialTags inside the profile JSON.
-		// Hoist any legacy value out before unmarshaling so the field
-		// reaches its new home on WakeSubscription.
-		legacyTags := extractLegacyInitialTags(profileJSON)
-		ws.InitialTags = legacyTags
 		if err := json.Unmarshal([]byte(profileJSON), &ws.Profile); err != nil {
 			s.logger.Warn("skipping subscription with invalid profile JSON",
 				"id", ws.ID, "error", err)
 			continue
 		}
-		columnHasTags := false
 		if initialTagsJSON != "" {
 			var tags []string
 			if err := json.Unmarshal([]byte(initialTagsJSON), &tags); err != nil {
@@ -133,15 +116,7 @@ func (s *SubscriptionStore) loadRuntime() error {
 					"id", ws.ID, "error", err)
 			} else if len(tags) > 0 {
 				ws.InitialTags = tags
-				columnHasTags = true
 			}
-		}
-		// Schedule a write-back when we recovered tags from legacy
-		// seed_json but the new column is still at its default. After
-		// this runs once, subsequent loads find tags in the column and
-		// the legacy extraction becomes a no-op for that row.
-		if !columnHasTags && len(legacyTags) > 0 {
-			pending = append(pending, pendingMigration{id: ws.ID, tags: legacyTags})
 		}
 		ts, err := database.ParseTimestamp(createdAt)
 		if err != nil {
@@ -174,25 +149,6 @@ func (s *SubscriptionStore) loadRuntime() error {
 	}
 	if err := rows.Close(); err != nil {
 		return err
-	}
-
-	for _, p := range pending {
-		tagsJSON, err := json.Marshal(p.tags)
-		if err != nil {
-			s.logger.Warn("failed to marshal hoisted initial_tags, leaving row legacy",
-				"id", p.id, "error", err)
-			continue
-		}
-		if _, err := s.db.Exec(
-			`UPDATE mqtt_wake_subscriptions SET initial_tags_json = ? WHERE id = ?`,
-			string(tagsJSON), p.id,
-		); err != nil {
-			s.logger.Warn("failed to persist hoisted initial_tags, will retry next load",
-				"id", p.id, "error", err)
-			continue
-		}
-		s.logger.Info("migrated legacy seed_json initial_tags to initial_tags_json column",
-			"id", p.id, "tags", p.tags)
 	}
 
 	return nil
@@ -238,30 +194,6 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 		})
 	}
 	return nil
-}
-
-// extractLegacyInitialTags returns any "initial_tags" value embedded in
-// a pre-migration LoopProfile JSON blob. Pre-migration rows stored
-// InitialTags inside the profile object; the field has since moved onto
-// WakeSubscription, so during load we hoist any legacy value here.
-// Returns nil when the JSON is malformed or the field is absent.
-func extractLegacyInitialTags(profileJSON string) []string {
-	if profileJSON == "" {
-		return nil
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(profileJSON), &raw); err != nil {
-		return nil
-	}
-	tagsRaw, ok := raw["initial_tags"]
-	if !ok {
-		return nil
-	}
-	var tags []string
-	if err := json.Unmarshal(tagsRaw, &tags); err != nil {
-		return nil
-	}
-	return tags
 }
 
 // SetSubscribeHook registers a callback that is invoked after a runtime
