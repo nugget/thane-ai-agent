@@ -72,12 +72,12 @@ func NewRuntime(ctx context.Context, base *Catalog, cfg *config.Config, logger *
 }
 
 // SetLogger rebinds the logger on every provider client owned by this
-// runtime. The intended caller is [internal/app.App.New], which needs
-// to swap clients off the bootstrap Info-level logger and onto the
-// dataset-routed handler once initLogging has finished. Each provider
-// re-applies its own "provider" attribute and the per-resource clients
-// receive a logger pre-decorated with the resource ID, so attributes
-// match what BuildClients originally produced.
+// runtime. The intended caller is app.New, after initLogging has
+// finished, to swap clients off the bootstrap Info-level logger and
+// onto the dataset-routed handler. Each provider re-applies its own
+// "provider" attribute and the per-resource clients receive a logger
+// pre-decorated with the resource ID, so attributes match what
+// BuildClients originally produced.
 //
 // Not safe to call concurrently with in-flight requests; intended to
 // be invoked once during init, before the runtime services traffic.
