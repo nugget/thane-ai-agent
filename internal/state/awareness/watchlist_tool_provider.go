@@ -69,7 +69,8 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"Use tags to scope entity context to specific capabilities or loop-owned focus tags (only visible when that tag is active). " +
 				"Subscriptions are additive: the same entity can appear in multiple scoped contexts. " +
 				"Use ttl_seconds when the watch should expire automatically after a bounded task ends. " +
-				"Use history to include historical state snapshots at specific intervals.",
+				"Use history to include historical state snapshots at specific intervals. " +
+				"Use forecast for weather entities when future weather context is needed.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -86,6 +87,11 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"type":        "array",
 						"items":       map[string]any{"type": "integer"},
 						"description": "Historical context windows in seconds. When set, watched-entity context includes a compact summary for each window. E.g., [600, 3600, 86400] adds recent summaries for 10min, 1hr, and 1day windows.",
+					},
+					"forecast": map[string]any{
+						"type":        "string",
+						"enum":        []string{"daily", "hourly", "twice_daily", "none"},
+						"description": "For weather.* entities, fetch this Home Assistant weather.get_forecasts type each turn and include the compact forecast in watched-entity context. Use none to clear forecast fetching.",
 					},
 					"ttl_seconds": map[string]any{
 						"type":        "integer",
@@ -160,13 +166,21 @@ func (w *WatchlistTools) handleAddContextEntity(_ context.Context, args map[stri
 	if ttlSeconds < 0 {
 		return "", fmt.Errorf("ttl_seconds must be >= 0")
 	}
+	rawForecast, forecastSet := args["forecast"]
+	forecast, err := parseWatchlistForecastArg(rawForecast)
+	if err != nil {
+		return "", err
+	}
+	if forecast != "" && !strings.HasPrefix(entityID, "weather.") {
+		return "", fmt.Errorf("forecast can only be set for weather.* entities; got %s", entityID)
+	}
 
-	if len(tags) > 0 || len(history) > 0 || ttlSeconds > 0 {
-		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds); err != nil {
+	if len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet {
+		if err := w.store.Add(entityID); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	} else {
-		if err := w.store.Add(entityID); err != nil {
+		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	}
@@ -182,13 +196,18 @@ func (w *WatchlistTools) handleAddContextEntity(_ context.Context, args map[stri
 		}
 		msg += fmt.Sprintf(" (history windows: %s)", strings.Join(parts, ", "))
 	}
+	if forecast != "" {
+		msg += fmt.Sprintf(" (forecast: %s)", forecast)
+	} else if forecastSet {
+		msg += " (forecast: none)"
+	}
 	if ttlSeconds > 0 {
 		msg += fmt.Sprintf(" (expires in %ds)", ttlSeconds)
 	}
 	msg += "."
 
 	w.logger.Info("context entity added",
-		"entity_id", entityID, "tags", tags, "history", history, "ttl_seconds", ttlSeconds)
+		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "ttl_seconds", ttlSeconds)
 	if w.tagRegistrar != nil {
 		for _, tag := range tags {
 			w.tagRegistrar(tag)
@@ -219,6 +238,9 @@ func (w *WatchlistTools) handleListContextEntities(_ context.Context, args map[s
 		}
 		if len(sub.History) > 0 {
 			item["history"] = append([]int(nil), sub.History...)
+		}
+		if sub.Forecast != "" {
+			item["forecast"] = sub.Forecast
 		}
 		if sub.ExpiresAt != nil {
 			item["expires_delta"] = promptfmt.FormatDeltaOnly(*sub.ExpiresAt, now)
@@ -288,6 +310,17 @@ func parseWatchlistTagArgs(raw any) ([]string, error) {
 		}
 	}
 	return tags, nil
+}
+
+func parseWatchlistForecastArg(raw any) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("forecast must be a string")
+	}
+	return normalizeForecastType(value)
 }
 
 func parseWatchlistHistoryArg(raw any) ([]int, error) {

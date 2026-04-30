@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
@@ -79,6 +80,10 @@ type State struct {
 	Attributes  map[string]any `json:"attributes"`
 	LastChanged time.Time      `json:"last_changed"`
 	LastUpdated time.Time      `json:"last_updated"`
+}
+
+type weatherForecastResponse struct {
+	Forecast []map[string]any `json:"forecast"`
 }
 
 // APIStatus represents the HA API status response.
@@ -175,6 +180,51 @@ func (c *Client) GetStateHistory(ctx context.Context, entityID string, startTime
 		}
 	}
 	return states, nil
+}
+
+// GetWeatherForecasts retrieves forecast rows for a weather entity using Home
+// Assistant's weather.get_forecasts response API. forecastType must be daily,
+// hourly, or twice_daily.
+func (c *Client) GetWeatherForecasts(ctx context.Context, entityID, forecastType string) ([]map[string]any, error) {
+	if entityID == "" {
+		return nil, nil
+	}
+	var err error
+	forecastType, err = normalizeWeatherForecastType(forecastType)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		ServiceResponse map[string]weatherForecastResponse `json:"service_response"`
+	}
+	body := map[string]any{
+		"entity_id": entityID,
+		"type":      forecastType,
+	}
+	if err := c.post(ctx, "/api/services/weather/get_forecasts?return_response", body, &response); err != nil {
+		return nil, err
+	}
+
+	item, ok := response.ServiceResponse[entityID]
+	if !ok {
+		return nil, fmt.Errorf("weather forecast response missing entity %q", entityID)
+	}
+	return append([]map[string]any(nil), item.Forecast...), nil
+}
+
+func normalizeWeatherForecastType(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	if value == "" {
+		return "daily", nil
+	}
+	switch value {
+	case "daily", "hourly", "twice_daily":
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid forecast type %q: must be one of daily, hourly, or twice_daily", value)
+	}
 }
 
 // CallService calls a Home Assistant service.

@@ -17,6 +17,7 @@ import (
 type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 	GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
+	GetWeatherForecasts(ctx context.Context, entityID, forecastType string) ([]map[string]any, error)
 }
 
 // WatchlistProvider implements [agent.TagContextProvider] by fetching
@@ -142,6 +143,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 		)
 		return formatFetchError(sub.EntityID)
 	}
+	state = p.stateWithForecast(ctx, sub, state)
 
 	content := formatEntityContext(state, now)
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
@@ -176,6 +178,7 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 		)
 		return formatFetchError(sub.EntityID)
 	}
+	state = p.stateWithForecast(ctx, sub, state)
 
 	content := formatEntityContext(state, now)
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
@@ -199,4 +202,65 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 	}
 
 	return mergeHistoryIntoEntityContext(content, summaries, truncated)
+}
+
+func (p *WatchlistProvider) stateWithForecast(ctx context.Context, sub WatchedSubscription, state *homeassistant.State) *homeassistant.State {
+	return watchlistStateWithForecast(ctx, p.ha, p.logger, sub, state, "failed to fetch watched weather forecast")
+}
+
+func (p *WatchlistTagProvider) stateWithForecast(ctx context.Context, sub WatchedSubscription, state *homeassistant.State) *homeassistant.State {
+	return watchlistStateWithForecast(ctx, p.ha, p.logger, sub, state, "failed to fetch tagged weather forecast", "tag", p.tag)
+}
+
+func watchlistStateWithForecast(
+	ctx context.Context,
+	ha StateGetter,
+	logger *slog.Logger,
+	sub WatchedSubscription,
+	state *homeassistant.State,
+	warnMsg string,
+	extraLogFields ...any,
+) *homeassistant.State {
+	next, err := stateWithWeatherForecast(ctx, ha, state, sub.Forecast)
+	if err != nil {
+		if logger == nil {
+			logger = slog.Default()
+		}
+		fields := []any{
+			"entity_id", sub.EntityID,
+			"forecast", sub.Forecast,
+			"error", err,
+		}
+		fields = append(fields, extraLogFields...)
+		logger.Warn(warnMsg, fields...)
+		return state
+	}
+	return next
+}
+
+func stateWithWeatherForecast(ctx context.Context, ha StateGetter, state *homeassistant.State, forecastType string) (*homeassistant.State, error) {
+	if state == nil || forecastType == "" || entityDomain(state.EntityID) != "weather" || isSentinelState(state.State) {
+		return state, nil
+	}
+	forecast, err := ha.GetWeatherForecasts(ctx, state.EntityID, forecastType)
+	if err != nil {
+		return state, err
+	}
+	if len(forecast) == 0 {
+		return state, nil
+	}
+
+	next := *state
+	attrs := make(map[string]any, len(state.Attributes)+2)
+	for key, value := range state.Attributes {
+		attrs[key] = value
+	}
+	entries := make([]any, 0, len(forecast))
+	for _, entry := range forecast {
+		entries = append(entries, entry)
+	}
+	attrs["forecast"] = entries
+	attrs["forecast_type"] = forecastType
+	next.Attributes = attrs
+	return &next, nil
 }

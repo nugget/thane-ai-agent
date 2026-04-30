@@ -115,9 +115,10 @@ func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
 	p, store, registered := setupWatchlistProvider(t)
 
 	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
-		"entity_id":   "sensor.battery",
+		"entity_id":   "weather.home",
 		"tags":        []any{"battery_focus", "battery_focus"},
 		"history":     []any{60, 3600},
+		"forecast":    "hourly",
 		"ttl_seconds": 120,
 	})
 	if err != nil {
@@ -141,8 +142,73 @@ func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
 	if !slices.Equal(subs[0].History, []int{60, 3600}) {
 		t.Fatalf("history = %v, want [60 3600]", subs[0].History)
 	}
+	if subs[0].Forecast != "hourly" {
+		t.Fatalf("forecast = %q, want hourly", subs[0].Forecast)
+	}
 	if subs[0].ExpiresAt == nil {
 		t.Fatal("expected subscription expiration")
+	}
+}
+
+func TestAddContextEntity_InvalidForecast(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddContextEntity(context.Background(), map[string]any{
+		"entity_id": "weather.home",
+		"forecast":  "monthly",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid forecast")
+	}
+	if !strings.Contains(err.Error(), "forecast must be one of") {
+		t.Fatalf("error = %q, want forecast validation", err.Error())
+	}
+}
+
+func TestAddContextEntity_ForecastRequiresWeatherEntity(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddContextEntity(context.Background(), map[string]any{
+		"entity_id": "sensor.outdoor_temperature",
+		"forecast":  "daily",
+	})
+	if err == nil {
+		t.Fatal("expected error for forecast on non-weather entity")
+	}
+	if !strings.Contains(err.Error(), "weather.*") {
+		t.Fatalf("error = %q, want weather entity guidance", err.Error())
+	}
+}
+
+func TestAddContextEntity_ForecastNoneClearsExistingOption(t *testing.T) {
+	p, store, _ := setupWatchlistProvider(t)
+
+	if _, err := p.handleAddContextEntity(context.Background(), map[string]any{
+		"entity_id": "weather.home",
+		"forecast":  "daily",
+	}); err != nil {
+		t.Fatalf("add forecast: %v", err)
+	}
+	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
+		"entity_id": "weather.home",
+		"forecast":  "none",
+	})
+	if err != nil {
+		t.Fatalf("clear forecast: %v", err)
+	}
+	if !strings.Contains(result, "forecast: none") {
+		t.Fatalf("result = %q, want forecast clearing note", result)
+	}
+
+	subs, err := store.ListUntaggedSubscriptions()
+	if err != nil {
+		t.Fatalf("ListUntaggedSubscriptions: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("len(subs) = %d, want 1", len(subs))
+	}
+	if subs[0].Forecast != "" {
+		t.Fatalf("forecast = %q, want cleared", subs[0].Forecast)
 	}
 }
 
@@ -163,12 +229,15 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 	if err := store.Add("sensor.always_on"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, []int{600}, 300); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, []int{600}, 300, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
+	}
+	if err := store.AddWithOptions("weather.home", []string{"weather_focus"}, nil, 0, "daily"); err != nil {
+		t.Fatalf("AddWithOptions weather: %v", err)
 	}
 
 	raw, err := p.handleListContextEntities(context.Background(), map[string]any{
-		"tag": "battery_focus",
+		"tag": "weather_focus",
 	})
 	if err != nil {
 		t.Fatalf("handleListContextEntities: %v", err)
@@ -180,6 +249,7 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 			EntityID      string `json:"entity_id"`
 			Scope         string `json:"scope"`
 			AlwaysVisible bool   `json:"always_visible"`
+			Forecast      string `json:"forecast"`
 			ExpiresDelta  string `json:"expires_delta"`
 		} `json:"items"`
 	}
@@ -189,14 +259,33 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 	if payload.Count != 1 {
 		t.Fatalf("count = %d, want 1", payload.Count)
 	}
-	if payload.Items[0].EntityID != "sensor.battery" || payload.Items[0].Scope != "battery_focus" {
-		t.Fatalf("item = %+v, want sensor.battery/battery_focus", payload.Items[0])
+	if payload.Items[0].EntityID != "weather.home" || payload.Items[0].Scope != "weather_focus" {
+		t.Fatalf("item = %+v, want weather.home/weather_focus", payload.Items[0])
 	}
 	if payload.Items[0].AlwaysVisible {
 		t.Fatal("tagged subscription should not be always visible")
 	}
+	if payload.Items[0].Forecast != "daily" {
+		t.Fatalf("forecast = %q, want daily", payload.Items[0].Forecast)
+	}
+
+	raw, err = p.handleListContextEntities(context.Background(), map[string]any{
+		"tag": "battery_focus",
+	})
+	if err != nil {
+		t.Fatalf("handleListContextEntities battery_focus: %v", err)
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal battery payload: %v", err)
+	}
+	if payload.Count != 1 {
+		t.Fatalf("battery count = %d, want 1", payload.Count)
+	}
+	if payload.Items[0].EntityID != "sensor.battery" || payload.Items[0].Scope != "battery_focus" {
+		t.Fatalf("battery item = %+v, want sensor.battery/battery_focus", payload.Items[0])
+	}
 	if payload.Items[0].ExpiresDelta == "" {
-		t.Fatal("expected expires_delta in payload")
+		t.Fatal("expected expires_delta for TTL-backed subscription")
 	}
 }
 
@@ -244,7 +333,7 @@ func TestRemoveContextEntity_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) 
 	if err := store.Add("sensor.battery"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 

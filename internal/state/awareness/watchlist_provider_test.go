@@ -17,10 +17,13 @@ import (
 
 // fakeHA implements StateGetter for testing.
 type fakeHA struct {
-	states  map[string]*homeassistant.State
-	history map[string][]homeassistant.State
-	err     error // returned for any entity not in states
-	histErr error
+	states           map[string]*homeassistant.State
+	history          map[string][]homeassistant.State
+	forecasts        map[string][]map[string]any
+	forecastRequests []string
+	err              error // returned for any entity not in states
+	histErr          error
+	forecastErr      error
 }
 
 func (f *fakeHA) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
@@ -39,6 +42,14 @@ func (f *fakeHA) GetStateHistory(_ context.Context, entityID string, _ time.Time
 	}
 	history := f.history[entityID]
 	return append([]homeassistant.State(nil), history...), nil
+}
+
+func (f *fakeHA) GetWeatherForecasts(_ context.Context, entityID, forecastType string) ([]map[string]any, error) {
+	f.forecastRequests = append(f.forecastRequests, entityID+":"+forecastType)
+	if f.forecastErr != nil {
+		return nil, f.forecastErr
+	}
+	return append([]map[string]any(nil), f.forecasts[entityID]...), nil
 }
 
 func setupTestProvider(t *testing.T, ha StateGetter) (*WatchlistProvider, *WatchlistStore) {
@@ -255,7 +266,7 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0); err != nil {
+	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -290,6 +301,73 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 }
 
+func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
+	now := time.Now().UTC().Round(time.Second)
+	ha := &fakeHA{
+		states: map[string]*homeassistant.State{
+			"weather.home": {
+				EntityID:    "weather.home",
+				State:       "cloudy",
+				LastChanged: now.Add(-5 * time.Minute),
+				Attributes: map[string]any{
+					"friendly_name":      "Home Forecast",
+					"temperature":        70.0,
+					"temperature_unit":   "°F",
+					"wind_speed_unit":    "mph",
+					"precipitation_unit": "in",
+				},
+			},
+		},
+		forecasts: map[string][]map[string]any{
+			"weather.home": {
+				{
+					"datetime":                  now.Add(2 * time.Hour).Format(time.RFC3339),
+					"condition":                 "rainy",
+					"temperature":               78.0,
+					"templow":                   64.0,
+					"precipitation_probability": 80.0,
+					"wind_speed":                12.0,
+				},
+			},
+		},
+	}
+
+	p, store := setupTestProvider(t, ha)
+	if err := store.AddWithOptions("weather.home", nil, nil, 0, "hourly"); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if len(ha.forecastRequests) != 1 || ha.forecastRequests[0] != "weather.home:hourly" {
+		t.Fatalf("forecastRequests = %v, want [weather.home:hourly]", ha.forecastRequests)
+	}
+	payload := decodeWatchlistPayload(t, got)
+	if payload["forecast_type"] != "hourly" {
+		t.Fatalf("forecast_type = %#v, want hourly", payload["forecast_type"])
+	}
+	forecast, ok := payload["forecast"].([]any)
+	if !ok || len(forecast) != 1 {
+		t.Fatalf("forecast = %#v, want one entry", payload["forecast"])
+	}
+	entry, ok := forecast[0].(map[string]any)
+	if !ok {
+		t.Fatalf("forecast[0] = %#v, want object", forecast[0])
+	}
+	if entry["condition"] != "rainy" {
+		t.Fatalf("condition = %#v, want rainy", entry["condition"])
+	}
+	if entry["high"] != "78 °F" {
+		t.Fatalf("high = %#v, want 78 °F", entry["high"])
+	}
+	if entry["precipitation_probability"] != float64(80) {
+		t.Fatalf("precipitation_probability = %#v, want 80", entry["precipitation_probability"])
+	}
+}
+
 func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	now := time.Now().UTC().Round(time.Second)
 	ha := &fakeHA{
@@ -313,7 +391,7 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0); err != nil {
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -372,7 +450,7 @@ func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0); err != nil {
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
