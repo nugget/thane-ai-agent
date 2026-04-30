@@ -108,6 +108,129 @@ func TestFormatWeather(t *testing.T) {
 	}
 }
 
+func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {
+	state := &homeassistant.State{
+		EntityID:    "weather.rooftop",
+		State:       "partlycloudy",
+		LastChanged: testNow.Add(-10 * time.Minute),
+		Attributes: map[string]any{
+			"temperature":          72.44,
+			"temperature_unit":     "°F",
+			"apparent_temperature": 75.2,
+			"dew_point":            64.8,
+			"humidity":             float64(74),
+			"wind_speed":           12.34,
+			"wind_speed_unit":      "mph",
+			"wind_gust_speed":      22.2,
+			"cloud_coverage":       63.4,
+			"uv_index":             4.25,
+			"ozone":                298.6,
+			"precipitation":        0.127,
+			"precipitation_unit":   "in",
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("weather output should be valid JSON: %v\nGot: %s", err, result)
+	}
+
+	checks := map[string]any{
+		"temperature":          72.4,
+		"temperature_unit":     "°F",
+		"apparent_temperature": 75.2,
+		"dew_point":            64.8,
+		"humidity":             float64(74),
+		"wind_speed":           12.3,
+		"wind_speed_unit":      "mph",
+		"wind_gust_speed":      22.2,
+		"wind_gust_speed_unit": "mph",
+		"cloud_coverage":       float64(63),
+		"uv_index":             4.3,
+		"ozone":                float64(299),
+		"precipitation":        0.13,
+		"precipitation_unit":   "in",
+	}
+	for key, want := range checks {
+		if got := parsed[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+	if _, has := parsed["station"]; has {
+		t.Errorf("station should not be inferred for a generic weather entity, got %v", parsed["station"])
+	}
+}
+
+func TestFormatWeather_NWSMETAR(t *testing.T) {
+	lastChanged, err := time.Parse(time.RFC3339Nano, "2026-04-30T05:47:28.212451+00:00")
+	if err != nil {
+		t.Fatalf("parse lastChanged: %v", err)
+	}
+	lastUpdated, err := time.Parse(time.RFC3339Nano, "2026-04-30T06:01:50.171952+00:00")
+	if err != nil {
+		t.Fatalf("parse lastUpdated: %v", err)
+	}
+	now := time.Date(2026, 4, 30, 6, 2, 50, 0, time.UTC)
+	state := &homeassistant.State{
+		EntityID:    "weather.nws_msrh_klbx",
+		State:       "fog",
+		LastChanged: lastChanged,
+		LastUpdated: lastUpdated,
+		Attributes: map[string]any{
+			"temperature":        21.0,
+			"temperature_unit":   "°C",
+			"humidity":           float64(100),
+			"pressure":           1011.1,
+			"pressure_unit":      "hPa",
+			"wind_bearing":       0.0,
+			"wind_speed":         0.0,
+			"wind_speed_unit":    "km/h",
+			"visibility":         8.05,
+			"visibility_unit":    "km",
+			"precipitation_unit": "mm",
+			"attribution":        "Data from National Weather Service/NOAA",
+			"friendly_name":      "KLBX (Closest METAR to MSR Houston. Angleton, TX) KLBX",
+			"supported_features": float64(6),
+		},
+	}
+
+	result := formatEntityContext(state, now)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("weather output should be valid JSON: %v\nGot: %s", err, result)
+	}
+
+	checks := map[string]any{
+		"entity":             "weather.nws_msrh_klbx",
+		"name":               "KLBX (Closest METAR to MSR Houston. Angleton, TX) KLBX",
+		"station":            "KLBX",
+		"source":             "National Weather Service/NOAA",
+		"state":              "fog",
+		"temperature":        float64(21),
+		"temperature_unit":   "°C",
+		"humidity":           float64(100),
+		"pressure":           1011.1,
+		"pressure_unit":      "hPa",
+		"wind_speed":         float64(0),
+		"wind_speed_unit":    "km/h",
+		"wind_bearing":       float64(0),
+		"visibility":         8.05,
+		"visibility_unit":    "km",
+		"precipitation_unit": "mm",
+		"since":              "-921s",
+		"updated":            "-59s",
+	}
+	for key, want := range checks {
+		if got := parsed[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+	if _, has := parsed["supported_features"]; has {
+		t.Errorf("supported_features should stay out of model context, got %v", parsed["supported_features"])
+	}
+}
+
 func TestFormatClimate(t *testing.T) {
 	state := &homeassistant.State{
 		EntityID:    "climate.thermostat",
