@@ -27,7 +27,7 @@ the shape of the work to the right surface:
 returns success and silently does nothing. Treat any control action as
 a three-step move:
 
-1. `find_entity` (or `mcp_home_assistant_ha_search_entities`) to confirm
+1. `find_entity` (or the loaded MCP entity-search equivalent) to confirm
    the entity actually exists and grab its real ID.
 2. `call_service` (or the MCP equivalent) to perform the action.
 3. `get_state` afterwards to verify the new value really took.
