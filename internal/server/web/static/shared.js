@@ -187,7 +187,8 @@ function extractDelegateCalls(liveTools) {
     const parsed = parseDelegateArgs(entry.args);
     calls.push({
       task: parsed.task || '',
-      profile: parsed.profile || delegateToolLabel(entry.tool),
+      profile: parsed.profile || '',
+      mode: parsed.mode || delegateToolLabel(entry.tool),
       guidance: truncate(parsed.guidance || '', 200),
       tags: parsed.tags || [],
       status: entry.status || 'done',
@@ -1700,10 +1701,11 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
       task.className = 'iter-card__delegate-task';
       task.textContent = truncate(dc.task || 'delegate', 100);
       item.appendChild(task);
-      if (dc.profile) {
+      const label = dc.profile || dc.mode;
+      if (label) {
         const prof = document.createElement('span');
         prof.className = 'iter-card__delegate-profile';
-        prof.textContent = dc.profile;
+        prof.textContent = label;
         item.appendChild(prof);
       }
       if (dc.status === 'error' && dc.error) {

@@ -156,11 +156,14 @@ func runAssign(ctx context.Context, exec *Executor, req delegateRequest) string 
 		explicitTagScope:  req.tagsProvided,
 		promptMode:        req.contextMode,
 	}
-	loopID, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
-	if err != nil {
-		return fmt.Sprintf("[Delegate error: profile=%s, mode=async] %s", req.profileName, err.Error())
+	loopID, profileName, err := exec.startBackground(ctx, req.task, req.profileName, req.guidance, req.tags, opts)
+	if profileName == "" {
+		profileName = req.profileName
 	}
-	return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", req.profileName, loopID)
+	if err != nil {
+		return fmt.Sprintf("[Delegate error: profile=%s, mode=async] %s", profileName, err.Error())
+	}
+	return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID)
 }
 
 // runNow executes the sync path for thane_now. Returns a fully
@@ -176,6 +179,10 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 	if err != nil {
 		return fmt.Sprintf("[Delegate error: profile=%s] %s", req.profileName, err.Error())
 	}
+	profileName := req.profileName
+	if result.ProfileName != "" {
+		profileName = result.ProfileName
+	}
 	summary := formatExecSummary(result)
 
 	// Format the result with explicit success/failure headers so the
@@ -186,16 +193,16 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 			// empty-after-tool-calls as ExhaustNoOutput.
 			return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
 				"\n\nDelegate completed without producing results.\n\n%s",
-				req.profileName, result.Model, result.Iterations, summary)
+				profileName, result.Model, result.Iterations, summary)
 		}
 		header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
-			req.profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
+			profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
 		return header + "\n\n" + result.Content + "\n\n" + summary
 	}
 
 	// Exhausted delegation — provide actionable context for retry.
 	header := fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
-		req.profileName, result.Model, result.ExhaustReason, result.Iterations,
+		profileName, result.Model, result.ExhaustReason, result.Iterations,
 		formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
 
 	var out strings.Builder

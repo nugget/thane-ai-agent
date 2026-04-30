@@ -152,6 +152,9 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if result.Model != "deepslate/google/gemma-3-4b" {
 		t.Fatalf("Model = %q", result.Model)
 	}
+	if result.ProfileName != "ha" {
+		t.Fatalf("ProfileName = %q, want ha", result.ProfileName)
+	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
@@ -203,6 +206,7 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if captured.UsageRole != "delegate" || captured.UsageTaskName != "ha" {
 		t.Fatalf("usage role/task = %q/%q", captured.UsageRole, captured.UsageTaskName)
 	}
+	assertContainsDelegateFamily(t, captured.ExcludeTools)
 }
 
 func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
@@ -230,12 +234,15 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 			exec := NewExecutor(slog.Default(), nil, nil, taggedDelegateTestRegistry(), "spark/gpt-oss:20b")
 			exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
 
-			_, err := exec.execute(context.Background(), "Check the hallway light", "general", "", tc.tags, executionOptions{
+			result, err := exec.execute(context.Background(), "Check the hallway light", "general", "", tc.tags, executionOptions{
 				explicitTagScope: true,
 				promptMode:       agentctx.PromptModeTask,
 			})
 			if err != nil {
 				t.Fatalf("execute() error = %v", err)
+			}
+			if result.ProfileName != "ha" {
+				t.Fatalf("ProfileName = %q, want ha profile derived from %v tags", result.ProfileName, tc.tags)
 			}
 
 			if captured.UsageTaskName != "ha" {
@@ -439,6 +446,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 	if containsString(captured.InitialTags, "ha") {
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
+	assertContainsDelegateFamily(t, captured.ExcludeTools)
 	// ExcludeTools may carry the delegate-family recursion guard, but
 	// must not include any of the regular tag-gated tools — the
 	// always-active tags should expand the filter scope so tag-based
@@ -948,6 +956,7 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	ctx := tools.WithConversationID(context.Background(), "conv-async")
 	result, err := AssignToolHandler(exec)(ctx, map[string]any{
 		"task": "Investigate the slow query.",
+		"tags": []any{"ha"},
 	})
 	if err != nil {
 		t.Fatalf("AssignToolHandler error: %v", err)
@@ -957,6 +966,9 @@ func TestAssignToolHandler_RoutesToAsyncPath(t *testing.T) {
 	}
 	if !strings.Contains(result, "loop_id=") {
 		t.Fatalf("expected loop_id in result, got: %s", result)
+	}
+	if !strings.Contains(result, "profile=ha") {
+		t.Fatalf("expected derived ha profile in result, got: %s", result)
 	}
 }
 
@@ -1136,4 +1148,13 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertContainsDelegateFamily(t *testing.T, toolNames []string) {
+	t.Helper()
+	for _, want := range delegateFamilyToolNames {
+		if !containsString(toolNames, want) {
+			t.Fatalf("tool names = %#v, want delegate-family exclusion %s", toolNames, want)
+		}
+	}
 }
