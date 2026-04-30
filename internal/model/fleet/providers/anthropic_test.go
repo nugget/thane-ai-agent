@@ -692,6 +692,96 @@ func TestAnthropicClient_HandleStreamingPreservesStopReasonAcrossMessageDeltas(t
 	}
 }
 
+// TestAnthropicClient_HandleStreamingAggregatesUsageAcrossSSEEvents
+// regression-locks how the streaming handler combines usage data from
+// the message_start event (input/cache tokens) with the message_delta
+// event (output_tokens). Anthropic's SSE schema reports input and
+// cache numbers up front and the final output_tokens only at the end;
+// any future refactor that drops one of those merges would silently
+// undercount tokens in usage_records and skew cost reports.
+func TestAnthropicClient_HandleStreamingAggregatesUsageAcrossSSEEvents(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-opus-4-20250514","usage":{"input_tokens":1234,"cache_creation_input_tokens":4096,"cache_read_input_tokens":8000,"cache_creation":{"ephemeral_5m_input_tokens":1000,"ephemeral_1h_input_tokens":3096}}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	if err != nil {
+		t.Fatalf("handleStreaming: %v", err)
+	}
+
+	checks := []struct {
+		field string
+		got   int
+		want  int
+	}{
+		{"InputTokens", resp.InputTokens, 1234},
+		{"OutputTokens", resp.OutputTokens, 42},
+		{"CacheCreationInputTokens", resp.CacheCreationInputTokens, 4096},
+		{"CacheReadInputTokens", resp.CacheReadInputTokens, 8000},
+		{"CacheCreation5mInputTokens", resp.CacheCreation5mInputTokens, 1000},
+		{"CacheCreation1hInputTokens", resp.CacheCreation1hInputTokens, 3096},
+	}
+	for _, chk := range checks {
+		if chk.got != chk.want {
+			t.Errorf("%s = %d, want %d", chk.field, chk.got, chk.want)
+		}
+	}
+	if resp.Message.Content != "hi" {
+		t.Errorf("Content = %q, want %q", resp.Message.Content, "hi")
+	}
+}
+
+// TestAnthropicClient_HandleStreamingMessageDeltaWithoutUsage protects
+// against a hypothetical regression where message_delta arriving
+// without a usage object overwrites the input/cache totals captured
+// from message_start. Anthropic always sends the final output_tokens
+// in message_delta, but the surrounding usage struct is optional and
+// may be absent even in valid streams; the handler must keep the
+// message_start numbers regardless.
+func TestAnthropicClient_HandleStreamingMessageDeltaWithoutUsage(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-opus-4-20250514","usage":{"input_tokens":500,"cache_read_input_tokens":2000}}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	c := NewAnthropicClient("k", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resp, err := c.handleStreaming(context.Background(), strings.NewReader(stream), nil, "")
+	if err != nil {
+		t.Fatalf("handleStreaming: %v", err)
+	}
+	if resp.InputTokens != 500 {
+		t.Errorf("InputTokens = %d, want 500 (must not be reset by message_delta with no usage)", resp.InputTokens)
+	}
+	if resp.CacheReadInputTokens != 2000 {
+		t.Errorf("CacheReadInputTokens = %d, want 2000", resp.CacheReadInputTokens)
+	}
+}
+
 func TestApplyCacheBreakpointGuards_ReturnsUnderMinimumDrops(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	// Two short blocks with breakpoints; opus minimum is 4096 tokens
