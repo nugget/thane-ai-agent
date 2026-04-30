@@ -77,11 +77,14 @@ func newTestRegistry() *tools.Registry {
 			return "search results", nil
 		},
 	})
-	// All three delegate-family tools are registered so tests can
-	// verify the full recursion guard, not just the deprecated alias.
-	// See #820 — thane_now and thane_assign were originally missed by
-	// the exclusion list.
-	for _, name := range []string{"thane_delegate", "thane_now", "thane_assign"} {
+	// All delegate-family tools are registered so tests can verify
+	// the full recursion guard, not just the deprecated alias. See
+	// #820 — thane_now and thane_assign were originally missed by
+	// the exclusion list. Iterating over the production
+	// delegateFamilyToolNames slice keeps fixture coverage in lock-step
+	// with the real exclusion list, so a future family addition
+	// automatically extends the test surface.
+	for _, name := range delegateFamilyToolNames {
 		r.Register(&tools.Tool{
 			Name:        name,
 			Description: "delegate-family tool — should be excluded from delegate registries",
@@ -262,7 +265,8 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 		t.Fatalf("execute() error = %v", err)
 	}
 
-	for _, want := range []string{"get_state", "web_search", "thane_delegate", "thane_now", "thane_assign"} {
+	wantExcluded := append([]string{"get_state", "web_search"}, delegateFamilyToolNames...)
+	for _, want := range wantExcluded {
 		if !containsString(captured.ExcludeTools, want) {
 			t.Fatalf("ExcludeTools = %#v, want %s", captured.ExcludeTools, want)
 		}
@@ -281,12 +285,10 @@ func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 
 	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
 
-	familyNames := []string{"thane_delegate", "thane_now", "thane_assign"}
-
 	t.Run("tag-scoped branch", func(t *testing.T) {
 		reg := exec.delegateToolRegistry([]string{"web"}, false)
 		names := reg.AllToolNames()
-		for _, want := range familyNames {
+		for _, want := range delegateFamilyToolNames {
 			if containsString(names, want) {
 				t.Errorf("tag-scoped delegate registry contains %q; full family must be excluded (registry: %v)", want, names)
 			}
@@ -300,7 +302,7 @@ func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	t.Run("fall-through branch", func(t *testing.T) {
 		reg := exec.delegateToolRegistry(nil, false)
 		names := reg.AllToolNames()
-		for _, want := range familyNames {
+		for _, want := range delegateFamilyToolNames {
 			if containsString(names, want) {
 				t.Errorf("fall-through delegate registry contains %q; full family must be excluded (registry: %v)", want, names)
 			}
