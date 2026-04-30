@@ -205,27 +205,34 @@ func (p *WatchlistTagProvider) renderSubscriptionContext(ctx context.Context, su
 }
 
 func (p *WatchlistProvider) stateWithForecast(ctx context.Context, sub WatchedSubscription, state *homeassistant.State) *homeassistant.State {
-	next, err := stateWithWeatherForecast(ctx, p.ha, state, sub.Forecast)
-	if err != nil {
-		p.logger.Warn("failed to fetch watched weather forecast",
-			"entity_id", sub.EntityID,
-			"forecast", sub.Forecast,
-			"error", err,
-		)
-		return state
-	}
-	return next
+	return watchlistStateWithForecast(ctx, p.ha, p.logger, sub, state, "failed to fetch watched weather forecast")
 }
 
 func (p *WatchlistTagProvider) stateWithForecast(ctx context.Context, sub WatchedSubscription, state *homeassistant.State) *homeassistant.State {
-	next, err := stateWithWeatherForecast(ctx, p.ha, state, sub.Forecast)
+	return watchlistStateWithForecast(ctx, p.ha, p.logger, sub, state, "failed to fetch tagged weather forecast", "tag", p.tag)
+}
+
+func watchlistStateWithForecast(
+	ctx context.Context,
+	ha StateGetter,
+	logger *slog.Logger,
+	sub WatchedSubscription,
+	state *homeassistant.State,
+	warnMsg string,
+	extraLogFields ...any,
+) *homeassistant.State {
+	next, err := stateWithWeatherForecast(ctx, ha, state, sub.Forecast)
 	if err != nil {
-		p.logger.Warn("failed to fetch tagged weather forecast",
+		if logger == nil {
+			logger = slog.Default()
+		}
+		fields := []any{
 			"entity_id", sub.EntityID,
-			"tag", p.tag,
 			"forecast", sub.Forecast,
 			"error", err,
-		)
+		}
+		fields = append(fields, extraLogFields...)
+		logger.Warn(warnMsg, fields...)
 		return state
 	}
 	return next

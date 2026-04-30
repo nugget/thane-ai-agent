@@ -268,6 +268,25 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 	if payload.Items[0].Forecast != "daily" {
 		t.Fatalf("forecast = %q, want daily", payload.Items[0].Forecast)
 	}
+
+	raw, err = p.handleListContextEntities(context.Background(), map[string]any{
+		"tag": "battery_focus",
+	})
+	if err != nil {
+		t.Fatalf("handleListContextEntities battery_focus: %v", err)
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal battery payload: %v", err)
+	}
+	if payload.Count != 1 {
+		t.Fatalf("battery count = %d, want 1", payload.Count)
+	}
+	if payload.Items[0].EntityID != "sensor.battery" || payload.Items[0].Scope != "battery_focus" {
+		t.Fatalf("battery item = %+v, want sensor.battery/battery_focus", payload.Items[0])
+	}
+	if payload.Items[0].ExpiresDelta == "" {
+		t.Fatal("expected expires_delta for TTL-backed subscription")
+	}
 }
 
 func TestRemoveContextEntity_MissingEntityID(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,5 +100,21 @@ func TestClient_GetWeatherForecasts(t *testing.T) {
 	}
 	if forecast[0]["condition"] != "rainy" {
 		t.Fatalf("forecast condition = %v, want rainy", forecast[0]["condition"])
+	}
+}
+
+func TestClient_GetWeatherForecastsRejectsInvalidType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("server should not be called for invalid forecast type")
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token", nil)
+	_, err := client.GetWeatherForecasts(context.Background(), "weather.home", "monthly")
+	if err == nil {
+		t.Fatal("expected invalid forecast type error")
+	}
+	if !strings.Contains(err.Error(), "must be one of daily, hourly, or twice_daily") {
+		t.Fatalf("error = %q, want forecast type guidance", err.Error())
 	}
 }

@@ -114,7 +114,7 @@ func TestStore_RemoveNonExistent(t *testing.T) {
 func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus", "interactive", "battery_focus"}, []int{600, 3600}, 300, "daily"); err != nil {
+	if err := store.AddWithOptions("weather.home", []string{"weather_focus", "interactive", "weather_focus"}, []int{600, 3600}, 300, "daily"); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -122,8 +122,8 @@ func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if !slices.Equal(ids, []string{"sensor.battery"}) {
-		t.Fatalf("List() = %v, want [sensor.battery]", ids)
+	if !slices.Equal(ids, []string{"weather.home"}) {
+		t.Fatalf("List() = %v, want [weather.home]", ids)
 	}
 
 	untagged, err := store.ListUntagged()
@@ -138,27 +138,27 @@ func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DistinctTags: %v", err)
 	}
-	if !slices.Equal(tags, []string{"battery_focus", "interactive"}) {
-		t.Fatalf("DistinctTags() = %v, want [battery_focus interactive]", tags)
+	if !slices.Equal(tags, []string{"interactive", "weather_focus"}) {
+		t.Fatalf("DistinctTags() = %v, want [interactive weather_focus]", tags)
 	}
 
-	batteryFocus, err := store.ListByTag("battery_focus")
+	weatherFocus, err := store.ListByTag("weather_focus")
 	if err != nil {
-		t.Fatalf("ListByTag(battery_focus): %v", err)
+		t.Fatalf("ListByTag(weather_focus): %v", err)
 	}
-	if len(batteryFocus) != 1 {
-		t.Fatalf("ListByTag(battery_focus) len = %d, want 1", len(batteryFocus))
+	if len(weatherFocus) != 1 {
+		t.Fatalf("ListByTag(weather_focus) len = %d, want 1", len(weatherFocus))
 	}
-	if batteryFocus[0].Scope != "battery_focus" {
-		t.Fatalf("scope = %q, want battery_focus", batteryFocus[0].Scope)
+	if weatherFocus[0].Scope != "weather_focus" {
+		t.Fatalf("scope = %q, want weather_focus", weatherFocus[0].Scope)
 	}
-	if !slices.Equal(batteryFocus[0].History, []int{600, 3600}) {
-		t.Fatalf("history = %v, want [600 3600]", batteryFocus[0].History)
+	if !slices.Equal(weatherFocus[0].History, []int{600, 3600}) {
+		t.Fatalf("history = %v, want [600 3600]", weatherFocus[0].History)
 	}
-	if batteryFocus[0].Forecast != "daily" {
-		t.Fatalf("forecast = %q, want daily", batteryFocus[0].Forecast)
+	if weatherFocus[0].Forecast != "daily" {
+		t.Fatalf("forecast = %q, want daily", weatherFocus[0].Forecast)
 	}
-	if batteryFocus[0].ExpiresAt == nil {
+	if weatherFocus[0].ExpiresAt == nil {
 		t.Fatal("expected expiration to be set")
 	}
 }

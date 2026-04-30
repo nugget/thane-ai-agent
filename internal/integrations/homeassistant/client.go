@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
@@ -188,8 +189,10 @@ func (c *Client) GetWeatherForecasts(ctx context.Context, entityID, forecastType
 	if entityID == "" {
 		return nil, nil
 	}
-	if forecastType == "" {
-		forecastType = "daily"
+	var err error
+	forecastType, err = normalizeWeatherForecastType(forecastType)
+	if err != nil {
+		return nil, err
 	}
 
 	var response struct {
@@ -208,6 +211,20 @@ func (c *Client) GetWeatherForecasts(ctx context.Context, entityID, forecastType
 		return nil, fmt.Errorf("weather forecast response missing entity %q", entityID)
 	}
 	return append([]map[string]any(nil), item.Forecast...), nil
+}
+
+func normalizeWeatherForecastType(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	if value == "" {
+		return "daily", nil
+	}
+	switch value {
+	case "daily", "hourly", "twice_daily":
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid forecast type %q: must be one of daily, hourly, or twice_daily", value)
+	}
 }
 
 // CallService calls a Home Assistant service.
