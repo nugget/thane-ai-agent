@@ -999,6 +999,84 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 	}
 }
 
+func TestConfigTagsSeedRequestInitialTags(t *testing.T) {
+	t.Parallel()
+
+	var captured Request
+	var mu sync.Mutex
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			mu.Lock()
+			defer mu.Unlock()
+			captured = Request{
+				InitialTags:   append([]string(nil), req.InitialTags...),
+				SkipTagFilter: req.SkipTagFilter,
+			}
+		},
+	}
+
+	l, err := New(Config{
+		Name:         "config-tags",
+		Task:         "test",
+		Tags:         []string{"ha", "documents"},
+		SleepMin:     time.Millisecond,
+		SleepMax:     time.Millisecond,
+		SleepDefault: time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(captured.InitialTags, "ha") || !slices.Contains(captured.InitialTags, "documents") {
+		t.Fatalf("InitialTags = %v, want ha and documents", captured.InitialTags)
+	}
+	if captured.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false when config tags define loop scope")
+	}
+}
+
+func TestStatusToolingIncludesConfiguredAndLaunchTags(t *testing.T) {
+	t.Parallel()
+
+	l, err := NewFromLaunch(Launch{
+		Spec: Spec{
+			Name:       "status-tags",
+			Task:       "test",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+			Tags:       []string{"ha"},
+		},
+		InitialTags: []string{"documents"},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("NewFromLaunch: %v", err)
+	}
+
+	status := l.Status()
+	if !slices.Contains(status.ActiveTags, "ha") || !slices.Contains(status.ActiveTags, "documents") {
+		t.Fatalf("ActiveTags = %v, want ha and documents before first iteration", status.ActiveTags)
+	}
+	if !slices.Contains(status.Tooling.ConfiguredTags, "ha") || !slices.Contains(status.Tooling.ConfiguredTags, "documents") {
+		t.Fatalf("Tooling.ConfiguredTags = %v, want ha and documents", status.Tooling.ConfiguredTags)
+	}
+	if !slices.Contains(status.Tooling.LoadedTags, "ha") || !slices.Contains(status.Tooling.LoadedTags, "documents") {
+		t.Fatalf("Tooling.LoadedTags = %v, want ha and documents", status.Tooling.LoadedTags)
+	}
+}
+
 func TestCurrentConvID(t *testing.T) {
 	t.Parallel()
 

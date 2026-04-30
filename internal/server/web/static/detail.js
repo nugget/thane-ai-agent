@@ -799,9 +799,18 @@ function renderLoopDetail() {
     loadedTags: loopData.active_tags || [],
     excludedTools: (loopData.config && loopData.config.ExcludeTools) || [],
   });
+  const latest = getLatestLoopSnapshot();
+  const latestTooling = normalizeTooling(latest && latest.tooling, {
+    configuredTags: baseTooling.configuredTags,
+    loadedTags: latest && latest.active_tags,
+    effectiveTools: latest && latest.effective_tools,
+    excludedTools: baseTooling.excludedTools,
+  });
   const currentTooling = (liveTooling.loadedTags.length > 0 || liveTooling.effectiveTools.length > 0 || liveTooling.loadedCapabilities.length > 0)
     ? liveTooling
-    : baseTooling;
+    : ((latestTooling.loadedTags.length > 0 || latestTooling.effectiveTools.length > 0 || latestTooling.loadedCapabilities.length > 0)
+      ? latestTooling
+      : baseTooling);
   const tagsSection = $('#detail-tags');
   const tagsList = $('#detail-tags-list');
   const groups = makeIterationScopePanel([

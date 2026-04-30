@@ -556,7 +556,7 @@ func (l *Loop) Status() Status {
 	// Call the active tags callback outside the lock to avoid
 	// lock-ordering issues with the agent loop's tagMu.
 	// Deep-copy the result so callers can't mutate internal state.
-	defaultLoadedTags := mergeUniqueStrings(requestBaseInitialTags, requestOverrideInitialTags, activatedTagsCopy)
+	defaultLoadedTags := mergeUniqueStrings(cfgCopy.Tags, requestBaseInitialTags, requestOverrideInitialTags, activatedTagsCopy)
 	if atFunc != nil {
 		if tags := atFunc(); len(tags) > 0 {
 			cp := make([]string, len(tags))
@@ -1336,7 +1336,8 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 		conversationID = l.requestOverride.ConversationID
 	}
 
-	skipTagFilter := len(l.config.Tags) == 0 || l.requestOverride.SkipTagFilter
+	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, l.requestOverride.InitialTags)
+	skipTagFilter := len(configuredInitialTags) == 0 || l.requestOverride.SkipTagFilter
 
 	req := Request{
 		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
@@ -1351,7 +1352,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 		SkipTagFilter:         skipTagFilter,
 		Hints:                 hints,
 		OnProgress:            composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
-		InitialTags:           mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		InitialTags:           mergeUniqueStrings(configuredInitialTags, l.activatedTags),
 		RuntimeTools:          cloneRuntimeTools(l.config.RuntimeTools),
 		FallbackContent:       firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
 		MaxIterations:         l.requestOverride.MaxIterations,
