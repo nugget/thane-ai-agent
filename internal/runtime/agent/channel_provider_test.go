@@ -44,26 +44,34 @@ func (m *mockContactLookup) LookupContactOriginPolicy(id, name, _ string) *Conta
 	return m.policies[name]
 }
 
-// parseContactJSON extracts the ContactContext from a channel context
-// output string by finding and parsing the JSON block.
-func parseContactJSON(t *testing.T, output string) *ContactContext {
-	t.Helper()
-	start := strings.Index(output, "```json\n")
-	if start < 0 {
-		t.Fatalf("no JSON block found in output:\n%s", output)
-	}
-	start += len("```json\n")
-	end := strings.Index(output[start:], "\n```")
-	if end < 0 {
-		t.Fatalf("unterminated JSON block in output:\n%s", output)
-	}
-	jsonStr := output[start : start+end]
+type parsedChannelContext struct {
+	Source  string          `json:"source"`
+	Note    string          `json:"note,omitempty"`
+	Contact *ContactContext `json:"contact"`
+}
 
-	var envelope struct {
-		Contact *ContactContext `json:"contact"`
+// parseChannelJSON extracts the channel context JSON envelope from output.
+func parseChannelJSON(t *testing.T, output string) parsedChannelContext {
+	t.Helper()
+	const header = "### Channel Context"
+	if !strings.HasPrefix(output, header) {
+		t.Fatalf("missing channel context header:\n%s", output)
 	}
+	jsonStr := strings.TrimSpace(strings.TrimPrefix(output, header))
+
+	var envelope parsedChannelContext
 	if err := json.Unmarshal([]byte(jsonStr), &envelope); err != nil {
 		t.Fatalf("failed to parse JSON: %v\n%s", err, jsonStr)
+	}
+	return envelope
+}
+
+// parseContactJSON extracts the ContactContext from a channel context output string.
+func parseContactJSON(t *testing.T, output string) *ContactContext {
+	t.Helper()
+	envelope := parseChannelJSON(t, output)
+	if envelope.Contact == nil {
+		t.Fatalf("contact missing from channel context:\n%s", output)
 	}
 	return envelope.Contact
 }
@@ -104,24 +112,34 @@ func TestChannelProvider_SignalKnownContact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Check markdown framing.
+	// Check markdown framing and JSON envelope.
 	checks := []struct {
 		label string
 		want  string
 	}{
 		{"header", "### Channel Context"},
-		{"source", "Signal"},
 		{"channel note", "Terse input is normal"},
-		{"json block", "```json"},
 	}
 	for _, tt := range checks {
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%s: expected %q in output:\n%s", tt.label, tt.want, got)
 		}
 	}
+	for _, stale := range []string{"- **Source:**", "- **Note:**", "```json"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("stale mixed-format marker %q in output:\n%s", stale, got)
+		}
+	}
 
 	// Check JSON content.
-	contact := parseContactJSON(t, got)
+	envelope := parseChannelJSON(t, got)
+	if envelope.Source != "signal" {
+		t.Errorf("source: got %q, want %q", envelope.Source, "signal")
+	}
+	if !strings.Contains(envelope.Note, "Terse input is normal") {
+		t.Errorf("note: got %q", envelope.Note)
+	}
+	contact := envelope.Contact
 	if contact.Name != "Nugget (David McNett)" {
 		t.Errorf("name: got %q, want %q", contact.Name, "Nugget (David McNett)")
 	}
@@ -525,6 +543,44 @@ func TestChannelProvider_JSONStructure(t *testing.T) {
 	}
 	if len(contact.Groups) != 1 || contact.Groups[0] != "family" {
 		t.Errorf("groups: got %v", contact.Groups)
+	}
+}
+
+func TestChannelProvider_JSONFallbackDropsUnmarshalableChannels(t *testing.T) {
+	lookup := &mockContactLookup{
+		contacts: map[string]*ContactContext{
+			"BadChannel": {
+				Name:      "Bad Channel",
+				TrustZone: "known",
+				TrustPolicy: &TrustPolicyView{
+					ToolAccess: "readonly",
+					SendGating: "blocked",
+				},
+				Channels: map[string]any{
+					"signal": func() {},
+				},
+			},
+		},
+	}
+	p := NewChannelProvider(lookup)
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		"source":      "signal",
+		"sender_name": "BadChannel",
+	})
+
+	got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "[json-marshal-error") {
+		t.Fatalf("channel context should recover to JSON envelope, got:\n%s", got)
+	}
+	contact := parseContactJSON(t, got)
+	if contact.Name != "Bad Channel" {
+		t.Fatalf("name = %q, want Bad Channel", contact.Name)
+	}
+	if contact.Channels != nil {
+		t.Fatalf("channels = %#v, want dropped fallback channels", contact.Channels)
 	}
 }
 
