@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -32,6 +30,12 @@ type ContactContext struct {
 	Channels        map[string]any   `json:"channels,omitempty"`
 	LastInteraction *InteractionRef  `json:"last_interaction,omitempty"`
 	ContactSince    string           `json:"contact_since,omitempty"`
+}
+
+type channelContextEnvelope struct {
+	Source  string          `json:"source"`
+	Note    string          `json:"note,omitempty"`
+	Contact *ContactContext `json:"contact"`
 }
 
 // TrustPolicyView is the JSON-serializable view of a trust zone's
@@ -174,27 +178,18 @@ func (p *ChannelProvider) TagContext(ctx context.Context, _ agentctx.ContextRequ
 		}
 	}
 
-	// Build output: markdown header + channel note + JSON contact block.
-	var sb strings.Builder
-	sb.WriteString("### Channel Context\n")
-	fmt.Fprintf(&sb, "- **Source:** %s\n", formatSourceName(source))
-	if channelNote != "" {
-		fmt.Fprintf(&sb, "- **Note:** %s\n", channelNote)
+	envelope := channelContextEnvelope{
+		Source:  source,
+		Note:    channelNote,
+		Contact: contactCtx,
+	}
+	payload := promptfmt.MarshalCompact(envelope)
+	if promptfmt.HasMarshalError(payload) {
+		envelope.Contact = contactContextWithoutChannels(contactCtx)
+		payload = promptfmt.MarshalCompact(envelope)
 	}
 
-	envelope := map[string]*ContactContext{"contact": contactCtx}
-	jsonBytes, err := json.Marshal(envelope)
-	if err != nil {
-		// Fall back to name-only if JSON fails (shouldn't happen).
-		fmt.Fprintf(&sb, "- **Participant:** %s\n", contactCtx.Name)
-		return sb.String(), nil
-	}
-
-	sb.WriteString("```json\n")
-	sb.Write(jsonBytes)
-	sb.WriteString("\n```\n")
-
-	return sb.String(), nil
+	return "### Channel Context\n\n" + payload + "\n", nil
 }
 
 func contactContextFromBinding(binding *memory.ChannelBinding, source string) *ContactContext {
@@ -237,16 +232,11 @@ func contactContextFromBinding(binding *memory.ChannelBinding, source string) *C
 	return ctx
 }
 
-// formatSourceName returns a human-readable channel name.
-func formatSourceName(source string) string {
-	switch source {
-	case "signal":
-		return "Signal"
-	case "matrix":
-		return "Matrix"
-	case "email":
-		return "Email"
-	default:
-		return source
+func contactContextWithoutChannels(contactCtx *ContactContext) *ContactContext {
+	if contactCtx == nil {
+		return nil
 	}
+	clone := *contactCtx
+	clone.Channels = nil
+	return &clone
 }
