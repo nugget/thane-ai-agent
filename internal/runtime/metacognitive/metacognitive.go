@@ -167,6 +167,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		Profile: router.LoopProfile{
 			Mission:          "metacognitive",
 			DelegationGating: "disabled",
+			InitialTags:      []string{"metacog"},
 			ExtraHints:       map[string]string{"source": "metacognitive"},
 		},
 

@@ -99,6 +99,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		Profile: router.LoopProfile{
 			Mission:          "ego",
 			DelegationGating: "disabled",
+			InitialTags:      []string{"ego"},
 			ExtraHints:       map[string]string{"source": "ego"},
 		},
 		Supervisor:             cfg.SupervisorProbability > 0,
