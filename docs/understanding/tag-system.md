@@ -44,12 +44,12 @@ boundaries, that's a smell.
 | **Talent** | Markdown content gated by tags. | `talents/*.md`, `talents.Loader`. | Static content, not executable; loaded into the system prompt when its declared tags are active. See [Context Layers](context-layers.md). |
 | **Scope** / **capabilityScope** | The runtime tag-set object for one `agent.Run()`. | [`capability_scope.go:51`][scope]. | Lives in context; mutated by tools; not directly persisted. |
 | **AlwaysAvailable** | A boolean flag on a `Tool`. | [`tools.Tool.AlwaysAvailable`][always-available]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`activate_capability` itself, etc.) and for `RuntimeTools`. |
-| **Always-active tags** | Tags pinned in every scope by config. | [`Executor.SetAlwaysActiveTags`][exec-always], `Configure...AlwaysActiveTags`. | Tag-level, not tool-level. Re-seeded each run. |
+| **Always-active tags** | Tags pinned in every scope by config. | [`Executor.SetAlwaysActiveTags`][exec-always], config `capability_tags.*.always_active`. | Tag-level, not tool-level. Re-seeded each run. |
 | **Delegate profile** (`delegate.Profile`) | Operational bundle for a delegated task: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints*. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
 | **Routing profile** | A user-facing model name (`thane:premium`, `thane:ops`). | [Routing Profiles](../operating/routing-profiles.md). | Selected by Ollama-API model name; resolves to a `LoopProfile`. |
 | **Mission** | Routing-hint string identifying task context (`conversation`, `automation`, `metacognitive`). | `LoopProfile.Mission`. | Pure routing input. Not a tag, not a tool gate. |
-| **Configured tags** | The `Spec.Tags` snapshot at launch time, captured for forensics. | [`loop/tooling.go`][configured-tags] (`ToolingState.ConfiguredTags`). | Read-only telemetry. Distinct from active tags so the dashboard can show "what was declared" vs "what became active." Introduced in [#813][pr-813]. |
+| **Configured tags** | Read-only snapshot of the configured tag inputs for the run: loop config `Tags` plus request-base/request-override `InitialTags`. | [`loop/tooling.go`][configured-tags] (`ToolingState.ConfiguredTags`). | Read-only telemetry. Distinct from active tags so the dashboard can show "what was configured at launch" vs "what became active." Introduced in [#813][pr-813]. |
 
 [scope]: ../../internal/runtime/agent/capability_scope.go
 [always-available]: ../../internal/tools/tools.go
