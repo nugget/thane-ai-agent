@@ -12,9 +12,9 @@ Choose the next move deliberately:
 
 - If the truth is already named in a local document, dossier, note, or
   semantic path, activate `files`.
-- If the truth probably lives somewhere in a managed local document
-  root, but the path has been lost or was never known, activate
-  `documents`.
+- If the truth lives in a structured document root—browsing, searching,
+  reading or editing sections of curated docs rather than raw workspace
+  files—activate `documents`.
 - If the truth is already named on the web, in a URL or page, activate
   `web`.
 - If the turn wants a distilled truth that should survive beyond this
