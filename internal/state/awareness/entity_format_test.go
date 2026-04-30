@@ -192,6 +192,53 @@ func TestFormatWeather_ForecastUnavailableSurfacesMarker(t *testing.T) {
 	}
 }
 
+func TestFormatWeather_ForecastUnavailableShortCircuitsRenderingEvenWithStaleForecastAttr(t *testing.T) {
+	// Defensive case: even if an upstream path were to leave a
+	// forecast array next to the unavailable marker (HA component
+	// quirks, race in state mutation, etc.), the formatter must keep
+	// the rendered JSON internally consistent — never report
+	// forecast_unavailable: true *and* a forecast array. This is the
+	// short-circuit defense that pairs with
+	// stateMarkedForecastUnavailable's source-side scrub.
+	state := &homeassistant.State{
+		EntityID:    "weather.home",
+		State:       "sunny",
+		LastChanged: testNow.Add(-60 * time.Second),
+		Attributes: map[string]any{
+			"temperature":          72.0,
+			"forecast_type":        "daily",
+			"forecast_unavailable": true,
+			"forecast": []any{
+				map[string]any{
+					"datetime":    testNow.Add(6 * time.Hour).Format(time.RFC3339),
+					"condition":   "stale",
+					"temperature": 99.0,
+				},
+			},
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\nGot: %s", err, result)
+	}
+
+	if got := parsed["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %v, want true", got)
+	}
+	if _, present := parsed["forecast"]; present {
+		t.Errorf("forecast array must be absent when forecast_unavailable: true, got %v", parsed["forecast"])
+	}
+	if _, present := parsed["forecast_total_count"]; present {
+		t.Errorf("forecast_total_count must be absent when forecast_unavailable: true, got %v", parsed["forecast_total_count"])
+	}
+	if _, present := parsed["forecast_truncated"]; present {
+		t.Errorf("forecast_truncated must be absent when forecast_unavailable: true, got %v", parsed["forecast_truncated"])
+	}
+}
+
 func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {
 	state := &homeassistant.State{
 		EntityID:    "weather.rooftop",

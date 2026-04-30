@@ -286,10 +286,19 @@ func stateWithWeatherForecast(ctx context.Context, ha StateGetter, state *homeas
 // forecast_type and forecast_unavailable attributes set so the
 // formatter can render an explicit unavailability marker for a
 // forecast that was requested but could not be returned.
+//
+// Any pre-existing "forecast" attribute on the source state is
+// dropped on the clone. Some HA components include a forecast array
+// on /api/states; without this scrub, the rendered context could
+// claim forecast_unavailable: true while still carrying a (probably
+// stale) forecast array, which would mislead the model.
 func stateMarkedForecastUnavailable(state *homeassistant.State, forecastType string) *homeassistant.State {
 	next := *state
 	attrs := make(map[string]any, len(state.Attributes)+2)
 	for key, value := range state.Attributes {
+		if key == "forecast" {
+			continue
+		}
 		attrs[key] = value
 	}
 	attrs["forecast_type"] = forecastType

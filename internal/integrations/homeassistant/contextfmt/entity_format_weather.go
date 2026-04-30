@@ -113,6 +113,17 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 		wc.ForecastUnavailable = true
 	}
 
+	// Short-circuit forecast rendering when the state is marked
+	// unavailable. Defense in depth alongside the source-side scrub
+	// in stateMarkedForecastUnavailable: even if an upstream path
+	// were to leave a forecast attribute next to the unavailable
+	// marker, the rendered JSON stays self-consistent — the model
+	// either gets a forecast array, or gets the unavailability
+	// marker, never both.
+	if wc.ForecastUnavailable {
+		return promptfmt.MarshalCompact(wc)
+	}
+
 	// Extract forecast entries (HA returns []any of map[string]any).
 	if rawForecast, ok := state.Attributes["forecast"].([]any); ok {
 		wc.ForecastTotalCount = len(rawForecast)

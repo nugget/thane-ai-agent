@@ -422,6 +422,41 @@ func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
 	}
 }
 
+func TestStateMarkedForecastUnavailable_ScrubsExistingForecastAttr(t *testing.T) {
+	// Some HA components emit a forecast array on /api/states even
+	// when a follow-up fetch fails. stateMarkedForecastUnavailable
+	// must drop that stale array on the marked clone so downstream
+	// formatters don't end up rendering both forecast_unavailable: true
+	// and a forecast list (the contradiction Copilot flagged on #830).
+	stale := []any{
+		map[string]any{"datetime": "2026-04-30T18:00:00Z", "condition": "stale"},
+	}
+	state := &homeassistant.State{
+		EntityID: "weather.home",
+		State:    "sunny",
+		Attributes: map[string]any{
+			"temperature": 72.0,
+			"forecast":    stale,
+		},
+	}
+
+	marked := stateMarkedForecastUnavailable(state, "daily")
+
+	if _, present := marked.Attributes["forecast"]; present {
+		t.Errorf("marked.Attributes still contains forecast = %#v; expected scrub", marked.Attributes["forecast"])
+	}
+	if got := marked.Attributes["forecast_type"]; got != "daily" {
+		t.Errorf("forecast_type = %#v, want daily", got)
+	}
+	if got := marked.Attributes["forecast_unavailable"]; got != true {
+		t.Errorf("forecast_unavailable = %#v, want true", got)
+	}
+	// Source state must remain untouched — the scrub is on the clone.
+	if _, present := state.Attributes["forecast"]; !present {
+		t.Errorf("source state.Attributes[\"forecast\"] should not be modified by the helper")
+	}
+}
+
 func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	now := time.Now().UTC().Round(time.Second)
 	ha := &fakeHA{
