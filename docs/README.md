@@ -19,6 +19,9 @@ complete onboarding guide for Home Assistant users.
   component map, technology choices
 - **[The Agent Loop](understanding/agent-loop.md)** — The core reasoning
   cycle: context assembly, tag activation, planning, delegation, response
+- **[The Tag System](understanding/tag-system.md)** — How capability tags,
+  lenses, talents, and the scope object compose to gate the agent's view
+  of the world; the load-bearing invariants and known smells
 - **[Delegation](understanding/delegation.md)** — How the orchestrator
   model plans and local models execute at zero cost
 - **[Memory](understanding/memory.md)** — Semantic facts, conversation
