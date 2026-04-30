@@ -205,6 +205,8 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),
 	}
 
+	logOutboundCacheMarkers(c.logger, &req)
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -598,6 +600,85 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 		blocks[i].CacheControl = nil
 		excess--
 	}
+}
+
+// logOutboundCacheMarkers emits a structured debug line describing every
+// cache_control breakpoint that will land in the outbound request bytes.
+// A 0% cache-read rate combined with a payload that omits markers points
+// at a different bug than one where markers are present but the prefix
+// isn't matching, so this log is the cheapest way to disambiguate.
+//
+// The function short-circuits when Debug is disabled so the loops and
+// slice allocations don't run on every request in production.
+func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
+	if logger == nil || !logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+
+	systemPayloadKind := "none"
+	systemBlocks := 0
+	systemBreakpoints := 0
+	systemTotalChars := 0
+	systemTTLs := make([]string, 0, 4)
+	systemBreakpointPrefixChars := make([]int, 0, 4)
+	switch system := req.System.(type) {
+	case []anthropicContent:
+		systemPayloadKind = "blocks"
+		systemBlocks = len(system)
+		prefix := 0
+		for _, b := range system {
+			prefix += len(b.Text)
+			if b.CacheControl != nil {
+				systemBreakpoints++
+				ttl := b.CacheControl.TTL
+				if ttl == "" {
+					ttl = "default"
+				}
+				systemTTLs = append(systemTTLs, ttl)
+				systemBreakpointPrefixChars = append(systemBreakpointPrefixChars, prefix)
+			}
+		}
+		systemTotalChars = prefix
+	case string:
+		// Fallback path from anthropicSystemPayload when no
+		// PromptSections are present. The system content still ships,
+		// just as a single un-cached string — record its size so
+		// operators can correlate prefix length even without blocks.
+		if system != "" {
+			systemPayloadKind = "string"
+			systemBlocks = 1
+			systemTotalChars = len(system)
+		}
+	}
+
+	toolBreakpointTTL := ""
+	if n := len(req.Tools); n > 0 && req.Tools[n-1].CacheControl != nil {
+		toolBreakpointTTL = req.Tools[n-1].CacheControl.TTL
+		if toolBreakpointTTL == "" {
+			toolBreakpointTTL = "default"
+		}
+	}
+
+	requestLevelTTL := ""
+	if req.CacheControl != nil {
+		requestLevelTTL = req.CacheControl.TTL
+		if requestLevelTTL == "" {
+			requestLevelTTL = "default"
+		}
+	}
+
+	logger.Debug("outbound cache markers",
+		"model", req.Model,
+		"system_payload_kind", systemPayloadKind,
+		"system_blocks", systemBlocks,
+		"system_breakpoints", systemBreakpoints,
+		"system_breakpoint_ttls", systemTTLs,
+		"system_breakpoint_prefix_chars", systemBreakpointPrefixChars,
+		"system_total_chars", systemTotalChars,
+		"tools", len(req.Tools),
+		"tool_breakpoint_ttl", toolBreakpointTTL,
+		"request_cache_control_ttl", requestLevelTTL,
+	)
 }
 
 type promptCacheRun struct {
