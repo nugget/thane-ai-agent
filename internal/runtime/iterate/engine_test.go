@@ -864,6 +864,44 @@ func TestEngine_PropagatesUpstreamRequestID(t *testing.T) {
 	}
 }
 
+func TestEngine_PropagatesStopReasonToIterationRecord(t *testing.T) {
+	resp := textResponse("done")
+	resp.StopReason = "end_turn"
+	mock := &mockLLM{responses: []*llm.ChatResponse{resp}}
+	cfg := baseCfg(mock, &mockExecutor{results: map[string]string{}})
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Iterations) != 1 {
+		t.Fatalf("iterations = %d, want 1", len(result.Iterations))
+	}
+	if result.Iterations[0].StopReason != "end_turn" {
+		t.Errorf("Iterations[0].StopReason = %q, want end_turn", result.Iterations[0].StopReason)
+	}
+}
+
+func TestEngine_PropagatesPauseTurnStopReason(t *testing.T) {
+	// pause_turn is the Anthropic context-pressure signal; the
+	// iteration record must surface it so trace dashboards / agent
+	// loops can react without poking provider internals.
+	resp := textResponse("partial")
+	resp.StopReason = "pause_turn"
+	mock := &mockLLM{responses: []*llm.ChatResponse{resp}}
+	cfg := baseCfg(mock, &mockExecutor{results: map[string]string{}})
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Iterations[0].StopReason != "pause_turn" {
+		t.Errorf("Iterations[0].StopReason = %q, want pause_turn", result.Iterations[0].StopReason)
+	}
+}
+
 func TestEngine_UpstreamRequestID_LatestNonEmptyWins(t *testing.T) {
 	// Multi-iteration: tool call then text. The final text response carries
 	// the upstream ID; an empty middle ID must not blank out the result.

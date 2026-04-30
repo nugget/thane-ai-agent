@@ -61,6 +61,14 @@ type ChatResponse struct {
 	// our local r_* request IDs to upstream invoice line items.
 	UpstreamRequestID string
 
+	// StopReason is the provider-side termination signal in
+	// provider-neutral form. Anthropic emits "end_turn", "tool_use",
+	// "max_tokens", "stop_sequence", or "pause_turn" (the latter is
+	// the server-side context-pressure signal that warrants operator
+	// attention). Empty when the provider doesn't expose one or the
+	// stream ended unexpectedly.
+	StopReason string
+
 	// Token usage (provider-neutral)
 	InputTokens              int
 	OutputTokens             int

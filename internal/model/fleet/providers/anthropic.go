@@ -499,6 +499,7 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"cache_hit_rate", result.CacheHitRate(),
 		"tool_calls", len(result.Message.ToolCalls),
 		"upstream_request_id", upstreamRequestID,
+		"stop_reason", result.StopReason,
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 
@@ -591,7 +592,9 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 
 		case "message_delta":
 			if event.Delta != nil {
-				stopReason = event.Delta.StopReason
+				if event.Delta.StopReason != "" {
+					stopReason = event.Delta.StopReason
+				}
 			}
 			if event.Usage != nil {
 				usage.OutputTokens = event.Usage.OutputTokens
@@ -621,9 +624,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		resp.CacheCreation5mInputTokens = bd.Ephemeral5mInputTokens
 		resp.CacheCreation1hInputTokens = bd.Ephemeral1hInputTokens
 	}
-
-	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
-	_ = stopReason
+	resp.StopReason = stopReason
 
 	c.logger.Debug("stream complete",
 		"model", resp.Model,
@@ -635,6 +636,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
 		"upstream_request_id", upstreamRequestID,
+		"stop_reason", stopReason,
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
 
@@ -1179,6 +1181,7 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 			ToolCalls: toolCalls,
 		},
 		Done:                     true,
+		StopReason:               resp.StopReason,
 		InputTokens:              resp.Usage.InputTokens,
 		OutputTokens:             resp.Usage.OutputTokens,
 		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
