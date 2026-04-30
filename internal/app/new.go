@@ -91,6 +91,15 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, err
 	}
 
+	// Late-bind the configured logger into provider clients that were
+	// built during bootstrap with the Info-level stdout logger. Without
+	// this, every Debug log inside the model providers (preparing
+	// request, response received, outbound cache markers, etc.) is
+	// suppressed because the bootstrap logger's handler short-circuits
+	// at LevelInfo. Anything else constructed before initLogging that
+	// emits Debug logs needs a similar rebind hook.
+	a.modelRuntime.SetLogger(a.logger)
+
 	s := &newState{ctx: ctx}
 
 	if err := a.initStores(s); err != nil {

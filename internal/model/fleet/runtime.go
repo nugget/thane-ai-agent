@@ -71,6 +71,31 @@ func NewRuntime(ctx context.Context, base *Catalog, cfg *config.Config, logger *
 	return rt, nil
 }
 
+// SetLogger rebinds the logger on every provider client owned by this
+// runtime. The intended caller is app.New, after initLogging has
+// finished, to swap clients off the bootstrap Info-level logger and
+// onto the dataset-routed handler. Each provider re-applies its own
+// "provider" attribute and the per-resource clients receive a logger
+// pre-decorated with the resource ID, so attributes match what
+// BuildClients originally produced.
+//
+// Not safe to call concurrently with in-flight requests; intended to
+// be invoked once during init, before the runtime services traffic.
+func (r *Runtime) SetLogger(logger *slog.Logger) {
+	if r == nil || r.bundle == nil || logger == nil {
+		return
+	}
+	for id, oc := range r.bundle.OllamaClients {
+		oc.SetLogger(logger.With("resource", id))
+	}
+	for id, lc := range r.bundle.LMStudioClients {
+		lc.SetLogger(logger.With("resource", id))
+	}
+	if r.bundle.AnthropicClient != nil {
+		r.bundle.AnthropicClient.SetLogger(logger)
+	}
+}
+
 // Client returns the swappable llm.Client.
 func (r *Runtime) Client() llm.Client {
 	if r == nil {

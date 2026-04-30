@@ -63,6 +63,27 @@ func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 	}
 }
 
+// SetLogger rebinds the request-level logger. See AnthropicClient.SetLogger
+// for the late-bind rationale; the same caveat about httpkit retries applies.
+//
+// Not safe to call concurrently with in-flight requests; intended to be
+// invoked once during init.
+func (c *OllamaClient) SetLogger(logger *slog.Logger) {
+	if c == nil || logger == nil {
+		return
+	}
+	c.logger = logger.With("provider", "ollama")
+}
+
+// Logger returns the request-level logger. Exposed for tests and
+// late-bind verification — production callers should not depend on it.
+func (c *OllamaClient) Logger() *slog.Logger {
+	if c == nil {
+		return nil
+	}
+	return c.logger
+}
+
 // ChatRequest is the request format for Ollama chat API.
 type ChatRequest struct {
 	Model    string           `json:"model"`
