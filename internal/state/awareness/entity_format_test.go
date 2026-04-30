@@ -137,24 +137,25 @@ func TestFormatWeather_OpportunisticOptionalAttributes(t *testing.T) {
 	}
 
 	checks := map[string]any{
-		"temperature":          72.4,
-		"temperature_unit":     "°F",
-		"apparent_temperature": 75.2,
-		"dew_point":            64.8,
+		"temperature":          "72.4 °F",
+		"apparent_temperature": "75.2 °F",
+		"dew_point":            "64.8 °F",
 		"humidity":             float64(74),
-		"wind_speed":           12.3,
-		"wind_speed_unit":      "mph",
-		"wind_gust_speed":      22.2,
-		"wind_gust_speed_unit": "mph",
+		"wind_speed":           "12.3 mph",
+		"wind_gust_speed":      "22.2 mph",
 		"cloud_coverage":       float64(63),
 		"uv_index":             4.3,
 		"ozone":                float64(299),
-		"precipitation":        0.13,
-		"precipitation_unit":   "in",
+		"precipitation":        "0.13 in",
 	}
 	for key, want := range checks {
 		if got := parsed[key]; got != want {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+	for _, key := range []string{"temperature_unit", "wind_speed_unit", "wind_gust_speed_unit", "precipitation_unit"} {
+		if got, has := parsed[key]; has {
+			t.Errorf("%s should be folded into its measurement value, got %v", key, got)
 		}
 	}
 	if _, has := parsed["station"]; has {
@@ -202,24 +203,19 @@ func TestFormatWeather_NWSMETAR(t *testing.T) {
 	}
 
 	checks := map[string]any{
-		"entity":             "weather.nws_msrh_klbx",
-		"name":               "KLBX (Closest METAR to MSR Houston. Angleton, TX) KLBX",
-		"station":            "KLBX",
-		"source":             "National Weather Service/NOAA",
-		"state":              "fog",
-		"temperature":        float64(21),
-		"temperature_unit":   "°C",
-		"humidity":           float64(100),
-		"pressure":           1011.1,
-		"pressure_unit":      "hPa",
-		"wind_speed":         float64(0),
-		"wind_speed_unit":    "km/h",
-		"wind_bearing":       float64(0),
-		"visibility":         8.05,
-		"visibility_unit":    "km",
-		"precipitation_unit": "mm",
-		"since":              "-921s",
-		"updated":            "-59s",
+		"entity":       "weather.nws_msrh_klbx",
+		"name":         "KLBX (Closest METAR to MSR Houston. Angleton, TX) KLBX",
+		"station":      "KLBX",
+		"source":       "National Weather Service/NOAA",
+		"state":        "fog",
+		"temperature":  "21 °C",
+		"humidity":     float64(100),
+		"pressure":     "1011.1 hPa",
+		"wind_speed":   "0 km/h",
+		"wind_bearing": float64(0),
+		"visibility":   "8.05 km",
+		"since":        "-921s",
+		"updated":      "-59s",
 	}
 	for key, want := range checks {
 		if got := parsed[key]; got != want {
@@ -228,6 +224,11 @@ func TestFormatWeather_NWSMETAR(t *testing.T) {
 	}
 	if _, has := parsed["supported_features"]; has {
 		t.Errorf("supported_features should stay out of model context, got %v", parsed["supported_features"])
+	}
+	for _, key := range []string{"temperature_unit", "pressure_unit", "wind_speed_unit", "visibility_unit", "precipitation_unit"} {
+		if got, has := parsed[key]; has {
+			t.Errorf("%s should be folded into its measurement value, got %v", key, got)
+		}
 	}
 }
 

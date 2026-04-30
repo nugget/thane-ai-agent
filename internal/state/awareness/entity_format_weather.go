@@ -1,6 +1,7 @@
 package awareness
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,33 +15,27 @@ import (
 // such as visibility, dew point, gusts, precipitation, and METAR
 // station identity.
 type weatherContext struct {
-	Entity            string            `json:"entity"`
-	Name              string            `json:"name,omitempty"`
-	Station           string            `json:"station,omitempty"`
-	Source            string            `json:"source,omitempty"`
-	State             string            `json:"state"`
-	Temperature       any               `json:"temperature,omitempty"`
-	TemperatureUnit   string            `json:"temperature_unit,omitempty"`
-	ApparentTemp      any               `json:"apparent_temperature,omitempty"`
-	DewPoint          any               `json:"dew_point,omitempty"`
-	Humidity          any               `json:"humidity,omitempty"`
-	WindSpeed         any               `json:"wind_speed,omitempty"`
-	WindSpeedUnit     string            `json:"wind_speed_unit,omitempty"`
-	WindGustSpeed     any               `json:"wind_gust_speed,omitempty"`
-	WindGustSpeedUnit string            `json:"wind_gust_speed_unit,omitempty"`
-	WindBearing       any               `json:"wind_bearing,omitempty"`
-	CloudCoverage     any               `json:"cloud_coverage,omitempty"`
-	UVIndex           any               `json:"uv_index,omitempty"`
-	Ozone             any               `json:"ozone,omitempty"`
-	Visibility        any               `json:"visibility,omitempty"`
-	VisibilityUnit    string            `json:"visibility_unit,omitempty"`
-	Pressure          any               `json:"pressure,omitempty"`
-	PressureUnit      string            `json:"pressure_unit,omitempty"`
-	Precipitation     any               `json:"precipitation,omitempty"`
-	PrecipitationUnit string            `json:"precipitation_unit,omitempty"`
-	Since             string            `json:"since"`
-	Updated           string            `json:"updated,omitempty"`
-	Forecast          []weatherForecast `json:"forecast,omitempty"`
+	Entity        string            `json:"entity"`
+	Name          string            `json:"name,omitempty"`
+	Station       string            `json:"station,omitempty"`
+	Source        string            `json:"source,omitempty"`
+	State         string            `json:"state"`
+	Temperature   any               `json:"temperature,omitempty"`
+	ApparentTemp  any               `json:"apparent_temperature,omitempty"`
+	DewPoint      any               `json:"dew_point,omitempty"`
+	Humidity      any               `json:"humidity,omitempty"`
+	WindSpeed     any               `json:"wind_speed,omitempty"`
+	WindGustSpeed any               `json:"wind_gust_speed,omitempty"`
+	WindBearing   any               `json:"wind_bearing,omitempty"`
+	CloudCoverage any               `json:"cloud_coverage,omitempty"`
+	UVIndex       any               `json:"uv_index,omitempty"`
+	Ozone         any               `json:"ozone,omitempty"`
+	Visibility    any               `json:"visibility,omitempty"`
+	Pressure      any               `json:"pressure,omitempty"`
+	Precipitation any               `json:"precipitation,omitempty"`
+	Since         string            `json:"since"`
+	Updated       string            `json:"updated,omitempty"`
+	Forecast      []weatherForecast `json:"forecast,omitempty"`
 }
 
 // weatherForecast is a single forecast entry.
@@ -53,33 +48,25 @@ type weatherForecast struct {
 
 func formatWeather(state *homeassistant.State, now time.Time) string {
 	wc := weatherContext{
-		Entity:            state.EntityID,
-		Name:              attrString(state.Attributes, "friendly_name"),
-		Station:           weatherStationID(state),
-		Source:            weatherSource(state.Attributes),
-		State:             state.State,
-		Temperature:       roundAttr(state.Attributes["temperature"], 1),
-		TemperatureUnit:   attrString(state.Attributes, "temperature_unit"),
-		ApparentTemp:      roundAttr(firstAttr(state.Attributes, "apparent_temperature", "apparent_temp", "feels_like"), 1),
-		DewPoint:          roundAttr(firstAttr(state.Attributes, "dew_point", "dewpoint"), 1),
-		Humidity:          roundAttr(state.Attributes["humidity"], 0),
-		WindSpeed:         roundAttr(state.Attributes["wind_speed"], 1),
-		WindSpeedUnit:     attrString(state.Attributes, "wind_speed_unit"),
-		WindGustSpeed:     roundAttr(firstAttr(state.Attributes, "wind_gust_speed", "wind_gust"), 1),
-		WindBearing:       roundAttr(state.Attributes["wind_bearing"], 0),
-		CloudCoverage:     roundAttr(firstAttr(state.Attributes, "cloud_coverage", "cloudcover", "clouds"), 0),
-		UVIndex:           roundAttr(firstAttr(state.Attributes, "uv_index", "uv"), 1),
-		Ozone:             roundAttr(state.Attributes["ozone"], 0),
-		Visibility:        roundAttr(state.Attributes["visibility"], 2),
-		VisibilityUnit:    attrString(state.Attributes, "visibility_unit"),
-		Pressure:          roundAttr(state.Attributes["pressure"], 1),
-		PressureUnit:      attrString(state.Attributes, "pressure_unit"),
-		Precipitation:     roundAttr(state.Attributes["precipitation"], 2),
-		PrecipitationUnit: attrString(state.Attributes, "precipitation_unit"),
-		Since:             promptfmt.FormatDeltaOnly(state.LastChanged, now),
-	}
-	if wc.WindGustSpeed != nil {
-		wc.WindGustSpeedUnit = firstNonEmpty(attrString(state.Attributes, "wind_gust_speed_unit"), wc.WindSpeedUnit)
+		Entity:        state.EntityID,
+		Name:          attrString(state.Attributes, "friendly_name"),
+		Station:       weatherStationID(state),
+		Source:        weatherSource(state.Attributes),
+		State:         state.State,
+		Temperature:   measuredAttr(state.Attributes, "temperature", "temperature_unit", 1),
+		ApparentTemp:  measuredFirstAttr(state.Attributes, []string{"apparent_temperature", "apparent_temp", "feels_like"}, attrString(state.Attributes, "temperature_unit"), 1),
+		DewPoint:      measuredFirstAttr(state.Attributes, []string{"dew_point", "dewpoint"}, attrString(state.Attributes, "temperature_unit"), 1),
+		Humidity:      roundAttr(state.Attributes["humidity"], 0),
+		WindSpeed:     measuredAttr(state.Attributes, "wind_speed", "wind_speed_unit", 1),
+		WindGustSpeed: measuredFirstAttr(state.Attributes, []string{"wind_gust_speed", "wind_gust"}, firstNonEmpty(attrString(state.Attributes, "wind_gust_speed_unit"), attrString(state.Attributes, "wind_speed_unit")), 1),
+		WindBearing:   roundAttr(state.Attributes["wind_bearing"], 0),
+		CloudCoverage: roundAttr(firstAttr(state.Attributes, "cloud_coverage", "cloudcover", "clouds"), 0),
+		UVIndex:       roundAttr(firstAttr(state.Attributes, "uv_index", "uv"), 1),
+		Ozone:         roundAttr(state.Attributes["ozone"], 0),
+		Visibility:    measuredAttr(state.Attributes, "visibility", "visibility_unit", 2),
+		Pressure:      measuredAttr(state.Attributes, "pressure", "pressure_unit", 1),
+		Precipitation: measuredAttr(state.Attributes, "precipitation", "precipitation_unit", 2),
+		Since:         promptfmt.FormatDeltaOnly(state.LastChanged, now),
 	}
 	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
 		wc.Updated = promptfmt.FormatDeltaOnly(state.LastUpdated, now)
@@ -98,8 +85,8 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 			}
 			fc := weatherForecast{
 				Condition: attrString(entry, "condition"),
-				TempHigh:  roundAttr(entry["temperature"], 1),
-				TempLow:   roundAttr(entry["templow"], 1),
+				TempHigh:  measuredFirstAttr(entry, []string{"temperature"}, attrString(state.Attributes, "temperature_unit"), 1),
+				TempLow:   measuredFirstAttr(entry, []string{"templow"}, attrString(state.Attributes, "temperature_unit"), 1),
 			}
 			// Delta-annotate forecast time if available. HA may include
 			// fractional seconds, so try RFC3339Nano first.
@@ -119,6 +106,26 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 	}
 
 	return promptfmt.MarshalCompact(wc)
+}
+
+func measuredAttr(attrs map[string]any, valueKey, unitKey string, places int) any {
+	return measuredValue(attrs[valueKey], attrString(attrs, unitKey), places)
+}
+
+func measuredFirstAttr(attrs map[string]any, valueKeys []string, unit string, places int) any {
+	return measuredValue(firstAttr(attrs, valueKeys...), unit, places)
+}
+
+func measuredValue(value any, unit string, places int) any {
+	rounded := roundAttr(value, places)
+	if rounded == nil {
+		return nil
+	}
+	unit = strings.TrimSpace(unit)
+	if unit == "" {
+		return rounded
+	}
+	return fmt.Sprintf("%v %s", rounded, unit)
 }
 
 func firstAttr(attrs map[string]any, keys ...string) any {
