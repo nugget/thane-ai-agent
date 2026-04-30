@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -26,6 +28,39 @@ type AnthropicClient struct {
 	apiKey     string
 	httpClient *http.Client
 	logger     *slog.Logger
+
+	rateLimitMu       sync.Mutex
+	rateLimitSnapshot *RateLimitSnapshot
+}
+
+// RateLimitSnapshot is the most recent set of rate-limit headers
+// returned by Anthropic. Captured on every response so smarter backoff
+// decisions and dashboards can reason about remaining capacity rather
+// than reacting blindly to 429s. Zero values indicate the header was
+// absent (different deployments expose different subsets).
+type RateLimitSnapshot struct {
+	CapturedAt        time.Time
+	UpstreamRequestID string
+
+	RequestsLimit     int
+	RequestsRemaining int
+	RequestsReset     time.Time
+
+	TokensLimit     int
+	TokensRemaining int
+	TokensReset     time.Time
+
+	InputTokensLimit     int
+	InputTokensRemaining int
+	InputTokensReset     time.Time
+
+	OutputTokensLimit     int
+	OutputTokensRemaining int
+	OutputTokensReset     time.Time
+
+	// RetryAfter is set from the `retry-after` response header,
+	// typically only present on 429 / 5xx responses.
+	RetryAfter time.Duration
 }
 
 // NewAnthropicClient creates a new Anthropic client.
@@ -91,6 +126,90 @@ func (c *AnthropicClient) Logger() *slog.Logger {
 		return nil
 	}
 	return c.logger
+}
+
+// RateLimitSnapshot returns a copy of the most recently captured
+// rate-limit headers, or nil when no response has been received yet.
+// Safe to call concurrently with in-flight requests.
+func (c *AnthropicClient) RateLimitSnapshot() *RateLimitSnapshot {
+	if c == nil {
+		return nil
+	}
+	c.rateLimitMu.Lock()
+	defer c.rateLimitMu.Unlock()
+	if c.rateLimitSnapshot == nil {
+		return nil
+	}
+	cp := *c.rateLimitSnapshot
+	return &cp
+}
+
+func (c *AnthropicClient) storeRateLimitSnapshot(snap *RateLimitSnapshot) {
+	if c == nil || snap == nil {
+		return
+	}
+	c.rateLimitMu.Lock()
+	c.rateLimitSnapshot = snap
+	c.rateLimitMu.Unlock()
+}
+
+// parseRateLimitHeaders extracts Anthropic's documented rate-limit
+// headers into a snapshot. Missing headers leave their fields zero.
+// Reset values come back as RFC3339 timestamps; retry-after is in
+// seconds. UpstreamRequestID is filled from the same response so a
+// snapshot is self-correlating.
+func parseRateLimitHeaders(h http.Header, upstreamRequestID string, capturedAt time.Time) *RateLimitSnapshot {
+	if h == nil {
+		return nil
+	}
+	hasAny := false
+	snap := &RateLimitSnapshot{
+		CapturedAt:        capturedAt,
+		UpstreamRequestID: upstreamRequestID,
+	}
+	parseInt := func(key string) int {
+		v := h.Get(key)
+		if v == "" {
+			return 0
+		}
+		hasAny = true
+		n, _ := strconv.Atoi(v)
+		return n
+	}
+	parseTime := func(key string) time.Time {
+		v := h.Get(key)
+		if v == "" {
+			return time.Time{}
+		}
+		hasAny = true
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	}
+	snap.RequestsLimit = parseInt("anthropic-ratelimit-requests-limit")
+	snap.RequestsRemaining = parseInt("anthropic-ratelimit-requests-remaining")
+	snap.RequestsReset = parseTime("anthropic-ratelimit-requests-reset")
+	snap.TokensLimit = parseInt("anthropic-ratelimit-tokens-limit")
+	snap.TokensRemaining = parseInt("anthropic-ratelimit-tokens-remaining")
+	snap.TokensReset = parseTime("anthropic-ratelimit-tokens-reset")
+	snap.InputTokensLimit = parseInt("anthropic-ratelimit-input-tokens-limit")
+	snap.InputTokensRemaining = parseInt("anthropic-ratelimit-input-tokens-remaining")
+	snap.InputTokensReset = parseTime("anthropic-ratelimit-input-tokens-reset")
+	snap.OutputTokensLimit = parseInt("anthropic-ratelimit-output-tokens-limit")
+	snap.OutputTokensRemaining = parseInt("anthropic-ratelimit-output-tokens-remaining")
+	snap.OutputTokensReset = parseTime("anthropic-ratelimit-output-tokens-reset")
+	if v := h.Get("retry-after"); v != "" {
+		hasAny = true
+		if secs, err := strconv.Atoi(v); err == nil {
+			snap.RetryAfter = time.Duration(secs) * time.Second
+		}
+	}
+	if !hasAny {
+		return nil
+	}
+	return snap
 }
 
 // Anthropic request/response types
@@ -210,8 +329,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	// minimum cached-prefix length) on the assembled blocks+tools.
 	// Runs below the model minimum and excess breakpoints are silently
 	// ignored by the API, so we drop them here and warn instead.
+	var cacheDrops []CacheBreakpointDrop
 	if blocks, ok := systemPayload.([]anthropicContent); ok {
-		applyCacheBreakpointGuards(blocks, anthropicTools, model, c.logger)
+		cacheDrops = applyCacheBreakpointGuards(blocks, anthropicTools, model, c.logger)
 	}
 	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
@@ -234,7 +354,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),
 	}
 
-	logOutboundCacheMarkers(c.logger, &req)
+	logOutboundCacheMarkers(c.logger, &req, cacheDrops)
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -257,6 +377,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	}
 	defer resp.Body.Close()
 
+	// Provider-side observability: capture rate-limit headers regardless
+	// of status, so 429s and 5xx still update the snapshot. The headers
+	// are documented per-call invariants, not per-success.
+	if snap := parseRateLimitHeaders(resp.Header, resp.Header.Get("x-request-id"), time.Now()); snap != nil {
+		c.storeRateLimitSnapshot(snap)
+		logRateLimitSnapshot(c.logger, snap)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
 		c.logger.Error("API error", "status", resp.StatusCode, "body", errBody)
@@ -268,6 +396,30 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		return c.handleNonStreaming(ctx, resp.Body, upstreamRequestID)
 	}
 	return c.handleStreaming(ctx, resp.Body, callback, upstreamRequestID)
+}
+
+// logRateLimitSnapshot emits a structured Debug line on every response
+// so operators can correlate captured rate-limit state without querying
+// the snapshot accessor. Short-circuits when Debug is off so the field
+// list isn't built per request in production.
+func logRateLimitSnapshot(logger *slog.Logger, snap *RateLimitSnapshot) {
+	if logger == nil || snap == nil || !logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	logger.Debug("anthropic rate limits",
+		"upstream_request_id", snap.UpstreamRequestID,
+		"requests_limit", snap.RequestsLimit,
+		"requests_remaining", snap.RequestsRemaining,
+		"requests_reset", snap.RequestsReset.Format(time.RFC3339),
+		"tokens_limit", snap.TokensLimit,
+		"tokens_remaining", snap.TokensRemaining,
+		"tokens_reset", snap.TokensReset.Format(time.RFC3339),
+		"input_tokens_limit", snap.InputTokensLimit,
+		"input_tokens_remaining", snap.InputTokensRemaining,
+		"output_tokens_limit", snap.OutputTokensLimit,
+		"output_tokens_remaining", snap.OutputTokensRemaining,
+		"retry_after", snap.RetryAfter.String(),
+	)
 }
 
 // Ping checks if the Anthropic API is reachable.
@@ -546,12 +698,37 @@ func minCacheablePrefixTokens(model string) int {
 	}
 }
 
+// CacheBreakpointDrop describes a cache_control marker that was
+// stripped before the request went out. Surfaced both via the Warn
+// logs the guards already emit AND aggregated onto the
+// `outbound cache markers` line so a single log can answer "did we
+// ship the breakpoints we intended?".
+type CacheBreakpointDrop struct {
+	// Reason identifies which guard rule fired. One of:
+	//   "under_minimum_prefix"        — system block, prefix too short
+	//   "over_cap_tool_breakpoint"    — tool cache dropped to fit ≤4
+	//   "over_cap_trailing_system"    — trailing system breakpoint dropped to fit ≤4
+	Reason string
+	// Scope is "system" or "tools".
+	Scope string
+	// BlockIndex is the index within Scope ("system" → block index;
+	// "tools" → last-tool index). -1 when not applicable.
+	BlockIndex int
+	// TTL is the dropped breakpoint's TTL hint, when known.
+	TTL string
+}
+
 // applyCacheBreakpointGuards enforces the Anthropic per-request cache
 // breakpoint cap (≤4) and the per-model minimum cached-prefix length
 // across system blocks and the tool cache. Both are silent-failure
 // modes in the raw API: under-minimum runs are processed uncached
 // without any signal, and over-the-cap breakpoint counts cause a
 // request rejection.
+//
+// Returns the list of drops it performed so callers can fold them
+// into a single observability line; the function also continues to
+// emit Warn logs for each drop so production alerting still fires
+// without depending on aggregated logs.
 //
 // The guard policy:
 //
@@ -567,8 +744,9 @@ func minCacheablePrefixTokens(model string) int {
 //  3. If still over the cap, drop trailing system breakpoints (the
 //     earliest runs typically cover the largest stable prefix, so
 //     dropping from the tail minimizes the loss).
-func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, logger *slog.Logger) {
+func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool, model string, logger *slog.Logger) []CacheBreakpointDrop {
 	minTokens := minCacheablePrefixTokens(model)
+	var drops []CacheBreakpointDrop
 
 	// Step 1: strip under-minimum breakpoints from system blocks.
 	prefixChars := 0
@@ -586,6 +764,12 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 				"min_tokens", minTokens,
 				"ttl", blocks[i].CacheControl.TTL,
 			)
+			drops = append(drops, CacheBreakpointDrop{
+				Reason:     "under_minimum_prefix",
+				Scope:      "system",
+				BlockIndex: i,
+				TTL:        blocks[i].CacheControl.TTL,
+			})
 			blocks[i].CacheControl = nil
 		}
 	}
@@ -604,20 +788,30 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 
 	total := systemBreakpoints + toolBreakpoint
 	if total <= maxAnthropicCacheBreakpoints {
-		return
+		return drops
 	}
 
 	// Step 3: drop the tool breakpoint first.
 	if toolBreakpoint > 0 {
+		ttl := ""
+		if tc := tools[len(tools)-1].CacheControl; tc != nil {
+			ttl = tc.TTL
+		}
 		logger.Warn("dropping tool cache breakpoint to fit Anthropic 4-breakpoint cap",
 			"system_breakpoints", systemBreakpoints,
 			"total_requested", total,
 			"max", maxAnthropicCacheBreakpoints,
 		)
+		drops = append(drops, CacheBreakpointDrop{
+			Reason:     "over_cap_tool_breakpoint",
+			Scope:      "tools",
+			BlockIndex: len(tools) - 1,
+			TTL:        ttl,
+		})
 		tools[len(tools)-1].CacheControl = nil
 		total--
 		if total <= maxAnthropicCacheBreakpoints {
-			return
+			return drops
 		}
 	}
 
@@ -627,13 +821,21 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 		if blocks[i].CacheControl == nil {
 			continue
 		}
+		ttl := blocks[i].CacheControl.TTL
 		logger.Warn("dropping trailing system cache breakpoint to fit Anthropic 4-breakpoint cap",
 			"block_index", i,
-			"ttl", blocks[i].CacheControl.TTL,
+			"ttl", ttl,
 		)
+		drops = append(drops, CacheBreakpointDrop{
+			Reason:     "over_cap_trailing_system",
+			Scope:      "system",
+			BlockIndex: i,
+			TTL:        ttl,
+		})
 		blocks[i].CacheControl = nil
 		excess--
 	}
+	return drops
 }
 
 // logOutboundCacheMarkers emits a structured debug line describing every
@@ -642,9 +844,13 @@ func applyCacheBreakpointGuards(blocks []anthropicContent, tools []anthropicTool
 // at a different bug than one where markers are present but the prefix
 // isn't matching, so this log is the cheapest way to disambiguate.
 //
+// drops is the list of breakpoints that applyCacheBreakpointGuards
+// stripped before this call — surfaced on the same line so a single log
+// entry shows both what shipped and what was dropped (and why).
+//
 // The function short-circuits when Debug is disabled so the loops and
 // slice allocations don't run on every request in production.
-func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
+func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest, drops []CacheBreakpointDrop) {
 	if logger == nil || !logger.Enabled(context.Background(), slog.LevelDebug) {
 		return
 	}
@@ -701,6 +907,15 @@ func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
 		}
 	}
 
+	dropReasons := make([]string, 0, len(drops))
+	dropTTLs := make([]string, 0, len(drops))
+	dropScopes := make([]string, 0, len(drops))
+	for _, d := range drops {
+		dropReasons = append(dropReasons, d.Reason)
+		dropTTLs = append(dropTTLs, d.TTL)
+		dropScopes = append(dropScopes, d.Scope)
+	}
+
 	logger.Debug("outbound cache markers",
 		"model", req.Model,
 		"system_payload_kind", systemPayloadKind,
@@ -712,6 +927,10 @@ func logOutboundCacheMarkers(logger *slog.Logger, req *anthropicRequest) {
 		"tools", len(req.Tools),
 		"tool_breakpoint_ttl", toolBreakpointTTL,
 		"request_cache_control_ttl", requestLevelTTL,
+		"dropped_breakpoints", len(drops),
+		"dropped_reasons", dropReasons,
+		"dropped_ttls", dropTTLs,
+		"dropped_scopes", dropScopes,
 	)
 }
 
