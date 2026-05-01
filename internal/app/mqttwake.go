@@ -12,9 +12,7 @@ import (
 
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -45,7 +43,7 @@ type mqttWakeDeps struct {
 // as a child loop under the MQTT parent so it appears on the dashboard.
 func mqttWakeHandler(
 	store *mqtt.SubscriptionStore,
-	runner agentRunner,
+	runner looppkg.Runner,
 	fallback mqtt.MessageHandler,
 	logger *slog.Logger,
 	deps mqttWakeDeps,
@@ -79,11 +77,11 @@ func mqttWakeHandler(
 				convID := fmt.Sprintf("mqtt-wake-%s-%d", ws.ID, time.Now().UnixMilli())
 				msg := buildWakeMessage(topic, payload, ws.Profile.Instructions)
 
-				req := &agent.Request{
+				req := looppkg.Request{
 					ConversationID: convID,
-					Messages:       []agent.Message{{Role: "user", Content: msg}},
+					Messages:       []looppkg.Message{{Role: "user", Content: msg}},
 				}
-				applyLoopProfile(&ws.Profile, req)
+				applyLoopProfile(&ws.Profile, &req)
 				if len(ws.InitialTags) > 0 {
 					req.InitialTags = append(req.InitialTags, ws.InitialTags...)
 				}
@@ -120,8 +118,8 @@ func mqttWakeHandler(
 // short-lived context that would cancel the child loop).
 func dispatchViaLoop(
 	deps mqttWakeDeps,
-	runner agentRunner,
-	req *agent.Request,
+	runner looppkg.Runner,
+	req looppkg.Request,
 	loopName, topic, convID string,
 	logger *slog.Logger,
 ) {
@@ -169,34 +167,21 @@ func dispatchViaLoop(
 		SleepDefault: immediate,
 		Jitter:       looppkg.Float64Ptr(0),
 		ParentID:     parentID,
-		Handler: func(hCtx context.Context, _ any) error {
-			stream := agent.BuildProgressStream(looppkg.ProgressFunc(hCtx))
-			resp, err := runner.Run(hCtx, req, stream)
-			if err != nil {
-				logger.Error("mqtt wake agent failed",
-					"conv_id", convID,
-					"topic", topic,
-					"error", err,
-				)
-				return fmt.Errorf("mqtt wake %s on %s: %w", convID, topic, err)
-			}
-
-			looppkg.ReportAgentRun(hCtx, looppkg.AgentRunSummary{
-				RequestID:          resp.RequestID,
-				Model:              resp.Model,
-				InputTokens:        resp.InputTokens,
-				OutputTokens:       resp.OutputTokens,
-				ContextWindow:      resp.ContextWindow,
-				ToolsUsed:          resp.ToolsUsed,
-				ActiveTags:         append([]string(nil), resp.ActiveTags...),
-				EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
-				LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
-			})
-
+		TurnBuilder: func(context.Context, looppkg.TurnInput) (*looppkg.AgentTurn, error) {
+			return &looppkg.AgentTurn{
+				Request: cloneLoopRequest(req),
+				Summary: map[string]any{
+					"mqtt_topic": topic,
+				},
+			}, nil
+		},
+		PostIterate: func(_ context.Context, result looppkg.IterationResult) error {
 			logger.Info("mqtt wake complete",
-				"conv_id", convID,
+				"conv_id", result.ConvID,
 				"topic", topic,
-				"result_len", len(resp.Content),
+				"model", result.Model,
+				"input_tokens", result.InputTokens,
+				"output_tokens", result.OutputTokens,
 			)
 			return nil
 		},
@@ -207,6 +192,7 @@ func dispatchViaLoop(
 			"conversation_id": convID,
 		},
 	}, looppkg.Deps{
+		Runner:   runner,
 		Logger:   logger,
 		EventBus: deps.eventBus,
 	})
@@ -267,13 +253,13 @@ func sanitizePayload(payload []byte) string {
 	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
 }
 
-// applyLoopProfile applies a LoopProfile's routing configuration to an
-// agent.Request. It sets the model, merges routing hints, and copies tool
+// applyLoopProfile applies a LoopProfile's routing configuration to a
+// loop request. It sets the model, merges routing hints, and copies tool
 // exclusions. Capability tags are not part of the routing profile and
 // are applied separately by the caller. This function lives in the app
-// package rather than on LoopProfile itself to avoid a circular import
-// between router and agent.
-func applyLoopProfile(profile *router.LoopProfile, req *agent.Request) {
+// package rather than on LoopProfile itself to avoid coupling router
+// profiles to a runtime request type.
+func applyLoopProfile(profile *router.LoopProfile, req *looppkg.Request) {
 	opts := profile.RequestOptions()
 
 	if opts.Model != "" {
@@ -292,4 +278,19 @@ func applyLoopProfile(profile *router.LoopProfile, req *agent.Request) {
 	if len(opts.ExcludeTools) > 0 {
 		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
 	}
+}
+
+// cloneLoopRequest returns an independent copy of a loop request before
+// it is handed to a TurnBuilder. MQTT wake loops are one-shot today, but
+// cloning keeps request preparation isolated from future retries or
+// accidental caller-side mutation.
+func cloneLoopRequest(req looppkg.Request) looppkg.Request {
+	req.Messages = append([]looppkg.Message(nil), req.Messages...)
+	req.ChannelBinding = req.ChannelBinding.Clone()
+	req.AllowedTools = append([]string(nil), req.AllowedTools...)
+	req.ExcludeTools = append([]string(nil), req.ExcludeTools...)
+	req.Hints = cloneStringMap(req.Hints)
+	req.InitialTags = append([]string(nil), req.InitialTags...)
+	req.RuntimeTools = append([]looppkg.RuntimeTool(nil), req.RuntimeTools...)
+	return req
 }

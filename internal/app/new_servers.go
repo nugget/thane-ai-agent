@@ -333,7 +333,13 @@ func (a *App) initServers(s *newState) error {
 		// Wrap with the wake handler: wake-configured topics dispatch
 		// agent conversations, everything else falls through to the
 		// base handler above.
-		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger, wakeDeps))
+		mqttPub.SetMessageHandler(mqttWakeHandler(
+			subStore,
+			&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
+			baseMsgHandler,
+			logger,
+			wakeDeps,
+		))
 
 		// Register MQTT wake subscription tools via the provider.
 		a.loop.Tools().RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore)))
