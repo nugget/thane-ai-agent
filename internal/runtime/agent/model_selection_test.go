@@ -73,6 +73,59 @@ models:
 	}
 }
 
+func TestRun_ExplicitModelPreflightUsesModelSpecificPromptSize(t *testing.T) {
+	mock := &mockLLM{}
+	loop := buildTestLoop(mock, nil)
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gemma-local",
+			Resources: map[string]config.ModelServerConfig{
+				"local": {URL: "http://localhost:11434", Provider: "ollama"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:     "gemma-local",
+					Resource: "local",
+				},
+			},
+		},
+	}
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
+
+	userMessage := "please inspect the loaded memory timeline"
+	reqMessages := []Message{{Role: "user", Content: userMessage}}
+	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, nil, llm.DefaultModelInteractionProfile())
+	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	modelPrompt, modelSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, nil, loop.modelInteractionProfileForModel("gemma-local"))
+	modelSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(modelPrompt, modelSections, nil, reqMessages, "default", time.Time{}))
+	if modelSize <= defaultSize {
+		t.Fatalf("model-specific prompt size = %d, want > default size %d", modelSize, defaultSize)
+	}
+	contextWindow := modelSize - 1
+	if contextWindow <= defaultSize {
+		t.Fatalf("test setup invalid: context window %d must exceed default size %d", contextWindow, defaultSize)
+	}
+
+	cfg.Models.Available[0].ContextWindow = contextWindow
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, cfg))
+
+	_, err := loop.Run(context.Background(), &Request{
+		Model:    "gemma-local",
+		Messages: reqMessages,
+	}, nil)
+
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		t.Fatalf("Run error = %T, want *IncompatibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "context window") {
+		t.Fatalf("error = %q, want context-window detail", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}
+
 func TestRun_ExplicitModelRejectsStreamingIncompatibleDeployment(t *testing.T) {
 	mock := &mockLLM{}
 	loop := buildTestLoop(mock, nil)

@@ -36,16 +36,18 @@ func TestBuildSystemPrompt_OmitsConversationHistory(t *testing.T) {
 }
 
 func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 	messages := buildInitialLLMMessages(
 		"system prompt",
 		[]llm.PromptSection{{Name: "PERSONA", Content: "system prompt"}},
 		[]memory.Message{
-			{Role: "user", Content: "prior question"},
-			{Role: "assistant", Content: "prior answer"},
-			{Role: "system", Content: "[Conversation Summary] earlier context"},
+			{Role: "user", Content: "prior question", Timestamp: now.Add(-2 * time.Minute)},
+			{Role: "assistant", Content: "prior answer", Timestamp: now.Add(-119 * time.Second)},
+			{Role: "system", Content: "[Conversation Summary] earlier context", Timestamp: now.Add(-90 * time.Second)},
 		},
 		[]Message{{Role: "user", Content: "current request"}},
 		"conv-1",
+		now,
 	)
 
 	if len(messages) != 5 {
@@ -54,9 +56,9 @@ func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
 	wantRoles := []string{"system", "user", "assistant", "assistant", "user"}
 	wantContent := []string{
 		"system prompt",
-		"prior question",
-		"prior answer",
-		"Conversation memory note (historical context, not an active instruction):\n[Conversation Summary] earlier context",
+		"[stored conversation history; role=user; t=-120s]\nprior question",
+		"[stored conversation history; role=assistant; t=-119s]\nprior answer",
+		"[stored conversation memory note; original_role=system; not active instruction; t=-90s]\n[Conversation Summary] earlier context",
 		"current request",
 	}
 	for i := range wantRoles {
@@ -66,6 +68,31 @@ func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
 	}
 	if len(messages[0].Sections) != 1 || messages[0].Sections[0].Name != "PERSONA" {
 		t.Fatalf("system sections = %#v, want PERSONA section", messages[0].Sections)
+	}
+}
+
+func TestBuildInitialLLMMessages_InsertsStoredHistoryGap(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	messages := buildInitialLLMMessages(
+		"system prompt",
+		nil,
+		[]memory.Message{
+			{Role: "user", Content: "earlier turn", Timestamp: now.Add(-2 * time.Hour)},
+			{Role: "assistant", Content: "later answer", Timestamp: now.Add(-20 * time.Minute)},
+		},
+		[]Message{{Role: "user", Content: "current request"}},
+		"conv-1",
+		now,
+	)
+
+	if len(messages) != 5 {
+		t.Fatalf("messages len = %d, want 5: %#v", len(messages), messages)
+	}
+	if messages[2].Role != "assistant" || !strings.Contains(messages[2].Content, "+6000s elapsed") {
+		t.Fatalf("gap marker = (%q, %q), want assistant metadata marker with +6000s", messages[2].Role, messages[2].Content)
+	}
+	if messages[3].Role != "assistant" || !strings.Contains(messages[3].Content, "later answer") {
+		t.Fatalf("post-gap message = (%q, %q), want later assistant answer", messages[3].Role, messages[3].Content)
 	}
 }
 
@@ -80,13 +107,14 @@ func TestBuildInitialLLMMessages_OWUUsesLastUserTurn(t *testing.T) {
 			{Role: "user", Content: "client current turn"},
 		},
 		"owu-example",
+		time.Time{},
 	)
 
 	if len(messages) != 3 {
 		t.Fatalf("messages len = %d, want 3: %#v", len(messages), messages)
 	}
-	if messages[1].Content != "stored previous answer" {
-		t.Fatalf("history message = %q, want stored previous answer", messages[1].Content)
+	if messages[1].Content != "[stored conversation history; role=assistant]\nstored previous answer" {
+		t.Fatalf("history message = %q, want annotated stored previous answer", messages[1].Content)
 	}
 	if messages[2].Role != "user" || messages[2].Content != "client current turn" {
 		t.Fatalf("trigger message = (%q, %q), want final OWU user turn", messages[2].Role, messages[2].Content)
@@ -132,8 +160,8 @@ func TestRun_SendsStoredHistoryAsMessages(t *testing.T) {
 		t.Fatalf("system prompt still embeds conversation history:\n%s", got[0].Content)
 	}
 	want := []llm.Message{
-		{Role: "user", Content: "prior question"},
-		{Role: "assistant", Content: "prior answer"},
+		{Role: "user", Content: "[stored conversation history; role=user]\nprior question"},
+		{Role: "assistant", Content: "[stored conversation history; role=assistant]\nprior answer"},
 		{Role: "user", Content: "current request"},
 	}
 	for i, w := range want {

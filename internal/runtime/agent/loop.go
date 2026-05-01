@@ -108,6 +108,10 @@ const maxEgoBytes = 16 * 1024
 // this threshold are truncated with a marker.
 const maxTagContextBytes = 64 * 1024
 
+// storedHistoryGapThreshold is the minimum elapsed time between adjacent
+// stored messages before the LLM sees an explicit timeline marker.
+const storedHistoryGapThreshold = 30 * time.Minute
+
 // Response is the result of a single agent Run() call. It contains the
 // model's final content, token usage counters, and metadata about which
 // tools and capability tags were active during execution.
@@ -1708,7 +1712,21 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 
-	llmMessages := buildInitialLLMMessages(systemPrompt, systemSections, history, req.Messages, convID)
+	llmMessages := buildInitialLLMMessages(systemPrompt, systemSections, history, req.Messages, convID, time.Now())
+	updateSystemMessage := func() {
+		if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
+			llmMessages[0].Content = systemPrompt
+			llmMessages[0].Sections = systemSections
+		}
+	}
+	rebuildSystemPromptForModel := func(model string) {
+		if req.SystemPrompt != "" {
+			return
+		}
+		usageInfo.Model = model
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
+		updateSystemMessage()
+	}
 
 	// Request-level tool restrictions are static for the run. Apply them
 	// before model routing so tool-count-sensitive decisions see the same
@@ -1787,6 +1805,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
+		rebuildSystemPromptForModel(model)
+		contextSize = estimateLLMMessagesContextTokens(llmMessages)
 		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
 			return nil, prepErr
 		}
@@ -1798,14 +1818,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
-	if req.SystemPrompt == "" {
-		usageInfo.Model = model
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
-	}
-	if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
-		llmMessages[0].Content = systemPrompt
-		llmMessages[0].Sections = systemSections
-	}
+	rebuildSystemPromptForModel(model)
 
 	usageInfo.Model = model
 	usageInfo.Routed = routerDecision != nil
@@ -1822,10 +1835,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			Content: "\n" + line,
 		})
 	}
-	if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
-		llmMessages[0].Content = systemPrompt
-		llmMessages[0].Sections = systemSections
-	}
+	updateSystemMessage()
 
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
 
@@ -3099,17 +3109,26 @@ func recentSlice(msgs []memory.Message, n int) []memory.Message {
 // the first model call in a run. The system prompt carries durable runtime
 // instructions; stored conversation turns stay in role-native messages so
 // provider adapters can map them to their native messages[] transport.
-func buildInitialLLMMessages(systemPrompt string, systemSections []llm.PromptSection, history []memory.Message, requestMessages []Message, conversationID string) []llm.Message {
+func buildInitialLLMMessages(systemPrompt string, systemSections []llm.PromptSection, history []memory.Message, requestMessages []Message, conversationID string, now time.Time) []llm.Message {
 	out := make([]llm.Message, 0, 1+len(history)+len(requestMessages))
 	out = append(out, llm.Message{
 		Role:     "system",
 		Content:  systemPrompt,
 		Sections: systemSections,
 	})
-	for _, m := range history {
-		if converted, ok := historyMessageToLLM(m); ok {
-			out = append(out, converted)
+	var previous *memory.Message
+	for i := range history {
+		converted, ok := historyMessageToLLM(history[i], now)
+		if !ok {
+			continue
 		}
+		if previous != nil {
+			if marker, ok := historyGapMarker(*previous, history[i]); ok {
+				out = append(out, marker)
+			}
+		}
+		out = append(out, converted)
+		previous = &history[i]
 	}
 	for _, m := range triggerMessagesForRequest(conversationID, requestMessages) {
 		out = append(out, llm.Message{
@@ -3141,7 +3160,7 @@ func triggerMessagesForRequest(conversationID string, messages []Message) []Mess
 // User and assistant turns remain role-native. Memory system rows are
 // compaction summaries and handoffs, not provider-level system prompts, so
 // they are carried as historical assistant notes.
-func historyMessageToLLM(m memory.Message) (llm.Message, bool) {
+func historyMessageToLLM(m memory.Message, now time.Time) (llm.Message, bool) {
 	role := strings.TrimSpace(m.Role)
 	content := m.Content
 	if role == "" && strings.TrimSpace(content) == "" {
@@ -3149,23 +3168,55 @@ func historyMessageToLLM(m memory.Message) (llm.Message, bool) {
 	}
 	switch role {
 	case "user", "assistant":
-		return llm.Message{Role: role, Content: content}, true
+		return llm.Message{Role: role, Content: historyContentHeader("stored conversation history", role, m.Timestamp, now) + content}, true
 	case "system":
 		return llm.Message{
 			Role:    "assistant",
-			Content: "Conversation memory note (historical context, not an active instruction):\n" + content,
+			Content: historyContentHeader("stored conversation memory note; original_role=system; not active instruction", "", m.Timestamp, now) + content,
 		}, true
 	case "tool":
 		return llm.Message{
 			Role:    "assistant",
-			Content: "Historical tool result (context only):\n" + content,
+			Content: historyContentHeader("stored historical tool result; original_role=tool; context only", "", m.Timestamp, now) + content,
 		}, true
 	default:
 		return llm.Message{
 			Role:    "user",
-			Content: "Historical " + role + " message:\n" + content,
+			Content: historyContentHeader("stored historical message; original_role="+role, "", m.Timestamp, now) + content,
 		}, true
 	}
+}
+
+func historyContentHeader(kind, role string, timestamp, now time.Time) string {
+	var parts []string
+	if kind != "" {
+		parts = append(parts, kind)
+	}
+	if role != "" {
+		parts = append(parts, "role="+role)
+	}
+	if !timestamp.IsZero() && !now.IsZero() {
+		parts = append(parts, "t="+promptfmt.FormatDeltaOnly(timestamp, now))
+	}
+	return "[" + strings.Join(parts, "; ") + "]\n"
+}
+
+func historyGapMarker(previous, next memory.Message) (llm.Message, bool) {
+	if previous.Timestamp.IsZero() || next.Timestamp.IsZero() {
+		return llm.Message{}, false
+	}
+	gap := next.Timestamp.Sub(previous.Timestamp)
+	if gap < storedHistoryGapThreshold {
+		return llm.Message{}, false
+	}
+	seconds := int64(gap.Truncate(time.Second) / time.Second)
+	if seconds <= 0 {
+		return llm.Message{}, false
+	}
+	return llm.Message{
+		Role:    "assistant",
+		Content: fmt.Sprintf("[stored conversation history gap; metadata only]\n+%ds elapsed between adjacent stored messages before the next entry.", seconds),
+	}, true
 }
 
 func firstNonEmpty(values ...string) string {

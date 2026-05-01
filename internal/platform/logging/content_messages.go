@@ -44,7 +44,7 @@ func retainedToolCalls(calls []llm.ToolCall, maxLen int) []MessageToolCallDetail
 		argsJSON, err := json.Marshal(call.Function.Arguments)
 		args := ""
 		if err != nil {
-			args = fmt.Sprintf("unmarshalable arguments: %v", err)
+			args = fmt.Sprintf("failed to marshal arguments: %v", err)
 		} else {
 			args = truncateRetainedContent(string(argsJSON), maxLen)
 		}
