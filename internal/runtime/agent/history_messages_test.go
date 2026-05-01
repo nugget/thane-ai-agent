@@ -56,9 +56,9 @@ func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
 	wantRoles := []string{"system", "user", "assistant", "assistant", "user"}
 	wantContent := []string{
 		"system prompt",
-		"[stored conversation history; role=user; t=-120s]\nprior question",
-		"[stored conversation history; role=assistant; t=-119s]\nprior answer",
-		"[stored conversation memory note; original_role=system; not active instruction; t=-90s]\n[Conversation Summary] earlier context",
+		"[stored conversation history; role=user; age_delta=-120s]\nprior question",
+		"[stored conversation history; role=assistant; age_delta=-119s]\nprior answer",
+		"[stored conversation memory note; original_role=system; not active instruction; age_delta=-90s]\n[Conversation Summary] earlier context",
 		"current request",
 	}
 	for i := range wantRoles {

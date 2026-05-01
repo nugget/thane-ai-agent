@@ -3196,7 +3196,7 @@ func historyContentHeader(kind, role string, timestamp, now time.Time) string {
 		parts = append(parts, "role="+role)
 	}
 	if !timestamp.IsZero() && !now.IsZero() {
-		parts = append(parts, "t="+promptfmt.FormatDeltaOnly(timestamp, now))
+		parts = append(parts, "age_delta="+promptfmt.FormatDeltaOnly(timestamp, now))
 	}
 	return "[" + strings.Join(parts, "; ") + "]\n"
 }
