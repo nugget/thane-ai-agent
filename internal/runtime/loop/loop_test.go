@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -773,13 +774,223 @@ func TestTaskBuilderValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("neither Task nor TaskBuilder nor Handler fails", func(t *testing.T) {
+	t.Run("TurnBuilder accepted without Task", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{
+			Name: "turn-builder-only",
+			TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+				return &AgentTurn{
+					Request: Request{
+						Messages: []Message{{Role: "user", Content: "dynamic"}},
+					},
+				}, nil
+			},
+		}, Deps{Runner: runner})
+		if err != nil {
+			t.Errorf("expected no error with TurnBuilder, got: %v", err)
+		}
+	})
+
+	t.Run("neither Task nor builder nor Handler fails", func(t *testing.T) {
 		t.Parallel()
 		_, err := New(Config{Name: "neither"}, Deps{Runner: runner})
 		if err == nil {
-			t.Error("expected error when neither Task, TaskBuilder, nor Handler set")
+			t.Error("expected error when neither Task, builder, nor Handler set")
 		}
 	})
+}
+
+func TestTurnBuilderRunsThroughLoopRunner(t *testing.T) {
+	t.Parallel()
+
+	var gotReq RunRequest
+	runner := &inspectingRunner{onRun: func(req RunRequest) {
+		gotReq = req
+	}}
+
+	l, err := New(Config{
+		Name:         "turn-builder",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Tags:         []string{"email"},
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request: Request{
+					ConversationID: "email-poll-123",
+					Messages:       []Message{{Role: "user", Content: "triage this mail"}},
+					Hints:          map[string]string{"source": "email_poll"},
+				},
+				Summary: map[string]any{"wake_msg_len": 42},
+			}, nil
+		},
+	}, Deps{Runner: runner, EventBus: events.New()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	if gotReq.ConversationID != "email-poll-123" {
+		t.Fatalf("ConversationID = %q, want email-poll-123", gotReq.ConversationID)
+	}
+	if len(gotReq.Messages) != 1 || gotReq.Messages[0].Content != "triage this mail" {
+		t.Fatalf("Messages = %#v, want triage prompt", gotReq.Messages)
+	}
+	if gotReq.Hints["source"] != "email_poll" {
+		t.Fatalf("source hint = %q, want email_poll", gotReq.Hints["source"])
+	}
+	if gotReq.Hints["loop_name"] != "turn-builder" {
+		t.Fatalf("loop_name hint = %q, want turn-builder", gotReq.Hints["loop_name"])
+	}
+	if !slices.Equal(gotReq.InitialTags, []string{"email"}) {
+		t.Fatalf("InitialTags = %v, want [email]", gotReq.InitialTags)
+	}
+	if gotReq.OnProgress == nil {
+		t.Fatal("OnProgress is nil, want loop progress wiring")
+	}
+
+	status := l.Status()
+	if status.HandlerOnly {
+		t.Fatal("HandlerOnly = true, want false for turn builder")
+	}
+	if status.Iterations != 1 || status.Attempts != 1 {
+		t.Fatalf("Iterations/Attempts = %d/%d, want 1/1", status.Iterations, status.Attempts)
+	}
+	if len(status.RecentIterations) != 1 {
+		t.Fatalf("RecentIterations = %d, want 1", len(status.RecentIterations))
+	}
+	snap := status.RecentIterations[0]
+	if snap.ConvID != "email-poll-123" {
+		t.Fatalf("snapshot ConvID = %q, want email-poll-123", snap.ConvID)
+	}
+	if snap.Summary["wake_msg_len"] != 42 {
+		t.Fatalf("snapshot wake_msg_len = %v, want 42", snap.Summary["wake_msg_len"])
+	}
+}
+
+func TestTurnBuilderAllowedToolsOverrideIntersects(t *testing.T) {
+	t.Parallel()
+
+	var gotReq RunRequest
+	runner := &inspectingRunner{onRun: func(req RunRequest) {
+		gotReq = req
+	}}
+
+	l, err := New(Config{
+		Name:         "agent-turn-allowed-tools",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request: Request{
+					ConversationID: "allowed-tools-123",
+					Messages:       []Message{{Role: "user", Content: "use scoped tools"}},
+					AllowedTools:   []string{"email_search", "email_archive"},
+				},
+			}, nil
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.requestOverride = Request{AllowedTools: []string{"email_search", "shell_exec"}}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	if !slices.Equal(gotReq.AllowedTools, []string{"email_search"}) {
+		t.Fatalf("AllowedTools = %#v, want intersection [email_search]", gotReq.AllowedTools)
+	}
+}
+
+func TestTurnBuilderAllowedToolsOverrideFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	var runnerCalls atomic.Int32
+	l, err := New(Config{
+		Name:         "agent-turn-allowed-tools-empty",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request: Request{
+					ConversationID: "allowed-tools-empty-123",
+					Messages:       []Message{{Role: "user", Content: "use scoped tools"}},
+					AllowedTools:   []string{"email_search"},
+				},
+			}, nil
+		},
+	}, Deps{Runner: &countingRunner{count: &runnerCalls}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.requestOverride = Request{AllowedTools: []string{"shell_exec"}}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
+	}
+	if status.Iterations != 0 || status.Attempts != 1 {
+		t.Fatalf("Iterations/Attempts = %d/%d, want 0/1", status.Iterations, status.Attempts)
+	}
+	if !strings.Contains(status.LastError, "allowed_tools override has no overlap") {
+		t.Fatalf("LastError = %q, want allowed_tools overlap error", status.LastError)
+	}
+}
+
+func TestTurnBuilderNilTurnIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	var runnerCalls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l, err := New(Config{
+		Name:         "turn-noop",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      100,
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			cancel()
+			return nil, nil
+		},
+	}, Deps{Runner: &countingRunner{count: &runnerCalls}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(ctx)
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	status := l.Status()
+	if runnerCalls.Load() != 0 {
+		t.Fatalf("runner calls = %d, want 0", runnerCalls.Load())
+	}
+	if status.Iterations != 0 || status.Attempts != 0 {
+		t.Fatalf("Iterations/Attempts = %d/%d, want 0/0", status.Iterations, status.Attempts)
+	}
+	if status.ConsecutiveErrors != 0 || status.LastError != "" {
+		t.Fatalf("error state = %d/%q, want empty", status.ConsecutiveErrors, status.LastError)
+	}
 }
 
 func TestPostIterate(t *testing.T) {

@@ -86,13 +86,13 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		if a.emailPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires email poller runtime", emailPollerDefinitionName)
 		}
-		spec.Handler = emailPollHandler(a.emailPoller, a.loop, a.logger)
+		spec.TurnBuilder = emailPollTurnBuilder(a.emailPoller, a.logger)
 		return a.hydrateLoopOutputs(spec)
 	case mediaFeedPollerDefinitionName:
 		if a.mediaFeedPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires media feed poller runtime", mediaFeedPollerDefinitionName)
 		}
-		spec.Handler = mediaFeedHandler(a.mediaFeedPoller, a.loop, a.logger)
+		spec.TurnBuilder = mediaFeedTurnBuilder(a.mediaFeedPoller, a.logger)
 		return a.hydrateLoopOutputs(spec)
 	case mqttPublisherDefinitionName:
 		if a.mqttPub == nil {

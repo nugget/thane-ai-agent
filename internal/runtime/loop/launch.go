@@ -180,7 +180,7 @@ func (l *Launch) Validate() error {
 		}
 	}
 	spec := l.Spec
-	if l.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+	if l.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.TurnBuilder == nil && spec.Handler == nil {
 		spec.Task = l.Task
 	}
 	return spec.Validate()

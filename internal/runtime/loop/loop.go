@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -154,7 +153,8 @@ type Deps struct {
 
 // Loop is a persistent background goroutine that iterates on a timer
 // or in response to external events. Each iteration runs an LLM call
-// via the agent runner, or a direct [Config.Handler] function for
+// via the agent runner, prepares an agent turn via [Config.TurnBuilder],
+// or calls a direct [Config.Handler] for
 // infrastructure loops that don't need an LLM. Create with [New],
 // start with [Start], stop with [Stop].
 type Loop struct {
@@ -323,7 +323,7 @@ func NewFromLaunch(launch Launch, deps Deps) (*Loop, error) {
 	}
 
 	spec := launch.Spec
-	if launch.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+	if launch.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.TurnBuilder == nil && spec.Handler == nil {
 		spec.Task = launch.Task
 	}
 	cfg := spec.ToConfig()
@@ -450,6 +450,7 @@ func (l *Loop) Status() Status {
 	// be serialized and shouldn't leak to callers.
 	cfgCopy := l.config
 	cfgCopy.TaskBuilder = nil
+	cfgCopy.TurnBuilder = nil
 	cfgCopy.PostIterate = nil
 	cfgCopy.WaitFunc = nil
 	cfgCopy.Handler = nil
@@ -824,7 +825,8 @@ func (l *Loop) run(ctx context.Context) {
 
 		iterStartTime := time.Now()
 
-		// Dispatch: Handler runs directly; otherwise use LLM via iterate().
+		// Dispatch: Handler runs directly; otherwise build an agent
+		// turn and let the loop runtime execute it.
 		var result *IterationResult
 		var err error
 		var handlerSummary map[string]any
@@ -933,16 +935,50 @@ func (l *Loop) run(ctx context.Context) {
 				l.mu.Unlock()
 			}
 		} else {
-			// LLM-based loops always do meaningful work.
-			l.mu.Lock()
-			l.lastWakeAt = iterStartTime
-			l.attempts++
-			l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
-			if len(l.recentConvIDs) > recentConvIDsCap {
-				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+			iterStart := time.Now()
+			turnCtx := withLoopID(iterCtx, l.id)
+			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
+			turnCtx = withNotifyEnvelopes(turnCtx, signals)
+			turn, buildErr := l.buildAgentTurn(turnCtx, TurnInput{
+				Event:           event,
+				Supervisor:      isSupervisor,
+				NotifyEnvelopes: signals,
+			})
+			if buildErr != nil {
+				if errors.Is(buildErr, ErrNoOp) {
+					noOp = true
+				} else {
+					err = fmt.Errorf("turn builder: %w", buildErr)
+				}
+			} else if turn == nil {
+				noOp = true
+			} else {
+				req, prepareErr := l.prepareAgentTurnRequest(turn.Request, convID, isSupervisor)
+				if prepareErr != nil {
+					err = prepareErr
+				} else {
+					if req.ConversationID != "" && req.ConversationID != convID {
+						convID = req.ConversationID
+						l.mu.Lock()
+						l.currentConvID = convID
+						l.mu.Unlock()
+					}
+					result, err = l.runAgentTurn(iterCtx, req, iterStart, isSupervisor)
+					if len(turn.Summary) > 0 {
+						handlerSummary = cloneSummaryMap(turn.Summary)
+					}
+				}
 			}
-			l.mu.Unlock()
-			result, err = l.iterate(iterCtx, isSupervisor, convID, signals)
+			if !noOp {
+				l.mu.Lock()
+				l.lastWakeAt = iterStartTime
+				l.attempts++
+				l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+				if len(l.recentConvIDs) > recentConvIDsCap {
+					l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+				}
+				l.mu.Unlock()
+			}
 		}
 
 		// Clear in-flight state after iteration completes.
@@ -1268,41 +1304,31 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 	}
 }
 
-// iterate performs a single loop iteration: build prompt and run the
-// LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, signals []messages.Envelope) (*IterationResult, error) {
-	iterStart := time.Now()
-
-	// Build routing hints.
-	hints := map[string]string{
-		"source":    "loop",
-		"loop_id":   l.id,
-		"loop_name": l.config.Name,
+// buildAgentTurn chooses the loop's turn construction strategy. Custom
+// TurnBuilder hooks get the wake first; otherwise Task and TaskBuilder
+// are adapted into the same AgentTurn shape.
+func (l *Loop) buildAgentTurn(ctx context.Context, input TurnInput) (*AgentTurn, error) {
+	if l.config.TurnBuilder != nil {
+		return l.config.TurnBuilder(ctx, input)
 	}
-	if isSupervisor {
-		hints["supervisor"] = "true"
-		if l.config.SupervisorQualityFloor > 0 {
-			hints["quality_floor"] = fmt.Sprintf("%d", l.config.SupervisorQualityFloor)
-		}
-		hints["local_only"] = "false"
-	} else {
-		if l.config.QualityFloor > 0 {
-			hints["quality_floor"] = fmt.Sprintf("%d", l.config.QualityFloor)
-		}
-		hints["local_only"] = "true"
-	}
+	return l.buildTaskTurn(ctx, input)
+}
 
-	// Build the task prompt. TaskBuilder takes priority over static Task.
+// buildTaskTurn adapts Config.Task and Config.TaskBuilder into the common
+// AgentTurn representation. Prompt-only concerns live here; request-level
+// routing, tool, progress, and accounting concerns stay in
+// prepareAgentTurnRequest and runAgentTurn.
+func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, error) {
 	var task string
 	if l.config.TaskBuilder != nil {
 		var buildErr error
-		task, buildErr = l.config.TaskBuilder(ctx, isSupervisor)
+		task, buildErr = l.config.TaskBuilder(ctx, input.Supervisor)
 		if buildErr != nil {
 			return nil, fmt.Errorf("TaskBuilder: %w", buildErr)
 		}
 	} else {
 		task = l.config.Task
-		if isSupervisor && l.config.SupervisorContext != "" {
+		if input.Supervisor && l.config.SupervisorContext != "" {
 			task = l.config.SupervisorContext + "\n\n" + task
 		}
 	}
@@ -1322,57 +1348,84 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 			task = outputContext + "\n\n" + task
 		}
 	}
-	if signalSummary := summarizeNotifyEnvelopes(signals); signalSummary != "" {
+	if signalSummary := summarizeNotifyEnvelopes(input.NotifyEnvelopes); signalSummary != "" {
 		task = signalSummary + "\n\n" + task
 	}
 
-	// Merge loops-ng profile hints over loop-generated defaults.
+	return &AgentTurn{
+		Request: Request{
+			Messages: []Message{{Role: "user", Content: task}},
+		},
+	}, nil
+}
+
+// prepareAgentTurnRequest applies the loop request environment to a
+// prepared turn request. This is the shared boundary where task turns,
+// custom TurnBuilder turns, launch overrides, and carried capability
+// state become the final runner request.
+func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor bool) (Request, error) {
+	hints := map[string]string{
+		"source":    "loop",
+		"loop_id":   l.id,
+		"loop_name": l.config.Name,
+	}
+	if isSupervisor {
+		hints["supervisor"] = "true"
+		if l.config.SupervisorQualityFloor > 0 {
+			hints["quality_floor"] = fmt.Sprintf("%d", l.config.SupervisorQualityFloor)
+		}
+		hints["local_only"] = "false"
+	} else {
+		if l.config.QualityFloor > 0 {
+			hints["quality_floor"] = fmt.Sprintf("%d", l.config.QualityFloor)
+		}
+		hints["local_only"] = "true"
+	}
 	for k, v := range l.requestBase.Hints {
 		hints[k] = v
 	}
-
-	// Merge config hints over loop-generated defaults.
 	for k, v := range l.config.Hints {
+		hints[k] = v
+	}
+	for k, v := range req.Hints {
 		hints[k] = v
 	}
 	for k, v := range l.requestOverride.Hints {
 		hints[k] = v
 	}
 
-	conversationID := convID
-	if l.requestOverride.ConversationID != "" {
-		conversationID = l.requestOverride.ConversationID
+	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags)
+	req.Model = firstNonEmpty(l.requestOverride.Model, req.Model, l.requestBase.Model)
+	req.ConversationID = firstNonEmpty(l.requestOverride.ConversationID, req.ConversationID, convID)
+	req.ChannelBinding = firstNonNilChannelBinding(l.requestOverride.ChannelBinding, req.ChannelBinding, l.requestBase.ChannelBinding)
+	req.SkipContext = l.requestOverride.SkipContext || req.SkipContext
+	allowedTools, err := applyAllowedToolsOverride(req.AllowedTools, l.requestOverride.AllowedTools)
+	if err != nil {
+		return Request{}, err
 	}
+	req.AllowedTools = allowedTools
+	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools)
+	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
+	req.Hints = hints
+	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
+	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
+	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)
+	req.FallbackContent = firstNonEmpty(l.requestOverride.FallbackContent, req.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent)
+	req.MaxIterations = firstPositiveInt(l.requestOverride.MaxIterations, req.MaxIterations)
+	req.MaxOutputTokens = firstPositiveInt(l.requestOverride.MaxOutputTokens, req.MaxOutputTokens)
+	req.ToolTimeout = firstPositiveDuration(l.requestOverride.ToolTimeout, req.ToolTimeout)
+	req.UsageRole = firstNonEmpty(l.requestOverride.UsageRole, req.UsageRole)
+	req.UsageTaskName = firstNonEmpty(l.requestOverride.UsageTaskName, req.UsageTaskName)
+	req.SystemPrompt = firstNonEmpty(l.requestOverride.SystemPrompt, req.SystemPrompt)
+	req.PromptMode = firstPromptMode(l.requestOverride.PromptMode, req.PromptMode)
+	req.SuppressAlwaysContext = l.requestOverride.SuppressAlwaysContext || req.SuppressAlwaysContext
+	return req, nil
+}
 
-	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, l.requestOverride.InitialTags)
-	skipTagFilter := len(configuredInitialTags) == 0 || l.requestOverride.SkipTagFilter
-
-	req := Request{
-		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
-		ConversationID: conversationID,
-		ChannelBinding: firstNonNilChannelBinding(l.requestOverride.ChannelBinding, l.requestBase.ChannelBinding),
-		Messages: []Message{
-			{Role: "user", Content: task},
-		},
-		SkipContext:           l.requestOverride.SkipContext,
-		AllowedTools:          append([]string(nil), l.requestOverride.AllowedTools...),
-		ExcludeTools:          mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
-		SkipTagFilter:         skipTagFilter,
-		Hints:                 hints,
-		OnProgress:            composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
-		InitialTags:           mergeUniqueStrings(configuredInitialTags, l.activatedTags),
-		RuntimeTools:          cloneRuntimeTools(l.config.RuntimeTools),
-		FallbackContent:       firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
-		MaxIterations:         l.requestOverride.MaxIterations,
-		MaxOutputTokens:       l.requestOverride.MaxOutputTokens,
-		ToolTimeout:           l.requestOverride.ToolTimeout,
-		UsageRole:             l.requestOverride.UsageRole,
-		UsageTaskName:         l.requestOverride.UsageTaskName,
-		SystemPrompt:          l.requestOverride.SystemPrompt,
-		PromptMode:            l.requestOverride.PromptMode,
-		SuppressAlwaysContext: l.requestOverride.SuppressAlwaysContext,
-	}
-
+// runAgentTurn is the only loop-owned path that invokes the agent runner.
+// It captures runner response state needed by subsequent iterations and
+// returns the typed iteration result used by snapshots and telemetry.
+func (l *Loop) runAgentTurn(ctx context.Context, req Request, iterStart time.Time, isSupervisor bool) (*IterationResult, error) {
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
 	// Capture activated tags for next iteration (under lock since
 	// activatedTags is read during Status snapshots). Always update,
@@ -1389,16 +1442,18 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, si
 	}
 
 	return &IterationResult{
-		Model:          resp.Model,
-		InputTokens:    resp.InputTokens,
-		OutputTokens:   resp.OutputTokens,
-		ContextWindow:  resp.ContextWindow,
-		ToolsUsed:      resp.ToolsUsed,
-		EffectiveTools: append([]string(nil), resp.EffectiveTools...),
-		ActiveTags:     append([]string(nil), resp.ActiveTags...),
-		RequestID:      resp.RequestID,
-		Elapsed:        time.Since(iterStart),
-		Supervisor:     isSupervisor,
+		ConvID:             req.ConversationID,
+		Model:              resp.Model,
+		InputTokens:        resp.InputTokens,
+		OutputTokens:       resp.OutputTokens,
+		ContextWindow:      resp.ContextWindow,
+		ToolsUsed:          resp.ToolsUsed,
+		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
+		ActiveTags:         append([]string(nil), resp.ActiveTags...),
+		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
+		RequestID:          resp.RequestID,
+		Elapsed:            time.Since(iterStart),
+		Supervisor:         isSupervisor,
 	}, nil
 }
 
@@ -1430,6 +1485,32 @@ func mergeUniqueStrings(parts ...[]string) []string {
 		return nil
 	}
 	return merged
+}
+
+func applyAllowedToolsOverride(base, override []string) ([]string, error) {
+	base = mergeUniqueStrings(base)
+	override = mergeUniqueStrings(override)
+	if len(override) == 0 {
+		return base, nil
+	}
+	if len(base) == 0 {
+		return override, nil
+	}
+
+	baseSet := make(map[string]struct{}, len(base))
+	for _, name := range base {
+		baseSet[name] = struct{}{}
+	}
+	result := make([]string, 0, len(override))
+	for _, name := range override {
+		if _, ok := baseSet[name]; ok {
+			result = append(result, name)
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("agent turn allowed_tools override has no overlap with prepared request allowed_tools")
+	}
+	return result, nil
 }
 
 func composeProgressFuncs(callbacks ...func(kind string, data map[string]any)) func(kind string, data map[string]any) {
@@ -1482,6 +1563,55 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func firstPositiveDuration(values ...time.Duration) time.Duration {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func firstPromptMode(values ...agentctx.PromptMode) agentctx.PromptMode {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func mergeRuntimeTools(parts ...[]RuntimeTool) []RuntimeTool {
+	var merged []RuntimeTool
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		merged = append(merged, cloneRuntimeTools(part)...)
+	}
+	return merged
+}
+
+func cloneSummaryMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // computeSleep returns the sleep duration for the next cycle. If
