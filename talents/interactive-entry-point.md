@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [interactive]
+teaser: "Open when pacing, channel, session state, or conversational continuity matters."
+next_tags: [message_channel, signal, owu, session]
 ---
 
 # Interactive Entry Point

@@ -101,6 +101,7 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	var sb strings.Builder
 	sb.WriteString("### Capability Menu\n\n")
+	sb.WriteString("These are entry points into richer guidance. Activate one relevant capability when the turn needs a domain; otherwise keep the straight path and answer.\n\n")
 	sb.Write(data)
 	return sb.String()
 }

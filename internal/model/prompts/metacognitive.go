@@ -68,8 +68,8 @@ frontier model. In addition to the normal assessment, critically evaluate:
 - **Drift detection** — Has the loop's behavior become routine or mechanical?
   Is it still genuinely reasoning or just going through motions?
 
-Be honest. This is self-supervision — the point is to catch things the
-cheaper model's consistent blind spots miss.`
+Be honest. Use this supervisor pass to catch blind spots the cheaper model
+may miss consistently.`
 
 // MetacognitivePrompt returns the prompt for a metacognitive loop
 // iteration. When isSupervisor is true, additional self-review

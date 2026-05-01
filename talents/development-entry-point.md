@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [development]
+teaser: "Open for code, repos, PRs, issues, releases, or implementation work."
+next_tags: [forge, files, web, shell]
 ---
 
 # Development Entry Point
@@ -12,6 +14,8 @@ first.
 Choose the next move deliberately:
 
 - If the truth probably already lives on GitHub, activate `forge`.
+- If the user names a PR, issue, review, check, branch, or commit,
+  activate `forge` before reading local files.
 - If the truth is in the checked-out workspace, activate `files`.
 - If the repo is not enough and you need outside docs or a named web
   source, activate `web`.

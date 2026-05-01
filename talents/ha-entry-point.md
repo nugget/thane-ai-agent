@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [ha]
+teaser: "Open for Home Assistant state, control, registry, automation, and history."
+next_tags: [awareness, notifications, operations, ha_admin]
 ---
 
 # HA Entry Point

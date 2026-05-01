@@ -142,6 +142,29 @@ Avoid:
 Short keys are acceptable only when the schema is tiny and the meaning is
 still immediate. Clarity is the default.
 
+### Write from the model's vantage point
+
+The model is not reading a file on disk. It is receiving context that it
+may incorporate into its current self-understanding, decision process, or
+tool plan.
+
+Use language whose referents are clear from that vantage point:
+
+- "These words are from past you" when framing talents
+- "When talking with Nugget on Signal..." when framing channel context
+- "Current loaded capabilities" when naming runtime state
+
+Avoid loose deictic language such as "this is how..." or "this document
+explains..." unless the immediately preceding noun makes the referent
+unambiguous. Editor-facing language may feel natural while authoring a
+markdown file, but it forces the model to infer whether "this" means the
+file, the section, the capability, the relationship, the channel, or the
+current conversation.
+
+Keep tense and perspective stable inside a block. Historical memory
+should read as past context. Runtime state should read as current state.
+Behavioral guidance should address the model directly.
+
 ### Pre-compute relationships
 
 Do not force the model to infer relationships that Go already knows.
@@ -268,9 +291,10 @@ Before adding or changing model-facing context, ask:
 
 1. What work is the model still being forced to do that Go could do first?
 2. Is this shape optimized for a model, or only for a human maintainer?
-3. Does this belong in always-on context, capability context, a tool
+3. Are tense, audience, and referents clear from the model's point of view?
+4. Does this belong in always-on context, capability context, a tool
    result, or nowhere at all?
-4. If this data changes often, why is it static?
+5. If this data changes often, why is it static?
 
 If those questions are answered well, the formatting is probably on the
 right track.

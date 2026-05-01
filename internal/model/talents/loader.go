@@ -32,6 +32,8 @@ type Talent struct {
 	Name       string   // Filename without .md extension
 	Tags       []string // Tags from YAML frontmatter (nil = untagged)
 	Kind       string   // Optional frontmatter kind (for example entry_point)
+	Teaser     string   // Optional short menu copy for entry-point talents
+	NextTags   []string // Optional likely follow-on tags for entry-point talents
 	Content    string   // Markdown content (frontmatter stripped)
 	SourcePath string   // Filesystem path loaded for verification/debugging
 }
@@ -110,7 +112,15 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		}
 		name := strings.TrimSuffix(f, ".md")
 		meta, content := ParseFrontmatterMetadata(string(data))
-		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content, SourcePath: path})
+		ts = append(ts, Talent{
+			Name:       name,
+			Tags:       meta.Tags,
+			Kind:       meta.Kind,
+			Teaser:     meta.Teaser,
+			NextTags:   append([]string(nil), meta.NextTags...),
+			Content:    content,
+			SourcePath: path,
+		})
 	}
 	return ts, nil
 }

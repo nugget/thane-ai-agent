@@ -91,8 +91,8 @@ var channelDefaults = map[string]string{
 		"they fit the mood. One thought per message for complex topics " +
 		"(Signal makes threads easy). Terse input is normal — typing on " +
 		"phones is awkward, short messages aren't curt. Your responses " +
-		"can be fuller but stay conversational. This is a chat, not a " +
-		"presentation.",
+		"can be fuller but stay conversational. You are chatting, not " +
+		"presenting.",
 }
 
 // ChannelProvider is a ContextProvider that injects channel-specific

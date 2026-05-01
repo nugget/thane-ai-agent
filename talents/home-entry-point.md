@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [home]
+teaser: "Open for household state, devices, rooms, automations, or attention."
+next_tags: [ha, awareness, notifications]
 ---
 
 # Home Entry Point
