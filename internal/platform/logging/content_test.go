@@ -274,6 +274,41 @@ func TestContentWriter_Truncation(t *testing.T) {
 	}
 }
 
+func TestRetainedToolCalls_BoundsMarshalErrorFallback(t *testing.T) {
+	call := llm.ToolCall{
+		ID: "tc_bad_args",
+		Function: struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		}{
+			Name: "bad_args",
+			Arguments: map[string]any{
+				"bad": make(chan int),
+			},
+		},
+	}
+
+	full := retainedToolCalls([]llm.ToolCall{call}, 4096)
+	if len(full) != 1 {
+		t.Fatalf("retained tool calls len = %d, want 1", len(full))
+	}
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(full[0].Arguments), &payload); err != nil {
+		t.Fatalf("fallback arguments should remain machine-parseable JSON: %v; content=%q", err, full[0].Arguments)
+	}
+	if payload["error"] != "failed_to_marshal_arguments" {
+		t.Fatalf("fallback error = %q, want failed_to_marshal_arguments", payload["error"])
+	}
+	if !strings.Contains(payload["detail"], "unsupported type") {
+		t.Fatalf("fallback detail = %q, want marshal error detail", payload["detail"])
+	}
+
+	truncated := retainedToolCalls([]llm.ToolCall{call}, 24)
+	if got := len([]rune(truncated[0].Arguments)); got > 24 {
+		t.Fatalf("truncated fallback length = %d, want <= 24; content=%q", got, truncated[0].Arguments)
+	}
+}
+
 func TestContentWriter_MultiByteRune(t *testing.T) {
 	db := openTestDB(t)
 	w, err := NewContentWriter(db, 5, slog.Default())

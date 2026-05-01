@@ -171,3 +171,40 @@ func TestRun_SendsStoredHistoryAsMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_UsesConfiguredClockForStoredHistoryAgeLabels(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{{
+			Model:   "test-model",
+			Message: llm.Message{Role: "assistant", Content: "ok"},
+		}},
+	}
+	mem := newMockMem()
+	mem.msgs["conv-clock"] = []memory.Message{
+		{Role: "user", Content: "prior question", Timestamp: now.Add(-5 * time.Minute)},
+	}
+	l := &Loop{
+		logger:  slog.Default(),
+		memory:  mem,
+		llm:     mock,
+		tools:   tools.NewRegistry(nil, nil),
+		model:   "test-model",
+		nowFunc: func() time.Time { return now },
+	}
+
+	_, err := l.Run(context.Background(), &Request{
+		ConversationID: "conv-clock",
+		Messages:       []Message{{Role: "user", Content: "current request"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(mock.calls))
+	}
+	got := mock.calls[0].Messages[1].Content
+	if !strings.HasPrefix(got, "[stored conversation history; role=user; age_delta=-300s]\n") {
+		t.Fatalf("stored history content = %q, want age_delta from loop clock", got)
+	}
+}

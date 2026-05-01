@@ -126,6 +126,80 @@ func TestRun_ExplicitModelPreflightUsesModelSpecificPromptSize(t *testing.T) {
 	}
 }
 
+func TestRun_RoutedModelRechecksModelSpecificPromptSize(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{{
+			Model:   "claude-sonnet-4-20250514",
+			Message: llm.Message{Role: "assistant", Content: "ok"},
+		}},
+	}
+	loop := buildTestLoop(mock, nil)
+
+	userMessage := "what is the status"
+	reqMessages := []Message{{Role: "user", Content: userMessage}}
+	defaultPrompt, defaultSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, nil, llm.DefaultModelInteractionProfile())
+	defaultSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(defaultPrompt, defaultSections, nil, reqMessages, "default", time.Time{}))
+	qwenPrompt, qwenSections := loop.buildSystemPromptWithProfileSections(context.Background(), userMessage, nil, loop.modelInteractionProfileForModel("qwen3:8b"))
+	qwenSize := estimateLLMMessagesContextTokens(buildInitialLLMMessages(qwenPrompt, qwenSections, nil, reqMessages, "default", time.Time{}))
+	if qwenSize <= defaultSize {
+		t.Fatalf("qwen prompt size = %d, want > default size %d", qwenSize, defaultSize)
+	}
+	qwenContextWindow := qwenSize - 1
+	if qwenContextWindow <= defaultSize {
+		t.Fatalf("test setup invalid: qwen context window %d must exceed default size %d", qwenContextWindow, defaultSize)
+	}
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default:    "qwen3:8b",
+			LocalFirst: true,
+			Resources: map[string]config.ModelServerConfig{
+				"local": {URL: "http://localhost:11434", Provider: "ollama"},
+				"cloud": {URL: "https://api.anthropic.com", Provider: "anthropic"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "qwen3:8b",
+					Resource:      "local",
+					SupportsTools: true,
+					ContextWindow: qwenContextWindow,
+					Speed:         10,
+					Quality:       7,
+					CostTier:      0,
+				},
+				{
+					Name:          "claude-sonnet-4-20250514",
+					Resource:      "cloud",
+					SupportsTools: true,
+					ContextWindow: qwenSize + 1000,
+					Speed:         4,
+					Quality:       9,
+					CostTier:      3,
+				},
+			},
+		},
+	}
+	registry := testModelRegistryFromConfig(t, cfg)
+	loop.UseModelRegistry(registry)
+	loop.router = router.NewRouter(slog.Default(), registry.Catalog().RouterConfig(32))
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Messages: reqMessages,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.Model != "claude-sonnet-4-20250514" {
+		t.Fatalf("resp.Model = %q, want claude-sonnet-4-20250514", resp.Model)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(mock.calls))
+	}
+	if mock.calls[0].Model != "claude-sonnet-4-20250514" {
+		t.Fatalf("llm call model = %q, want claude-sonnet-4-20250514", mock.calls[0].Model)
+	}
+}
+
 func TestRun_ExplicitModelRejectsStreamingIncompatibleDeployment(t *testing.T) {
 	mock := &mockLLM{}
 	loop := buildTestLoop(mock, nil)

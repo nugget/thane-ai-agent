@@ -1712,7 +1712,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 
-	llmMessages := buildInitialLLMMessages(systemPrompt, systemSections, history, req.Messages, convID, time.Now())
+	llmMessages := buildInitialLLMMessages(systemPrompt, systemSections, history, req.Messages, convID, l.now())
 	updateSystemMessage := func() {
 		if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
 			llmMessages[0].Content = systemPrompt
@@ -1763,6 +1763,31 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	needsStreaming := stream != nil
 	needsImages := messagesNeedImages(req.Messages)
 	contextSize := estimateLLMMessagesContextTokens(llmMessages)
+	query := ""
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			query = req.Messages[i].Content
+			break
+		}
+	}
+	routeWithContextSize := func(size int) (string, *router.Decision, error) {
+		routerReq := router.Request{
+			Query:          query,
+			ContextSize:    size,
+			NeedsTools:     needsTools,
+			NeedsStreaming: needsStreaming,
+			NeedsImages:    needsImages,
+			ToolCount:      len(visibleTools.List()),
+			Priority:       router.PriorityInteractive,
+			Hints:          req.Hints,
+		}
+
+		selected, decision := l.router.Route(ctx, routerReq)
+		if needsImages && decision != nil && decision.NoEligible {
+			return "", decision, noEligibleImageRoutingError(l.currentModelCatalog(), decision)
+		}
+		return selected, decision, nil
+	}
 
 	// Select model via router
 	model := req.Model
@@ -1772,32 +1797,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	if model == "" || model == "thane" {
 		if l.router != nil {
-			// Get the user's query from messages
-			query := ""
-			for i := len(req.Messages) - 1; i >= 0; i-- {
-				if req.Messages[i].Role == "user" {
-					query = req.Messages[i].Content
-					break
-				}
-			}
-
 			// Estimate effective prompt size for routing. This includes
 			// the assembled system prompt, user-visible message text, and
 			// a conservative surcharge for image-bearing inputs.
-			routerReq := router.Request{
-				Query:          query,
-				ContextSize:    contextSize,
-				NeedsTools:     needsTools,
-				NeedsStreaming: needsStreaming,
-				NeedsImages:    needsImages,
-				ToolCount:      len(visibleTools.List()),
-				Priority:       router.PriorityInteractive,
-				Hints:          req.Hints,
-			}
-
-			model, routerDecision = l.router.Route(ctx, routerReq)
-			if needsImages && routerDecision != nil && routerDecision.NoEligible {
-				return nil, noEligibleImageRoutingError(l.currentModelCatalog(), routerDecision)
+			var routeErr error
+			model, routerDecision, routeErr = routeWithContextSize(contextSize)
+			if routeErr != nil {
+				return nil, routeErr
 			}
 			log.Debug("model selected by router", "model", model)
 		} else {
@@ -1816,6 +1822,34 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		model = resolvedModel
 		log.Debug("model specified in request, skipping router", "model", model)
+	}
+
+	for routedPromptChecks := 0; routerDecision != nil; routedPromptChecks++ {
+		rebuildSystemPromptForModel(model)
+		actualContextSize := estimateLLMMessagesContextTokens(llmMessages)
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, actualContextSize)
+		if err == nil {
+			model = resolvedModel
+			break
+		}
+		if l.router == nil || !isContextWindowIncompatible(err) || routedPromptChecks >= 2 {
+			return nil, err
+		}
+
+		previousModel := model
+		var routeErr error
+		model, routerDecision, routeErr = routeWithContextSize(actualContextSize)
+		if routeErr != nil {
+			return nil, routeErr
+		}
+		if model == previousModel {
+			return nil, err
+		}
+		log.Info("model rerouted after model-specific prompt context check",
+			"from_model", previousModel,
+			"to_model", model,
+			"context_size", actualContextSize,
+		)
 	}
 
 	rebuildSystemPromptForModel(model)

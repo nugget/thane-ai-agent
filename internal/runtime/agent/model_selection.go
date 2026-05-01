@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -320,6 +321,20 @@ func isLMStudioLoadedContextError(err error) bool {
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(msg, "tokens to keep from the initial prompt is greater than the context length") &&
 		strings.Contains(msg, "load the model with a larger context length")
+}
+
+func isContextWindowIncompatible(err error) bool {
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		return false
+	}
+	for _, reason := range incompatible.Reasons {
+		reason = strings.ToLower(strings.TrimSpace(reason))
+		if strings.Contains(reason, "context window") || strings.Contains(reason, "token window") {
+			return true
+		}
+	}
+	return false
 }
 
 func noEligibleImageRoutingError(cat *fleet.Catalog, decision *router.Decision) error {

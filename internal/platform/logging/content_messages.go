@@ -44,7 +44,7 @@ func retainedToolCalls(calls []llm.ToolCall, maxLen int) []MessageToolCallDetail
 		argsJSON, err := json.Marshal(call.Function.Arguments)
 		args := ""
 		if err != nil {
-			args = fmt.Sprintf("failed to marshal arguments: %v", err)
+			args = retainedToolCallMarshalError(err, maxLen)
 		} else {
 			args = truncateRetainedContent(string(argsJSON), maxLen)
 		}
@@ -55,6 +55,18 @@ func retainedToolCalls(calls []llm.ToolCall, maxLen int) []MessageToolCallDetail
 		})
 	}
 	return retained
+}
+
+func retainedToolCallMarshalError(err error, maxLen int) string {
+	payload := map[string]string{
+		"error":  "failed_to_marshal_arguments",
+		"detail": err.Error(),
+	}
+	data, marshalErr := json.Marshal(payload)
+	if marshalErr != nil {
+		return truncateRetainedContent(fmt.Sprintf("failed to marshal arguments: %v", err), maxLen)
+	}
+	return truncateRetainedContent(string(data), maxLen)
 }
 
 func retainedImages(images []llm.ImageContent) []MessageImageDetail {
