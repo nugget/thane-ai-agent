@@ -10,16 +10,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
-
-// agentRunner abstracts direct agent dispatch sites that still bypass
-// loops-ng launch semantics (for example, handler-triggered wake paths
-// that create their own conversations).
-type agentRunner interface {
-	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
-}
 
 // taskExecDeps holds all dependencies needed by the scheduled task
 // executor. Using a struct avoids a growing parameter list as more

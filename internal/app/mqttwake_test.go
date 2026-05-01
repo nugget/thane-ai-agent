@@ -12,7 +12,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -21,20 +20,28 @@ import (
 // mqttMockRunner records Run calls for assertion.
 type mqttMockRunner struct {
 	mu   sync.Mutex
-	reqs []*agent.Request
+	reqs []looppkg.Request
 }
 
-func (m *mqttMockRunner) Run(_ context.Context, req *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
+func (m *mqttMockRunner) Run(_ context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reqs = append(m.reqs, req)
-	return &agent.Response{Content: "ok"}, nil
+	return &looppkg.Response{
+		Content:       "ok",
+		Model:         "test-model",
+		InputTokens:   11,
+		OutputTokens:  3,
+		ContextWindow: 4096,
+		RequestID:     "req-mqtt-test",
+		ActiveTags:    append([]string(nil), req.InitialTags...),
+	}, nil
 }
 
-func (m *mqttMockRunner) requests() []*agent.Request {
+func (m *mqttMockRunner) requests() []looppkg.Request {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cp := make([]*agent.Request, len(m.reqs))
+	cp := make([]looppkg.Request, len(m.reqs))
 	copy(cp, m.reqs)
 	return cp
 }
@@ -189,6 +196,12 @@ func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	if req.Hints["source"] != "mqtt_wake" {
 		t.Errorf("source hint = %q, want %q", req.Hints["source"], "mqtt_wake")
 	}
+	if req.Hints["loop_id"] == "" {
+		t.Error("loop_id hint is empty; request did not traverse loop turn preparation")
+	}
+	if req.Hints["loop_name"] != "mqtt/wake" {
+		t.Errorf("loop_name hint = %q, want %q", req.Hints["loop_name"], "mqtt/wake")
+	}
 }
 
 func TestMQTTWakeHandlerFanOut(t *testing.T) {
@@ -321,7 +334,7 @@ func TestApplyLoopProfile(t *testing.T) {
 		ExtraHints:       map[string]string{"custom": "value"},
 	}
 
-	req := &agent.Request{
+	req := &looppkg.Request{
 		Hints:        map[string]string{"existing": "hint"},
 		ExcludeTools: []string{"files_read"},
 		InitialTags:  []string{"baseline"},
