@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -1008,17 +1009,24 @@ func (a *loopAdapter) capSurfaceSnapshot() []toolcatalog.CapabilitySurface {
 const maxToolResultLen = 2000
 
 // Run converts a [looppkg.Request] to [agent.Request], calls the agent
-// loop, and converts the result back to [looppkg.Response].
-func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+// loop, and converts the result back to [looppkg.Response]. The stream
+// callback carries caller-facing events, such as HTTP token streaming;
+// req.OnProgress is translated into loop lifecycle telemetry separately.
+func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, stream looppkg.StreamCallback) (*looppkg.Response, error) {
 	agentReq := compileLoopAgentRequest(req)
 
-	// Build an agent streaming callback that relays tool and LLM
-	// events through the loop's OnProgress callback.
+	// Build one agent stream that fans out to both the caller-facing
+	// stream and the loop progress callback.
 	capSurface := a.capSurfaceSnapshot()
 
 	var agentStream agent.StreamCallback
-	if req.OnProgress != nil {
+	if stream != nil {
 		agentStream = func(e agent.StreamEvent) {
+			stream(e)
+		}
+	}
+	if req.OnProgress != nil {
+		progressStream := func(e agent.StreamEvent) {
 			switch e.Kind {
 			case agent.KindLLMStart:
 				if e.Response != nil {
@@ -1094,6 +1102,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 				}
 			}
 		}
+		agentStream = composeAgentStreams(agentStream, progressStream)
 	}
 
 	resp, err := a.agentLoop.Run(ctx, agentReq, agentStream)
@@ -1135,11 +1144,35 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 	}, nil
 }
 
+// composeAgentStreams returns a callback that preserves both stream
+// consumers. It is used when a loop turn needs caller-facing streaming and
+// loop progress telemetry from the same underlying agent stream.
+func composeAgentStreams(first, second agent.StreamCallback) agent.StreamCallback {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return func(e agent.StreamEvent) {
+		first(e)
+		second(e)
+	}
+}
+
+// compileLoopAgentRequest converts the loop-owned request mirror into the
+// agent package's request type. Mutable slices and maps are copied so the
+// loop can keep its per-turn request stable after handing execution to the
+// agent runtime.
 func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 	// Convert messages.
 	msgs := make([]agent.Message, len(req.Messages))
 	for i, m := range req.Messages {
-		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
+		msgs[i] = agent.Message{
+			Role:    m.Role,
+			Content: m.Content,
+			Images:  append([]llm.ImageContent(nil), m.Images...),
+		}
 	}
 
 	return &agent.Request{
@@ -1160,6 +1193,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		ToolTimeout:           req.ToolTimeout,
 		UsageRole:             req.UsageRole,
 		UsageTaskName:         req.UsageTaskName,
+		FallbackContent:       req.FallbackContent,
 		SystemPrompt:          req.SystemPrompt,
 		PromptMode:            req.PromptMode,
 		SuppressAlwaysContext: req.SuppressAlwaysContext,

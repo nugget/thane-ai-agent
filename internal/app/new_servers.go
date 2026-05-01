@@ -167,7 +167,13 @@ func (a *App) initServers(s *newState) error {
 	// --- OWU tracker ---
 	// Registers a parent "owu" loop and lazily spawns per-conversation
 	// children so that Open WebUI sessions appear on the dashboard.
-	owuTracker, err := api.NewOWUTracker(s.ctx, a.loopRegistry, a.eventBus, a.loop, logger)
+	owuTracker, err := api.NewOWUTracker(
+		s.ctx,
+		a.loopRegistry,
+		a.eventBus,
+		&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
+		logger,
+	)
 	if err != nil {
 		return fmt.Errorf("create owu tracker: %w", err)
 	}

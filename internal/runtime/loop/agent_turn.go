@@ -26,19 +26,47 @@ type TurnInput struct {
 }
 
 // AgentTurn is an agent request prepared by loop-adjacent code for the
-// loop runtime to execute. The request is not yet final; the runtime
-// still merges loop defaults, launch overrides, progress callbacks,
-// tool filters, and carried capability tags before calling the runner.
+// loop runtime to execute. It is the handoff point between wake-specific
+// adapters and the common runner path: builders describe the work, while
+// the loop still applies defaults, launch overrides, progress callbacks,
+// tool filters, fallback content, and carried capability tags before
+// invoking the runner.
 type AgentTurn struct {
 	// Request is the model-facing request prepared for this wake before
-	// loop-level request defaults are applied.
+	// loop-level defaults and overrides are applied. Builders should set
+	// only the request fields they actually own.
 	Request Request
+
+	// RunContext is an optional caller-owned cancellation context for the
+	// runner invocation. The loop merges it with the iteration context so
+	// request/reply callers, such as HTTP handlers, can cancel model work
+	// on disconnect without owning loop lifecycle or registration.
+	RunContext context.Context
+
+	// Stream receives raw runner stream events for this turn. The loop
+	// still wires its own progress callback separately, so Stream is for
+	// caller-facing delivery such as HTTP token streaming rather than
+	// dashboard telemetry.
+	Stream StreamCallback
+
+	// ResultSink receives the runner response and error when preparation
+	// or execution finishes. It is called synchronously from the loop
+	// goroutine, so implementations should return promptly; a buffered
+	// channel send is the usual pattern for synchronous request/reply
+	// ingress paths.
+	ResultSink TurnResultSink
 
 	// Summary is compact operator context copied onto the iteration
 	// snapshot and completion event. Values should stay small because
 	// they travel through dashboard/event payloads.
 	Summary map[string]any
 }
+
+// TurnResultSink receives the model response and error for a single
+// loop-owned turn. On request-preparation failures the response may be
+// nil; on runner failures it may contain partial metadata returned by
+// the runner.
+type TurnResultSink func(resp *Response, err error)
 
 // TurnBuilder prepares model-facing work from a loop wake. A nil
 // AgentTurn with nil error means the wake produced no work and should
