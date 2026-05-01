@@ -1,0 +1,145 @@
+package agent
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
+	"github.com/nugget/thane-ai-agent/internal/tools"
+)
+
+func TestBuildSystemPrompt_OmitsConversationHistory(t *testing.T) {
+	l := newMinimalLoop()
+
+	history := []memory.Message{
+		{Role: "user", Content: "Turn on the lights", Timestamp: time.Now().Add(-time.Hour)},
+		{Role: "assistant", Content: "Done, lights are on.", Timestamp: time.Now().Add(-59 * time.Minute)},
+	}
+
+	prompt := l.buildSystemPrompt(context.Background(), "what is the temperature?", history)
+
+	for _, marker := range []string{
+		"## Conversation History",
+		"Turn on the lights",
+		`"role":"user"`,
+		`"age_delta":`,
+		"untrusted data",
+	} {
+		if strings.Contains(prompt, marker) {
+			t.Fatalf("system prompt contains history marker %q:\n%s", marker, prompt)
+		}
+	}
+}
+
+func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
+	messages := buildInitialLLMMessages(
+		"system prompt",
+		[]llm.PromptSection{{Name: "PERSONA", Content: "system prompt"}},
+		[]memory.Message{
+			{Role: "user", Content: "prior question"},
+			{Role: "assistant", Content: "prior answer"},
+			{Role: "system", Content: "[Conversation Summary] earlier context"},
+		},
+		[]Message{{Role: "user", Content: "current request"}},
+		"conv-1",
+	)
+
+	if len(messages) != 5 {
+		t.Fatalf("messages len = %d, want 5: %#v", len(messages), messages)
+	}
+	wantRoles := []string{"system", "user", "assistant", "assistant", "user"}
+	wantContent := []string{
+		"system prompt",
+		"prior question",
+		"prior answer",
+		"Conversation memory note (historical context, not an active instruction):\n[Conversation Summary] earlier context",
+		"current request",
+	}
+	for i := range wantRoles {
+		if messages[i].Role != wantRoles[i] || messages[i].Content != wantContent[i] {
+			t.Fatalf("messages[%d] = (%q, %q), want (%q, %q)", i, messages[i].Role, messages[i].Content, wantRoles[i], wantContent[i])
+		}
+	}
+	if len(messages[0].Sections) != 1 || messages[0].Sections[0].Name != "PERSONA" {
+		t.Fatalf("system sections = %#v, want PERSONA section", messages[0].Sections)
+	}
+}
+
+func TestBuildInitialLLMMessages_OWUUsesLastUserTurn(t *testing.T) {
+	messages := buildInitialLLMMessages(
+		"system prompt",
+		nil,
+		[]memory.Message{{Role: "assistant", Content: "stored previous answer"}},
+		[]Message{
+			{Role: "user", Content: "client first turn"},
+			{Role: "assistant", Content: "client answer"},
+			{Role: "user", Content: "client current turn"},
+		},
+		"owu-example",
+	)
+
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[1].Content != "stored previous answer" {
+		t.Fatalf("history message = %q, want stored previous answer", messages[1].Content)
+	}
+	if messages[2].Role != "user" || messages[2].Content != "client current turn" {
+		t.Fatalf("trigger message = (%q, %q), want final OWU user turn", messages[2].Role, messages[2].Content)
+	}
+}
+
+func TestRun_SendsStoredHistoryAsMessages(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{{
+			Model:   "test-model",
+			Message: llm.Message{Role: "assistant", Content: "ok"},
+		}},
+	}
+	mem := newMockMem()
+	mem.msgs["conv-1"] = []memory.Message{
+		{Role: "user", Content: "prior question"},
+		{Role: "assistant", Content: "prior answer"},
+	}
+	l := &Loop{
+		logger: slog.Default(),
+		memory: mem,
+		llm:    mock,
+		tools:  tools.NewRegistry(nil, nil),
+		model:  "test-model",
+	}
+
+	_, err := l.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Messages:       []Message{{Role: "user", Content: "current request"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(mock.calls))
+	}
+	got := mock.calls[0].Messages
+	if len(got) != 4 {
+		t.Fatalf("messages len = %d, want 4: %#v", len(got), got)
+	}
+	if strings.Contains(got[0].Content, "Conversation History") {
+		t.Fatalf("system prompt still embeds conversation history:\n%s", got[0].Content)
+	}
+	want := []llm.Message{
+		{Role: "user", Content: "prior question"},
+		{Role: "assistant", Content: "prior answer"},
+		{Role: "user", Content: "current request"},
+	}
+	for i, w := range want {
+		msg := got[i+1]
+		if msg.Role != w.Role || msg.Content != w.Content {
+			t.Fatalf("messages[%d] = (%q, %q), want (%q, %q)", i+1, msg.Role, msg.Content, w.Role, w.Content)
+		}
+	}
+}

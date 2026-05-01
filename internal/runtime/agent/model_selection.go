@@ -296,6 +296,15 @@ func estimateRequestContextTokens(systemPrompt string, msgs []Message) int {
 	return total
 }
 
+func estimateLLMMessagesContextTokens(msgs []llm.Message) int {
+	total := 0
+	for _, msg := range msgs {
+		total += roughTokenCount(msg.Content)
+		total += len(msg.Images) * estimatedImageContextTokens
+	}
+	return total
+}
+
 func roughTokenCount(s string) int {
 	s = strings.TrimSpace(s)
 	if s == "" {
