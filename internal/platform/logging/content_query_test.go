@@ -92,6 +92,18 @@ func TestQueryRequestDetail_Found(t *testing.T) {
 	if detail.ToolsUsed["search"] != 2 {
 		t.Errorf("tools_used[search] = %d, want 2", detail.ToolsUsed["search"])
 	}
+	if len(detail.Messages) != 5 {
+		t.Fatalf("messages count = %d, want 5", len(detail.Messages))
+	}
+	if detail.Messages[0].Role != "system" || detail.Messages[0].Content != "You are a helpful assistant." {
+		t.Fatalf("messages[0] = %#v, want retained system prompt", detail.Messages[0])
+	}
+	if detail.Messages[2].Role != "assistant" || len(detail.Messages[2].ToolCalls) != 1 {
+		t.Fatalf("messages[2] = %#v, want assistant tool-call message", detail.Messages[2])
+	}
+	if detail.Messages[2].ToolCalls[0].Name != "search" || detail.Messages[2].ToolCalls[0].Arguments != `{"query":"hello"}` {
+		t.Fatalf("messages[2].ToolCalls[0] = %#v, want search query args", detail.Messages[2].ToolCalls[0])
+	}
 
 	// Verify tool calls.
 	if len(detail.ToolCalls) != 1 {

@@ -2248,11 +2248,14 @@ function renderRequestDetail(detail, els) {
   }
   els.meta.appendChild(bar);
 
-  // Content sections (system prompt, user, assistant).
+  // Content sections (system prompt, retained messages, user, assistant).
   els.content.innerHTML = '';
 
   if (detail.system_prompt) {
     els.content.appendChild(buildContentSection('System Prompt', detail.system_prompt));
+  }
+  if (Array.isArray(detail.messages) && detail.messages.length > 0) {
+    els.content.appendChild(buildContentSection('Messages[] Payload', JSON.stringify(detail.messages, null, 2)));
   }
   if (detail.user_content) {
     els.content.appendChild(buildContentSection('User', detail.user_content));

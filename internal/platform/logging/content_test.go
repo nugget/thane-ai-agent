@@ -54,13 +54,13 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 	var (
 		reqID, promptHash, userContent, assistantContent, model string
 		iterCount, inputTok, outputTok                          int
-		toolsUsed                                               sql.NullString
+		toolsUsed, messagesJSON                                 sql.NullString
 	)
 	err = db.QueryRow(`SELECT request_id, prompt_hash, user_content, assistant_content,
-		model, iteration_count, input_tokens, output_tokens, tools_used
-		FROM log_request_content WHERE request_id = ?`, "r_test123").Scan(
+			model, iteration_count, input_tokens, output_tokens, tools_used, messages_json
+			FROM log_request_content WHERE request_id = ?`, "r_test123").Scan(
 		&reqID, &promptHash, &userContent, &assistantContent,
-		&model, &iterCount, &inputTok, &outputTok, &toolsUsed,
+		&model, &iterCount, &inputTok, &outputTok, &toolsUsed, &messagesJSON,
 	)
 	if err != nil {
 		t.Fatalf("failed to read request content: %v", err)
@@ -90,6 +90,22 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 		}
 	} else {
 		t.Error("tools_used should not be null")
+	}
+	if !messagesJSON.Valid {
+		t.Fatal("messages_json should not be null")
+	}
+	var retained []MessageDetail
+	if err := json.Unmarshal([]byte(messagesJSON.String), &retained); err != nil {
+		t.Fatalf("decode messages_json: %v", err)
+	}
+	if len(retained) != 3 {
+		t.Fatalf("retained messages len = %d, want 3", len(retained))
+	}
+	if retained[0].Role != "system" || retained[0].Content != "You are a helpful assistant." {
+		t.Fatalf("retained[0] = %#v, want system prompt message", retained[0])
+	}
+	if retained[1].Role != "user" || retained[1].Content != "Hello" {
+		t.Fatalf("retained[1] = %#v, want user Hello", retained[1])
 	}
 
 	// Write same prompt again — should not duplicate.
@@ -239,6 +255,22 @@ func TestContentWriter_Truncation(t *testing.T) {
 	}
 	if len(assistantContent) != 10 {
 		t.Errorf("assistant_content length = %d, want 10", len(assistantContent))
+	}
+	var messagesJSON string
+	err = db.QueryRow(`SELECT messages_json FROM log_request_content
+			WHERE request_id = ?`, "r_trunc").Scan(&messagesJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained []MessageDetail
+	if err := json.Unmarshal([]byte(messagesJSON), &retained); err != nil {
+		t.Fatalf("decode messages_json: %v", err)
+	}
+	if len(retained) != 3 {
+		t.Fatalf("retained messages len = %d, want 3", len(retained))
+	}
+	if len(retained[1].Content) != 10 || !retained[1].ContentTruncated {
+		t.Fatalf("retained user content = %#v, want 10 chars and truncated flag", retained[1])
 	}
 }
 
