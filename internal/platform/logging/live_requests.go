@@ -138,6 +138,7 @@ func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *Reque
 		Exhausted:        rc.Exhausted,
 		ExhaustReason:    rc.ExhaustReason,
 		CreatedAt:        now.Format(time.RFC3339Nano),
+		Messages:         retainedMessages(rc.Messages, maxLen),
 		ToolCalls:        extractToolDetails(rc.Messages, maxLen),
 	}
 	if len(rc.ToolsUsed) > 0 {
@@ -165,6 +166,7 @@ func cloneRequestDetail(src *RequestDetail) *RequestDetail {
 	} else {
 		dst.ToolCalls = append([]ToolDetail(nil), src.ToolCalls...)
 	}
+	dst.Messages = cloneMessageDetails(src.Messages)
 	return &dst
 }
 
@@ -205,15 +207,20 @@ func extractToolDetails(messages []llm.Message, maxLen int) []ToolDetail {
 }
 
 func truncateRetainedContent(s string, maxLen int) string {
+	out, _ := truncateRetainedContentWithFlag(s, maxLen)
+	return out
+}
+
+func truncateRetainedContentWithFlag(s string, maxLen int) (string, bool) {
 	if maxLen <= 0 {
-		return s
+		return s, false
 	}
 	runeCount := 0
 	for i := range s {
 		if runeCount == maxLen {
-			return s[:i]
+			return s[:i], true
 		}
 		runeCount++
 	}
-	return s
+	return s, false
 }

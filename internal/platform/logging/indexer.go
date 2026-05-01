@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // promotedKeys lists log attribute keys that are extracted into their
@@ -274,6 +276,7 @@ func Migrate(db *sql.DB) error {
 		input_tokens INTEGER,
 		output_tokens INTEGER,
 		tools_used TEXT,
+		messages_json TEXT,
 		exhausted BOOLEAN DEFAULT FALSE,
 		exhaust_reason TEXT,
 		created_at TEXT NOT NULL
@@ -296,6 +299,9 @@ func Migrate(db *sql.DB) error {
 	`
 	if _, err := db.Exec(contentSchema); err != nil {
 		return fmt.Errorf("migrate content retention: %w", err)
+	}
+	if err := database.AddColumn(db, "log_request_content", "messages_json", "TEXT"); err != nil {
+		return fmt.Errorf("migrate content messages: %w", err)
 	}
 
 	return nil

@@ -384,8 +384,9 @@ type LoggingConfig struct {
 
 	// RetainContent enables content retention in the log index database.
 	// When true, system prompts (deduplicated by SHA-256 hash), tool call
-	// arguments/results, and request/response content are persisted to
-	// logs.db alongside the existing log index. Default: false.
+	// arguments/results, request/response content, and the model-facing
+	// chat message payload are persisted to logs.db alongside the existing
+	// log index. Default: false.
 	RetainContent bool `yaml:"retain_content"`
 
 	// MaxContentLength is the maximum number of characters retained per

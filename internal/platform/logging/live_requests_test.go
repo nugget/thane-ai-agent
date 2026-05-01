@@ -75,10 +75,23 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	if detail.ToolCalls[0].Result != "result paylo" {
 		t.Fatalf("Result = %q, want truncated tool result", detail.ToolCalls[0].Result)
 	}
+	if len(detail.Messages) != 5 {
+		t.Fatalf("len(Messages) = %d, want 5", len(detail.Messages))
+	}
+	if detail.Messages[1].Role != "user" || detail.Messages[1].Content != "search for o" || !detail.Messages[1].ContentTruncated {
+		t.Fatalf("Messages[1] = %#v, want truncated retained user message", detail.Messages[1])
+	}
+	if detail.Messages[2].Role != "assistant" || len(detail.Messages[2].ToolCalls) != 1 {
+		t.Fatalf("Messages[2] = %#v, want assistant tool-call message", detail.Messages[2])
+	}
+	if detail.Messages[2].ToolCalls[0].Arguments != `{"query":"ob` {
+		t.Fatalf("ToolCall arguments = %q", detail.Messages[2].ToolCalls[0].Arguments)
+	}
 
 	// Ensure callers receive a defensive copy.
 	detail.ToolsUsed["web_search"] = 99
 	detail.ToolCalls[0].ToolName = "mutated"
+	detail.Messages[2].ToolCalls[0].Name = "mutated"
 	again, err := store.QueryRequestDetail("r_live")
 	if err != nil {
 		t.Fatalf("QueryRequestDetail second call: %v", err)
@@ -88,6 +101,9 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	}
 	if again.ToolCalls[0].ToolName != "web_search" {
 		t.Fatalf("stored ToolName mutated to %q, want web_search", again.ToolCalls[0].ToolName)
+	}
+	if again.Messages[2].ToolCalls[0].Name != "web_search" {
+		t.Fatalf("stored message tool name mutated to %q, want web_search", again.Messages[2].ToolCalls[0].Name)
 	}
 }
 

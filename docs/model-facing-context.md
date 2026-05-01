@@ -210,8 +210,10 @@ document tool, or generated output tool is the intended write surface.
 ### Separate instructions from data
 
 Behavioral guidance belongs in talents and prompts. Runtime facts belong
-in context providers. Historical conversation data belongs in a clearly
-delimited data block.
+in context providers. Historical conversation turns belong in role-native
+chat messages rather than the root system prompt. Generated summaries or
+handoffs that are stored as conversation memory should be labeled as
+historical context, not promoted to active system instructions.
 
 Do not hide instructions inside what claims to be data.
 

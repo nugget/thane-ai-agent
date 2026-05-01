@@ -11,20 +11,21 @@ import (
 // RequestDetail holds the full content retained for a single request,
 // ready for JSON serialization by the web API.
 type RequestDetail struct {
-	RequestID        string         `json:"request_id"`
-	PromptHash       string         `json:"prompt_hash,omitempty"`
-	SystemPrompt     string         `json:"system_prompt,omitempty"`
-	UserContent      string         `json:"user_content,omitempty"`
-	AssistantContent string         `json:"assistant_content,omitempty"`
-	Model            string         `json:"model,omitempty"`
-	IterationCount   int            `json:"iteration_count"`
-	InputTokens      int            `json:"input_tokens"`
-	OutputTokens     int            `json:"output_tokens"`
-	ToolsUsed        map[string]int `json:"tools_used,omitempty"`
-	Exhausted        bool           `json:"exhausted"`
-	ExhaustReason    string         `json:"exhaust_reason,omitempty"`
-	CreatedAt        string         `json:"created_at"`
-	ToolCalls        []ToolDetail   `json:"tool_calls"`
+	RequestID        string          `json:"request_id"`
+	PromptHash       string          `json:"prompt_hash,omitempty"`
+	SystemPrompt     string          `json:"system_prompt,omitempty"`
+	Messages         []MessageDetail `json:"messages"`
+	UserContent      string          `json:"user_content,omitempty"`
+	AssistantContent string          `json:"assistant_content,omitempty"`
+	Model            string          `json:"model,omitempty"`
+	IterationCount   int             `json:"iteration_count"`
+	InputTokens      int             `json:"input_tokens"`
+	OutputTokens     int             `json:"output_tokens"`
+	ToolsUsed        map[string]int  `json:"tools_used,omitempty"`
+	Exhausted        bool            `json:"exhausted"`
+	ExhaustReason    string          `json:"exhaust_reason,omitempty"`
+	CreatedAt        string          `json:"created_at"`
+	ToolCalls        []ToolDetail    `json:"tool_calls"`
 }
 
 // ToolDetail holds the retained content for a single tool invocation.
@@ -34,6 +35,33 @@ type ToolDetail struct {
 	Arguments      string `json:"arguments,omitempty"`
 	Result         string `json:"result,omitempty"`
 	IterationIndex int    `json:"iteration_index"`
+}
+
+// MessageDetail holds one retained chat message from the provider-neutral
+// message payload sent to the model. Image bytes are intentionally omitted;
+// only media metadata is retained for forensics.
+type MessageDetail struct {
+	Index            int                     `json:"index"`
+	Role             string                  `json:"role"`
+	Content          string                  `json:"content,omitempty"`
+	ContentTruncated bool                    `json:"content_truncated,omitempty"`
+	ToolCalls        []MessageToolCallDetail `json:"tool_calls,omitempty"`
+	ToolCallID       string                  `json:"tool_call_id,omitempty"`
+	Images           []MessageImageDetail    `json:"images,omitempty"`
+}
+
+// MessageToolCallDetail describes a tool call embedded in an assistant
+// message from the retained chat payload.
+type MessageToolCallDetail struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+// MessageImageDetail describes a retained image attachment without storing
+// the base64 image payload itself.
+type MessageImageDetail struct {
+	MediaType string `json:"media_type,omitempty"`
 }
 
 // QueryRequestDetail fetches the full retained content for a request by
@@ -50,19 +78,20 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 		rd                             RequestDetail
 		promptHash, userContent        sql.NullString
 		assistantContent, model        sql.NullString
+		messagesJSON, toolsUsed        sql.NullString
+		exhaustReason                  sql.NullString
 		iterCount, inputTok, outputTok sql.NullInt64
-		toolsUsed, exhaustReason       sql.NullString
 		exhausted                      sql.NullBool
 		createdAt                      string
 	)
 
 	err := db.QueryRowContext(ctx, `SELECT request_id, prompt_hash, user_content, assistant_content,
-		model, iteration_count, input_tokens, output_tokens, tools_used,
+		model, iteration_count, input_tokens, output_tokens, tools_used, messages_json,
 		exhausted, exhaust_reason, created_at
 		FROM log_request_content WHERE request_id = ?`, requestID).Scan(
 		&rd.RequestID, &promptHash, &userContent, &assistantContent,
 		&model, &iterCount, &inputTok, &outputTok, &toolsUsed,
-		&exhausted, &exhaustReason, &createdAt,
+		&messagesJSON, &exhausted, &exhaustReason, &createdAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -87,6 +116,14 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 		if err := json.Unmarshal([]byte(toolsUsed.String), &tu); err == nil {
 			rd.ToolsUsed = tu
 		}
+	}
+	if messagesJSON.Valid && messagesJSON.String != "" {
+		if err := json.Unmarshal([]byte(messagesJSON.String), &rd.Messages); err != nil {
+			return &rd, fmt.Errorf("decode retained messages: %w", err)
+		}
+	}
+	if rd.Messages == nil {
+		rd.Messages = []MessageDetail{}
 	}
 
 	// Resolve system prompt content from the prompts table.
