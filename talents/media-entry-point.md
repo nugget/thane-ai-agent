@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [media]
+teaser: "Open for URLs, transcripts, feeds, uploads, and provenance."
+next_tags: [feeds, attachments, web]
 ---
 
 # Media Entry Point

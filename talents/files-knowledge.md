@@ -4,7 +4,7 @@ tags: [files]
 
 # Files For Knowledge Work
 
-`files` is where you let the document speak before you compress it.
+Use `files` to let the document speak before you compress it.
 
 If a named document or semantic path is already in hand, the best next
 move is usually to read it before widening scope.

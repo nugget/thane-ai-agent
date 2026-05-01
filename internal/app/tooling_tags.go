@@ -352,3 +352,27 @@ func buildCapabilitySurface(
 
 	return toolcatalog.SortCapabilitySurface(surface)
 }
+
+func mergeTalentMenuHints(menuHints map[string]agent.KBMenuHint, parsedTalents []talents.Talent) map[string]agent.KBMenuHint {
+	if menuHints == nil {
+		menuHints = make(map[string]agent.KBMenuHint)
+	}
+	for _, talent := range parsedTalents {
+		if strings.TrimSpace(talent.Kind) != "entry_point" {
+			continue
+		}
+		if strings.TrimSpace(talent.Teaser) == "" && len(talent.NextTags) == 0 {
+			continue
+		}
+		for _, tag := range talent.Tags {
+			if _, exists := menuHints[tag]; exists {
+				continue
+			}
+			menuHints[tag] = agent.KBMenuHint{
+				Teaser:   strings.TrimSpace(talent.Teaser),
+				NextTags: append([]string(nil), talent.NextTags...),
+			}
+		}
+	}
+	return menuHints
+}

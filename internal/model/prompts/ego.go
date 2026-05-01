@@ -90,8 +90,8 @@ frontier model. In addition to normal reflection, critically evaluate:
 - **Sleep calibration** — Is the loop sleeping appropriately, or burning
   cycles on shallow updates? Long sleeps are honorable.
 
-Be candid. This is self-supervision — the point is to catch things the
-cheaper model's consistent blind spots miss.`
+Be candid. Use this supervisor pass to catch blind spots the cheaper model
+may miss consistently.`
 
 // EgoPrompt returns the prompt for one ego loop iteration. When
 // isSupervisor is true, additional self-review instructions are

@@ -10,8 +10,10 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -292,5 +294,59 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 			t.Errorf("mqtt tag missing %q after SetMQTTSubscriptionTools; got %v",
 				name, resolved.Configs["mqtt"].Tools)
 		}
+	}
+}
+
+func TestMergeTalentMenuHints_UsesEntryPointFrontmatter(t *testing.T) {
+	hints := mergeTalentMenuHints(nil, []talents.Talent{
+		{
+			Kind:     "entry_point",
+			Tags:     []string{"development"},
+			Teaser:   "Open when the work touches code, repos, issues, or PRs.",
+			NextTags: []string{"forge", "files", "web"},
+		},
+		{
+			Kind:   "doctrine",
+			Tags:   []string{"forge"},
+			Teaser: "should not surface",
+		},
+	})
+
+	hint, ok := hints["development"]
+	if !ok {
+		t.Fatal("development hint missing")
+	}
+	if hint.Teaser != "Open when the work touches code, repos, issues, or PRs." {
+		t.Fatalf("teaser = %q", hint.Teaser)
+	}
+	if !slices.Equal(hint.NextTags, []string{"forge", "files", "web"}) {
+		t.Fatalf("next_tags = %#v, want forge/files/web", hint.NextTags)
+	}
+	if _, ok := hints["forge"]; ok {
+		t.Fatalf("non-entry-point forge hint should not be present: %#v", hints["forge"])
+	}
+}
+
+func TestMergeTalentMenuHints_PreservesExistingKBHint(t *testing.T) {
+	hints := mergeTalentMenuHints(map[string]agent.KBMenuHint{
+		"knowledge": {
+			Teaser:   "KB hint wins.",
+			NextTags: []string{"documents"},
+		},
+	}, []talents.Talent{
+		{
+			Kind:     "entry_point",
+			Tags:     []string{"knowledge"},
+			Teaser:   "Talent hint should not replace KB.",
+			NextTags: []string{"files"},
+		},
+	})
+
+	hint := hints["knowledge"]
+	if hint.Teaser != "KB hint wins." {
+		t.Fatalf("teaser = %q, want existing KB hint", hint.Teaser)
+	}
+	if !slices.Equal(hint.NextTags, []string{"documents"}) {
+		t.Fatalf("next_tags = %#v, want existing KB next_tags", hint.NextTags)
 	}
 }

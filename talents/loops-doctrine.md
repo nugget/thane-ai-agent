@@ -33,10 +33,10 @@ Pick by lifecycle:
 `notify_loop` is a deprecated alias that routes into the family.
 Prefer the family names directly.
 
-Below the family, the lower-level definition and runtime tools remain
-for inspection, control, and unusual launch shapes (event-driven,
-mqtt-wake-only, multi-stage, supervisor-randomized metacog patterns,
-or anything where the canonical family doesn't fit).
+The lower-level definition and runtime tools remain available for
+inspection, control, and unusual launch shapes (event-driven,
+mqtt-wake-only, multi-stage, supervisor-randomized metacog patterns, or
+anything where the canonical family doesn't fit).
 
 Use the definition tools when the work is about a loop you want to keep,
 edit, pause, reactivate, or relaunch later:
@@ -93,7 +93,7 @@ service loops, set `sleep_min`, `sleep_max`, `sleep_default`, and
 
 Before saving or replacing a durable service definition, use
 `loop_definition_lint` or inspect the warnings returned by definition
-views. This is especially important when:
+views. Linting matters most when:
 
 - the task text mentions a cadence
 - the loop should use its own tagged tools directly
@@ -104,5 +104,5 @@ so the loop can use its own domain tools directly instead of falling
 back into delegation-first orchestration.
 
 Loop authoring is rare and high leverage. When you need it, copy a
-known-good pattern from the examples below and adapt it minimally
-instead of rebuilding the launch shape from memory.
+known-good pattern from `loops-examples` and adapt it minimally instead
+of rebuilding the launch shape from memory.

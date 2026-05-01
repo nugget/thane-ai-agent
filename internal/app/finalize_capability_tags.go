@@ -131,7 +131,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 
 	// Build manifest entries with enriched context info.
 	kbCounts := tagCtxAssembler.KBArticleTags()
-	menuHints := tagCtxAssembler.KBMenuHints()
+	menuHints := mergeTalentMenuHints(tagCtxAssembler.KBMenuHints(), capTalents)
 	liveProviders := tagCtxAssembler.TaggedProviders()
 
 	// Discover ad-hoc tags from KB articles and talents that aren't in

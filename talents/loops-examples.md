@@ -71,8 +71,8 @@ that can return naturally when it is done.
 }
 ```
 
-If this is launched from the current interactive context, you usually do
-not need to set an explicit completion target. The runtime can infer the
+When launching from the current interactive context, you usually do not
+need to set an explicit completion target. The runtime can infer the
 most natural callback path from the current conversation or channel
 origin.
 
@@ -119,7 +119,8 @@ pass.
 Put the main prompt in `launch.spec.task`, not top-level `launch.task`,
 when you want `supervisor_context` to apply cleanly.
 Words like hourly or daily inside `task` do not schedule the loop. The
-sleep fields above are the real cadence.
+`sleep_min`, `sleep_max`, `sleep_default`, and `jitter` fields are the
+real cadence.
 
 ## Pattern: Durable Named Service You Can Pause And Resume
 
@@ -203,8 +204,8 @@ decision boundary.
 }
 ```
 
-This is the most reliable way to get delegate-like behavior without
-flattening the parent loop into the entire investigation.
+Use this pattern for delegate-like behavior without flattening the
+parent loop into the entire investigation.
 
 ## Pattern: Wake A Sleeping Service Loop With New Context
 
@@ -226,5 +227,5 @@ the normal sleep cycle.
 }
 ```
 
-This is the right tool when the loop already exists and only needs a
-single corrective or time-sensitive nudge.
+Use this tool when the loop already exists and only needs a single
+corrective or time-sensitive nudge.

@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [knowledge]
+teaser: "Open when the truth lives in docs, memory, archives, or named sources."
+next_tags: [files, documents, memory, archive, web]
 ---
 
 # Knowledge Entry Point

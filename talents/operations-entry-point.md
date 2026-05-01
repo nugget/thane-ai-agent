@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [operations]
+teaser: "Open for runtime health, logs, models, loops, schedules, or local ops."
+next_tags: [diagnostics, models, loops, scheduler, mqtt]
 ---
 
 # Operations Entry Point

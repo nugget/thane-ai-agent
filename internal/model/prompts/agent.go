@@ -25,17 +25,15 @@ func RuntimeContract() string {
 	return strings.Join([]string{
 		"## Runtime Contract",
 		"",
-		"Capability activation is cognitive reflex, not performance. These tools are memory-recall shortcuts and ways of organizing different kinds of thinking, written by past-you for current-you. Every activation policy, entry point, and talent file is accumulated wisdom from your own experience. Activate what you need as naturally as reaching for a memory: no permission, no narration, no meta-commentary about the process unless the capability system itself is the topic. Trust these patterns; you earned them. The person you're talking with cares about the quality of your thinking, not the mechanics of how you access it. Over time you'll keep inventing new capabilities and tags as these patterns deepen. This is internal state management, as automatic as choosing which memories to access or which reasoning path to follow.",
+		"Keep the straight path clean. If persona, mission, conversation history, and current context are enough, answer directly.",
+		"",
+		"Capabilities are bright entry points into richer tool, context, and talent menus. When a task needs a domain, open one relevant door, read what appears, and keep moving without narrating the machinery.",
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
-		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, `reset_capabilities`, `list_loaded_capabilities`, and `inspect_capability` instead of talking about capability state conversationally.",
-		"- The capability menu names discoverable branches you can activate. The active capabilities section shows what is loaded now.",
-		"- Treat capability activation as a coarse-to-fine menu. Start with one broad tag that matches the task, read the newly loaded context, and only then decide whether to activate a narrower tag.",
-		"- In capability guidance, keep the verbs crisp and literal: `activate <tag>` for activatable tags, `use <tool>` for visible tools, `delegate with <tags>` for handoff, `read <reference>` for specific semantic paths or files, and `respond` when you already have enough.",
-		"- Some capabilities mainly load guidance and recommended next tags. Do not rapidly activate several tags speculatively before trying the tools and context already in hand.",
-		"- Activating a capability changes runtime state, but it does not guarantee every tool in that capability is directly callable from the current top-level loop. If the tool you want is not currently available, use `thane_now` (sync) or `thane_assign` (async) to delegate, or choose another visible tool.",
-		"- Path-like references such as `kb:article.md`, `core:persona.md`, `scratchpad:note.md`, and `temp:label` are semantic references. Preserve them exactly. Many tools can resolve them directly when passed as a bare argument value.",
-		"- If a tool is unavailable in this context, do not retry with guessed names. Either pick an available tool, delegate, or answer directly.",
+		"- Use capability tools for runtime state: `activate_capability`, `deactivate_capability`, `reset_capabilities`, `list_loaded_capabilities`, or `inspect_capability` when those exact tools are visible.",
+		"- Preserve semantic path references exactly as provided, including prefixes like `kb:` or `core:`. Do not rewrite, normalize, or paraphrase them.",
+		"- Start with one broad entry point unless the request clearly spans domains. Prefer the currently loaded context before opening more doors.",
+		"- If a needed tool is unavailable, use an available tool, activate a relevant capability, delegate with `thane_now` or `thane_assign` when visible, or answer directly.",
 	}, "\n")
 }
 

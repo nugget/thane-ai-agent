@@ -202,15 +202,16 @@ This is the opposite of a "browse and load everything" posture.
 ## Progressive Disclosure Model
 
 The current working model is a coarse-to-fine capability menu backed by
-entry-point documents that lead into a broader decision tree.
+entry-point talents or KB documents that lead into a broader decision
+tree.
 
 The important design choice is that these should be the same documents,
 not two parallel systems:
 
 - the manifest exposes a small set of broad entry-point tags
-- activating one broad tag loads a tagged article for that domain
-- that article acts like a local decision tree
-- the article defines the next tier of options, narrower tags, and
+- activating one broad tag loads tagged entry-point guidance for that domain
+- that guidance acts like a local decision tree
+- the guidance defines the next tier of options, narrower tags, and
   delegation boundaries
 
 In other words, the "phone tree" is only the navigation posture. The
@@ -297,6 +298,8 @@ For model-facing copy inside the document itself:
 
 - heading format should be `# <Domain> Entry Point`
 - use one stable cue line: `Choose the next move deliberately:`
+- write from the receiving model's vantage point, not from the
+  maintainer's view of a markdown file on disk
 - keep bullet verbs inside the fixed navigation vocabulary where
   possible (`activate`, `use`, `delegate with`, `read`, `respond`)
 
