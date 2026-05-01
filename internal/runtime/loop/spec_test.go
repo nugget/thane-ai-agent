@@ -202,17 +202,44 @@ func TestSpecProfileRequestSeedsInitialTagsFromSpecTags(t *testing.T) {
 }
 
 func TestSpecValidatePersistableRejectsRuntimeHooks(t *testing.T) {
-	spec := &Spec{
-		Name: "dynamic-loop",
-		Task: "Do useful background work.",
-		TaskBuilder: func(_ context.Context, _ bool) (string, error) {
-			return "dynamic", nil
+	tests := []struct {
+		name    string
+		mutate  func(*Spec)
+		wantErr string
+	}{
+		{
+			name: "task builder",
+			mutate: func(spec *Spec) {
+				spec.TaskBuilder = func(_ context.Context, _ bool) (string, error) {
+					return "dynamic", nil
+				}
+			},
+			wantErr: "cannot set TaskBuilder",
+		},
+		{
+			name: "turn builder",
+			mutate: func(spec *Spec) {
+				spec.TurnBuilder = func(context.Context, TurnInput) (*AgentTurn, error) {
+					return nil, nil
+				}
+			},
+			wantErr: "cannot set TurnBuilder",
 		},
 	}
 
-	err := spec.ValidatePersistable()
-	if err == nil || !strings.Contains(err.Error(), "cannot set TaskBuilder") {
-		t.Fatalf("ValidatePersistable() error = %v, want TaskBuilder rejection", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &Spec{
+				Name: "dynamic-loop",
+				Task: "Do useful background work.",
+			}
+			tt.mutate(spec)
+
+			err := spec.ValidatePersistable()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidatePersistable() error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

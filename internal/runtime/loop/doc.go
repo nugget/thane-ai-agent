@@ -16,6 +16,38 @@
 //
 // See issue #509 for the full design.
 //
+// # Turn construction lifecycle
+//
+// Model-facing loop work is built in two phases so wake-specific code
+// can prepare useful context without owning model execution. First,
+// a wake is converted into an [AgentTurn]. Then the loop applies its
+// common request environment and runs the agent.
+//
+//	WaitFunc / timer wake
+//	     │
+//	     ▼
+//	TurnInput                 event payload, supervisor flag, notify envelopes
+//	     │
+//	     ├─ Config.TurnBuilder    custom request-producing wake logic
+//	     │
+//	     └─ Config.Task /
+//	        Config.TaskBuilder    prompt-only convenience path
+//	     ▼
+//	AgentTurn                prepared Request plus compact snapshot summary
+//	     │
+//	     │  prepareAgentTurnRequest
+//	     ▼
+//	Request                  loop defaults, launch overrides, progress,
+//	                         tools, tags, fallback content
+//	     │
+//	     │  runAgentTurn
+//	     ▼
+//	Runner.Run              model execution, response capture, telemetry
+//
+// [Config.Handler] is intentionally outside this chain. Use it for
+// infrastructure work that does not need a model turn; use
+// [Config.TurnBuilder] when the wake should result in agent execution.
+//
 // # Capability tag lifecycle
 //
 // Capability tags scope the tool surface, KB articles, talents, and

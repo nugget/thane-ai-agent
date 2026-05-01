@@ -78,7 +78,7 @@ type Spec struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// Task is the static prompt for each iteration. Ignored when
-	// TaskBuilder is set.
+	// TaskBuilder or TurnBuilder is set.
 	Task string `yaml:"task,omitempty" json:"task,omitempty"`
 
 	// Profile shapes loop execution: routing hints, context-injection
@@ -146,8 +146,16 @@ type Spec struct {
 	// while already running.
 	OnRetrigger RetriggerMode `yaml:"on_retrigger,omitempty" json:"on_retrigger,omitempty"`
 
-	// TaskBuilder generates a prompt per-iteration.
+	// TaskBuilder generates a prompt per-iteration. The loop adapts
+	// the prompt into the common TurnBuilder execution path so task
+	// loops and custom turn builders share request preparation and
+	// runner execution.
 	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error) `yaml:"-" json:"-"`
+
+	// TurnBuilder prepares an agent request per wake while leaving
+	// execution in the loop runtime. It is runtime-only because it
+	// captures Go dependencies and cannot be persisted.
+	TurnBuilder TurnBuilder `yaml:"-" json:"-"`
 
 	// PostIterate runs after each successful iteration.
 	PostIterate func(ctx context.Context, result IterationResult) error `yaml:"-" json:"-"`
@@ -225,6 +233,8 @@ func (s *Spec) ValidatePersistable() error {
 	switch {
 	case s.TaskBuilder != nil:
 		return fmt.Errorf("loop: persistable spec %q cannot set TaskBuilder", s.Name)
+	case s.TurnBuilder != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set TurnBuilder", s.Name)
 	case s.PostIterate != nil:
 		return fmt.Errorf("loop: persistable spec %q cannot set PostIterate", s.Name)
 	case s.WaitFunc != nil:
@@ -273,6 +283,7 @@ func (s *Spec) ToConfig() Config {
 		SupervisorQualityFloor: ns.SupervisorQualityFloor,
 		OnRetrigger:            ns.OnRetrigger,
 		TaskBuilder:            ns.TaskBuilder,
+		TurnBuilder:            ns.TurnBuilder,
 		PostIterate:            ns.PostIterate,
 		WaitFunc:               ns.WaitFunc,
 		Handler:                ns.Handler,

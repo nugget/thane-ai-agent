@@ -125,7 +125,8 @@ type Config struct {
 	Name string
 
 	// Task is the LLM prompt for each iteration. It describes what
-	// the loop should observe, check, or do on each wake.
+	// the loop should observe, check, or do on each wake. Ignored when
+	// TaskBuilder or TurnBuilder is set.
 	Task string
 
 	// Operation describes the runtime pattern expected for the loop.
@@ -204,9 +205,18 @@ type Config struct {
 	OnRetrigger RetriggerMode
 
 	// TaskBuilder is called per-iteration to generate a dynamic prompt.
-	// When set, the static Task field is ignored. The isSupervisor
-	// argument indicates whether this is a supervisor iteration.
+	// When set, the static Task field is ignored. The returned prompt
+	// is wrapped as an [AgentTurn] so task-based loops use the same
+	// request preparation and runner path as [TurnBuilder].
 	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error) `json:"-"`
+
+	// TurnBuilder prepares a full agent request for each wake while
+	// leaving model execution, telemetry, snapshots, and completion
+	// handling in the loop runtime. Return nil, nil when the wake
+	// produced no model-facing work. If unset, Task/TaskBuilder are
+	// adapted into this shape. Use Handler instead for work that should
+	// not run a model turn.
+	TurnBuilder TurnBuilder `json:"-"`
 
 	// PostIterate is called after each successful iteration. Use it
 	// for side effects like appending iteration logs. Errors are
@@ -308,8 +318,8 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
-	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil {
-		return fmt.Errorf("loop: Task, TaskBuilder, or Handler is required")
+	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil && c.TurnBuilder == nil {
+		return fmt.Errorf("loop: Task, TaskBuilder, TurnBuilder, or Handler is required")
 	}
 	if c.SleepMin <= 0 {
 		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
