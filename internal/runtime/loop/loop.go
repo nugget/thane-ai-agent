@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -18,8 +19,11 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// Runner abstracts the agent loop for LLM calls. Satisfied by
-// *agent.Loop. Defined here to avoid a circular import.
+// Runner executes one prepared model turn for the loop runtime. The
+// application adapter satisfies this with *agent.Loop while keeping the
+// loop package independent of the agent package. The stream callback is
+// the caller-facing delivery path for raw runner events; loop telemetry is
+// supplied separately through Request.OnProgress.
 type Runner interface {
 	Run(ctx context.Context, req Request, stream StreamCallback) (*Response, error)
 }
@@ -78,10 +82,19 @@ type Request struct {
 // onto Request as the primary loop-facing run descriptor.
 type RunRequest = Request
 
-// Message is a chat message for the runner.
+// Message is a chat message for the runner. It intentionally mirrors
+// the subset of agent.Message that loop-owned request preparation needs.
 type Message struct {
-	Role    string `yaml:"role" json:"role"`
+	// Role is the chat role, such as system, user, assistant, or tool.
+	Role string `yaml:"role" json:"role"`
+
+	// Content is the text body sent to the model.
 	Content string `yaml:"content" json:"content"`
+
+	// Images carries multimodal payloads for this message. It is
+	// runtime-only because persisted loop specs should stay textual and
+	// portable; HTTP ingress paths such as OWU populate it per request.
+	Images []llm.ImageContent `yaml:"-" json:"-"`
 }
 
 // RunMessage is kept as a compatibility alias while loops-ng migrates
@@ -115,7 +128,11 @@ type Response struct {
 // migrates onto Response as the primary loop-facing response type.
 type RunResponse = Response
 
-// StreamCallback receives streaming events. Nil disables streaming.
+// StreamCallback receives raw streaming events from a [Runner]. The event
+// value is intentionally untyped at the loop boundary so the loop package
+// does not import channel-specific or agent-specific event structs.
+// Adapters that know the concrete event type should validate it before
+// forwarding. Nil disables caller-facing streaming for the turn.
 type StreamCallback func(event any)
 
 // RandSource abstracts randomness for deterministic testing.
@@ -958,9 +975,12 @@ func (l *Loop) run(ctx context.Context) {
 			} else if turn == nil {
 				noOp = true
 			} else {
+				var turnResp *Response
+				var turnErr error
 				req, prepareErr := l.prepareAgentTurnRequest(turn.Request, convID, isSupervisor)
 				if prepareErr != nil {
-					err = prepareErr
+					turnErr = prepareErr
+					err = turnErr
 				} else {
 					if req.ConversationID != "" && req.ConversationID != convID {
 						convID = req.ConversationID
@@ -968,10 +988,16 @@ func (l *Loop) run(ctx context.Context) {
 						l.currentConvID = convID
 						l.mu.Unlock()
 					}
-					result, err = l.runAgentTurn(iterCtx, req, iterStart, isSupervisor)
+					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
+					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor)
+					runCancel()
+					err = turnErr
 					if len(turn.Summary) > 0 {
 						handlerSummary = cloneSummaryMap(turn.Summary)
 					}
+				}
+				if turn.ResultSink != nil {
+					turn.ResultSink(turnResp, turnErr)
 				}
 			}
 			if !noOp {
@@ -1430,8 +1456,11 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 // runAgentTurn is the only loop-owned path that invokes the agent runner.
 // It captures runner response state needed by subsequent iterations and
 // returns the typed iteration result used by snapshots and telemetry.
-func (l *Loop) runAgentTurn(ctx context.Context, req Request, iterStart time.Time, isSupervisor bool) (*IterationResult, error) {
-	resp, err := l.deps.Runner.Run(ctx, req, nil)
+func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallback, iterStart time.Time, isSupervisor bool) (*IterationResult, *Response, error) {
+	resp, err := l.deps.Runner.Run(ctx, req, stream)
+	if err == nil && resp == nil {
+		err = fmt.Errorf("runner returned nil response")
+	}
 	// Capture activated tags for next iteration (under lock since
 	// activatedTags is read during Status snapshots). Always update,
 	// even to nil — if all tags were dropped during a run, the next
@@ -1443,7 +1472,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, iterStart time.Tim
 		l.mu.Unlock()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("loop LLM call: %w", err)
+		return nil, resp, fmt.Errorf("loop LLM call: %w", err)
 	}
 
 	return &IterationResult{
@@ -1459,7 +1488,30 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, iterStart time.Tim
 		RequestID:          resp.RequestID,
 		Elapsed:            time.Since(iterStart),
 		Supervisor:         isSupervisor,
-	}, nil
+	}, resp, nil
+}
+
+// mergeTurnRunContext combines the loop iteration context with an optional
+// caller-owned request context. It lets request/reply adapters cancel the
+// runner on client disconnect without making that request context own the
+// child loop's lifetime.
+func mergeTurnRunContext(base context.Context, extra context.Context) (context.Context, context.CancelFunc) {
+	if extra == nil {
+		return base, func() {}
+	}
+	ctx, cancel := context.WithCancel(base)
+	if extra.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-extra.Done():
+			cancel()
+		}
+	}()
+	return ctx, cancel
 }
 
 func firstNonNilChannelBinding(bindings ...*memory.ChannelBinding) *memory.ChannelBinding {

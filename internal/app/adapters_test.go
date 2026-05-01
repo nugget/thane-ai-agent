@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -35,7 +36,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 			ContactName: "Alice Smith",
 		},
 		Messages: []looppkg.Message{
-			{Role: "system", Content: "stay focused"},
+			{Role: "system", Content: "stay focused", Images: []llm.ImageContent{{MediaType: "image/png", Data: "abc123"}}},
 			{Role: "user", Content: "summarize this"},
 		},
 		SkipContext:     true,
@@ -50,6 +51,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		ToolTimeout:     2 * time.Second,
 		UsageRole:       "delegate",
 		UsageTaskName:   "spec-probe",
+		FallbackContent: "fallback reply",
 		SystemPrompt:    "custom prompt",
 		PromptMode:      agentctx.PromptModeTask,
 	}
@@ -67,6 +69,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if len(got.Messages) != 2 || got.Messages[0].Role != "system" || got.Messages[1].Content != "summarize this" {
 		t.Fatalf("Messages = %#v", got.Messages)
 	}
+	if len(got.Messages[0].Images) != 1 || got.Messages[0].Images[0].MediaType != "image/png" {
+		t.Fatalf("Images = %#v", got.Messages[0].Images)
+	}
 	if !got.SkipContext || !got.SkipTagFilter {
 		t.Fatalf("Skip flags = %#v", got)
 	}
@@ -82,6 +87,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if got.SystemPrompt != "custom prompt" {
 		t.Fatalf("SystemPrompt = %q", got.SystemPrompt)
 	}
+	if got.FallbackContent != "fallback reply" {
+		t.Fatalf("FallbackContent = %q", got.FallbackContent)
+	}
 	if got.PromptMode != agentctx.PromptModeTask {
 		t.Fatalf("PromptMode = %q, want task", got.PromptMode)
 	}
@@ -91,6 +99,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	got.Hints["mission"] = "changed"
 	got.InitialTags[0] = "changed"
 	got.RuntimeTags[0] = "changed"
+	got.Messages[0].Images[0].MediaType = "changed"
 	got.ChannelBinding.ContactName = "changed"
 
 	if req.AllowedTools[0] != "alpha" {
@@ -107,6 +116,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	}
 	if req.RuntimeTags[0] != "message_channel" {
 		t.Fatalf("RuntimeTags mutated = %#v", req.RuntimeTags)
+	}
+	if req.Messages[0].Images[0].MediaType != "image/png" {
+		t.Fatalf("Images mutated = %#v", req.Messages[0].Images)
 	}
 	if req.ChannelBinding.ContactName != "Alice Smith" {
 		t.Fatalf("ChannelBinding mutated = %#v", req.ChannelBinding)

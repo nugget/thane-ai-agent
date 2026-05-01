@@ -33,20 +33,27 @@
 //	     └─ Config.Task /
 //	        Config.TaskBuilder    prompt-only convenience path
 //	     ▼
-//	AgentTurn                prepared Request plus compact snapshot summary
+//	AgentTurn                prepared Request, optional stream/result hooks,
+//	                         compact snapshot summary
 //	     │
 //	     │  prepareAgentTurnRequest
 //	     ▼
 //	Request                  loop defaults, launch overrides, progress,
-//	                         tools, tags, fallback content
+//	                         tools, tags, fallback content, cancellation
 //	     │
 //	     │  runAgentTurn
 //	     ▼
-//	Runner.Run              model execution, response capture, telemetry
+//	Runner.Run              model execution, stream fan-out, response capture,
+//	                         telemetry
 //
 // [Config.Handler] is intentionally outside this chain. Use it for
 // infrastructure work that does not need a model turn; use
 // [Config.TurnBuilder] when the wake should result in agent execution.
+// Request/reply integrations may attach [AgentTurn.RunContext],
+// [AgentTurn.Stream], and [AgentTurn.ResultSink] to preserve caller
+// cancellation, streaming, and synchronous result delivery while still
+// letting the loop own request preparation, telemetry, accounting, and
+// runner execution.
 //
 // # Capability tag lifecycle
 //

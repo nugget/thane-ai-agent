@@ -872,6 +872,126 @@ func TestTurnBuilderRunsThroughLoopRunner(t *testing.T) {
 	}
 }
 
+func TestTurnBuilderStreamAndResultSink(t *testing.T) {
+	t.Parallel()
+
+	streamCh := make(chan any, 1)
+	resultCh := make(chan struct {
+		resp *Response
+		err  error
+	}, 1)
+	runner := &turnCallbackRunner{fn: func(_ context.Context, _ RunRequest, stream StreamCallback) (*RunResponse, error) {
+		if stream == nil {
+			return nil, fmt.Errorf("stream callback is nil")
+		}
+		stream("chunk")
+		return &RunResponse{
+			Content:      "ok",
+			Model:        "test-model",
+			InputTokens:  10,
+			OutputTokens: 5,
+		}, nil
+	}}
+
+	l, err := New(Config{
+		Name:         "turn-builder-stream",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "stream this"}},
+				},
+				Stream: func(event any) {
+					streamCh <- event
+				},
+				ResultSink: func(resp *Response, err error) {
+					resultCh <- struct {
+						resp *Response
+						err  error
+					}{resp: resp, err: err}
+				},
+			}, nil
+		},
+	}, Deps{Runner: runner, EventBus: events.New()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	select {
+	case got := <-streamCh:
+		if got != "chunk" {
+			t.Fatalf("stream event = %#v, want chunk", got)
+		}
+	default:
+		t.Fatal("stream callback was not called")
+	}
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("result sink err = %v", got.err)
+		}
+		if got.resp == nil || got.resp.Content != "ok" {
+			t.Fatalf("result sink resp = %#v", got.resp)
+		}
+	default:
+		t.Fatal("result sink was not called")
+	}
+}
+
+func TestTurnBuilderRunContextCancelsRunner(t *testing.T) {
+	t.Parallel()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	resultCh := make(chan error, 1)
+	runner := &turnCallbackRunner{fn: func(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+		return nil, ctx.Err()
+	}}
+
+	l, err := New(Config{
+		Name:         "turn-builder-run-context",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		TurnBuilder: func(context.Context, TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "cancel this"}},
+				},
+				RunContext: runCtx,
+				ResultSink: func(_ *Response, err error) {
+					resultCh <- err
+				},
+			}, nil
+		},
+	}, Deps{Runner: runner, EventBus: events.New()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	select {
+	case err := <-resultCh:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("result sink err = %v, want context canceled", err)
+		}
+	default:
+		t.Fatal("result sink was not called")
+	}
+}
+
 func TestTurnBuilderAllowedToolsOverrideIntersects(t *testing.T) {
 	t.Parallel()
 
@@ -1428,6 +1548,16 @@ func (r *inspectingRunner) Run(_ context.Context, req RunRequest, _ StreamCallba
 		InputTokens:  10,
 		OutputTokens: 5,
 	}, nil
+}
+
+// turnCallbackRunner delegates Run to a caller-provided function that can
+// inspect request, context, and stream callback behavior.
+type turnCallbackRunner struct {
+	fn func(context.Context, RunRequest, StreamCallback) (*RunResponse, error)
+}
+
+func (r *turnCallbackRunner) Run(ctx context.Context, req RunRequest, stream StreamCallback) (*RunResponse, error) {
+	return r.fn(ctx, req, stream)
 }
 
 func TestRecentConvIDs(t *testing.T) {
