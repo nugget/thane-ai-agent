@@ -58,6 +58,7 @@ func (a *App) initServers(s *newState) error {
 		a.reconcileLoopDefinition,
 		a.launchLoopDefinition,
 	)
+	server.ConfigureChatLoopLauncher(a.launchLoop)
 	server.SetEventBus(a.eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()

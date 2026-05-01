@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -209,6 +212,134 @@ func TestSimpleChatResponse_OmitEmptyToolCalls(t *testing.T) {
 	// tool_calls should be omitted when empty
 	if bytes.Contains(data, []byte(`"tool_calls":[]`)) {
 		t.Error("empty tool_calls should be omitted")
+	}
+}
+
+type capturingAPILoopRunner struct {
+	response *looppkg.Response
+	onRun    func(req looppkg.Request, stream looppkg.StreamCallback)
+}
+
+func (r *capturingAPILoopRunner) Run(_ context.Context, req looppkg.Request, stream looppkg.StreamCallback) (*looppkg.Response, error) {
+	if r.onRun != nil {
+		r.onRun(req, stream)
+	}
+	if r.response != nil {
+		return r.response, nil
+	}
+	return &looppkg.Response{Content: "ok", Model: "test-model", FinishReason: "stop"}, nil
+}
+
+func TestRunChatLoopRoutesThroughLoopRuntime(t *testing.T) {
+	t.Parallel()
+
+	var capturedReq looppkg.Request
+	var capturedLaunch looppkg.Launch
+	runner := &capturingAPILoopRunner{
+		response: &looppkg.Response{
+			Content:      "looped",
+			Model:        "test-model",
+			FinishReason: "stop",
+			InputTokens:  12,
+			OutputTokens: 3,
+			ActiveTags:   []string{"api"},
+		},
+		onRun: func(req looppkg.Request, _ looppkg.StreamCallback) {
+			capturedReq = req
+		},
+	}
+
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+		capturedLaunch = launch
+		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
+			Runner: runner,
+			Logger: testAPILogger(),
+		})
+	})
+
+	resp, err := server.runChatLoop(context.Background(), &agent.Request{
+		Model:          "thane",
+		ConversationID: "conv-api",
+		Messages: []agent.Message{
+			{Role: "user", Content: "hello"},
+		},
+		Hints: map[string]string{
+			"channel": "api",
+		},
+	}, nil, "api/test")
+	if err != nil {
+		t.Fatalf("runChatLoop: %v", err)
+	}
+	if resp == nil || resp.Content != "looped" || resp.Model != "test-model" {
+		t.Fatalf("response = %#v, want looped test-model", resp)
+	}
+	if capturedLaunch.Spec.Operation != looppkg.OperationRequestReply {
+		t.Fatalf("Operation = %q, want %q", capturedLaunch.Spec.Operation, looppkg.OperationRequestReply)
+	}
+	if !slices.Equal(capturedLaunch.Spec.Tags, []string{"api"}) {
+		t.Fatalf("Tags = %v, want [api]", capturedLaunch.Spec.Tags)
+	}
+	if capturedReq.ConversationID != "conv-api" {
+		t.Fatalf("ConversationID = %q, want conv-api", capturedReq.ConversationID)
+	}
+	if capturedReq.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false for native API capability scoping")
+	}
+	if !slices.Equal(capturedReq.InitialTags, []string{"api"}) {
+		t.Fatalf("InitialTags = %v, want [api]", capturedReq.InitialTags)
+	}
+	if capturedReq.Hints["source"] != "api" || capturedReq.Hints["channel"] != "api" {
+		t.Fatalf("Hints = %#v, want source/channel api", capturedReq.Hints)
+	}
+	if capturedReq.Hints["loop_id"] == "" || capturedReq.Hints["loop_name"] != "api/test" {
+		t.Fatalf("loop hints = %#v, want loop_id and loop_name api/test", capturedReq.Hints)
+	}
+	if len(capturedReq.Messages) != 1 || capturedReq.Messages[0].Content != "hello" {
+		t.Fatalf("Messages = %#v, want user hello", capturedReq.Messages)
+	}
+}
+
+func TestHandleStreamingCompletionUsesChatLoopStream(t *testing.T) {
+	t.Parallel()
+
+	runner := &capturingAPILoopRunner{
+		response: &looppkg.Response{
+			Content:      "streamed",
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+		onRun: func(_ looppkg.Request, stream looppkg.StreamCallback) {
+			if stream != nil {
+				stream(agent.StreamEvent{Kind: agent.KindToken, Token: "streamed"})
+			}
+		},
+	}
+
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
+			Runner: runner,
+			Logger: testAPILogger(),
+		})
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	server.handleStreamingCompletion(rec, req, &agent.Request{
+		Messages: []agent.Message{{Role: "user", Content: "hello"}},
+		Hints:    map[string]string{"channel": "api"},
+	})
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"content":"streamed"`) {
+		t.Fatalf("stream body = %q, want streamed token", body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("stream body = %q, want DONE marker", body)
+	}
+	if rec.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", rec.Header().Get("Content-Type"))
 	}
 }
 

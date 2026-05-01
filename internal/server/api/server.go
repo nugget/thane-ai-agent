@@ -91,6 +91,7 @@ type Server struct {
 	deleteLoopDefinitionPolicy         func(string) error
 	reconcileLoopDefinition            func(context.Context, string) error
 	launchLoopDefinition               func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
+	launchChatLoop                     func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
 	anthropicRateLimitSnapshot         func() *fleet.AnthropicRateLimitSnapshot
 	logger                             *slog.Logger
 	server                             *http.Server
@@ -172,6 +173,12 @@ func (s *Server) ConfigureLoopDefinitionLifecycle(
 	s.deleteLoopDefinitionPolicy = deletePolicy
 	s.reconcileLoopDefinition = reconcile
 	s.launchLoopDefinition = launch
+}
+
+// ConfigureChatLoopLauncher configures the request/reply loop launcher used
+// by the native OpenAI-compatible chat endpoints.
+func (s *Server) ConfigureChatLoopLauncher(launch func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)) {
+	s.launchChatLoop = launch
 }
 
 // DashboardSnapshot returns a copy of the current session stats
@@ -601,6 +608,55 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// runChatLoop routes a native API request through the loop runtime's
+// request/reply path. The API layer still owns OpenAI wire formatting,
+// while the loop owns request preparation, telemetry, accounting, and
+// runner execution.
+func (s *Server) runChatLoop(ctx context.Context, req *agent.Request, streamCallback agent.StreamCallback, loopName string) (*agent.Response, error) {
+	if s.launchChatLoop == nil {
+		return nil, fmt.Errorf("api chat loop launcher is not configured")
+	}
+
+	loopReq := loopRequestFromAgent(req)
+	if loopReq.Hints == nil {
+		loopReq.Hints = make(map[string]string, 2)
+	}
+	if _, ok := loopReq.Hints["source"]; !ok {
+		loopReq.Hints["source"] = "api"
+	}
+	if _, ok := loopReq.Hints["channel"]; !ok {
+		loopReq.Hints["channel"] = "api"
+	}
+	stream := loopStreamFromAgent(streamCallback)
+
+	result, err := s.launchChatLoop(ctx, looppkg.Launch{
+		Spec: looppkg.Spec{
+			Name:       loopName,
+			Operation:  looppkg.OperationRequestReply,
+			Completion: looppkg.CompletionReturn,
+			Tags:       []string{"api"},
+			TurnBuilder: func(context.Context, looppkg.TurnInput) (*looppkg.AgentTurn, error) {
+				return &looppkg.AgentTurn{
+					Request:    cloneLoopRequest(loopReq),
+					RunContext: ctx,
+					Stream:     stream,
+				}, nil
+			},
+			Metadata: map[string]string{
+				"subsystem": "api",
+				"category":  "chat",
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.Response == nil {
+		return nil, fmt.Errorf("api chat loop returned no response")
+	}
+	return agentResponseFromLoop(result.Response), nil
+}
+
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -635,7 +691,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-streaming: run and return complete response
-	resp, err := s.loop.Run(ctx, agentReq, nil)
+	resp, err := s.runChatLoop(ctx, agentReq, nil, "api/chat-completions")
 	if err != nil {
 		log.Error("agent loop failed", "error", err)
 		code, message := agentErrorDetails(err)
@@ -719,7 +775,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	resp, err := s.loop.Run(ctx, agentReq, nil)
+	resp, err := s.runChatLoop(ctx, agentReq, nil, "api/simple-chat")
 	if err != nil {
 		log.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error: "+err.Error())
@@ -774,6 +830,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	completionID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	created := time.Now().Unix()
 	modelName := "thane" // Will be updated when we get the response
+	var writeMu sync.Mutex
 
 	// Send initial chunk with role
 	initialChunk := StreamChunk{
@@ -786,8 +843,10 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 			Delta: StreamDelta{Role: "assistant"},
 		}},
 	}
+	writeMu.Lock()
 	s.writeSSE(w, initialChunk)
 	flusher.Flush()
+	writeMu.Unlock()
 
 	// Track if any tokens were streamed (greeting fast-path skips streaming)
 	streamed := false
@@ -810,25 +869,31 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 					Delta: StreamDelta{Content: event.Token},
 				}},
 			}
+			writeMu.Lock()
 			s.writeSSE(w, chunk)
 			flusher.Flush()
+			writeMu.Unlock()
 
 		case agent.KindToolCallStart, agent.KindToolCallDone:
 			// Send SSE comment as keepalive to prevent write timeout
+			writeMu.Lock()
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
+			writeMu.Unlock()
 		}
 
 		// Reset write deadline after every event to prevent timeout
 		// during multi-iteration tool loops
+		writeMu.Lock()
 		if err := rc.SetWriteDeadline(time.Now().Add(120 * time.Second)); err != nil {
 			s.logger.Debug("failed to reset write deadline", "error", err)
 		}
+		writeMu.Unlock()
 	}
 
 	// Run agent with streaming — context carries the subsystem logger
-	// injected by the calling handler (handleChatCompletions or Ollama).
-	resp, err := s.loop.Run(r.Context(), agentReq, streamCallback)
+	// injected by the calling OpenAI-compatible handler.
+	resp, err := s.runChatLoop(r.Context(), agentReq, streamCallback, "api/chat-completions")
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)
 		// Can't change status code after streaming started, just close
@@ -857,12 +922,14 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 			FinishReason: &finishReason,
 		}},
 	}
+	writeMu.Lock()
 	s.writeSSE(w, finalChunk)
 	flusher.Flush()
 
 	// Send [DONE] marker
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	writeMu.Unlock()
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, chunk StreamChunk) {
