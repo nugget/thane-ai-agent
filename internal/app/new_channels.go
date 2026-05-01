@@ -708,7 +708,7 @@ func (a *App) initChannels(s *newState) error {
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
 				Client:        signalClient,
-				Runner:        a.loop,
+				Runner:        &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
 				Logger:        a.logger,
 				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
 				HandleTimeout: a.cfg.Signal.HandleTimeout,

@@ -11,22 +11,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// AgentRunner abstracts the agent loop for testability. The real
-// implementation is *agent.Loop.
+// AgentRunner abstracts the loop-owned agent runner for testability.
+// Production passes the app loop adapter so Signal requests share the
+// same execution path as other loop turns.
 type AgentRunner interface {
-	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
+	Run(ctx context.Context, req loop.Request, stream loop.StreamCallback) (*loop.Response, error)
 }
 
 // ContactResolver resolves a channel/address pair to a typed channel
@@ -273,6 +273,15 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	// Reactions are carried inside dataMessage but have no
 	// text. Intercept them before the content filter.
 	if env.DataMessage != nil && env.DataMessage.Reaction != nil {
+		if env.DataMessage.Reaction.IsRemove {
+			b.handleReaction(ctx, env)
+			if summary != nil {
+				summary["action"] = "reaction_removed"
+				summary["sender"] = env.Source
+				summary["emoji"] = env.DataMessage.Reaction.Emoji
+			}
+			return nil
+		}
 		if !b.allowSender(env.Source) {
 			b.logger.Warn("signal reaction rate-limited",
 				"sender", env.Source,
@@ -283,7 +292,9 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 			}
 			return nil
 		}
-		b.handleReaction(ctx, env)
+		if !b.enqueueSenderEnvelope(ctx, env) {
+			return nil
+		}
 		if summary != nil {
 			summary["action"] = "reaction"
 			summary["sender"] = env.Source
@@ -294,9 +305,8 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 
 	// For DataMessages with neither text nor attachments,
 	// track the signal timestamp so the reaction tool's
-	// "latest" resolution still works. Messages with content
-	// update lastInboundTS inside handleMessage (after the
-	// idle rotation check).
+	// "latest" resolution still works. Messages with content update
+	// lastInboundTS during turn preparation.
 	hasContent := env.DataMessage != nil &&
 		(env.DataMessage.Message != "" || len(env.DataMessage.Attachments) > 0)
 	if env.DataMessage != nil && !hasContent {
@@ -335,26 +345,7 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	}
 
 	// Fan out to per-sender child loop.
-	b.ensureSenderLoop(ctx, env.Source)
-
-	b.mu.Lock()
-	ch, ok := b.senderChans[env.Source]
-	b.mu.Unlock()
-
-	enqueued := false
-	if ok {
-		select {
-		case ch <- env:
-			enqueued = true
-		case <-ctx.Done():
-			b.logger.Warn("signal context cancelled before enqueue, dropping message",
-				"sender", env.Source,
-				"error", ctx.Err(),
-			)
-		}
-	}
-
-	if !enqueued {
+	if !b.enqueueSenderEnvelope(ctx, env) {
 		// Don't send a read receipt for messages we failed to enqueue.
 		return nil
 	}
@@ -381,9 +372,34 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	return nil
 }
 
+func (b *Bridge) enqueueSenderEnvelope(ctx context.Context, env *Envelope) bool {
+	if env == nil {
+		return false
+	}
+	b.ensureSenderLoop(ctx, env.Source)
+
+	b.mu.Lock()
+	ch, ok := b.senderChans[env.Source]
+	b.mu.Unlock()
+	if !ok {
+		return false
+	}
+
+	select {
+	case ch <- env:
+		return true
+	case <-ctx.Done():
+		b.logger.Warn("signal context cancelled before enqueue, dropping message",
+			"sender", env.Source,
+			"error", ctx.Err(),
+		)
+		return false
+	}
+}
+
 // ensureSenderLoop creates a per-sender child loop if one does not
 // already exist. The child loop blocks on a per-sender channel and
-// processes messages sequentially via handleMessage.
+// processes envelopes sequentially via TurnBuilder.
 func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	b.mu.Lock()
 	if _, exists := b.senderChans[sender]; exists {
@@ -419,7 +435,7 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 					if !ok {
 						return
 					}
-					b.handleMessage(ctx, env, nil)
+					b.handleEnvelope(ctx, env, nil)
 				}
 			}
 		}()
@@ -439,14 +455,12 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 				return env, nil
 			}
 		},
-		Handler: func(hCtx context.Context, event any) error {
-			env, ok := event.(*Envelope)
+		TurnBuilder: func(tCtx context.Context, input loop.TurnInput) (*loop.AgentTurn, error) {
+			env, ok := input.Event.(*Envelope)
 			if !ok {
-				return nil
+				return nil, nil
 			}
-			progressFn := loop.ProgressFunc(hCtx)
-			b.handleMessage(hCtx, env, progressFn)
-			return nil
+			return b.prepareSignalTurn(tCtx, env)
 		},
 		ParentID:        parentID,
 		FallbackContent: prompts.InteractiveEmptyResponseFallback,
@@ -464,7 +478,11 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 				return b.LinkSource
 			}),
 		},
-	}, loop.Deps{Logger: b.logger, EventBus: b.eventBus})
+	}, loop.Deps{
+		Runner:   signalResponseRunner{bridge: b, runner: b.runner},
+		Logger:   b.logger,
+		EventBus: b.eventBus,
+	})
 	if err != nil {
 		b.logger.Error("failed to spawn sender loop",
 			"sender", sender,
@@ -480,42 +498,87 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 					if !ok {
 						return
 					}
-					b.handleMessage(ctx, env, nil)
+					b.handleEnvelope(ctx, env, nil)
 				}
 			}
 		}()
 	}
 }
 
-// handleMessage processes a single inbound Signal message: runs it
-// through the agent loop and sends the response back to the sender.
-// The progressFn, if non-nil, is used to forward in-flight events
-// to the loop infrastructure for dashboard visibility.
+// handleMessage processes a single inbound Signal message through the
+// loop-facing request path. The progressFn, if non-nil, is used by the
+// legacy no-registry path to forward in-flight events to loop telemetry.
 func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	ctx, cancel := context.WithTimeout(ctx, b.handleTimeout)
-	defer cancel()
+	b.handleEnvelope(ctx, env, progressFn)
+}
 
+// handleReaction processes an inbound emoji reaction. Reaction
+// removals are logged but do not wake the agent. Non-removal
+// reactions are forwarded to the agent loop with contextual hints.
+func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
+	sender := env.Source
+	reaction := signalReactionEvent(env)
+
+	if reaction.Removed {
+		b.logger.Info("signal reaction removed",
+			"sender", sender,
+			"emoji", reaction.Emoji,
+			"target_author", reaction.TargetAuthor,
+			"target_timestamp", reaction.TargetTimestamp,
+		)
+		return
+	}
+
+	b.handleEnvelope(ctx, env, nil)
+}
+
+func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
+	turn, err := b.prepareSignalTurn(ctx, env)
+	if err != nil {
+		b.logger.Error("signal turn preparation failed", "error", err)
+		return
+	}
+	if turn == nil {
+		return
+	}
+	req := turn.Request
+	if progressFn != nil {
+		req.OnProgress = progressFn
+	}
+	_, _ = signalResponseRunner{bridge: b, runner: b.runner}.Run(ctx, req, nil)
+}
+
+func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
+	if env == nil || env.DataMessage == nil {
+		return nil, nil
+	}
+	if env.DataMessage.Reaction != nil {
+		if env.DataMessage.Reaction.IsRemove {
+			b.handleReaction(ctx, env)
+			return nil, nil
+		}
+		return b.prepareReactionTurn(ctx, env)
+	}
+	if env.DataMessage.Message == "" && len(env.DataMessage.Attachments) == 0 {
+		return nil, nil
+	}
+	return b.prepareMessageTurn(ctx, env)
+}
+
+func (b *Bridge) prepareMessageTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
 	sender := env.Source
 	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
-
-	// Inject a context logger with Signal-specific trace fields so all
-	// downstream code (agent loop, tools, delegate) inherits them.
 	log := b.logger.With(
 		"subsystem", logging.SubsystemSignal,
 		"conversation_id", convID,
 		"sender", sender,
 	)
-	ctx = logging.WithLogger(ctx, log)
 
-	// Process attachments before formatting the message.
 	var attachmentDescs []string
 	if len(env.DataMessage.Attachments) > 0 {
 		if env.DataMessage.ViewOnce {
 			attachmentDescs = []string{"[View-once attachment — not available]"}
 		} else {
-			// Use the Signal message timestamp for provenance rather than
-			// wall-clock time, so records remain accurate across processing
-			// delays and downtime replays.
 			msgTS := env.Timestamp
 			if env.DataMessage.Timestamp != 0 {
 				msgTS = env.DataMessage.Timestamp
@@ -537,13 +600,8 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		"attachments", len(env.DataMessage.Attachments),
 	)
 
-	// Update lastInboundTS so the reaction tool's "latest" resolution
-	// has a fresh anchor. Idle-session rotation is no longer triggered
-	// here — the summarizer worker is the sole owner of idle close,
-	// and continuity is delivered via the message_channel context
-	// provider's verbatim tail rather than an LLM-driven carry-forward.
 	ts := env.Timestamp
-	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+	if env.DataMessage.Timestamp != 0 {
 		ts = env.DataMessage.Timestamp
 	}
 	b.mu.Lock()
@@ -553,133 +611,32 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 	}
 	b.mu.Unlock()
 
-	// Start typing indicator refresh loop. The goroutine sends an
-	// initial indicator and then re-sends every 10s to keep it
-	// visible during long agent processing.
-	stopTyping := b.startTypingRefresh(ctx, sender)
-
 	opts := b.requestOptions(sender, map[string]string{
 		"source": "signal",
 		"sender": sender,
 	})
-	fallbackContent := loop.FallbackContent(ctx)
 
-	req := &agent.Request{
-		ConversationID:  convID,
-		ChannelBinding:  channelBinding,
-		Messages:        []agent.Message{{Role: "user", Content: content}},
-		Model:           opts.Model,
-		Hints:           opts.Hints,
-		ExcludeTools:    opts.ExcludeTools,
-		RuntimeTags:     []string{"message_channel"},
-		FallbackContent: fallbackContent,
-	}
-
-	stream := agent.BuildProgressStream(progressFn)
-	resp, err := b.runner.Run(ctx, req, stream)
-
-	// Stop the typing refresh goroutine, then send a definitive
-	// typing stop. Use a fresh background context so this
-	// best-effort cleanup runs even if the handler context has
-	// timed out or been cancelled.
-	stopTyping()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stopCancel()
-	if typErr := b.client.SendTyping(stopCtx, sender, true); typErr != nil {
-		b.logger.Debug("signal typing stop failed", "error", typErr)
-	}
-
-	// Enrich the logger with session/request IDs from the agent loop
-	// so post-run log lines correlate with the agent's context.
-	if resp != nil {
-		log = log.With("session_id", resp.SessionID, "request_id", resp.RequestID)
-	}
-
-	if err != nil {
-		log.Error("signal agent run failed", "error", err)
-		return
-	}
-	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
-		resp.Content = fallbackContent
-	}
-
-	// Report iteration stats for the loop dashboard.
-	if summary := loop.ReportAgentRun(ctx, loop.AgentRunSummary{
-		RequestID:          resp.RequestID,
-		Model:              resp.Model,
-		InputTokens:        resp.InputTokens,
-		OutputTokens:       resp.OutputTokens,
-		ContextWindow:      resp.ContextWindow,
-		ToolsUsed:          resp.ToolsUsed,
-		ActiveTags:         append([]string(nil), resp.ActiveTags...),
-		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
-		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
-	}); summary != nil {
-		summary["message_len"] = len(content)
-		summary["response_len"] = len(resp.Content)
-		summary["sender"] = sender
-	}
-
-	log.Info("signal agent run completed",
-		"response_len", len(resp.Content),
-		"model", resp.Model,
-	)
-
-	// If the agent already called signal_send_message during its tool
-	// loop, skip the bridge-level send to avoid duplicate messages.
-	if agentAlreadySent(resp.ToolsUsed) {
-		log.Info("signal reply already sent by agent tool call")
-		return
-	}
-
-	if resp.Content == "" {
-		return
-	}
-
-	log.Info("signal sending reply",
-		"response_len", len(resp.Content),
-	)
-
-	if _, err := b.client.Send(ctx, sender, resp.Content); err != nil {
-		log.Error("signal reply send failed", "error", err)
-		return
-	}
-
-	log.Info("signal reply sent")
+	return b.agentTurn(convID, channelBinding, content, opts, map[string]any{
+		"message_len": len(content),
+		"sender":      sender,
+		"attachments": len(env.DataMessage.Attachments),
+	}), nil
 }
 
-// handleReaction processes an inbound emoji reaction. Reaction
-// removals are logged but do not wake the agent. Non-removal
-// reactions are forwarded to the agent loop with contextual hints.
-func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
-	ctx, cancel := context.WithTimeout(ctx, b.handleTimeout)
-	defer cancel()
-
+func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.AgentTurn, error) {
 	sender := env.Source
-	reaction := env.DataMessage.Reaction
+	reaction := signalReactionEvent(env)
 	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
-
-	if reaction.IsRemove {
-		b.logger.Info("signal reaction removed",
-			"sender", sender,
-			"emoji", reaction.Emoji,
-			"target_author", reaction.TargetAuthor,
-			"target_timestamp", reaction.TargetSentTimestamp,
-		)
-		return
-	}
 
 	b.logger.Info("signal reaction received",
 		"sender", sender,
 		"emoji", reaction.Emoji,
 		"target_author", reaction.TargetAuthor,
-		"target_timestamp", reaction.TargetSentTimestamp,
+		"target_timestamp", reaction.TargetTimestamp,
 		"conversation_id", convID,
 	)
 
-	stopTyping := b.startTypingRefresh(ctx, sender)
-
-	content := formatReaction(env)
+	content := reaction.Prompt()
 	channelBinding := b.resolveBinding(sender)
 	if b.bindConversation != nil && channelBinding != nil {
 		if err := b.bindConversation(convID, channelBinding); err != nil {
@@ -687,89 +644,133 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		}
 	}
 
-	opts := b.requestOptions(sender, map[string]string{
-		"source":                "signal",
-		"sender":                sender,
+	hints := reaction.Hints()
+	hints["source"] = "signal"
+	hints["sender"] = sender
+	opts := b.requestOptions(sender, hints)
+
+	return b.agentTurn(convID, channelBinding, content, opts, map[string]any{
 		"event_type":            "reaction",
+		"sender":                sender,
 		"reaction_emoji":        reaction.Emoji,
-		"target_sent_timestamp": fmt.Sprintf("%d", reaction.TargetSentTimestamp),
-	})
-	fallbackContent := loop.FallbackContent(ctx)
-
-	req := &agent.Request{
-		ConversationID:  convID,
-		ChannelBinding:  channelBinding,
-		Messages:        []agent.Message{{Role: "user", Content: content}},
-		Model:           opts.Model,
-		Hints:           opts.Hints,
-		ExcludeTools:    opts.ExcludeTools,
-		RuntimeTags:     []string{"message_channel"},
-		FallbackContent: fallbackContent,
-	}
-
-	resp, err := b.runner.Run(ctx, req, nil)
-
-	// Build a logger with correlation IDs for post-run log lines.
-	rlog := b.logger.With("sender", sender, "conversation_id", convID)
-	if resp != nil {
-		rlog = rlog.With("session_id", resp.SessionID, "request_id", resp.RequestID)
-	}
-
-	stopTyping()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stopCancel()
-	if typErr := b.client.SendTyping(stopCtx, sender, true); typErr != nil {
-		b.logger.Debug("signal typing stop failed", "error", typErr)
-	}
-
-	if err != nil {
-		rlog.Error("signal agent run failed (reaction)", "error", err)
-		return
-	}
-	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
-		resp.Content = fallbackContent
-	}
-
-	if agentAlreadySent(resp.ToolsUsed) || resp.Content == "" {
-		return
-	}
-
-	if _, err := b.client.Send(ctx, sender, resp.Content); err != nil {
-		rlog.Error("signal reply send failed (reaction)", "error", err)
-		return
-	}
-
-	rlog.Info("signal reply sent (reaction)")
+		"target_sent_timestamp": reaction.TargetTimestamp,
+	}), nil
 }
 
-// startTypingRefresh sends a typing indicator immediately, then
-// refreshes it on a ticker until the returned cancel function is
-// called. The caller must call the cancel function when processing
-// is complete.
-func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) context.CancelFunc {
-	refreshCtx, cancel := context.WithCancel(ctx)
+func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any) *loop.AgentTurn {
+	fallbackContent := prompts.InteractiveEmptyResponseFallback
+	return &loop.AgentTurn{
+		Request: loop.Request{
+			ConversationID:  convID,
+			ChannelBinding:  binding,
+			Messages:        []loop.Message{{Role: "user", Content: content}},
+			Model:           opts.Model,
+			Hints:           opts.Hints,
+			ExcludeTools:    opts.ExcludeTools,
+			InitialTags:     []string{"signal"},
+			RuntimeTags:     []string{"message_channel"},
+			FallbackContent: fallbackContent,
+		},
+		Summary: summary,
+	}
+}
 
-	// Send initial typing indicator.
-	if err := b.client.SendTyping(refreshCtx, recipient, false); err != nil {
-		b.logger.Debug("signal typing indicator failed", "error", err)
+type signalResponseRunner struct {
+	bridge *Bridge
+	runner AgentRunner
+}
+
+func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream loop.StreamCallback) (*loop.Response, error) {
+	if r.runner == nil {
+		return nil, fmt.Errorf("signal runner is not configured")
+	}
+	b := r.bridge
+	if b == nil {
+		return r.runner.Run(ctx, req, stream)
 	}
 
-	go func() {
-		ticker := time.NewTicker(typingRefreshInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-refreshCtx.Done():
-				return
-			case <-ticker.C:
-				if err := b.client.SendTyping(refreshCtx, recipient, false); err != nil {
-					b.logger.Debug("signal typing refresh failed", "error", err)
-				}
-			}
-		}
-	}()
+	sender := req.Hints["sender"]
+	log := b.logger.With(
+		"subsystem", logging.SubsystemSignal,
+		"conversation_id", req.ConversationID,
+		"sender", sender,
+	)
+	runCtx, cancel := context.WithTimeout(ctx, b.handleTimeout)
+	defer cancel()
+	runCtx = logging.WithLogger(runCtx, log)
 
-	return cancel
+	indicator := b.activityIndicator(sender)
+	stopActivity := indicator.Begin(runCtx)
+	resp, err := r.runner.Run(runCtx, req, stream)
+	stopActivity()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	indicator.End(stopCtx)
+	stopCancel()
+
+	if resp == nil {
+		resp = &loop.Response{}
+	}
+	if resp.RequestID != "" {
+		log = log.With("request_id", resp.RequestID)
+	}
+	if err != nil {
+		log.Error("signal agent run failed", "error", err)
+		return resp, err
+	}
+	if strings.TrimSpace(resp.Content) == "" && req.FallbackContent != "" {
+		resp.Content = req.FallbackContent
+	}
+
+	log.Info("signal agent run completed",
+		"response_len", len(resp.Content),
+		"model", resp.Model,
+	)
+
+	if agentAlreadySent(resp.ToolsUsed) {
+		log.Info("signal reply already sent by agent tool call")
+		return resp, nil
+	}
+	if resp.Content == "" || sender == "" {
+		return resp, nil
+	}
+
+	log.Info("signal sending reply",
+		"response_len", len(resp.Content),
+	)
+	if b.client == nil {
+		log.Warn("signal reply send skipped because client is not configured")
+		return resp, nil
+	}
+	if _, err := b.client.Send(runCtx, sender, resp.Content); err != nil {
+		log.Error("signal reply send failed", "error", err)
+		return resp, fmt.Errorf("send signal reply: %w", err)
+	}
+
+	log.Info("signal reply sent")
+	return resp, nil
+}
+
+func (b *Bridge) activityIndicator(recipient string) messages.ActivityIndicator {
+	sendTyping := func(ctx context.Context, stop bool) error {
+		if b.client == nil || recipient == "" {
+			return nil
+		}
+		return b.client.SendTyping(ctx, recipient, stop)
+	}
+	return messages.ActivityIndicator{
+		Name:     "signal_typing",
+		Interval: typingRefreshInterval,
+		Start: func(ctx context.Context) error {
+			return sendTyping(ctx, false)
+		},
+		Refresh: func(ctx context.Context) error {
+			return sendTyping(ctx, false)
+		},
+		Stop: func(ctx context.Context) error {
+			return sendTyping(ctx, true)
+		},
+		Logger: b.logger,
+	}
 }
 
 func (b *Bridge) requestOptions(sender string, extraHints map[string]string) router.RequestOptions {
@@ -955,18 +956,23 @@ func formatMessage(env *Envelope, attachmentDescs []string) string {
 // reaction envelope. The output identifies the sender, the emoji,
 // and the target message timestamp.
 func formatReaction(env *Envelope) string {
-	var sb strings.Builder
-	sender := env.Source
-	if env.SourceName != "" {
-		sender = fmt.Sprintf("%s (%s)", env.SourceName, env.Source)
+	return signalReactionEvent(env).Prompt()
+}
+
+func signalReactionEvent(env *Envelope) messages.ReactionEvent {
+	if env == nil || env.DataMessage == nil || env.DataMessage.Reaction == nil {
+		return messages.ReactionEvent{ChannelName: "Signal"}
 	}
-	fmt.Fprintf(&sb, "Signal reaction from %s: %s on message [ts:%d] from %s",
-		sender,
-		env.DataMessage.Reaction.Emoji,
-		env.DataMessage.Reaction.TargetSentTimestamp,
-		env.DataMessage.Reaction.TargetAuthor,
-	)
-	return sb.String()
+	reaction := env.DataMessage.Reaction
+	return messages.ReactionEvent{
+		ChannelName:     "Signal",
+		SenderID:        env.Source,
+		SenderName:      env.SourceName,
+		Emoji:           reaction.Emoji,
+		TargetAuthor:    reaction.TargetAuthor,
+		TargetTimestamp: reaction.TargetSentTimestamp,
+		Removed:         reaction.IsRemove,
+	}
 }
 
 // processAttachments stores received attachments and returns a

@@ -291,6 +291,7 @@ func cloneLoopRequest(req looppkg.Request) looppkg.Request {
 	req.ExcludeTools = append([]string(nil), req.ExcludeTools...)
 	req.Hints = cloneStringMap(req.Hints)
 	req.InitialTags = append([]string(nil), req.InitialTags...)
+	req.RuntimeTags = append([]string(nil), req.RuntimeTags...)
 	req.RuntimeTools = append([]looppkg.RuntimeTool(nil), req.RuntimeTools...)
 	return req
 }

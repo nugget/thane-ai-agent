@@ -40,6 +40,11 @@ type Request struct {
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
 	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
+	// RuntimeTags are trusted runtime-asserted tags pinned for this runner
+	// invocation only. Unlike InitialTags, the model cannot deactivate them
+	// during the run. They are runtime-only so persisted specs and external
+	// launch JSON cannot assert trust.
+	RuntimeTags []string `yaml:"-" json:"-"`
 	// RuntimeTools are request-scoped tools visible only to this run.
 	RuntimeTools []RuntimeTool `yaml:"-" json:"-"`
 
