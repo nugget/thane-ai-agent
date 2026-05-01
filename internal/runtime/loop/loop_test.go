@@ -2086,6 +2086,9 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 	t.Parallel()
 
 	bus := events.New()
+	ch := bus.Subscribe(16)
+	defer bus.Unsubscribe(ch)
+
 	l, err := New(Config{
 		Name: "handler-tooling-test",
 		Handler: func(ctx context.Context, _ any) error {
@@ -2094,6 +2097,8 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 				Model:          "test-model",
 				InputTokens:    42,
 				OutputTokens:   9,
+				ContextWindow:  200000,
+				ToolsUsed:      map[string]int{"archive_search": 2, "remember_fact": 1},
 				ActiveTags:     []string{"forge", "ha"},
 				EffectiveTools: []string{"forge_issue_list", "get_state"},
 				LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
@@ -2136,6 +2141,15 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 	if !slices.Equal(snap.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
 		t.Fatalf("snap.EffectiveTools = %v, want [forge_issue_list get_state]", snap.EffectiveTools)
 	}
+	if snap.ToolsUsed["archive_search"] != 2 || snap.ToolsUsed["remember_fact"] != 1 {
+		t.Fatalf("snap.ToolsUsed = %v, want archive_search=2 remember_fact=1", snap.ToolsUsed)
+	}
+	if snap.ContextWindow != 200000 {
+		t.Fatalf("snap.ContextWindow = %d, want 200000", snap.ContextWindow)
+	}
+	if snap.Tooling.ToolsUsed["archive_search"] != 2 || snap.Tooling.ToolsUsed["remember_fact"] != 1 {
+		t.Fatalf("snap.Tooling.ToolsUsed = %v, want archive_search=2 remember_fact=1", snap.Tooling.ToolsUsed)
+	}
 	if len(snap.Tooling.LoadedCapabilities) != 2 {
 		t.Fatalf("snap.Tooling.LoadedCapabilities = %v, want 2 entries", snap.Tooling.LoadedCapabilities)
 	}
@@ -2147,6 +2161,33 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 	}
 	if len(status.Tooling.LoadedCapabilities) != 0 {
 		t.Fatalf("status.Tooling.LoadedCapabilities = %v, want empty for idle handler loop", status.Tooling.LoadedCapabilities)
+	}
+
+	var complete *events.Event
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Kind == events.KindLoopIterationComplete && evt.Source == events.SourceLoop {
+				evtCopy := evt
+				complete = &evtCopy
+			}
+		default:
+			goto drained
+		}
+	}
+drained:
+	if complete == nil {
+		t.Fatal("missing loop_iteration_complete event")
+	}
+	toolsUsed, ok := complete.Data["tools_used"].(map[string]int)
+	if !ok {
+		t.Fatalf("event tools_used = %#v, want map[string]int", complete.Data["tools_used"])
+	}
+	if toolsUsed["archive_search"] != 2 || toolsUsed["remember_fact"] != 1 {
+		t.Fatalf("event tools_used = %v, want archive_search=2 remember_fact=1", toolsUsed)
+	}
+	if complete.Data["context_window"] != 200000 {
+		t.Fatalf("event context_window = %v, want 200000", complete.Data["context_window"])
 	}
 }
 

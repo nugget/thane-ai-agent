@@ -100,7 +100,8 @@ const (
 	// Data: loop_id, loop_name, conversation_id, supervisor, attempt.
 	KindLoopIterationStart = "loop_iteration_start"
 	// KindLoopIterationComplete signals the end of a loop iteration.
-	// Data: loop_id, loop_name, model, input_tokens, output_tokens, elapsed_ms.
+	// Data: loop_id, loop_name, model, input_tokens, output_tokens,
+	// context_window, elapsed_ms, tools_used.
 	KindLoopIterationComplete = "loop_iteration_complete"
 	// KindLoopSleepStart signals a loop has entered its sleep phase.
 	// Data: loop_id, loop_name, sleep_duration, initial (bool, true

@@ -880,6 +880,14 @@ func (l *Loop) run(ctx context.Context) {
 				result.OutputTokens = outputTokens
 				delete(summary, "output_tokens")
 			}
+			if contextWindow, ok := summary["context_window"].(int); ok && contextWindow > 0 && result != nil {
+				result.ContextWindow = contextWindow
+				delete(summary, "context_window")
+			}
+			if toolsUsed, ok := summary["tools_used"].(map[string]int); ok && result != nil {
+				result.ToolsUsed = cloneToolCounts(toolsUsed)
+				delete(summary, "tools_used")
+			}
 			if activeTags, ok := summary["active_tags"].([]string); ok && result != nil {
 				result.ActiveTags = append([]string(nil), activeTags...)
 				delete(summary, "active_tags")
