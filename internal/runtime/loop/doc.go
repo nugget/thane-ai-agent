@@ -105,13 +105,13 @@
 //     loop/agent boundary and becomes the capability scope's seed.
 //     Lives in the [agent] package, not here.
 //
-//   - agent.Request.RuntimeTags is distinct from InitialTags despite
-//     the similar shape. RuntimeTags are trusted runtime-asserted
-//     tags the model cannot deactivate within the run; they're
-//     pinned via scope.PinChannelTags rather than scope.Request.
-//     Set by trusted callers (the Signal bridge pins
-//     "message_channel"). Use when a tag must remain active
-//     regardless of model behavior.
+//   - [Request.RuntimeTags] is distinct from InitialTags despite the
+//     similar shape. RuntimeTags are trusted runtime-asserted tags the
+//     model cannot deactivate within the run; the app adapter copies
+//     them to agent.Request.RuntimeTags, where they are pinned via
+//     scope.PinChannelTags rather than scope.Request. Set by trusted
+//     callers (the Signal bridge pins "message_channel"). Use when a
+//     tag must remain active regardless of model behavior.
 //
 //   - agent.Response.ActiveTags is the end-of-run snapshot. The loop
 //     captures it into activatedTags for the next iteration's merge,

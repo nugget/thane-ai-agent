@@ -44,6 +44,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		SkipTagFilter:   true,
 		Hints:           map[string]string{"mission": "automation"},
 		InitialTags:     []string{"monitoring"},
+		RuntimeTags:     []string{"message_channel"},
 		MaxIterations:   7,
 		MaxOutputTokens: 321,
 		ToolTimeout:     2 * time.Second,
@@ -89,6 +90,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	got.ExcludeTools[0] = "changed"
 	got.Hints["mission"] = "changed"
 	got.InitialTags[0] = "changed"
+	got.RuntimeTags[0] = "changed"
 	got.ChannelBinding.ContactName = "changed"
 
 	if req.AllowedTools[0] != "alpha" {
@@ -102,6 +104,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	}
 	if req.InitialTags[0] != "monitoring" {
 		t.Fatalf("InitialTags mutated = %#v", req.InitialTags)
+	}
+	if req.RuntimeTags[0] != "message_channel" {
+		t.Fatalf("RuntimeTags mutated = %#v", req.RuntimeTags)
 	}
 	if req.ChannelBinding.ContactName != "Alice Smith" {
 		t.Fatalf("ChannelBinding mutated = %#v", req.ChannelBinding)

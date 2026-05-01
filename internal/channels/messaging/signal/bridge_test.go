@@ -18,7 +18,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -27,19 +27,19 @@ import (
 // response. Thread-safe for use from handleMessage goroutines.
 type testRunner struct {
 	mu      sync.Mutex
-	lastReq *agent.Request
-	resp    *agent.Response
+	lastReq *loop.Request
+	resp    *loop.Response
 	err     error
 }
 
-func (r *testRunner) Run(_ context.Context, req *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
+func (r *testRunner) Run(_ context.Context, req loop.Request, _ loop.StreamCallback) (*loop.Response, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.lastReq = req
+	r.lastReq = &req
 	return r.resp, r.err
 }
 
-func (r *testRunner) getLastReq() *agent.Request {
+func (r *testRunner) getLastReq() *loop.Request {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.lastReq
@@ -68,7 +68,7 @@ func bridgeHelper(t *testing.T, opts ...bridgeOption) (*Bridge, io.Writer, io.Re
 	t.Helper()
 	client, stdout, stdin := pipeClient(t)
 	runner := &testRunner{
-		resp: &agent.Response{Content: "ok"},
+		resp: &loop.Response{Content: "ok"},
 	}
 
 	cfg := BridgeConfig{
@@ -161,6 +161,51 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 	if !strings.Contains(req.Messages[0].Content, "What's the weather?") {
 		t.Errorf("message content missing user text: %q", req.Messages[0].Content)
+	}
+}
+
+func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Registry = loop.NewRegistry()
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	bridge.mu.Lock()
+	bridge.parentID = "signal-parent"
+	bridge.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &Envelope{
+		Source:       "+15551234567",
+		SourceNumber: "+15551234567",
+		SourceName:   "Alice",
+		Timestamp:    1700000000000,
+		DataMessage:  &DataMessage{Message: "What's the weather?"},
+	}
+
+	if err := bridge.dispatch(ctx, env); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runner.getLastReq() != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	if req.Hints["loop_id"] == "" {
+		t.Fatal("loop_id hint is empty; request did not traverse sender loop turn preparation")
+	}
+	if req.Hints["loop_name"] != "signal/15551234567" {
+		t.Fatalf("loop_name = %q, want signal/15551234567", req.Hints["loop_name"])
 	}
 }
 
@@ -293,7 +338,7 @@ func TestBridge_EmptyResponseNoReply(t *testing.T) {
 		}
 	}()
 
-	runner.resp = &agent.Response{Content: ""}
+	runner.resp = &loop.Response{Content: ""}
 
 	env := &Envelope{
 		Source:      "+15551234567",
@@ -409,7 +454,7 @@ func TestBridge_AgentAlreadySentSkipsDuplicateReply(t *testing.T) {
 		}
 	}()
 
-	runner.resp = &agent.Response{
+	runner.resp = &loop.Response{
 		Content: "Already sent via tool",
 		ToolsUsed: map[string]int{
 			"signal_send_message": 1,
@@ -535,6 +580,52 @@ func TestAgentAlreadySent(t *testing.T) {
 				t.Errorf("agentAlreadySent(%v) = %v, want %v", tt.toolsUsed, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSignalResponseRunner_ReturnsReplySendError(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go func() {
+		reader := bufio.NewReader(stdin)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var req rpcRequest
+			if err := json.Unmarshal(line, &req); err != nil {
+				continue
+			}
+
+			var resp string
+			if req.Method == "send" {
+				resp = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32000,"message":"delivery failed"}}`+"\n", req.ID)
+			} else {
+				resp = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`+"\n", req.ID)
+			}
+			if _, err := io.WriteString(stdout, resp); err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := signalResponseRunner{bridge: bridge, runner: runner}.Run(ctx, loop.Request{
+		ConversationID: "signal-15551234567",
+		Hints: map[string]string{
+			"sender": "+15551234567",
+		},
+	}, nil)
+	if err == nil {
+		t.Fatal("Run returned nil error for failed Signal send")
+	}
+	if !strings.Contains(err.Error(), "send signal reply") {
+		t.Fatalf("Run error = %q, want send signal reply context", err)
+	}
+	if resp == nil || resp.Content != "ok" {
+		t.Fatalf("response = %#v, want original runner response", resp)
 	}
 }
 
@@ -735,9 +826,9 @@ func TestBridge_ContactResolution_NilResolver(t *testing.T) {
 	}
 }
 
-// --- Issue #357: Typing Indicator Refresh ---
+// --- Issue #357: Activity Indicator Refresh ---
 
-func TestStartTypingRefresh_CancelsCleanly(t *testing.T) {
+func TestBridgeActivityIndicator_CancelsCleanly(t *testing.T) {
 	bridge, _, stdin, _ := bridgeHelper(t)
 
 	// Drain RPC requests so the client doesn't block on pipe writes.
@@ -753,7 +844,7 @@ func TestStartTypingRefresh_CancelsCleanly(t *testing.T) {
 	ctx, ctxCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer ctxCancel()
 
-	cancel := bridge.startTypingRefresh(ctx, "+15551234567")
+	cancel := bridge.activityIndicator("+15551234567").Begin(ctx)
 
 	// Let the goroutine start and potentially fire.
 	time.Sleep(50 * time.Millisecond)
