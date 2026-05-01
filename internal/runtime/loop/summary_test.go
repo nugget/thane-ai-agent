@@ -38,6 +38,8 @@ func TestReportAgentRun_PopulatesSummary(t *testing.T) {
 		Model:          "claude-3-opus",
 		InputTokens:    500,
 		OutputTokens:   200,
+		ContextWindow:  200000,
+		ToolsUsed:      map[string]int{"archive_search": 2, "remember_fact": 1},
 		ActiveTags:     []string{"forge", "ha"},
 		EffectiveTools: []string{"get_state", "forge_issue_list"},
 		LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
@@ -58,6 +60,12 @@ func TestReportAgentRun_PopulatesSummary(t *testing.T) {
 	}
 	if got["output_tokens"] != 200 {
 		t.Errorf("output_tokens = %v, want 200", got["output_tokens"])
+	}
+	if got["context_window"] != 200000 {
+		t.Errorf("context_window = %v, want 200000", got["context_window"])
+	}
+	if tools, ok := got["tools_used"].(map[string]int); !ok || len(tools) != 2 || tools["archive_search"] != 2 || tools["remember_fact"] != 1 {
+		t.Errorf("tools_used = %#v, want archive_search=2 remember_fact=1", got["tools_used"])
 	}
 	if active, ok := got["active_tags"].([]string); !ok || len(active) != 2 || active[0] != "forge" || active[1] != "ha" {
 		t.Errorf("active_tags = %#v, want [forge ha]", got["active_tags"])

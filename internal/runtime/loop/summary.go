@@ -11,8 +11,8 @@ type iterSummaryKey struct{}
 // IterationSummary returns the summary map for the current iteration
 // from the handler context, or nil if not available. Handler
 // implementations call this to report per-iteration metrics to the
-// dashboard timeline. Values should be small scalars (int, string,
-// bool) to keep SSE payloads compact.
+// dashboard timeline. Values should be small scalars or compact
+// structured metadata to keep SSE payloads readable.
 func IterationSummary(ctx context.Context) map[string]any {
 	if m, ok := ctx.Value(iterSummaryKey{}).(map[string]any); ok {
 		return m
@@ -30,6 +30,8 @@ type AgentRunSummary struct {
 	Model              string
 	InputTokens        int
 	OutputTokens       int
+	ContextWindow      int
+	ToolsUsed          map[string]int
 	ActiveTags         []string
 	EffectiveTools     []string
 	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
@@ -37,8 +39,8 @@ type AgentRunSummary struct {
 
 // ReportAgentRun writes standard agent-run metrics into the current
 // iteration's summary map. It is the canonical way for handler-only
-// loops that call runner.Run() to surface request_id, model, and
-// token counts on the dashboard.
+// loops that call runner.Run() to surface request_id, model, token
+// counts, and tool usage on the dashboard.
 //
 // Callers may add additional custom fields to the summary map after
 // this call (e.g., sender, message_len).
@@ -54,6 +56,12 @@ func ReportAgentRun(ctx context.Context, s AgentRunSummary) map[string]any {
 	summary["model"] = s.Model
 	summary["input_tokens"] = s.InputTokens
 	summary["output_tokens"] = s.OutputTokens
+	if s.ContextWindow > 0 {
+		summary["context_window"] = s.ContextWindow
+	}
+	if len(s.ToolsUsed) > 0 {
+		summary["tools_used"] = cloneToolCounts(s.ToolsUsed)
+	}
 	if len(s.ActiveTags) > 0 {
 		summary["active_tags"] = append([]string(nil), s.ActiveTags...)
 	}
@@ -64,6 +72,17 @@ func ReportAgentRun(ctx context.Context, s AgentRunSummary) map[string]any {
 		summary["loaded_capabilities"] = append([]toolcatalog.LoadedCapabilityEntry(nil), s.LoadedCapabilities...)
 	}
 	return summary
+}
+
+func cloneToolCounts(tools map[string]int) map[string]int {
+	if len(tools) == 0 {
+		return nil
+	}
+	clone := make(map[string]int, len(tools))
+	for name, count := range tools {
+		clone[name] = count
+	}
+	return clone
 }
 
 // ReportConversationID overrides the loop-visible conversation ID for the

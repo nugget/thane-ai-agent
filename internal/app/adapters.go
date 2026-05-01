@@ -1106,13 +1106,14 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 		loadedCapabilities = toolcatalog.BuildLoadedCapabilityEntries(capSurface, resp.ActiveTags)
 	}
 
-	// Use the routed model's context window if available, otherwise
-	// fall back to the agent loop's default.
-	ctxWindow := a.agentLoop.GetContextWindow()
-	if a.router != nil && resp.Model != "" {
+	ctxWindow := resp.ContextWindow
+	if ctxWindow <= 0 && a.router != nil && resp.Model != "" {
 		if mw := a.router.ContextWindowForModel(resp.Model); mw > 0 {
 			ctxWindow = mw
 		}
+	}
+	if ctxWindow <= 0 {
+		ctxWindow = a.agentLoop.GetContextWindow()
 	}
 
 	return &looppkg.Response{

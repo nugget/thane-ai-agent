@@ -119,6 +119,7 @@ type Response struct {
 	OutputTokens             int                                 `json:"output_tokens,omitempty"`
 	CacheCreationInputTokens int                                 `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int                                 `json:"cache_read_input_tokens,omitempty"`
+	ContextWindow            int                                 `json:"context_window,omitempty"`
 	ToolsUsed                map[string]int                      `json:"tools_used,omitempty"` // tool name → call count
 	EffectiveTools           []string                            `json:"effective_tools,omitempty"`
 	LoadedCapabilities       []toolcatalog.LoadedCapabilityEntry `json:"loaded_capabilities,omitempty"`
@@ -2363,6 +2364,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		OutputTokens:             iterResult.OutputTokens,
 		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
+		ContextWindow:            usageInfo.ContextWindow,
 		ToolsUsed:                iterResult.ToolsUsed,
 		EffectiveTools:           effectiveToolNames(),
 		Iterations:               iterResult.IterationCount,

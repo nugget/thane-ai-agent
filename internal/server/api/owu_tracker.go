@@ -206,6 +206,8 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 					Model:              resp.Model,
 					InputTokens:        resp.InputTokens,
 					OutputTokens:       resp.OutputTokens,
+					ContextWindow:      resp.ContextWindow,
+					ToolsUsed:          resp.ToolsUsed,
 					ActiveTags:         append([]string(nil), resp.ActiveTags...),
 					EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
 					LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
