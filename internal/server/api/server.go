@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -78,6 +79,7 @@ type Server struct {
 	webServer                          WebServerRegistrar
 	companionHandler                   http.Handler
 	modelRegistry                      *fleet.Registry
+	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
 	usageStore                         *usage.Store
@@ -136,6 +138,11 @@ func (s *Server) SetWebServer(ws WebServerRegistrar) {
 // companion app connections.
 func (s *Server) SetCompanionHandler(h http.Handler) {
 	s.companionHandler = h
+}
+
+// UseContactStore configures the native contact-directory API.
+func (s *Server) UseContactStore(store *contacts.Store) {
+	s.contactStore = store
 }
 
 // UseLoopDefinitionRegistry configures the persistent loops-ng definition
@@ -431,6 +438,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
 	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
 	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
+
+	// Contact directory endpoints
+	mux.HandleFunc("GET /v1/contacts", s.handleContactsList)
+	mux.HandleFunc("GET /v1/contacts/{id}", s.handleContactGet)
+	mux.HandleFunc("POST /v1/contacts", s.handleContactCreate)
+	mux.HandleFunc("PUT /v1/contacts/{id}", s.handleContactUpdate)
+	mux.HandleFunc("DELETE /v1/contacts/{id}", s.handleContactDelete)
 
 	// Loop definition registry endpoints
 	mux.HandleFunc("GET /v1/loop-definitions", s.handleLoopDefinitions)

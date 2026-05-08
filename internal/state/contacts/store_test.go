@@ -469,6 +469,17 @@ func TestListAll(t *testing.T) {
 	if results[0].FormattedName != "Adam" {
 		t.Errorf("first contact = %q, want %q", results[0].FormattedName, "Adam")
 	}
+
+	limited, err := store.ListAllLimit(2)
+	if err != nil {
+		t.Fatalf("ListAllLimit() error = %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("ListAllLimit() returned %d, want 2", len(limited))
+	}
+	if limited[0].FormattedName != "Adam" || limited[1].FormattedName != "Mid Corp" {
+		t.Fatalf("limited contacts = %q, %q; want Adam, Mid Corp", limited[0].FormattedName, limited[1].FormattedName)
+	}
 }
 
 func TestResurrectSoftDeleted(t *testing.T) {
@@ -823,6 +834,14 @@ func TestFindByTrustZone(t *testing.T) {
 			}
 		})
 	}
+
+	limited, err := store.FindByTrustZoneLimit("trusted", 1)
+	if err != nil {
+		t.Fatalf("FindByTrustZoneLimit() error = %v", err)
+	}
+	if len(limited) != 1 || limited[0].FormattedName != "Trusted C" {
+		t.Fatalf("FindByTrustZoneLimit() = %+v, want Trusted C only", limited)
+	}
 }
 
 func TestFindByPropertyExact_HACompanionApp(t *testing.T) {
@@ -1038,6 +1057,14 @@ func TestAddProperty_GetProperties(t *testing.T) {
 	tel := props[1]
 	if tel.Property != "TEL" || tel.Value != "+15551234567" || tel.Type != "cell" {
 		t.Errorf("TEL prop = %+v", tel)
+	}
+
+	propsByContact, err := store.GetPropertiesForContacts([]uuid.UUID{created.ID})
+	if err != nil {
+		t.Fatalf("GetPropertiesForContacts() error = %v", err)
+	}
+	if got := propsByContact[created.ID]; len(got) != 2 {
+		t.Fatalf("GetPropertiesForContacts()[created] len = %d, want 2", len(got))
 	}
 }
 

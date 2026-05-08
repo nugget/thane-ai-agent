@@ -467,8 +467,18 @@ func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 
 // ListAll returns all active contacts.
 func (s *Store) ListAll() ([]*Contact, error) {
+	return s.ListAllLimit(100)
+}
+
+// ListAllLimit returns up to limit active contacts. Values less than
+// one use the same 100-contact cap as [Store.ListAll].
+func (s *Store) ListAllLimit(limit int) ([]*Contact, error) {
+	if limit <= 0 {
+		limit = 100
+	}
 	rows, err := s.db.Query(
-		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY formatted_name LIMIT 100`)
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` ORDER BY formatted_name LIMIT ?`,
+		limit)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -656,10 +666,10 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 		propNow := now.Format(time.RFC3339)
 		if _, err := tx.Exec(`
 			INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, c.ID.String(), p.Property, p.Value,
 			nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
-			propNow, propNow); err != nil {
+			boolToInt(p.Verified), propNow, propNow); err != nil {
 			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
 		}
 	}
@@ -794,6 +804,42 @@ func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
 	return props, rows.Err()
 }
 
+// GetPropertiesForContacts returns all properties for the supplied
+// contact IDs, grouped by contact ID.
+func (s *Store) GetPropertiesForContacts(contactIDs []uuid.UUID) (map[uuid.UUID][]Property, error) {
+	result := make(map[uuid.UUID][]Property, len(contactIDs))
+	if len(contactIDs) == 0 {
+		return result, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(contactIDs)), ",")
+	args := make([]any, len(contactIDs))
+	for i, id := range contactIDs {
+		result[id] = nil
+		args[i] = id.String()
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		FROM contact_properties
+		WHERE contact_id IN (`+placeholders+`)
+		ORDER BY contact_id, property, pref NULLS LAST, id
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p, err := scanProperty(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[p.ContactID] = append(result[p.ContactID], p)
+	}
+	return result, rows.Err()
+}
+
 // GetPropertiesMap returns all properties for a contact grouped by
 // property name as a map of name→values. This is a convenience view
 // for callers that don't need the full Property metadata.
@@ -890,6 +936,23 @@ func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 	rows, err := s.db.Query(
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY formatted_name`,
 		zone)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
+// FindByTrustZoneLimit returns up to limit active contacts in the given
+// trust zone. Values less than one return all active contacts in that zone.
+func (s *Store) FindByTrustZoneLimit(zone string, limit int) ([]*Contact, error) {
+	if limit <= 0 {
+		return s.FindByTrustZone(zone)
+	}
+	rows, err := s.db.Query(
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY formatted_name LIMIT ?`,
+		zone, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}

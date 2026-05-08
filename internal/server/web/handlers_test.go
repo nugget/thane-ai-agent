@@ -71,6 +71,7 @@ type stubSystemStatus struct {
 	modelRegistry *fleet.RegistrySnapshot
 	routerStats   *router.Stats
 	rateLimit     *fleet.AnthropicRateLimitSnapshot
+	definitions   *loop.DefinitionRegistryView
 	capCatalog    *toolcatalog.CapabilityCatalogView
 }
 
@@ -83,6 +84,9 @@ func (s *stubSystemStatus) ModelRegistry() *fleet.RegistrySnapshot {
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
 func (s *stubSystemStatus) AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot {
 	return s.rateLimit
+}
+func (s *stubSystemStatus) LoopDefinitions() *loop.DefinitionRegistryView {
+	return s.definitions
 }
 func (s *stubSystemStatus) CapabilityCatalog(_ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
 	return s.capCatalog
@@ -372,6 +376,26 @@ func TestHandleSystem_Healthy(t *testing.T) {
 				Remaining: 4999,
 			},
 		},
+		definitions: &loop.DefinitionRegistryView{
+			Generation:         7,
+			ConfigDefinitions:  1,
+			RunningDefinitions: 1,
+			ByRuntimeState:     map[string]int{"sleeping": 1},
+			Definitions: []loop.DefinitionView{
+				{
+					DefinitionSnapshot: loop.DefinitionSnapshot{
+						Name:        "metacog",
+						Source:      loop.DefinitionSourceConfig,
+						PolicyState: loop.DefinitionPolicyStateActive,
+					},
+					Runtime: loop.DefinitionRuntimeStatus{
+						Running: true,
+						LoopID:  "loop-metacog",
+						State:   loop.StateSleeping,
+					},
+				},
+			},
+		},
 		capCatalog: &toolcatalog.CapabilityCatalogView{
 			Kind: "capability_catalog",
 			ActivationTools: toolcatalog.CapabilityActionTools{
@@ -445,6 +469,16 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	if rateLimit["upstream_request_id"] != "req_dashboard" {
 		t.Errorf("upstream_request_id = %v, want req_dashboard", rateLimit["upstream_request_id"])
 	}
+	definitions, ok := body["loop_definitions"].(map[string]any)
+	if !ok {
+		t.Fatal("loop_definitions field missing or not a map")
+	}
+	if definitions["generation"] != float64(7) {
+		t.Errorf("loop definition generation = %v, want 7", definitions["generation"])
+	}
+	if definitions["running_definitions"] != float64(1) {
+		t.Errorf("running_definitions = %v, want 1", definitions["running_definitions"])
+	}
 	capCatalog, ok := body["capability_catalog"].(map[string]any)
 	if !ok {
 		t.Fatal("capability_catalog field missing or not a map")
@@ -502,6 +536,81 @@ func TestHandleSystem_Nil(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 when SystemStatus is nil", w.Code)
+	}
+}
+
+func TestHandleLoopDefinitions_ReturnsView(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		definitions: &loop.DefinitionRegistryView{
+			Generation:         11,
+			ConfigDefinitions:  1,
+			OverlayDefinitions: 1,
+			RunningDefinitions: 1,
+			ByPolicyState:      map[string]int{"active": 2},
+			ByRuntimeState:     map[string]int{"sleeping": 1, "not_running": 1},
+			Definitions: []loop.DefinitionView{
+				{
+					DefinitionSnapshot: loop.DefinitionSnapshot{
+						Name:        "metacog",
+						Source:      loop.DefinitionSourceConfig,
+						PolicyState: loop.DefinitionPolicyStateActive,
+					},
+					Runtime: loop.DefinitionRuntimeStatus{
+						Running: true,
+						LoopID:  "loop-metacog",
+						State:   loop.StateSleeping,
+					},
+				},
+			},
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/loop-definitions", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var view loop.DefinitionRegistryView
+	if err := json.NewDecoder(w.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.Generation != 11 || view.RunningDefinitions != 1 {
+		t.Fatalf("view = %+v, want generation 11 with one running definition", view)
+	}
+	if len(view.Definitions) != 1 || view.Definitions[0].Runtime.LoopID != "loop-metacog" {
+		t.Fatalf("definitions = %+v, want metacog runtime loop", view.Definitions)
+	}
+}
+
+func TestHandleLoopDefinitions_Unavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: &stubSystemStatus{},
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/loop-definitions", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
 	}
 }
 

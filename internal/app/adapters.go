@@ -882,6 +882,7 @@ type systemStatusAdapter struct {
 	modelRuntime  *fleet.Runtime
 	router        *router.Router
 	capSurface    func() []toolcatalog.CapabilitySurface
+	definitions   func() *looppkg.DefinitionRegistryView
 }
 
 // Health returns the health state of all watched services.
@@ -936,6 +937,15 @@ func (a *systemStatusAdapter) AnthropicRateLimitSnapshot() *fleet.AnthropicRateL
 		return nil
 	}
 	return a.modelRuntime.AnthropicRateLimitSnapshot()
+}
+
+// LoopDefinitions returns the effective durable loop-definition view,
+// including live runtime state when the loop-definition runtime is enabled.
+func (a *systemStatusAdapter) LoopDefinitions() *looppkg.DefinitionRegistryView {
+	if a.definitions == nil {
+		return nil
+	}
+	return a.definitions()
 }
 
 // CapabilityCatalog returns the runtime capability catalog used by the
