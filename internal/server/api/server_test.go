@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 func testAPILogger() *slog.Logger {
@@ -104,6 +105,17 @@ func testAPILoopDefinitionRegistry(t *testing.T) *looppkg.DefinitionRegistry {
 		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
 	return registry
+}
+
+func testAPIContactStore(t *testing.T) *contacts.Store {
+	t.Helper()
+
+	store, err := contacts.NewStore(t.TempDir()+"/contacts.db", testAPILogger())
+	if err != nil {
+		t.Fatalf("contacts.NewStore: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
 }
 
 func TestSimpleChatRequest_Parsing(t *testing.T) {
@@ -927,6 +939,236 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 	}
 	if res.snapshot.PolicySource != fleet.DeploymentPolicySourceDefault {
 		t.Fatalf("PolicySource = %q, want %q after persistence failure", res.snapshot.PolicySource, fleet.DeploymentPolicySourceDefault)
+	}
+}
+
+func TestHandleContactsCreateListGetUpdateDelete(t *testing.T) {
+	store := testAPIContactStore(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseContactStore(store)
+
+	createBody := bytes.NewBufferString(`{
+		"formatted_name":"Alice Smith",
+		"kind":"individual",
+		"trust_zone":"trusted",
+		"properties":[
+			{"property":"email","value":"alice@example.com","type":"home","verified":true},
+			{"property":"tel","value":"+15551234567","type":"cell"}
+		]
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/contacts", createBody)
+	createRec := httptest.NewRecorder()
+	server.handleContactCreate(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201; body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	var created contactResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Contact == nil || created.Contact.ID.String() == "" {
+		t.Fatalf("created contact = %#v, want populated id", created.Contact)
+	}
+	if created.Contact.FormattedName != "Alice Smith" {
+		t.Fatalf("FormattedName = %q, want Alice Smith", created.Contact.FormattedName)
+	}
+	if len(created.Contact.Properties) != 2 {
+		t.Fatalf("properties len = %d, want 2", len(created.Contact.Properties))
+	}
+	if created.Contact.Properties[0].Property != "EMAIL" || !created.Contact.Properties[0].Verified {
+		t.Fatalf("first property = %+v, want verified EMAIL", created.Contact.Properties[0])
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/contacts?query=Alice", nil)
+	listRec := httptest.NewRecorder()
+	server.handleContactsList(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listRec.Code)
+	}
+	var listResp contactsListResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&listResp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if listResp.Count != 1 || listResp.Contacts[0].FormattedName != "Alice Smith" {
+		t.Fatalf("list response = %#v, want Alice Smith", listResp)
+	}
+	if len(listResp.Contacts[0].Properties) != 2 {
+		t.Fatalf("list properties len = %d, want 2", len(listResp.Contacts[0].Properties))
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/contacts/"+created.Contact.ID.String(), nil)
+	getReq.SetPathValue("id", created.Contact.ID.String())
+	getRec := httptest.NewRecorder()
+	server.handleContactGet(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200", getRec.Code)
+	}
+
+	updateBody := bytes.NewBufferString(`{
+		"formatted_name":"Alice Jones",
+		"kind":"individual",
+		"trust_zone":"household",
+		"properties":[{"property":"email","value":"alice@home.example","type":"work"}]
+	}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/v1/contacts/"+created.Contact.ID.String(), updateBody)
+	updateReq.SetPathValue("id", created.Contact.ID.String())
+	updateRec := httptest.NewRecorder()
+	server.handleContactUpdate(updateRec, updateReq)
+
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want 200; body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated contactResponse
+	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated.Contact.FormattedName != "Alice Jones" || updated.Contact.TrustZone != contacts.ZoneHousehold {
+		t.Fatalf("updated contact = %+v, want Alice Jones household", updated.Contact)
+	}
+	if len(updated.Contact.Properties) != 1 || updated.Contact.Properties[0].Value != "alice@home.example" {
+		t.Fatalf("updated properties = %+v, want replacement email", updated.Contact.Properties)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/contacts/"+created.Contact.ID.String(), nil)
+	deleteReq.SetPathValue("id", created.Contact.ID.String())
+	deleteRec := httptest.NewRecorder()
+	server.handleContactDelete(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
+	}
+
+	getDeletedReq := httptest.NewRequest(http.MethodGet, "/v1/contacts/"+created.Contact.ID.String(), nil)
+	getDeletedReq.SetPathValue("id", created.Contact.ID.String())
+	getDeletedRec := httptest.NewRecorder()
+	server.handleContactGet(getDeletedRec, getDeletedReq)
+	if getDeletedRec.Code != http.StatusNotFound {
+		t.Fatalf("deleted get status = %d, want 404", getDeletedRec.Code)
+	}
+}
+
+func TestHandleContactsListFilters(t *testing.T) {
+	store := testAPIContactStore(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseContactStore(store)
+
+	alice, err := store.UpsertWithProperties(&contacts.Contact{
+		FormattedName: "Alice Smith",
+		Kind:          "individual",
+		TrustZone:     contacts.ZoneTrusted,
+	}, []contacts.Property{{Property: "EMAIL", Value: "alice@example.com"}})
+	if err != nil {
+		t.Fatalf("upsert Alice: %v", err)
+	}
+	if _, err := store.UpsertWithProperties(&contacts.Contact{
+		FormattedName: "Acme Org",
+		Kind:          "org",
+		TrustZone:     contacts.ZoneKnown,
+	}, []contacts.Property{{Property: "EMAIL", Value: "ops@acme.example"}}); err != nil {
+		t.Fatalf("upsert Acme: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		target    string
+		wantCount int
+		wantName  string
+	}{
+		{name: "kind", target: "/v1/contacts?kind=org", wantCount: 1, wantName: "Acme Org"},
+		{name: "trust zone", target: "/v1/contacts?trust_zone=trusted", wantCount: 1, wantName: alice.FormattedName},
+		{name: "property exact", target: "/v1/contacts?property=email&value=alice@example.com&exact=true", wantCount: 1, wantName: alice.FormattedName},
+		{name: "limit", target: "/v1/contacts?limit=1", wantCount: 1, wantName: "Acme Org"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			rec := httptest.NewRecorder()
+			server.handleContactsList(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			var resp contactsListResponse
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.Count != tt.wantCount {
+				t.Fatalf("Count = %d, want %d", resp.Count, tt.wantCount)
+			}
+			if resp.Contacts[0].FormattedName != tt.wantName {
+				t.Fatalf("contact = %q, want %q", resp.Contacts[0].FormattedName, tt.wantName)
+			}
+			if len(resp.Contacts[0].Properties) == 0 {
+				t.Fatalf("contact properties are empty, want hydrated properties")
+			}
+		})
+	}
+}
+
+func TestHandleContactsValidationErrors(t *testing.T) {
+	store := testAPIContactStore(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseContactStore(store)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/contacts", bytes.NewBufferString(`{"kind":"individual"}`))
+	createRec := httptest.NewRecorder()
+	server.handleContactCreate(createRec, createReq)
+	if createRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing name status = %d, want 400", createRec.Code)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/contacts/not-a-uuid", nil)
+	getReq.SetPathValue("id", "not-a-uuid")
+	getRec := httptest.NewRecorder()
+	server.handleContactGet(getRec, getReq)
+	if getRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad id status = %d, want 400", getRec.Code)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/contacts?kind=bogus", nil)
+	listRec := httptest.NewRecorder()
+	server.handleContactsList(listRec, listReq)
+	if listRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad kind status = %d, want 400", listRec.Code)
+	}
+
+	if _, err := store.Upsert(&contacts.Contact{
+		FormattedName: "Duplicate Name",
+		Kind:          "individual",
+	}); err != nil {
+		t.Fatalf("seed duplicate contact: %v", err)
+	}
+	dupReq := httptest.NewRequest(http.MethodPost, "/v1/contacts", bytes.NewBufferString(`{
+		"formatted_name":"duplicate name",
+		"kind":"individual"
+	}`))
+	dupRec := httptest.NewRecorder()
+	server.handleContactCreate(dupRec, dupReq)
+	if dupRec.Code != http.StatusConflict {
+		t.Fatalf("duplicate status = %d, want 409", dupRec.Code)
+	}
+	var dupBody map[string]map[string]any
+	if err := json.NewDecoder(dupRec.Body).Decode(&dupBody); err != nil {
+		t.Fatalf("decode duplicate response: %v", err)
+	}
+	if got := dupBody["error"]["message"]; got != "formatted_name must be unique" {
+		t.Fatalf("duplicate message = %v, want stable uniqueness message", got)
+	}
+}
+
+func TestHandleContactsUnavailable(t *testing.T) {
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/contacts", nil)
+	rec := httptest.NewRecorder()
+	server.handleContactsList(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }
 

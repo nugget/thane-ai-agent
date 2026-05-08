@@ -4,31 +4,88 @@ Thane serves three network listeners simultaneously from a single binary.
 
 ## Port 8080 — Native API
 
-OpenAI-compatible `/v1/chat/completions` endpoint. This is the primary
-interface for direct integration, development, and the built-in web
-experience.
+Port 8080 serves the OpenAI-compatible native API and the embedded Cognition
+Engine dashboard. The dashboard has no build step and fetches JSON/SSE
+endpoints from the same listener.
 
-**Chat API:** Accepts standard OpenAI chat completion requests with
-streaming support. The `model` field selects a
-[routing profile](../operating/routing-profiles.md) (e.g., `thane:latest`,
-`thane:premium`).
+### Chat and Models
 
-**Web Dashboard:** Served on the same port at the root path. Includes:
-- **Overview** — runtime stats, dependency health, model router info
-- **Chat** — interactive web chat interface with streaming
-- **Contacts** — browse and inspect the contact directory
-- **Facts** — search the semantic knowledge store
-- **Sessions** — list sessions with full transcripts and timeline view
-- **Tasks** — view scheduled tasks with execution history
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. The `model` field selects a [routing profile](../operating/routing-profiles.md), such as `thane:latest` or `thane:premium`. |
+| `POST` | `/v1/chat` | Minimal JSON chat endpoint for simple testing. |
+| `GET` | `/v1/models` | OpenAI-compatible model list. |
 
-The dashboard uses embedded HTML templates and htmx for lightweight
-interactivity. No build step, no JavaScript framework.
+### Runtime and Web Dashboard
 
-**Health endpoint:** Available for service monitoring.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | Embedded Cognition Engine dashboard. |
+| `GET` | `/health` | Dependency health for service monitoring. |
+| `GET` | `/v1/version` | Build and runtime metadata. |
+| `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, loop definitions, and capability catalog. |
+| `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
+| `GET` | `/api/loops` | Live loop status snapshots, including recent iterations, active tags, tooling, and config. |
+| `GET` | `/api/loops/events` | SSE stream. Sends an initial loop snapshot, then loop and delegate events. |
+| `GET` | `/api/loops/{id}/logs` | Structured logs scoped to a loop's recent conversation IDs. |
+| `GET` | `/api/loop-definitions` | Effective durable loop-definition registry view, including runtime state. |
+| `GET` | `/api/capabilities` | Resolved capability catalog. Pass `include=excluded` to include operator-excluded tools. |
+| `GET` | `/api/capabilities/{tag}` | Single capability entry. |
+| `GET` | `/api/request-detail/_probe` | Request-detail availability probe. |
+| `GET` | `/api/requests/{id}` | Live or retained request detail: prompt, messages, tool calls, results, and token metadata. |
 
-**Companion WebSocket:** Native companion apps connect at
-`/v1/companion/ws` to register local host capabilities. The older
-`/v1/platform/ws` route remains as a compatibility alias.
+### Router, Registry, and History
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/router/stats` | Router statistics, including Anthropic rate-limit snapshot when available. |
+| `GET` | `/v1/router/audit` | Recent routing decisions. |
+| `GET` | `/v1/router/explain/{requestId}` | Routing decision for one request ID. |
+| `GET` | `/v1/model-registry` | Effective model registry snapshot. |
+| `POST` | `/v1/model-registry/policy` | Set a deployment policy. |
+| `DELETE` | `/v1/model-registry/policy?deployment=...` | Clear a deployment policy. |
+| `POST` | `/v1/model-registry/resource-policy` | Set a resource policy. |
+| `DELETE` | `/v1/model-registry/resource-policy?resource=...` | Clear a resource policy. |
+| `GET` | `/v1/contacts` | List or search contacts. Supports `query`, `kind`, `trust_zone`, `property`, `value`, `exact=true`, and `limit` (default 100, max 500). |
+| `GET` | `/v1/contacts/{id}` | Get one contact with structured properties. |
+| `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
+| `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties. |
+| `DELETE` | `/v1/contacts/{id}` | Soft-delete a contact. |
+| `GET` | `/v1/loop-definitions` | Effective durable loop-definition registry view. |
+| `GET` | `/v1/loop-definitions/{name}` | One loop definition. |
+| `POST` | `/v1/loop-definitions` | Upsert a mutable overlay loop definition. |
+| `DELETE` | `/v1/loop-definitions/{name}` | Delete a mutable overlay loop definition. |
+| `POST` | `/v1/loop-definitions/policy` | Set a loop-definition policy. |
+| `DELETE` | `/v1/loop-definitions/policy?name=...` | Clear a loop-definition policy. |
+| `POST` | `/v1/loop-definitions/{name}/launch` | Launch a stored loop definition. |
+| `GET` | `/v1/conversations` | Conversation summaries. |
+| `GET` | `/v1/conversations/{id}` | Conversation detail. |
+| `GET` | `/v1/tools/calls` | Tool-call history. |
+| `GET` | `/v1/tools/stats` | Tool usage stats. |
+| `GET` | `/v1/session/stats` | Current session usage and context stats. |
+| `GET` | `/v1/usage/summary` | Usage summary over a time window. |
+| `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |
+| `POST` | `/v1/session/reset` | Reset current session stats. |
+| `POST` | `/v1/session/compact` | Compact current session history. |
+| `GET` | `/v1/session/history` | Current session history. |
+| `GET` | `/v1/archive/sessions` | Archived session list. |
+| `GET` | `/v1/archive/sessions/{id}` | Archived session detail. |
+| `GET` | `/v1/archive/sessions/{id}/export` | Export one archived session. |
+| `GET` | `/v1/archive/search` | Full-text archive search. |
+| `GET` | `/v1/archive/messages` | Archived message query. |
+| `GET` | `/v1/archive/stats` | Archive statistics. |
+
+### Checkpoints and Companion Apps
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/checkpoint` | Create a checkpoint. |
+| `GET` | `/v1/checkpoints` | List checkpoints. |
+| `GET` | `/v1/checkpoint/{id}` | Get checkpoint metadata/detail. |
+| `DELETE` | `/v1/checkpoint/{id}` | Delete a checkpoint. |
+| `POST` | `/v1/checkpoint/{id}/restore` | Restore from a checkpoint. |
+| `GET` | `/v1/companion/ws` | Native companion app WebSocket. |
+| `GET` | `/v1/platform/ws` | Legacy companion WebSocket alias. |
 
 ## Port 11434 — Ollama-Compatible API
 

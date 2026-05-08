@@ -73,6 +73,9 @@ type SystemStatusProvider interface {
 	// AnthropicRateLimitSnapshot returns the latest Anthropic
 	// rate-limit snapshot, or nil when Anthropic has not been observed.
 	AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot
+	// LoopDefinitions returns the current effective loop-definition
+	// registry view, including live runtime state when available.
+	LoopDefinitions() *loop.DefinitionRegistryView
 	// CapabilityCatalog returns the resolved runtime capability catalog
 	// rendered with the supplied options.
 	CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView
@@ -146,6 +149,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/capabilities", s.handleCapabilities)
 	mux.HandleFunc("GET /api/capabilities/{tag}", s.handleCapability)
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
+	mux.HandleFunc("GET /api/loop-definitions", s.handleLoopDefinitions)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
 	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)

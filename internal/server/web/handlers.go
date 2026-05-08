@@ -48,10 +48,28 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if snapshot := s.systemStatus.AnthropicRateLimitSnapshot(); snapshot != nil {
 		body["anthropic_rate_limit"] = snapshot
 	}
+	if definitions := s.systemStatus.LoopDefinitions(); definitions != nil {
+		body["loop_definitions"] = definitions
+	}
 	if catalog := s.systemStatus.CapabilityCatalog(toolcatalog.CatalogViewOptions{IncludeDelegate: true}); catalog != nil {
 		body["capability_catalog"] = catalog
 	}
 	s.writeJSON(w, body)
+}
+
+// handleLoopDefinitions returns the current effective durable
+// loop-definition registry view for dashboard clients.
+func (s *WebServer) handleLoopDefinitions(w http.ResponseWriter, _ *http.Request) {
+	if s.systemStatus == nil {
+		s.writeJSONError(w, "loop definitions unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	definitions := s.systemStatus.LoopDefinitions()
+	if definitions == nil {
+		s.writeJSONError(w, "loop definitions unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.writeJSON(w, definitions)
 }
 
 // handleCapabilities returns the resolved capability catalog as a

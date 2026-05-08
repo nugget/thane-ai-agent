@@ -49,6 +49,7 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
+	server.UseContactStore(a.contactStore)
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
 	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
 	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
@@ -524,6 +525,7 @@ func (a *App) initServers(s *newState) error {
 				modelRuntime:  a.modelRuntime,
 				router:        a.rtr,
 				capSurface:    a.capSurfaceGetter(),
+				definitions:   a.loopDefinitionView,
 			},
 			Logger: logger,
 		}
