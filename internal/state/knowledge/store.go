@@ -64,72 +64,19 @@ type Store struct {
 	logger     *slog.Logger
 }
 
-// NewStore creates a fact store using the given database path.
-func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+// NewStore creates a fact store backed by db. The caller owns db's
+// lifecycle; NewStore only applies the schema and sets up the optional
+// FTS5 index.
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
+	if logger == nil {
+		logger = slog.Default()
 	}
-
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
+	}
 	s := &Store{db: db, logger: logger}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return s, nil
-}
-
-// NewStoreWithDB creates a fact store using an existing database connection.
-func NewStoreWithDB(db *sql.DB, logger *slog.Logger) (*Store, error) {
-	s := &Store{db: db, logger: logger}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-	return s, nil
-}
-
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS facts (
-			id TEXT PRIMARY KEY,
-			category TEXT NOT NULL,
-			key TEXT NOT NULL,
-			value TEXT NOT NULL,
-			source TEXT,
-			confidence REAL DEFAULT 1.0,
-			embedding BLOB,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			accessed_at TEXT NOT NULL,
-			deleted_at TEXT,
-			UNIQUE(category, key)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
-		CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
-		CREATE INDEX IF NOT EXISTS idx_facts_accessed ON facts(accessed_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_facts_deleted ON facts(deleted_at);
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Add columns if they don't exist (migrations for existing DBs).
-	for _, col := range []struct{ name, typedef string }{
-		{"embedding", "BLOB"},
-		{"deleted_at", "TEXT"},
-		{"subjects", "TEXT"},
-		{"ref", "TEXT"},
-	} {
-		if err := database.AddColumn(s.db, "facts", col.name, col.typedef); err != nil {
-			return err
-		}
-	}
-
 	s.tryEnableFTS()
-
-	return nil
+	return s, nil
 }
 
 // tryEnableFTS creates the FTS5 virtual table for full-text search.
@@ -158,11 +105,6 @@ func (s *Store) tryEnableFTS() {
 		s.logger.Warn("failed to rebuild facts FTS index", "error", err)
 		s.ftsEnabled = false
 	}
-}
-
-// Close closes the database connection.
-func (s *Store) Close() error {
-	return s.db.Close()
 }
 
 // Set creates or updates a fact. Resurrects soft-deleted facts if they exist.

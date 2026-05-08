@@ -36,7 +36,7 @@ func testAPIUsageStore(t *testing.T) *usage.Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := usage.NewStore(db)
+	store, err := usage.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("usage.NewStore: %v", err)
 	}
@@ -110,11 +110,15 @@ func testAPILoopDefinitionRegistry(t *testing.T) *looppkg.DefinitionRegistry {
 func testAPIContactStore(t *testing.T) *contacts.Store {
 	t.Helper()
 
-	store, err := contacts.NewStore(t.TempDir()+"/contacts.db", testAPILogger())
+	db, err := database.Open(t.TempDir() + "/contacts.db")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := contacts.NewStore(db, testAPILogger())
 	if err != nil {
 		t.Fatalf("contacts.NewStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 	return store
 }
 

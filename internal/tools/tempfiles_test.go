@@ -19,7 +19,7 @@ func testTempFileStore(t *testing.T) (*TempFileStore, *opstate.Store) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	state, err := opstate.NewStore(db)
+	state, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}

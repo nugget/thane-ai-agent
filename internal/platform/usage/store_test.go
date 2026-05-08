@@ -19,7 +19,7 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s, err := NewStore(db)
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -572,7 +572,7 @@ func TestRecord_AutoID(t *testing.T) {
 }
 
 func TestNewStore_NilDB(t *testing.T) {
-	_, err := NewStore(nil)
+	_, err := NewStore(nil, nil)
 	if err == nil {
 		t.Error("NewStore(nil) should fail")
 	}
@@ -714,7 +714,7 @@ func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
 		t.Fatalf("create legacy table: %v", err)
 	}
 
-	s, err := NewStore(db)
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -771,7 +771,7 @@ func TestMigrate_AddsUpstreamRequestIDColumn(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := NewStore(db); err != nil {
+	if _, err := NewStore(db, nil); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	if !database.HasColumn(db, "usage_records", "upstream_request_id") {

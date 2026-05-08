@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -99,73 +100,16 @@ type Store struct {
 // NewStore creates a usage store using the given database connection.
 // The caller owns the connection — Store does not close it. The schema
 // is created automatically on first use.
-func NewStore(db *sql.DB) (*Store, error) {
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("nil database connection")
 	}
 
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate usage schema: %w", err)
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
 	}
 
-	return s, nil
-}
-
-func (s *Store) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS usage_records (
-		id              TEXT PRIMARY KEY,
-		timestamp       TEXT NOT NULL,
-		request_id      TEXT NOT NULL,
-		session_id      TEXT,
-		conversation_id TEXT,
-		model           TEXT NOT NULL,
-		provider        TEXT NOT NULL,
-		input_tokens    INTEGER NOT NULL,
-		output_tokens   INTEGER NOT NULL,
-		cost_usd        REAL NOT NULL,
-		role            TEXT NOT NULL,
-		task_name       TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id);
-	CREATE INDEX IF NOT EXISTS idx_usage_conversation ON usage_records(conversation_id);
-	`
-	if _, err := s.db.Exec(schema); err != nil {
-		return err
-	}
-	if err := database.AddColumn(s.db, "usage_records", "upstream_model", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := database.AddColumn(s.db, "usage_records", "resource", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := database.AddColumn(s.db, "usage_records", "cache_creation_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := database.AddColumn(s.db, "usage_records", "cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	// Per-TTL cache-write breakdown columns, added for #736. Rows
-	// written before this migration ran have NULL/0 in both buckets;
-	// ComputeDetailedCostForIdentity treats that as "unknown mix" and
-	// falls back to the 5m multiplier on the full total so historical
-	// cost numbers don't spike retroactively.
-	if err := database.AddColumn(s.db, "usage_records", "cache_creation_5m_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := database.AddColumn(s.db, "usage_records", "cache_creation_1h_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	// upstream_request_id captures Anthropic's `x-request-id` response
-	// header (and any equivalent from future providers) for billing
-	// correlation. Rows from before this migration have "" — fine,
-	// the column is informational and never participates in joins.
-	if err := database.AddColumn(s.db, "usage_records", "upstream_request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	return nil
+	return &Store{db: db}, nil
 }
 
 // Record persists a usage record. If rec.ID is empty, a UUIDv7 is

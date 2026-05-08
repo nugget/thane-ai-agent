@@ -6,16 +6,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "scheduler_test.db")
-	s, err := NewStore(dbPath)
+	db, err := database.Open(dbPath)
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
 	return s
 }
 
@@ -138,18 +145,33 @@ func TestGetTaskByName_DuplicateNamesReturnsError(t *testing.T) {
 	}
 }
 
-// Ensure the test DB file is writable (sanity check for CI environments).
-func TestNewStore_CreatesDB(t *testing.T) {
+// Ensure NewStore wires up a writable DB and applies the schema
+// (sanity check for CI environments).
+func TestNewStore_AppliesSchema(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	s, err := NewStore(dbPath)
+	db, err := database.Open(dbPath)
 	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := NewStore(db, nil); err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	defer s.Close()
 
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		t.Error("database file was not created")
+	}
+
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'`,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Error("schema did not create tasks table")
 	}
 }

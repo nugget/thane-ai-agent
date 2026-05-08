@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,35 +19,13 @@ type Store struct {
 	db *sql.DB
 }
 
-// NewStore creates a checkpoint store using the given database.
-func NewStore(db *sql.DB) (*Store, error) {
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
+// NewStore creates a checkpoint store backed by db. The caller owns
+// db's lifecycle; NewStore only applies the schema.
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
 	}
-	return s, nil
-}
-
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS checkpoints (
-			id TEXT PRIMARY KEY,
-			created_at TEXT NOT NULL,
-			trigger TEXT NOT NULL,
-			note TEXT,
-			state_gz BLOB NOT NULL,
-			byte_size INTEGER NOT NULL,
-			message_count INTEGER NOT NULL,
-			fact_count INTEGER NOT NULL
-		);
-		
-		CREATE INDEX IF NOT EXISTS idx_checkpoints_created 
-			ON checkpoints(created_at DESC);
-		
-		CREATE INDEX IF NOT EXISTS idx_checkpoints_trigger 
-			ON checkpoints(trigger);
-	`)
-	return err
+	return &Store{db: db}, nil
 }
 
 // Create saves a new checkpoint and returns it with ID populated.

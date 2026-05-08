@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -23,35 +24,16 @@ type Store struct {
 // NewStore creates an operational state store using the given database
 // connection. The caller owns the connection — Store does not close it.
 // The schema is created automatically on first use.
-func NewStore(db *sql.DB) (*Store, error) {
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("nil database connection")
 	}
 
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate: %w", err)
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
 	}
 
-	return s, nil
-}
-
-func (s *Store) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS operational_state (
-		namespace  TEXT NOT NULL,
-		key        TEXT NOT NULL,
-		value      TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		PRIMARY KEY (namespace, key)
-	);
-	`
-	if _, err := s.db.Exec(schema); err != nil {
-		return err
-	}
-
-	// Add expires_at column for TTL support (issue #457).
-	return database.AddColumn(s.db, "operational_state", "expires_at", "TEXT")
+	return &Store{db: db}, nil
 }
 
 // Get returns the stored value for a namespace/key pair. Returns empty

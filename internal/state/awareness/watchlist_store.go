@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // WatchedSubscription represents one entity subscription scope with its stored
@@ -25,25 +28,11 @@ type WatchlistStore struct {
 }
 
 // NewWatchlistStore creates a watchlist store, running migrations on first use.
-func NewWatchlistStore(db *sql.DB) (*WatchlistStore, error) {
-	s := &WatchlistStore{db: db}
-	if err := s.migrate(); err != nil {
-		return nil, fmt.Errorf("migrate watchlist: %w", err)
+func NewWatchlistStore(db *sql.DB, logger *slog.Logger) (*WatchlistStore, error) {
+	if err := database.Migrate(db, watchlistSchema, logger); err != nil {
+		return nil, err
 	}
-	return s, nil
-}
-
-func (s *WatchlistStore) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS watched_entity_subscriptions (
-			entity_id TEXT NOT NULL,
-			scope     TEXT NOT NULL DEFAULT '',
-			added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			options   TEXT NOT NULL DEFAULT '{}',
-			PRIMARY KEY (scope, entity_id)
-		)
-	`)
-	return err
+	return &WatchlistStore{db: db}, nil
 }
 
 // Add inserts an entity into the watchlist with no scope or options.

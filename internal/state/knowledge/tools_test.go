@@ -2,7 +2,6 @@ package knowledge
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -31,11 +30,7 @@ func TestRememberWithEmbedding(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 
@@ -81,11 +76,7 @@ func TestRememberWithoutEmbedding(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 	// No embedding client set
@@ -117,11 +108,7 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 
@@ -170,11 +157,7 @@ func TestGenerateMissingEmbeddingsNoClient(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 	// No embedding client
@@ -193,11 +176,7 @@ func TestRemember_WithRef(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 
@@ -233,11 +212,7 @@ func TestRecall_ShowsRef(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpFile.Name())
 
 	tools := NewTools(store)
 

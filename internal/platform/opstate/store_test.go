@@ -17,7 +17,7 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s, err := NewStore(db)
+	s, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestListEmpty(t *testing.T) {
 
 func TestNewStore_NilDB(t *testing.T) {
 	// A nil *sql.DB should fail during migration.
-	_, err := NewStore(nil)
+	_, err := NewStore(nil, nil)
 	if err == nil {
 		t.Error("NewStore(nil) should fail")
 	}
@@ -184,7 +184,7 @@ func TestStore_SharedConnection(t *testing.T) {
 	}
 	defer db.Close()
 
-	s1, err := NewStore(db)
+	s1, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore(1): %v", err)
 	}
@@ -193,7 +193,7 @@ func TestStore_SharedConnection(t *testing.T) {
 	}
 
 	// Create a second Store on the same DB — data should be visible.
-	s2, err := NewStore(db)
+	s2, err := NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore(2): %v", err)
 	}

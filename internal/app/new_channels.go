@@ -22,6 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
@@ -54,12 +55,16 @@ func (a *App) initChannels(s *newState) error {
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
 	// knowledge that persist across conversations and restarts.
-	factStore, err := knowledge.NewStore(a.cfg.DataDir+"/knowledge.db", a.logger)
+	factDB, err := database.Open(a.cfg.DataDir + "/knowledge.db")
+	if err != nil {
+		return fmt.Errorf("open knowledge database: %w", err)
+	}
+	a.onCloseErr("facts", factDB.Close)
+	factStore, err := knowledge.NewStore(factDB, a.logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
 	a.factStore = factStore
-	a.onCloseErr("facts", factStore.Close)
 
 	factTools := knowledge.NewTools(factStore)
 	a.loop.Tools().SetFactTools(factTools)
@@ -68,12 +73,16 @@ func (a *App) initChannels(s *newState) error {
 	// --- Contact directory ---
 	// Structured storage for people and organizations. Separate database
 	// from facts to keep concerns isolated.
-	contactStore, err := contacts.NewStore(a.cfg.DataDir+"/contacts.db", a.logger)
+	contactDB, err := database.Open(a.cfg.DataDir + "/contacts.db")
+	if err != nil {
+		return fmt.Errorf("open contacts database: %w", err)
+	}
+	a.onCloseErr("contacts", contactDB.Close)
+	contactStore, err := contacts.NewStore(contactDB, a.logger)
 	if err != nil {
 		return fmt.Errorf("open contact store: %w", err)
 	}
 	a.contactStore = contactStore
-	a.onCloseErr("contacts", contactStore.Close)
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()

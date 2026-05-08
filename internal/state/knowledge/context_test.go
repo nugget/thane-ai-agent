@@ -2,7 +2,6 @@ package knowledge
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"testing"
 
@@ -31,11 +30,7 @@ func TestContextProvider_GetContext_Empty(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpDB.Name())
 
 	// Mock embedder - won't be called since no facts exist
 	mock := &mockEmbedder{embedding: []float32{1.0, 0.0, 0.0}}
@@ -71,11 +66,7 @@ func TestContextProvider_Config(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpDB.Name())
 
 	provider := NewContextProvider(store, nil)
 
@@ -107,11 +98,7 @@ func TestNewContextProvider(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpDB.Name())
 
 	// Test with nil embedder (valid case)
 	provider := NewContextProvider(store, nil)

@@ -19,7 +19,7 @@ func TestModelResourcePolicyStoreSaveAndLoadIntoRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	op, err := opstate.NewStore(db)
+	op, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("opstate.NewStore: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestModelResourcePolicyStoreLoadIntoSkipsInvalidEntries(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	op, err := opstate.NewStore(db)
+	op, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("opstate.NewStore: %v", err)
 	}

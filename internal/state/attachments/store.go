@@ -65,80 +65,24 @@ type Store struct {
 	logger  *slog.Logger
 }
 
-// NewStore creates an attachment store rooted at rootDir with a SQLite
-// metadata index at dbPath. The root directory is created if it does not
-// exist.
-func NewStore(dbPath string, rootDir string, logger *slog.Logger) (*Store, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("attachments: open database: %w", err)
-	}
-
+// NewStore creates an attachment store backed by db with content
+// stored under rootDir. The caller owns db's lifecycle; NewStore
+// applies the schema and ensures rootDir exists.
+func NewStore(db *sql.DB, rootDir string, logger *slog.Logger) (*Store, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
-	s := &Store{
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(rootDir, 0o750); err != nil {
+		return nil, fmt.Errorf("attachments: create store dir: %w", err)
+	}
+	return &Store{
 		db:      db,
 		rootDir: rootDir,
 		logger:  logger,
-	}
-
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("attachments: migrate: %w", err)
-	}
-
-	if err := os.MkdirAll(rootDir, 0o750); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("attachments: create store dir: %w", err)
-	}
-
-	return s, nil
-}
-
-// migrate creates or upgrades the attachments table and indexes.
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS attachments (
-			id TEXT PRIMARY KEY,
-			hash TEXT NOT NULL,
-			store_path TEXT NOT NULL,
-			original_name TEXT NOT NULL DEFAULT '',
-			content_type TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			width INTEGER NOT NULL DEFAULT 0,
-			height INTEGER NOT NULL DEFAULT 0,
-			channel TEXT NOT NULL DEFAULT '',
-			sender TEXT NOT NULL DEFAULT '',
-			conversation_id TEXT NOT NULL DEFAULT '',
-			received_at TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_attachments_hash ON attachments(hash);
-		CREATE INDEX IF NOT EXISTS idx_attachments_conversation ON attachments(conversation_id);
-		CREATE INDEX IF NOT EXISTS idx_attachments_channel_sender ON attachments(channel, sender);
-	`)
-	if err != nil {
-		return fmt.Errorf("create schema: %w", err)
-	}
-
-	// Search index on received_at for ORDER BY in Search queries (added in phase 4).
-	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_attachments_received_at ON attachments(received_at)`); err != nil {
-		return fmt.Errorf("create received_at index: %w", err)
-	}
-
-	// Vision analysis columns (added in phase 3).
-	for _, col := range []struct{ name, typedef string }{
-		{"description", "TEXT NOT NULL DEFAULT ''"},
-		{"analyzed_at", "TEXT NOT NULL DEFAULT ''"},
-		{"analysis_model", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := database.AddColumn(s.db, "attachments", col.name, col.typedef); err != nil {
-			return fmt.Errorf("add column %s: %w", col.name, err)
-		}
-	}
-
-	return nil
+	}, nil
 }
 
 // Ingest reads the attachment from params.Source, computes its SHA-256
@@ -439,11 +383,6 @@ func (s *Store) TelemetryStats(ctx context.Context) (total, totalBytes, unique i
 		`SELECT COUNT(*), COALESCE(SUM(size), 0), COUNT(DISTINCT hash) FROM attachments`,
 	).Scan(&total, &totalBytes, &unique)
 	return
-}
-
-// Close closes the underlying database connection.
-func (s *Store) Close() error {
-	return s.db.Close()
 }
 
 // queryOne executes a query expected to return zero or one Record rows.

@@ -60,7 +60,7 @@ func setupTestProvider(t *testing.T, ha StateGetter) (*WatchlistProvider, *Watch
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := NewWatchlistStore(db)
+	store, err := NewWatchlistStore(db, nil)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}

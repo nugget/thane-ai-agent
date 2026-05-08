@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
@@ -367,18 +368,22 @@ func (a *App) initStores(s *newState) error {
 	// --- Scheduler ---
 	// Persistent task scheduler for deferred and recurring work (e.g.,
 	// wake events, periodic checks). Tasks survive restarts.
-	schedStore, err := scheduler.NewStore(cfg.DataDir + "/scheduler.db")
+	schedDB, err := database.Open(cfg.DataDir + "/scheduler.db")
 	if err != nil {
 		return fmt.Errorf("open scheduler database: %w", err)
 	}
+	a.onCloseErr("scheduler-db", schedDB.Close)
+	schedStore, err := scheduler.NewStore(schedDB, logger)
+	if err != nil {
+		return fmt.Errorf("initialize scheduler store: %w", err)
+	}
 	a.schedStore = schedStore
-	a.onCloseErr("scheduler-db", schedStore.Close)
 
 	// --- Operational state ---
 	// Generic KV store for persistent operational state (poller
 	// high-water marks, feature toggles, session preferences).
 	// Shares the main thane.db connection.
-	opStore, err := opstate.NewStore(mem.DB())
+	opStore, err := opstate.NewStore(mem.DB(), logger)
 	if err != nil {
 		return fmt.Errorf("initialize operational state store: %w", err)
 	}
@@ -451,7 +456,7 @@ func (a *App) initStores(s *newState) error {
 	// Persistent token usage and cost recording for attribution and
 	// analysis. Append-only SQLite store, queried via the cost_summary tool.
 	// Shares the main thane.db connection.
-	if err := a.initLoopUsageStores(mem.DB()); err != nil {
+	if err := a.initLoopUsageStores(mem.DB(), logger); err != nil {
 		return err
 	}
 

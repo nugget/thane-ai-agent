@@ -19,7 +19,7 @@ func testOpstate(t *testing.T) *opstate.Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s, err := opstate.NewStore(db)
+	s, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
