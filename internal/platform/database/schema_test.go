@@ -1,7 +1,6 @@
 package database
 
 import (
-	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -169,7 +168,39 @@ func TestRawApplyError(t *testing.T) {
 	}
 	// Description should be wrapped into the error so failed migrations
 	// are easy to diagnose.
-	if !errors.Is(err, err) || !strings.Contains(err.Error(), "bad") {
+	if !strings.Contains(err.Error(), "bad") {
 		t.Errorf("error should mention description, got: %v", err)
+	}
+}
+
+func TestMigrateRejectsNilDB(t *testing.T) {
+	schema := Schema{
+		Name: "guarded",
+		Steps: []MigrationStep{
+			TableCreate{Table: "x", SQL: `CREATE TABLE IF NOT EXISTS x (id TEXT PRIMARY KEY)`},
+		},
+	}
+	err := Migrate(nil, schema, discardLogger())
+	if err == nil {
+		t.Fatal("expected error for nil db")
+	}
+	if !strings.Contains(err.Error(), "guarded") || !strings.Contains(err.Error(), "nil database") {
+		t.Errorf("error should name the schema and mention nil db, got: %v", err)
+	}
+}
+
+func TestMigrateRejectsEmptyName(t *testing.T) {
+	db, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	err = Migrate(db, Schema{Steps: nil}, discardLogger())
+	if err == nil {
+		t.Fatal("expected error for empty schema name")
+	}
+	if !strings.Contains(err.Error(), "schema name") {
+		t.Errorf("error should mention schema name, got: %v", err)
 	}
 }

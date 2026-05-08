@@ -64,7 +64,7 @@ func (s TableCreate) Describe() string {
 
 // ColumnAdd adds a column to an existing table if it does not already
 // exist. The Typedef parameter carries the SQL type and any inline
-// constraints (for example "TEXT NOT NULL DEFAULT ”").
+// constraints (for example "INTEGER NOT NULL DEFAULT 0" or "TEXT").
 type ColumnAdd struct {
 	Table   string
 	Column  string
@@ -127,7 +127,17 @@ func (s Raw) Describe() string {
 // failing step halts migration and its error is returned wrapped with
 // the schema name. On success a single info-level log line records the
 // store name and the steps that ran.
+//
+// db must be non-nil and schema.Name must be non-empty; both are
+// validated up front so callers get a readable error rather than a
+// panic in step.Apply.
 func Migrate(db *sql.DB, schema Schema, logger *slog.Logger) error {
+	if schema.Name == "" {
+		return fmt.Errorf("migrate: schema name is empty")
+	}
+	if db == nil {
+		return fmt.Errorf("%s migrate: nil database connection", schema.Name)
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
