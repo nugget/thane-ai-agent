@@ -16,7 +16,7 @@ func newTestLensStore(t *testing.T) *LensStore {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := opstate.NewStore(db)
+	store, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("create opstate store: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestLensStore_Persistence(t *testing.T) {
 	}
 	defer db.Close()
 
-	store1, err := opstate.NewStore(db)
+	store1, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("create store1: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestLensStore_Persistence(t *testing.T) {
 	}
 
 	// Create a new LensStore on the same database to verify persistence.
-	store2, err := opstate.NewStore(db)
+	store2, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("create store2: %v", err)
 	}

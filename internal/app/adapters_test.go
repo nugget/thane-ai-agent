@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
@@ -285,11 +286,15 @@ func TestDetachedLoopCompletionDispatcherRequiresConversationID(t *testing.T) {
 }
 
 func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T) {
-	store, err := contacts.NewStore(t.TempDir()+"/contacts.db", slog.Default())
+	db, err := database.Open(t.TempDir() + "/contacts.db")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := contacts.NewStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 
 	tools := contacts.NewTools(store)
 	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"admin","facts":{"email":"aimee@example.com"}}`); err != nil {

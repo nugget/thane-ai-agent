@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -13,12 +14,15 @@ func (a *App) initAttachmentRuntime() error {
 	if a.cfg.Attachments.StoreDir != "" {
 		storeDir := paths.ExpandHome(a.cfg.Attachments.StoreDir)
 		attachDBPath := filepath.Join(a.cfg.DataDir, "attachments.db")
-		var err error
-		a.attachmentStore, err = attachments.NewStore(attachDBPath, storeDir, a.logger)
+		attachDB, err := database.Open(attachDBPath)
+		if err != nil {
+			return fmt.Errorf("open attachments database: %w", err)
+		}
+		a.onCloseErr("attachments", attachDB.Close)
+		a.attachmentStore, err = attachments.NewStore(attachDB, storeDir, a.logger)
 		if err != nil {
 			return fmt.Errorf("init attachment store: %w", err)
 		}
-		a.onCloseErr("attachments", a.attachmentStore.Close)
 		a.logger.Info("attachment store initialized",
 			"db", attachDBPath,
 			"store_dir", storeDir,

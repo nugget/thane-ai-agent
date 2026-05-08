@@ -7,7 +7,22 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
+
+func openFileBackedStore(t *testing.T, path string) *Store {
+	t.Helper()
+	db, err := database.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
 
 // mockIngestEmbedder implements EmbeddingClient for testing.
 type mockIngestEmbedder struct {
@@ -61,11 +76,7 @@ Steep for 4 minutes, then press slowly to avoid agitation.
 	tmpMD.Close()
 
 	// Open fact store
-	store, err := NewStore(tmpDB.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpDB.Name())
 
 	// Create ingester with mock embedder
 	mock := &mockIngestEmbedder{}
@@ -123,11 +134,7 @@ func TestArchitectureIngesterReimport(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name(), slog.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := openFileBackedStore(t, tmpDB.Name())
 
 	ingester := NewMarkdownIngester(store, nil, "test:reimport", CategoryArchitecture)
 	ctx := context.Background()

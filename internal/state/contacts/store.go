@@ -118,102 +118,34 @@ type Store struct {
 	logger     *slog.Logger
 }
 
-// NewStore creates a contact store using the given database path.
-func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+// NewStore creates a contact store backed by db. The caller owns db's
+// lifecycle; NewStore applies the schema and sets up the optional
+// FTS5 index.
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	// Enable foreign key enforcement so ON DELETE CASCADE on
 	// contact_properties actually fires.
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
+	}
+
+	// Enforce active name uniqueness (case-insensitive). The partial
+	// index requires deterministic LOWER, which is not always available
+	// on older sqlite builds — warn and continue if it can't be created.
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_fn_active ON contacts(LOWER(formatted_name)) WHERE deleted_at IS NULL`); err != nil {
+		logger.Warn("unique active name index not created", "error", err)
+	}
+
 	s := &Store{db: db, logger: logger}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return s, nil
-}
-
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS contacts (
-			id TEXT PRIMARY KEY,
-			kind TEXT NOT NULL DEFAULT 'individual',
-			formatted_name TEXT NOT NULL,
-			family_name TEXT,
-			given_name TEXT,
-			additional_names TEXT,
-			name_prefix TEXT,
-			name_suffix TEXT,
-			nickname TEXT,
-			birthday TEXT,
-			anniversary TEXT,
-			gender TEXT,
-			org TEXT,
-			title TEXT,
-			role TEXT,
-			note TEXT,
-			photo_uri TEXT,
-			trust_zone TEXT NOT NULL DEFAULT 'known',
-			ai_summary TEXT,
-			rev TEXT NOT NULL,
-			etag TEXT,
-			embedding BLOB,
-			last_interaction TEXT,
-			last_interaction_meta TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			deleted_at TEXT
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_contacts_kind ON contacts(kind);
-		CREATE INDEX IF NOT EXISTS idx_contacts_fn ON contacts(formatted_name);
-		CREATE INDEX IF NOT EXISTS idx_contacts_deleted ON contacts(deleted_at);
-		CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone);
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Enforce active name uniqueness (case-insensitive).
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_fn_active ON contacts(LOWER(formatted_name)) WHERE deleted_at IS NULL`); err != nil {
-		s.logger.Warn("unique active name index not created", "error", err)
-	}
-
-	// contact_properties: multi-value vCard properties with parameters.
-	_, err = s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS contact_properties (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-			property TEXT NOT NULL,
-			value TEXT NOT NULL,
-			type TEXT,
-			pref INTEGER,
-			label TEXT,
-			mediatype TEXT,
-			verified INTEGER DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_cp_contact ON contact_properties(contact_id);
-		CREATE INDEX IF NOT EXISTS idx_cp_property ON contact_properties(property);
-		CREATE INDEX IF NOT EXISTS idx_cp_property_value ON contact_properties(property, value);
-		CREATE INDEX IF NOT EXISTS idx_cp_value ON contact_properties(value);
-	`)
-	if err != nil {
-		return err
-	}
-
 	s.tryEnableFTS()
-	return nil
+	return s, nil
 }
 
 // tryEnableFTS creates the FTS5 virtual table for full-text search.
@@ -241,11 +173,6 @@ func (s *Store) tryEnableFTS() {
 		s.logger.Warn("failed to rebuild contacts FTS index", "error", err)
 		s.ftsEnabled = false
 	}
-}
-
-// Close closes the database connection.
-func (s *Store) Close() error {
-	return s.db.Close()
 }
 
 // Upsert creates or updates a contact. If the contact has no ID, a new

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,59 +17,13 @@ type Store struct {
 	db *sql.DB
 }
 
-// NewStore creates a scheduler store with SQLite backend.
-func NewStore(dbPath string) (*Store, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+// NewStore creates a scheduler store backed by db. The caller owns
+// db's lifecycle; NewStore only applies the schema.
+func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
+	if err := database.Migrate(db, schema, logger); err != nil {
+		return nil, err
 	}
-
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return s, nil
-}
-
-// Close closes the database connection.
-func (s *Store) Close() error {
-	return s.db.Close()
-}
-
-func (s *Store) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS tasks (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		schedule_json TEXT NOT NULL,
-		payload_json TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 1,
-		created_at TEXT NOT NULL,
-		created_by TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS executions (
-		id TEXT PRIMARY KEY,
-		task_id TEXT NOT NULL,
-		scheduled_at TEXT NOT NULL,
-		started_at TEXT,
-		completed_at TEXT,
-		status TEXT NOT NULL,
-		result TEXT,
-		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_tasks_name ON tasks(name);
-	CREATE INDEX IF NOT EXISTS idx_executions_task_id ON executions(task_id);
-	CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
-	CREATE INDEX IF NOT EXISTS idx_executions_scheduled_at ON executions(scheduled_at);
-	`
-
-	_, err := s.db.Exec(schema)
-	return err
+	return &Store{db: db}, nil
 }
 
 // NewID generates a new UUIDv7.

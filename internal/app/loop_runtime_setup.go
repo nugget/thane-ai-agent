@@ -17,8 +17,8 @@ func (a *App) newLoopRegistry(logger *slog.Logger) *looppkg.Registry {
 	return looppkg.NewRegistry(registryOpts...)
 }
 
-func (a *App) initLoopUsageStores(db *sql.DB) error {
-	usageStore, err := usage.NewStore(db)
+func (a *App) initLoopUsageStores(db *sql.DB, logger *slog.Logger) error {
+	usageStore, err := usage.NewStore(db, logger)
 	if err != nil {
 		return fmt.Errorf("initialize usage store: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
@@ -23,11 +24,16 @@ func newTestBackend(t *testing.T) *Backend {
 	tmp.Close()
 	t.Cleanup(func() { os.Remove(tmp.Name()) })
 
-	store, err := contacts.NewStore(tmp.Name(), slog.Default())
+	db, err := database.Open(tmp.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	store, err := contacts.NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	return NewBackend(store, slog.Default())
 }

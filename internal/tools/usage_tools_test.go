@@ -19,7 +19,7 @@ func testUsageStore(t *testing.T) *usage.Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s, err := usage.NewStore(db)
+	s, err := usage.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}

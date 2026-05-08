@@ -18,10 +18,25 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
+
+func newTestAttachmentStore(t *testing.T, dbPath, storeDir string) *attachments.Store {
+	t.Helper()
+	db, err := database.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := attachments.NewStore(db, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
 
 // testRunner records the most recent Run call and returns a canned
 // response. Thread-safe for use from handleMessage goroutines.
@@ -1354,11 +1369,7 @@ func TestProcessAttachments_WithStore(t *testing.T) {
 	os.MkdirAll(srcDir, 0o750)
 	os.WriteFile(filepath.Join(srcDir, "att-001"), []byte("image data"), 0o640)
 
-	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestAttachmentStore(t, dbPath, storeDir)
 
 	bridge := NewBridge(BridgeConfig{
 		Client: &Client{},
@@ -1424,11 +1435,7 @@ func TestProcessAttachments_WithStore_MissingSource(t *testing.T) {
 	os.MkdirAll(srcDir, 0o750)
 	// Do NOT create the source file — it should be missing.
 
-	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestAttachmentStore(t, dbPath, storeDir)
 
 	bridge := NewBridge(BridgeConfig{
 		Client: &Client{},
@@ -1463,11 +1470,7 @@ func TestProcessAttachments_WithStore_Dedup(t *testing.T) {
 	os.WriteFile(filepath.Join(srcDir, "att-A"), []byte("same content"), 0o640)
 	os.WriteFile(filepath.Join(srcDir, "att-B"), []byte("same content"), 0o640)
 
-	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestAttachmentStore(t, dbPath, storeDir)
 
 	bridge := NewBridge(BridgeConfig{
 		Client: &Client{},
@@ -1536,11 +1539,7 @@ func TestProcessAttachments_WithVision(t *testing.T) {
 	os.MkdirAll(srcDir, 0o750)
 	os.WriteFile(filepath.Join(srcDir, "att-img"), []byte("fake image"), 0o640)
 
-	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestAttachmentStore(t, dbPath, storeDir)
 
 	bridge := NewBridge(BridgeConfig{
 		Client: &Client{},
@@ -1574,11 +1573,7 @@ func TestProcessAttachments_VisionError(t *testing.T) {
 	os.MkdirAll(srcDir, 0o750)
 	os.WriteFile(filepath.Join(srcDir, "att-err"), []byte("error image"), 0o640)
 
-	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestAttachmentStore(t, dbPath, storeDir)
 
 	bridge := NewBridge(BridgeConfig{
 		Client: &Client{},

@@ -22,7 +22,7 @@ func newTestAnalysisTools(t *testing.T, defaultOutputPath string) (*AnalysisTool
 	}
 	t.Cleanup(func() { db.Close() })
 
-	state, err := opstate.NewStore(db)
+	state, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore() error: %v", err)
 	}

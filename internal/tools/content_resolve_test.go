@@ -23,7 +23,7 @@ func testContentResolver(t *testing.T) (*ContentResolver, *TempFileStore, string
 	}
 	t.Cleanup(func() { db.Close() })
 
-	state, err := opstate.NewStore(db)
+	state, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}

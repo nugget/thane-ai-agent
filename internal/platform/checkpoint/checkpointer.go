@@ -45,7 +45,7 @@ type Config struct {
 
 // NewCheckpointer creates a new checkpointer.
 func NewCheckpointer(db *sql.DB, cfg Config, log *slog.Logger) (*Checkpointer, error) {
-	store, err := NewStore(db)
+	store, err := NewStore(db, log)
 	if err != nil {
 		return nil, err
 	}

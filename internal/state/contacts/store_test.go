@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -21,11 +22,16 @@ func newTestStore(t *testing.T) *Store {
 	tmpFile.Close()
 	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
 
-	store, err := NewStore(tmpFile.Name(), slog.Default())
+	db, err := database.Open(tmpFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewStore(db, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return store
 }
 

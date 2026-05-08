@@ -78,7 +78,7 @@ func (a *App) initAwareness(s *newState) error {
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
 	// SQLite so the watchlist survives restarts. Shares thane.db.
-	watchlistStore, err := awareness.NewWatchlistStore(a.mem.DB())
+	watchlistStore, err := awareness.NewWatchlistStore(a.mem.DB(), logger)
 	if err != nil {
 		return fmt.Errorf("watchlist store: %w", err)
 	}

@@ -34,6 +34,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -264,11 +265,15 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
-	factStore, err := knowledge.NewStore(cfg.DataDir+"/knowledge.db", logger)
+	factDB, err := database.Open(cfg.DataDir + "/knowledge.db")
+	if err != nil {
+		return fmt.Errorf("open knowledge database: %w", err)
+	}
+	defer factDB.Close()
+	factStore, err := knowledge.NewStore(factDB, logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
-	defer factStore.Close()
 
 	// Embeddings are optional. When enabled, each ingested fact gets a
 	// vector embedding for later semantic search.

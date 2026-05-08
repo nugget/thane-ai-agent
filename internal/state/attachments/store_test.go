@@ -12,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
 // newTestStore creates a Store in a temporary directory for testing.
@@ -21,11 +22,16 @@ func newTestStore(t *testing.T) *Store {
 	dbPath := filepath.Join(dir, "test.db")
 	rootDir := filepath.Join(dir, "store")
 
-	store, err := NewStore(dbPath, rootDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	db, err := database.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewStore(db, rootDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return store
 }
 

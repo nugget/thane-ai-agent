@@ -232,7 +232,7 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := awareness.NewWatchlistStore(db)
+	store, err := awareness.NewWatchlistStore(db, nil)
 	if err != nil {
 		t.Fatalf("new watchlist store: %v", err)
 	}

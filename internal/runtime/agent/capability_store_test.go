@@ -16,7 +16,7 @@ func newTestCapStore(t *testing.T) *OpstateCapabilityTagStore {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	state, err := opstate.NewStore(db)
+	state, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

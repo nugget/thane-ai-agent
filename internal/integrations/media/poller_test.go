@@ -21,7 +21,7 @@ func newTestStore(t *testing.T) *opstate.Store {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := opstate.NewStore(db)
+	store, err := opstate.NewStore(db, nil)
 	if err != nil {
 		t.Fatalf("NewStore() error: %v", err)
 	}
