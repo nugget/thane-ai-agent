@@ -5,9 +5,13 @@ import "context"
 type loopIDKey struct{}
 type fallbackContentKey struct{}
 
-// withLoopID injects the loop ID into the handler context so downstream
-// code (e.g. agent loop → delegate executor) can discover which loop
-// triggered the current execution.
+// withLoopID injects the loop ID into the run context so downstream
+// code (e.g. handlers, turn builders, the agent runner, tool calls,
+// and delegate launches) can discover which loop triggered the current
+// execution. The loop's own run() applies this at the top of its
+// goroutine so the loop's identity dominates over anything inherited
+// from the spawning context — important when a loop is spawned from
+// inside another loop's handler context.
 func withLoopID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, loopIDKey{}, id)
 }
@@ -19,9 +23,11 @@ func withFallbackContent(ctx context.Context, content string) context.Context {
 	return context.WithValue(ctx, fallbackContentKey{}, content)
 }
 
-// LoopIDFromContext extracts the originating loop ID from a handler
-// context. Returns an empty string if the context was not created by
-// a loop handler dispatch.
+// LoopIDFromContext extracts the originating loop ID from any context
+// derived from a loop's run goroutine — handler, turn builder, agent
+// runner, tool call, or delegate launch contexts all qualify. Returns
+// an empty string when called from a context that did not originate
+// inside a loop.
 func LoopIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(loopIDKey{}).(string); ok {
 		return id
