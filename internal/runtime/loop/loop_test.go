@@ -1113,6 +1113,136 @@ func TestTurnBuilderNilTurnIsNoOp(t *testing.T) {
 	}
 }
 
+// TestRunContextHasOwnLoopID verifies that a loop's run context carries
+// its own ID — not whatever LoopID may have been set on the spawning
+// context. Regression guard for the topology bug where delegates
+// launched from a per-contact channel loop ended up parented onto the
+// channel-level loop because the per-contact loop's run context still
+// carried the channel loop's LoopID inherited from its Start ctx.
+func TestRunContextHasOwnLoopID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("turn builder and runner see own loop id", func(t *testing.T) {
+		t.Parallel()
+
+		const parentID = "parent-loop-id-should-not-leak"
+
+		var (
+			mu                sync.Mutex
+			turnBuilderLoopID string
+			runnerLoopID      string
+		)
+
+		runner := &turnCallbackRunner{fn: func(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+			mu.Lock()
+			runnerLoopID = LoopIDFromContext(ctx)
+			mu.Unlock()
+			return &RunResponse{Content: "ok", Model: "test-model"}, nil
+		}}
+
+		l, err := New(Config{
+			Name:         "run-ctx-loop-id-turn",
+			SleepMin:     1 * time.Millisecond,
+			SleepMax:     2 * time.Millisecond,
+			SleepDefault: 1 * time.Millisecond,
+			Jitter:       Float64Ptr(0),
+			MaxIter:      1,
+			TurnBuilder: func(ctx context.Context, _ TurnInput) (*AgentTurn, error) {
+				mu.Lock()
+				turnBuilderLoopID = LoopIDFromContext(ctx)
+				mu.Unlock()
+				return &AgentTurn{
+					Request: Request{
+						Messages: []Message{{Role: "user", Content: "go"}},
+					},
+				}, nil
+			},
+		}, Deps{Runner: runner})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		// Start with a parent context that carries a DIFFERENT loop ID,
+		// the way ensureSenderLoop spawns a per-contact loop from the
+		// channel-level loop's handler context.
+		parentCtx := withLoopID(context.Background(), parentID)
+		if err := l.Start(parentCtx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		<-l.Done()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if turnBuilderLoopID != l.ID() {
+			t.Errorf("TurnBuilder ctx LoopID = %q, want loop's own ID %q (parent was %q)",
+				turnBuilderLoopID, l.ID(), parentID)
+		}
+		if runnerLoopID != l.ID() {
+			t.Errorf("Runner ctx LoopID = %q, want loop's own ID %q (parent was %q)",
+				runnerLoopID, l.ID(), parentID)
+		}
+		if turnBuilderLoopID == parentID || runnerLoopID == parentID {
+			t.Errorf("parent LoopID %q leaked into loop run context — delegates would be mis-parented",
+				parentID)
+		}
+	})
+
+	t.Run("handler sees own loop id", func(t *testing.T) {
+		t.Parallel()
+
+		const parentID = "parent-loop-id-should-not-leak"
+
+		var (
+			mu              sync.Mutex
+			handlerLoopID   string
+			handlerInvoked  bool
+			handlerLoopName string
+		)
+
+		l, err := New(Config{
+			Name:         "run-ctx-loop-id-handler",
+			SleepMin:     1 * time.Millisecond,
+			SleepMax:     2 * time.Millisecond,
+			SleepDefault: 1 * time.Millisecond,
+			Jitter:       Float64Ptr(0),
+			MaxIter:      1,
+			Task:         "handler-only",
+			Handler: func(ctx context.Context, _ any) error {
+				mu.Lock()
+				handlerInvoked = true
+				handlerLoopID = LoopIDFromContext(ctx)
+				handlerLoopName = "run-ctx-loop-id-handler"
+				mu.Unlock()
+				return nil
+			},
+		}, Deps{Runner: &noopRunner{}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		parentCtx := withLoopID(context.Background(), parentID)
+		if err := l.Start(parentCtx); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		<-l.Done()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if !handlerInvoked {
+			t.Fatalf("handler was not invoked")
+		}
+		_ = handlerLoopName
+		if handlerLoopID != l.ID() {
+			t.Errorf("Handler ctx LoopID = %q, want loop's own ID %q (parent was %q)",
+				handlerLoopID, l.ID(), parentID)
+		}
+		if handlerLoopID == parentID {
+			t.Errorf("parent LoopID %q leaked into handler context — delegates would be mis-parented",
+				parentID)
+		}
+	})
+}
+
 func TestPostIterate(t *testing.T) {
 	t.Parallel()
 

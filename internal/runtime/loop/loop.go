@@ -658,6 +658,17 @@ func (l *Loop) run(ctx context.Context) {
 		"loop_name", l.config.Name,
 	)
 	ctx = logging.WithLogger(ctx, logger)
+	// Stamp this loop's ID onto the run context so every descendant
+	// context — iterCtx, handlerCtx, turnCtx, the agent runner's ctx,
+	// tool calls, and any delegates those tools launch — sees this
+	// loop as the LoopID origin rather than inheriting whatever ID
+	// the spawner's context happened to carry. Without this, a child
+	// loop spawned from a parent's handler context (where withLoopID
+	// is set to the parent's ID) silently inherits the parent's ID
+	// through every downstream context, and any delegate launched
+	// from within the child loop's run is mis-parented onto the
+	// parent loop in the topology.
+	ctx = withLoopID(ctx, l.id)
 
 	// Initial state depends on whether the loop waits for events or
 	// sleeps on a timer. WaitFunc loops enter StateWaiting immediately
