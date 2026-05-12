@@ -33,6 +33,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // DefinitionName is the durable loops-ng definition name for the
@@ -245,14 +246,14 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 // have access to. File tools are replaced by the declared durable output
 // tool, exec is unnecessary and dangerous, session management is for
 // interactive use only.
-var metacogExcludeTools = []string{
+var metacogExcludeTools = append([]string{
 	"file_read", "file_write", "file_edit", "file_list",
 	"file_search", "file_grep", "file_stat", "file_tree",
 	"exec",
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"activate_capability", "deactivate_capability",
-}
+}, tools.DirectHumanEgressToolNames()...)
 
 // appendIterationLog appends an HTML comment summary block to the state
 // file after a successful iteration. Old logs beyond

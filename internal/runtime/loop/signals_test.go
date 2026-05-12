@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -86,21 +87,26 @@ func TestLoopNotifyWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 	}
 }
 
-func TestLoopNotifyRejectsEventDrivenLoop(t *testing.T) {
+func TestLoopNotifyWakesEventDrivenLoop(t *testing.T) {
 	t.Parallel()
 
-	waitCh := make(chan struct{})
+	inputs := make(chan TurnInput, 1)
 	l, err := New(Config{
 		Name: "event-driven",
 		WaitFunc: func(ctx context.Context) (any, error) {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-waitCh:
-				return nil, nil
-			}
+			<-ctx.Done()
+			return nil, ctx.Err()
 		},
-		Task: "watch",
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			inputs <- input
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "wake from notification"}},
+				},
+			}, nil
+		},
+		MaxIter:    1,
+		Supervisor: true,
 	}, Deps{Runner: &noopRunner{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -120,13 +126,64 @@ func TestLoopNotifyRejectsEventDrivenLoop(t *testing.T) {
 			Selector: messages.SelectorName,
 		},
 		Type: messages.TypeSignal,
+		Payload: messages.LoopNotifyPayload{
+			Concern:         "The watcher saw a pattern that may need the owner.",
+			ForceSupervisor: true,
+		},
 	}).Normalize(time.Now())
 	if err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
 
-	if _, err := l.enqueueNotify(env); err == nil || !strings.Contains(err.Error(), "event-driven") {
-		t.Fatalf("enqueueNotify err = %v, want event-driven rejection", err)
+	receipt, err := l.enqueueNotify(env)
+	if err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+	if !receipt.WokeImmediately {
+		t.Fatalf("receipt = %#v, want woke_immediately", receipt)
+	}
+
+	select {
+	case input := <-inputs:
+		if _, ok := input.Event.(notifyWakeEvent); !ok {
+			t.Fatalf("event = %T, want notifyWakeEvent", input.Event)
+		}
+		if !input.Supervisor {
+			t.Fatal("input.Supervisor = false, want forced supervisor")
+		}
+		if len(input.NotifyEnvelopes) != 1 {
+			t.Fatalf("NotifyEnvelopes len = %d, want 1", len(input.NotifyEnvelopes))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event-driven loop did not wake after signal")
+	}
+}
+
+func TestWaitForEventCancellationWinsOverNotifyWake(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "event-driven-cancel",
+		WaitFunc: func(ctx context.Context) (any, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	l.wakeCh <- struct{}{}
+
+	event, err := l.waitForEvent(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForEvent err = %v, want context.Canceled", err)
+	}
+	if event != nil {
+		t.Fatalf("event = %#v, want nil", event)
 	}
 }
 

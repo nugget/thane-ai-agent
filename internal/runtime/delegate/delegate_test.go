@@ -102,6 +102,22 @@ func newTestRegistry() *tools.Registry {
 	return r
 }
 
+func registerDirectEgressToolsForTest(t *testing.T, reg *tools.Registry) []string {
+	t.Helper()
+	directEgress := tools.DirectHumanEgressToolNames()
+	for _, name := range directEgress {
+		reg.Register(&tools.Tool{
+			Name:        name,
+			Description: "direct human egress tool",
+			Parameters:  map[string]any{},
+			Handler: func(_ context.Context, _ map[string]any) (string, error) {
+				return "should not be called by a delegate", nil
+			},
+		})
+	}
+	return directEgress
+}
+
 type mockLoopRunner struct {
 	onRun func(req looppkg.Request)
 	resp  *looppkg.Response
@@ -371,6 +387,46 @@ func TestExecute_LoopBackedTagScopedExcludesDelegateFamily(t *testing.T) {
 	}
 }
 
+func TestExecute_LoopBackedTagScopedExcludesDirectHumanEgress(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content: "delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+
+	reg := newTestRegistry()
+	directEgress := registerDirectEgressToolsForTest(t, reg)
+	reg.SetTagIndex(map[string][]string{
+		"email":           {"email_reply", "email_send"},
+		"message_channel": {"send_reaction"},
+		"notifications":   {"ha_notify", "request_human_decision", "request_human_escalation", "send_notification"},
+		"signal":          {"signal_send_message", "signal_send_reaction"},
+		"web":             {"web_search"},
+	})
+	exec := NewExecutor(slog.Default(), nil, nil, reg, "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	_, err := exec.execute(context.Background(), "task", "ha", "", []string{"notifications", "web"}, executionOptions{
+		explicitTagScope: true,
+	})
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+
+	for _, want := range directEgress {
+		if !containsString(captured.ExcludeTools, want) {
+			t.Fatalf("ExcludeTools = %#v, want direct egress exclusion %s", captured.ExcludeTools, want)
+		}
+	}
+}
+
 // TestDelegateToolRegistry_ExcludesFullDelegateFamily is the regression
 // test for #820. Delegate registries must exclude every member of the
 // thane_* family — thane_now and thane_assign — to prevent a delegate
@@ -411,6 +467,51 @@ func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	})
 }
 
+func TestDelegateToolRegistry_ExcludesDirectHumanEgress(t *testing.T) {
+	t.Parallel()
+
+	reg := newTestRegistry()
+	directEgress := registerDirectEgressToolsForTest(t, reg)
+	reg.SetTagIndex(map[string][]string{
+		"email":           {"email_reply", "email_send"},
+		"message_channel": {"send_reaction"},
+		"notifications":   {"ha_notify", "request_human_decision", "request_human_escalation", "send_notification"},
+		"signal":          {"signal_send_message", "signal_send_reaction"},
+		"web":             {"web_search"},
+	})
+
+	exec := NewExecutor(slog.Default(), nil, nil, reg, "spark/gpt-oss:20b")
+
+	for _, tt := range []struct {
+		name string
+		reg  *tools.Registry
+	}{
+		{
+			name: "tag-scoped branch",
+			reg:  exec.delegateToolRegistry([]string{"email", "message_channel", "notifications", "signal", "web"}, true),
+		},
+		{
+			name: "fall-through branch",
+			reg:  exec.delegateToolRegistry(nil, false),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			names := tt.reg.AllToolNames()
+			for _, wantAbsent := range directEgress {
+				if containsString(names, wantAbsent) {
+					t.Errorf("delegate registry contains direct egress tool %q (registry: %v)", wantAbsent, names)
+				}
+			}
+			if tt.name == "tag-scoped branch" && !containsString(names, "web_search") {
+				t.Errorf("tag-scoped delegate registry missing non-egress tag tool web_search (registry: %v)", names)
+			}
+			if tt.name == "fall-through branch" && !containsString(names, "get_state") {
+				t.Errorf("fall-through delegate registry missing non-egress tool get_state (registry: %v)", names)
+			}
+		})
+	}
+}
+
 func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFiltering(t *testing.T) {
 	t.Parallel()
 
@@ -447,14 +548,14 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
 	assertContainsDelegateFamily(t, captured.ExcludeTools)
-	// ExcludeTools may carry the delegate-family recursion guard, but
-	// must not include any of the regular tag-gated tools — the
-	// always-active tags should expand the filter scope so tag-based
-	// filtering does the work via InitialTags, not via wholesale
-	// AllToolNames exclusion.
+	// ExcludeTools may carry delegate safety exclusions, but must not
+	// include any regular tag-gated tools — the always-active tags should
+	// expand the filter scope so tag-based filtering does the work via
+	// InitialTags, not via wholesale AllToolNames exclusion.
+	allowedExclusions := delegateToolExclusions()
 	for _, got := range captured.ExcludeTools {
-		if !containsString(delegateFamilyToolNames, got) {
-			t.Fatalf("ExcludeTools = %#v, includes non-family tool %q — tag filtering should route through InitialTags", captured.ExcludeTools, got)
+		if !containsString(allowedExclusions, got) {
+			t.Fatalf("ExcludeTools = %#v, includes regular tag-gated tool %q — tag filtering should route through InitialTags", captured.ExcludeTools, got)
 		}
 	}
 }

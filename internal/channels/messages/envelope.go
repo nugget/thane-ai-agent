@@ -190,7 +190,14 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 }
 
 // LoopNotifyPayload is the first concrete loop-notification payload shape.
+// Message preserves the legacy free-form notification body used by
+// thane_wake/notify_loop. The concern fields carry structured, core-mediated
+// attention requests from delegated or subsystem loops.
 type LoopNotifyPayload struct {
+	Kind            string `json:"kind,omitempty"`
 	Message         string `json:"message,omitempty"`
+	Concern         string `json:"concern,omitempty"`
+	SuggestedAction string `json:"suggested_action,omitempty"`
+	Context         string `json:"context,omitempty"`
 	ForceSupervisor bool   `json:"force_supervisor,omitempty"`
 }

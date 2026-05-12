@@ -39,6 +39,10 @@ var delegateFamilyToolNames = []string{
 	"thane_assign",
 }
 
+func delegateToolExclusions() []string {
+	return mergeTagLists(delegateFamilyToolNames, tools.DirectHumanEgressToolNames())
+}
+
 // Exhaustion reason constants are defined in the [iterate] package.
 // These aliases preserve backward compatibility for consumers that
 // reference them via the delegate package.
@@ -165,9 +169,9 @@ func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequest
 		} else {
 			reg = e.parentReg.FilteredCopy(nil)
 		}
-		return reg.FilteredCopyExcluding(delegateFamilyToolNames)
+		return reg.FilteredCopyExcluding(delegateToolExclusions())
 	}
-	return e.parentReg.FilteredCopyExcluding(delegateFamilyToolNames)
+	return e.parentReg.FilteredCopyExcluding(delegateToolExclusions())
 }
 
 func mergeTagLists(tagGroups ...[]string) []string {
@@ -744,21 +748,20 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
 	filterTags := mergeTagLists(scopeTags, e.alwaysActiveTags)
-	// The delegate-family recursion guard must hold on every code
-	// path. The loop-backed launch rebuilds the catalog from the
-	// parent registry filtered by the launched loop's request, so the
-	// family has to be expressed as a request-level exclusion to
-	// survive that rebuild — the in-process delegateToolRegistry
-	// filter alone is not enough.
+	// Delegate tool exclusions must hold on every code path. The
+	// loop-backed launch rebuilds the catalog from the parent registry
+	// filtered by the launched loop's request, so the exclusions have to
+	// be expressed at request level to survive that rebuild — the
+	// in-process delegateToolRegistry filter alone is not enough.
 	//
-	// The explicit-empty-scope branch (AllToolNames) already includes
-	// the family names, so dedup before sorting to avoid duplicate
-	// entries when both sources contribute.
+	// The explicit-empty-scope branch (AllToolNames) already includes the
+	// excluded names, so dedup before sorting to avoid duplicate entries
+	// when both sources contribute.
 	var excludeTools []string
 	if explicitScopeRequested && len(filterTags) == 0 {
 		excludeTools = e.parentReg.AllToolNames()
 	}
-	excludeTools = mergeExcludeToolNames(excludeTools, delegateFamilyToolNames)
+	excludeTools = mergeExcludeToolNames(excludeTools, delegateToolExclusions())
 	tagFilterActive := len(scopeTags) > 0 || explicitScopeRequested
 
 	log = log.With("profile", profile.Name)
