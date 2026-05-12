@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,16 @@ func TestResolveCoreAttentionTargetPrefersExplicitMetadata(t *testing.T) {
 	}
 	if target.LoopID != core.ID() || target.LoopName != "core-attention" || target.Reason != "metadata_core_attention_target" {
 		t.Fatalf("target = %#v, want explicit core loop", target)
+	}
+	if target.LastActive != nil {
+		t.Fatalf("LastActive = %v, want nil for unstarted loop", target.LastActive)
+	}
+	blob, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("Marshal target: %v", err)
+	}
+	if strings.Contains(string(blob), "last_active") {
+		t.Fatalf("target JSON = %s, want last_active omitted when unknown", blob)
 	}
 }
 

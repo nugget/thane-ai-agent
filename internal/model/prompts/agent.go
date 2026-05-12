@@ -17,6 +17,18 @@ const EmptyResponseFallback = "I processed your request but wasn't able to compo
 // the turn without content.
 const InteractiveEmptyResponseFallback = "I hit a problem before I could finish that. Please try again."
 
+const coreAttentionSignalWakeInstruction = "A delegated or subsystem loop requested core attention through the loop bus. Review the notification(s), then decide whether any human-facing message is appropriate now. If no immediate Signal reply should be sent, leave the final response empty."
+
+// CoreAttentionSignalWakePrompt returns the model-facing prompt used when a
+// Signal owner loop is woken by a core-attention notification.
+func CoreAttentionSignalWakePrompt(notificationSummary string) string {
+	notificationSummary = strings.TrimSpace(notificationSummary)
+	if notificationSummary == "" {
+		return ""
+	}
+	return coreAttentionSignalWakeInstruction + "\n\n" + notificationSummary
+}
+
 // RuntimeContract teaches the live execution model that prompt-injected
 // identity files cannot reliably convey: exact tool naming, capability
 // activation semantics, delegation when top-level tools are gated, and

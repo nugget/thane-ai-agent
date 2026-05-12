@@ -234,10 +234,8 @@ func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
 		return result.event, result.err
 	case <-l.wakeCh:
 		cancel()
-		select {
-		case result := <-done:
-			return result.event, result.err
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return notifyWakeEvent{}, nil
 	case <-ctx.Done():

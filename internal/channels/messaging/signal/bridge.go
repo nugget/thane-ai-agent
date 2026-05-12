@@ -581,7 +581,10 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 		}
 	}
 
-	content := "A delegated or subsystem loop requested core attention through the loop bus. Review the notification(s), then decide whether any human-facing message is appropriate now. If no immediate Signal reply should be sent, leave the final response empty.\n\n" + summary
+	content := prompts.CoreAttentionSignalWakePrompt(summary)
+	if content == "" {
+		return nil, nil
+	}
 	opts := b.requestOptions(sender, map[string]string{
 		"source":      "signal",
 		"sender":      sender,

@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +156,34 @@ func TestLoopNotifyWakesEventDrivenLoop(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("event-driven loop did not wake after signal")
+	}
+}
+
+func TestWaitForEventCancellationWinsOverNotifyWake(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "event-driven-cancel",
+		WaitFunc: func(ctx context.Context) (any, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	l.wakeCh <- struct{}{}
+
+	event, err := l.waitForEvent(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForEvent err = %v, want context.Canceled", err)
+	}
+	if event != nil {
+		t.Fatalf("event = %#v, want nil", event)
 	}
 }
 

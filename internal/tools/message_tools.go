@@ -118,10 +118,10 @@ func wakeToolParameters() map[string]any {
 }
 
 type coreAttentionTarget struct {
-	LoopID     string    `json:"loop_id"`
-	LoopName   string    `json:"loop_name"`
-	Reason     string    `json:"reason"`
-	LastActive time.Time `json:"last_active,omitempty"`
+	LoopID     string     `json:"loop_id"`
+	LoopName   string     `json:"loop_name"`
+	Reason     string     `json:"reason"`
+	LastActive *time.Time `json:"last_active,omitempty"`
 }
 
 func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[string]any) (string, error) {
@@ -259,8 +259,15 @@ func newestCoreAttentionTarget(statuses []looppkg.Status, accept func(looppkg.St
 		LoopID:     st.ID,
 		LoopName:   st.Name,
 		Reason:     reason,
-		LastActive: loopStatusLastActive(st),
+		LastActive: optionalTime(loopStatusLastActive(st)),
 	}, true
+}
+
+func optionalTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func loopStatusLastActive(st looppkg.Status) time.Time {
