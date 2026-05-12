@@ -23,9 +23,11 @@ func withFallbackContent(ctx context.Context, content string) context.Context {
 	return context.WithValue(ctx, fallbackContentKey{}, content)
 }
 
-// LoopIDFromContext extracts the originating loop ID from a handler
-// context. Returns an empty string if the context was not created by
-// a loop handler dispatch.
+// LoopIDFromContext extracts the originating loop ID from any context
+// derived from a loop's run goroutine — handler, turn builder, agent
+// runner, tool call, or delegate launch contexts all qualify. Returns
+// an empty string when called from a context that did not originate
+// inside a loop.
 func LoopIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(loopIDKey{}).(string); ok {
 		return id

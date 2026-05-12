@@ -1193,10 +1193,9 @@ func TestRunContextHasOwnLoopID(t *testing.T) {
 		const parentID = "parent-loop-id-should-not-leak"
 
 		var (
-			mu              sync.Mutex
-			handlerLoopID   string
-			handlerInvoked  bool
-			handlerLoopName string
+			mu             sync.Mutex
+			handlerLoopID  string
+			handlerInvoked bool
 		)
 
 		l, err := New(Config{
@@ -1211,7 +1210,6 @@ func TestRunContextHasOwnLoopID(t *testing.T) {
 				mu.Lock()
 				handlerInvoked = true
 				handlerLoopID = LoopIDFromContext(ctx)
-				handlerLoopName = "run-ctx-loop-id-handler"
 				mu.Unlock()
 				return nil
 			},
@@ -1231,7 +1229,6 @@ func TestRunContextHasOwnLoopID(t *testing.T) {
 		if !handlerInvoked {
 			t.Fatalf("handler was not invoked")
 		}
-		_ = handlerLoopName
 		if handlerLoopID != l.ID() {
 			t.Errorf("Handler ctx LoopID = %q, want loop's own ID %q (parent was %q)",
 				handlerLoopID, l.ID(), parentID)
