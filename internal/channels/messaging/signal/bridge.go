@@ -458,6 +458,9 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 		TurnBuilder: func(tCtx context.Context, input loop.TurnInput) (*loop.AgentTurn, error) {
 			env, ok := input.Event.(*Envelope)
 			if !ok {
+				if len(input.NotifyEnvelopes) > 0 {
+					return b.prepareLoopNotificationTurn(tCtx, sender, input.NotifyEnvelopes)
+				}
 				return nil, nil
 			}
 			return b.prepareSignalTurn(tCtx, env)
@@ -563,6 +566,43 @@ func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.Ag
 		return nil, nil
 	}
 	return b.prepareMessageTurn(ctx, env)
+}
+
+func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string, envs []messages.Envelope) (*loop.AgentTurn, error) {
+	summary := loop.FormatNotifyEnvelopes(envs)
+	if summary == "" {
+		return nil, nil
+	}
+	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
+	channelBinding := b.resolveBinding(sender)
+	if b.bindConversation != nil && channelBinding != nil {
+		if err := b.bindConversation(convID, channelBinding); err != nil {
+			b.logger.Warn("failed to persist signal conversation binding", "error", err)
+		}
+	}
+
+	content := "A delegated or subsystem loop requested core attention through the loop bus. Review the notification(s), then decide whether any human-facing message is appropriate now. If no immediate Signal reply should be sent, leave the final response empty.\n\n" + summary
+	opts := b.requestOptions(sender, map[string]string{
+		"source":      "signal",
+		"sender":      sender,
+		"wake_reason": "core_attention",
+	})
+	turn := b.agentTurn(convID, channelBinding, content, opts, map[string]any{
+		"event_type":          "loop_notification",
+		"sender":              sender,
+		"notification_count":  len(envs),
+		"core_attention_wake": true,
+		"fallback_suppressed": true,
+	})
+	turn.Request.FallbackContent = ""
+
+	log := b.logger.With(
+		"subsystem", logging.SubsystemSignal,
+		"conversation_id", convID,
+		"sender", sender,
+	)
+	log.InfoContext(ctx, "signal loop notification received", "notifications", len(envs))
+	return turn, nil
 }
 
 func (b *Bridge) prepareMessageTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {

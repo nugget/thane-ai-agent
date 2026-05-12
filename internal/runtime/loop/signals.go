@@ -104,10 +104,22 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			Priority: env.Priority,
 			Scope:    append([]string(nil), env.Scope...),
 		}
-		if strings.TrimSpace(payload.Message) != "" || payload.ForceSupervisor {
+		if payload.Kind != "" || strings.TrimSpace(payload.Message) != "" || strings.TrimSpace(payload.Concern) != "" || strings.TrimSpace(payload.SuggestedAction) != "" || strings.TrimSpace(payload.Context) != "" || payload.ForceSupervisor {
 			view.Payload = map[string]any{}
+			if strings.TrimSpace(payload.Kind) != "" {
+				view.Payload["kind"] = payload.Kind
+			}
 			if strings.TrimSpace(payload.Message) != "" {
 				view.Payload["message"] = payload.Message
+			}
+			if strings.TrimSpace(payload.Concern) != "" {
+				view.Payload["concern"] = payload.Concern
+			}
+			if strings.TrimSpace(payload.SuggestedAction) != "" {
+				view.Payload["suggested_action"] = payload.SuggestedAction
+			}
+			if strings.TrimSpace(payload.Context) != "" {
+				view.Payload["context"] = payload.Context
 			}
 			if payload.ForceSupervisor {
 				view.Payload["force_supervisor"] = true
@@ -123,6 +135,21 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 	return "Loop notifications for this run:\n" + string(blob)
 }
 
+// FormatNotifyEnvelopes renders one-shot loop notifications for model-facing
+// wake context. Task-based loops use this automatically; custom TurnBuilder
+// integrations can call it when a notification wake should create an agent
+// turn of their own.
+func FormatNotifyEnvelopes(envs []messages.Envelope) string {
+	return summarizeNotifyEnvelopes(envs)
+}
+
+type notifyWakeEvent struct{}
+
+type waitResult struct {
+	event any
+	err   error
+}
+
 func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 	payload, err := decodeLoopNotifyPayload(env.Payload)
 	if err != nil {
@@ -133,9 +160,6 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 	defer l.mu.Unlock()
 	if l.stopped || !l.started {
 		return NotifyReceipt{}, fmt.Errorf("loop %q is not running", l.config.Name)
-	}
-	if l.config.WaitFunc != nil {
-		return NotifyReceipt{}, fmt.Errorf("loop %q is event-driven and cannot be interrupted by notification yet", l.config.Name)
 	}
 	if len(l.pendingNotifies) >= maxPendingNotifications {
 		return NotifyReceipt{}, fmt.Errorf("loop %q notify queue full (%d pending)", l.config.Name, len(l.pendingNotifies))
@@ -152,7 +176,7 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 		ForceSupervisor:      payload.ForceSupervisor,
 		PendingNotifications: len(l.pendingNotifies),
 	}
-	if l.state == StateSleeping {
+	if l.state == StateSleeping || l.state == StateWaiting {
 		select {
 		case l.wakeCh <- struct{}{}:
 		default:
@@ -189,6 +213,37 @@ func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool) {
 	default:
 	}
 	return envs, forceSupervisor
+}
+
+func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
+	if l.config.WaitFunc == nil {
+		return nil, nil
+	}
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	done := make(chan waitResult, 1)
+	go func() {
+		event, err := l.config.WaitFunc(waitCtx)
+		done <- waitResult{event: event, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		return result.event, result.err
+	case <-l.wakeCh:
+		cancel()
+		select {
+		case result := <-done:
+			return result.event, result.err
+		default:
+		}
+		return notifyWakeEvent{}, nil
+	case <-ctx.Done():
+		cancel()
+		return nil, ctx.Err()
+	}
 }
 
 func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {

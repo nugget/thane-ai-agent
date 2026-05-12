@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // DefinitionName is the durable loops-ng definition name for the ego
@@ -166,11 +167,11 @@ func BuildLoopConfig(cfg Config) loop.Config {
 // egoExcludeTools lists tools that the ego loop should not have access
 // to. File tools are replaced by the declared durable output tool, exec
 // is unnecessary, session management is for interactive use only.
-var egoExcludeTools = []string{
+var egoExcludeTools = append([]string{
 	"file_read", "file_write", "file_edit", "file_list",
 	"file_search", "file_grep", "file_stat", "file_tree",
 	"exec",
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"activate_capability", "deactivate_capability",
-}
+}, tools.DirectHumanEgressToolNames()...)
