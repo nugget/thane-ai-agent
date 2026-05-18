@@ -46,6 +46,12 @@ type mockProvider struct {
 	listChecksErr          error
 	mergePRResult          *MergeResult
 	mergePRErr             error
+	getRepositoryResult    *Repository
+	getRepositoryErr       error
+	listReleasesResult     []*Release
+	listReleasesErr        error
+	listCommitsResult      []*Commit
+	listCommitsErr         error
 	addReactionErr         error
 	requestReviewErr       error
 	searchResult           []SearchResult
@@ -140,6 +146,21 @@ func (m *mockProvider) ListChecks(_ context.Context, repo string, number int) ([
 func (m *mockProvider) MergePR(_ context.Context, repo string, number int, opts *MergeOptions) (*MergeResult, error) {
 	m.record("MergePR", repo, number, opts)
 	return m.mergePRResult, m.mergePRErr
+}
+
+func (m *mockProvider) GetRepository(_ context.Context, repo string) (*Repository, error) {
+	m.record("GetRepository", repo)
+	return m.getRepositoryResult, m.getRepositoryErr
+}
+
+func (m *mockProvider) ListReleases(_ context.Context, repo string, limit int) ([]*Release, error) {
+	m.record("ListReleases", repo, limit)
+	return m.listReleasesResult, m.listReleasesErr
+}
+
+func (m *mockProvider) ListCommits(_ context.Context, repo string, ref string, limit int) ([]*Commit, error) {
+	m.record("ListCommits", repo, ref, limit)
+	return m.listCommitsResult, m.listCommitsErr
 }
 
 func (m *mockProvider) AddReaction(_ context.Context, repo string, number int, commentID int64, emoji string) error {

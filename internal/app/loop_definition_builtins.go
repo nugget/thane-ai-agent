@@ -12,6 +12,7 @@ const (
 	unifiPollerDefinitionName     = "unifi-poller"
 	haStateWatcherDefinitionName  = "ha-state-watcher"
 	emailPollerDefinitionName     = "email-poller"
+	forgeSubPollerDefinitionName  = "forge-subscription-poller"
 	mediaFeedPollerDefinitionName = "media-feed-poller"
 	mqttPublisherDefinitionName   = "mqtt"
 	telemetryDefinitionName       = "telemetry"
@@ -71,6 +72,26 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			Jitter:       looppkg.Float64Ptr(0),
 			Metadata: map[string]string{
 				"subsystem": "email",
+				"category":  "poller",
+			},
+		})
+	}
+
+	if cfg.Forge.Configured() && cfg.Forge.SubscriptionCheckInterval > 0 {
+		pollInterval := time.Duration(cfg.Forge.SubscriptionCheckInterval) * time.Second
+		specs = append(specs, looppkg.Spec{
+			Name:         forgeSubPollerDefinitionName,
+			Enabled:      true,
+			Task:         "Poll followed code forge repositories for new releases and commits.",
+			Operation:    looppkg.OperationService,
+			Completion:   looppkg.CompletionNone,
+			SleepMin:     pollInterval,
+			SleepMax:     pollInterval,
+			SleepDefault: pollInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Tags:         []string{"forge"},
+			Metadata: map[string]string{
+				"subsystem": "forge",
 				"category":  "poller",
 			},
 		})

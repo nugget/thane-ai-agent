@@ -166,6 +166,7 @@ type App struct {
 	unifiPoller        *unifi.Poller
 	haStateWatcher     *homeassistant.StateWatcher
 	emailPoller        *email.Poller
+	forgeSubPoller     *forge.SubscriptionPoller
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
 

@@ -17,9 +17,10 @@ import (
 // handled universally by the tool registry's ContentResolver before
 // handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager *Manager
-	opLog   *OperationLog
-	logger  *slog.Logger
+	manager       *Manager
+	opLog         *OperationLog
+	subscriptions *SubscriptionStore
+	logger        *slog.Logger
 }
 
 // NewTools creates forge tools backed by the given manager. The opLog

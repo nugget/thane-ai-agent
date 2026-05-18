@@ -555,6 +555,106 @@ func (g *GitHub) MergePR(ctx context.Context, repo string, number int, opts *Mer
 	}, nil
 }
 
+// --- Repositories ---
+
+// GetRepository retrieves repository metadata.
+func (g *GitHub) GetRepository(ctx context.Context, repo string) (*Repository, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	ghRepo, resp, err := g.client.Repositories.Get(ctx, owner, name)
+	if err != nil {
+		return nil, fmt.Errorf("get repository %s: %w", repo, err)
+	}
+	g.checkRate(resp)
+
+	return &Repository{
+		FullName:      ghRepo.GetFullName(),
+		Name:          ghRepo.GetName(),
+		Description:   ghRepo.GetDescription(),
+		DefaultBranch: ghRepo.GetDefaultBranch(),
+		URL:           ghRepo.GetHTMLURL(),
+	}, nil
+}
+
+// ListReleases returns recent releases for a repository.
+func (g *GitHub) ListReleases(ctx context.Context, repo string, limit int) ([]*Release, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	ghReleases, resp, err := g.client.Repositories.ListReleases(ctx, owner, name, &github.ListOptions{PerPage: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list releases for %s: %w", repo, err)
+	}
+	g.checkRate(resp)
+
+	releases := make([]*Release, 0, len(ghReleases))
+	for _, r := range ghReleases {
+		release := &Release{
+			ID:         r.GetID(),
+			TagName:    r.GetTagName(),
+			Name:       r.GetName(),
+			Body:       r.GetBody(),
+			URL:        r.GetHTMLURL(),
+			Draft:      r.GetDraft(),
+			Prerelease: r.GetPrerelease(),
+		}
+		if r.CreatedAt != nil {
+			release.CreatedAt = r.GetCreatedAt().Time
+		}
+		if r.PublishedAt != nil {
+			release.PublishedAt = r.GetPublishedAt().Time
+		}
+		releases = append(releases, release)
+	}
+	return releases, nil
+}
+
+// ListCommits returns recent commits for a repository ref/branch.
+func (g *GitHub) ListCommits(ctx context.Context, repo string, ref string, limit int) ([]*Commit, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	opts := &github.CommitsListOptions{
+		SHA: ref,
+		ListOptions: github.ListOptions{
+			PerPage: limit,
+		},
+	}
+	ghCommits, resp, err := g.client.Repositories.ListCommits(ctx, owner, name, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list commits for %s: %w", repo, err)
+	}
+	g.checkRate(resp)
+
+	commits := make([]*Commit, 0, len(ghCommits))
+	for _, c := range ghCommits {
+		commit := &Commit{
+			SHA:     c.GetSHA(),
+			Message: c.GetCommit().GetMessage(),
+			URL:     c.GetHTMLURL(),
+		}
+		if c.GetCommit().GetAuthor() != nil {
+			commit.Author = c.GetCommit().GetAuthor().GetName()
+			commit.Date = c.GetCommit().GetAuthor().GetDate().Time
+		}
+		commits = append(commits, commit)
+	}
+	return commits, nil
+}
+
 // --- Reactions ---
 
 // AddReaction adds an emoji reaction to an issue/PR or a specific comment.

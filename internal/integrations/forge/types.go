@@ -141,6 +141,8 @@ type Commit struct {
 	Author string
 	// Date is when the commit was authored.
 	Date time.Time
+	// URL is the web URL for the commit.
+	URL string
 }
 
 // Review represents a pull request review with optional inline comments.
@@ -200,6 +202,42 @@ type CheckRun struct {
 	CompletedAt *time.Time
 	// DetailsURL links to the full check run output.
 	DetailsURL string
+}
+
+// Repository describes a forge repository/project.
+type Repository struct {
+	// FullName is the canonical owner/repo identifier.
+	FullName string
+	// Name is the short repository name.
+	Name string
+	// Description is the repository description, when available.
+	Description string
+	// DefaultBranch is the provider-reported default branch.
+	DefaultBranch string
+	// URL is the web URL for the repository.
+	URL string
+}
+
+// Release represents a repository release.
+type Release struct {
+	// ID is the provider-assigned release identifier.
+	ID int64
+	// TagName is the release tag.
+	TagName string
+	// Name is the release title.
+	Name string
+	// Body is the release notes body.
+	Body string
+	// URL is the web URL for the release.
+	URL string
+	// Draft indicates the release is not publicly published.
+	Draft bool
+	// Prerelease indicates the release is marked as a prerelease.
+	Prerelease bool
+	// CreatedAt is when the release object was created.
+	CreatedAt time.Time
+	// PublishedAt is when the release was published, when available.
+	PublishedAt time.Time
 }
 
 // MergeOptions controls how a pull request is merged.

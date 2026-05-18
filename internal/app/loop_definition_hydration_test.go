@@ -9,6 +9,7 @@ import (
 	"time"
 
 	emailcfg "github.com/nugget/thane-ai-agent/internal/channels/email"
+	forgecfg "github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -59,6 +60,14 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsConfiguredBuiltIns(t *testing.T) {
 				},
 			}},
 		},
+		Forge: forgecfg.Config{
+			SubscriptionCheckInterval: 900,
+			Accounts: []forgecfg.AccountConfig{{
+				Name:     "github",
+				Provider: "github",
+				Token:    "token",
+			}},
+		},
 		Media: config.MediaConfig{
 			FeedCheckInterval: 600,
 		},
@@ -83,6 +92,7 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsConfiguredBuiltIns(t *testing.T) {
 		unifiPollerDefinitionName:     false,
 		haStateWatcherDefinitionName:  false,
 		emailPollerDefinitionName:     false,
+		forgeSubPollerDefinitionName:  false,
 		mediaFeedPollerDefinitionName: false,
 		mqttPublisherDefinitionName:   false,
 		telemetryDefinitionName:       false,

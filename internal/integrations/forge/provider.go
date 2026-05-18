@@ -66,6 +66,19 @@ type ForgeProvider interface {
 	// MergePR merges a pull request using the specified method.
 	MergePR(ctx context.Context, repo string, number int, opts *MergeOptions) (*MergeResult, error)
 
+	// --- Repositories ---
+
+	// GetRepository retrieves repository metadata.
+	GetRepository(ctx context.Context, repo string) (*Repository, error)
+
+	// ListReleases returns recent releases for a repository, newest
+	// first. Limit is provider-clamped when needed.
+	ListReleases(ctx context.Context, repo string, limit int) ([]*Release, error)
+
+	// ListCommits returns recent commits for a repository ref/branch,
+	// newest first. Limit is provider-clamped when needed.
+	ListCommits(ctx context.Context, repo string, ref string, limit int) ([]*Commit, error)
+
 	// --- Reactions ---
 
 	// AddReaction adds an emoji reaction to an issue/PR or a specific

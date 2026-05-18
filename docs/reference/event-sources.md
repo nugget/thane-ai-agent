@@ -89,3 +89,11 @@ Periodic checks for new entries on followed feeds (RSS, Atom, YouTube
 channels). When new entries are detected, the agent wakes to process them.
 Polling intervals and feed lists are managed via the `media_follow` and
 `media_unfollow` tools.
+
+## Code Forge Subscription Polling
+
+Periodic checks for new releases and commits on followed code forge
+repositories. When new project updates are detected, the agent wakes with
+the `forge` capability active. Polling intervals are configured under
+`forge.subscription_check_interval`, and followed repositories are managed
+via `forge_repo_follow` and `forge_repo_unfollow`.

@@ -190,7 +190,17 @@ func (a *App) initChannels(s *newState) error {
 
 		forgeOpLog = forge.NewOperationLog()
 		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger)
+		forgeSubStore := forge.NewSubscriptionStore(a.opStore, a.logger, a.cfg.Forge.MaxSubscriptions)
+		forgeTools.SetSubscriptionStore(forgeSubStore)
 		a.loop.Tools().SetForgeTools(forgeTools)
+
+		if a.cfg.Forge.SubscriptionCheckInterval > 0 {
+			a.forgeSubPoller = forge.NewSubscriptionPoller(a.forgeMgr, forgeSubStore, a.logger)
+			a.logger.Info("forge subscription polling enabled",
+				"interval", time.Duration(a.cfg.Forge.SubscriptionCheckInterval)*time.Second,
+				"max_subscriptions", a.cfg.Forge.MaxSubscriptions,
+			)
+		}
 
 		a.logger.Info("forge enabled", "accounts", len(a.cfg.Forge.Accounts))
 	} else {

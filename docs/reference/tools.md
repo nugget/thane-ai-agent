@@ -275,6 +275,9 @@ Attachment list and search results report arrival recency as
 | `forge_pr_merge` | Merge a PR. |
 | `forge_pr_request_review` | Request reviewers on a PR. |
 | `forge_react` | Add an emoji reaction to an issue/PR/comment. |
+| `forge_repo_follow` | Follow a repository for new releases and commits. |
+| `forge_repo_unfollow` | Stop following a repository. |
+| `forge_repo_subscriptions` | List followed repositories and their status. |
 | `forge_search` | Search code and issues across the forge. |
 
 ## `scheduler` — time-based tasks
