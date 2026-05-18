@@ -54,7 +54,7 @@ func TestRepoFollowInitializesHighWaterMarks(t *testing.T) {
 		}},
 	}
 	tools := newTestTools(provider, "owner")
-	tools.SetSubscriptionStore(store)
+	tools.subscriptions = store
 
 	result, err := tools.HandleRepoFollow(context.Background(), map[string]any{"repo": "project"})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestRepoSubscriptionsListAndUnfollow(t *testing.T) {
 		},
 	}
 	tools := newTestTools(provider, "owner")
-	tools.SetSubscriptionStore(store)
+	tools.subscriptions = store
 
 	result, err := tools.HandleRepoFollow(context.Background(), map[string]any{
 		"repo":           "project",

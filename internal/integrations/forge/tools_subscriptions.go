@@ -46,11 +46,6 @@ type repoUnfollowResponse struct {
 	SubscriptionID string `json:"subscription_id"`
 }
 
-// SetSubscriptionStore wires runtime-managed forge project subscriptions.
-func (t *Tools) SetSubscriptionStore(store *SubscriptionStore) {
-	t.subscriptions = store
-}
-
 // HandleRepoFollow follows a repository for release and/or commit updates.
 func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (string, error) {
 	if t.subscriptions == nil {

@@ -189,9 +189,8 @@ func (a *App) initChannels(s *newState) error {
 		}
 
 		forgeOpLog = forge.NewOperationLog()
-		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger)
 		forgeSubStore := forge.NewSubscriptionStore(a.opStore, a.logger, a.cfg.Forge.MaxSubscriptions)
-		forgeTools.SetSubscriptionStore(forgeSubStore)
+		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger, forgeSubStore)
 		a.loop.Tools().SetForgeTools(forgeTools)
 
 		if a.cfg.Forge.SubscriptionCheckInterval > 0 {

@@ -25,12 +25,18 @@ type Tools struct {
 
 // NewTools creates forge tools backed by the given manager. The opLog
 // records successful operations for context injection; pass nil to
-// disable operation tracking.
-func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger) *Tools {
+// disable operation tracking. Pass a subscription store to enable
+// repository follow/list/unfollow tools.
+func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, stores ...*SubscriptionStore) *Tools {
+	var subscriptions *SubscriptionStore
+	if len(stores) > 0 {
+		subscriptions = stores[0]
+	}
 	return &Tools{
-		manager: mgr,
-		opLog:   opLog,
-		logger:  logger,
+		manager:       mgr,
+		opLog:         opLog,
+		subscriptions: subscriptions,
+		logger:        logger,
 	}
 }
 
