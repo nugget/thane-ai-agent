@@ -25,6 +25,9 @@ type forgeHandler interface {
 	HandleReact(ctx context.Context, args map[string]any) (string, error)
 	HandleRequestReview(ctx context.Context, args map[string]any) (string, error)
 	HandleSearch(ctx context.Context, args map[string]any) (string, error)
+	HandleRepoFollow(ctx context.Context, args map[string]any) (string, error)
+	HandleRepoUnfollow(ctx context.Context, args map[string]any) (string, error)
+	HandleRepoSubscriptions(ctx context.Context, args map[string]any) (string, error)
 }
 
 // SetForgeTools adds code forge tools to the registry. The handler
@@ -33,6 +36,7 @@ type forgeHandler interface {
 func (r *Registry) SetForgeTools(ft forgeHandler) {
 	r.forgeTools = ft
 	r.registerForgeTools()
+	r.registerForgeSubscriptionTools()
 }
 
 func (r *Registry) registerForgeTools() {

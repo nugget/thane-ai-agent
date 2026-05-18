@@ -64,6 +64,11 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 
 		outputPath, _ := args["output_path"].(string)
 
+		wakeTarget, wakeConfigured, err := parseFeedWakeTarget(args["wake_loop"])
+		if err != nil {
+			return "", fmt.Errorf("media_follow: %w", err)
+		}
+
 		notify := true
 		if n, ok := args["notify"].(bool); ok {
 			notify = n
@@ -142,6 +147,9 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 				return "", fmt.Errorf("media_follow: store output_path: %w", err)
 			}
 		}
+		if err := storeFeedWakeTarget(ft.state, id, wakeTarget, wakeConfigured); err != nil {
+			return "", fmt.Errorf("media_follow: store wake_loop: %w", err)
+		}
 
 		// Set high-water mark to latest entry (don't backfill).
 		latestTitle := ""
@@ -169,7 +177,7 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			"output_path", outputPath,
 		)
 
-		result := map[string]string{
+		result := map[string]any{
 			"feed_id":      id,
 			"name":         name,
 			"url":          feedURL,
@@ -178,6 +186,9 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		}
 		if outputPath != "" {
 			result["output_path"] = outputPath
+		}
+		if wakeConfigured {
+			result["wake_loop"] = feedWakeTargetJSON(wakeTarget, true)
 		}
 		out, _ := json.Marshal(result)
 		return string(out), nil
@@ -221,6 +232,11 @@ func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string
 				ft.logger.Warn("failed to delete feed key", "key", key, "error", err)
 			}
 		}
+		for _, key := range feedWakeKeys(id) {
+			if err := ft.state.Delete(feedNamespace, key); err != nil {
+				ft.logger.Warn("failed to delete feed wake key", "key", key, "error", err)
+			}
+		}
 
 		// Remove from index.
 		ids, err := loadFeedIndex(ft.state)
@@ -252,14 +268,15 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 		}
 
 		type feedInfo struct {
-			FeedID      string `json:"feed_id"`
-			Name        string `json:"name"`
-			URL         string `json:"url"`
-			TrustZone   string `json:"trust_zone"`
-			OutputPath  string `json:"output_path,omitempty"`
-			LastChecked string `json:"last_checked,omitempty"`
-			LatestEntry string `json:"latest_entry,omitempty"`
-			Notify      bool   `json:"notify"`
+			FeedID      string         `json:"feed_id"`
+			Name        string         `json:"name"`
+			URL         string         `json:"url"`
+			TrustZone   string         `json:"trust_zone"`
+			OutputPath  string         `json:"output_path,omitempty"`
+			LastChecked string         `json:"last_checked,omitempty"`
+			LatestEntry string         `json:"latest_entry,omitempty"`
+			Notify      bool           `json:"notify"`
+			WakeLoop    map[string]any `json:"wake_loop,omitempty"`
 		}
 
 		feeds := make([]feedInfo, 0, len(ids))
@@ -295,6 +312,10 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			if err != nil {
 				return "", fmt.Errorf("media_feeds: read output_path for %s: %w", id, err)
 			}
+			wakeTarget, wakeConfigured, err := loadFeedWakeTarget(ft.state, id)
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read wake_loop for %s: %w", id, err)
+			}
 
 			feeds = append(feeds, feedInfo{
 				FeedID:      id,
@@ -305,6 +326,7 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 				LastChecked: lastChecked,
 				LatestEntry: latestTitle,
 				Notify:      notifyStr != "false",
+				WakeLoop:    feedWakeTargetJSON(wakeTarget, wakeConfigured),
 			})
 		}
 
@@ -337,8 +359,9 @@ func FollowDefinition() map[string]any {
 			},
 			"notify": map[string]any{
 				"type":        "boolean",
-				"description": "Whether to notify the owner when new content is detected. Default: true.",
+				"description": "Whether to start the default media-analysis conversation when new content is detected and wake_loop is omitted. Default: true.",
 			},
+			"wake_loop": feedWakeTargetDefinition(),
 		},
 		"required": []string{"url"},
 	}

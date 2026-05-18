@@ -66,6 +66,109 @@ func (g *GitHub) checkRate(resp *github.Response) {
 	}
 }
 
+// --- Repositories ---
+
+// GetRepository retrieves repository metadata.
+func (g *GitHub) GetRepository(ctx context.Context, repo string) (*Repository, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	ghRepo, resp, err := g.client.Repositories.Get(ctx, owner, name)
+	if err != nil {
+		return nil, fmt.Errorf("get repository: %w", err)
+	}
+	g.checkRate(resp)
+
+	return &Repository{
+		FullName:      ghRepo.GetFullName(),
+		DefaultBranch: ghRepo.GetDefaultBranch(),
+		URL:           ghRepo.GetHTMLURL(),
+	}, nil
+}
+
+// ListReleases returns recent repository releases, newest first.
+func (g *GitHub) ListReleases(ctx context.Context, repo string, limit int) ([]*Release, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	ghReleases, resp, err := g.client.Repositories.ListReleases(ctx, owner, name, &github.ListOptions{PerPage: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list releases: %w", err)
+	}
+	g.checkRate(resp)
+
+	releases := make([]*Release, 0, len(ghReleases))
+	for _, release := range ghReleases {
+		item := &Release{
+			ID:         release.GetID(),
+			TagName:    release.GetTagName(),
+			Name:       release.GetName(),
+			URL:        release.GetHTMLURL(),
+			Prerelease: release.GetPrerelease(),
+		}
+		if release.CreatedAt != nil {
+			item.CreatedAt = release.CreatedAt.Time
+		}
+		if release.PublishedAt != nil {
+			item.PublishedAt = release.PublishedAt.Time
+		}
+		releases = append(releases, item)
+	}
+	return releases, nil
+}
+
+// ListCommits returns recent commits on a repository branch/ref, newest first.
+func (g *GitHub) ListCommits(ctx context.Context, repo, branch string, limit int) ([]*Commit, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	opts := &github.CommitsListOptions{
+		SHA:         branch,
+		ListOptions: github.ListOptions{PerPage: limit},
+	}
+	ghCommits, resp, err := g.client.Repositories.ListCommits(ctx, owner, name, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list commits: %w", err)
+	}
+	g.checkRate(resp)
+
+	commits := make([]*Commit, 0, len(ghCommits))
+	for _, c := range ghCommits {
+		commit := &Commit{
+			SHA:     c.GetSHA(),
+			Message: c.GetCommit().GetMessage(),
+			URL:     c.GetHTMLURL(),
+		}
+		if c.GetCommit().GetAuthor() != nil {
+			commit.Author = c.GetCommit().GetAuthor().GetName()
+			commit.Date = c.GetCommit().GetAuthor().GetDate().Time
+		} else if c.GetCommit().GetCommitter() != nil {
+			commit.Author = c.GetCommit().GetCommitter().GetName()
+			commit.Date = c.GetCommit().GetCommitter().GetDate().Time
+		}
+		commits = append(commits, commit)
+	}
+	return commits, nil
+}
+
 // --- Issues ---
 
 // CreateIssue creates a new issue on the repository.

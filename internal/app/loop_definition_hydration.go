@@ -88,6 +88,21 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		}
 		spec.TurnBuilder = emailPollTurnBuilder(a.emailPoller, a.logger)
 		return a.hydrateLoopOutputs(spec)
+	case forgeSubPollerDefinitionName:
+		if a.forgeSubPoller == nil {
+			return looppkg.Spec{}, fmt.Errorf("%s definition requires forge subscription poller runtime", forgeSubPollerDefinitionName)
+		}
+		spec.Handler = func(ctx context.Context, _ any) error {
+			wakes, err := a.forgeSubPoller.CheckSubscriptions(ctx)
+			if err != nil {
+				return err
+			}
+			if wakes == 0 {
+				return looppkg.ErrNoOp
+			}
+			return nil
+		}
+		return a.hydrateLoopOutputs(spec)
 	case mediaFeedPollerDefinitionName:
 		if a.mediaFeedPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires media feed poller runtime", mediaFeedPollerDefinitionName)

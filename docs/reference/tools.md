@@ -244,6 +244,10 @@ Owner channel activity recency is reported with delta fields such as
 | `media_unfollow` | Stop following a feed. |
 | `media_feeds` | List followed feeds and their status. |
 
+`media_follow` accepts an optional `wake_loop` target. When present, new feed
+entries are delivered as structured event-source wakes to that loop instead
+of starting the default media-analysis conversation.
+
 ## `attachments` — vision pipeline
 
 | Tool | Description |
@@ -276,6 +280,13 @@ Attachment list and search results report arrival recency as
 | `forge_pr_request_review` | Request reviewers on a PR. |
 | `forge_react` | Add an emoji reaction to an issue/PR/comment. |
 | `forge_search` | Search code and issues across the forge. |
+| `forge_repo_follow` | Follow a repository for release/commit events and wake an existing loop. |
+| `forge_repo_unfollow` | Stop following a repository event subscription. |
+| `forge_repo_subscriptions` | List repository event subscriptions and target loops. |
+
+Repository subscriptions require `wake_loop` so event handling is owned by
+an existing loop, usually one created with `thane_curate` for a specific
+managed document.
 
 ## `scheduler` — time-based tasks
 

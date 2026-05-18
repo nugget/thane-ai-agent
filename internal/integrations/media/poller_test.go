@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
@@ -274,6 +275,106 @@ func TestCheckFeeds_TrustZoneInWakeMessage(t *testing.T) {
 	// Verify format: **Name** [zone] (feed_id: ID): Title
 	if !strings.Contains(msg, "**Trusted Source** [trusted] (feed_id: tf1): New Episode") {
 		t.Errorf("wake message format incorrect, got: %q", msg)
+	}
+}
+
+func TestCheckFeeds_WakeLoopDispatchesStructuredEvents(t *testing.T) {
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Curated Source</title>
+	<entry><id>ep-2</id><title>New Episode</title>
+	<link href="https://example.com/ep2"/>
+	<published>2026-02-22T12:00:00Z</published></entry>
+	<entry><id>ep-1</id><title>Old Episode</title>
+	<link href="https://example.com/ep1"/>
+	<published>2026-02-20T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"cf1"})
+	store.Set(feedNamespace, feedKeyURL("cf1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("cf1"), "Curated Source")
+	store.Set(feedNamespace, feedKeyLastEntryID("cf1"), "ep-1")
+	store.Set(feedNamespace, feedKeyTrustZone("cf1"), "trusted")
+	if err := storeFeedWakeTarget(store, "cf1", messages.LoopWakeTarget{Name: "feed_curator", ForceSupervisor: true}, true); err != nil {
+		t.Fatalf("storeFeedWakeTarget: %v", err)
+	}
+
+	var delivered messages.Envelope
+	bus := messages.NewBus(nil)
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		delivered = env
+		return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+	})
+
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	msg, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if msg != "" {
+		t.Fatalf("legacy wake message = %q, want empty when wake_loop dispatches", msg)
+	}
+	if delivered.To.Target != "feed_curator" {
+		t.Fatalf("delivered target = %q, want feed_curator", delivered.To.Target)
+	}
+	payload, ok := delivered.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", delivered.Payload)
+	}
+	if !payload.ForceSupervisor {
+		t.Fatal("expected force_supervisor payload")
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(payload.Events))
+	}
+	if payload.Events[0].Type != "feed_entry" || payload.Events[0].Metadata["feed_id"] != "cf1" {
+		t.Fatalf("event = %+v", payload.Events[0])
+	}
+	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("cf1"))
+	if hwm != "ep-2" {
+		t.Fatalf("high-water mark = %q, want ep-2 after wake delivery", hwm)
+	}
+}
+
+func TestCheckFeeds_WakeLoopDeliveryFailureKeepsHighWater(t *testing.T) {
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Curated Source</title>
+	<entry><id>ep-2</id><title>New Episode</title>
+	<link href="https://example.com/ep2"/>
+	<published>2026-02-22T12:00:00Z</published></entry>
+	<entry><id>ep-1</id><title>Old Episode</title>
+	<link href="https://example.com/ep1"/>
+	<published>2026-02-20T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"cf1"})
+	store.Set(feedNamespace, feedKeyURL("cf1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("cf1"), "Curated Source")
+	store.Set(feedNamespace, feedKeyLastEntryID("cf1"), "ep-1")
+	if err := storeFeedWakeTarget(store, "cf1", messages.LoopWakeTarget{Name: "feed_curator"}, true); err != nil {
+		t.Fatalf("storeFeedWakeTarget: %v", err)
+	}
+
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(messages.NewBus(nil)))
+	msg, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if msg != "" {
+		t.Fatalf("legacy wake message = %q, want empty when wake_loop dispatch fails", msg)
+	}
+	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("cf1"))
+	if hwm != "ep-1" {
+		t.Fatalf("high-water mark = %q, want ep-1 after failed wake delivery", hwm)
 	}
 }
 

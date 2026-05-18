@@ -14,6 +14,19 @@ type ForgeProvider interface {
 	// Name returns the provider identifier (e.g., "github", "gitea").
 	Name() string
 
+	// --- Repositories ---
+
+	// GetRepository retrieves repository metadata used by subscription
+	// setup, such as the default branch and web URL.
+	GetRepository(ctx context.Context, repo string) (*Repository, error)
+
+	// ListReleases returns recent repository releases, newest first.
+	ListReleases(ctx context.Context, repo string, limit int) ([]*Release, error)
+
+	// ListCommits returns recent commits on a repository branch/ref, newest
+	// first. Empty branch means provider default branch.
+	ListCommits(ctx context.Context, repo, branch string, limit int) ([]*Commit, error)
+
 	// --- Issues ---
 
 	// CreateIssue creates a new issue and returns it with the

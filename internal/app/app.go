@@ -141,7 +141,8 @@ type App struct {
 	notifCallbackDispatcher *notifications.CallbackDispatcher
 
 	// Forge integration
-	forgeMgr *forge.Manager
+	forgeMgr       *forge.Manager
+	forgeSubPoller *forge.SubscriptionPoller
 
 	// MCP clients (closed on shutdown)
 	mcpClients []*mcp.Client

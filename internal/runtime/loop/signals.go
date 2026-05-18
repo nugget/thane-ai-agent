@@ -104,7 +104,7 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			Priority: env.Priority,
 			Scope:    append([]string(nil), env.Scope...),
 		}
-		if payload.Kind != "" || strings.TrimSpace(payload.Message) != "" || strings.TrimSpace(payload.Concern) != "" || strings.TrimSpace(payload.SuggestedAction) != "" || strings.TrimSpace(payload.Context) != "" || payload.ForceSupervisor {
+		if payload.Kind != "" || strings.TrimSpace(payload.Message) != "" || strings.TrimSpace(payload.Concern) != "" || strings.TrimSpace(payload.SuggestedAction) != "" || strings.TrimSpace(payload.Context) != "" || payload.ForceSupervisor || len(payload.Events) > 0 {
 			view.Payload = map[string]any{}
 			if strings.TrimSpace(payload.Kind) != "" {
 				view.Payload["kind"] = payload.Kind
@@ -123,6 +123,9 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			}
 			if payload.ForceSupervisor {
 				view.Payload["force_supervisor"] = true
+			}
+			if len(payload.Events) > 0 {
+				view.Payload["events"] = payload.Events
 			}
 		}
 		views = append(views, view)
