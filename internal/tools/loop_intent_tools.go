@@ -54,7 +54,7 @@ func (r *Registry) registerThaneCurate() {
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, and the derived sleep_min/max/default cadence triple.",
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, and the derived sleep_min/max/default cadence triple.",
 		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -318,7 +318,22 @@ func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string
 	sb.WriteString(docRef)
 	sb.WriteString(" with the current state. Write through the declared output tool ")
 	sb.WriteString(outputToolName)
-	sb.WriteString("; the document's current contents are surfaced in the Declared Durable Outputs context block above, so no separate read is needed.")
+	sb.WriteString(". ")
+	switch outputMode {
+	case "journal":
+		// Append-only: the recent tail in the context block is enough; the
+		// model never needs the full history to write a new entry.
+		sb.WriteString("Recent entries are surfaced in the Declared Durable Outputs context block above; no separate read is needed before appending.")
+	case "maintain":
+		// Complete-replacement: the context block shows the document head,
+		// possibly truncated at 16 KiB (see loopOutputContentBytes in
+		// app.loop_outputs). The model MUST notice the `truncated` flag and
+		// read the full document before replacing, or it will silently drop
+		// everything past the truncation boundary.
+		sb.WriteString("The current document body is shown in the Declared Durable Outputs context block above. If that entry is marked `truncated: true`, read the full document with doc_read before replacing — the output tool overwrites the entire body.")
+	default:
+		sb.WriteString("The document's current contents are surfaced in the Declared Durable Outputs context block above.")
+	}
 	if strings.TrimSpace(guidance) != "" {
 		sb.WriteString("\n\nGuidance: ")
 		sb.WriteString(guidance)

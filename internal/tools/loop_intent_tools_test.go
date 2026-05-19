@@ -247,6 +247,15 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if !strings.Contains(found.Spec.Task, "replace_output_test_pr_watchlist") {
 		t.Errorf("task prompt should reference scoped output tool, got: %s", found.Spec.Task)
 	}
+	// Maintain mode must warn the model about the 16 KiB head truncation
+	// applied by renderLoopOutputContext, or it will rewrite only the
+	// visible prefix and silently drop everything past the boundary.
+	if !strings.Contains(found.Spec.Task, "truncated") {
+		t.Errorf("maintain-mode task prompt must warn about truncation, got: %s", found.Spec.Task)
+	}
+	if !strings.Contains(found.Spec.Task, "doc_read") {
+		t.Errorf("maintain-mode task prompt must instruct doc_read on truncation, got: %s", found.Spec.Task)
+	}
 
 	// Verify the scaffold document was written with loop-ownership frontmatter.
 	doc, err := docTools.Read(context.Background(), documents.RefArgs{Ref: "kb:dashboards/pr-watchlist.md"})
@@ -502,5 +511,16 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 	}
 	if !strings.Contains(found.Spec.Task, "append_output_release_journal") {
 		t.Errorf("task prompt should reference scoped output tool, got: %s", found.Spec.Task)
+	}
+	// Journal mode is append-only: the recent tail in the context block
+	// is enough, so the prompt should explicitly say no separate read is
+	// needed before appending.
+	if !strings.Contains(found.Spec.Task, "no separate read") {
+		t.Errorf("journal-mode task prompt should reassure no read needed, got: %s", found.Spec.Task)
+	}
+	// Conversely, journal mode must NOT carry the maintain-mode truncation
+	// warning — appending doesn't need the full history.
+	if strings.Contains(found.Spec.Task, "truncated") {
+		t.Errorf("journal-mode task prompt should not carry maintain-mode truncation warning, got: %s", found.Spec.Task)
 	}
 }
