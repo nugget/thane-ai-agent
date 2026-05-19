@@ -179,17 +179,20 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		}
 	}
 
+	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
+
 	jitterRatio := 0.1
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
-		Task:         buildCurateTask(intent, documentRef, outputMode, guidance),
+		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), guidance),
 		Operation:    looppkg.OperationService,
 		SleepMin:     cad.sleepMin,
 		SleepMax:     cad.sleepMax,
 		SleepDefault: cad.sleepDefault,
 		Jitter:       &jitterRatio,
 		Tags:         tags,
+		Outputs:      []looppkg.OutputSpec{outputSpec},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 		},
@@ -258,6 +261,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_definition_name": name,
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
+		"output_tool":          outputSpec.ToolName(),
 		"cadence": map[string]any{
 			"input":         cadenceInput,
 			"sleep_default": cad.sleepDefault.String(),
@@ -268,12 +272,35 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	})
 }
 
+// buildCurateOutputSpec converts the intent-shaped output argument into
+// a declared OutputSpec on the loop. Once declared, the hydration layer
+// generates a scoped mutation tool (replace_output_* / append_output_*)
+// and injects current-document context into each iteration prompt — so
+// the model gets a typed write surface and "what's already there?"
+// answered without re-reading the doc itself.
+func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.OutputSpec {
+	out := looppkg.OutputSpec{
+		Name:    name,
+		Ref:     docRef,
+		Purpose: intent,
+	}
+	switch outputMode {
+	case "journal":
+		out.Type = looppkg.OutputTypeJournalDocument
+		out.Mode = looppkg.OutputModeAppend
+	case "maintain":
+		out.Type = looppkg.OutputTypeMaintainedDocument
+		out.Mode = looppkg.OutputModeReplace
+	}
+	return out
+}
+
 // buildCurateTask renders the per-iteration task prompt for a
 // thane_curate-created loop. The model running each iteration sees the
-// intent, the document target, and the output mode, plus any caller
-// guidance. Kept short and shape-clear so the model can act without
-// re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, guidance string) string {
+// intent, the document target, the output mode, the scoped output tool
+// name, plus any caller guidance. Kept short and shape-clear so the
+// model can act without re-reading the loop's own definition.
+func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string) string {
 	var verb string
 	switch outputMode {
 	case "journal":
@@ -289,13 +316,9 @@ func buildCurateTask(intent, docRef, outputMode, guidance string) string {
 	sb.WriteString(verb)
 	sb.WriteString(" ")
 	sb.WriteString(docRef)
-	sb.WriteString(" with the current state. Use document mutation tools (")
-	if outputMode == "journal" {
-		sb.WriteString("doc_journal_update for the dated entry, doc_read to inspect existing entries")
-	} else {
-		sb.WriteString("doc_write to replace the body, doc_read to inspect the prior snapshot before rewriting")
-	}
-	sb.WriteString(").")
+	sb.WriteString(" with the current state. Write through the declared output tool ")
+	sb.WriteString(outputToolName)
+	sb.WriteString("; the document's current contents are surfaced in the Declared Durable Outputs context block above, so no separate read is needed.")
 	if strings.TrimSpace(guidance) != "" {
 		sb.WriteString("\n\nGuidance: ")
 		sb.WriteString(guidance)

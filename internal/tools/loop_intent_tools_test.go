@@ -186,6 +186,9 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if resp["output_mode"] != "maintain" {
 		t.Errorf("output_mode = %v, want maintain", resp["output_mode"])
 	}
+	if resp["output_tool"] != "replace_output_test_pr_watchlist" {
+		t.Errorf("output_tool = %v, want replace_output_test_pr_watchlist", resp["output_tool"])
+	}
 
 	// Verify the launch fired against the right name.
 	if launchedName != "test_pr_watchlist" {
@@ -212,6 +215,37 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	}
 	if len(found.Spec.Tags) != 1 || found.Spec.Tags[0] != "forge" {
 		t.Errorf("Tags = %v, want [forge]", found.Spec.Tags)
+	}
+
+	// Verify the declared output rides on the spec so the hydration
+	// layer can generate the scoped output tool and inject document
+	// context on each iteration.
+	if len(found.Spec.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1: %+v", len(found.Spec.Outputs), found.Spec.Outputs)
+	}
+	out := found.Spec.Outputs[0]
+	if out.Name != "test_pr_watchlist" {
+		t.Errorf("Outputs[0].Name = %q, want test_pr_watchlist", out.Name)
+	}
+	if out.Type != looppkg.OutputTypeMaintainedDocument {
+		t.Errorf("Outputs[0].Type = %q, want maintained_document", out.Type)
+	}
+	if out.Mode != looppkg.OutputModeReplace {
+		t.Errorf("Outputs[0].Mode = %q, want replace", out.Mode)
+	}
+	if out.Ref != "kb:dashboards/pr-watchlist.md" {
+		t.Errorf("Outputs[0].Ref = %q, want kb:dashboards/pr-watchlist.md", out.Ref)
+	}
+	if out.Purpose == "" {
+		t.Errorf("Outputs[0].Purpose should carry the intent, got empty")
+	}
+	if got, want := out.ToolName(), "replace_output_test_pr_watchlist"; got != want {
+		t.Errorf("Outputs[0].ToolName = %q, want %q", got, want)
+	}
+	// The task prompt should point the model at the scoped tool rather
+	// than the generic doc_write / doc_journal_update pair.
+	if !strings.Contains(found.Spec.Task, "replace_output_test_pr_watchlist") {
+		t.Errorf("task prompt should reference scoped output tool, got: %s", found.Spec.Task)
 	}
 
 	// Verify the scaffold document was written with loop-ownership frontmatter.
@@ -387,5 +421,86 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 	}
 	if !strings.Contains(doc, "Do not overwrite") {
 		t.Errorf("pre-existing document was modified despite refusal:\n%s", doc)
+	}
+}
+
+// TestThaneCurate_JournalDeclaresAppendOutput verifies that journal-mode
+// loops carry a journal_document OutputSpec with append mode, so the
+// hydration layer generates an append_output_* scoped tool instead of
+// the replace_output_* tool used by maintain-mode loops.
+func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "loop-journal-1"}, nil
+		},
+	})
+
+	tool := reg.Get("thane_curate")
+	if _, err := tool.Handler(context.Background(), map[string]any{
+		"name":    "release_journal",
+		"intent":  "Capture forge releases as a dated log.",
+		"cadence": "hourly",
+		"output": map[string]any{
+			"mode":     "journal",
+			"document": "kb:journal/releases.md",
+		},
+	}); err != nil {
+		t.Fatalf("thane_curate handler: %v", err)
+	}
+
+	snap := defRegistry.Snapshot()
+	var found *looppkg.DefinitionSnapshot
+	for i := range snap.Definitions {
+		if snap.Definitions[i].Spec.Name == "release_journal" {
+			found = &snap.Definitions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("definition not registered")
+	}
+	if len(found.Spec.Outputs) != 1 {
+		t.Fatalf("Outputs len = %d, want 1", len(found.Spec.Outputs))
+	}
+	out := found.Spec.Outputs[0]
+	if out.Type != looppkg.OutputTypeJournalDocument {
+		t.Errorf("Type = %q, want journal_document", out.Type)
+	}
+	if out.Mode != looppkg.OutputModeAppend {
+		t.Errorf("Mode = %q, want append", out.Mode)
+	}
+	if got, want := out.ToolName(), "append_output_release_journal"; got != want {
+		t.Errorf("ToolName = %q, want %q", got, want)
+	}
+	if !strings.Contains(found.Spec.Task, "append_output_release_journal") {
+		t.Errorf("task prompt should reference scoped output tool, got: %s", found.Spec.Task)
 	}
 }
