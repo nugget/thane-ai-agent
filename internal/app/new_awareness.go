@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -77,11 +76,11 @@ func (a *App) initAwareness(s *newState) error {
 	// --- Entity watchlist ---
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
-	// SQLite so the watchlist survives restarts. Shares thane.db.
-	watchlistStore, err := awareness.NewWatchlistStore(a.mem.DB(), logger)
-	if err != nil {
-		return fmt.Errorf("watchlist store: %w", err)
-	}
+	// SQLite so the watchlist survives restarts. Shares thane.db. The
+	// store itself is constructed earlier in initStores so initChannels
+	// can wire it into thane_curate; here we register the runtime
+	// context providers that surface its rows into prompts.
+	watchlistStore := a.watchlistStore
 
 	if a.ha != nil {
 		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
