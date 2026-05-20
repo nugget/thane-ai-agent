@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -64,11 +65,31 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	if existing, ok := findLoopDefinition(snapshot, name); ok && existing.Source == looppkg.DefinitionSourceConfig {
+	existing, ok := findLoopDefinition(snapshot, name)
+	if ok && existing.Source == looppkg.DefinitionSourceConfig {
 		return "", (&looppkg.ImmutableDefinitionError{Name: name})
 	} else if !ok {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
+
+	// Tear down any entity subscriptions scoped to this loop's focus tag
+	// before the definition itself is removed. The focus_tag binding is
+	// stored on Spec.Metadata so it persists across replace cycles; only
+	// delete crosses the threshold where the subscriptions become orphans.
+	// A wipe failure aborts the whole delete: the alternative (proceed
+	// anyway) would leave watchlist rows scoped to a focus_tag whose
+	// owning loop no longer exists, with no later operation that could
+	// reach them. Hard-fail keeps state consistent and lets the caller
+	// retry once the underlying issue clears. Skip when the watchlist
+	// store isn't wired (test harnesses, alternate registries).
+	if r.loopIntentDeps.WatchlistStore != nil {
+		if focusTag := strings.TrimSpace(existing.Spec.Metadata["focus_tag"]); focusTag != "" {
+			if err := r.loopIntentDeps.WatchlistStore.RemoveAllForScope(focusTag); err != nil {
+				return "", fmt.Errorf("wipe loop entity subscriptions for %q: %w", focusTag, err)
+			}
+		}
+	}
+
 	if r.deletePersistedLoopDefinition != nil {
 		if err := r.deletePersistedLoopDefinition(name); err != nil {
 			return "", fmt.Errorf("delete persisted loop definition: %w", err)

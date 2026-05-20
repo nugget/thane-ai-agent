@@ -114,6 +114,21 @@ func (s *WatchlistStore) RemoveWithScopes(entityID string, scopes []string) erro
 	return tx.Commit()
 }
 
+// RemoveAllForScope deletes every subscription whose scope matches the given
+// tag. Used to tear down loop-owned entity subscriptions when the owning loop
+// is deleted or when a replace-mode launch re-seeds its watch set.
+func (s *WatchlistStore) RemoveAllForScope(scope string) error {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return fmt.Errorf("scope is required")
+	}
+	_, err := s.db.Exec(
+		`DELETE FROM watched_entity_subscriptions WHERE scope = ?`,
+		scope,
+	)
+	return err
+}
+
 // List returns all watched entity IDs in insertion order, deduplicated across
 // scoped subscriptions.
 func (s *WatchlistStore) List() ([]string, error) {
