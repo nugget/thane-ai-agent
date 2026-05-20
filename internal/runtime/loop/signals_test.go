@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -216,10 +217,10 @@ func TestFormatNotifyEnvelopesCapsStructuredEvents(t *testing.T) {
 	if !strings.Contains(summary, `"events_truncated":true`) {
 		t.Fatalf("summary missing truncation flag: %s", summary)
 	}
-	if !strings.Contains(summary, `"events_total":51`) {
+	if !strings.Contains(summary, `"events_total":`+strconv.Itoa(messages.MaxLoopEventsPerWake+1)) {
 		t.Fatalf("summary missing total count: %s", summary)
 	}
-	if !strings.Contains(summary, `"events_shown":50`) {
+	if !strings.Contains(summary, `"events_shown":`+strconv.Itoa(messages.MaxLoopEventsPerWake)) {
 		t.Fatalf("summary missing shown count: %s", summary)
 	}
 	if strings.Contains(summary, "derived event summary") {
