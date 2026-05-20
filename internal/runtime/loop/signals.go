@@ -18,15 +18,11 @@ import (
 // to drain it on the next iteration.
 const maxPendingNotifications = 8
 
-// maxNotifyEventsInSummary caps how many event-source events are
-// rendered into the model-facing notification summary per wake. A
-// high-volume producer (feed with a long backlog, repo with many
-// releases between polls) could otherwise blow up the next iteration's
-// prompt with thousands of entries. When the cap is hit, the summary
-// surfaces events_truncated/events_total/events_shown so the receiving
-// model knows it didn't see everything and can choose to drill in via
-// source-specific tools.
-const maxNotifyEventsInSummary = 50
+// maxNotifyEventsInSummary caps how many event-source events are rendered into
+// the model-facing notification summary per wake. Source producers should
+// already obey messages.MaxLoopEventsPerWake; this remains a defensive cap for
+// hand-built LoopNotifyPayload values.
+const maxNotifyEventsInSummary = messages.MaxLoopEventsPerWake
 
 type pendingNotify struct {
 	Envelope        messages.Envelope

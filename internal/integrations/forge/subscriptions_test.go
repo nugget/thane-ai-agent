@@ -2,6 +2,9 @@ package forge
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -237,6 +240,130 @@ func TestSubscriptionPollerDeliveryFailureKeepsHighWater(t *testing.T) {
 	}
 	if subs[0].LastRelease != "tag:v1.0.0" || subs[0].LastCommit != "oldsha" {
 		t.Fatalf("high-water markers advanced after failed wake: release=%q commit=%q", subs[0].LastRelease, subs[0].LastCommit)
+	}
+}
+
+func TestSubscriptionPollerBatchesAndAdvancesHighWaterPerBatch(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	now := time.Now().UTC()
+	sub := ProjectSubscription{
+		ID:           "sub",
+		Account:      "test",
+		Repo:         "owner/repo",
+		Name:         "owner/repo",
+		Branch:       "main",
+		TrackCommits: true,
+		WakeTarget:   messages.LoopWakeTarget{Name: "repo_curator"},
+		LastCommit:   "oldsha",
+		LastChecked:  now.Add(-2 * time.Hour),
+		CreatedAt:    now.Add(-24 * time.Hour),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	total := messages.MaxLoopEventsPerWake + 2
+	commits := make([]*Commit, 0, total+1)
+	for i := total; i >= 1; i-- {
+		commits = append(commits, &Commit{
+			SHA:     fmt.Sprintf("sha-%02d", i),
+			Message: fmt.Sprintf("commit %02d", i),
+			Author:  "Dev",
+			Date:    now.Add(time.Duration(i) * time.Minute),
+			URL:     fmt.Sprintf("https://commit/%02d", i),
+		})
+	}
+	commits = append(commits, &Commit{
+		SHA:     "oldsha",
+		Message: "old commit",
+		Author:  "Dev",
+		Date:    now.Add(-3 * time.Hour),
+		URL:     "https://old-commit",
+	})
+	provider := &mockProvider{
+		name:              "test",
+		listCommitsResult: commits,
+	}
+	mgr := &Manager{
+		providers: map[string]ForgeProvider{"test": provider},
+		configs:   map[string]AccountConfig{"test": {Name: "test", Owner: "owner"}},
+		order:     []string{"test"},
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	sendCount := 0
+	var firstBatch messages.Envelope
+	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		sendCount++
+		if sendCount == 1 {
+			firstBatch = env
+			return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+		}
+		return messages.DeliveryResult{}, errors.New("second batch failed")
+	})
+
+	poller := NewSubscriptionPoller(mgr, store, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	count, err := poller.CheckSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("CheckSubscriptions: %v", err)
+	}
+	if count != messages.MaxLoopEventsPerWake {
+		t.Fatalf("event count = %d, want %d delivered before failure", count, messages.MaxLoopEventsPerWake)
+	}
+	if sendCount != 2 {
+		t.Fatalf("send count = %d, want 2", sendCount)
+	}
+	payload, ok := firstBatch.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", firstBatch.Payload)
+	}
+	if len(payload.Events) != messages.MaxLoopEventsPerWake {
+		t.Fatalf("first batch events len = %d, want %d", len(payload.Events), messages.MaxLoopEventsPerWake)
+	}
+	if payload.Events[0].ID != "sha-50" {
+		t.Fatalf("first delivered high-water event = %q, want sha-50", payload.Events[0].ID)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions len = %d, want 1", len(subs))
+	}
+	if subs[0].LastCommit != "sha-50" {
+		t.Fatalf("last commit = %q, want sha-50 after first batch only", subs[0].LastCommit)
+	}
+}
+
+func TestSubscriptionStoreRejectsMismatchedPayloadID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	raw, err := json.Marshal(ProjectSubscription{
+		ID:            "other",
+		Account:       "test",
+		Repo:          "owner/repo",
+		TrackReleases: true,
+		WakeTarget:    messages.LoopWakeTarget{Name: "repo_curator"},
+		CreatedAt:     time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := store.state.Set(subscriptionNamespace, subscriptionKey("sub"), string(raw)); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	_, err = store.Get("sub")
+	if err == nil {
+		t.Fatal("expected mismatched payload id to be rejected")
+	}
+	if !strings.Contains(err.Error(), "mismatched payload id") {
+		t.Fatalf("error = %q, want mismatched payload id", err)
 	}
 }
 

@@ -129,21 +129,16 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 		}
 		switch {
 		case update.WakeConfigured:
-			dispatched, err := p.dispatchFeedEvents(ctx, update)
+			dispatched, err := p.dispatchFeedEventBatches(ctx, update)
+			eventWakeCount += dispatched
 			if err != nil {
 				p.logger.Warn("feed event wake failed",
 					"feed_id", id,
+					"delivered_events", dispatched,
 					"error", err,
 				)
 				continue
 			}
-			if err := p.advanceFeedHighWater(update); err != nil {
-				p.logger.Warn("failed to update high-water mark",
-					"feed_id", id,
-					"error", err,
-				)
-			}
-			eventWakeCount += dispatched
 		case update.Notify:
 			if err := p.advanceFeedHighWater(update); err != nil {
 				p.logger.Warn("failed to update high-water mark",
@@ -187,6 +182,35 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 		sb.WriteString(s)
 	}
 	return sb.String(), nil
+}
+
+func (p *FeedPoller) dispatchFeedEventBatches(ctx context.Context, update *feedUpdate) (int, error) {
+	delivered := 0
+	for end := len(update.Events); end > 0; end -= messages.MaxLoopEventsPerWake {
+		start := end - messages.MaxLoopEventsPerWake
+		if start < 0 {
+			start = 0
+		}
+		chunk := update.Events[start:end]
+		batch := *update
+		batch.Events = chunk
+		if len(chunk) > 0 {
+			batch.LastEntryID = chunk[0].ID
+		}
+		if batch.LastEntryID == "" {
+			return delivered, fmt.Errorf("feed event batch missing high-water id")
+		}
+
+		dispatched, err := p.dispatchFeedEvents(ctx, &batch)
+		if err != nil {
+			return delivered, err
+		}
+		delivered += dispatched
+		if err := p.advanceFeedHighWater(&batch); err != nil {
+			return delivered, err
+		}
+	}
+	return delivered, nil
 }
 
 func (p *FeedPoller) dispatchFeedEvents(ctx context.Context, update *feedUpdate) (int, error) {

@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// MaxLoopEventsPerWake is the largest structured event batch that should be
+// delivered in one loop wake. The task-loop renderer exposes this many events
+// directly in the model prompt, so source pollers must split larger backlogs
+// into multiple wakes and advance their cursors only after each batch is
+// accepted.
+const MaxLoopEventsPerWake = 50
+
 // LoopEventPayload is structured event-source context delivered through a
 // loop notification. Event producers use it for durable facts such as source,
 // type, title, URL, and source-specific metadata; task-based loops receive the
@@ -138,6 +145,9 @@ func VerifyLoopWakeTarget(target LoopWakeTarget, resolver LoopResolver) error {
 func NewEventSourceEnvelope(from Identity, target LoopWakeTarget, source string, events []LoopEventPayload) (Envelope, error) {
 	if len(events) == 0 {
 		return Envelope{}, fmt.Errorf("event-source envelope requires at least one event")
+	}
+	if len(events) > MaxLoopEventsPerWake {
+		return Envelope{}, fmt.Errorf("event-source envelope has %d events; max per wake is %d", len(events), MaxLoopEventsPerWake)
 	}
 	destination, err := target.Destination()
 	if err != nil {

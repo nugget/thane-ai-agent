@@ -187,6 +187,46 @@ func TestWaitForEventCancellationWinsOverNotifyWake(t *testing.T) {
 	}
 }
 
+func TestFormatNotifyEnvelopesCapsStructuredEvents(t *testing.T) {
+	t.Parallel()
+
+	events := make([]messages.LoopEventPayload, messages.MaxLoopEventsPerWake+1)
+	for i := range events {
+		events[i] = messages.LoopEventPayload{
+			Source: "test",
+			Type:   "item",
+			ID:     "event",
+		}
+	}
+	summary := FormatNotifyEnvelopes([]messages.Envelope{{
+		From: messages.Identity{Kind: messages.IdentitySystem, Name: "tester"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   "curator",
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+		Payload: messages.LoopNotifyPayload{
+			Kind:    "event_source",
+			Message: "derived event summary",
+			Events:  events,
+		},
+	}})
+
+	if !strings.Contains(summary, `"events_truncated":true`) {
+		t.Fatalf("summary missing truncation flag: %s", summary)
+	}
+	if !strings.Contains(summary, `"events_total":51`) {
+		t.Fatalf("summary missing total count: %s", summary)
+	}
+	if !strings.Contains(summary, `"events_shown":50`) {
+		t.Fatalf("summary missing shown count: %s", summary)
+	}
+	if strings.Contains(summary, "derived event summary") {
+		t.Fatalf("summary should omit derived message when structured events are present: %s", summary)
+	}
+}
+
 func TestLoopNotifyQueueBounded(t *testing.T) {
 	t.Parallel()
 

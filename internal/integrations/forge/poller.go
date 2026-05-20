@@ -92,24 +92,18 @@ func (p *SubscriptionPoller) CheckSubscriptions(ctx context.Context) (int, error
 			}
 			continue
 		}
-		if err := p.dispatchEvents(ctx, sub, events); err != nil {
-			p.logger.Warn("forge subscription wake failed",
+		delivered, err := p.dispatchEventBatches(ctx, sub, updated, events)
+		eventWakeCount += delivered
+		if err != nil {
+			p.logger.Warn("forge subscription event batch failed",
 				"subscription_id", sub.ID,
 				"account", sub.Account,
 				"repo", sub.Repo,
+				"delivered_events", delivered,
 				"error", err,
 			)
 			continue
 		}
-		if err := p.store.Update(updated); err != nil {
-			p.logger.Warn("forge subscription update failed after wake",
-				"subscription_id", sub.ID,
-				"account", sub.Account,
-				"repo", sub.Repo,
-				"error", err,
-			)
-		}
-		eventWakeCount += len(events)
 	}
 
 	if summary != nil {
@@ -196,6 +190,30 @@ func (p *SubscriptionPoller) checkSubscription(ctx context.Context, sub ProjectS
 	return sub, events, newReleaseCount, newCommitCount, nil
 }
 
+func (p *SubscriptionPoller) dispatchEventBatches(ctx context.Context, sub, final ProjectSubscription, events []messages.LoopEventPayload) (int, error) {
+	progress := initialBatchProgress(sub, final, events)
+	delivered := 0
+
+	for end := len(events); end > 0; end -= messages.MaxLoopEventsPerWake {
+		start := end - messages.MaxLoopEventsPerWake
+		if start < 0 {
+			start = 0
+		}
+		chunk := events[start:end]
+		if err := p.dispatchEvents(ctx, sub, chunk); err != nil {
+			return delivered, err
+		}
+		delivered += len(chunk)
+
+		progress = advanceSubscriptionProgress(progress, chunk)
+		if err := p.store.Update(progress); err != nil {
+			return delivered, fmt.Errorf("update forge subscription after event batch: %w", err)
+		}
+	}
+
+	return delivered, nil
+}
+
 func (p *SubscriptionPoller) dispatchEvents(ctx context.Context, sub ProjectSubscription, events []messages.LoopEventPayload) error {
 	env, err := messages.NewEventSourceEnvelope(
 		messages.Identity{Kind: messages.IdentitySystem, Name: "forge_subscription_poller"},
@@ -208,6 +226,62 @@ func (p *SubscriptionPoller) dispatchEvents(ctx context.Context, sub ProjectSubs
 	}
 	_, err = p.bus.Send(ctx, env)
 	return err
+}
+
+func initialBatchProgress(sub, final ProjectSubscription, events []messages.LoopEventPayload) ProjectSubscription {
+	progress := sub
+	progress.LastChecked = final.LastChecked
+	hasReleaseEvents := false
+	hasCommitEvents := false
+	for _, event := range events {
+		switch event.Type {
+		case "release":
+			hasReleaseEvents = true
+		case "commit":
+			hasCommitEvents = true
+		}
+	}
+	if !hasReleaseEvents {
+		progress.LastRelease = final.LastRelease
+		progress.LatestRelease = final.LatestRelease
+	}
+	if !hasCommitEvents {
+		progress.LastCommit = final.LastCommit
+		progress.LatestCommit = final.LatestCommit
+	}
+	return progress
+}
+
+func advanceSubscriptionProgress(sub ProjectSubscription, events []messages.LoopEventPayload) ProjectSubscription {
+	releaseSeen := false
+	commitSeen := false
+	for _, event := range events {
+		switch event.Type {
+		case "release":
+			if releaseSeen {
+				continue
+			}
+			marker := event.Metadata["release_marker"]
+			if marker == "" {
+				marker = event.ID
+			}
+			sub.LastRelease = marker
+			sub.LatestRelease = event.Title
+			releaseSeen = true
+		case "commit":
+			if commitSeen {
+				continue
+			}
+			sha := event.Metadata["sha"]
+			if sha == "" {
+				sha = event.ID
+			}
+			sub.LastCommit = sha
+			sub.LatestCommit = event.Title
+			commitSeen = true
+		}
+	}
+	return sub
 }
 
 // collectNewReleases returns releases newer than the prior marker.
