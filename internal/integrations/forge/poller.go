@@ -11,6 +11,16 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
+// forgePollFetchLimit caps how many releases/commits the poller asks
+// the provider for per repository per poll. The github.com upstream
+// already clamps to 100; using the same value here keeps the API call
+// cost predictable while giving substantial headroom over the prior
+// 20-item ceiling. If a repository sees more than this many new events
+// between polls, the older events at the back of the page are lost when
+// the high-water mark advances — collectNewReleases/Commits surface that
+// case so checkSubscription can log a warning.
+const forgePollFetchLimit = 100
+
 // SubscriptionPoller checks followed forge projects for new releases and
 // commits, then wakes the loop declared by each subscription.
 type SubscriptionPoller struct {
@@ -130,11 +140,21 @@ func (p *SubscriptionPoller) checkSubscription(ctx context.Context, sub ProjectS
 	newCommitCount := 0
 
 	if sub.TrackReleases {
-		releases, err := provider.ListReleases(ctx, sub.Repo, 20)
+		releases, err := provider.ListReleases(ctx, sub.Repo, forgePollFetchLimit)
 		if err != nil {
 			return sub, nil, 0, 0, err
 		}
-		newReleases := collectNewReleases(releases, sub.LastRelease, cutoff)
+		newReleases, truncated := collectNewReleases(releases, sub.LastRelease, cutoff)
+		if truncated {
+			p.logger.Warn("forge release poll may have missed events",
+				"subscription_id", sub.ID,
+				"account", sub.Account,
+				"repo", sub.Repo,
+				"prior_marker", sub.LastRelease,
+				"fetched", len(releases),
+				"reason", "prior release marker not found within fetch window; older events beyond the page are unreachable without API pagination",
+			)
+		}
 		newReleaseCount = len(newReleases)
 		for _, release := range newReleases {
 			events = append(events, releaseEvent(sub, release))
@@ -146,11 +166,22 @@ func (p *SubscriptionPoller) checkSubscription(ctx context.Context, sub ProjectS
 	}
 
 	if sub.TrackCommits {
-		commits, err := provider.ListCommits(ctx, sub.Repo, sub.Branch, 20)
+		commits, err := provider.ListCommits(ctx, sub.Repo, sub.Branch, forgePollFetchLimit)
 		if err != nil {
 			return sub, nil, 0, 0, err
 		}
-		newCommits := collectNewCommits(commits, sub.LastCommit, cutoff)
+		newCommits, truncated := collectNewCommits(commits, sub.LastCommit, cutoff)
+		if truncated {
+			p.logger.Warn("forge commit poll may have missed events",
+				"subscription_id", sub.ID,
+				"account", sub.Account,
+				"repo", sub.Repo,
+				"branch", sub.Branch,
+				"prior_marker", sub.LastCommit,
+				"fetched", len(commits),
+				"reason", "prior commit marker not found within fetch window; older commits beyond the page are unreachable without API pagination",
+			)
+		}
 		newCommitCount = len(newCommits)
 		for _, commit := range newCommits {
 			events = append(events, commitEvent(sub, commit))
@@ -179,12 +210,18 @@ func (p *SubscriptionPoller) dispatchEvents(ctx context.Context, sub ProjectSubs
 	return err
 }
 
-func collectNewReleases(releases []*Release, marker string, cutoff time.Time) []*Release {
+// collectNewReleases returns releases newer than the prior marker.
+// truncated is true when a non-empty marker did not appear in the
+// fetched batch — meaning older releases may exist between the prior
+// marker and the oldest entry the poller saw, and those events are
+// lost when the high-water mark advances. The caller is expected to
+// surface that signal so missed events are at least observable.
+func collectNewReleases(releases []*Release, marker string, cutoff time.Time) ([]*Release, bool) {
 	if len(releases) == 0 {
-		return nil
+		return nil, false
 	}
 	if marker == "" {
-		return releasesAfter(releases, cutoff)
+		return releasesAfter(releases, cutoff), false
 	}
 
 	var out []*Release
@@ -197,17 +234,19 @@ func collectNewReleases(releases []*Release, marker string, cutoff time.Time) []
 		out = append(out, release)
 	}
 	if found {
-		return out
+		return out, false
 	}
-	return releasesAfter(releases, cutoff)
+	return releasesAfter(releases, cutoff), true
 }
 
-func collectNewCommits(commits []*Commit, marker string, cutoff time.Time) []*Commit {
+// collectNewCommits returns commits newer than the prior marker;
+// truncated has the same meaning as in collectNewReleases.
+func collectNewCommits(commits []*Commit, marker string, cutoff time.Time) ([]*Commit, bool) {
 	if len(commits) == 0 {
-		return nil
+		return nil, false
 	}
 	if marker == "" {
-		return commitsAfter(commits, cutoff)
+		return commitsAfter(commits, cutoff), false
 	}
 
 	var out []*Commit
@@ -220,9 +259,9 @@ func collectNewCommits(commits []*Commit, marker string, cutoff time.Time) []*Co
 		out = append(out, commit)
 	}
 	if found {
-		return out
+		return out, false
 	}
-	return commitsAfter(commits, cutoff)
+	return commitsAfter(commits, cutoff), true
 }
 
 func releasesAfter(releases []*Release, cutoff time.Time) []*Release {

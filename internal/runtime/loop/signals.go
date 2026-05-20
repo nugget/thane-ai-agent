@@ -18,6 +18,16 @@ import (
 // to drain it on the next iteration.
 const maxPendingNotifications = 8
 
+// maxNotifyEventsInSummary caps how many event-source events are
+// rendered into the model-facing notification summary per wake. A
+// high-volume producer (feed with a long backlog, repo with many
+// releases between polls) could otherwise blow up the next iteration's
+// prompt with thousands of entries. When the cap is hit, the summary
+// surfaces events_truncated/events_total/events_shown so the receiving
+// model knows it didn't see everything and can choose to drill in via
+// source-specific tools.
+const maxNotifyEventsInSummary = 50
+
 type pendingNotify struct {
 	Envelope        messages.Envelope
 	ForceSupervisor bool
@@ -132,7 +142,21 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 				view.Payload["force_supervisor"] = true
 			}
 			if len(payload.Events) > 0 {
-				view.Payload["events"] = payload.Events
+				// Bound the serialized events so a single wake from a
+				// high-volume source (a feed with a long backlog, a
+				// repo with many releases between polls) can't blow
+				// up the next iteration's prompt. Surface the
+				// truncation explicitly so the model can decide whether
+				// to drill in via source-specific tools when the wake
+				// looks larger than it can fully reason about.
+				if len(payload.Events) <= maxNotifyEventsInSummary {
+					view.Payload["events"] = payload.Events
+				} else {
+					view.Payload["events"] = payload.Events[:maxNotifyEventsInSummary]
+					view.Payload["events_truncated"] = true
+					view.Payload["events_total"] = len(payload.Events)
+					view.Payload["events_shown"] = maxNotifyEventsInSummary
+				}
 			}
 		}
 		views = append(views, view)

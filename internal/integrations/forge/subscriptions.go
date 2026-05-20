@@ -228,8 +228,17 @@ func (s *SubscriptionStore) read(id string) (ProjectSubscription, error) {
 	if err := json.Unmarshal([]byte(raw), &sub); err != nil {
 		return ProjectSubscription{}, fmt.Errorf("decode subscription %q: %w", id, err)
 	}
-	if sub.ID == "" {
+	// The store key is the source of truth for the subscription's
+	// identity. Reject — rather than silently accept — a stored
+	// payload whose subscription_id contradicts its key: that state
+	// is reachable only via corruption or a buggy writer, and
+	// continuing would let later Update calls write the modified
+	// record under a different key, orphaning the original entry.
+	switch {
+	case sub.ID == "":
 		sub.ID = id
+	case sub.ID != id:
+		return ProjectSubscription{}, fmt.Errorf("subscription %q stored with mismatched payload id %q", id, sub.ID)
 	}
 	if err := validateSubscription(sub); err != nil {
 		return ProjectSubscription{}, err

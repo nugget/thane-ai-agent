@@ -318,14 +318,25 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (*feedUpdate,
 		"new_count", len(newEntries),
 	)
 
-	// Format section for wake message. Trust zone is shown in brackets
-	// so the agent can adapt analysis depth per the wake prompt guidance.
-	// The feed_id is included so the agent can pass it to media_save_analysis
-	// for per-feed output_path resolution.
+	// Events are always built (the wake path consumes them via
+	// dispatchFeedEvents; even non-wake paths benefit from carrying
+	// them in feedUpdate for observability). The legacy formatted
+	// section string is only consumed by the !WakeConfigured && Notify
+	// branch in CheckFeeds, so skip the string-builder work when the
+	// section won't be read — for feeds with many entries this avoids
+	// non-trivial wasted formatting work each poll.
+	buildSection := !wakeConfigured && notify
 	var sb strings.Builder
 	events := make([]messages.LoopEventPayload, 0, len(newEntries))
 	for _, entry := range newEntries {
-		fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
+		if buildSection {
+			// Format section for wake message. Trust zone is shown in
+			// brackets so the agent can adapt analysis depth per the
+			// wake prompt guidance. The feed_id is included so the
+			// agent can pass it to media_save_analysis for per-feed
+			// output_path resolution.
+			fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
+		}
 		events = append(events, messages.LoopEventPayload{
 			Source:     "media_feed",
 			Type:       "feed_entry",
