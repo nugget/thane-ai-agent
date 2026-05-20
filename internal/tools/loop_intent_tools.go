@@ -17,12 +17,23 @@ import (
 // store, and launch helper into the intent-shaped loop creation tools.
 //
 // Intent-shaped tools form a thane_* family — verbs after the prefix
-// carry the lifecycle: thane_curate (recurring; this PR), thane_now
-// (sync; future), thane_assign (async one-shot; future), thane_wake
-// (poke an existing loop; future). Each tool constructs a Spec and
-// Launch on the caller's behalf from intent-shaped inputs, then
-// persists + launches through the same registry + reconcile + launch
-// path used by loop_definition_set and loop_definition_launch.
+// carry the lifecycle:
+//   - thane_now (sync delegate) — registered in app.initDelegation via
+//     delegate.NowToolHandler; not part of this package.
+//   - thane_assign (async one-shot delegate) — registered in
+//     app.initDelegation via delegate.AssignToolHandler; not part of
+//     this package.
+//   - thane_curate (recurring service loop) — registered below.
+//
+// External wakes to live loops are infrastructural rather than
+// tool-shaped: producer subsystems dispatch structured envelopes over
+// messages.Bus directly, and request_core_attention covers
+// loop → core/owner attention escalation.
+//
+// thane_curate constructs a Spec on the caller's behalf from intent-
+// shaped inputs, then persists + launches through the same registry +
+// reconcile + launch path used by loop_definition_set and
+// loop_definition_launch.
 type LoopIntentToolDeps struct {
 	DocTools         *documents.Tools
 	Registry         *looppkg.DefinitionRegistry

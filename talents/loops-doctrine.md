@@ -24,14 +24,14 @@ Pick by lifecycle:
   `journal` appends a dated entry each cycle; `maintain` rewrites the
   body each cycle. Future versions will accept a directory ref for
   tree-shaped collections.
-- `thane_wake(loop_id|name, message?)` — tap a sleeping or
-  already-running timer loop with one-shot context. Wakes immediately
-  if sleeping; queues for the next iteration if processing. Useful
-  for forcing the next iteration into supervisor mode or delivering
-  fresh context to a watcher.
 
-`notify_loop` is a deprecated alias that routes into the family.
-Prefer the family names directly.
+External wakes to running loops are infrastructural, not tool-shaped:
+producer subsystems (feed pollers, forge subscriptions, channel
+ingestion) dispatch structured event envelopes over the message bus to
+the loop named in their subscription's `wake_loop`. From inside a
+running service loop, use `set_next_sleep` to shorten its own cycle
+when it has learned something time-sensitive. To route a concern up to
+the core/owner loop, use `request_core_attention`.
 
 The lower-level definition and runtime tools remain available for
 inspection, control, and unusual launch shapes (event-driven,
@@ -55,7 +55,6 @@ now:
 - `set_next_sleep`
 - `spawn_loop`
 - `stop_loop`
-- `notify_loop`
 
 `spawn_loop` is for ad hoc work that should start immediately without
 first becoming part of the persistent loop-definition registry. Reach

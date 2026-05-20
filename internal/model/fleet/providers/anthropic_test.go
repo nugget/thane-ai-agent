@@ -136,8 +136,8 @@ func TestConvertToolsToAnthropic_StripsTopLevelCompositionKeywords(t *testing.T)
 		{
 			"type": "function",
 			"function": map[string]any{
-				"name":        "notify_loop",
-				"description": "Notify a loop",
+				"name":        "fixture_with_top_level_any_of",
+				"description": "Schema-translation fixture: top-level anyOf must be stripped, nested anyOf preserved.",
 				"parameters": map[string]any{
 					"type": "object",
 					"anyOf": []any{

@@ -189,10 +189,14 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 	return e, nil
 }
 
-// LoopNotifyPayload is the first concrete loop-notification payload shape.
-// Message preserves the legacy free-form notification body used by
-// thane_wake/notify_loop. The concern fields carry structured, core-mediated
-// attention requests from delegated or subsystem loops.
+// LoopNotifyPayload is the inter-loop signal payload shape. Kind
+// discriminates the producer category (for example "core_attention_request"
+// from request_core_attention, or structured event-source kinds dispatched
+// by producer subsystems over the bus). Message is a free-form rendered
+// summary some payload kinds populate for legacy renderers; the structured
+// fields (Concern, SuggestedAction, Context) carry the typed content used
+// by request_core_attention. ForceSupervisor asks the receiving loop's
+// next iteration to run in supervisor mode.
 type LoopNotifyPayload struct {
 	Kind            string `json:"kind,omitempty"`
 	Message         string `json:"message,omitempty"`
