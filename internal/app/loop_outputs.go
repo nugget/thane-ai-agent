@@ -48,19 +48,24 @@ type loopOutputJournal struct {
 	MaxWindows int    `json:"max_windows,omitempty"`
 }
 
+// hydrateLoopOutputs is the universal "make this spec runtime-ready"
+// pass. Despite the name (preserved for call-site stability), it now
+// wires both declared document outputs and per-loop focus-tag runtime
+// tools (watch_entity / unwatch_entity). Either step is a no-op when
+// the corresponding metadata is absent, so the same call works for
+// every spec the registry produces.
 func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
-	if len(spec.Outputs) == 0 {
-		return spec, nil
+	if len(spec.Outputs) > 0 {
+		if a == nil || a.documentStore == nil {
+			return looppkg.Spec{}, fmt.Errorf("loop %q declares outputs but managed document roots are not configured", spec.Name)
+		}
+		outputs := cloneLoopOutputs(spec.Outputs)
+		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
+		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
+			return renderLoopOutputContext(ctx, a.documentStore, outputs)
+		}
 	}
-	if a == nil || a.documentStore == nil {
-		return looppkg.Spec{}, fmt.Errorf("loop %q declares outputs but managed document roots are not configured", spec.Name)
-	}
-	outputs := cloneLoopOutputs(spec.Outputs)
-	spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
-	spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
-		return renderLoopOutputContext(ctx, a.documentStore, outputs)
-	}
-	return spec, nil
+	return a.hydrateLoopFocusTools(spec)
 }
 
 func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) []looppkg.RuntimeTool {
