@@ -301,15 +301,16 @@ Task next-run values include a model-facing delta.
 ## `thane_*` family — intent-shaped front door for "do work"
 
 Always-available (`thane_now`, `thane_assign`) plus loops-tagged
-(`thane_curate`, `thane_wake`). Pick by lifecycle. `notify_loop`
-remains as a deprecated alias that routes into the family.
+(`thane_curate`). Pick by lifecycle. External wakes to live loops are
+infrastructural rather than tool-shaped — producer subsystems dispatch
+structured envelopes over the message bus directly, and
+`request_core_attention` covers loop → core/owner attention escalation.
 
 | Tool | Lifecycle | Description |
 |------|-----------|-------------|
 | `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
 | `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
-| `thane_wake` | poke existing | Send a one-shot message envelope to a live timer loop, waking it or queueing for the next iteration. |
 
 `thane_now` and `thane_assign` accept `context_mode`. The default,
 `task`, gives the child run a compact
@@ -339,7 +340,6 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 | `loop_definition_launch` | Launch a persistent loop from a definition. |
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
-| `notify_loop` | DEPRECATED alias for `thane_wake`. |
 
 ## `mqtt` — wake subscriptions
 
