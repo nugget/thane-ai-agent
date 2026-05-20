@@ -63,6 +63,9 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 	if !wakeConfigured {
 		return "", fmt.Errorf("wake_loop is required")
 	}
+	if err := messages.VerifyLoopWakeTarget(wakeTarget, t.loopResolver); err != nil {
+		return "", err
+	}
 
 	provider, repo, acct, err := t.resolveAccountAndRepo(args)
 	if err != nil {

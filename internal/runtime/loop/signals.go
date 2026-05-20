@@ -109,7 +109,14 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			if strings.TrimSpace(payload.Kind) != "" {
 				view.Payload["kind"] = payload.Kind
 			}
-			if strings.TrimSpace(payload.Message) != "" {
+			// When structured Events are present, Message is a rendered
+			// summary of those same events (see RenderLoopEventSummary).
+			// Including both doubles the prompt footprint for every wake
+			// and risks very large prompts for high-volume sources. The
+			// structured Events are the authoritative form; the rendered
+			// Message exists for legacy renderers that don't know about
+			// Events, and those callers don't read this summary.
+			if strings.TrimSpace(payload.Message) != "" && len(payload.Events) == 0 {
 				view.Payload["message"] = payload.Message
 			}
 			if strings.TrimSpace(payload.Concern) != "" {

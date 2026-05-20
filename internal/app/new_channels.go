@@ -192,6 +192,7 @@ func (a *App) initChannels(s *newState) error {
 		forgeOpLog = forge.NewOperationLog()
 		forgeSubStore := forge.NewSubscriptionStore(a.opStore, a.logger, a.cfg.Forge.MaxSubscriptions)
 		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger, forgeSubStore)
+		forgeTools.SetLoopResolver(a.loopRegistry)
 		a.loop.Tools().SetForgeTools(forgeTools)
 
 		if a.cfg.Forge.SubscriptionCheckInterval > 0 {
@@ -565,6 +566,7 @@ func (a *App) initChannels(s *newState) error {
 	// are always registered so the agent can manage feeds. Feed polling
 	// is a separate concern controlled by FeedCheckInterval.
 	feedTools := media.NewFeedTools(a.opStore, a.logger, a.cfg.Media.MaxFeeds)
+	feedTools.SetLoopResolver(a.loopRegistry)
 	a.loop.Tools().SetMediaFeedTools(feedTools)
 
 	// --- Media analysis tools ---

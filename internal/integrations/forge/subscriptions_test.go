@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,5 +237,106 @@ func TestSubscriptionPollerDeliveryFailureKeepsHighWater(t *testing.T) {
 	}
 	if subs[0].LastRelease != "tag:v1.0.0" || subs[0].LastCommit != "oldsha" {
 		t.Fatalf("high-water markers advanced after failed wake: release=%q commit=%q", subs[0].LastRelease, subs[0].LastCommit)
+	}
+}
+
+// fakeLoopResolver is a minimal in-test implementation of
+// messages.LoopResolver for verifying wake-target existence checks
+// without standing up a real loop registry.
+type fakeLoopResolver struct {
+	names map[string]bool
+	ids   map[string]bool
+}
+
+func (f *fakeLoopResolver) LoopExistsByID(id string) bool  { return f.ids[id] }
+func (f *fakeLoopResolver) LoopExistsByName(n string) bool { return f.names[n] }
+func (f *fakeLoopResolver) KnownLoopNames() []string {
+	out := make([]string, 0, len(f.names))
+	for n := range f.names {
+		out = append(out, n)
+	}
+	return out
+}
+
+// TestHandleRepoFollowRejectsUnknownWakeTarget covers the existence
+// check: when a loop resolver is wired and the caller's wake_loop.name
+// doesn't resolve, the follow fails fast with an actionable error
+// rather than producing a permanent silent-drop on each poll cycle.
+func TestHandleRepoFollowRejectsUnknownWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+	tools.loopResolver = &fakeLoopResolver{
+		names: map[string]bool{"valid_loop": true},
+	}
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": true,
+		"wake_loop":      map[string]any{"name": "typo_loop"},
+	})
+	if err == nil {
+		t.Fatal("expected unknown wake_loop name to be rejected")
+	}
+	if !strings.Contains(err.Error(), "typo_loop") {
+		t.Errorf("error %q should name the unresolved target", err)
+	}
+	if !strings.Contains(err.Error(), "valid_loop") {
+		t.Errorf("error %q should list known loop names for the model to correct toward", err)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Errorf("subscription should not be persisted when wake_loop rejected, got %d", len(subs))
+	}
+}
+
+// TestHandleRepoFollowAcceptsKnownWakeTarget guards the positive case:
+// a wake_loop.name that resolves against the resolver succeeds.
+func TestHandleRepoFollowAcceptsKnownWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+	tools.loopResolver = &fakeLoopResolver{
+		names: map[string]bool{"my_curator": true},
+	}
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": true,
+		"wake_loop":      map[string]any{"name": "my_curator"},
+	})
+	if err != nil {
+		t.Fatalf("HandleRepoFollow: %v", err)
+	}
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Errorf("subscription should be persisted on resolved wake_loop, got %d", len(subs))
 	}
 }

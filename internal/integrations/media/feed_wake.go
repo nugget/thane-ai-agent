@@ -32,6 +32,17 @@ func parseFeedWakeTarget(raw any) (messages.LoopWakeTarget, bool, error) {
 }
 
 func storeFeedWakeTarget(state *opstate.Store, feedID string, target messages.LoopWakeTarget, configured bool) error {
+	// Always start by clearing the prior wake keys so a feed ID that
+	// previously had a wake target can't carry it through a re-follow
+	// that omits wake_loop (or a partial unfollow that left stragglers).
+	// Without this, storeFeedWakeTarget is a no-op when configured=false
+	// and the persisted target survives, routing events to a loop the
+	// caller didn't ask for.
+	for _, key := range feedWakeKeys(feedID) {
+		if err := state.Delete(feedNamespace, key); err != nil {
+			return fmt.Errorf("clear %s: %w", key, err)
+		}
+	}
 	if !configured {
 		return nil
 	}

@@ -84,6 +84,55 @@ func ParseLoopWakeTarget(raw any) (LoopWakeTarget, bool, error) {
 	}
 }
 
+// LoopResolver is the minimal contract a wake-target verifier needs from
+// the live loop registry. Defined here rather than in the loop package so
+// that ParseLoopWakeTarget and VerifyLoopWakeTarget callers can validate
+// targets without taking a direct dependency on the loop runtime.
+type LoopResolver interface {
+	// LoopExistsByID reports whether a live loop with the given ID is
+	// currently registered.
+	LoopExistsByID(loopID string) bool
+	// LoopExistsByName reports whether a live loop with the given name
+	// is currently registered.
+	LoopExistsByName(name string) bool
+	// KnownLoopNames returns the names of currently registered loops in
+	// stable order. Used to populate actionable error messages when a
+	// caller's wake target doesn't resolve.
+	KnownLoopNames() []string
+}
+
+// VerifyLoopWakeTarget checks that the target refers to a currently-running
+// loop. Returns nil on success, an actionable error otherwise. Callers
+// that accept a wake target from model input should call this after
+// ParseLoopWakeTarget and before persisting the subscription, so a
+// typo in name or loop_id is surfaced immediately rather than producing
+// a permanent silent-drop on every subsequent poll cycle.
+//
+// A nil resolver is treated as "verification disabled" — useful in
+// test harnesses or alternative wirings where the live registry is
+// unavailable. Callers that need verification must provide a resolver.
+func VerifyLoopWakeTarget(target LoopWakeTarget, resolver LoopResolver) error {
+	if resolver == nil {
+		return nil
+	}
+	loopID := strings.TrimSpace(target.LoopID)
+	name := strings.TrimSpace(target.Name)
+	switch {
+	case loopID != "":
+		if resolver.LoopExistsByID(loopID) {
+			return nil
+		}
+		return fmt.Errorf("wake_loop.loop_id %q does not match any running loop; known loop names: %v", loopID, resolver.KnownLoopNames())
+	case name != "":
+		if resolver.LoopExistsByName(name) {
+			return nil
+		}
+		return fmt.Errorf("wake_loop.name %q does not match any running loop; known loop names: %v", name, resolver.KnownLoopNames())
+	default:
+		return fmt.Errorf("wake_loop requires loop_id or name")
+	}
+}
+
 // NewEventSourceEnvelope constructs a loop signal envelope from structured
 // event-source records.
 func NewEventSourceEnvelope(from Identity, target LoopWakeTarget, source string, events []LoopEventPayload) (Envelope, error) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
@@ -21,6 +22,7 @@ type Tools struct {
 	opLog         *OperationLog
 	logger        *slog.Logger
 	subscriptions *SubscriptionStore
+	loopResolver  messages.LoopResolver
 }
 
 // NewTools creates forge tools backed by the given manager. The opLog
@@ -36,6 +38,15 @@ func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscripti
 		t.subscriptions = subscriptions[0]
 	}
 	return t
+}
+
+// SetLoopResolver wires the live loop registry into forge tools so
+// forge_repo_follow can verify a caller's wake_loop target resolves
+// before persisting the subscription. Without a resolver,
+// verification is skipped and typos in wake_loop.name/loop_id surface
+// only at delivery time (as a silent drop on each poll cycle).
+func (t *Tools) SetLoopResolver(resolver messages.LoopResolver) {
+	t.loopResolver = resolver
 }
 
 // recordOp logs a successful forge operation for context injection.

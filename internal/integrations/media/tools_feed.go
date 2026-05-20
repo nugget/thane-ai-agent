@@ -10,16 +10,18 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
 
 // FeedTools provides tool handlers and definitions for feed management.
 type FeedTools struct {
-	state    *opstate.Store
-	http     *http.Client
-	logger   *slog.Logger
-	maxFeeds int
+	state        *opstate.Store
+	http         *http.Client
+	logger       *slog.Logger
+	maxFeeds     int
+	loopResolver messages.LoopResolver
 }
 
 // NewFeedTools creates a FeedTools instance. The HTTP client is created
@@ -37,6 +39,15 @@ func NewFeedTools(state *opstate.Store, logger *slog.Logger, maxFeeds int) *Feed
 		logger:   logger,
 		maxFeeds: maxFeeds,
 	}
+}
+
+// SetLoopResolver wires the live loop registry into feed tools so
+// media_follow can verify a caller's wake_loop target resolves before
+// persisting the subscription. Without a resolver, verification is
+// skipped and typos in wake_loop.name/loop_id surface only at delivery
+// time (as a silent drop on each poll cycle).
+func (ft *FeedTools) SetLoopResolver(resolver messages.LoopResolver) {
+	ft.loopResolver = resolver
 }
 
 // feedID generates a short, deterministic ID from a feed URL.
@@ -67,6 +78,11 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		wakeTarget, wakeConfigured, err := parseFeedWakeTarget(args["wake_loop"])
 		if err != nil {
 			return "", fmt.Errorf("media_follow: %w", err)
+		}
+		if wakeConfigured {
+			if err := messages.VerifyLoopWakeTarget(wakeTarget, ft.loopResolver); err != nil {
+				return "", fmt.Errorf("media_follow: %w", err)
+			}
 		}
 
 		notify := true
