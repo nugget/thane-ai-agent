@@ -1376,6 +1376,21 @@ function buildAggregateStat(label, value, opts = {}) {
   return item;
 }
 
+function getLoopIterationElapsedMs(loop) {
+  if (!loop) return 0;
+  let started = Number(loop._iterStartTs || 0);
+  const lastWake = parseTimestamp(loop.last_wake_at);
+  if (!Number.isFinite(started) || started <= 0) {
+    started = lastWake ? lastWake.getTime() : 0;
+  }
+  let elapsed = started > 0 ? Date.now() - started : 0;
+  if ((!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 24 * 60 * 60 * 1000) && lastWake) {
+    elapsed = Date.now() - lastWake.getTime();
+  }
+  if (!Number.isFinite(elapsed) || elapsed < 0) return 0;
+  return elapsed;
+}
+
 function buildLiveCard(loop) {
   const card = document.createElement('div');
   card.className = 'iter-card iter-card--live' + (loop._supervisor ? ' iter-card--supervisor' : '');
@@ -1387,7 +1402,7 @@ function buildLiveCard(loop) {
   const elapsed = document.createElement('span');
   elapsed.className = 'iter-card__elapsed';
   elapsed.id = 'detail-elapsed';
-  elapsed.textContent = loop._iterStartTs ? formatDuration(Date.now() - loop._iterStartTs) : '0s';
+  elapsed.textContent = formatDuration(getLoopIterationElapsedMs(loop));
 
   const model = document.createElement('span');
   model.className = 'iter-card__model';

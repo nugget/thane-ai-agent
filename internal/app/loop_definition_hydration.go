@@ -136,6 +136,8 @@ func hydrateHAStateWatcherSpec(spec looppkg.Spec, watcher *homeassistant.StateWa
 	const haBatchWindow = 1 * time.Second
 	const haBatchMax = 100
 
+	policy := watcher.Policy()
+	spec.Metadata = haStateWatcherMetadata(policy.EntityGlobs, policy.RateLimitPerMinute, spec.Metadata)
 	haEvents := watcher.Events()
 	lastCleanup := time.Now()
 	spec.WaitFunc = func(wCtx context.Context) (any, error) {

@@ -47,6 +47,17 @@ func TestEntityFilter_EmptyMatchesAll(t *testing.T) {
 	}
 }
 
+func TestEntityFilter_PatternsReturnsCopy(t *testing.T) {
+	f := NewEntityFilter([]string{"person.*", "light.kitchen"}, nil)
+	got := f.Patterns()
+	got[0] = "changed"
+
+	again := f.Patterns()
+	if again[0] != "person.*" {
+		t.Fatalf("Patterns aliased internal slice: %v", again)
+	}
+}
+
 func TestEntityRateLimiter_Allow(t *testing.T) {
 	limiter := NewEntityRateLimiter(3)
 
@@ -75,6 +86,25 @@ func TestEntityRateLimiter_Disabled(t *testing.T) {
 		if !limiter.Allow("light.kitchen") {
 			t.Fatal("disabled limiter should always allow")
 		}
+	}
+}
+
+func TestStateWatcher_Policy(t *testing.T) {
+	filter := NewEntityFilter([]string{"person.*", "binary_sensor.*door*"}, nil)
+	limiter := NewEntityRateLimiter(12)
+	watcher := NewStateWatcher(nil, filter, limiter, nil, nil)
+
+	policy := watcher.Policy()
+	if policy.RateLimitPerMinute != 12 {
+		t.Fatalf("RateLimitPerMinute = %d, want 12", policy.RateLimitPerMinute)
+	}
+	if len(policy.EntityGlobs) != 2 || policy.EntityGlobs[0] != "person.*" || policy.EntityGlobs[1] != "binary_sensor.*door*" {
+		t.Fatalf("EntityGlobs = %#v, want configured globs", policy.EntityGlobs)
+	}
+
+	policy.EntityGlobs[0] = "changed"
+	if got := watcher.Policy().EntityGlobs[0]; got != "person.*" {
+		t.Fatalf("Policy aliased entity globs: %q", got)
 	}
 }
 

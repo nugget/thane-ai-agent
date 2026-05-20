@@ -28,7 +28,16 @@ func NewEntityFilter(globs []string, logger *slog.Logger) *EntityFilter {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &EntityFilter{patterns: globs, logger: logger}
+	return &EntityFilter{patterns: append([]string(nil), globs...), logger: logger}
+}
+
+// Patterns returns the glob patterns used by the filter. The returned
+// slice is a copy and can be mutated by callers.
+func (f *EntityFilter) Patterns() []string {
+	if f == nil {
+		return nil
+	}
+	return append([]string(nil), f.patterns...)
 }
 
 // Match reports whether the entity ID matches at least one pattern.
@@ -68,6 +77,15 @@ func NewEntityRateLimiter(perMinute int) *EntityRateLimiter {
 		window:   time.Minute,
 		counters: make(map[string][]time.Time),
 	}
+}
+
+// RateLimitPerMinute returns the configured per-entity event limit.
+// Zero means rate limiting is disabled.
+func (r *EntityRateLimiter) RateLimitPerMinute() int {
+	if r == nil {
+		return 0
+	}
+	return r.limit
 }
 
 // Allow reports whether a state change for the given entity should be
@@ -137,6 +155,17 @@ type StateWatcher struct {
 	logger  *slog.Logger
 }
 
+// StateWatchPolicy describes which Home Assistant state_changed events
+// the watcher accepts before dispatching them to runtime consumers.
+type StateWatchPolicy struct {
+	// EntityGlobs is the effective list of entity ID glob patterns.
+	// Empty means all state_changed events are accepted.
+	EntityGlobs []string `json:"entity_globs,omitempty"`
+	// RateLimitPerMinute is the per-entity event limit. Zero disables
+	// rate limiting.
+	RateLimitPerMinute int `json:"rate_limit_per_minute,omitempty"`
+}
+
 // NewStateWatcher creates a state watcher that consumes events from the
 // given channel. The filter and limiter control which events reach the
 // handler. A nil filter or limiter disables that stage.
@@ -156,6 +185,18 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 		limiter: limiter,
 		handler: handler,
 		logger:  logger,
+	}
+}
+
+// Policy returns the watcher's effective entity filter and rate limit
+// policy for inspection surfaces such as the dashboard.
+func (w *StateWatcher) Policy() StateWatchPolicy {
+	if w == nil {
+		return StateWatchPolicy{}
+	}
+	return StateWatchPolicy{
+		EntityGlobs:        w.filter.Patterns(),
+		RateLimitPerMinute: w.limiter.RateLimitPerMinute(),
 	}
 }
 

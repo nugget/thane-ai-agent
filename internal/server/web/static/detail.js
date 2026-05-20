@@ -10,6 +10,8 @@ const logBody = $('#log-body');
 const logsSection = $('#logs-section');
 const requestSection = $('#request-section');
 const logControlsRow = $('#log-controls-row');
+const inspector = $('#inspector');
+const resizeHandle = $('#popup-resize');
 const connDot = $('#conn-dot');
 const pollSlider = $('#poll-rate');
 const pollLabel = $('#poll-rate-label');
@@ -23,7 +25,10 @@ const forensics = {
   ids: $('#forensics-ids'),
   meta: $('#forensics-meta'),
   requestMeta: $('#forensics-request-meta'),
-  waterfallMeta: $('#forensics-waterfall-meta'),
+  scope: $('#forensics-scope'),
+  scopeMeta: $('#forensics-scope-meta'),
+  notebook: $('#forensics-notebook'),
+  notebookMeta: $('#forensics-notebook-meta'),
   empty: $('#forensics-empty'),
   content: $('#forensics-content'),
   waterfall: $('#forensics-waterfall'),
@@ -87,6 +92,7 @@ function openRegistryWindow(registry) {
 let logPollInterval = null;
 let activeRequestID = '';
 let activeRequestJSON = '';
+let activeRequestDetail = null;
 let pinnedRequestID = '';
 let followLatestRequest = true;
 let serverStartTime = null;
@@ -213,15 +219,16 @@ async function probeContentRetention() {
 
 function renderRequestDetailUnavailable(message, meta = '') {
   activeRequestJSON = '';
+  activeRequestDetail = null;
   if (forensics.ids) forensics.ids.innerHTML = '';
   if (forensics.meta) forensics.meta.innerHTML = '';
   if (forensics.requestMeta) {
     forensics.requestMeta.textContent = meta;
     forensics.requestMeta.classList.remove('forensics-card__meta--loading');
   }
-  if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
   if (forensics.empty) forensics.empty.textContent = message;
   setForensicsLoaded(false);
+  if (loopData) renderTraceNotebook(loopData);
   updateForensicsControls();
 }
 
@@ -371,6 +378,7 @@ async function fetchSystemLogs() {
 // ---------------------------------------------------------------------------
 
 let loopData = null;
+let allLoopStatuses = [];
 const sleepTimers = new Map();
 let iterationHistory = [];
 let loopEventSource = null;
@@ -380,6 +388,9 @@ function showLoopForensicsView() {
   if (requestSection) requestSection.hidden = false;
   if (logsSection) logsSection.hidden = true;
   if (logControlsRow) logControlsRow.hidden = true;
+  if (inspector) inspector.hidden = true;
+  if (resizeHandle) resizeHandle.hidden = true;
+  document.body.classList.remove('inspector-left');
   if (forensics.openRequest) forensics.openRequest.disabled = true;
 }
 
@@ -387,6 +398,8 @@ function showSystemLogsView() {
   if (requestSection) requestSection.hidden = true;
   if (logsSection) logsSection.hidden = false;
   if (logControlsRow) logControlsRow.hidden = false;
+  if (inspector) inspector.hidden = false;
+  if (resizeHandle) resizeHandle.hidden = false;
 }
 
 function getLatestLoopSnapshot() {
@@ -464,9 +477,948 @@ function renderForensicsCurrent(loop) {
   }
 }
 
+function getLoopConfig(loop) {
+  return (loop && loop.config && typeof loop.config === 'object') ? loop.config : {};
+}
+
+function getLoopMetadata(loop) {
+  const cfg = getLoopConfig(loop);
+  return (cfg.Metadata && typeof cfg.Metadata === 'object') ? cfg.Metadata : {};
+}
+
+function getConfigValue(cfg, name, fallback = '') {
+  if (!cfg || typeof cfg !== 'object') return fallback;
+  if (cfg[name] !== undefined && cfg[name] !== null && cfg[name] !== '') return cfg[name];
+  const lower = name.slice(0, 1).toLowerCase() + name.slice(1);
+  if (cfg[lower] !== undefined && cfg[lower] !== null && cfg[lower] !== '') return cfg[lower];
+  return fallback;
+}
+
+function parseMetadataList(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return Array.from(new Set(raw.filter(Boolean).map((v) => String(v).trim()).filter(Boolean)));
+  const text = String(raw).trim();
+  if (!text) return [];
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parseMetadataList(parsed);
+    } catch (_) {
+      // Fall through to delimiter parsing.
+    }
+  }
+  return Array.from(new Set(text.split(/[\n,;]/).map((v) => v.trim()).filter(Boolean)));
+}
+
+function isExactEntityPattern(value) {
+  return /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(String(value || ''));
+}
+
+function formatConfigDuration(raw) {
+  if (raw === null || raw === undefined || raw === '') return '';
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return formatDuration(raw / 1000000);
+  }
+  if (typeof raw === 'string') {
+    const ms = parseDuration(raw);
+    return ms > 0 ? formatDuration(ms) : raw;
+  }
+  return '';
+}
+
+function hasToolingDetails(tooling) {
+  return !!tooling && (
+    tooling.configuredTags.length > 0 ||
+    tooling.loadedTags.length > 0 ||
+    tooling.loadedCapabilities.length > 0 ||
+    tooling.effectiveTools.length > 0 ||
+    tooling.excludedTools.length > 0
+  );
+}
+
+function getLoopCurrentTooling(loop) {
+  const cfg = getLoopConfig(loop);
+  const liveTooling = normalizeTooling(loop && loop._llmContext && loop._llmContext.tooling, {
+    configuredTags: (loop && loop.tooling && loop.tooling.configured_tags) || [],
+    loadedTags: loop && loop._llmContext && loop._llmContext.active_tags,
+    effectiveTools: loop && loop._llmContext && loop._llmContext.effective_tools,
+    excludedTools: (loop && loop.tooling && loop.tooling.excluded_tools) || [],
+  });
+  const baseTooling = normalizeTooling(loop && loop.tooling, {
+    configuredTags: getConfigValue(cfg, 'Tags', []),
+    loadedTags: (loop && loop.active_tags) || [],
+    excludedTools: getConfigValue(cfg, 'ExcludeTools', []),
+  });
+  const latest = getLatestLoopSnapshot();
+  const latestTooling = normalizeTooling(latest && latest.tooling, {
+    configuredTags: baseTooling.configuredTags,
+    loadedTags: latest && latest.active_tags,
+    effectiveTools: latest && latest.effective_tools,
+    excludedTools: baseTooling.excludedTools,
+  });
+
+  if (hasToolingDetails(liveTooling)) return liveTooling;
+  if (hasToolingDetails(latestTooling)) return latestTooling;
+  return baseTooling;
+}
+
+function makeScopeSection(title) {
+  const section = document.createElement('section');
+  section.className = 'forensics-scope__section';
+  const heading = document.createElement('div');
+  heading.className = 'forensics-scope__title';
+  heading.textContent = title;
+  section.appendChild(heading);
+  return section;
+}
+
+function makeScopeChip(text, className = '') {
+  if (!text) return null;
+  const chip = document.createElement('span');
+  chip.className = 'forensics-scope__chip' + (className ? ' ' + className : '');
+  chip.textContent = text;
+  return chip;
+}
+
+function appendScopeChips(section, values, className = '') {
+  const valid = (values || []).filter(Boolean);
+  if (valid.length === 0) return false;
+  const row = document.createElement('div');
+  row.className = 'forensics-scope__chips';
+  for (const value of valid) {
+    const chip = makeScopeChip(value, className);
+    if (chip) row.appendChild(chip);
+  }
+  section.appendChild(row);
+  return true;
+}
+
+function appendCapabilityChips(section, entries) {
+  const valid = (entries || []).filter((entry) => entry && entry.tag);
+  if (valid.length === 0) return false;
+  const row = document.createElement('div');
+  row.className = 'forensics-scope__chips';
+  for (const entry of valid) {
+    const chip = makeScopeChip(entry.tag, 'forensics-scope__chip--active');
+    if (!chip) continue;
+    const desc = describeCapabilityEntry(entry);
+    if (desc) chip.title = desc;
+    row.appendChild(chip);
+  }
+  section.appendChild(row);
+  return true;
+}
+
+function renderLoopScope(loop) {
+  if (!forensics.scope) return;
+  const cfg = getLoopConfig(loop);
+  const meta = getLoopMetadata(loop);
+  const tooling = getLoopCurrentTooling(loop);
+  const operation = getConfigValue(cfg, 'Operation', '') || (loop.event_driven ? 'service' : '');
+  const completion = getConfigValue(cfg, 'Completion', '');
+  const outputs = Array.isArray(getConfigValue(cfg, 'Outputs', [])) ? getConfigValue(cfg, 'Outputs', []) : [];
+  const sleepMin = formatConfigDuration(getConfigValue(cfg, 'SleepMin', ''));
+  const sleepMax = formatConfigDuration(getConfigValue(cfg, 'SleepMax', ''));
+  const cadence = loop.event_driven
+    ? 'event driven'
+    : (sleepMin && sleepMax ? (sleepMin === sleepMax ? sleepMin : sleepMin + ' - ' + sleepMax) : 'timed');
+
+  forensics.scope.innerHTML = '';
+  if (forensics.scopeMeta) {
+    const bits = [
+      meta.subsystem || '',
+      meta.category || '',
+      operation ? formatSchemaToken(operation) : '',
+    ].filter(Boolean);
+    forensics.scopeMeta.textContent = bits.join(' · ');
+  }
+
+  const startedAt = parseTimestamp(loop.started_at);
+  const lastWake = parseTimestamp(loop.last_wake_at);
+  const totalTokens = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
+  const facts = makeIterationFacts([
+    { label: 'State', value: formatSchemaToken(loop.state || 'pending') },
+    { label: 'Operation', value: operation ? formatSchemaToken(operation) : '' },
+    { label: 'Completion', value: completion ? formatSchemaToken(completion) : '' },
+    { label: 'Cadence', value: cadence },
+    { label: 'Started', value: startedAt ? timeAgo(startedAt) : '' },
+    { label: 'Last wake', value: lastWake ? timeAgo(lastWake) : '' },
+    { label: 'Attempts', value: loop.attempts ? formatNumber(loop.attempts) : '0' },
+    { label: 'Total tokens', value: totalTokens > 0 ? formatTokens(totalTokens) : '' },
+  ]);
+  if (facts) forensics.scope.appendChild(facts);
+
+  const capabilitySection = makeScopeSection('Capabilities');
+  const renderedCapabilities = appendCapabilityChips(capabilitySection, tooling.loadedCapabilities);
+  const renderedConfigured = appendScopeChips(capabilitySection, tooling.configuredTags, '');
+  const renderedTools = tooling.effectiveTools.length > 0
+    ? appendScopeChips(capabilitySection, [formatNumber(tooling.effectiveTools.length) + ' tools in scope'])
+    : false;
+  if (renderedCapabilities || renderedConfigured || renderedTools) {
+    forensics.scope.appendChild(capabilitySection);
+  }
+
+  const entityGlobs = parseMetadataList(meta.entity_globs || meta.subscribed_entities || meta.entities);
+  if (entityGlobs.length > 0 || meta.subscription_event || meta.rate_limit_per_minute) {
+    const entitySection = makeScopeSection('Home Assistant Event Filter');
+    const exactEntities = entityGlobs.filter(isExactEntityPattern);
+    const globPatterns = entityGlobs.filter((value) => !isExactEntityPattern(value));
+    appendScopeChips(entitySection, exactEntities, 'forensics-scope__chip--entity');
+    appendScopeChips(entitySection, globPatterns.length > 0 ? globPatterns : (entityGlobs.length === 0 ? ['all entities'] : []), '');
+    const policyBits = [];
+    if (meta.subscription_event) policyBits.push('event ' + meta.subscription_event);
+    if (meta.rate_limit_per_minute && meta.rate_limit_per_minute !== '0') {
+      policyBits.push(meta.rate_limit_per_minute + '/min per entity');
+    } else if (meta.rate_limit_per_minute === '0') {
+      policyBits.push('no rate limit');
+    }
+    appendScopeChips(entitySection, policyBits, '');
+    forensics.scope.appendChild(entitySection);
+  }
+
+  if (outputs.length > 0) {
+    const outputSection = makeScopeSection('Declared Outputs');
+    appendScopeChips(outputSection, outputs.map((out) => out.name || out.Name || out.ref || out.Ref).filter(Boolean));
+    forensics.scope.appendChild(outputSection);
+  }
+}
+
+function getActiveRequestDetail() {
+  if (activeRequestDetail && activeRequestDetail.request_id === activeRequestID) {
+    return activeRequestDetail;
+  }
+  if (!activeRequestJSON) return null;
+  try {
+    const detail = JSON.parse(activeRequestJSON);
+    return detail && detail.request_id === activeRequestID ? detail : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function formatTraceJSON(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return '';
+    if (text.startsWith('{') || text.startsWith('[')) {
+      try {
+        return JSON.stringify(JSON.parse(text), null, 2);
+      } catch (_) {
+        return value;
+      }
+    }
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function summarizeTracePayload(value, max = 120) {
+  const text = formatTraceJSON(value).replace(/\s+/g, ' ').trim();
+  return text ? truncate(text, max) : '';
+}
+
+function appendTraceDisclosure(parent, label, value) {
+  const text = formatTraceJSON(value);
+  if (!text) return false;
+  const details = document.createElement('details');
+  details.className = 'trace-disclosure';
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  const pre = document.createElement('pre');
+  pre.textContent = text;
+  details.appendChild(summary);
+  details.appendChild(pre);
+  parent.appendChild(details);
+  return true;
+}
+
+function makeTraceChip(text, className = '') {
+  return makeTurnChip(text, className);
+}
+
+function buildTraceEvent(probe, title, meta, opts = {}) {
+  const event = document.createElement('article');
+  event.className = 'trace-event' + (opts.kind ? ' trace-event--' + opts.kind : '');
+  if (opts.title) event.title = opts.title;
+
+  const header = document.createElement('div');
+  header.className = 'trace-event__header';
+  const probeEl = document.createElement('span');
+  probeEl.className = 'trace-event__probe';
+  probeEl.textContent = probe;
+  const titleEl = document.createElement('div');
+  titleEl.className = 'trace-event__title';
+  titleEl.textContent = title;
+  header.appendChild(probeEl);
+  header.appendChild(titleEl);
+  event.appendChild(header);
+
+  if (meta) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'trace-event__meta';
+    metaEl.textContent = meta;
+    event.appendChild(metaEl);
+  }
+
+  const chips = (opts.chips || []).filter(Boolean);
+  if (chips.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'trace-event__chips';
+    for (const chip of chips) row.appendChild(chip);
+    event.appendChild(row);
+  }
+
+  if (opts.details && opts.details.length > 0) {
+    const body = document.createElement('div');
+    body.className = 'trace-event__details';
+    for (const detail of opts.details) {
+      appendTraceDisclosure(body, detail.label, detail.value);
+    }
+    if (body.children.length > 0) event.appendChild(body);
+  }
+
+  const actions = (opts.actions || []).filter(Boolean);
+  if (actions.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'trace-event__actions';
+    for (const action of actions) row.appendChild(action);
+    event.appendChild(row);
+  }
+
+  return event;
+}
+
+function makeTraceAction(label, title, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'btn btn--sm';
+  btn.type = 'button';
+  btn.textContent = label;
+  if (title) btn.title = title;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+function formatTraceTime(raw) {
+  const date = parseTimestamp(raw);
+  return date ? timeAgo(date) : '';
+}
+
+function getTraceChildLoops(loop) {
+  if (!loop) return [];
+  return (allLoopStatuses || [])
+    .filter((status) => status && status.parent_id === loop.id)
+    .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+}
+
+function upsertLoopStatusFromEvent(evt) {
+  const d = evt.data || {};
+  const id = d.loop_id;
+  if (!id) return null;
+  let status = allLoopStatuses.find((entry) => entry.id === id);
+  if (!status) {
+    status = {
+      id,
+      name: d.loop_name || id,
+      state: 'pending',
+      parent_id: d.parent_id || '',
+      iterations: 0,
+      attempts: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+    };
+    allLoopStatuses.push(status);
+  }
+  if (d.loop_name) status.name = d.loop_name;
+  if (d.parent_id !== undefined) status.parent_id = d.parent_id || '';
+  if (evt.kind === 'loop_started') {
+    status.state = status.state === 'pending' ? 'sleeping' : status.state;
+    status.started_at = evt.ts;
+  } else if (evt.kind === 'loop_state_change') {
+    status.state = d.to || status.state;
+  } else if (evt.kind === 'loop_iteration_start') {
+    status.state = 'processing';
+    status.last_wake_at = evt.ts;
+    status.attempts = d.attempt || status.attempts || 0;
+  } else if (evt.kind === 'loop_iteration_complete') {
+    status.iterations = (status.iterations || 0) + 1;
+    status.state = status.event_driven ? 'waiting' : status.state;
+    status.last_input_tokens = d.input_tokens || 0;
+    status.last_output_tokens = d.output_tokens || 0;
+    status.total_input_tokens = (status.total_input_tokens || 0) + (d.input_tokens || 0);
+    status.total_output_tokens = (status.total_output_tokens || 0) + (d.output_tokens || 0);
+    status.last_model = d.model || status.last_model || '';
+  } else if (evt.kind === 'loop_sleep_start') {
+    status.state = 'sleeping';
+  } else if (evt.kind === 'loop_wait_start') {
+    status.state = 'waiting';
+    status.event_driven = true;
+  } else if (evt.kind === 'loop_error') {
+    status.state = 'error';
+    status.last_error = d.error || status.last_error || '';
+  } else if (evt.kind === 'loop_stopped') {
+    status.state = 'stopped';
+    status.iterations = d.iterations || status.iterations || 0;
+    status.attempts = d.attempts || status.attempts || 0;
+  }
+  return status;
+}
+
+function openLoopForensics(loopID, loopName, target = '_self') {
+  if (!loopID) return;
+  const url = '/static/detail.html?type=loop&id=' + encodeURIComponent(loopID)
+    + '&name=' + encodeURIComponent(loopName || loopID);
+  if (target === '_blank') {
+    window.open(url, 'loop-' + loopID, 'popup=yes,width=1280,height=920');
+    return;
+  }
+  window.location.href = url;
+}
+
+function buildTraceToolEvent(tool) {
+  const name = tool.toolName || tool.tool_name || tool.tool || 'tool';
+  const isDelegate = isDelegateTool(name);
+  const status = tool.error ? 'error' : (tool.status || (tool.result ? 'done' : 'recorded'));
+  const parsed = isDelegate ? parseDelegateArgs(tool.arguments || tool.args) : {};
+  const title = isDelegate
+    ? name + ': ' + truncate(parsed.task || 'spawned work', 96)
+    : name;
+  const metaBits = [];
+  if (tool.iterationIndex || tool.iteration_index) metaBits.push('iteration #' + (tool.iterationIndex || tool.iteration_index));
+  const argSummary = summarizeTracePayload(tool.arguments || tool.args, 100);
+  if (argSummary && !isDelegate) metaBits.push(argSummary);
+  if (tool.error) metaBits.push(tool.error);
+  const chips = [
+    makeTraceChip(status, status === 'running' ? 'forensics-scope__chip--active' : ''),
+    isDelegate ? makeTraceChip(delegateToolLabel(name), 'forensics-scope__chip--active') : null,
+    tool.tool_call_id ? makeTraceChip('call ' + shortID(tool.tool_call_id)) : null,
+  ];
+  const details = [
+    { label: 'Arguments', value: tool.arguments || tool.args },
+    { label: tool.error ? 'Error' : 'Result', value: tool.error || tool.result },
+  ];
+  return buildTraceEvent(isDelegate ? 'loop:spawn' : 'tool:' + status, title, metaBits.join(' · '), {
+    kind: tool.error ? 'error' : (isDelegate ? 'branch' : 'tool'),
+    chips,
+    details,
+  });
+}
+
+function getNotebookRequestDetail(requestID) {
+  const detail = getActiveRequestDetail();
+  return detail && detail.request_id === requestID ? detail : null;
+}
+
+function makeNotebookCell(opts) {
+  const cell = document.createElement('article');
+  cell.className = 'trace-cell trace-cell--' + (opts.kind || 'past');
+
+  const rail = document.createElement('div');
+  rail.className = 'trace-cell__rail';
+  const dot = document.createElement('span');
+  dot.className = 'trace-cell__dot';
+  const ordinal = document.createElement('span');
+  ordinal.className = 'trace-cell__ordinal';
+  ordinal.textContent = opts.ordinal || '';
+  const time = document.createElement('span');
+  time.className = 'trace-cell__time';
+  time.textContent = opts.time || '';
+  rail.appendChild(dot);
+  rail.appendChild(ordinal);
+  rail.appendChild(time);
+  cell.appendChild(rail);
+
+  const body = document.createElement('div');
+  body.className = 'trace-cell__body';
+
+  const header = document.createElement('header');
+  header.className = 'trace-cell__header';
+  if (opts.eyebrow) {
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'trace-cell__eyebrow';
+    eyebrow.textContent = opts.eyebrow;
+    header.appendChild(eyebrow);
+  }
+
+  const heading = document.createElement('div');
+  heading.className = 'trace-cell__heading';
+  const title = document.createElement('h3');
+  title.className = 'trace-cell__title';
+  title.textContent = opts.title || '';
+  heading.appendChild(title);
+  if (opts.state) {
+    const state = document.createElement('span');
+    state.className = 'trace-cell__state trace-cell__state--' + (opts.stateKind || opts.kind || 'past');
+    state.textContent = opts.state;
+    heading.appendChild(state);
+  }
+  header.appendChild(heading);
+
+  if (opts.meta) {
+    const meta = document.createElement('div');
+    meta.className = 'trace-cell__meta';
+    meta.textContent = opts.meta;
+    header.appendChild(meta);
+  }
+
+  const chips = (opts.chips || []).filter(Boolean);
+  if (chips.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'trace-cell__chips';
+    for (const chip of chips) row.appendChild(chip);
+    header.appendChild(row);
+  }
+
+  body.appendChild(header);
+  cell.appendChild(body);
+  return { cell, body };
+}
+
+function makeNotebookSection(title, content) {
+  if (!content) return null;
+  const section = document.createElement('section');
+  section.className = 'trace-cell__section';
+  if (title) {
+    const label = document.createElement('div');
+    label.className = 'trace-cell__section-title';
+    label.textContent = title;
+    section.appendChild(label);
+  }
+  section.appendChild(content);
+  return section;
+}
+
+function makeNotebookEventList(events) {
+  const valid = (events || []).filter(Boolean);
+  if (valid.length === 0) return null;
+  const list = document.createElement('div');
+  list.className = 'trace-cell__events';
+  for (const event of valid) list.appendChild(event);
+  return list;
+}
+
+function appendNotebookSection(body, title, content) {
+  const section = makeNotebookSection(title, content);
+  if (section) body.appendChild(section);
+}
+
+function buildToolSummaryEvents(toolsUsed) {
+  if (!toolsUsed) return [];
+  return Object.entries(toolsUsed).map(([name, count]) => buildTraceEvent('tool:summary', name, formatNumber(count) + ' call' + (count === 1 ? '' : 's') + ' observed in this turn', {
+    kind: isDelegateTool(name) ? 'branch' : 'tool',
+    chips: [makeTraceChip('summary')],
+  }));
+}
+
+function appendNotebookToolSection(body, detail, fallbackTools, liveTools = []) {
+  const events = [];
+  for (const entry of liveTools || []) {
+    events.push(buildTraceToolEvent({
+      toolName: entry.tool,
+      status: entry.status || 'running',
+      arguments: entry.args,
+      result: entry.result,
+      error: entry.error,
+    }));
+  }
+  if (events.length === 0 && detail && Array.isArray(detail.tool_calls) && detail.tool_calls.length > 0) {
+    for (const toolCall of detail.tool_calls) {
+      events.push(buildTraceToolEvent(toolCall));
+    }
+  }
+  if (events.length === 0) {
+    events.push(...buildToolSummaryEvents(fallbackTools));
+  }
+  appendNotebookSection(body, 'Tool Calls', makeNotebookEventList(events));
+}
+
+function buildChildLoopEvent(child) {
+  const tokenTotal = (child.total_input_tokens || 0) + (child.total_output_tokens || 0);
+  const metaBits = [
+    formatSchemaToken(child.state || 'pending'),
+    child.iterations ? formatNumber(child.iterations) + ' turns' : '',
+    child.last_wake_at ? 'wake ' + formatTraceTime(child.last_wake_at) : '',
+    tokenTotal > 0 ? formatTokens(tokenTotal) + ' tokens' : '',
+  ].filter(Boolean);
+  const actions = [
+    makeTraceAction('Inspect', 'Navigate to child loop forensics', () => openLoopForensics(child.id, child.name, '_self')),
+    makeTraceAction('Pop out', 'Open child loop forensics in a new window', () => openLoopForensics(child.id, child.name, '_blank')),
+  ];
+  return buildTraceEvent('loop:child', child.name || shortID(child.id), metaBits.join(' · '), {
+    kind: child.state === 'error' ? 'error' : 'branch',
+    title: 'loop_id ' + child.id,
+    chips: [
+      makeTraceChip(formatSchemaToken(child.state || 'pending'), child.state === 'processing' ? 'forensics-scope__chip--active' : ''),
+      child.handler_only ? makeTraceChip('handler') : null,
+    ],
+    actions,
+  });
+}
+
+function buildDelegateSummaryEvent(dc) {
+  const metaBits = [
+    dc.profile || dc.mode || '',
+    dc.status || '',
+    dc.guidance || '',
+    dc.error || '',
+  ].filter(Boolean);
+  return buildTraceEvent('loop:spawn', truncate(dc.task || 'spawned work', 96), metaBits.join(' · '), {
+    kind: dc.status === 'error' ? 'error' : 'branch',
+    chips: [
+      dc.mode ? makeTraceChip(dc.mode, 'forensics-scope__chip--active') : null,
+      dc.tags && dc.tags.length > 0 ? makeTraceChip(formatNumber(dc.tags.length) + ' tags') : null,
+    ],
+  });
+}
+
+function appendNotebookSpawnedWork(body, loop, snap, includeLinkedChildren) {
+  const events = [];
+  if (snap && Array.isArray(snap.delegate_calls)) {
+    for (const dc of snap.delegate_calls) events.push(buildDelegateSummaryEvent(dc));
+  }
+  if (includeLinkedChildren) {
+    for (const child of getTraceChildLoops(loop)) events.push(buildChildLoopEvent(child));
+  }
+  appendNotebookSection(body, 'Spawned Work', makeNotebookEventList(events));
+}
+
+function makeNotebookStatus(text) {
+  if (!text) return null;
+  const status = document.createElement('div');
+  status.className = 'trace-cell__status';
+  status.textContent = text;
+  return status;
+}
+
+function appendNotebookAfterState(body, loop, prefix = 'Loop state') {
+  const next = describeNextTurn(loop);
+  appendNotebookSection(body, prefix, makeNotebookStatus(next.title + (next.meta ? ' · ' + next.meta : '')));
+}
+
+function appendNotebookEvidence(body, detail) {
+  if (!detail) return;
+  const evidence = document.createElement('div');
+  evidence.className = 'trace-cell__evidence';
+  appendTraceDisclosure(evidence, 'Retained request detail', detail);
+  appendNotebookSection(body, 'Raw Evidence', evidence.childElementCount > 0 ? evidence : null);
+}
+
+function loadNotebookRequestDetail(requestID) {
+  if (!requestID) return;
+  followLatestRequest = false;
+  pinnedRequestID = requestID;
+  syncLoopRequestDetail(true);
+}
+
+function detailHasModelExchange(detail) {
+  return !!(detail && (
+    detail.system_prompt
+    || (Array.isArray(detail.messages) && detail.messages.length > 0)
+    || detail.assistant_content
+    || detail.exhaust_reason
+  ));
+}
+
+function appendModelExchangeDisclosure(parent, label, value) {
+  if (value === null || value === undefined || value === '') return false;
+  return appendTraceDisclosure(parent, label, value);
+}
+
+function makeModelExchangeResponse(detail) {
+  if (!detail) return '';
+  if (detail.assistant_content) return detail.assistant_content;
+  if (detail.exhaust_reason) return 'No assistant content retained. Exhausted: ' + detail.exhaust_reason;
+  return '';
+}
+
+function makeLoadModelExchangePrompt(requestID) {
+  const wrap = document.createElement('div');
+  wrap.className = 'trace-cell__raw-prompt';
+
+  let statusText = 'Retained request detail is available on demand for this turn.';
+  if (activeRequestID === requestID) {
+    statusText = 'Loading retained request detail. This will expose the system prompt, Messages[] payload, and model response when available.';
+    if (requestDetailCooldown.requestID === requestID && Date.now() < requestDetailCooldown.until) {
+      statusText = requestDetailCooldown.status === 404
+        ? 'Retained request detail is not available for this turn.'
+        : requestDetailCooldown.status === 503
+          ? 'Request detail retention is disabled for this runtime.'
+          : 'Request detail failed to load for this turn.';
+    }
+  }
+  const status = makeNotebookStatus(statusText);
+  if (status) wrap.appendChild(status);
+
+  const actions = document.createElement('div');
+  actions.className = 'trace-cell__raw-actions';
+  actions.appendChild(makeTraceAction(
+    activeRequestID === requestID ? 'Reload raw exchange' : 'Load raw exchange',
+    'Load system prompt, Messages[] payload, and model response for this request',
+    () => loadNotebookRequestDetail(requestID),
+  ));
+  actions.appendChild(makeTraceAction(
+    'Open request window',
+    'Open retained request detail in a separate window',
+    () => openRequestWindow(requestID),
+  ));
+  wrap.appendChild(actions);
+  return wrap;
+}
+
+function appendNotebookModelExchange(body, requestID, detail) {
+  if (!requestID) return;
+  if (!detail || !detailHasModelExchange(detail)) {
+    appendNotebookSection(body, 'Raw Model Exchange', makeLoadModelExchangePrompt(requestID));
+    return;
+  }
+
+  const exchange = document.createElement('div');
+  exchange.className = 'trace-cell__evidence';
+  appendModelExchangeDisclosure(exchange, 'System Prompt', detail.system_prompt);
+  appendModelExchangeDisclosure(exchange, 'Messages[] Payload', Array.isArray(detail.messages) ? detail.messages : null);
+  appendModelExchangeDisclosure(exchange, 'Model Response', makeModelExchangeResponse(detail));
+  if (exchange.childElementCount === 0) {
+    exchange.appendChild(makeNotebookStatus('Request detail loaded, but no raw prompt, Messages[], or model response was retained for this request.'));
+  }
+  appendNotebookSection(body, 'Raw Model Exchange', exchange);
+}
+
+function buildLiveNotebookCell(loop) {
+  const ctx = loop._llmContext || {};
+  const requestID = loop._currentRequestID || ctx.request_id || '';
+  const detail = getNotebookRequestDetail(requestID);
+  const tooling = normalizeTooling(ctx.tooling, {
+    configuredTags: loop.tooling && loop.tooling.configured_tags,
+    loadedTags: Array.isArray(ctx.active_tags) && ctx.active_tags.length > 0 ? ctx.active_tags : loop.active_tags,
+    effectiveTools: ctx.effective_tools,
+    excludedTools: loop.tooling && loop.tooling.excluded_tools,
+  });
+  const elapsed = formatDuration(getLoopIterationElapsedMs(loop));
+  const metaBits = [];
+  if (elapsed) metaBits.push('running ' + elapsed);
+  if (loop._liveModel || ctx.model) metaBits.push('sampling on ' + shortModelName(loop._liveModel || ctx.model));
+  if (ctx.est_tokens) metaBits.push('~' + formatTokens(ctx.est_tokens) + ' context tokens');
+  if (ctx.tools) metaBits.push(formatNumber(ctx.tools) + ' tools offered');
+
+  const { cell, body } = makeNotebookCell({
+    kind: 'live',
+    ordinal: 'now',
+    time: elapsed,
+    eyebrow: loop._supervisor ? 'Live supervisor iteration' : 'Live iteration',
+    title: 'Active model turn',
+    state: 'live',
+    stateKind: 'live',
+    meta: metaBits.join(' · ') || 'The loop is currently executing.',
+    chips: [
+      makeRequestTurnChip(requestID),
+      loop._liveModel ? makeTraceChip(shortModelName(loop._liveModel), 'forensics-scope__chip--active') : null,
+      tooling.loadedCapabilities.length > 0 ? makeTraceChip(formatNumber(tooling.loadedCapabilities.length) + ' capabilities') : null,
+      tooling.effectiveTools.length > 0 ? makeTraceChip(formatNumber(tooling.effectiveTools.length) + ' tools') : null,
+    ],
+  });
+
+  const scope = makeIterationScopePanel([
+    tooling.loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: tooling.loadedCapabilities, className: 'tag-chip tag-chip--active' }
+      : null,
+    tooling.effectiveTools.length > 0
+      ? { label: 'Tool surface', values: tooling.effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  appendNotebookSection(body, 'Scope', scope);
+  appendNotebookToolSection(body, detail, null, loop._liveTools || []);
+  appendNotebookSpawnedWork(body, loop, null, true);
+  appendNotebookAfterState(body, loop, 'After this turn');
+  appendNotebookModelExchange(body, requestID, detail);
+  appendNotebookEvidence(body, detail);
+  return cell;
+}
+
+function buildPastNotebookCell(loop, snap, isTop) {
+  const detail = getNotebookRequestDetail(snap.request_id);
+  const toolCount = countToolCalls(snap.tools_used);
+  const tooling = normalizeTooling(snap.tooling, {
+    loadedTags: Array.isArray(snap.active_tags) ? snap.active_tags : [],
+    effectiveTools: Array.isArray(snap.effective_tools) ? snap.effective_tools : [],
+    toolsUsed: snap.tools_used || null,
+  });
+  const metaBits = [];
+  if (snap.completed_at) metaBits.push(formatTraceTime(snap.completed_at));
+  if (snap.elapsed_ms) metaBits.push(formatDuration(snap.elapsed_ms));
+  if (snap.model) metaBits.push(shortModelName(snap.model));
+  if (snap.input_tokens || snap.output_tokens) {
+    metaBits.push(formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out');
+  }
+  if (toolCount > 0) metaBits.push(formatNumber(toolCount) + ' tool call' + (toolCount === 1 ? '' : 's'));
+  if (snap.error) metaBits.push(snap.error);
+
+  const { cell, body } = makeNotebookCell({
+    kind: snap.error ? 'issue' : (isTop ? 'recent' : 'past'),
+    ordinal: snap.number ? '#' + snap.number : 'turn',
+    time: snap.completed_at ? formatTimeShort(new Date(snap.completed_at)) : '',
+    eyebrow: isTop ? 'Most recent completed iteration' : 'Previous iteration',
+    title: snap.error ? 'Turn ended with an issue' : snap.supervisor ? 'Supervisor turn completed' : 'Model turn completed',
+    state: snap.error ? 'issue' : 'complete',
+    stateKind: snap.error ? 'issue' : 'complete',
+    meta: metaBits.join(' · '),
+    chips: [
+      makeRequestTurnChip(snap.request_id),
+      snap.model ? makeTraceChip(shortModelName(snap.model), snap.supervisor ? 'forensics-scope__chip--active' : '') : null,
+      snap.supervisor ? makeTraceChip('supervisor') : null,
+      tooling.loadedCapabilities.length > 0 ? makeTraceChip(formatNumber(tooling.loadedCapabilities.length) + ' capabilities') : null,
+    ],
+  });
+
+  const scope = makeIterationScopePanel([
+    tooling.loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: tooling.loadedCapabilities, className: 'tag-chip tag-chip--active' }
+      : null,
+    tooling.effectiveTools.length > 0
+      ? { label: 'Tool surface', values: tooling.effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  appendNotebookSection(body, 'Scope', scope);
+  appendNotebookToolSection(body, detail, snap.tools_used || tooling.toolsUsed);
+  appendNotebookSpawnedWork(body, loop, snap, isTop);
+  if (isTop) appendNotebookAfterState(body, loop, 'Current loop state');
+  appendNotebookModelExchange(body, snap.request_id, detail);
+  appendNotebookEvidence(body, detail);
+  return cell;
+}
+
+function buildStatusNotebookCell(loop) {
+  const next = describeNextTurn(loop);
+  const { cell, body } = makeNotebookCell({
+    kind: loop.state === 'error' ? 'issue' : 'status',
+    ordinal: 'state',
+    time: '',
+    eyebrow: 'No retained iteration yet',
+    title: next.title,
+    state: formatSchemaToken(loop.state || 'pending'),
+    stateKind: loop.state === 'error' ? 'issue' : 'complete',
+    meta: next.meta,
+    chips: [
+      makeTraceChip(formatSchemaToken(loop.state || 'pending')),
+      loop.event_driven ? makeTraceChip('event driven') : null,
+      loop.handler_only ? makeTraceChip('handler') : makeTraceChip('model loop'),
+    ],
+  });
+  appendNotebookSpawnedWork(body, loop, null, true);
+  return cell;
+}
+
+function renderTraceNotebook(loop) {
+  if (!forensics.notebook) return;
+  const history = Array.isArray(iterationHistory) ? iterationHistory : [];
+  const detail = getActiveRequestDetail();
+  const childCount = getTraceChildLoops(loop).length;
+  forensics.notebook.innerHTML = '';
+  if (forensics.notebookMeta) {
+    const bits = [];
+    if (loop.state === 'processing') bits.push('live');
+    if (history.length > 0) bits.push(formatNumber(history.length) + ' retained turns');
+    if (detail && detail.tool_calls) bits.push(formatNumber(detail.tool_calls.length) + ' retained tool records');
+    if (childCount > 0) bits.push(formatNumber(childCount) + ' child loop' + (childCount === 1 ? '' : 's'));
+    forensics.notebookMeta.textContent = bits.join(' · ') || 'awaiting first turn';
+  }
+
+  if (loop.state === 'processing') {
+    forensics.notebook.appendChild(buildLiveNotebookCell(loop));
+    for (const snap of history.slice(0, 7)) {
+      forensics.notebook.appendChild(buildPastNotebookCell(loop, snap, false));
+    }
+    return;
+  }
+
+  if (history.length > 0) {
+    for (const [index, snap] of history.slice(0, 8).entries()) {
+      forensics.notebook.appendChild(buildPastNotebookCell(loop, snap, index === 0));
+    }
+    return;
+  }
+
+  forensics.notebook.appendChild(buildStatusNotebookCell(loop));
+}
+
+function describeNextTurn(loop) {
+  const cfg = getLoopConfig(loop);
+  if (loop.state === 'processing') {
+    return {
+      title: 'After the active turn',
+      meta: 'The loop will compute its next sleep or wait state when this request completes.',
+    };
+  }
+  if (loop.state === 'waiting') {
+    return {
+      title: 'Next external event',
+      meta: loop.event_driven
+        ? 'The next turn starts when the subscribed event source delivers a matching payload.'
+        : 'The loop is waiting for its next trigger.',
+    };
+  }
+  if (loop.state === 'sleeping') {
+    const sleepTimer = sleepTimers.get(nodeId);
+    let title = 'Next scheduled wake';
+    if (sleepTimer && sleepTimer.durationMs > 0) {
+      const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt);
+      if (remaining > 0) title = 'Wakes in ' + formatDuration(remaining);
+    }
+    const supervisor = cfg.Supervisor && cfg.SupervisorProb > 0
+      ? Math.round(cfg.SupervisorProb * 100) + '% supervisor chance'
+      : '';
+    return {
+      title,
+      meta: supervisor || 'Normal model turn unless the loop adjusts its own sleep.',
+    };
+  }
+  if (loop.state === 'error') {
+    return {
+      title: 'Retry on next wake',
+      meta: loop.last_error || 'The next turn will retry after backoff or an external wake.',
+    };
+  }
+  return {
+    title: formatSchemaToken(loop.state || 'pending'),
+    meta: 'No future turn is currently scheduled by the dashboard snapshot.',
+  };
+}
+
+function makeTurnChip(text, className = '') {
+  const chip = makeScopeChip(text, className);
+  if (chip) chip.classList.add('trace-cell__chip');
+  return chip;
+}
+
+function makeRequestTurnChip(requestID) {
+  if (!requestID) return null;
+  const chip = makeTurnChip('req ' + shortID(requestID), 'forensics-scope__chip--entity');
+  if (!chip) return null;
+  chip.classList.add('trace-cell__chip--clickable');
+  chip.title = 'Click to inspect request\n' + requestID;
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (e.shiftKey) {
+      navigator.clipboard.writeText(requestID);
+      return;
+    }
+    if (typeof window.onRequestChipClick === 'function') {
+      window.onRequestChipClick(requestID);
+    }
+  });
+  return chip;
+}
+
 function setForensicsRequestLoading(requestID) {
   activeRequestID = requestID || '';
   activeRequestJSON = '';
+  activeRequestDetail = null;
   if (forensics.ids) {
     forensics.ids.innerHTML = '';
     if (requestID) {
@@ -483,24 +1435,20 @@ function setForensicsRequestLoading(requestID) {
     forensics.requestMeta.textContent = metaBits.join(' · ');
     forensics.requestMeta.classList.toggle('forensics-card__meta--loading', !!requestID);
   }
-  if (forensics.waterfallMeta) {
-    forensics.waterfallMeta.textContent = requestID ? 'Waiting for request detail' : '';
-  }
   if (forensics.empty) {
     forensics.empty.textContent = requestID
       ? 'Loading request detail ' + shortID(requestID) + '…'
       : 'Waiting for the first request detail in this loop.';
   }
   setForensicsLoaded(false);
-  if (requestSection) {
-    requestSection.scrollTo({ top: 0, behavior: 'smooth' });
-  }
+  if (loopData) renderTraceNotebook(loopData);
 }
 
 async function fetchRequestDetailIntoForensics(requestID) {
   if (!requestID) {
     activeRequestID = '';
     activeRequestJSON = '';
+    activeRequestDetail = null;
     clearRequestDetailCooldown(requestID);
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
@@ -508,13 +1456,13 @@ async function fetchRequestDetailIntoForensics(requestID) {
       forensics.requestMeta.textContent = '';
       forensics.requestMeta.classList.remove('forensics-card__meta--loading');
     }
-    if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
     if (forensics.empty) {
       forensics.empty.textContent = loopData && loopData.state === 'processing'
         ? 'The loop is active, but request detail is still materializing for the current turn. Live tool and iteration telemetry stays in the sidebar until it is ready.'
         : 'Waiting for the first request detail in this loop.';
     }
     setForensicsLoaded(false);
+    if (loopData) renderTraceNotebook(loopData);
     updateForensicsControls();
     return;
   }
@@ -535,6 +1483,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
     if (!resp.ok) {
       activeRequestID = requestID;
       activeRequestJSON = '';
+      activeRequestDetail = null;
       if (resp.status === 503) {
         requestDetailAvailable = false;
       }
@@ -549,7 +1498,6 @@ async function fetchRequestDetailIntoForensics(requestID) {
             : 'Request detail failed (' + resp.status + ')';
         forensics.requestMeta.classList.remove('forensics-card__meta--loading');
       }
-      if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
       if (forensics.empty) {
         forensics.empty.textContent = resp.status === 404
           ? 'This request detail is no longer available. It may have been evicted from the live buffer, or archival content may not include this turn.'
@@ -558,6 +1506,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
             : 'Request detail failed to load.';
       }
       setForensicsLoaded(false);
+      if (loopData) renderTraceNotebook(loopData);
       updateForensicsControls();
       return;
     }
@@ -566,6 +1515,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
     const detailLooksFinal = !!(detail.assistant_content || detail.output_tokens > 0 || detail.exhausted);
     activeRequestID = requestID;
     activeRequestJSON = JSON.stringify(detail, null, 2);
+    activeRequestDetail = detail;
     clearRequestDetailCooldown(requestID);
     if (detailLooksFinal) {
       clearRecentlyCompletedRequest(requestID);
@@ -580,15 +1530,6 @@ async function fetchRequestDetailIntoForensics(requestID) {
       forensics.requestMeta.textContent = metaBits.join(' · ');
       forensics.requestMeta.classList.remove('forensics-card__meta--loading');
     }
-    if (forensics.waterfallMeta) {
-      const waterfallBits = [];
-      if (detail.tools_used && Object.keys(detail.tools_used).length > 0) {
-        waterfallBits.push(Object.entries(detail.tools_used).map(([name, count]) => `${name}×${count}`).join(' · '));
-      }
-      if (detail.exhausted) waterfallBits.push('exhausted');
-      forensics.waterfallMeta.textContent = waterfallBits.join(' · ');
-    }
-
     renderRequestDetail(detail, {
       ids: forensics.ids,
       meta: forensics.meta,
@@ -596,9 +1537,13 @@ async function fetchRequestDetailIntoForensics(requestID) {
       waterfall: forensics.waterfall,
     });
     setForensicsLoaded(true);
+    if (loopData) {
+      renderTraceNotebook(loopData);
+    }
     updateForensicsControls();
   } catch (err) {
     console.warn('Failed to fetch request detail:', err);
+    activeRequestDetail = null;
     rememberRequestDetailFailure(requestID, 0);
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
@@ -608,6 +1553,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
     }
     if (forensics.empty) forensics.empty.textContent = 'Request detail failed to load.';
     setForensicsLoaded(false);
+    if (loopData) renderTraceNotebook(loopData);
     updateForensicsControls();
   }
 }
@@ -621,12 +1567,12 @@ function syncLoopRequestDetail(force = false) {
   const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
 
   if (forensics.title) {
-    forensics.title.textContent = (loopData.name || nodeId.slice(0, 8)) + ' forensics';
+    forensics.title.textContent = (loopData.name || nodeId.slice(0, 8)) + ' trace';
   }
   if (forensics.subtitle) {
     const subtitleBits = [
-      followLatestRequest ? 'Following the latest request detail for this loop.' : 'Pinned to a specific request detail for comparison.',
-      loopData.state === 'processing' ? 'Live tool and iteration telemetry stays in the sidebar while the turn runs.' : '',
+      followLatestRequest ? 'Following live causality for this loop.' : 'Pinned to a specific request while live state continues updating.',
+      loopData.state === 'processing' ? 'Active tool calls and delegate branches update as events arrive.' : 'Latest retained turn remains the forensic anchor while the loop waits or sleeps.',
     ].filter(Boolean);
     forensics.subtitle.textContent = subtitleBits.join(' ');
   }
@@ -690,6 +1636,7 @@ function connectSSE() {
 
   es.addEventListener('snapshot', (e) => {
     const statuses = JSON.parse(e.data);
+    allLoopStatuses = statuses.map((status) => ({ ...status }));
     const match = statuses.find(s => s.id === nodeId);
     if (match) {
       // Seed iteration history from server-side ring buffer.
@@ -712,7 +1659,7 @@ function connectSSE() {
         match._currentRequestID = (match._llmContext && match._llmContext.request_id) || '';
       }
       loopData = match;
-      document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8)) + ' forensics';
+      document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8)) + ' trace';
       renderLoopDetail();
     }
     setConnStatus('ok', 'Connected \u2014 ' + formatTime(new Date()));
@@ -720,9 +1667,12 @@ function connectSSE() {
 
   es.addEventListener('loop', (e) => {
     const evt = JSON.parse(e.data);
+    const updatedStatus = upsertLoopStatusFromEvent(evt);
     if (evt.data && evt.data.loop_id === nodeId) {
       applyLoopEvent(evt);
       renderLoopDetail();
+    } else if (loopData && updatedStatus && updatedStatus.parent_id === nodeId) {
+      renderTraceNotebook(loopData);
     }
   });
 
@@ -765,7 +1715,7 @@ function applyLoopEvent(evt) {
 function renderLoopDetail() {
   if (!loopData) return;
 
-  document.title = 'Thane \u00b7 ' + (loopData.name || nodeId.slice(0, 8)) + ' forensics';
+  document.title = 'Thane \u00b7 ' + (loopData.name || nodeId.slice(0, 8)) + ' trace';
   $('#detail-name').textContent = loopData.name || loopData.id;
 
   const badge = $('#detail-state');
@@ -785,32 +1735,12 @@ function renderLoopDetail() {
 
   // Iteration timeline.
   renderTimeline(loopData, $('#detail-timeline'), iterationHistory, nodeId, sleepTimers);
+  renderLoopScope(loopData);
+  renderTraceNotebook(loopData);
   syncLoopRequestDetail();
   updatePopupFooter();
 
-  const liveTooling = normalizeTooling(loopData._llmContext && loopData._llmContext.tooling, {
-    configuredTags: loopData.tooling && loopData.tooling.configured_tags,
-    loadedTags: loopData._llmContext && loopData._llmContext.active_tags,
-    effectiveTools: loopData._llmContext && loopData._llmContext.effective_tools,
-    excludedTools: loopData.tooling && loopData.tooling.excluded_tools,
-  });
-  const baseTooling = normalizeTooling(loopData.tooling, {
-    configuredTags: (loopData.config && loopData.config.Tags) || [],
-    loadedTags: loopData.active_tags || [],
-    excludedTools: (loopData.config && loopData.config.ExcludeTools) || [],
-  });
-  const latest = getLatestLoopSnapshot();
-  const latestTooling = normalizeTooling(latest && latest.tooling, {
-    configuredTags: baseTooling.configuredTags,
-    loadedTags: latest && latest.active_tags,
-    effectiveTools: latest && latest.effective_tools,
-    excludedTools: baseTooling.excludedTools,
-  });
-  const currentTooling = (liveTooling.loadedTags.length > 0 || liveTooling.effectiveTools.length > 0 || liveTooling.loadedCapabilities.length > 0)
-    ? liveTooling
-    : ((latestTooling.loadedTags.length > 0 || latestTooling.effectiveTools.length > 0 || latestTooling.loadedCapabilities.length > 0)
-      ? latestTooling
-      : baseTooling);
+  const currentTooling = getLoopCurrentTooling(loopData);
   const tagsSection = $('#detail-tags');
   const tagsList = $('#detail-tags-list');
   const groups = makeIterationScopePanel([

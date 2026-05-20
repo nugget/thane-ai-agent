@@ -184,7 +184,9 @@ func TestHydrateLoopDefinitionSpec_HAStateWatcher(t *testing.T) {
 
 	eventsCh := make(chan homeassistant.Event, 1)
 	var handled int
-	watcher := homeassistant.NewStateWatcher(eventsCh, nil, nil, func(entityID, oldState, newState string) {
+	filter := homeassistant.NewEntityFilter([]string{"light.*", "person.dan"}, nil)
+	limiter := homeassistant.NewEntityRateLimiter(9)
+	watcher := homeassistant.NewStateWatcher(eventsCh, filter, limiter, func(entityID, oldState, newState string) {
 		handled++
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -195,6 +197,15 @@ func TestHydrateLoopDefinitionSpec_HAStateWatcher(t *testing.T) {
 	}
 	if spec.WaitFunc == nil || spec.Handler == nil {
 		t.Fatalf("hydrated spec = %+v, want WaitFunc and Handler", spec)
+	}
+	if spec.Metadata["subscription_event"] != "state_changed" {
+		t.Fatalf("subscription_event metadata = %q, want state_changed", spec.Metadata["subscription_event"])
+	}
+	if spec.Metadata["entity_globs"] != "light.*,person.dan" {
+		t.Fatalf("entity_globs metadata = %q, want light.*,person.dan", spec.Metadata["entity_globs"])
+	}
+	if spec.Metadata["rate_limit_per_minute"] != "9" {
+		t.Fatalf("rate_limit_per_minute metadata = %q, want 9", spec.Metadata["rate_limit_per_minute"])
 	}
 
 	payload, err := json.Marshal(homeassistant.StateChangedData{

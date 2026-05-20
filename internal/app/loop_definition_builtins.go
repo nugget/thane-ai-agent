@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,16 +46,15 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	if cfg.HomeAssistant.Configured() {
+		entityGlobs := append([]string(nil), cfg.HomeAssistant.Subscribe.EntityGlobs...)
+		entityGlobs = append(entityGlobs, cfg.Person.Track...)
 		specs = append(specs, looppkg.Spec{
 			Name:       haStateWatcherDefinitionName,
 			Enabled:    true,
 			Task:       "Watch Home Assistant state_changed events and feed ambient awareness state.",
 			Operation:  looppkg.OperationService,
 			Completion: looppkg.CompletionNone,
-			Metadata: map[string]string{
-				"subsystem": "homeassistant",
-				"category":  "watcher",
-			},
+			Metadata:   haStateWatcherMetadata(entityGlobs, cfg.HomeAssistant.Subscribe.RateLimitPerMinute, nil),
 		})
 	}
 
@@ -155,6 +155,23 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	return specs
+}
+
+func haStateWatcherMetadata(entityGlobs []string, rateLimitPerMinute int, base map[string]string) map[string]string {
+	metadata := make(map[string]string, len(base)+5)
+	for k, v := range base {
+		metadata[k] = v
+	}
+	if metadata["subsystem"] == "" {
+		metadata["subsystem"] = "homeassistant"
+	}
+	if metadata["category"] == "" {
+		metadata["category"] = "watcher"
+	}
+	metadata["subscription_event"] = "state_changed"
+	metadata["entity_globs"] = strings.Join(entityGlobs, ",")
+	metadata["rate_limit_per_minute"] = strconv.Itoa(rateLimitPerMinute)
+	return metadata
 }
 
 func appendMissingDefinition(base []looppkg.Spec, seen map[string]struct{}, spec looppkg.Spec) []looppkg.Spec {
