@@ -107,6 +107,9 @@ func TestLoopUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	if tool == nil {
+		t.Fatal("loop_update_entity_subscriptions not registered")
+	}
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"name": "no_such_loop",
 		"add":  []any{map[string]any{"entity_id": "sensor.foo"}},
@@ -144,6 +147,9 @@ func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutFocusTag(t *testing.T) 
 	}
 
 	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	if tool == nil {
+		t.Fatal("loop_update_entity_subscriptions not registered")
+	}
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"name": "tagless",
 		"add":  []any{map[string]any{"entity_id": "sensor.foo"}},
@@ -176,11 +182,55 @@ func TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 	}
 
 	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	if tool == nil {
+		t.Fatal("loop_update_entity_subscriptions not registered")
+	}
 	_, err := tool.Handler(context.Background(), map[string]any{"name": "loop_one"})
 	if err == nil {
 		t.Fatal("expected error for empty change-set")
 	}
 	if !strings.Contains(err.Error(), "add or remove") {
 		t.Errorf("error %q should mention add or remove", err)
+	}
+}
+
+// TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly guards
+// against the parseCurateEntities → parseEntityList rename: validation
+// errors raised while parsing the `add` parameter must refer to the
+// `add` field, not the curate-side `entities` field name.
+func TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
+	t.Parallel()
+	rig := newCurateTestRig(t)
+
+	if _, err := rig.tool.Handler(context.Background(), map[string]any{
+		"name":    "scope_test",
+		"intent":  "x",
+		"cadence": "hourly",
+		"output": map[string]any{
+			"mode":     "journal",
+			"document": "kb:scope.md",
+		},
+		"entities": []any{map[string]any{"entity_id": "sensor.seed"}},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	if tool == nil {
+		t.Fatal("loop_update_entity_subscriptions not registered")
+	}
+	// Trigger a missing-entity_id error inside add[0].
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"name": "scope_test",
+		"add":  []any{map[string]any{}},
+	})
+	if err == nil {
+		t.Fatal("expected validation error from add[0]")
+	}
+	if !strings.Contains(err.Error(), "add[") {
+		t.Errorf("error %q should be scoped to add[...] not entities[...]", err)
+	}
+	if strings.Contains(err.Error(), "entities[") {
+		t.Errorf("error %q leaks the curate-side field name into the update tool's error path", err)
 	}
 }

@@ -222,7 +222,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	guidance, _ := args["guidance"].(string)
 	replace, _ := args["replace"].(bool)
 
-	entities, err := parseCurateEntities(args["entities"])
+	entities, err := parseEntityList("entities", args["entities"])
 	if err != nil {
 		return "", err
 	}
@@ -398,16 +398,20 @@ type curateEntity struct {
 	TTLSeconds int
 }
 
-// parseCurateEntities decodes the "entities" parameter of thane_curate
-// into a typed list. Empty/missing returns nil. Invalid shapes return
-// an actionable error per the model-facing-tools doctrine.
-func parseCurateEntities(raw any) ([]curateEntity, error) {
+// parseEntityList decodes an entity-subscription array into a typed
+// list. fieldName is the caller-facing name of the parameter
+// (e.g. "entities" for thane_curate, "add" for
+// loop_update_entity_subscriptions) and is woven into every error
+// message so the model can see which argument failed validation.
+// Empty/missing returns nil. Invalid shapes return an actionable
+// error per the model-facing-tools doctrine.
+func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 	if raw == nil {
 		return nil, nil
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("entities must be an array of objects")
+		return nil, fmt.Errorf("%s must be an array of objects", fieldName)
 	}
 	if len(list) == 0 {
 		return nil, nil
@@ -417,15 +421,15 @@ func parseCurateEntities(raw any) ([]curateEntity, error) {
 	for i, item := range list {
 		obj, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("entities[%d] must be an object with at least an entity_id", i)
+			return nil, fmt.Errorf("%s[%d] must be an object with at least an entity_id", fieldName, i)
 		}
 		entityID, _ := obj["entity_id"].(string)
 		entityID = strings.TrimSpace(entityID)
 		if entityID == "" {
-			return nil, fmt.Errorf("entities[%d].entity_id is required", i)
+			return nil, fmt.Errorf("%s[%d].entity_id is required", fieldName, i)
 		}
 		if seen[entityID] {
-			return nil, fmt.Errorf("entities[%d] duplicates entity_id %q; each entity may appear at most once", i, entityID)
+			return nil, fmt.Errorf("%s[%d] duplicates entity_id %q; each entity may appear at most once", fieldName, i, entityID)
 		}
 		seen[entityID] = true
 
@@ -434,10 +438,10 @@ func parseCurateEntities(raw any) ([]curateEntity, error) {
 			for j, h := range rawHistory {
 				n, err := coerceInt(h)
 				if err != nil {
-					return nil, fmt.Errorf("entities[%d].history[%d]: %w", i, j, err)
+					return nil, fmt.Errorf("%s[%d].history[%d]: %w", fieldName, i, j, err)
 				}
 				if n <= 0 {
-					return nil, fmt.Errorf("entities[%d].history[%d]: window seconds must be > 0", i, j)
+					return nil, fmt.Errorf("%s[%d].history[%d]: window seconds must be > 0", fieldName, i, j)
 				}
 				ent.History = append(ent.History, n)
 			}
@@ -448,10 +452,10 @@ func parseCurateEntities(raw any) ([]curateEntity, error) {
 		if rawTTL, present := obj["ttl_seconds"]; present {
 			ttl, err := coerceInt(rawTTL)
 			if err != nil {
-				return nil, fmt.Errorf("entities[%d].ttl_seconds: %w", i, err)
+				return nil, fmt.Errorf("%s[%d].ttl_seconds: %w", fieldName, i, err)
 			}
 			if ttl < 0 {
-				return nil, fmt.Errorf("entities[%d].ttl_seconds: must be >= 0", i)
+				return nil, fmt.Errorf("%s[%d].ttl_seconds: must be >= 0", fieldName, i)
 			}
 			ent.TTLSeconds = ttl
 		}

@@ -98,9 +98,9 @@ func (r *Registry) handleLoopUpdateEntitySubscriptions(_ context.Context, args m
 		return "", fmt.Errorf("loop %q has no focus_tag; only loops created with thane_curate (or another tool that mints a focus_tag) support entity subscriptions", name)
 	}
 
-	addList, err := parseCurateEntities(args["add"])
+	addList, err := parseEntityList("add", args["add"])
 	if err != nil {
-		return "", fmt.Errorf("add: %w", err)
+		return "", err
 	}
 	removeList, err := parseRemoveEntityIDs(args["remove"])
 	if err != nil {
