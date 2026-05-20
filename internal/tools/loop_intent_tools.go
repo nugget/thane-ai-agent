@@ -65,7 +65,7 @@ func (r *Registry) registerThaneCurate() {
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, and the derived sleep_min/max/default cadence triple.",
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, and the derived sleep_min/max/default cadence triple.",
 		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -190,17 +190,20 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		}
 	}
 
+	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
+
 	jitterRatio := 0.1
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
-		Task:         buildCurateTask(intent, documentRef, outputMode, guidance),
+		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), guidance),
 		Operation:    looppkg.OperationService,
 		SleepMin:     cad.sleepMin,
 		SleepMax:     cad.sleepMax,
 		SleepDefault: cad.sleepDefault,
 		Jitter:       &jitterRatio,
 		Tags:         tags,
+		Outputs:      []looppkg.OutputSpec{outputSpec},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 		},
@@ -269,6 +272,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_definition_name": name,
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
+		"output_tool":          outputSpec.ToolName(),
 		"cadence": map[string]any{
 			"input":         cadenceInput,
 			"sleep_default": cad.sleepDefault.String(),
@@ -279,12 +283,35 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	})
 }
 
+// buildCurateOutputSpec converts the intent-shaped output argument into
+// a declared OutputSpec on the loop. Once declared, the hydration layer
+// generates a scoped mutation tool (replace_output_* / append_output_*)
+// and injects current-document context into each iteration prompt — so
+// the model gets a typed write surface and "what's already there?"
+// answered without re-reading the doc itself.
+func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.OutputSpec {
+	out := looppkg.OutputSpec{
+		Name:    name,
+		Ref:     docRef,
+		Purpose: intent,
+	}
+	switch outputMode {
+	case "journal":
+		out.Type = looppkg.OutputTypeJournalDocument
+		out.Mode = looppkg.OutputModeAppend
+	case "maintain":
+		out.Type = looppkg.OutputTypeMaintainedDocument
+		out.Mode = looppkg.OutputModeReplace
+	}
+	return out
+}
+
 // buildCurateTask renders the per-iteration task prompt for a
 // thane_curate-created loop. The model running each iteration sees the
-// intent, the document target, and the output mode, plus any caller
-// guidance. Kept short and shape-clear so the model can act without
-// re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, guidance string) string {
+// intent, the document target, the output mode, the scoped output tool
+// name, plus any caller guidance. Kept short and shape-clear so the
+// model can act without re-reading the loop's own definition.
+func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string) string {
 	var verb string
 	switch outputMode {
 	case "journal":
@@ -300,13 +327,24 @@ func buildCurateTask(intent, docRef, outputMode, guidance string) string {
 	sb.WriteString(verb)
 	sb.WriteString(" ")
 	sb.WriteString(docRef)
-	sb.WriteString(" with the current state. Use document mutation tools (")
-	if outputMode == "journal" {
-		sb.WriteString("doc_journal_update for the dated entry, doc_read to inspect existing entries")
-	} else {
-		sb.WriteString("doc_write to replace the body, doc_read to inspect the prior snapshot before rewriting")
+	sb.WriteString(" with the current state. Write through the declared output tool ")
+	sb.WriteString(outputToolName)
+	sb.WriteString(". ")
+	switch outputMode {
+	case "journal":
+		// Append-only: the recent tail in the context block is enough; the
+		// model never needs the full history to write a new entry.
+		sb.WriteString("Recent entries are surfaced in the Declared Durable Outputs context block above; no separate read is needed before appending.")
+	case "maintain":
+		// Complete-replacement: the context block shows the document head,
+		// possibly truncated at 16 KiB (see loopOutputContentBytes in
+		// app.loop_outputs). The model MUST notice the `truncated` flag and
+		// read the full document before replacing, or it will silently drop
+		// everything past the truncation boundary.
+		sb.WriteString("The current document body is shown in the Declared Durable Outputs context block above. If that entry is marked `truncated: true`, read the full document with doc_read before replacing — the output tool overwrites the entire body.")
+	default:
+		sb.WriteString("The document's current contents are surfaced in the Declared Durable Outputs context block above.")
 	}
-	sb.WriteString(").")
 	if strings.TrimSpace(guidance) != "" {
 		sb.WriteString("\n\nGuidance: ")
 		sb.WriteString(guidance)
