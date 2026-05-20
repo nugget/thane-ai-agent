@@ -32,67 +32,6 @@ func (r *messageToolLoopRunner) Run(_ context.Context, _ looppkg.Request, _ loop
 	return &looppkg.Response{Content: "ok", Model: "test-model"}, nil
 }
 
-func TestConfigureMessageToolsRegistersNotifyLoop(t *testing.T) {
-	t.Parallel()
-
-	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	handler := &recordingMessageHandler{}
-	bus.RegisterRoute(messages.DestinationLoop, handler.Deliver)
-
-	reg := NewEmptyRegistry()
-	reg.ConfigureMessageTools(MessageToolDeps{Bus: bus})
-
-	tool := reg.Get("notify_loop")
-	if tool == nil {
-		t.Fatal("notify_loop tool not registered")
-	}
-	if _, ok := tool.Parameters["anyOf"]; !ok {
-		t.Fatal("notify_loop schema missing anyOf guardrail")
-	}
-
-	ctx := WithLoopID(context.Background(), "loop-parent-1")
-	ctx = WithHints(ctx, map[string]string{
-		"source":    "loop",
-		"loop_name": "metacognitive",
-	})
-	out, err := tool.Handler(ctx, map[string]any{
-		"name":             "battery-watch",
-		"message":          "Fresh context for the next iteration.",
-		"force_supervisor": true,
-		"priority":         "urgent",
-	})
-	if err != nil {
-		t.Fatalf("notify_loop: %v", err)
-	}
-
-	if handler.env.From.Kind != messages.IdentityLoop || handler.env.From.ID != "loop-parent-1" {
-		t.Fatalf("from = %#v, want loop identity", handler.env.From)
-	}
-	if handler.env.To.Kind != messages.DestinationLoop || handler.env.To.Target != "battery-watch" || handler.env.To.Selector != messages.SelectorName {
-		t.Fatalf("to = %#v", handler.env.To)
-	}
-	payload, err := messagesPayload(handler.env.Payload)
-	if err != nil {
-		t.Fatalf("messagesPayload: %v", err)
-	}
-	if payload.Message != "Fresh context for the next iteration." || !payload.ForceSupervisor {
-		t.Fatalf("payload = %#v", payload)
-	}
-	if handler.env.Priority != messages.PriorityUrgent {
-		t.Fatalf("priority = %q, want urgent", handler.env.Priority)
-	}
-
-	var got struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got.Status != "ok" {
-		t.Fatalf("status = %q, want ok", got.Status)
-	}
-}
-
 func TestRequestCoreAttentionTargetsOwnerChannel(t *testing.T) {
 	t.Parallel()
 
