@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -12,6 +14,15 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
+
+// EntitySubscriptionStore is the narrow contract loop-intent tools need
+// from the entity-watchlist store. Defined here rather than imported
+// from state/awareness because that package transitively imports this
+// one (area_activity_tool.go); the interface inverts the dependency.
+type EntitySubscriptionStore interface {
+	AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error
+	RemoveAllForScope(scope string) error
+}
 
 // LoopIntentToolDeps wires the loop-definition registry, document
 // store, and launch helper into the intent-shaped loop creation tools.
@@ -40,6 +51,15 @@ type LoopIntentToolDeps struct {
 	PersistSpec      func(looppkg.Spec, time.Time) error
 	Reconcile        func(context.Context, string) error
 	LaunchDefinition func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
+	// WatchlistStore wires entity-subscription writes into thane_curate's
+	// entities parameter. Optional: when nil, the entities parameter is
+	// rejected and only the document/output side of the loop is set up.
+	WatchlistStore EntitySubscriptionStore
+	// RegisterTagProvider, if set, is invoked once after thane_curate
+	// adds entity subscriptions under a new focus tag so the tag-scoped
+	// context provider exists in the registry. Mirrors the TagRegistrar
+	// callback awareness.WatchlistTools uses.
+	RegisterTagProvider func(tag string)
 }
 
 // ConfigureLoopIntentTools registers the intent-shaped loop creation
@@ -65,8 +85,9 @@ func (r *Registry) registerThaneCurate() {
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, and the derived sleep_min/max/default cadence triple.",
-		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "replace"},
+			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop focus tag and surfaced into the loop's prompt automatically. " +
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the derived sleep_min/max/default cadence triple.",
+		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -106,6 +127,34 @@ func (r *Registry) registerThaneCurate() {
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
 					"description": "Optional capability tags scoping the loop's tool surface. Omit to use only always-active tags.",
+				},
+				"entities": map[string]any{
+					"type":        "array",
+					"description": "Optional Home Assistant entity subscriptions the loop should see in context every iteration. Each item declares an entity_id with optional history windows (seconds, e.g. [3600, 86400] for 1h and 1d summaries), weather forecast type for weather.* entities, and a ttl_seconds expiration. Subscriptions are persisted under a per-loop focus tag; you do not need to spell the tag.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"entity_id": map[string]any{
+								"type":        "string",
+								"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home).",
+							},
+							"history": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "integer"},
+								"description": "Optional historical context windows in seconds. Each window adds a compact summary of past state to context (e.g., [600, 3600, 86400] for 10min/1hr/1day).",
+							},
+							"forecast": map[string]any{
+								"type":        "string",
+								"enum":        []string{"daily", "hourly", "twice_daily", "none"},
+								"description": "For weather.* entities, fetch this HA forecast type each turn and include the compact forecast in context.",
+							},
+							"ttl_seconds": map[string]any{
+								"type":        "integer",
+								"description": "Optional expiration in seconds. After this TTL elapses, the subscription is auto-removed from future context injection.",
+							},
+						},
+						"required": []string{"entity_id"},
+					},
 				},
 				"guidance": map[string]any{
 					"type":        "string",
@@ -169,6 +218,14 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	guidance, _ := args["guidance"].(string)
 	replace, _ := args["replace"].(bool)
 
+	entities, err := parseCurateEntities(args["entities"])
+	if err != nil {
+		return "", err
+	}
+	if len(entities) > 0 && deps.WatchlistStore == nil {
+		return "", fmt.Errorf("entities provided but watchlist store is not configured")
+	}
+
 	cad, err := parseCadence(cadenceInput)
 	if err != nil {
 		return "", err
@@ -179,6 +236,11 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	// currentLoopDefinitionSnapshot, because the latter checks
 	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
 	// rather than the registry handle this tool was configured with.
+	//
+	// When replace=true and the prior spec has a focus_tag, reuse it
+	// so existing subscriptions are renormalized under a stable tag
+	// rather than orphaned under a stale one.
+	var existingFocusTag string
 	if snap := deps.Registry.Snapshot(); snap != nil {
 		if existing, ok := findLoopDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
@@ -187,10 +249,24 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			if !replace {
 				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 			}
+			existingFocusTag = strings.TrimSpace(existing.Spec.Metadata["focus_tag"])
+		}
+	}
+
+	focusTag := existingFocusTag
+	if focusTag == "" {
+		focusTag, err = newFocusTag()
+		if err != nil {
+			return "", fmt.Errorf("generate focus tag: %w", err)
 		}
 	}
 
 	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
+
+	// The focus tag is prepended to Spec.Tags so each iteration activates
+	// the loop-scoped watchlist provider without the caller having to
+	// repeat it. Caller-supplied tags follow.
+	finalTags := append([]string{focusTag}, tags...)
 
 	jitterRatio := 0.1
 	spec := looppkg.Spec{
@@ -202,8 +278,11 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		SleepMax:     cad.sleepMax,
 		SleepDefault: cad.sleepDefault,
 		Jitter:       &jitterRatio,
-		Tags:         tags,
+		Tags:         finalTags,
 		Outputs:      []looppkg.OutputSpec{outputSpec},
+		Metadata: map[string]string{
+			"focus_tag": focusTag,
+		},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 		},
@@ -243,6 +322,27 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	_ = docResult // discard structured result; we surface the ref directly
 
+	// Entity subscriptions: wipe-and-re-add under the focus tag. On a
+	// fresh create existingFocusTag is empty and wipe is a no-op; on
+	// replace=true we wipe the prior watch set before adding the new
+	// one so the loop never sees stale entities. Wipe runs even when
+	// the new entities list is empty (an explicit clear).
+	if deps.WatchlistStore != nil && (existingFocusTag != "" || len(entities) > 0) {
+		if existingFocusTag != "" {
+			if err := deps.WatchlistStore.RemoveAllForScope(focusTag); err != nil {
+				return "", fmt.Errorf("wipe prior entity subscriptions: %w", err)
+			}
+		}
+		for _, e := range entities {
+			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{focusTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
+				return "", fmt.Errorf("add entity subscription %q: %w", e.EntityID, err)
+			}
+		}
+		if deps.RegisterTagProvider != nil && len(entities) > 0 {
+			deps.RegisterTagProvider(focusTag)
+		}
+	}
+
 	// Persist + reconcile + launch. Mirrors handleLoopDefinitionSet +
 	// handleLoopDefinitionLaunch; collapsed here so the model only sees
 	// one round-trip for the intent.
@@ -273,6 +373,8 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
 		"output_tool":          outputSpec.ToolName(),
+		"focus_tag":            focusTag,
+		"entity_subscriptions": len(entities),
 		"cadence": map[string]any{
 			"input":         cadenceInput,
 			"sleep_default": cad.sleepDefault.String(),
@@ -281,6 +383,109 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		},
 		"warnings": warnings,
 	})
+}
+
+// curateEntity is the parsed shape of one element from the thane_curate
+// "entities" parameter. Fields mirror the watchlist subscription options.
+type curateEntity struct {
+	EntityID   string
+	History    []int
+	Forecast   string
+	TTLSeconds int
+}
+
+// parseCurateEntities decodes the "entities" parameter of thane_curate
+// into a typed list. Empty/missing returns nil. Invalid shapes return
+// an actionable error per the model-facing-tools doctrine.
+func parseCurateEntities(raw any) ([]curateEntity, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("entities must be an array of objects")
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := make([]curateEntity, 0, len(list))
+	seen := make(map[string]bool, len(list))
+	for i, item := range list {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("entities[%d] must be an object with at least an entity_id", i)
+		}
+		entityID, _ := obj["entity_id"].(string)
+		entityID = strings.TrimSpace(entityID)
+		if entityID == "" {
+			return nil, fmt.Errorf("entities[%d].entity_id is required", i)
+		}
+		if seen[entityID] {
+			return nil, fmt.Errorf("entities[%d] duplicates entity_id %q; each entity may appear at most once", i, entityID)
+		}
+		seen[entityID] = true
+
+		ent := curateEntity{EntityID: entityID}
+		if rawHistory, ok := obj["history"].([]any); ok {
+			for j, h := range rawHistory {
+				n, err := coerceInt(h)
+				if err != nil {
+					return nil, fmt.Errorf("entities[%d].history[%d]: %w", i, j, err)
+				}
+				if n <= 0 {
+					return nil, fmt.Errorf("entities[%d].history[%d]: window seconds must be > 0", i, j)
+				}
+				ent.History = append(ent.History, n)
+			}
+		}
+		if forecast, ok := obj["forecast"].(string); ok {
+			ent.Forecast = strings.TrimSpace(forecast)
+		}
+		if rawTTL, present := obj["ttl_seconds"]; present {
+			ttl, err := coerceInt(rawTTL)
+			if err != nil {
+				return nil, fmt.Errorf("entities[%d].ttl_seconds: %w", i, err)
+			}
+			if ttl < 0 {
+				return nil, fmt.Errorf("entities[%d].ttl_seconds: must be >= 0", i)
+			}
+			ent.TTLSeconds = ttl
+		}
+		out = append(out, ent)
+	}
+	return out, nil
+}
+
+func coerceInt(v any) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int64:
+		return int(n), nil
+	case float64:
+		// JSON decoders deliver every number as float64; reject any
+		// fractional value so callers see an actionable error instead
+		// of a silent truncation (e.g. 3600.5 quietly becoming 3600).
+		if n != float64(int64(n)) {
+			return 0, fmt.Errorf("must be an integer, got fractional value %v", n)
+		}
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("must be an integer, got %T", v)
+	}
+}
+
+// newFocusTag mints a fresh per-loop watchlist scope. The "loop:" prefix
+// is the load-bearing convention: API/UI layers filter for it to find
+// loop-owned subscriptions, capability-tag collisions are impossible
+// (no built-in tag contains a colon), and a human reading
+// list_context_entities knows at a glance which rows belong to a loop.
+func newFocusTag() (string, error) {
+	var buf [3]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return "loop:" + hex.EncodeToString(buf[:]), nil
 }
 
 // buildCurateOutputSpec converts the intent-shaped output argument into

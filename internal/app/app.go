@@ -46,6 +46,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
+	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -92,6 +93,7 @@ type App struct {
 	documentStore             *documents.Store
 	documentTools             *documents.Tools
 	contactStore              *contacts.Store
+	watchlistStore            *awareness.WatchlistStore
 	opStore                   *opstate.Store
 	modelPolicyStore          *modelPolicyStore
 	modelResourcePolicyStore  *modelResourcePolicyStore

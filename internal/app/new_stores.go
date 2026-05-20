@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -92,6 +93,17 @@ func (a *App) initStores(s *newState) error {
 	a.mem = mem
 	a.onCloseErr("memory", mem.Close)
 	logger.Info("memory database opened", "path", dbPath)
+
+	// --- Entity watchlist store ---
+	// Constructed early so later init phases (initChannels →
+	// ConfigureLoopIntentTools) can wire it into thane_curate for
+	// loop-owned entity subscriptions. The associated tag/always context
+	// providers are registered in initAwareness, which uses a.watchlistStore.
+	watchlistStore, err := awareness.NewWatchlistStore(a.mem.DB(), logger)
+	if err != nil {
+		return fmt.Errorf("watchlist store: %w", err)
+	}
+	a.watchlistStore = watchlistStore
 
 	// --- Home Assistant client ---
 	// Optional but central. Without it, HA-related tools are unavailable
