@@ -190,8 +190,18 @@ func (a *App) initChannels(s *newState) error {
 		}
 
 		forgeOpLog = forge.NewOperationLog()
-		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger)
+		forgeSubStore := forge.NewSubscriptionStore(a.opStore, a.logger, a.cfg.Forge.MaxSubscriptions)
+		forgeTools := forge.NewTools(a.forgeMgr, forgeOpLog, a.logger, forgeSubStore)
+		forgeTools.SetLoopResolver(a.loopRegistry)
 		a.loop.Tools().SetForgeTools(forgeTools)
+
+		if a.cfg.Forge.SubscriptionCheckInterval > 0 {
+			a.forgeSubPoller = forge.NewSubscriptionPoller(a.forgeMgr, forgeSubStore, a.messageBus, a.logger)
+			a.logger.Info("forge subscription polling enabled",
+				"interval", time.Duration(a.cfg.Forge.SubscriptionCheckInterval)*time.Second,
+				"max_subscriptions", a.cfg.Forge.MaxSubscriptions,
+			)
+		}
 
 		a.logger.Info("forge enabled", "accounts", len(a.cfg.Forge.Accounts))
 	} else {
@@ -556,6 +566,7 @@ func (a *App) initChannels(s *newState) error {
 	// are always registered so the agent can manage feeds. Feed polling
 	// is a separate concern controlled by FeedCheckInterval.
 	feedTools := media.NewFeedTools(a.opStore, a.logger, a.cfg.Media.MaxFeeds)
+	feedTools.SetLoopResolver(a.loopRegistry)
 	a.loop.Tools().SetMediaFeedTools(feedTools)
 
 	// --- Media analysis tools ---
@@ -582,7 +593,7 @@ func (a *App) initChannels(s *newState) error {
 	// The handler checks feeds against high-water marks and dispatches an
 	// agent conversation only when new content is detected.
 	if a.cfg.Media.FeedCheckInterval > 0 {
-		feedPoller := media.NewFeedPoller(a.opStore, a.logger)
+		feedPoller := media.NewFeedPoller(a.opStore, a.logger, media.WithFeedMessageBus(a.messageBus))
 		a.mediaFeedPoller = feedPoller
 
 		a.logger.Info("media feed polling enabled",

@@ -16,6 +16,12 @@ type mockProvider struct {
 	name string
 
 	// Return values for each method, set per-test.
+	getRepositoryResult    *Repository
+	getRepositoryErr       error
+	listReleasesResult     []*Release
+	listReleasesErr        error
+	listCommitsResult      []*Commit
+	listCommitsErr         error
 	createIssueResult      *Issue
 	createIssueErr         error
 	updateIssueResult      *Issue
@@ -66,6 +72,21 @@ func (m *mockProvider) record(method, repo string, args ...any) {
 }
 
 func (m *mockProvider) Name() string { return m.name }
+
+func (m *mockProvider) GetRepository(_ context.Context, repo string) (*Repository, error) {
+	m.record("GetRepository", repo)
+	return m.getRepositoryResult, m.getRepositoryErr
+}
+
+func (m *mockProvider) ListReleases(_ context.Context, repo string, limit int) ([]*Release, error) {
+	m.record("ListReleases", repo, limit)
+	return m.listReleasesResult, m.listReleasesErr
+}
+
+func (m *mockProvider) ListCommits(_ context.Context, repo, branch string, limit int) ([]*Commit, error) {
+	m.record("ListCommits", repo, branch, limit)
+	return m.listCommitsResult, m.listCommitsErr
+}
 
 func (m *mockProvider) CreateIssue(_ context.Context, repo string, issue *Issue) (*Issue, error) {
 	m.record("CreateIssue", repo, issue)

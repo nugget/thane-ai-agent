@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
@@ -17,20 +18,35 @@ import (
 // handled universally by the tool registry's ContentResolver before
 // handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager *Manager
-	opLog   *OperationLog
-	logger  *slog.Logger
+	manager       *Manager
+	opLog         *OperationLog
+	logger        *slog.Logger
+	subscriptions *SubscriptionStore
+	loopResolver  messages.LoopResolver
 }
 
 // NewTools creates forge tools backed by the given manager. The opLog
 // records successful operations for context injection; pass nil to
 // disable operation tracking.
-func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger) *Tools {
-	return &Tools{
+func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions ...*SubscriptionStore) *Tools {
+	t := &Tools{
 		manager: mgr,
 		opLog:   opLog,
 		logger:  logger,
 	}
+	if len(subscriptions) > 0 {
+		t.subscriptions = subscriptions[0]
+	}
+	return t
+}
+
+// SetLoopResolver wires the live loop registry into forge tools so
+// forge_repo_follow can verify a caller's wake_loop target resolves
+// before persisting the subscription. Without a resolver,
+// verification is skipped and typos in wake_loop.name/loop_id surface
+// only at delivery time (as a silent drop on each poll cycle).
+func (t *Tools) SetLoopResolver(resolver messages.LoopResolver) {
+	t.loopResolver = resolver
 }
 
 // recordOp logs a successful forge operation for context injection.

@@ -18,6 +18,12 @@ import (
 // to drain it on the next iteration.
 const maxPendingNotifications = 8
 
+// maxNotifyEventsInSummary caps how many event-source events are rendered into
+// the model-facing notification summary per wake. Source producers should
+// already obey messages.MaxLoopEventsPerWake; this remains a defensive cap for
+// hand-built LoopNotifyPayload values.
+const maxNotifyEventsInSummary = messages.MaxLoopEventsPerWake
+
 type pendingNotify struct {
 	Envelope        messages.Envelope
 	ForceSupervisor bool
@@ -104,12 +110,19 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			Priority: env.Priority,
 			Scope:    append([]string(nil), env.Scope...),
 		}
-		if payload.Kind != "" || strings.TrimSpace(payload.Message) != "" || strings.TrimSpace(payload.Concern) != "" || strings.TrimSpace(payload.SuggestedAction) != "" || strings.TrimSpace(payload.Context) != "" || payload.ForceSupervisor {
+		if payload.Kind != "" || strings.TrimSpace(payload.Message) != "" || strings.TrimSpace(payload.Concern) != "" || strings.TrimSpace(payload.SuggestedAction) != "" || strings.TrimSpace(payload.Context) != "" || payload.ForceSupervisor || len(payload.Events) > 0 {
 			view.Payload = map[string]any{}
 			if strings.TrimSpace(payload.Kind) != "" {
 				view.Payload["kind"] = payload.Kind
 			}
-			if strings.TrimSpace(payload.Message) != "" {
+			// When structured Events are present, Message is a rendered
+			// summary of those same events (see RenderLoopEventSummary).
+			// Including both doubles the prompt footprint for every wake
+			// and risks very large prompts for high-volume sources. The
+			// structured Events are the authoritative form; the rendered
+			// Message exists for legacy renderers that don't know about
+			// Events, and those callers don't read this summary.
+			if strings.TrimSpace(payload.Message) != "" && len(payload.Events) == 0 {
 				view.Payload["message"] = payload.Message
 			}
 			if strings.TrimSpace(payload.Concern) != "" {
@@ -123,6 +136,23 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 			}
 			if payload.ForceSupervisor {
 				view.Payload["force_supervisor"] = true
+			}
+			if len(payload.Events) > 0 {
+				// Bound the serialized events so a single wake from a
+				// high-volume source (a feed with a long backlog, a
+				// repo with many releases between polls) can't blow
+				// up the next iteration's prompt. Surface the
+				// truncation explicitly so the model can decide whether
+				// to drill in via source-specific tools when the wake
+				// looks larger than it can fully reason about.
+				if len(payload.Events) <= maxNotifyEventsInSummary {
+					view.Payload["events"] = payload.Events
+				} else {
+					view.Payload["events"] = payload.Events[:maxNotifyEventsInSummary]
+					view.Payload["events_truncated"] = true
+					view.Payload["events_total"] = len(payload.Events)
+					view.Payload["events_shown"] = maxNotifyEventsInSummary
+				}
 			}
 		}
 		views = append(views, view)

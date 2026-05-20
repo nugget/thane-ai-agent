@@ -198,10 +198,11 @@ func (e Envelope) Normalize(now time.Time) (Envelope, error) {
 // by request_core_attention. ForceSupervisor asks the receiving loop's
 // next iteration to run in supervisor mode.
 type LoopNotifyPayload struct {
-	Kind            string `json:"kind,omitempty"`
-	Message         string `json:"message,omitempty"`
-	Concern         string `json:"concern,omitempty"`
-	SuggestedAction string `json:"suggested_action,omitempty"`
-	Context         string `json:"context,omitempty"`
-	ForceSupervisor bool   `json:"force_supervisor,omitempty"`
+	Kind            string             `json:"kind,omitempty"`
+	Message         string             `json:"message,omitempty"`
+	Concern         string             `json:"concern,omitempty"`
+	SuggestedAction string             `json:"suggested_action,omitempty"`
+	Context         string             `json:"context,omitempty"`
+	ForceSupervisor bool               `json:"force_supervisor,omitempty"`
+	Events          []LoopEventPayload `json:"events,omitempty"`
 }

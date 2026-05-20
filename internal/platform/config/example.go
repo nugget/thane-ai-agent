@@ -299,6 +299,8 @@ func ExampleConfig() *Config {
 		},
 
 		Forge: forge.Config{
+			SubscriptionCheckInterval: 3600,
+			MaxSubscriptions:          50,
 			Accounts: []forge.AccountConfig{
 				{
 					Name:     "github",

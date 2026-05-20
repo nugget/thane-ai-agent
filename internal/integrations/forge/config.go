@@ -13,6 +13,13 @@ import (
 // Config holds all forge account configurations.
 type Config struct {
 	Accounts []AccountConfig `yaml:"accounts"`
+
+	// SubscriptionCheckInterval is how often (in seconds) to poll followed
+	// repositories for releases and commits. Zero disables polling.
+	SubscriptionCheckInterval int `yaml:"subscription_check_interval"`
+
+	// MaxSubscriptions limits runtime-managed repository event subscriptions.
+	MaxSubscriptions int `yaml:"max_subscriptions"`
 }
 
 // AccountConfig describes a single forge account.
@@ -50,6 +57,12 @@ func (c Config) Configured() bool {
 
 // Validate checks that the configuration is internally consistent.
 func (c Config) Validate() error {
+	if c.SubscriptionCheckInterval < 0 {
+		return fmt.Errorf("forge.subscription_check_interval must be >= 0")
+	}
+	if c.MaxSubscriptions < 0 {
+		return fmt.Errorf("forge.max_subscriptions must be >= 0")
+	}
 	seen := make(map[string]bool, len(c.Accounts))
 	for i, acct := range c.Accounts {
 		if acct.Name == "" {
@@ -75,6 +88,9 @@ func (c Config) Validate() error {
 
 // ApplyDefaults fills in missing optional fields with sensible values.
 func (c *Config) ApplyDefaults() {
+	if c.MaxSubscriptions == 0 {
+		c.MaxSubscriptions = 50
+	}
 	for i := range c.Accounts {
 		if c.Accounts[i].Provider == "github" && c.Accounts[i].URL == "" {
 			c.Accounts[i].URL = "https://api.github.com"

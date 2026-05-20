@@ -671,6 +671,8 @@ talents_dir: ./talents
 #       owner: your-username
 #       username: ""
 #       url: https://api.github.com
+#   subscription_check_interval: 3600
+#   max_subscriptions: 50
 #
 # (optional) Email configures native IMAP email access. When configured, Thane
 # email:

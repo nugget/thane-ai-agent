@@ -1,0 +1,469 @@
+package forge
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+)
+
+func newTestSubscriptionStore(t *testing.T) *SubscriptionStore {
+	t.Helper()
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	state, err := opstate.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("opstate.NewStore: %v", err)
+	}
+	return NewSubscriptionStore(state, slog.New(slog.NewTextHandler(io.Discard, nil)), 10)
+}
+
+func TestSubscriptionStoreRequiresWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	err := store.Add(ProjectSubscription{
+		ID:            "sub",
+		Account:       "test",
+		Repo:          "owner/repo",
+		TrackReleases: true,
+		CreatedAt:     time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected wake_loop validation error")
+	}
+}
+
+func TestHandleRepoFollowStoresWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+		listReleasesResult: []*Release{{
+			ID:          100,
+			TagName:     "v1.0.0",
+			Name:        "v1.0.0",
+			URL:         "https://github.com/owner/repo/releases/tag/v1.0.0",
+			PublishedAt: time.Now(),
+		}},
+		listCommitsResult: []*Commit{{
+			SHA:     "abcdef123",
+			Message: "initial commit",
+			Author:  "Dev",
+			Date:    time.Now(),
+			URL:     "https://github.com/owner/repo/commit/abcdef123",
+		}},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": true,
+		"track_commits":  true,
+		"wake_loop":      map[string]any{"name": "repo_curator", "force_supervisor": true},
+	})
+	if err != nil {
+		t.Fatalf("HandleRepoFollow: %v", err)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions len = %d, want 1", len(subs))
+	}
+	if subs[0].WakeTarget.Name != "repo_curator" || !subs[0].WakeTarget.ForceSupervisor {
+		t.Fatalf("WakeTarget = %+v, want repo_curator supervisor target", subs[0].WakeTarget)
+	}
+	if subs[0].Repo != "owner/repo" || subs[0].Branch != "main" {
+		t.Fatalf("subscription repo/branch = %s/%s", subs[0].Repo, subs[0].Branch)
+	}
+}
+
+func TestSubscriptionPollerDispatchesStructuredEvents(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	now := time.Now().UTC()
+	wakeTarget := messages.LoopWakeTarget{Name: "repo_curator", ForceSupervisor: true}
+	sub := ProjectSubscription{
+		ID:            "sub",
+		Account:       "test",
+		Repo:          "owner/repo",
+		Name:          "owner/repo",
+		Branch:        "main",
+		TrackReleases: true,
+		TrackCommits:  true,
+		WakeTarget:    wakeTarget,
+		LastRelease:   "tag:v1.0.0",
+		LastCommit:    "oldsha",
+		LastChecked:   now.Add(-2 * time.Hour),
+		CreatedAt:     now.Add(-24 * time.Hour),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	provider := &mockProvider{
+		name: "test",
+		listReleasesResult: []*Release{
+			{ID: 101, TagName: "v1.1.0", Name: "v1.1.0", URL: "https://release", PublishedAt: now.Add(-time.Hour)},
+			{ID: 100, TagName: "v1.0.0", Name: "v1.0.0", URL: "https://old-release", PublishedAt: now.Add(-3 * time.Hour)},
+		},
+		listCommitsResult: []*Commit{
+			{SHA: "newsha", Message: "add feature", Author: "Dev", Date: now.Add(-30 * time.Minute), URL: "https://commit"},
+			{SHA: "oldsha", Message: "old feature", Author: "Dev", Date: now.Add(-3 * time.Hour), URL: "https://old-commit"},
+		},
+	}
+	mgr := &Manager{
+		providers: map[string]ForgeProvider{"test": provider},
+		configs:   map[string]AccountConfig{"test": {Name: "test", Owner: "owner"}},
+		order:     []string{"test"},
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	var delivered messages.Envelope
+	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		delivered = env
+		return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+	})
+
+	poller := NewSubscriptionPoller(mgr, store, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	count, err := poller.CheckSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("CheckSubscriptions: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("event count = %d, want 2", count)
+	}
+	if delivered.To.Target != "repo_curator" {
+		t.Fatalf("delivered target = %q, want repo_curator", delivered.To.Target)
+	}
+	payload, ok := delivered.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", delivered.Payload)
+	}
+	if !payload.ForceSupervisor {
+		t.Fatal("expected force_supervisor on payload")
+	}
+	if len(payload.Events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(payload.Events))
+	}
+	if payload.Events[0].Type != "release" || payload.Events[1].Type != "commit" {
+		t.Fatalf("event types = %s, %s", payload.Events[0].Type, payload.Events[1].Type)
+	}
+	if got := payload.Events[0].Metadata["subscription_id"]; got != "sub" {
+		t.Fatalf("subscription metadata = %q, want sub", got)
+	}
+}
+
+func TestSubscriptionPollerDeliveryFailureKeepsHighWater(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	now := time.Now().UTC()
+	sub := ProjectSubscription{
+		ID:            "sub",
+		Account:       "test",
+		Repo:          "owner/repo",
+		Name:          "owner/repo",
+		Branch:        "main",
+		TrackReleases: true,
+		TrackCommits:  true,
+		WakeTarget:    messages.LoopWakeTarget{Name: "repo_curator"},
+		LastRelease:   "tag:v1.0.0",
+		LastCommit:    "oldsha",
+		LastChecked:   now.Add(-2 * time.Hour),
+		CreatedAt:     now.Add(-24 * time.Hour),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	provider := &mockProvider{
+		name: "test",
+		listReleasesResult: []*Release{
+			{ID: 101, TagName: "v1.1.0", Name: "v1.1.0", URL: "https://release", PublishedAt: now.Add(-time.Hour)},
+			{ID: 100, TagName: "v1.0.0", Name: "v1.0.0", URL: "https://old-release", PublishedAt: now.Add(-3 * time.Hour)},
+		},
+		listCommitsResult: []*Commit{
+			{SHA: "newsha", Message: "add feature", Author: "Dev", Date: now.Add(-30 * time.Minute), URL: "https://commit"},
+			{SHA: "oldsha", Message: "old feature", Author: "Dev", Date: now.Add(-3 * time.Hour), URL: "https://old-commit"},
+		},
+	}
+	mgr := &Manager{
+		providers: map[string]ForgeProvider{"test": provider},
+		configs:   map[string]AccountConfig{"test": {Name: "test", Owner: "owner"}},
+		order:     []string{"test"},
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	poller := NewSubscriptionPoller(mgr, store, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	count, err := poller.CheckSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("CheckSubscriptions: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("event count = %d, want 0 after failed wake delivery", count)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions len = %d, want 1", len(subs))
+	}
+	if subs[0].LastRelease != "tag:v1.0.0" || subs[0].LastCommit != "oldsha" {
+		t.Fatalf("high-water markers advanced after failed wake: release=%q commit=%q", subs[0].LastRelease, subs[0].LastCommit)
+	}
+}
+
+func TestSubscriptionPollerBatchesAndAdvancesHighWaterPerBatch(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	now := time.Now().UTC()
+	sub := ProjectSubscription{
+		ID:           "sub",
+		Account:      "test",
+		Repo:         "owner/repo",
+		Name:         "owner/repo",
+		Branch:       "main",
+		TrackCommits: true,
+		WakeTarget:   messages.LoopWakeTarget{Name: "repo_curator"},
+		LastCommit:   "oldsha",
+		LastChecked:  now.Add(-2 * time.Hour),
+		CreatedAt:    now.Add(-24 * time.Hour),
+	}
+	if err := store.Add(sub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	total := messages.MaxLoopEventsPerWake + 2
+	commits := make([]*Commit, 0, total+1)
+	for i := total; i >= 1; i-- {
+		commits = append(commits, &Commit{
+			SHA:     fmt.Sprintf("sha-%02d", i),
+			Message: fmt.Sprintf("commit %02d", i),
+			Author:  "Dev",
+			Date:    now.Add(time.Duration(i) * time.Minute),
+			URL:     fmt.Sprintf("https://commit/%02d", i),
+		})
+	}
+	commits = append(commits, &Commit{
+		SHA:     "oldsha",
+		Message: "old commit",
+		Author:  "Dev",
+		Date:    now.Add(-3 * time.Hour),
+		URL:     "https://old-commit",
+	})
+	provider := &mockProvider{
+		name:              "test",
+		listCommitsResult: commits,
+	}
+	mgr := &Manager{
+		providers: map[string]ForgeProvider{"test": provider},
+		configs:   map[string]AccountConfig{"test": {Name: "test", Owner: "owner"}},
+		order:     []string{"test"},
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	sendCount := 0
+	var firstBatch messages.Envelope
+	bus := messages.NewBus(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		sendCount++
+		if sendCount == 1 {
+			firstBatch = env
+			return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+		}
+		return messages.DeliveryResult{}, errors.New("second batch failed")
+	})
+
+	poller := NewSubscriptionPoller(mgr, store, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	count, err := poller.CheckSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("CheckSubscriptions: %v", err)
+	}
+	if count != messages.MaxLoopEventsPerWake {
+		t.Fatalf("event count = %d, want %d delivered before failure", count, messages.MaxLoopEventsPerWake)
+	}
+	if sendCount != 2 {
+		t.Fatalf("send count = %d, want 2", sendCount)
+	}
+	payload, ok := firstBatch.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", firstBatch.Payload)
+	}
+	if len(payload.Events) != messages.MaxLoopEventsPerWake {
+		t.Fatalf("first batch events len = %d, want %d", len(payload.Events), messages.MaxLoopEventsPerWake)
+	}
+	if payload.Events[0].ID != "sha-50" {
+		t.Fatalf("first delivered high-water event = %q, want sha-50", payload.Events[0].ID)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions len = %d, want 1", len(subs))
+	}
+	if subs[0].LastCommit != "sha-50" {
+		t.Fatalf("last commit = %q, want sha-50 after first batch only", subs[0].LastCommit)
+	}
+}
+
+func TestSubscriptionStoreRejectsMismatchedPayloadID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	raw, err := json.Marshal(ProjectSubscription{
+		ID:            "other",
+		Account:       "test",
+		Repo:          "owner/repo",
+		TrackReleases: true,
+		WakeTarget:    messages.LoopWakeTarget{Name: "repo_curator"},
+		CreatedAt:     time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := store.state.Set(subscriptionNamespace, subscriptionKey("sub"), string(raw)); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	_, err = store.Get("sub")
+	if err == nil {
+		t.Fatal("expected mismatched payload id to be rejected")
+	}
+	if !strings.Contains(err.Error(), "mismatched payload id") {
+		t.Fatalf("error = %q, want mismatched payload id", err)
+	}
+}
+
+// fakeLoopResolver is a minimal in-test implementation of
+// messages.LoopResolver for verifying wake-target existence checks
+// without standing up a real loop registry.
+type fakeLoopResolver struct {
+	names map[string]bool
+	ids   map[string]bool
+}
+
+func (f *fakeLoopResolver) LoopExistsByID(id string) bool  { return f.ids[id] }
+func (f *fakeLoopResolver) LoopExistsByName(n string) bool { return f.names[n] }
+func (f *fakeLoopResolver) KnownLoopNames() []string {
+	out := make([]string, 0, len(f.names))
+	for n := range f.names {
+		out = append(out, n)
+	}
+	return out
+}
+
+// TestHandleRepoFollowRejectsUnknownWakeTarget covers the existence
+// check: when a loop resolver is wired and the caller's wake_loop.name
+// doesn't resolve, the follow fails fast with an actionable error
+// rather than producing a permanent silent-drop on each poll cycle.
+func TestHandleRepoFollowRejectsUnknownWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+	tools.loopResolver = &fakeLoopResolver{
+		names: map[string]bool{"valid_loop": true},
+	}
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": true,
+		"wake_loop":      map[string]any{"name": "typo_loop"},
+	})
+	if err == nil {
+		t.Fatal("expected unknown wake_loop name to be rejected")
+	}
+	if !strings.Contains(err.Error(), "typo_loop") {
+		t.Errorf("error %q should name the unresolved target", err)
+	}
+	if !strings.Contains(err.Error(), "valid_loop") {
+		t.Errorf("error %q should list known loop names for the model to correct toward", err)
+	}
+
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Errorf("subscription should not be persisted when wake_loop rejected, got %d", len(subs))
+	}
+}
+
+// TestHandleRepoFollowAcceptsKnownWakeTarget guards the positive case:
+// a wake_loop.name that resolves against the resolver succeeds.
+func TestHandleRepoFollowAcceptsKnownWakeTarget(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+	tools.loopResolver = &fakeLoopResolver{
+		names: map[string]bool{"my_curator": true},
+	}
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": true,
+		"wake_loop":      map[string]any{"name": "my_curator"},
+	})
+	if err != nil {
+		t.Fatalf("HandleRepoFollow: %v", err)
+	}
+	subs, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Errorf("subscription should be persisted on resolved wake_loop, got %d", len(subs))
+	}
+}

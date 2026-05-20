@@ -14,6 +14,34 @@ const (
 	SearchCommits SearchKind = "commits"
 )
 
+// Repository describes forge repository metadata relevant to subscriptions.
+type Repository struct {
+	// FullName is the canonical owner/repo name.
+	FullName string
+	// DefaultBranch is the repository's default branch.
+	DefaultBranch string
+	// URL is the web URL for the repository.
+	URL string
+}
+
+// Release represents a repository release.
+type Release struct {
+	// ID is the provider-assigned release identifier.
+	ID int64
+	// TagName is the release tag.
+	TagName string
+	// Name is the human-facing release title.
+	Name string
+	// URL is the web URL for the release.
+	URL string
+	// Prerelease indicates whether this is marked as a prerelease.
+	Prerelease bool
+	// CreatedAt is when the release object was created.
+	CreatedAt time.Time
+	// PublishedAt is when the release was published, if available.
+	PublishedAt time.Time
+}
+
 // Issue represents a forge issue or pull request issue entry.
 type Issue struct {
 	// Number is the issue number (e.g., #42).
@@ -141,6 +169,8 @@ type Commit struct {
 	Author string
 	// Date is when the commit was authored.
 	Date time.Time
+	// URL is the web URL for the commit.
+	URL string
 }
 
 // Review represents a pull request review with optional inline comments.
