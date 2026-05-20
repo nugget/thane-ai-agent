@@ -463,6 +463,12 @@ func coerceInt(v any) (int, error) {
 	case int64:
 		return int(n), nil
 	case float64:
+		// JSON decoders deliver every number as float64; reject any
+		// fractional value so callers see an actionable error instead
+		// of a silent truncation (e.g. 3600.5 quietly becoming 3600).
+		if n != float64(int64(n)) {
+			return 0, fmt.Errorf("must be an integer, got fractional value %v", n)
+		}
 		return int(n), nil
 	default:
 		return 0, fmt.Errorf("must be an integer, got %T", v)

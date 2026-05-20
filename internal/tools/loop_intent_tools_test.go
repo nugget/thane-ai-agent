@@ -880,3 +880,58 @@ func TestThaneCurate_RejectsDuplicateEntityID(t *testing.T) {
 		t.Errorf("error %q should mention duplicate", err)
 	}
 }
+
+// TestThaneCurate_RejectsFractionalInteger guards coerceInt's
+// integer-not-float guard. JSON decoders deliver every number as
+// float64, so a model that types `"ttl_seconds": 3600.5` would be
+// silently truncated to 3600 without this check. Whole-number
+// floats (3600.0) must still be accepted since that's the realistic
+// post-decode shape of an integer literal.
+func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
+	t.Parallel()
+	rig := newCurateTestRig(t)
+
+	_, err := rig.tool.Handler(context.Background(), map[string]any{
+		"name":    "frac_test",
+		"intent":  "x",
+		"cadence": "hourly",
+		"output": map[string]any{
+			"mode":     "journal",
+			"document": "kb:frac.md",
+		},
+		"entities": []any{
+			map[string]any{
+				"entity_id":   "sensor.foo",
+				"ttl_seconds": 3600.5,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected fractional ttl_seconds to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fractional") {
+		t.Errorf("error %q should mention fractional", err)
+	}
+
+	// Whole-number float (post-JSON-decode shape of an integer literal)
+	// must still pass — coerceInt accepts float64 when n == int64(n).
+	_, err = rig.tool.Handler(context.Background(), map[string]any{
+		"name":    "whole_float_test",
+		"intent":  "x",
+		"cadence": "hourly",
+		"output": map[string]any{
+			"mode":     "journal",
+			"document": "kb:whole.md",
+		},
+		"entities": []any{
+			map[string]any{
+				"entity_id":   "sensor.foo",
+				"ttl_seconds": 3600.0,
+				"history":     []any{3600.0, 86400.0},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("whole-number floats should be accepted: %v", err)
+	}
+}
