@@ -21,6 +21,7 @@ import (
 // one (area_activity_tool.go); the interface inverts the dependency.
 type EntitySubscriptionStore interface {
 	AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error
+	RemoveWithScopes(entityID string, scopes []string) error
 	RemoveAllForScope(scope string) error
 }
 
@@ -74,6 +75,9 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 	}
 	r.loopIntentDeps = deps
 	r.registerThaneCurate()
+	if deps.WatchlistStore != nil {
+		r.registerLoopUpdateEntitySubscriptions()
+	}
 }
 
 func (r *Registry) registerThaneCurate() {

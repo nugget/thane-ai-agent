@@ -541,11 +541,12 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 	}
 }
 
-// fakeSubscriptionStore captures AddWithOptions / RemoveAllForScope
-// calls so tests can assert on the per-loop watchlist plumbing without
-// standing up a real SQLite database.
+// fakeSubscriptionStore captures the interface-method calls so tests
+// can assert on the per-loop watchlist plumbing without standing up
+// a real SQLite database.
 type fakeSubscriptionStore struct {
 	added   []fakeSubAdd
+	removed []fakeSubRemove
 	wiped   []string
 	failAdd error
 }
@@ -558,6 +559,11 @@ type fakeSubAdd struct {
 	Forecast   string
 }
 
+type fakeSubRemove struct {
+	EntityID string
+	Scopes   []string
+}
+
 func (f *fakeSubscriptionStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error {
 	if f.failAdd != nil {
 		return f.failAdd
@@ -568,6 +574,14 @@ func (f *fakeSubscriptionStore) AddWithOptions(entityID string, tags []string, h
 		History:    append([]int(nil), history...),
 		TTLSeconds: ttlSeconds,
 		Forecast:   forecast,
+	})
+	return nil
+}
+
+func (f *fakeSubscriptionStore) RemoveWithScopes(entityID string, scopes []string) error {
+	f.removed = append(f.removed, fakeSubRemove{
+		EntityID: entityID,
+		Scopes:   append([]string(nil), scopes...),
 	})
 	return nil
 }
