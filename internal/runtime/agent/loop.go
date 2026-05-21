@@ -189,6 +189,9 @@ type ContextRequest = agentctx.ContextRequest
 // always-on bucket (via [Loop.RegisterAlwaysContextProvider]), where
 // they fire on every main-loop run but are suppressed for delegate
 // runs that pass [agentctx.ContextRequest.IncludeAlways] = false.
+// Curated core files such as ego.md and configured inject files are
+// rendered by the prompt assembler as first-class stable sections
+// before this generated context pipeline.
 //
 // Output should follow #458 conventions: delta-annotated timestamps
 // via [promptfmt.FormatDelta], machine-first format, pre-computed
@@ -448,14 +451,14 @@ func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
 // grouped Configure* methods for late-binding state; new code should
 // prefer those entry points.
 
-// SetEgoFile sets the path to ego.md. The file is published through
-// the always-on context-provider pipeline and read fresh on each turn.
+// SetEgoFile sets the path to ego.md. The file is read fresh on each
+// full prompt turn and rendered as a first-class stable section.
 func (l *Loop) SetEgoFile(path string) {
 	l.ensureCoreContextProvider().updateEgoFile(path)
 }
 
-// SetInjectFiles sets the core context files published through the
-// always-on context-provider pipeline on each turn.
+// SetInjectFiles sets the core context files rendered as stable
+// injected context on each full prompt turn.
 func (l *Loop) SetInjectFiles(paths []string) {
 	l.ensureCoreContextProvider().updateInjectFiles(paths)
 }
@@ -474,7 +477,6 @@ func (l *Loop) ensureCoreContextProvider() *CoreContextProvider {
 		Logger: l.logger,
 		Now:    l.nowFunc,
 	})
-	l.RegisterAlwaysContextProvider(l.coreContextProvider)
 	return l.coreContextProvider
 }
 
@@ -594,15 +596,8 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	for tag, p := range pendingTagged {
 		a.RegisterTaggedProvider(tag, p)
 	}
-	coreRegistered := false
 	for _, p := range pendingAlways {
 		a.RegisterAlwaysProvider(p)
-		if p == l.coreContextProvider {
-			coreRegistered = true
-		}
-	}
-	if l.coreContextProvider != nil && !coreRegistered {
-		a.RegisterAlwaysProvider(l.coreContextProvider)
 	}
 }
 
@@ -991,7 +986,16 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	}
 	seal()
 
-	// 2. Runtime contract (execution semantics — how should I use tools)
+	// 2. Stable core context (durable self-orientation).
+	if !taskPrompt && l.coreContextProvider != nil {
+		for _, coreSection := range l.coreContextProvider.promptSections(ctx) {
+			mark(coreSection.name)
+			promptfmt.AppendMarkdownSection(&sb, 2, coreSection.title, coreSection.content)
+			seal()
+		}
+	}
+
+	// 3. Runtime contract (execution semantics — how should I use tools)
 	mark("RUNTIME CONTRACT")
 	sb.WriteString("\n\n")
 	if taskPrompt {
@@ -1039,7 +1043,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		seal()
 	}
 
-	// 5b. Session origin policy (runtime data about why this run was shaped).
+	// 6. Session origin policy (runtime data about why this run was shaped).
 	if !taskPrompt {
 		if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
 			mark("SESSION ORIGIN CONTEXT")
@@ -1049,7 +1053,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		}
 	}
 
-	// 6. Typed context buckets (capability knowledge + ambient context).
+	// 7. Typed context buckets (capability knowledge + ambient context).
 	// TagContextAssembler walks tagged KB articles, tagged providers, and
 	// always-on providers, then returns named buckets so durable guidance,
 	// continuity, related context, and live state are not flattened into
@@ -1072,7 +1076,7 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		}
 	}
 
-	// 7. Current Conditions (environment — where/when am I)
+	// 8. Current Conditions (environment — where/when am I)
 	mark("CURRENT CONDITIONS")
 	sb.WriteString("\n\n")
 	sb.WriteString(awareness.CurrentConditions(l.timezone))

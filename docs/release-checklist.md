@@ -82,10 +82,10 @@ same fix after a release ships is migration work.
     history, not in the source.
 - [ ] **Model-facing context audit**
 
-  Every output that becomes system prompt content, capability context,
-  delegate bootstrap context, tool output, summary scaffolding, or any
-  other loop input has a model as its audience. Audit new and altered
-  context-injection points against
+  Every output that becomes system prompt content, typed context
+  buckets, delegate bootstrap context, tool output, summary
+  scaffolding, or any other loop input has a model as its audience.
+  Audit new and altered context-injection points against
   [docs/model-facing-context.md](model-facing-context.md). Cognitive
   clarity is expensive; typing is free.
 
@@ -102,10 +102,11 @@ same fix after a release ships is migration work.
         not narrative prose. Markdown is for section boundaries,
         brief framing notes, and normative instructions; structured
         data is data.
-  - [ ] **Does this belong in always-on context, capability context,
-        a tool result, or nowhere at all?** Tag-scoped providers exist
-        for a reason — every block that lives in always-on context
-        thins what's left for the conversation.
+  - [ ] **Does this belong in stable core context, tagged guidance,
+        continuity context, related context, live state, a tool result,
+        or nowhere at all?** Tag-scoped providers exist for a reason —
+        every block that lives in always-on context thins what's left
+        for the conversation.
   - [ ] **If this data changes often, why is it static?** Live config,
         active capabilities, recent tool activity, and external state
         belong in dynamic providers, not in markdown files frozen at
