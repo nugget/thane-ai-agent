@@ -97,6 +97,7 @@ let activeRequestJSON = '';
 let activeRequestDetail = null;
 let pinnedRequestID = '';
 let followLatestRequest = true;
+const traceDisclosureState = new Map();
 let serverStartTime = null;
 let requestDetailAvailable = null;
 let requestDetailProbeInFlight = null;
@@ -816,11 +817,29 @@ function summarizeTracePayload(value, max = 120) {
   return text ? truncate(text, max) : '';
 }
 
-function appendTraceDisclosure(parent, label, value) {
+function hashTraceDisclosureText(text) {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function traceDisclosureKey(label, text, key = '') {
+  return key || (label + ':' + hashTraceDisclosureText(text.slice(0, 2000)));
+}
+
+function appendTraceDisclosure(parent, label, value, key = '') {
   const text = formatTraceJSON(value);
   if (!text) return false;
+  const stateKey = traceDisclosureKey(label, text, key);
   const details = document.createElement('details');
   details.className = 'trace-disclosure';
+  details.dataset.traceKey = stateKey;
+  details.open = traceDisclosureState.get(stateKey) === true;
+  details.addEventListener('toggle', () => {
+    traceDisclosureState.set(stateKey, details.open);
+  });
   const summary = document.createElement('summary');
   summary.textContent = label;
   const pre = document.createElement('pre');
@@ -871,7 +890,7 @@ function buildTraceEvent(probe, title, meta, opts = {}) {
     const body = document.createElement('div');
     body.className = 'trace-event__details';
     for (const detail of opts.details) {
-      appendTraceDisclosure(body, detail.label, detail.value);
+      appendTraceDisclosure(body, detail.label, detail.value, detail.key || '');
     }
     if (body.children.length > 0) event.appendChild(body);
   }
@@ -1002,11 +1021,14 @@ function buildTraceToolEvent(tool) {
   const name = tool.toolName || tool.tool_name || tool.tool || 'tool';
   const isDelegate = isDelegateTool(name);
   const status = tool.error ? 'error' : (tool.status || (tool.result ? 'done' : 'recorded'));
+  const callID = tool.tool_call_id || tool.toolCallID || tool.call_id || tool.callID || '';
+  const toolKey = callID || tool.liveKey || tool.liveIndex || [name, tool.iterationIndex || tool.iteration_index || 0, status].join(':');
   const parsed = isDelegate ? parseDelegateArgs(tool.arguments || tool.args) : {};
   const title = isDelegate
     ? name + ': ' + truncate(parsed.task || 'spawned work', 96)
     : name;
   const metaBits = [];
+  if (status === 'running') metaBits.push('in flight');
   if (tool.iterationIndex || tool.iteration_index) metaBits.push('iteration #' + (tool.iterationIndex || tool.iteration_index));
   const argSummary = summarizeTracePayload(tool.arguments || tool.args, 100);
   if (argSummary && !isDelegate) metaBits.push(argSummary);
@@ -1014,11 +1036,11 @@ function buildTraceToolEvent(tool) {
   const chips = [
     makeTraceChip(status, status === 'running' ? 'forensics-scope__chip--active' : ''),
     isDelegate ? makeTraceChip(delegateToolLabel(name), 'forensics-scope__chip--active') : null,
-    tool.tool_call_id ? makeTraceChip('call ' + shortID(tool.tool_call_id)) : null,
+    callID ? makeTraceChip('call ' + shortID(callID)) : null,
   ];
   const details = [
-    { label: 'Arguments', value: tool.arguments || tool.args },
-    { label: tool.error ? 'Error' : 'Result', value: tool.error || tool.result },
+    { label: 'Arguments', value: tool.arguments || tool.args, key: 'tool:' + toolKey + ':args' },
+    { label: tool.error ? 'Error' : 'Result', value: tool.error || tool.result, key: 'tool:' + toolKey + ':result' },
   ];
   return buildTraceEvent(isDelegate ? 'loop:spawn' : 'tool:' + status, title, metaBits.join(' · '), {
     kind: tool.error ? 'error' : (isDelegate ? 'branch' : 'tool'),
@@ -1150,6 +1172,9 @@ function appendNotebookToolSection(body, detail, fallbackTools, liveTools = []) 
       arguments: entry.args,
       result: entry.result,
       error: entry.error,
+      tool_call_id: entry.tool_call_id || entry.toolCallID,
+      liveKey: entry.liveKey,
+      liveIndex: entry.liveIndex,
     }));
   }
   if (events.length === 0 && detail && Array.isArray(detail.tool_calls) && detail.tool_calls.length > 0) {
@@ -1230,7 +1255,7 @@ function appendNotebookEvidence(body, detail) {
   if (!detail) return;
   const evidence = document.createElement('div');
   evidence.className = 'trace-cell__evidence';
-  appendTraceDisclosure(evidence, 'Retained request detail', detail);
+  appendTraceDisclosure(evidence, 'Retained request detail', detail, 'request:' + detail.request_id + ':detail');
   appendNotebookSection(body, 'Raw Evidence', evidence.childElementCount > 0 ? evidence : null);
 }
 
@@ -1250,9 +1275,10 @@ function detailHasModelExchange(detail) {
   ));
 }
 
-function appendModelExchangeDisclosure(parent, label, value) {
+function appendModelExchangeDisclosure(parent, label, value, requestID) {
   if (value === null || value === undefined || value === '') return false;
-  return appendTraceDisclosure(parent, label, value);
+  const token = label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return appendTraceDisclosure(parent, label, value, 'request:' + requestID + ':exchange:' + token);
 }
 
 function makeModelExchangeResponse(detail) {
@@ -1305,9 +1331,9 @@ function appendNotebookModelExchange(body, requestID, detail) {
 
   const exchange = document.createElement('div');
   exchange.className = 'trace-cell__evidence';
-  appendModelExchangeDisclosure(exchange, 'System Prompt', detail.system_prompt);
-  appendModelExchangeDisclosure(exchange, 'Messages[] Payload', Array.isArray(detail.messages) ? detail.messages : null);
-  appendModelExchangeDisclosure(exchange, 'Model Response', makeModelExchangeResponse(detail));
+  appendModelExchangeDisclosure(exchange, 'System Prompt', detail.system_prompt, requestID);
+  appendModelExchangeDisclosure(exchange, 'Messages[] Payload', Array.isArray(detail.messages) ? detail.messages : null, requestID);
+  appendModelExchangeDisclosure(exchange, 'Model Response', makeModelExchangeResponse(detail), requestID);
   if (exchange.childElementCount === 0) {
     exchange.appendChild(makeNotebookStatus('Request detail loaded, but no raw prompt, Messages[], or model response was retained for this request.'));
   }

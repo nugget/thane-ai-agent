@@ -1958,19 +1958,45 @@ function applyLoopEventToLoop(evt, ctx) {
     case 'loop_tool_start':
       if (!loop._liveTools) loop._liveTools = [];
       if (!loop._iterStartTs) loop._iterStartTs = Date.now();
-      loop._liveTools.push({ tool: d.tool, status: 'running', args: d.args || null });
+      loop.state = 'processing';
+      loop._liveTools.push({
+        tool: d.tool,
+        status: 'running',
+        args: d.args || null,
+        tool_call_id: d.tool_call_id || '',
+        liveKey: d.tool_call_id || 'live-' + loop._liveTools.length,
+        started_at: evt.ts,
+      });
       return null;
 
     case 'loop_tool_done':
+      let matchedTool = false;
       if (loop._liveTools) {
         for (let i = loop._liveTools.length - 1; i >= 0; i--) {
-          if (loop._liveTools[i].tool === d.tool && loop._liveTools[i].status === 'running') {
+          const sameCall = d.tool_call_id && loop._liveTools[i].tool_call_id === d.tool_call_id;
+          const sameRunningTool = loop._liveTools[i].tool === d.tool && loop._liveTools[i].status === 'running';
+          if (sameCall || sameRunningTool) {
             loop._liveTools[i].status = d.error ? 'error' : 'done';
             loop._liveTools[i].result = d.result || null;
             loop._liveTools[i].error = d.error || null;
+            loop._liveTools[i].completed_at = evt.ts;
+            if (d.tool_call_id) loop._liveTools[i].tool_call_id = d.tool_call_id;
+            matchedTool = true;
             break;
           }
         }
+      }
+      if (!matchedTool) {
+        if (!loop._liveTools) loop._liveTools = [];
+        loop._liveTools.push({
+          tool: d.tool,
+          status: d.error ? 'error' : 'done',
+          result: d.result || null,
+          error: d.error || null,
+          tool_call_id: d.tool_call_id || '',
+          liveKey: d.tool_call_id || 'done-' + loop._liveTools.length,
+          completed_at: evt.ts,
+        });
       }
       if (d.tooling) {
         const tooling = normalizeTooling(d.tooling, {
