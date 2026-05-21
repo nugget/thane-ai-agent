@@ -277,6 +277,7 @@ func Migrate(db *sql.DB) error {
 		output_tokens INTEGER,
 		tools_used TEXT,
 		messages_json TEXT,
+		tool_definitions_json TEXT,
 		exhausted BOOLEAN DEFAULT FALSE,
 		exhaust_reason TEXT,
 		created_at TEXT NOT NULL
@@ -302,6 +303,9 @@ func Migrate(db *sql.DB) error {
 	}
 	if err := database.AddColumn(db, "log_request_content", "messages_json", "TEXT"); err != nil {
 		return fmt.Errorf("migrate content messages: %w", err)
+	}
+	if err := database.AddColumn(db, "log_request_content", "tool_definitions_json", "TEXT"); err != nil {
+		return fmt.Errorf("migrate content tool definitions: %w", err)
 	}
 
 	return nil

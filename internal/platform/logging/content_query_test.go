@@ -29,6 +29,21 @@ func TestQueryRequestDetail_Found(t *testing.T) {
 		ToolsUsed:        map[string]int{"search": 2},
 		Exhausted:        true,
 		ExhaustReason:    "max_iterations",
+		ToolDefinitions: []ToolDefDetail{
+			NewToolDefDetail(0, []map[string]any{{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "search",
+					"description": "Search the web.",
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"query": map[string]any{"type": "string"},
+						},
+					},
+				},
+			}}),
+		},
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are a helpful assistant."},
 			{Role: "user", Content: "Hello"},
@@ -91,6 +106,12 @@ func TestQueryRequestDetail_Found(t *testing.T) {
 	}
 	if detail.ToolsUsed["search"] != 2 {
 		t.Errorf("tools_used[search] = %d, want 2", detail.ToolsUsed["search"])
+	}
+	if len(detail.ToolDefinitions) != 1 {
+		t.Fatalf("tool_definitions count = %d, want 1", len(detail.ToolDefinitions))
+	}
+	if got := detail.ToolDefinitions[0].Tools[0]["function"].(map[string]any)["name"]; got != "search" {
+		t.Fatalf("tool_definitions[0] function name = %v, want search", got)
 	}
 	if len(detail.Messages) != 5 {
 		t.Fatalf("messages count = %d, want 5", len(detail.Messages))

@@ -544,8 +544,10 @@ function renderForensicsCurrent(loop) {
   const latestModel = loop._liveModel || loop._lastModel || latestSnap?.model || '';
   const currentConvID = loop._currentConvID || latestSnap?.conv_id || '';
   const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
+  const nextTurn = loop ? describeNextTurn(loop) : null;
   const chips = [
     { text: followLatestRequest ? 'live follow' : 'pinned', focus: true },
+    nextTurn ? { text: nextTurn.title, full: nextTurn.meta } : null,
     latestModel ? { text: shortModelName(latestModel) } : null,
     currentConvID ? { text: 'thread ' + shortID(currentConvID) } : null,
     targetRequestID ? { text: 'req ' + shortID(targetRequestID), request: true, full: targetRequestID } : null,
@@ -558,9 +560,9 @@ function renderForensicsCurrent(loop) {
       + (item.request ? ' forensics-chip--request' : '')
       + (item.focus ? ' forensics-chip--focus' : '');
     el.textContent = item.text;
+    if (item.full) el.title = item.full;
     if (item.request) {
       el.type = 'button';
-      el.title = item.full || '';
       el.addEventListener('click', () => {
         if (!item.full) return;
         followLatestRequest = false;
@@ -829,7 +831,11 @@ function traceDisclosureKey(label, text, key = '') {
   return key || (label + ':' + hashTraceDisclosureText(text.slice(0, 2000)));
 }
 
-function appendTraceDisclosure(parent, label, value, key = '') {
+function appendTraceDisclosure(parent, label, value, key = '', opts = {}) {
+  if (key && typeof key === 'object') {
+    opts = key;
+    key = '';
+  }
   const text = formatTraceJSON(value);
   if (!text) return false;
   const stateKey = traceDisclosureKey(label, text, key);
@@ -841,7 +847,29 @@ function appendTraceDisclosure(parent, label, value, key = '') {
     traceDisclosureState.set(stateKey, details.open);
   });
   const summary = document.createElement('summary');
-  summary.textContent = label;
+  const labelEl = document.createElement('span');
+  labelEl.textContent = label;
+  summary.appendChild(labelEl);
+  if (opts.copy) {
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'trace-disclosure__copy';
+    copy.textContent = 'copy';
+    copy.title = 'Copy ' + label;
+    copy.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      navigator.clipboard.writeText(text).then(() => {
+        copy.textContent = 'copied';
+        copy.classList.add('trace-disclosure__copy--copied');
+        setTimeout(() => {
+          copy.textContent = 'copy';
+          copy.classList.remove('trace-disclosure__copy--copied');
+        }, 1200);
+      });
+    });
+    summary.appendChild(copy);
+  }
   const pre = document.createElement('pre');
   pre.textContent = text;
   details.appendChild(summary);
@@ -1122,9 +1150,31 @@ function makeNotebookCell(opts) {
     header.appendChild(row);
   }
 
-  body.appendChild(header);
+  let sectionTarget = body;
+  if (opts.collapsible) {
+    const foldKey = 'cell:' + (opts.foldKey || opts.title || opts.ordinal || '');
+    const fold = document.createElement('details');
+    fold.className = 'trace-cell__fold';
+    fold.open = traceDisclosureState.has(foldKey)
+      ? traceDisclosureState.get(foldKey) === true
+      : opts.defaultOpen !== false;
+    fold.addEventListener('toggle', () => {
+      traceDisclosureState.set(foldKey, fold.open);
+    });
+
+    const summary = document.createElement('summary');
+    summary.appendChild(header);
+    fold.appendChild(summary);
+
+    sectionTarget = document.createElement('div');
+    sectionTarget.className = 'trace-cell__fold-body';
+    fold.appendChild(sectionTarget);
+    body.appendChild(fold);
+  } else {
+    body.appendChild(header);
+  }
   cell.appendChild(body);
-  return { cell, body };
+  return { cell, body: sectionTarget };
 }
 
 function makeNotebookSection(title, content) {
@@ -1188,6 +1238,33 @@ function appendNotebookToolSection(body, detail, fallbackTools, liveTools = []) 
   appendNotebookSection(body, 'Tool Calls', makeNotebookEventList(events));
 }
 
+function getToolDefinitionSnapshots(detail) {
+  if (!detail) return [];
+  if (Array.isArray(detail.tool_definitions)) return detail.tool_definitions;
+  return [];
+}
+
+function countToolDefinitions(snapshots) {
+  return (snapshots || []).reduce((total, snap) => total + (snap && Array.isArray(snap.tools) ? snap.tools.length : 0), 0);
+}
+
+function appendNotebookToolSurface(body, requestID, detail) {
+  const snapshots = getToolDefinitionSnapshots(detail);
+  if (snapshots.length === 0) return;
+
+  const surface = document.createElement('div');
+  surface.className = 'trace-cell__evidence';
+  for (const snap of snapshots) {
+    if (!snap) continue;
+    const tools = Array.isArray(snap.tools) ? snap.tools : [];
+    if (tools.length === 0) continue;
+    const iter = Number.isFinite(snap.iteration_index) ? snap.iteration_index : 0;
+    const label = 'Iteration ' + iter + ' Registry.List() (' + formatNumber(tools.length) + ' tools)';
+    appendTraceDisclosure(surface, label, tools, 'request:' + requestID + ':tooldefs:' + iter, { copy: true });
+  }
+  appendNotebookSection(body, 'Model Tool Surface', surface.childElementCount > 0 ? surface : null);
+}
+
 function buildChildLoopEvent(child) {
   const tokenTotal = (child.total_input_tokens || 0) + (child.total_output_tokens || 0);
   const metaBits = [
@@ -1246,17 +1323,12 @@ function makeNotebookStatus(text) {
   return status;
 }
 
-function appendNotebookAfterState(body, loop, prefix = 'Loop state') {
-  const next = describeNextTurn(loop);
-  appendNotebookSection(body, prefix, makeNotebookStatus(next.title + (next.meta ? ' · ' + next.meta : '')));
-}
-
 function appendNotebookEvidence(body, detail) {
   if (!detail) return;
   const evidence = document.createElement('div');
   evidence.className = 'trace-cell__evidence';
-  appendTraceDisclosure(evidence, 'Retained request detail', detail, 'request:' + detail.request_id + ':detail');
-  appendNotebookSection(body, 'Raw Evidence', evidence.childElementCount > 0 ? evidence : null);
+  appendTraceDisclosure(evidence, 'Full retained request JSON', detail, 'request:' + detail.request_id + ':detail', { copy: true });
+  appendNotebookSection(body, 'Request Detail JSON', evidence.childElementCount > 0 ? evidence : null);
 }
 
 function loadNotebookRequestDetail(requestID) {
@@ -1278,7 +1350,7 @@ function detailHasModelExchange(detail) {
 function appendModelExchangeDisclosure(parent, label, value, requestID) {
   if (value === null || value === undefined || value === '') return false;
   const token = label.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return appendTraceDisclosure(parent, label, value, 'request:' + requestID + ':exchange:' + token);
+  return appendTraceDisclosure(parent, label, value, 'request:' + requestID + ':exchange:' + token, { copy: true });
 }
 
 function makeModelExchangeResponse(detail) {
@@ -1388,8 +1460,8 @@ function buildLiveNotebookCell(loop) {
   ]);
   appendNotebookSection(body, 'Scope', scope);
   appendNotebookToolSection(body, detail, null, loop._liveTools || []);
+  appendNotebookToolSurface(body, requestID, detail);
   appendNotebookSpawnedWork(body, loop, null, true);
-  appendNotebookAfterState(body, loop, 'After this turn');
   appendNotebookModelExchange(body, requestID, detail);
   appendNotebookEvidence(body, detail);
   return cell;
@@ -1432,6 +1504,9 @@ function buildPastNotebookCell(loop, snap, isTop) {
       makeTraceCopyAction('copy request_id', snap.request_id, 'Copy this turn request_id'),
       makeTraceCopyAction('copy request JSON', detail ? stringifyForensicsJSON(detail) : '', 'Copy retained request detail JSON', snap.request_id ? 'Click the request chip to load this request detail first.' : 'No request_id for this turn.'),
     ],
+    collapsible: true,
+    defaultOpen: isTop,
+    foldKey: snap.request_id || snap.conv_id || ('turn-' + (snap.number || 'unknown')),
   });
 
   const scope = makeIterationScopePanel([
@@ -1444,8 +1519,8 @@ function buildPastNotebookCell(loop, snap, isTop) {
   ]);
   appendNotebookSection(body, 'Scope', scope);
   appendNotebookToolSection(body, detail, snap.tools_used || tooling.toolsUsed);
+  appendNotebookToolSurface(body, snap.request_id, detail);
   appendNotebookSpawnedWork(body, loop, snap, isTop);
-  if (isTop) appendNotebookAfterState(body, loop, 'Current loop state');
   appendNotebookModelExchange(body, snap.request_id, detail);
   appendNotebookEvidence(body, detail);
   return cell;
@@ -1483,6 +1558,10 @@ function renderTraceNotebook(loop) {
     if (loop.state === 'processing') bits.push('live');
     if (history.length > 0) bits.push(formatNumber(history.length) + ' retained turns');
     if (detail && detail.tool_calls) bits.push(formatNumber(detail.tool_calls.length) + ' retained tool records');
+    if (detail) {
+      const retainedToolDefinitions = countToolDefinitions(getToolDefinitionSnapshots(detail));
+      if (retainedToolDefinitions > 0) bits.push(formatNumber(retainedToolDefinitions) + ' retained tool definitions');
+    }
     if (childCount > 0) bits.push(formatNumber(childCount) + ' child loop' + (childCount === 1 ? '' : 's'));
     forensics.notebookMeta.textContent = bits.join(' · ') || 'awaiting first turn';
   }

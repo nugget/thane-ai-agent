@@ -26,6 +26,7 @@ type RequestDetail struct {
 	ExhaustReason    string          `json:"exhaust_reason,omitempty"`
 	CreatedAt        string          `json:"created_at"`
 	ToolCalls        []ToolDetail    `json:"tool_calls"`
+	ToolDefinitions  []ToolDefDetail `json:"tool_definitions,omitempty"`
 }
 
 // ToolDetail holds the retained content for a single tool invocation.
@@ -35,6 +36,79 @@ type ToolDetail struct {
 	Arguments      string `json:"arguments,omitempty"`
 	Result         string `json:"result,omitempty"`
 	IterationIndex int    `json:"iteration_index"`
+}
+
+// ToolDefDetail holds the model-facing tool definition list offered to a
+// single model iteration.
+type ToolDefDetail struct {
+	IterationIndex int              `json:"iteration_index"`
+	Tools          []map[string]any `json:"tools"`
+}
+
+// NewToolDefDetail returns a defensive copy of tool definitions for one
+// model iteration.
+func NewToolDefDetail(iterationIndex int, tools []map[string]any) ToolDefDetail {
+	return ToolDefDetail{
+		IterationIndex: iterationIndex,
+		Tools:          cloneToolDefMaps(tools),
+	}
+}
+
+// CloneToolDefDetails returns a defensive copy of retained tool-definition
+// snapshots.
+func CloneToolDefDetails(src []ToolDefDetail) []ToolDefDetail {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]ToolDefDetail, len(src))
+	for i, snap := range src {
+		out[i] = ToolDefDetail{
+			IterationIndex: snap.IterationIndex,
+			Tools:          cloneToolDefMaps(snap.Tools),
+		}
+	}
+	return out
+}
+
+func cloneToolDefMaps(src []map[string]any) []map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(src))
+	for i, item := range src {
+		out[i] = cloneToolDefMap(item)
+	}
+	return out
+}
+
+func cloneToolDefMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]any, len(src))
+	for key, value := range src {
+		out[key] = cloneToolDefValue(value)
+	}
+	return out
+}
+
+func cloneToolDefValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return cloneToolDefMap(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = cloneToolDefValue(item)
+		}
+		return out
+	case []map[string]any:
+		return cloneToolDefMaps(v)
+	case []string:
+		return append([]string(nil), v...)
+	default:
+		return value
+	}
 }
 
 // MessageDetail holds one retained chat message from the provider-neutral
@@ -78,7 +152,8 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 		rd                             RequestDetail
 		promptHash, userContent        sql.NullString
 		assistantContent, model        sql.NullString
-		messagesJSON, toolsUsed        sql.NullString
+		messagesJSON, toolDefsJSON     sql.NullString
+		toolsUsed                      sql.NullString
 		exhaustReason                  sql.NullString
 		iterCount, inputTok, outputTok sql.NullInt64
 		exhausted                      sql.NullBool
@@ -87,11 +162,11 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 
 	err := db.QueryRowContext(ctx, `SELECT request_id, prompt_hash, user_content, assistant_content,
 		model, iteration_count, input_tokens, output_tokens, tools_used, messages_json,
-		exhausted, exhaust_reason, created_at
+		tool_definitions_json, exhausted, exhaust_reason, created_at
 		FROM log_request_content WHERE request_id = ?`, requestID).Scan(
 		&rd.RequestID, &promptHash, &userContent, &assistantContent,
 		&model, &iterCount, &inputTok, &outputTok, &toolsUsed,
-		&messagesJSON, &exhausted, &exhaustReason, &createdAt,
+		&messagesJSON, &toolDefsJSON, &exhausted, &exhaustReason, &createdAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -124,6 +199,11 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 	}
 	if rd.Messages == nil {
 		rd.Messages = []MessageDetail{}
+	}
+	if toolDefsJSON.Valid && toolDefsJSON.String != "" {
+		if err := json.Unmarshal([]byte(toolDefsJSON.String), &rd.ToolDefinitions); err != nil {
+			return &rd, fmt.Errorf("decode retained tool definitions: %w", err)
+		}
 	}
 
 	// Resolve system prompt content from the prompts table.

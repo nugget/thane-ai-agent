@@ -21,6 +21,16 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 		InputTokens:      321,
 		OutputTokens:     123,
 		ToolsUsed:        map[string]int{"web_search": 1},
+		ToolDefinitions: []ToolDefDetail{
+			NewToolDefDetail(0, []map[string]any{{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "web_search",
+					"description": "Search the web.",
+					"parameters":  map[string]any{"type": "object"},
+				},
+			}}),
+		},
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are a helpful assistant."},
 			{Role: "user", Content: "search for observability regressions"},
@@ -66,6 +76,12 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	if detail.ToolsUsed["web_search"] != 1 {
 		t.Fatalf("ToolsUsed[web_search] = %d, want 1", detail.ToolsUsed["web_search"])
 	}
+	if len(detail.ToolDefinitions) != 1 || len(detail.ToolDefinitions[0].Tools) != 1 {
+		t.Fatalf("ToolDefinitions = %#v, want one retained tool definition snapshot", detail.ToolDefinitions)
+	}
+	if got := detail.ToolDefinitions[0].Tools[0]["function"].(map[string]any)["name"]; got != "web_search" {
+		t.Fatalf("ToolDefinitions[0] name = %v, want web_search", got)
+	}
 	if len(detail.ToolCalls) != 1 {
 		t.Fatalf("len(ToolCalls) = %d, want 1", len(detail.ToolCalls))
 	}
@@ -91,6 +107,7 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	// Ensure callers receive a defensive copy.
 	detail.ToolsUsed["web_search"] = 99
 	detail.ToolCalls[0].ToolName = "mutated"
+	detail.ToolDefinitions[0].Tools[0]["function"].(map[string]any)["name"] = "mutated"
 	detail.Messages[2].ToolCalls[0].Name = "mutated"
 	again, err := store.QueryRequestDetail("r_live")
 	if err != nil {
@@ -102,8 +119,38 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	if again.ToolCalls[0].ToolName != "web_search" {
 		t.Fatalf("stored ToolName mutated to %q, want web_search", again.ToolCalls[0].ToolName)
 	}
+	if got := again.ToolDefinitions[0].Tools[0]["function"].(map[string]any)["name"]; got != "web_search" {
+		t.Fatalf("stored ToolDefinitions mutated to %v, want web_search", got)
+	}
 	if again.Messages[2].ToolCalls[0].Name != "web_search" {
 		t.Fatalf("stored message tool name mutated to %q, want web_search", again.Messages[2].ToolCalls[0].Name)
+	}
+}
+
+func TestLiveRequestStore_PreservesToolDefinitionsOnStreamingUpdate(t *testing.T) {
+	t.Parallel()
+
+	store := NewLiveRequestStore(8, 0)
+	store.WriteRequest(context.Background(), RequestContent{
+		RequestID: "r_stream",
+		ToolDefinitions: []ToolDefDetail{
+			NewToolDefDetail(0, []map[string]any{{
+				"type":     "function",
+				"function": map[string]any{"name": "web_search"},
+			}}),
+		},
+	})
+	store.WriteRequest(context.Background(), RequestContent{
+		RequestID:        "r_stream",
+		AssistantContent: "partial streamed text",
+	})
+
+	detail, err := store.QueryRequestDetail("r_stream")
+	if err != nil {
+		t.Fatalf("QueryRequestDetail: %v", err)
+	}
+	if len(detail.ToolDefinitions) != 1 || len(detail.ToolDefinitions[0].Tools) != 1 {
+		t.Fatalf("ToolDefinitions = %#v, want preserved snapshot", detail.ToolDefinitions)
 	}
 }
 

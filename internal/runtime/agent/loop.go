@@ -1871,7 +1871,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 	updateSystemMessage()
 
-	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
+	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages, nil)
 
 	startTime := time.Now()
 
@@ -1931,7 +1931,31 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		liveStreamIteration int
 		liveStreamMessages  []llm.Message
 		liveStreamText      strings.Builder
+		toolDefsMu          sync.Mutex
+		toolDefs            []logging.ToolDefDetail
 	)
+	recordToolDefs := func(iteration int, defs []map[string]any) []logging.ToolDefDetail {
+		snap := logging.NewToolDefDetail(iteration, defs)
+		toolDefsMu.Lock()
+		defer toolDefsMu.Unlock()
+		replaced := false
+		for i := range toolDefs {
+			if toolDefs[i].IterationIndex == iteration {
+				toolDefs[i] = snap
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			toolDefs = append(toolDefs, snap)
+		}
+		return logging.CloneToolDefDetails(toolDefs)
+	}
+	currentToolDefs := func() []logging.ToolDefDetail {
+		toolDefsMu.Lock()
+		defer toolDefsMu.Unlock()
+		return logging.CloneToolDefDetails(toolDefs)
+	}
 	liveStreamCallback := stream
 	if stream != nil && l.liveRequestRecorder != nil {
 		liveStreamCallback = func(event llm.StreamEvent) {
@@ -2035,7 +2059,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
+		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, toolDefs []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 
 			// Rebuild system prompt each iteration so that:
@@ -2061,7 +2085,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			liveStreamText.Reset()
 			liveStreamMu.Unlock()
 
-			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot)
+			toolDefSnapshots := recordToolDefs(i, toolDefs)
+			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot, toolDefSnapshots)
 
 			iterMsgTokens := 0
 			for _, m := range msgs {
@@ -2364,18 +2389,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
 
-	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
+	toolDefsForRetention := currentToolDefs()
+	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult, toolDefsForRetention)
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheCreation5mInputTokens, iterResult.CacheCreation1hInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID, iterResult.UpstreamRequestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
 	// Content retention is fire-and-forget with a short deadline so it
 	// never blocks response delivery.
-	go func() {
+	go func(toolDefs []logging.ToolDefDetail) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
-	}()
+		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult, toolDefs)
+	}(toolDefsForRetention)
 
 	return resp, nil
 }
@@ -2598,7 +2624,7 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 
 // retainContent captures request-level content (system prompt, tool call
 // details, messages) for live inspection and optional persistence.
-func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result, toolDefs []logging.ToolDefDetail) {
 	if l.requestRecorder == nil {
 		return
 	}
@@ -2615,10 +2641,11 @@ func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userM
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+		ToolDefinitions:  toolDefs,
 	})
 }
 
-func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result, toolDefs []logging.ToolDefDetail) {
 	if l.liveRequestRecorder == nil || result == nil {
 		return
 	}
@@ -2635,20 +2662,22 @@ func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPro
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+		ToolDefinitions:  toolDefs,
 	})
 }
 
-func (l *Loop) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage, model string, iterationCount int, messages []llm.Message) {
+func (l *Loop) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage, model string, iterationCount int, messages []llm.Message, toolDefs []logging.ToolDefDetail) {
 	if l.liveRequestRecorder == nil {
 		return
 	}
 	l.liveRequestRecorder(ctx, logging.RequestContent{
-		RequestID:      requestID,
-		SystemPrompt:   systemPrompt,
-		UserContent:    userMessage,
-		Model:          model,
-		IterationCount: iterationCount,
-		Messages:       messages,
+		RequestID:       requestID,
+		SystemPrompt:    systemPrompt,
+		UserContent:     userMessage,
+		Model:           model,
+		IterationCount:  iterationCount,
+		Messages:        messages,
+		ToolDefinitions: toolDefs,
 	})
 }
 

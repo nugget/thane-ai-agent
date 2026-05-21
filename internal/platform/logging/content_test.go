@@ -31,6 +31,16 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 		OutputTokens:     50,
 		ToolsUsed:        map[string]int{"search": 2},
 		Exhausted:        false,
+		ToolDefinitions: []ToolDefDetail{
+			NewToolDefDetail(0, []map[string]any{{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "search",
+					"description": "Search the web.",
+					"parameters":  map[string]any{"type": "object"},
+				},
+			}}),
+		},
 		Messages: []llm.Message{
 			{Role: "system", Content: "You are a helpful assistant."},
 			{Role: "user", Content: "Hello"},
@@ -54,13 +64,14 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 	var (
 		reqID, promptHash, userContent, assistantContent, model string
 		iterCount, inputTok, outputTok                          int
-		toolsUsed, messagesJSON                                 sql.NullString
+		toolsUsed, messagesJSON, toolDefsJSON                   sql.NullString
 	)
 	err = db.QueryRow(`SELECT request_id, prompt_hash, user_content, assistant_content,
-			model, iteration_count, input_tokens, output_tokens, tools_used, messages_json
+			model, iteration_count, input_tokens, output_tokens, tools_used, messages_json,
+			tool_definitions_json
 			FROM log_request_content WHERE request_id = ?`, "r_test123").Scan(
 		&reqID, &promptHash, &userContent, &assistantContent,
-		&model, &iterCount, &inputTok, &outputTok, &toolsUsed, &messagesJSON,
+		&model, &iterCount, &inputTok, &outputTok, &toolsUsed, &messagesJSON, &toolDefsJSON,
 	)
 	if err != nil {
 		t.Fatalf("failed to read request content: %v", err)
@@ -106,6 +117,19 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 	}
 	if retained[1].Role != "user" || retained[1].Content != "Hello" {
 		t.Fatalf("retained[1] = %#v, want user Hello", retained[1])
+	}
+	if !toolDefsJSON.Valid {
+		t.Fatal("tool_definitions_json should not be null")
+	}
+	var toolDefs []ToolDefDetail
+	if err := json.Unmarshal([]byte(toolDefsJSON.String), &toolDefs); err != nil {
+		t.Fatalf("decode tool_definitions_json: %v", err)
+	}
+	if len(toolDefs) != 1 || len(toolDefs[0].Tools) != 1 {
+		t.Fatalf("tool_definitions_json = %#v, want one snapshot", toolDefs)
+	}
+	if got := toolDefs[0].Tools[0]["function"].(map[string]any)["name"]; got != "search" {
+		t.Fatalf("tool definition name = %v, want search", got)
 	}
 
 	// Write same prompt again — should not duplicate.

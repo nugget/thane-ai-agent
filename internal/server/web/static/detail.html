@@ -358,6 +358,40 @@
       border-radius: var(--radius);
       background: rgba(22, 27, 34, 0.72);
     }
+    .trace-cell__fold {
+      display: grid;
+      gap: 0;
+      min-width: 0;
+    }
+    .trace-cell__fold > summary {
+      position: relative;
+      display: block;
+      min-width: 0;
+      padding-left: 0.9rem;
+      cursor: pointer;
+      list-style: none;
+    }
+    .trace-cell__fold > summary::-webkit-details-marker {
+      display: none;
+    }
+    .trace-cell__fold > summary::before {
+      content: ">";
+      position: absolute;
+      left: 0;
+      top: 0.08rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+    }
+    .trace-cell__fold[open] > summary::before {
+      content: "v";
+    }
+    .trace-cell__fold-body {
+      display: grid;
+      gap: 0.75rem;
+      min-width: 0;
+      margin-top: 0.75rem;
+    }
     .trace-cell--live .trace-cell__body {
       border-color: rgba(45, 212, 191, 0.34);
       background: rgba(45, 212, 191, 0.07);
@@ -604,11 +638,57 @@
       background: rgba(1, 4, 9, 0.25);
     }
     .trace-disclosure > summary {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
       cursor: pointer;
-      padding: 0.36rem 0.48rem;
+      min-width: 0;
+      padding: 0.36rem 0.48rem 0.36rem 1.16rem;
+      list-style: none;
       color: var(--text-secondary);
       font-size: 0.68rem;
       font-weight: 650;
+    }
+    .trace-disclosure > summary::-webkit-details-marker {
+      display: none;
+    }
+    .trace-disclosure > summary::before {
+      content: ">";
+      position: absolute;
+      left: 0.48rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+    }
+    .trace-disclosure[open] > summary::before {
+      content: "v";
+    }
+    .trace-disclosure > summary span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .trace-disclosure__copy {
+      flex-shrink: 0;
+      border: 1px solid rgba(110, 118, 129, 0.22);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--text-muted);
+      font-size: 0.62rem;
+      line-height: 1;
+      padding: 0.14rem 0.42rem;
+      cursor: pointer;
+    }
+    .trace-disclosure__copy:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .trace-disclosure__copy--copied {
+      border-color: var(--green);
+      color: var(--green);
     }
     .trace-disclosure pre {
       max-height: 16rem;

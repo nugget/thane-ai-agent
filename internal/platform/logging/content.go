@@ -40,8 +40,8 @@ func NewContentWriter(db *sql.DB, maxLen int, logger *slog.Logger) (*ContentWrit
 	insertRequest, err := db.Prepare(`INSERT OR REPLACE INTO log_request_content
 		(request_id, prompt_hash, user_content, assistant_content, model,
 		 iteration_count, input_tokens, output_tokens, tools_used, messages_json,
-		 exhausted, exhaust_reason, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 tool_definitions_json, exhausted, exhaust_reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		upsertPrompt.Close()
 		return nil, fmt.Errorf("prepare insert request: %w", err)
@@ -102,7 +102,8 @@ type RequestContent struct {
 
 	// Full message history sent to the model, retained for forensics and
 	// tool-call extraction. Image bytes are omitted from retained detail.
-	Messages []llm.Message
+	Messages        []llm.Message
+	ToolDefinitions []ToolDefDetail
 }
 
 // WriteRequest persists a completed request's content. The system
@@ -135,6 +136,18 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 			"error", err,
 		)
 	}
+	var toolDefinitionsJSON string
+	if len(rc.ToolDefinitions) > 0 {
+		b, err := json.Marshal(rc.ToolDefinitions)
+		if err != nil {
+			w.logger.Warn("content retention: failed to marshal tool definitions",
+				"request_id", rc.RequestID,
+				"error", err,
+			)
+		} else {
+			toolDefinitionsJSON = string(b)
+		}
+	}
 
 	// Store request-level content.
 	if _, err := w.stmtInsertRequest.ExecContext(ctx,
@@ -148,6 +161,7 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 		rc.OutputTokens,
 		nullStr(toolsUsedJSON),
 		nullStr(messagesJSON),
+		nullStr(toolDefinitionsJSON),
 		rc.Exhausted,
 		nullStr(rc.ExhaustReason),
 		now,

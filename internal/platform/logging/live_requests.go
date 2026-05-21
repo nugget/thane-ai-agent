@@ -87,6 +87,9 @@ func (s *LiveRequestStore) WriteRequest(_ context.Context, rc RequestContent) {
 	defer s.mu.Unlock()
 
 	if existing := s.entries[rc.RequestID]; existing != nil {
+		if oldEntry, _ := existing.Value.(*liveRequestEntry); oldEntry != nil && oldEntry.detail != nil && len(entry.detail.ToolDefinitions) == 0 {
+			entry.detail.ToolDefinitions = CloneToolDefDetails(oldEntry.detail.ToolDefinitions)
+		}
 		existing.Value = entry
 		s.order.MoveToBack(existing)
 		return
@@ -140,6 +143,7 @@ func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *Reque
 		CreatedAt:        now.Format(time.RFC3339Nano),
 		Messages:         retainedMessages(rc.Messages, maxLen),
 		ToolCalls:        extractToolDetails(rc.Messages, maxLen),
+		ToolDefinitions:  CloneToolDefDetails(rc.ToolDefinitions),
 	}
 	if len(rc.ToolsUsed) > 0 {
 		detail.ToolsUsed = make(map[string]int, len(rc.ToolsUsed))
@@ -166,6 +170,7 @@ func cloneRequestDetail(src *RequestDetail) *RequestDetail {
 	} else {
 		dst.ToolCalls = append([]ToolDetail(nil), src.ToolCalls...)
 	}
+	dst.ToolDefinitions = CloneToolDefDetails(src.ToolDefinitions)
 	dst.Messages = cloneMessageDetails(src.Messages)
 	return &dst
 }
