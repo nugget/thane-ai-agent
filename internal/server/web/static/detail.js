@@ -1519,7 +1519,16 @@ function appendNotebookModelExchange(body, requestID, detail) {
 function normalizeRequestTitleText(value) {
   if (value === null || value === undefined || value === '') return '';
   const text = typeof value === 'string' ? value : formatTraceJSON(value);
-  return text.replace(/\s+/g, ' ').trim();
+  return stripRequestTitlePreamble(text.replace(/\s+/g, ' ').trim());
+}
+
+function stripRequestTitlePreamble(text) {
+  if (!text) return '';
+  const signalWithTimestamp = text.match(/^Signal message from .*? \[ts:[^\]]+\]:\s*/);
+  if (signalWithTimestamp) return text.slice(signalWithTimestamp[0].length).trim();
+  const signalWithoutTimestamp = text.match(/^Signal message from [^:]+:\s*/);
+  if (signalWithoutTimestamp) return text.slice(signalWithoutTimestamp[0].length).trim();
+  return text;
 }
 
 function latestUserMessageText(messages) {
