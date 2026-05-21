@@ -103,9 +103,8 @@ const (
 // with a marker.
 const maxAxiomsBytes = 16 * 1024
 
-// maxEgoBytes is the maximum size of ego.md content published through
-// the core context provider. Content beyond this limit is truncated
-// with a marker.
+// maxEgoBytes is the maximum size of ego.md content published as a stable
+// core prompt section. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
 
 // maxTagContextBytes is the aggregate size limit for all tag context
@@ -977,59 +976,68 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// Snapshot active tags from the per-Run capability scope.
 	tags := snapshotTagsFromContext(ctx)
 
-	// Track section boundaries for debug dump.
+	// Track section boundaries for debug dumps and provider-side prompt
+	// cache blocks. Separators belong between sections, so write them
+	// before marking the section start.
 	var sections []promptSection
-	mark := func(name string) { sections = append(sections, promptSection{name: name, start: sb.Len()}) }
-	seal := func() { sections[len(sections)-1].end = sb.Len() }
+	appendTracked := func(name string, write func()) {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		sections = append(sections, promptSection{name: name, start: sb.Len()})
+		write()
+		sections[len(sections)-1].end = sb.Len()
+	}
+	appendTrackedMarkdown := func(name string, level int, title string, content string) {
+		var section strings.Builder
+		if !promptfmt.AppendMarkdownSection(&section, level, title, content) {
+			return
+		}
+		appendTracked(name, func() {
+			sb.WriteString(section.String())
+		})
+	}
 
 	// 0. Axioms (highest-level preamble — what must be true before identity)
 	if !taskPrompt && l.coreContextProvider != nil {
 		for _, preambleSection := range l.coreContextProvider.preambleSections(ctx) {
-			mark(preambleSection.name)
-			promptfmt.AppendMarkdownSection(&sb, 2, preambleSection.title, preambleSection.content)
-			seal()
+			appendTrackedMarkdown(preambleSection.name, 2, preambleSection.title, preambleSection.content)
 		}
 	}
 
 	// 1. Persona (identity — who am I)
-	if sb.Len() > 0 {
-		sb.WriteString("\n\n")
-	}
-	mark("PERSONA")
-	if taskPrompt {
-		sb.WriteString(prompts.DelegateSystemPrompt())
-	} else if l.persona != "" {
-		sb.WriteString(l.persona)
-	} else {
-		sb.WriteString(prompts.BaseSystemPrompt())
-	}
-	seal()
+	appendTracked("PERSONA", func() {
+		if taskPrompt {
+			sb.WriteString(prompts.DelegateSystemPrompt())
+		} else if l.persona != "" {
+			sb.WriteString(l.persona)
+		} else {
+			sb.WriteString(prompts.BaseSystemPrompt())
+		}
+	})
 
 	// 2. Stable core context (durable self-orientation).
 	if !taskPrompt && l.coreContextProvider != nil {
 		for _, coreSection := range l.coreContextProvider.promptSections(ctx) {
-			mark(coreSection.name)
-			promptfmt.AppendMarkdownSection(&sb, 2, coreSection.title, coreSection.content)
-			seal()
+			appendTrackedMarkdown(coreSection.name, 2, coreSection.title, coreSection.content)
 		}
 	}
 
 	// 3. Runtime contract (execution semantics — how should I use tools)
-	mark("RUNTIME CONTRACT")
-	sb.WriteString("\n\n")
-	if taskPrompt {
-		sb.WriteString(prompts.DelegateRuntimeContract())
-	} else {
-		sb.WriteString(prompts.RuntimeContract())
-	}
-	seal()
+	appendTracked("RUNTIME CONTRACT", func() {
+		if taskPrompt {
+			sb.WriteString(prompts.DelegateRuntimeContract())
+		} else {
+			sb.WriteString(prompts.RuntimeContract())
+		}
+	})
 
 	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
-		mark("TOOL CALLING CONTRACT")
-		sb.WriteString("\n\n## Tool Calling Contract\n\n")
-		sb.WriteString(contract)
-		sb.WriteString("\n")
-		seal()
+		appendTracked("TOOL CALLING CONTRACT", func() {
+			sb.WriteString("## Tool Calling Contract\n\n")
+			sb.WriteString(contract)
+			sb.WriteString("\n")
+		})
 	}
 
 	// 4. Talents (behavior — how should I act)
@@ -1037,38 +1045,38 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// prompt caching can retain the stable behavioral prefix.
 	alwaysOnTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, tags)
 	if !taskPrompt && alwaysOnTalents != "" {
-		mark("TALENTS ALWAYS ON")
-		sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		sb.WriteString(alwaysOnTalents)
-		seal()
+		appendTracked("TALENTS ALWAYS ON", func() {
+			sb.WriteString("## Behavioral Guidance\n\n")
+			sb.WriteString(alwaysOnTalents)
+		})
 	}
 	if taggedTalents != "" {
-		mark("TALENTS TAGGED")
-		if !taskPrompt && alwaysOnTalents != "" {
-			sb.WriteString("\n\n---\n\n")
-		} else {
-			sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		}
-		sb.WriteString(taggedTalents)
-		seal()
+		appendTracked("TALENTS TAGGED", func() {
+			if !taskPrompt && alwaysOnTalents != "" {
+				sb.WriteString("---\n\n")
+			} else {
+				sb.WriteString("## Behavioral Guidance\n\n")
+			}
+			sb.WriteString(taggedTalents)
+		})
 	}
 
 	// 5. Active capabilities (dynamic runtime state).
 	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
-		mark("ACTIVE CAPABILITIES")
-		sb.WriteString("\n\n## Active Capabilities\n\n")
-		sb.WriteString(activeSummary)
-		sb.WriteString("\n")
-		seal()
+		appendTracked("ACTIVE CAPABILITIES", func() {
+			sb.WriteString("## Active Capabilities\n\n")
+			sb.WriteString(activeSummary)
+			sb.WriteString("\n")
+		})
 	}
 
 	// 6. Session origin policy (runtime data about why this run was shaped).
 	if !taskPrompt {
 		if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
-			mark("SESSION ORIGIN CONTEXT")
-			sb.WriteString("\n\n## Session Origin Context\n\n")
-			sb.WriteString(originCtx)
-			seal()
+			appendTracked("SESSION ORIGIN CONTEXT", func() {
+				sb.WriteString("## Session Origin Context\n\n")
+				sb.WriteString(originCtx)
+			})
 		}
 	}
 
@@ -1089,17 +1097,14 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
 		}
 		for _, contextSection := range assembler.BuildSections(haCtx, req) {
-			mark(strings.ToUpper(contextSection.Title))
-			promptfmt.AppendMarkdownSection(&sb, 2, contextSection.Title, contextSection.Content)
-			seal()
+			appendTrackedMarkdown(strings.ToUpper(contextSection.Title), 2, contextSection.Title, contextSection.Content)
 		}
 	}
 
 	// 8. Current Conditions (environment — where/when am I)
-	mark("CURRENT CONDITIONS")
-	sb.WriteString("\n\n")
-	sb.WriteString(awareness.CurrentConditions(l.timezone))
-	seal()
+	appendTracked("CURRENT CONDITIONS", func() {
+		sb.WriteString(awareness.CurrentConditions(l.timezone))
+	})
 
 	text := sb.String()
 	return text, promptSectionsFromBoundaries(text, sections)

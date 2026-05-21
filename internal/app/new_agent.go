@@ -92,7 +92,7 @@ func (a *App) initAgentLoop(s *newState) error {
 		axiomsFile = resolvePath(coreFilePath(cfg.Workspace.Path, "axioms.md"), nil)
 		egoFile = resolvePath(coreFilePath(cfg.Workspace.Path, "ego.md"), nil)
 	}
-	s.resolvedCorePromptFiles = append(existingCorePromptFiles(axiomsFile, egoFile), resolvedInjectFiles...)
+	s.resolvedCorePromptFiles = append(corePromptFilesForStartupVerification(logger, axiomsFile, egoFile), resolvedInjectFiles...)
 
 	// --- Agent loop ---
 	// The core conversation engine. Receives messages, manages context,
@@ -144,13 +144,20 @@ func (a *App) initAgentLoop(s *newState) error {
 	return nil
 }
 
-func existingCorePromptFiles(paths ...string) []string {
+func corePromptFilesForStartupVerification(logger *slog.Logger, paths ...string) []string {
 	var out []string
 	for _, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
-		if _, err := os.Stat(path); err == nil || !errors.Is(err, fs.ErrNotExist) {
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			if logger != nil {
+				logger.Warn("core prompt file unreadable", "path", path, "error", err)
+			}
+			// Keep unreadable paths in startup verification so managed-root
+			// policy failures surface instead of being silently skipped.
 			out = append(out, path)
 		}
 	}

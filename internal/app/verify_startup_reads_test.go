@@ -68,6 +68,20 @@ func writeTestFile(t *testing.T, path, body string) {
 	}
 }
 
+func TestCorePromptFilesForStartupVerification_SkipsMissingFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	axiomsPath := filepath.Join(dir, "axioms.md")
+	writeTestFile(t, axiomsPath, "# Axioms\n")
+	missingPath := filepath.Join(dir, "ego.md")
+
+	got := corePromptFilesForStartupVerification(nil, "", axiomsPath, missingPath)
+	if len(got) != 1 || got[0] != axiomsPath {
+		t.Fatalf("corePromptFilesForStartupVerification() = %#v, want only %q", got, axiomsPath)
+	}
+}
+
 // TestVerifyStartupReads_RequiredBlocksUnsignedCorePromptFile confirms
 // that a core prompt file living inside a managed root with
 // verify_signatures: required fails startup when the verifier says

@@ -55,6 +55,7 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 		llm.DefaultModelInteractionProfile(),
 	)
 	index := promptSectionIndex(t, sections)
+	assertPromptSectionsStartAtContent(t, sections)
 
 	assertPromptSectionOrder(t, index,
 		"AXIOMS",
@@ -121,6 +122,7 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 		llm.DefaultModelInteractionProfile(),
 	)
 	index := promptSectionIndex(t, sections)
+	assertPromptSectionsStartAtContent(t, sections)
 
 	assertPromptSectionAbsent(t, index, "AXIOMS")
 	assertPromptSectionAbsent(t, index, "EGO")
@@ -181,6 +183,15 @@ func promptSectionIndex(t *testing.T, sections []llm.PromptSection) map[string]i
 		index[section.Name] = i
 	}
 	return index
+}
+
+func assertPromptSectionsStartAtContent(t *testing.T, sections []llm.PromptSection) {
+	t.Helper()
+	for _, section := range sections {
+		if strings.HasPrefix(section.Content, "\n") || strings.HasPrefix(section.Content, "\r") {
+			t.Fatalf("prompt section %q starts with separator whitespace: %q", section.Name, section.Content)
+		}
+	}
 }
 
 func assertPromptSectionOrder(t *testing.T, index map[string]int, names ...string) {
