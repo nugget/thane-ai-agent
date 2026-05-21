@@ -322,6 +322,42 @@ func TestBuildSystemPrompt_InjectFilesIncluded(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_InjectFilesStripFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "MEMORY.md")
+	if err := os.WriteFile(f, []byte(`---
+created: 2026-05-21T20:14:00Z
+updated: 2026-05-21T20:16:00Z
+summary: Static metadata should not be prompt corpus.
+---
+
+# Shared Memory
+
+literal context body
+`), 0o644); err != nil {
+		t.Fatalf("write inject file: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.SetInjectFiles([]string{f})
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "literal context body") {
+		t.Fatal("system prompt should contain inject file body")
+	}
+	for _, unwanted := range []string{
+		"created:",
+		"updated:",
+		"2026-05-21T20:14:00Z",
+		"Static metadata should not be prompt corpus.",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("system prompt contains frontmatter %q:\n%s", unwanted, prompt)
+		}
+	}
+}
+
 type rejectingInjectFileVerifier struct{}
 
 func (rejectingInjectFileVerifier) VerifyPath(context.Context, string, string) error {
