@@ -277,8 +277,8 @@ type Loop struct {
 	pendingTagProviders    map[string]TagContextProvider
 	pendingAlwaysProviders []TagContextProvider
 
-	// tagContextAssembler builds the Capability Context section from
-	// tagged KB articles, tagged providers, and always-on providers.
+	// tagContextAssembler builds typed context sections from tagged KB
+	// articles, tagged providers, and always-on providers.
 	// Set via SetTagContextAssembler; nil disables tag context.
 	tagContextAssembler *TagContextAssembler
 
@@ -576,9 +576,9 @@ func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
 }
 
 // SetTagContextAssembler configures the shared assembler that builds
-// the Capability Context section of the system prompt from tagged KB
-// articles, tagged providers, and always-on providers. Drains any
-// provider registrations staged before this call into the assembler.
+// typed context sections of the system prompt from tagged KB articles,
+// tagged providers, and always-on providers. Drains any provider
+// registrations staged before this call into the assembler.
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	l.pendingProvidersMu.Lock()
 	pendingTagged := l.pendingTagProviders
@@ -1049,11 +1049,12 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 		}
 	}
 
-	// 6. Capability context (capability knowledge + ambient context)
-	// One unified section assembled by TagContextAssembler from three
-	// sources: tagged KB articles, tagged providers, and always-on
-	// providers. Always-on providers are gated by IncludeAlways: main
-	// loop runs include them; delegate runs (which set
+	// 6. Typed context buckets (capability knowledge + ambient context).
+	// TagContextAssembler walks tagged KB articles, tagged providers, and
+	// always-on providers, then returns named buckets so durable guidance,
+	// continuity, related context, and live state are not flattened into
+	// one generic section. Always-on providers are gated by IncludeAlways:
+	// main loop runs include them; delegate runs (which set
 	// req.SuppressAlwaysContext via the loops launch) do not.
 	if assembler := l.contextAssemblerForPrompt(); assembler != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -1064,10 +1065,9 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			ActiveTags:    tags,
 			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
 		}
-		if capCtx := assembler.Build(haCtx, req); capCtx != "" {
-			mark("CAPABILITY CONTEXT")
-			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(capCtx)
+		for _, contextSection := range assembler.BuildSections(haCtx, req) {
+			mark(strings.ToUpper(contextSection.Title))
+			promptfmt.AppendMarkdownSection(&sb, 2, contextSection.Title, contextSection.Content)
 			seal()
 		}
 	}
@@ -1182,11 +1182,11 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 	return result
 }
 
-// promptSectionCacheTTL maps a system-prompt section name to its
-// Anthropic cache TTL. See docs/anthropic-caching.md for the policy,
-// the decision tree for adding new sections, and why volatile
-// sections must return "" rather than a short TTL (they'd churn the
-// cache instead of amortizing it).
+// promptSectionCacheTTL maps a system-prompt section name to the current
+// Anthropic-shaped cache TTL hint. See docs/prompt-caching.md for the
+// provider-neutral stability policy, provider adapter mapping, and why volatile
+// sections must return "" rather than a short TTL (they'd churn the cache
+// instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
 	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":

@@ -43,6 +43,11 @@ func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Lo
 	}
 }
 
+// TagContextBucket places watched entity snapshots in live state.
+func (p *WatchlistProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
+}
+
 // SetRegistryClient enables device/sibling/gateway/integration
 // enrichment for unavailable entities. Pass nil to disable. The
 // concrete homeassistant.Client satisfies HARegistryClient out of
@@ -100,6 +105,12 @@ type WatchlistTagProvider struct {
 // NewWatchlistTagProvider creates a tag-scoped watchlist provider.
 func NewWatchlistTagProvider(tag string, store *WatchlistStore, ha StateGetter, logger *slog.Logger) *WatchlistTagProvider {
 	return &WatchlistTagProvider{tag: tag, store: store, ha: ha, logger: logger}
+}
+
+// TagContextBucket places tag-scoped watched entity snapshots in live
+// state rather than tagged guidance.
+func (p *WatchlistTagProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
 }
 
 // SetRegistryClient enables unavailability enrichment for this

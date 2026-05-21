@@ -312,6 +312,7 @@ Good places to look for existing patterns:
 
 ## Related
 
-- [`anthropic-caching.md`](anthropic-caching.md) — how the system
-  prompt sections map onto Anthropic cache TTLs, and the decision
-  tree for adding a new section without breaking the cache.
+- [`prompt-caching.md`](prompt-caching.md) — how system prompt sections
+  map onto global stability classes, provider-specific cache policy,
+  and the decision tree for adding a new section without breaking the
+  cache.

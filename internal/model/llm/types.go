@@ -23,7 +23,7 @@ type ImageContent struct {
 type PromptSection struct {
 	Name     string
 	Content  string
-	CacheTTL string // optional provider hint, for example "1h" or "5m"
+	CacheTTL string // optional provider cache hint; currently Anthropic-shaped ("1h", "5m")
 }
 
 // Message represents a chat message for the LLM.

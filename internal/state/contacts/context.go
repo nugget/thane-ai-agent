@@ -27,6 +27,12 @@ func NewContextProvider(store *Store, embeddings EmbeddingClient) *ContextProvid
 	}
 }
 
+// TagContextBucket places semantic contact matches in related context
+// because they are selected from the current user message.
+func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketRelated
+}
+
 // SetMaxContacts configures how many contacts to include. Values less
 // than 1 are clamped to 1.
 func (p *ContextProvider) SetMaxContacts(n int) {

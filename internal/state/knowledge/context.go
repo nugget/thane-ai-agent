@@ -26,6 +26,12 @@ func NewContextProvider(store *Store, embedder *Client) *ContextProvider {
 	}
 }
 
+// TagContextBucket places semantic fact matches in related context
+// because they are selected from the current user message.
+func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketRelated
+}
+
 // SetMaxFacts configures how many facts to include.
 func (p *ContextProvider) SetMaxFacts(n int) {
 	p.maxFacts = n
