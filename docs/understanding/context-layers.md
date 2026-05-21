@@ -71,6 +71,8 @@ memory files, identity documents.
 - `ego.md` — self-reflection and continuity notes
 - `mission.md` — deployment-specific mission context
 
+See `examples/axioms.example.md` for a reference axioms preamble.
+
 ### 4. Session Context (dynamic)
 
 **Purpose:** Conversation state — what's happening *now*.
