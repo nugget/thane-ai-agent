@@ -35,15 +35,16 @@ Today, prompt assembly in `internal/runtime/agent/loop.go` roughly looks like:
 
 1. axioms, when `core/axioms.md` exists
 2. persona
-3. ego and injected core context files
-4. runtime contract
-5. model-family tool-calling contract
-6. talents
-7. active capability summary
-8. session origin context
-9. typed context buckets: tagged guidance, continuity, related context, live state
-10. current conditions
-11. conversation history and carry-forward context
+3. mission, when `core/mission.md` exists
+4. ego and supplemental injected core context files
+5. runtime contract
+6. model-family tool-calling contract
+7. talents
+8. active capability summary
+9. session origin context
+10. typed context buckets: tagged guidance, continuity, related context, live state
+11. current conditions
+12. conversation history and carry-forward context
 
 This layering is mostly sound. The problem is that the always-on layers
 still carry too much evergreen tool doctrine, and the tagged/contextual
@@ -392,6 +393,12 @@ purpose:
 - `ego.md`: self-reflection and continuity of internal stance
 - `mission.md`: durable mission framing and major operational truths
 - `metacognitive.md`: metacognitive loop state, not general doctrine
+
+All fixed core prompt files should travel through the same mechanics:
+resolve the workspace/core path, verify the managed-root policy, read
+fresh each turn, enforce a prompt budget with an explicit truncation
+marker, and render into the intended semantic slot. The semantic slots
+can differ; the file plumbing should not.
 
 These files should not become a dumping ground for tool encyclopedias.
 

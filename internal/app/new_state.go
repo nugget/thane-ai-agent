@@ -20,13 +20,11 @@ type newState struct {
 
 	// Loaded in initChannels after document-root verification wiring,
 	// consumed by finalizeCapabilityTags.
-	parsedTalents  []talents.Talent
-	personaContent string
+	parsedTalents []talents.Talent
 
 	// Resolved in initAgentLoop, consumed by initChannels for startup
 	// verification once the document store exists.
 	resolvedCorePromptFiles []string
-	resolvedInjectFiles     []string
 
 	// Forward-declared in initStores (for connwatch OnReady closure),
 	// constructed in initAwareness.

@@ -103,9 +103,22 @@ const (
 // with a marker.
 const maxAxiomsBytes = 16 * 1024
 
+// maxPersonaBytes is the maximum size of persona.md content published as the
+// identity section. Content beyond this limit is truncated with a marker.
+const maxPersonaBytes = 16 * 1024
+
 // maxEgoBytes is the maximum size of ego.md content published as a stable
 // core prompt section. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
+
+// maxMissionBytes is the maximum size of mission.md content published as a
+// stable core prompt section. Content beyond this limit is truncated with a
+// marker.
+const maxMissionBytes = 16 * 1024
+
+// maxInjectFileBytes is the maximum size of each configured supplemental core
+// prompt file. Content beyond this limit is truncated with a marker.
+const maxInjectFileBytes = 16 * 1024
 
 // maxTagContextBytes is the aggregate size limit for all tag context
 // files injected into the system prompt. Individual files exceeding
@@ -328,6 +341,8 @@ type LoopOptions struct {
 	// Optional, stable at construction.
 	Persona             string
 	AxiomsFile          string
+	PersonaFile         string
+	MissionFile         string
 	ParsedTalents       []talents.Talent
 	Timezone            string
 	RecoveryModel       string
@@ -382,8 +397,10 @@ func NewLoop(opts LoopOptions) (*Loop, error) {
 		requestRecorder:     opts.RequestRecorder,
 		nowFunc:             time.Now,
 	}
-	if opts.AxiomsFile != "" || opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+	if opts.AxiomsFile != "" || opts.PersonaFile != "" || opts.MissionFile != "" || opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
 		l.ensureCoreContextProvider().updateAxiomsFile(opts.AxiomsFile)
+		l.ensureCoreContextProvider().updatePersonaFile(opts.PersonaFile)
+		l.ensureCoreContextProvider().updateMissionFile(opts.MissionFile)
 		l.ensureCoreContextProvider().updateEgoFile(opts.EgoFile)
 		l.coreContextProvider.updateProvenanceStore(opts.ProvenanceStore)
 		l.coreContextProvider.updateInjectFiles(opts.InjectFiles)
@@ -1009,6 +1026,14 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	appendTracked("PERSONA", func() {
 		if taskPrompt {
 			sb.WriteString(prompts.DelegateSystemPrompt())
+		} else if l.coreContextProvider != nil {
+			if persona := l.coreContextProvider.personaContent(ctx); persona != "" {
+				sb.WriteString(persona)
+			} else if l.persona != "" {
+				sb.WriteString(l.persona)
+			} else {
+				sb.WriteString(prompts.BaseSystemPrompt())
+			}
 		} else if l.persona != "" {
 			sb.WriteString(l.persona)
 		} else {
@@ -1217,7 +1242,7 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 // instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
-	case "AXIOMS", "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
+	case "AXIOMS", "PERSONA", "MISSION", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
 		return "1h"
 	case "TALENTS TAGGED":
 		return "5m"

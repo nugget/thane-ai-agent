@@ -34,8 +34,9 @@ and regression tests.
 |-------------------------|-----------|-----------|
 | `AXIOMS`                | stable    | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | stable    | Identity. Changes only when persona files are edited. |
+| `MISSION`               | stable    | Durable mission framing. Changes only when mission.md is edited. |
 | `EGO`                   | stable    | Self-reflection file. Stable across long sessions. |
-| `INJECTED CONTEXT`      | stable    | Mission + configured core files. Stable across a session. |
+| `INJECTED CONTEXT`      | stable    | Supplemental configured core files. Stable across a session. |
 | `RUNTIME CONTRACT`      | stable    | Execution semantics. Model-invariant. |
 | `TOOL CALLING CONTRACT` | stable    | Model-family-specific tool-calling guidance. |
 | `TALENTS ALWAYS ON`     | stable    | Behavioral guidance. Stable across a session. |
@@ -61,6 +62,11 @@ other buckets. The tradeoff is an explicit ceiling expansion from one
 64 KB aggregate context block to as much as 256 KB across the four
 volatile buckets, so new buckets should justify both their ordering and
 their prompt-budget impact.
+
+Fixed core prompt files (`axioms.md`, `persona.md`, `mission.md`,
+`ego.md`, and any configured supplemental injected file) share the same
+read/verify/reread/truncate mechanics. Their cache policy follows the
+section they render into, not a separate file-specific path.
 
 ## Adding a New Section
 
@@ -105,8 +111,9 @@ Anthropic exposes explicit prompt-cache breakpoints through
 |-------------------------|---------------|-----------|
 | `AXIOMS`                | 1h            | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | 1h            | Identity. Changes only when persona files are edited. |
+| `MISSION`               | 1h            | Durable mission framing. Changes only when mission.md is edited. |
 | `EGO`                   | 1h            | Self-reflection file. Stable across long sessions. |
-| `INJECTED CONTEXT`      | 1h            | Mission + configured core files. Stable across a session. |
+| `INJECTED CONTEXT`      | 1h            | Supplemental configured core files. Stable across a session. |
 | `RUNTIME CONTRACT`      | 1h            | Execution semantics. Model-invariant. |
 | `TOOL CALLING CONTRACT` | 1h            | Model-family-specific tool-calling guidance. |
 | `TALENTS ALWAYS ON`     | 1h            | Behavioral guidance. Stable across a session. |

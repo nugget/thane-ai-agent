@@ -296,22 +296,6 @@ func (a *App) initStores(s *newState) error {
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, mem, logger)
 	a.archiveAdapter = archiveAdapter
 
-	// --- Persona --- A curated core/persona.md file can replace the
-	// default system prompt, giving the agent a custom identity and
-	// behavioral guidance.
-	var personaContent string
-	if personaPath := resolvePath(cfg.CoreFile("persona.md"), nil); personaPath != "" {
-		data, err := os.ReadFile(personaPath)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("load persona %s: %w", personaPath, err)
-			}
-		} else {
-			personaContent = string(data)
-			logger.Info("persona loaded", "path", personaPath, "size", len(personaContent))
-		}
-	}
-	s.personaContent = personaContent
 	// --- Model router ---
 	// Selects the best model for each request based on complexity, cost,
 	// and capability requirements. Falls back to the default model.
