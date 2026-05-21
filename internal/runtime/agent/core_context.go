@@ -90,6 +90,12 @@ func (p *CoreContextProvider) updateProvenanceStore(store *provenance.Store) {
 	p.mu.Unlock()
 }
 
+// TagContextBucket keeps current core context in continuity until the
+// dedicated core preamble path owns axioms, mission, and ego sections.
+func (p *CoreContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // TagContext returns core continuity context for always-on injection.
 func (p *CoreContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
 	if p == nil {

@@ -87,6 +87,13 @@ func NewEpisodicProvider(archive ArchiveReader, logger *slog.Logger, cfg Episodi
 	}
 }
 
+// TagContextBucket places daily notes and recent-session catalogs in
+// continuity context because they orient the current turn inside past
+// experience.
+func (p *EpisodicProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // TagContext returns episodic memory context for injection into the
 // system prompt. It assembles daily memory notes and the recent-
 // sessions JSON catalog from the archive. Implements

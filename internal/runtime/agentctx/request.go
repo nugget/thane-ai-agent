@@ -46,6 +46,83 @@ type ContextRequest struct {
 	IncludeAlways bool
 }
 
+// ContextBucket names the model-facing section class for generated
+// runtime context. Buckets let prompt assembly keep durable guidance,
+// continuity material, request-related leads, and live state in stable
+// positions instead of flattening everything into one generic context
+// blob.
+type ContextBucket string
+
+const (
+	// ContextBucketTaggedGuidance contains tag-scoped doctrine or
+	// instructions loaded because a capability tag is active.
+	ContextBucketTaggedGuidance ContextBucket = "tagged_guidance"
+
+	// ContextBucketContinuity contains conversation, channel, working
+	// memory, and other experiential state that helps the model preserve
+	// continuity across turns.
+	ContextBucketContinuity ContextBucket = "continuity_context"
+
+	// ContextBucketRelated contains retrieved or inferred pointers that
+	// may be relevant to the current request. Results here should stay
+	// lightweight and clearly optional.
+	ContextBucketRelated ContextBucket = "related_context"
+
+	// ContextBucketLiveState contains current operational or world state,
+	// such as entity snapshots, recent state changes, presence, or
+	// service health.
+	ContextBucketLiveState ContextBucket = "live_state"
+)
+
+// Title returns the markdown heading used for b in system prompts.
+func (b ContextBucket) Title() string {
+	switch b {
+	case ContextBucketTaggedGuidance:
+		return "Tagged Guidance"
+	case ContextBucketContinuity:
+		return "Continuity Context"
+	case ContextBucketRelated:
+		return "Related Context"
+	case ContextBucketLiveState:
+		return "Live State"
+	default:
+		return "Context"
+	}
+}
+
+// Valid reports whether b is one of the known prompt context buckets.
+func (b ContextBucket) Valid() bool {
+	switch b {
+	case ContextBucketTaggedGuidance,
+		ContextBucketContinuity,
+		ContextBucketRelated,
+		ContextBucketLiveState:
+		return true
+	default:
+		return false
+	}
+}
+
+// OrDefault returns b when it is recognized, otherwise fallback.
+func (b ContextBucket) OrDefault(fallback ContextBucket) ContextBucket {
+	if b.Valid() {
+		return b
+	}
+	if fallback.Valid() {
+		return fallback
+	}
+	return ContextBucketContinuity
+}
+
+// ContextSection is one assembled context bucket ready for prompt
+// rendering. Content excludes the heading; prompt assembly owns section
+// placement and retained section metadata.
+type ContextSection struct {
+	Bucket  ContextBucket
+	Title   string
+	Content string
+}
+
 // ParsePromptMode validates a wire value and returns the corresponding
 // prompt mode. An empty value resolves to the full default.
 func ParsePromptMode(value string) (PromptMode, error) {

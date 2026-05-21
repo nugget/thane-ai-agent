@@ -47,6 +47,13 @@ func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, 
 	}
 }
 
+// TagContextBucket places archive prewarm hits in related context
+// because they are retrieval results selected for the current wake or
+// request rather than baseline continuity.
+func (p *ArchiveContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketRelated
+}
+
 // TagContext searches the conversation archive for excerpts relevant
 // to the current wake context. Subjects are extracted from ctx (set
 // by the wake bridge); if no subjects are available but

@@ -53,6 +53,12 @@ func NewSubjectContextProvider(store *Store, logger *slog.Logger) *SubjectContex
 	}
 }
 
+// TagContextBucket places subject-keyed facts in related context
+// because they are retrieved from wake/request subjects.
+func (p *SubjectContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketRelated
+}
+
 // SetMaxFacts configures the maximum number of subject-matched facts
 // to include in the context.
 func (p *SubjectContextProvider) SetMaxFacts(n int) {

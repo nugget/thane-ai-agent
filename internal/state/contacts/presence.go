@@ -125,6 +125,11 @@ func NewPresenceTracker(entityIDs []string, timezone string, logger *slog.Logger
 	}
 }
 
+// TagContextBucket places current person presence in live state.
+func (t *PresenceTracker) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
+}
+
 // Initialize fetches the current state of all tracked entities from the
 // Home Assistant REST API. Entities that fail to load are logged and
 // left in "Unknown" state. This method is idempotent and safe to call

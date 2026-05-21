@@ -16,8 +16,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
-// TagContextAssembler builds the Capability Context section from
-// three sources, walked in one ordered pass per call:
+// TagContextAssembler builds typed prompt context sections from three
+// sources, walked in one ordered pass per call:
 //
 //  1. Tagged KB articles — markdown files in the knowledge base
 //     directory with `tags:` (any-of) and/or `tags_all:` (all-of)
@@ -30,14 +30,12 @@ import (
 //     ContextRequest.IncludeAlways: main loop runs include them,
 //     delegate runs do not.
 //
-// All three sources share one 64 KB aggregate cap, one truncation
-// marker, and one unified [Build] method — there is no parallel
-// always-bucket walker. Tagged vs always is encoded as where each
-// source registered, not as a separate code path. KB articles and
-// explicit context refs flow through the optional managed-root
-// signature verifier. Providers that read disk-managed material are
-// responsible for applying their own verification before returning
-// model-facing content.
+// Each rendered bucket has its own 64 KB cap and truncation marker.
+// Tagged vs always is encoded as where each source registered, not as
+// a separate code path. KB articles and explicit context refs flow
+// through the optional managed-root signature verifier. Providers that
+// read disk-managed material are responsible for applying their own
+// verification before returning model-facing content.
 //
 // Both the main agent loop and delegate executor share a single
 // assembler. The assembler is safe for concurrent use after
@@ -56,6 +54,15 @@ type TagContextAssembler struct {
 	mu              sync.Mutex
 	tagProviders    map[string]TagContextProvider
 	alwaysProviders []TagContextProvider
+}
+
+// TagContextBucketer lets a context provider choose the prompt bucket
+// that should contain its output. Providers that do not implement it
+// are assigned by registration path: tagged providers default to
+// Tagged Guidance and always-on providers default to Continuity
+// Context.
+type TagContextBucketer interface {
+	TagContextBucket() agentctx.ContextBucket
 }
 
 // kbArticle is a knowledge base file with tag affinity parsed from
@@ -188,15 +195,29 @@ func (a *TagContextAssembler) TaggedProviders() map[string]TagContextProvider {
 	return out
 }
 
-// Build assembles tag context for the request. The single internal
-// pipeline walks three sources in order — KB articles, tagged
-// providers, always-on providers — sharing one 64 KB aggregate cap
-// and one truncation marker. Always-on providers are gated by
-// req.IncludeAlways; main loop runs include them, delegate runs do
-// not. Returns empty string when no source produces content.
+// Build assembles tag context for the request as one legacy string.
+// New prompt assembly should prefer [TagContextAssembler.BuildSections]
+// so typed buckets remain visible to the model and request forensics.
 func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextRequest) string {
-	if a == nil {
+	sections := a.BuildSections(ctx, req)
+	if len(sections) == 0 {
 		return ""
+	}
+	var buf strings.Builder
+	for _, section := range sections {
+		appendContextContent(&buf, []byte(section.Content), maxTagContextBytes, truncationMarker)
+	}
+	return buf.String()
+}
+
+// BuildSections assembles typed context sections for the request. The
+// single internal pipeline walks three sources in order — KB articles,
+// tagged providers, always-on providers. Always-on providers are gated
+// by req.IncludeAlways; main loop runs include them, delegate runs do
+// not. Returns nil when no source produces content.
+func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.ContextRequest) []agentctx.ContextSection {
+	if a == nil {
+		return nil
 	}
 
 	a.mu.Lock()
@@ -208,7 +229,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 	a.mu.Unlock()
 
 	seen := make(map[string]bool)
-	var buf strings.Builder
+	acc := newContextAccumulator()
 
 	// Source 1: Tagged KB articles. Re-scanned and re-read each turn
 	// so frontmatter edits, additions, and deletions propagate
@@ -239,11 +260,11 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 		// the YAML metadata, just the knowledge content.
 		_, content := talents.ParseFrontmatterMetadata(string(data))
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
-		a.appendContent(&buf, data)
-		if buf.Len() >= maxTagContextBytes {
+		acc.append(agentctx.ContextBucketTaggedGuidance, data)
+		if acc.truncated(agentctx.ContextBucketTaggedGuidance) {
 			a.logger.Warn("tag context aggregate limit reached",
 				"source", "kb_article", "limit_bytes", maxTagContextBytes)
-			return buf.String()
+			return acc.sections()
 		}
 	}
 
@@ -265,11 +286,12 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 		if content == "" {
 			continue
 		}
-		a.appendContent(&buf, []byte(content))
-		if buf.Len() >= maxTagContextBytes {
+		bucket := providerContextBucket(p, agentctx.ContextBucketTaggedGuidance)
+		acc.append(bucket, []byte(content))
+		if acc.truncated(bucket) {
 			a.logger.Warn("tag context aggregate limit reached",
 				"tag", tag, "source", "tagged_provider", "limit_bytes", maxTagContextBytes)
-			return buf.String()
+			return acc.sections()
 		}
 	}
 
@@ -287,16 +309,17 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 			if content == "" {
 				continue
 			}
-			a.appendContent(&buf, []byte(content))
-			if buf.Len() >= maxTagContextBytes {
+			bucket := providerContextBucket(p, agentctx.ContextBucketContinuity)
+			acc.append(bucket, []byte(content))
+			if acc.truncated(bucket) {
 				a.logger.Warn("tag context aggregate limit reached",
 					"source", "always_provider", "limit_bytes", maxTagContextBytes)
-				return buf.String()
+				return acc.sections()
 			}
 		}
 	}
 
-	return buf.String()
+	return acc.sections()
 }
 
 // BuildRefs assembles exact managed document refs for origin-derived
@@ -342,7 +365,7 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		entry.WriteString(ref)
 		entry.WriteString("\n\n")
 		entry.Write(resolved)
-		a.appendContent(&buf, []byte(entry.String()))
+		appendContextContent(&buf, []byte(entry.String()), maxTagContextBytes, truncationMarker)
 		if buf.Len() >= maxTagContextBytes {
 			a.logger.Warn("session origin context aggregate limit reached",
 				"ref", ref, "limit_bytes", maxTagContextBytes)
@@ -420,18 +443,105 @@ func safeManagedRefPath(root, path string) (string, bool) {
 
 const truncationMarker = "\n\n[tag context truncated — exceeded aggregate 64 KB limit]"
 
-// appendContent adds data to buf with a separator, respecting the
-// aggregate size limit. Truncates data if it would exceed the cap,
-// reserving space for the truncation marker so the buffer never
-// exceeds maxTagContextBytes.
-func (a *TagContextAssembler) appendContent(buf *strings.Builder, data []byte) {
+type contextAccumulator struct {
+	order   []agentctx.ContextBucket
+	buffers map[agentctx.ContextBucket]*strings.Builder
+	capped  map[agentctx.ContextBucket]bool
+}
+
+func newContextAccumulator() *contextAccumulator {
+	return &contextAccumulator{
+		buffers: make(map[agentctx.ContextBucket]*strings.Builder),
+		capped:  make(map[agentctx.ContextBucket]bool),
+	}
+}
+
+func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) {
+	bucket = bucket.OrDefault(agentctx.ContextBucketContinuity)
+	if len(data) == 0 || a.capped[bucket] {
+		return
+	}
+	buf := a.buffers[bucket]
+	if buf == nil {
+		buf = &strings.Builder{}
+		a.buffers[bucket] = buf
+		a.order = append(a.order, bucket)
+	}
+	before := buf.Len()
+	appendContextContent(buf, data, maxTagContextBytes, truncationMarker)
+	if before < maxTagContextBytes && buf.Len() >= maxTagContextBytes {
+		a.capped[bucket] = true
+	}
+}
+
+func (a *contextAccumulator) truncated(bucket agentctx.ContextBucket) bool {
+	return a.capped[bucket.OrDefault(agentctx.ContextBucketContinuity)]
+}
+
+func (a *contextAccumulator) sections() []agentctx.ContextSection {
+	if len(a.order) == 0 {
+		return nil
+	}
+	sections := make([]agentctx.ContextSection, 0, len(a.order))
+	for _, bucket := range orderedContextBuckets(a.order) {
+		buf := a.buffers[bucket]
+		if buf == nil || buf.Len() == 0 {
+			continue
+		}
+		sections = append(sections, agentctx.ContextSection{
+			Bucket:  bucket,
+			Title:   bucket.Title(),
+			Content: buf.String(),
+		})
+	}
+	return sections
+}
+
+func orderedContextBuckets(seen []agentctx.ContextBucket) []agentctx.ContextBucket {
+	seenSet := make(map[agentctx.ContextBucket]bool, len(seen))
+	for _, bucket := range seen {
+		seenSet[bucket] = true
+	}
+	order := []agentctx.ContextBucket{
+		agentctx.ContextBucketTaggedGuidance,
+		agentctx.ContextBucketContinuity,
+		agentctx.ContextBucketRelated,
+		agentctx.ContextBucketLiveState,
+	}
+	out := make([]agentctx.ContextBucket, 0, len(seen))
+	for _, bucket := range order {
+		if seenSet[bucket] {
+			out = append(out, bucket)
+			delete(seenSet, bucket)
+		}
+	}
+	for _, bucket := range seen {
+		if seenSet[bucket] {
+			out = append(out, bucket)
+			delete(seenSet, bucket)
+		}
+	}
+	return out
+}
+
+func providerContextBucket(p TagContextProvider, fallback agentctx.ContextBucket) agentctx.ContextBucket {
+	if bucketer, ok := p.(TagContextBucketer); ok {
+		return bucketer.TagContextBucket().OrDefault(fallback)
+	}
+	return fallback.OrDefault(agentctx.ContextBucketContinuity)
+}
+
+// appendContextContent adds data to buf with a separator, respecting
+// limit. Truncates data if it would exceed the cap, reserving space for
+// marker so the buffer never exceeds the limit.
+func appendContextContent(buf *strings.Builder, data []byte, limit int, marker string) {
 	if len(data) == 0 {
 		return
 	}
 	if buf.Len() > 0 {
 		buf.WriteString("\n\n---\n\n")
 	}
-	remaining := maxTagContextBytes - buf.Len()
+	remaining := limit - buf.Len()
 	if remaining <= 0 {
 		return
 	}

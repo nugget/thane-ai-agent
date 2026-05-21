@@ -104,6 +104,12 @@ func NewMessageChannelProvider(archive *ArchiveStore, conversationIDFromCtx func
 	}
 }
 
+// TagContextBucket places message-channel transcript tail and older
+// session catalogs in continuity context.
+func (p *MessageChannelProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // TagContext returns the verbatim tail + older-sessions blocks for the
 // active conversation. Returns the empty string when there is nothing
 // to emit (no conversation context, no archived content).

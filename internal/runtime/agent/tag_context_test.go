@@ -82,8 +82,8 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	if !strings.Contains(prompt, "Tabs not spaces") {
 		t.Error("system prompt should contain second KB article content")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should contain capability context section heading")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should contain tagged guidance section heading")
 	}
 }
 
@@ -113,8 +113,8 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 	if strings.Contains(prompt, "Secret content") {
 		t.Error("system prompt should not contain context from inactive tags")
 	}
-	if strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should not contain capability context section when no active tags have context")
+	if strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should not contain tagged guidance section when no active tags have context")
 	}
 }
 
@@ -193,8 +193,8 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
-	if strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should not contain capability context section when capTags is nil")
+	if strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should not contain tagged guidance section when capTags is nil")
 	}
 }
 
@@ -225,8 +225,8 @@ func TestBuildSystemPrompt_TagContextChannelPinnedBuiltinTagIncluded(t *testing.
 	if !strings.Contains(prompt, "INTERACTIVE_CONTEXT_MARKER") {
 		t.Fatal("channel-pinned builtin helper tag should inject matching KB article")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Fatal("prompt should include capability context heading for channel-pinned helper tag")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Fatal("prompt should include tagged guidance heading for channel-pinned helper tag")
 	}
 }
 
@@ -272,8 +272,8 @@ func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 		t.Fatal("prompt should contain current conditions")
 	}
 
-	// Core context now enters through the always-on provider bucket,
-	// after tagged context and before current conditions.
+	// Core context now enters through the continuity provider bucket,
+	// after tagged guidance and before current conditions.
 	if injectedIdx < tagCtxIdx {
 		t.Error("core context should appear after tagged context")
 	}
@@ -445,10 +445,15 @@ func TestSafeManagedRefPath_AllowsSymlinkInsideRoot(t *testing.T) {
 type mockTagProvider struct {
 	content string
 	err     error
+	bucket  agentctx.ContextBucket
 }
 
 func (m *mockTagProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	return m.content, m.err
+}
+
+func (m *mockTagProvider) TagContextBucket() agentctx.ContextBucket {
+	return m.bucket
 }
 
 type rejectingContextVerifier struct{}
@@ -570,6 +575,55 @@ func TestTagContextAssembler_KBAndLiveProvider(t *testing.T) {
 	}
 }
 
+func TestTagContextAssembler_BuildSectionsBuckets(t *testing.T) {
+	kbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(kbDir, "kb.md"),
+		[]byte("---\ntags: [forge]\n---\nKB_GUIDANCE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:   kbDir,
+	})
+	a.RegisterTaggedProvider("forge", &mockTagProvider{
+		content: "LIVE_PROVIDER",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
+	a.RegisterAlwaysProvider(&mockTagProvider{
+		content: "RELATED_PROVIDER",
+		bucket:  agentctx.ContextBucketRelated,
+	})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: true,
+	})
+	if len(sections) != 3 {
+		t.Fatalf("BuildSections returned %d sections, want 3: %#v", len(sections), sections)
+	}
+	wants := []struct {
+		bucket  agentctx.ContextBucket
+		title   string
+		content string
+	}{
+		{agentctx.ContextBucketTaggedGuidance, "Tagged Guidance", "KB_GUIDANCE"},
+		{agentctx.ContextBucketRelated, "Related Context", "RELATED_PROVIDER"},
+		{agentctx.ContextBucketLiveState, "Live State", "LIVE_PROVIDER"},
+	}
+	for i, want := range wants {
+		if sections[i].Bucket != want.bucket {
+			t.Fatalf("section %d bucket = %q, want %q", i, sections[i].Bucket, want.bucket)
+		}
+		if sections[i].Title != want.title {
+			t.Fatalf("section %d title = %q, want %q", i, sections[i].Title, want.title)
+		}
+		if !strings.Contains(sections[i].Content, want.content) {
+			t.Fatalf("section %d content = %q, want marker %q", i, sections[i].Content, want.content)
+		}
+	}
+}
+
 func TestTagContextAssembler_NilAssembler(t *testing.T) {
 	var a *TagContextAssembler
 	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
@@ -640,8 +694,8 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 	if !strings.Contains(prompt, "github-primary") {
 		t.Error("system prompt should contain live provider content")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should contain capability context heading")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should contain tagged guidance heading")
 	}
 }
 

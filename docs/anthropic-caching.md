@@ -36,7 +36,10 @@ breakpoint gets placed. The policy lives in
 | `TALENTS ALWAYS ON`     | 1h  | Behavioural guidance. Stable across a session.        |
 | `TALENTS TAGGED`        | 5m  | Tag-scoped talents. Can change per turn if tags flip. |
 | `ACTIVE CAPABILITIES`   | —   | Derived from active tags; changes per turn.           |
-| `CAPABILITY CONTEXT`    | —   | KB articles + tagged providers + always-on providers, assembled by `TagContextAssembler`. Per-turn. |
+| `TAGGED GUIDANCE`       | —   | Tagged KB articles and guidance-oriented providers. Changes with active tags and disk-backed docs. |
+| `CONTINUITY CONTEXT`    | —   | Channel, session, working-memory, and other continuity providers. Per-turn. |
+| `RELATED CONTEXT`       | —   | Request/wake-related retrieval providers. Per-turn and query-sensitive. |
+| `LIVE STATE`            | —   | Current operational/world state providers. Per-turn. |
 | `CURRENT CONDITIONS`    | —   | Environment / timezone. Changes every turn by definition. |
 | `CONVERSATION HISTORY`  | —   | Append-only, but uncached so turn N+1 sees turn N.    |
 | `CONTEXT USAGE`         | —   | Per-turn token counts.                                |

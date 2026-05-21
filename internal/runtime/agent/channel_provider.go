@@ -111,6 +111,13 @@ func NewChannelProvider(contacts ContactLookup) *ChannelProvider {
 	return &ChannelProvider{contacts: contacts}
 }
 
+// TagContextBucket places channel identity and contact framing in the
+// continuity bucket because it explains the conversational origin of
+// the current turn.
+func (p *ChannelProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // TagContext returns a channel context block if the request context
 // carries a "source" hint that matches a known channel. When a contact
 // lookup is available and the sender resolves to a known contact, the
