@@ -70,10 +70,11 @@
     }
     .popup-request[hidden] { display: none; }
     .forensics-hero {
+      position: relative;
       flex-shrink: 0;
       display: grid;
-      gap: 0.7rem;
-      padding: 0.95rem 1rem;
+      gap: 0.62rem;
+      padding: 0.86rem 1rem;
       border: 1px solid var(--border);
       border-radius: 12px;
       background: linear-gradient(180deg, rgba(28, 33, 40, 0.92), rgba(22, 27, 34, 0.98));
@@ -81,6 +82,7 @@
     .forensics-hero__copy {
       display: grid;
       gap: 0.2rem;
+      padding-right: 7.45rem;
       min-width: 0;
     }
     .forensics-hero__title {
@@ -97,11 +99,52 @@
       line-height: 1.45;
       text-wrap: pretty;
     }
-    .forensics-hero__actions {
+    .forensics-palette {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.45rem;
+      gap: 0.4rem;
       align-items: center;
+    }
+    .forensics-palette__button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 1.8rem;
+      max-width: 100%;
+      padding: 0.16rem 0.68rem;
+      border: 1px solid rgba(110, 118, 129, 0.24);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 0.72rem;
+      line-height: 1;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .forensics-palette__button:hover:not(:disabled) {
+      border-color: rgba(139, 148, 158, 0.5);
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.055);
+    }
+    .forensics-palette__button:disabled {
+      cursor: not-allowed;
+      opacity: 0.42;
+    }
+    .forensics-palette__button--active {
+      color: var(--accent);
+      border-color: rgba(45, 212, 191, 0.28);
+      background: rgba(45, 212, 191, 0.14);
+    }
+    .forensics-palette__button--id {
+      color: var(--blue);
+      border-color: rgba(88, 166, 255, 0.28);
+      background: rgba(88, 166, 255, 0.1);
+    }
+    .forensics-palette__button--copied {
+      color: var(--green);
+      border-color: rgba(63, 185, 80, 0.32);
+      background: rgba(63, 185, 80, 0.12);
     }
     .forensics-chip-row {
       display: flex;
@@ -122,6 +165,39 @@
       line-height: 1;
       white-space: nowrap;
     }
+    .forensics-state-badge {
+      position: absolute;
+      top: 0.74rem;
+      right: 0.78rem;
+      gap: 0.36rem;
+      min-height: 1.72rem;
+      max-width: 7.1rem;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      box-shadow: 0 0 14px rgba(255, 255, 255, 0.04);
+    }
+    .forensics-state-badge::before {
+      content: "";
+      width: 0.42rem;
+      height: 0.42rem;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 9px currentColor;
+    }
+    .forensics-state-badge.state-badge--sleeping    { background: var(--blue-dim);   color: var(--blue);   }
+    .forensics-state-badge.state-badge--waiting     { background: var(--cyan-dim);   color: var(--cyan);   }
+    .forensics-state-badge.state-badge--processing  { background: var(--green-dim);  color: var(--green);  }
+    .forensics-state-badge.state-badge--error,
+    .forensics-state-badge.state-badge--degraded    { background: var(--orange-dim); color: var(--orange); }
+    .forensics-state-badge.state-badge--stopped     { background: var(--red-dim);    color: var(--red);    }
+    .forensics-state-badge.state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
+    .forensics-state-badge.state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
+    .forensics-state-badge.state-badge--completed,
+    .forensics-state-badge.state-badge--complete    { background: var(--green-dim);  color: var(--green);  }
     .forensics-chip--request {
       color: var(--blue);
       border-color: rgba(88, 166, 255, 0.28);
@@ -362,6 +438,12 @@
       display: flex;
       flex-wrap: wrap;
       gap: 0.3rem;
+      min-width: 0;
+    }
+    .trace-cell__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
       min-width: 0;
     }
     .trace-cell__section {
@@ -756,9 +838,7 @@
       .popup-resize {
         display: none;
       }
-      .forensics-hero__actions .btn,
-      .forensics-hero__actions .copy-btn,
-      .forensics-hero__actions .toggle-btn {
+      .forensics-palette__button {
         min-width: 0;
       }
       .popup-footer {
@@ -798,16 +878,11 @@
     <section id="request-section" class="popup-request" hidden>
       <section class="forensics-hero">
         <div class="forensics-hero__copy">
-          <div class="schema-kind">thane_trace</div>
           <h1 id="forensics-title" class="forensics-hero__title">Live trace</h1>
-          <p id="forensics-subtitle" class="forensics-hero__subtitle">Tracing loop wakes, model turns, tool calls, spawned work, and retained evidence.</p>
+          <p id="forensics-subtitle" class="forensics-hero__subtitle" hidden></p>
         </div>
-        <div id="forensics-current" class="forensics-chip-row"></div>
-        <div class="forensics-hero__actions">
-          <button id="forensics-follow" class="toggle-btn toggle-btn--active" type="button">Following latest</button>
-          <button id="forensics-open-request" class="btn btn--sm" type="button">Open request window</button>
-          <button id="forensics-copy-json" class="copy-btn" type="button">JSON</button>
-        </div>
+        <span id="forensics-state" class="forensics-state-badge state-badge state-badge--pending">pending</span>
+        <div id="forensics-palette" class="forensics-palette" aria-label="Forensic copy targets"></div>
       </section>
 
       <section class="trace-target-strip">

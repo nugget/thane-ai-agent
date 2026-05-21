@@ -18,7 +18,9 @@ const pollLabel = $('#poll-rate-label');
 const forensics = {
   title: $('#forensics-title'),
   subtitle: $('#forensics-subtitle'),
+  state: $('#forensics-state'),
   current: $('#forensics-current'),
+  palette: $('#forensics-palette'),
   follow: $('#forensics-follow'),
   openRequest: $('#forensics-open-request'),
   copyJSON: $('#forensics-copy-json'),
@@ -426,22 +428,115 @@ function setForensicsLoaded(loaded) {
 }
 
 function updateForensicsControls() {
-  if (!forensics.follow) return;
-  if (followLatestRequest) {
-    forensics.follow.textContent = 'Following latest';
-    forensics.follow.classList.add('toggle-btn--active');
-    forensics.follow.title = 'Following the latest request detail for this loop';
-  } else {
-    forensics.follow.textContent = 'Resume live follow';
-    forensics.follow.classList.remove('toggle-btn--active');
-    forensics.follow.title = 'Jump back to the latest request detail';
-  }
-  if (forensics.openRequest) {
-    forensics.openRequest.disabled = !activeRequestID;
+  renderForensicsPalette();
+}
+
+function stringifyForensicsJSON(value) {
+  if (!value) return '';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return '';
   }
 }
 
+function copyPaletteValue(btn, value, label) {
+  if (!btn || !value) return;
+  navigator.clipboard.writeText(value).then(() => {
+    btn.textContent = 'copied';
+    btn.classList.add('forensics-palette__button--copied');
+    setTimeout(() => {
+      btn.textContent = label;
+      btn.classList.remove('forensics-palette__button--copied');
+    }, 1200);
+  });
+}
+
+function makePaletteButton(label, opts = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'forensics-palette__button'
+    + (opts.active ? ' forensics-palette__button--active' : '')
+    + (opts.id ? ' forensics-palette__button--id' : '');
+  btn.textContent = label;
+  btn.title = opts.title || '';
+  btn.disabled = !!opts.disabled;
+  if (opts.onClick) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onClick(btn);
+    });
+  }
+  return btn;
+}
+
+function makeCopyPaletteButton(label, value, title, opts = {}) {
+  const titleValue = opts.includeValueInTitle === false ? '' : value;
+  return makePaletteButton(label, {
+    ...opts,
+    disabled: !value || opts.disabled,
+    title: value && titleValue ? (title + '\n' + titleValue) : (value ? title : (opts.emptyTitle || title)),
+    onClick: (btn) => copyPaletteValue(btn, value, label),
+  });
+}
+
+function renderForensicsPalette() {
+  if (!forensics.palette) return;
+  const latestSnap = getLatestLoopSnapshot();
+  const latestModel = loopData ? (loopData._liveModel || loopData._lastModel || latestSnap?.model || '') : '';
+  const currentConvID = loopData ? (loopData._currentConvID || latestSnap?.conv_id || '') : '';
+  const loopJSON = stringifyForensicsJSON(loopData);
+
+  forensics.palette.innerHTML = '';
+  forensics.palette.appendChild(makePaletteButton(
+    followLatestRequest ? 'live follow' : 'pinned request',
+    {
+      active: followLatestRequest,
+      title: followLatestRequest
+        ? 'Automatically follows the newest retained request detail for this loop. Click a request_id chip to pin a specific turn.'
+        : 'Pinned to a specific request detail. Click to resume following the newest retained request.',
+      onClick: () => {
+        if (followLatestRequest) return;
+        followLatestRequest = true;
+        pinnedRequestID = '';
+        syncLoopRequestDetail(true);
+      },
+    },
+  ));
+
+  if (loopData && loopData.id) {
+    forensics.palette.appendChild(makeCopyPaletteButton('loop_id', loopData.id, 'Copy loop_id', { id: true }));
+  }
+  if (loopData && loopData.parent_id) {
+    forensics.palette.appendChild(makeCopyPaletteButton('parent_id', loopData.parent_id, 'Copy parent_id', { id: true }));
+  }
+  if (currentConvID) {
+    forensics.palette.appendChild(makeCopyPaletteButton('conv_id', currentConvID, 'Copy conv_id', { id: true }));
+  }
+  if (latestModel) {
+    forensics.palette.appendChild(makeCopyPaletteButton('model', latestModel, 'Copy model name'));
+  }
+  forensics.palette.appendChild(makeCopyPaletteButton('loop JSON', loopJSON, 'Copy current loop snapshot JSON', {
+    emptyTitle: 'Loop snapshot is not loaded yet.',
+    includeValueInTitle: false,
+  }));
+}
+
+function stateClassToken(state) {
+  return String(state || 'pending').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+}
+
+function renderForensicsState(loop) {
+  if (!forensics.state) return;
+  const state = formatSchemaToken(loop && loop.state ? loop.state : 'pending');
+  const stateClass = stateClassToken(loop && loop.state ? loop.state : 'pending');
+  forensics.state.textContent = state;
+  forensics.state.className = 'forensics-state-badge state-badge state-badge--' + stateClass;
+  forensics.state.title = 'Current loop state: ' + state;
+}
+
 function renderForensicsCurrent(loop) {
+  renderForensicsState(loop);
   if (!forensics.current) return;
   const latestRequestID = getLatestLoopRequestID();
   const latestSnap = getLatestLoopSnapshot();
@@ -450,7 +545,6 @@ function renderForensicsCurrent(loop) {
   const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
   const chips = [
     { text: followLatestRequest ? 'live follow' : 'pinned', focus: true },
-    { text: formatSchemaToken(loop.state || 'pending') },
     latestModel ? { text: shortModelName(latestModel) } : null,
     currentConvID ? { text: 'thread ' + shortID(currentConvID) } : null,
     targetRequestID ? { text: 'req ' + shortID(targetRequestID), request: true, full: targetRequestID } : null,
@@ -806,6 +900,28 @@ function makeTraceAction(label, title, onClick) {
   return btn;
 }
 
+function makeTraceCopyAction(label, value, title, emptyTitle = '') {
+  const btn = document.createElement('button');
+  btn.className = 'btn btn--sm';
+  btn.type = 'button';
+  btn.textContent = label;
+  btn.disabled = !value;
+  btn.title = value ? title : (emptyTitle || title);
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!value) return;
+    navigator.clipboard.writeText(value).then(() => {
+      btn.textContent = 'copied';
+      btn.classList.add('copy-btn--copied');
+      setTimeout(() => {
+        btn.textContent = label;
+        btn.classList.remove('copy-btn--copied');
+      }, 1200);
+    });
+  });
+  return btn;
+}
+
 function formatTraceTime(raw) {
   const date = parseTimestamp(raw);
   return date ? timeAgo(date) : '';
@@ -973,6 +1089,14 @@ function makeNotebookCell(opts) {
     const row = document.createElement('div');
     row.className = 'trace-cell__chips';
     for (const chip of chips) row.appendChild(chip);
+    header.appendChild(row);
+  }
+
+  const actions = (opts.actions || []).filter(Boolean);
+  if (actions.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'trace-cell__actions';
+    for (const action of actions) row.appendChild(action);
     header.appendChild(row);
   }
 
@@ -1222,6 +1346,10 @@ function buildLiveNotebookCell(loop) {
       tooling.loadedCapabilities.length > 0 ? makeTraceChip(formatNumber(tooling.loadedCapabilities.length) + ' capabilities') : null,
       tooling.effectiveTools.length > 0 ? makeTraceChip(formatNumber(tooling.effectiveTools.length) + ' tools') : null,
     ],
+    actions: [
+      makeTraceCopyAction('copy request_id', requestID, 'Copy this turn request_id'),
+      makeTraceCopyAction('copy request JSON', detail ? stringifyForensicsJSON(detail) : '', 'Copy retained request detail JSON', requestID ? 'Request detail is still loading or unavailable.' : 'No request_id for this turn.'),
+    ],
   });
 
   const scope = makeIterationScopePanel([
@@ -1273,6 +1401,10 @@ function buildPastNotebookCell(loop, snap, isTop) {
       snap.model ? makeTraceChip(shortModelName(snap.model), snap.supervisor ? 'forensics-scope__chip--active' : '') : null,
       snap.supervisor ? makeTraceChip('supervisor') : null,
       tooling.loadedCapabilities.length > 0 ? makeTraceChip(formatNumber(tooling.loadedCapabilities.length) + ' capabilities') : null,
+    ],
+    actions: [
+      makeTraceCopyAction('copy request_id', snap.request_id, 'Copy this turn request_id'),
+      makeTraceCopyAction('copy request JSON', detail ? stringifyForensicsJSON(detail) : '', 'Copy retained request detail JSON', snap.request_id ? 'Click the request chip to load this request detail first.' : 'No request_id for this turn.'),
     ],
   });
 
@@ -1567,14 +1699,17 @@ function syncLoopRequestDetail(force = false) {
   const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
 
   if (forensics.title) {
-    forensics.title.textContent = (loopData.name || nodeId.slice(0, 8)) + ' trace';
-  }
-  if (forensics.subtitle) {
+    const titleText = (loopData.name || nodeId.slice(0, 8)) + ' trace';
     const subtitleBits = [
       followLatestRequest ? 'Following live causality for this loop.' : 'Pinned to a specific request while live state continues updating.',
       loopData.state === 'processing' ? 'Active tool calls and delegate branches update as events arrive.' : 'Latest retained turn remains the forensic anchor while the loop waits or sleeps.',
     ].filter(Boolean);
-    forensics.subtitle.textContent = subtitleBits.join(' ');
+    forensics.title.textContent = titleText;
+    forensics.title.title = subtitleBits.join(' ');
+  }
+  if (forensics.subtitle) {
+    forensics.subtitle.textContent = '';
+    forensics.subtitle.hidden = true;
   }
 
   renderForensicsCurrent(loopData);
