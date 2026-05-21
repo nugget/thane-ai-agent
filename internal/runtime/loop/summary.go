@@ -27,6 +27,7 @@ func IterationSummary(ctx context.Context) map[string]any {
 // around.
 type AgentRunSummary struct {
 	RequestID          string
+	RequestText        string
 	Model              string
 	InputTokens        int
 	OutputTokens       int
@@ -53,6 +54,9 @@ func ReportAgentRun(ctx context.Context, s AgentRunSummary) map[string]any {
 		return nil
 	}
 	summary["request_id"] = s.RequestID
+	if s.RequestText != "" {
+		summary["request_text"] = s.RequestText
+	}
 	summary["model"] = s.Model
 	summary["input_tokens"] = s.InputTokens
 	summary["output_tokens"] = s.OutputTokens

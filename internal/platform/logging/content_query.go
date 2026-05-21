@@ -8,6 +8,12 @@ import (
 	"fmt"
 )
 
+const (
+	maxRetainedToolDefinitionSnapshots = 10
+	maxRetainedToolDefinitionsPerSnap  = 128
+	defaultRetainedToolDefinitionLen   = 4096
+)
+
 // RequestDetail holds the full content retained for a single request,
 // ready for JSON serialization by the web API.
 type RequestDetail struct {
@@ -36,13 +42,16 @@ type ToolDetail struct {
 	Arguments      string `json:"arguments,omitempty"`
 	Result         string `json:"result,omitempty"`
 	IterationIndex int    `json:"iteration_index"`
+	CreatedAt      string `json:"created_at,omitempty"`
 }
 
 // ToolDefDetail holds the model-facing tool definition list offered to a
 // single model iteration.
 type ToolDefDetail struct {
-	IterationIndex int              `json:"iteration_index"`
-	Tools          []map[string]any `json:"tools"`
+	IterationIndex   int              `json:"iteration_index"`
+	Tools            []map[string]any `json:"tools"`
+	ToolsTruncated   bool             `json:"tools_truncated,omitempty"`
+	ContentTruncated bool             `json:"content_truncated,omitempty"`
 }
 
 // NewToolDefDetail returns a defensive copy of tool definitions for one
@@ -63,11 +72,100 @@ func CloneToolDefDetails(src []ToolDefDetail) []ToolDefDetail {
 	out := make([]ToolDefDetail, len(src))
 	for i, snap := range src {
 		out[i] = ToolDefDetail{
-			IterationIndex: snap.IterationIndex,
-			Tools:          cloneToolDefMaps(snap.Tools),
+			IterationIndex:   snap.IterationIndex,
+			Tools:            cloneToolDefMaps(snap.Tools),
+			ToolsTruncated:   snap.ToolsTruncated,
+			ContentTruncated: snap.ContentTruncated,
 		}
 	}
 	return out
+}
+
+func retainedToolDefDetails(src []ToolDefDetail, maxLen int) []ToolDefDetail {
+	if len(src) == 0 {
+		return nil
+	}
+	snapshotCount := len(src)
+	if snapshotCount > maxRetainedToolDefinitionSnapshots {
+		snapshotCount = maxRetainedToolDefinitionSnapshots
+	}
+	out := make([]ToolDefDetail, 0, snapshotCount)
+	for i := 0; i < snapshotCount; i++ {
+		snap := src[i]
+		toolCount := len(snap.Tools)
+		toolsTruncated := snap.ToolsTruncated
+		if toolCount > maxRetainedToolDefinitionsPerSnap {
+			toolCount = maxRetainedToolDefinitionsPerSnap
+			toolsTruncated = true
+		}
+		tools, contentTruncated := retainedToolDefMaps(snap.Tools[:toolCount], maxLen)
+		out = append(out, ToolDefDetail{
+			IterationIndex:   snap.IterationIndex,
+			Tools:            tools,
+			ToolsTruncated:   toolsTruncated,
+			ContentTruncated: snap.ContentTruncated || contentTruncated,
+		})
+	}
+	return out
+}
+
+func retainedToolDefMaps(src []map[string]any, maxLen int) ([]map[string]any, bool) {
+	if len(src) == 0 {
+		return nil, false
+	}
+	out := make([]map[string]any, len(src))
+	var truncated bool
+	for i, item := range src {
+		out[i], truncated = retainedToolDefMap(item, maxLen, truncated)
+	}
+	return out, truncated
+}
+
+func retainedToolDefMap(src map[string]any, maxLen int, truncated bool) (map[string]any, bool) {
+	if src == nil {
+		return nil, truncated
+	}
+	out := make(map[string]any, len(src))
+	for key, value := range src {
+		out[key], truncated = retainedToolDefValue(value, maxLen, truncated)
+	}
+	return out, truncated
+}
+
+func retainedToolDefValue(value any, maxLen int, truncated bool) (any, bool) {
+	switch v := value.(type) {
+	case string:
+		out, cut := truncateRetainedContentWithFlag(v, toolDefinitionStringLimit(maxLen))
+		return out, truncated || cut
+	case map[string]any:
+		return retainedToolDefMap(v, maxLen, truncated)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i], truncated = retainedToolDefValue(item, maxLen, truncated)
+		}
+		return out, truncated
+	case []map[string]any:
+		out, cut := retainedToolDefMaps(v, maxLen)
+		return out, truncated || cut
+	case []string:
+		out := make([]string, len(v))
+		for i, item := range v {
+			var cut bool
+			out[i], cut = truncateRetainedContentWithFlag(item, toolDefinitionStringLimit(maxLen))
+			truncated = truncated || cut
+		}
+		return out, truncated
+	default:
+		return value, truncated
+	}
+}
+
+func toolDefinitionStringLimit(maxLen int) int {
+	if maxLen > 0 {
+		return maxLen
+	}
+	return defaultRetainedToolDefinitionLen
 }
 
 func cloneToolDefMaps(src []map[string]any) []map[string]any {
@@ -217,7 +315,7 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 	}
 
 	// Fetch tool calls for this request.
-	rows, err := db.QueryContext(ctx, `SELECT tool_call_id, tool_name, arguments, result, iteration_index
+	rows, err := db.QueryContext(ctx, `SELECT tool_call_id, tool_name, arguments, result, iteration_index, created_at
 		FROM log_tool_content WHERE request_id = ? ORDER BY iteration_index, id`, requestID)
 	if err != nil {
 		return &rd, fmt.Errorf("query tool content: %w", err)
@@ -229,7 +327,7 @@ func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*
 			td                   ToolDetail
 			callID, args, result sql.NullString
 		)
-		if err := rows.Scan(&callID, &td.ToolName, &args, &result, &td.IterationIndex); err != nil {
+		if err := rows.Scan(&callID, &td.ToolName, &args, &result, &td.IterationIndex, &td.CreatedAt); err != nil {
 			return &rd, fmt.Errorf("scan tool row: %w", err)
 		}
 		td.ToolCallID = callID.String

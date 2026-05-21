@@ -143,7 +143,7 @@ func buildLiveRequestDetail(rc RequestContent, maxLen int, now time.Time) *Reque
 		CreatedAt:        now.Format(time.RFC3339Nano),
 		Messages:         retainedMessages(rc.Messages, maxLen),
 		ToolCalls:        extractToolDetails(rc.Messages, maxLen),
-		ToolDefinitions:  CloneToolDefDetails(rc.ToolDefinitions),
+		ToolDefinitions:  retainedToolDefDetails(rc.ToolDefinitions, maxLen),
 	}
 	if len(rc.ToolsUsed) > 0 {
 		detail.ToolsUsed = make(map[string]int, len(rc.ToolsUsed))

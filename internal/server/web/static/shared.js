@@ -1980,6 +1980,7 @@ function applyLoopEventToLoop(evt, ctx) {
             loop._liveTools[i].result = d.result || null;
             loop._liveTools[i].error = d.error || null;
             loop._liveTools[i].completed_at = evt.ts;
+            if (d.duration_ms != null) loop._liveTools[i].duration_ms = d.duration_ms;
             if (d.tool_call_id) loop._liveTools[i].tool_call_id = d.tool_call_id;
             matchedTool = true;
             break;
@@ -1996,6 +1997,7 @@ function applyLoopEventToLoop(evt, ctx) {
           tool_call_id: d.tool_call_id || '',
           liveKey: d.tool_call_id || 'done-' + loop._liveTools.length,
           completed_at: evt.ts,
+          duration_ms: d.duration_ms,
         });
       }
       if (d.tooling) {

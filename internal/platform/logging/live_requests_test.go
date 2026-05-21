@@ -127,6 +127,41 @@ func TestLiveRequestStore_WriteAndQueryRequestDetail(t *testing.T) {
 	}
 }
 
+func TestLiveRequestStore_ToolDefinitionsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	store := NewLiveRequestStore(8, 8)
+	store.WriteRequest(context.Background(), RequestContent{
+		RequestID:       "r_tool_defs_bound",
+		ToolDefinitions: toolDefinitionFixture(maxRetainedToolDefinitionsPerSnap+1, "0123456789abcdef"),
+	})
+
+	detail, err := store.QueryRequestDetail("r_tool_defs_bound")
+	if err != nil {
+		t.Fatalf("QueryRequestDetail: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("QueryRequestDetail returned nil detail")
+	}
+	if len(detail.ToolDefinitions) != 1 {
+		t.Fatalf("ToolDefinitions snapshots = %d, want 1", len(detail.ToolDefinitions))
+	}
+	snap := detail.ToolDefinitions[0]
+	if len(snap.Tools) != maxRetainedToolDefinitionsPerSnap {
+		t.Fatalf("ToolDefinitions[0].Tools = %d, want %d", len(snap.Tools), maxRetainedToolDefinitionsPerSnap)
+	}
+	if !snap.ToolsTruncated {
+		t.Fatal("ToolsTruncated = false, want true")
+	}
+	if !snap.ContentTruncated {
+		t.Fatal("ContentTruncated = false, want true")
+	}
+	fn := snap.Tools[0]["function"].(map[string]any)
+	if got := fn["description"]; got != "01234567" {
+		t.Fatalf("description = %q, want truncated description", got)
+	}
+}
+
 func TestLiveRequestStore_PreservesToolDefinitionsOnStreamingUpdate(t *testing.T) {
 	t.Parallel()
 

@@ -38,6 +38,9 @@ func BuildProgressStream(progressFn func(string, map[string]any)) StreamCallback
 				data := map[string]any{
 					"tool": e.ToolCall.Function.Name,
 				}
+				if e.ToolCall.ID != "" {
+					data["tool_call_id"] = e.ToolCall.ID
+				}
 				if len(e.ToolCall.Function.Arguments) > 0 {
 					data["args"] = e.ToolCall.Function.Arguments
 				}
@@ -45,6 +48,9 @@ func BuildProgressStream(progressFn func(string, map[string]any)) StreamCallback
 			}
 		case KindToolCallDone:
 			data := map[string]any{"tool": e.ToolName}
+			for k, v := range e.Data {
+				data[k] = v
+			}
 			if e.ToolError != "" {
 				data["error"] = e.ToolError
 			}

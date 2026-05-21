@@ -2281,6 +2281,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				doneData := map[string]any{
 					"active_tags":     activeTagList(),
 					"effective_tools": effectiveToolNames(),
+					"duration_ms":     durationMS,
+				}
+				if toolCallIDStr != "" {
+					doneData["tool_call_id"] = toolCallIDStr
 				}
 				stream(llm.StreamEvent{
 					Kind:       llm.KindToolCallDone,

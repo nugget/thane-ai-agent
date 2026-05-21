@@ -141,6 +141,49 @@ func TestContentWriter_WriteRequest(t *testing.T) {
 	}
 }
 
+func TestContentWriter_ToolDefinitionsAreBounded(t *testing.T) {
+	db := openTestDB(t)
+	w, err := NewContentWriter(db, 16, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	w.WriteRequest(context.Background(), RequestContent{
+		RequestID:       "r_tool_defs_bound",
+		SystemPrompt:    "system",
+		ToolDefinitions: toolDefinitionFixture(maxRetainedToolDefinitionsPerSnap+1, strings.Repeat("x", 32)),
+	})
+
+	var toolDefsJSON sql.NullString
+	if err := db.QueryRow(`SELECT tool_definitions_json FROM log_request_content WHERE request_id = ?`, "r_tool_defs_bound").Scan(&toolDefsJSON); err != nil {
+		t.Fatalf("read tool_definitions_json: %v", err)
+	}
+	if !toolDefsJSON.Valid {
+		t.Fatal("tool_definitions_json should not be null")
+	}
+	var toolDefs []ToolDefDetail
+	if err := json.Unmarshal([]byte(toolDefsJSON.String), &toolDefs); err != nil {
+		t.Fatalf("decode tool_definitions_json: %v", err)
+	}
+	if len(toolDefs) != 1 {
+		t.Fatalf("tool definition snapshots = %d, want 1", len(toolDefs))
+	}
+	if len(toolDefs[0].Tools) != maxRetainedToolDefinitionsPerSnap {
+		t.Fatalf("tool definitions retained = %d, want %d", len(toolDefs[0].Tools), maxRetainedToolDefinitionsPerSnap)
+	}
+	if !toolDefs[0].ToolsTruncated {
+		t.Fatal("ToolsTruncated = false, want true")
+	}
+	if !toolDefs[0].ContentTruncated {
+		t.Fatal("ContentTruncated = false, want true")
+	}
+	fn := toolDefs[0].Tools[0]["function"].(map[string]any)
+	if got := fn["description"]; got != strings.Repeat("x", 16) {
+		t.Fatalf("description = %q, want truncated description", got)
+	}
+}
+
 func TestContentWriter_ToolCallExtraction(t *testing.T) {
 	db := openTestDB(t)
 	w, err := NewContentWriter(db, 4096, slog.Default())
@@ -199,6 +242,29 @@ func TestContentWriter_ToolCallExtraction(t *testing.T) {
 	if result.String != "Found 42 results about cats." {
 		t.Errorf("result = %q, want %q", result.String, "Found 42 results about cats.")
 	}
+}
+
+func toolDefinitionFixture(count int, description string) []ToolDefDetail {
+	tools := make([]map[string]any, count)
+	for i := range tools {
+		tools[i] = map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "example_tool",
+				"description": description,
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":        "string",
+							"description": description,
+						},
+					},
+				},
+			},
+		}
+	}
+	return []ToolDefDetail{NewToolDefDetail(0, tools)}
 }
 
 func TestContentWriter_DuplicateWriteNoDuplicateTools(t *testing.T) {

@@ -138,7 +138,7 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 	}
 	var toolDefinitionsJSON string
 	if len(rc.ToolDefinitions) > 0 {
-		b, err := json.Marshal(rc.ToolDefinitions)
+		b, err := json.Marshal(retainedToolDefDetails(rc.ToolDefinitions, w.maxLen))
 		if err != nil {
 			w.logger.Warn("content retention: failed to marshal tool definitions",
 				"request_id", rc.RequestID,

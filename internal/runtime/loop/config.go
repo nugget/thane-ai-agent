@@ -385,6 +385,9 @@ type IterationSnapshot struct {
 	// RequestID is the agent-generated request ID, linking to
 	// log_request_content for prompt/response inspection.
 	RequestID string `json:"request_id,omitempty"`
+	// RequestText is a compact human-readable summary of the user-facing
+	// request that drove this iteration.
+	RequestText string `json:"request_text,omitempty"`
 	// Model is the LLM model used.
 	Model string `json:"model,omitempty"`
 	// InputTokens consumed by this iteration.

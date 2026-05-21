@@ -382,6 +382,8 @@ async function fetchSystemLogs() {
 
 let loopData = null;
 let allLoopStatuses = [];
+const loopStatusByID = new Map();
+const childLoopIDsByParentID = new Map();
 const sleepTimers = new Map();
 let iterationHistory = [];
 let loopEventSource = null;
@@ -441,14 +443,52 @@ function stringifyForensicsJSON(value) {
   }
 }
 
+function fallbackCopyText(text) {
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      if (document.execCommand('copy')) {
+        resolve();
+      } else {
+        reject(new Error('copy command failed'));
+      }
+    } catch (err) {
+      reject(err);
+    } finally {
+      document.body.removeChild(ta);
+    }
+  });
+}
+
+function writeClipboardText(value) {
+  const text = String(value || '');
+  if (!text) return Promise.reject(new Error('empty clipboard value'));
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+  }
+  return fallbackCopyText(text);
+}
+
 function copyPaletteValue(btn, value, label) {
   if (!btn || !value) return;
-  navigator.clipboard.writeText(value).then(() => {
+  writeClipboardText(value).then(() => {
     btn.textContent = 'copied';
     btn.classList.add('forensics-palette__button--copied');
     setTimeout(() => {
       btn.textContent = label;
       btn.classList.remove('forensics-palette__button--copied');
+    }, 1200);
+  }).catch(() => {
+    btn.textContent = 'copy failed';
+    setTimeout(() => {
+      btn.textContent = label;
     }, 1200);
   });
 }
@@ -734,7 +774,6 @@ function renderLoopScope(loop) {
   const lastWake = parseTimestamp(loop.last_wake_at);
   const totalTokens = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
   const facts = makeIterationFacts([
-    { label: 'State', value: formatSchemaToken(loop.state || 'pending') },
     { label: 'Operation', value: operation ? formatSchemaToken(operation) : '' },
     { label: 'Completion', value: completion ? formatSchemaToken(completion) : '' },
     { label: 'Cadence', value: cadence },
@@ -859,12 +898,17 @@ function appendTraceDisclosure(parent, label, value, key = '', opts = {}) {
     copy.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      navigator.clipboard.writeText(text).then(() => {
+      writeClipboardText(text).then(() => {
         copy.textContent = 'copied';
         copy.classList.add('trace-disclosure__copy--copied');
         setTimeout(() => {
           copy.textContent = 'copy';
           copy.classList.remove('trace-disclosure__copy--copied');
+        }, 1200);
+      }).catch(() => {
+        copy.textContent = 'failed';
+        setTimeout(() => {
+          copy.textContent = 'copy';
         }, 1200);
       });
     });
@@ -918,7 +962,7 @@ function buildTraceEvent(probe, title, meta, opts = {}) {
     const body = document.createElement('div');
     body.className = 'trace-event__details';
     for (const detail of opts.details) {
-      appendTraceDisclosure(body, detail.label, detail.value, detail.key || '');
+      appendTraceDisclosure(body, detail.label, detail.value, detail.key || '', { copy: detail.copy });
     }
     if (body.children.length > 0) event.appendChild(body);
   }
@@ -957,12 +1001,17 @@ function makeTraceCopyAction(label, value, title, emptyTitle = '') {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!value) return;
-    navigator.clipboard.writeText(value).then(() => {
+    writeClipboardText(value).then(() => {
       btn.textContent = 'copied';
       btn.classList.add('copy-btn--copied');
       setTimeout(() => {
         btn.textContent = label;
         btn.classList.remove('copy-btn--copied');
+      }, 1200);
+    }).catch(() => {
+      btn.textContent = 'copy failed';
+      setTimeout(() => {
+        btn.textContent = label;
       }, 1200);
     });
   });
@@ -976,16 +1025,58 @@ function formatTraceTime(raw) {
 
 function getTraceChildLoops(loop) {
   if (!loop) return [];
-  return (allLoopStatuses || [])
-    .filter((status) => status && status.parent_id === loop.id)
+  const childIDs = childLoopIDsByParentID.get(loop.id);
+  if (!childIDs) return [];
+  return Array.from(childIDs)
+    .map((id) => loopStatusByID.get(id))
+    .filter(Boolean)
     .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+}
+
+function indexLoopChild(parentID, childID) {
+  if (!parentID || !childID) return;
+  let children = childLoopIDsByParentID.get(parentID);
+  if (!children) {
+    children = new Set();
+    childLoopIDsByParentID.set(parentID, children);
+  }
+  children.add(childID);
+}
+
+function unindexLoopChild(parentID, childID) {
+  if (!parentID || !childID) return;
+  const children = childLoopIDsByParentID.get(parentID);
+  if (!children) return;
+  children.delete(childID);
+  if (children.size === 0) childLoopIDsByParentID.delete(parentID);
+}
+
+function reindexLoopParent(status, previousParentID) {
+  const nextParentID = status && status.parent_id ? status.parent_id : '';
+  if (previousParentID === nextParentID) return;
+  unindexLoopChild(previousParentID, status.id);
+  indexLoopChild(nextParentID, status.id);
+}
+
+function replaceLoopStatusSnapshot(statuses) {
+  allLoopStatuses = [];
+  loopStatusByID.clear();
+  childLoopIDsByParentID.clear();
+  for (const entry of statuses || []) {
+    if (!entry || !entry.id) continue;
+    const status = { ...entry };
+    allLoopStatuses.push(status);
+    loopStatusByID.set(status.id, status);
+    indexLoopChild(status.parent_id || '', status.id);
+  }
 }
 
 function upsertLoopStatusFromEvent(evt) {
   const d = evt.data || {};
   const id = d.loop_id;
   if (!id) return null;
-  let status = allLoopStatuses.find((entry) => entry.id === id);
+  let status = loopStatusByID.get(id);
+  const previousParentID = status && status.parent_id ? status.parent_id : '';
   if (!status) {
     status = {
       id,
@@ -998,6 +1089,7 @@ function upsertLoopStatusFromEvent(evt) {
       total_output_tokens: 0,
     };
     allLoopStatuses.push(status);
+    loopStatusByID.set(id, status);
   }
   if (d.loop_name) status.name = d.loop_name;
   if (d.parent_id !== undefined) status.parent_id = d.parent_id || '';
@@ -1031,6 +1123,7 @@ function upsertLoopStatusFromEvent(evt) {
     status.iterations = d.iterations || status.iterations || 0;
     status.attempts = d.attempts || status.attempts || 0;
   }
+  reindexLoopParent(status, previousParentID);
   return status;
 }
 
@@ -1051,6 +1144,9 @@ function buildTraceToolEvent(tool) {
   const status = tool.error ? 'error' : (tool.status || (tool.result ? 'done' : 'recorded'));
   const callID = tool.tool_call_id || tool.toolCallID || tool.call_id || tool.callID || '';
   const toolKey = callID || tool.liveKey || tool.liveIndex || [name, tool.iterationIndex || tool.iteration_index || 0, status].join(':');
+  const startedAt = tool.started_at || tool.startedAt || '';
+  const completedAt = tool.completed_at || tool.completedAt || tool.created_at || '';
+  const duration = Number.isFinite(tool.duration_ms) ? tool.duration_ms : null;
   const parsed = isDelegate ? parseDelegateArgs(tool.arguments || tool.args) : {};
   const title = isDelegate
     ? name + ': ' + truncate(parsed.task || 'spawned work', 96)
@@ -1058,6 +1154,9 @@ function buildTraceToolEvent(tool) {
   const metaBits = [];
   if (status === 'running') metaBits.push('in flight');
   if (tool.iterationIndex || tool.iteration_index) metaBits.push('iteration #' + (tool.iterationIndex || tool.iteration_index));
+  if (startedAt) metaBits.push('started ' + formatTraceTime(startedAt));
+  if (duration !== null && duration >= 0) metaBits.push(formatDuration(duration));
+  if (!startedAt && completedAt) metaBits.push('recorded ' + formatTraceTime(completedAt));
   const argSummary = summarizeTracePayload(tool.arguments || tool.args, 100);
   if (argSummary && !isDelegate) metaBits.push(argSummary);
   if (tool.error) metaBits.push(tool.error);
@@ -1067,8 +1166,9 @@ function buildTraceToolEvent(tool) {
     callID ? makeTraceChip('call ' + shortID(callID)) : null,
   ];
   const details = [
-    { label: 'Arguments', value: tool.arguments || tool.args, key: 'tool:' + toolKey + ':args' },
-    { label: tool.error ? 'Error' : 'Result', value: tool.error || tool.result, key: 'tool:' + toolKey + ':result' },
+    { label: 'Arguments', value: tool.arguments || tool.args, key: 'tool:' + toolKey + ':args', copy: true },
+    { label: tool.error ? 'Error' : 'Result', value: tool.error || tool.result, key: 'tool:' + toolKey + ':result', copy: true },
+    { label: 'Raw tool record', value: tool, key: 'tool:' + toolKey + ':raw', copy: true },
   ];
   return buildTraceEvent(isDelegate ? 'loop:spawn' : 'tool:' + status, title, metaBits.join(' · '), {
     kind: tool.error ? 'error' : (isDelegate ? 'branch' : 'tool'),
@@ -1118,6 +1218,7 @@ function makeNotebookCell(opts) {
   const title = document.createElement('h3');
   title.className = 'trace-cell__title';
   title.textContent = opts.title || '';
+  if (opts.fullTitle) title.title = opts.fullTitle;
   heading.appendChild(title);
   if (opts.state) {
     const state = document.createElement('span');
@@ -1225,6 +1326,9 @@ function appendNotebookToolSection(body, detail, fallbackTools, liveTools = []) 
       tool_call_id: entry.tool_call_id || entry.toolCallID,
       liveKey: entry.liveKey,
       liveIndex: entry.liveIndex,
+      started_at: entry.started_at,
+      completed_at: entry.completed_at,
+      duration_ms: entry.duration_ms,
     }));
   }
   if (events.length === 0 && detail && Array.isArray(detail.tool_calls) && detail.tool_calls.length > 0) {
@@ -1412,6 +1516,35 @@ function appendNotebookModelExchange(body, requestID, detail) {
   appendNotebookSection(body, 'Raw Model Exchange', exchange);
 }
 
+function normalizeRequestTitleText(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const text = typeof value === 'string' ? value : formatTraceJSON(value);
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function latestUserMessageText(messages) {
+  if (!Array.isArray(messages)) return '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i] || {};
+    if (msg.role === 'user') {
+      const text = normalizeRequestTitleText(msg.content);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function turnRequestTitle(snap, detail) {
+  const text = normalizeRequestTitleText(
+    snap.request_text
+      || snap.user_content
+      || (snap.summary && (snap.summary.request_text || snap.summary.user_content))
+      || (detail && detail.user_content)
+      || latestUserMessageText(detail && detail.messages),
+  );
+  return text ? truncate(text, 120) : '';
+}
+
 function buildLiveNotebookCell(loop) {
   const ctx = loop._llmContext || {};
   const requestID = loop._currentRequestID || ctx.request_id || '';
@@ -1469,6 +1602,14 @@ function buildLiveNotebookCell(loop) {
 
 function buildPastNotebookCell(loop, snap, isTop) {
   const detail = getNotebookRequestDetail(snap.request_id);
+  const requestTitle = turnRequestTitle(snap, detail);
+  const fallbackTitle = snap.error
+    ? 'Turn ended with an issue'
+    : snap.supervisor
+      ? 'Supervisor turn'
+      : snap.request_id
+        ? 'Request ' + shortID(snap.request_id)
+        : 'Loop turn';
   const toolCount = countToolCalls(snap.tools_used);
   const tooling = normalizeTooling(snap.tooling, {
     loadedTags: Array.isArray(snap.active_tags) ? snap.active_tags : [],
@@ -1490,7 +1631,8 @@ function buildPastNotebookCell(loop, snap, isTop) {
     ordinal: snap.number ? '#' + snap.number : 'turn',
     time: snap.completed_at ? formatTimeShort(new Date(snap.completed_at)) : '',
     eyebrow: isTop ? 'Most recent completed iteration' : 'Previous iteration',
-    title: snap.error ? 'Turn ended with an issue' : snap.supervisor ? 'Supervisor turn completed' : 'Model turn completed',
+    title: requestTitle || fallbackTitle,
+    fullTitle: requestTitle || '',
     state: snap.error ? 'issue' : 'complete',
     stateKind: snap.error ? 'issue' : 'complete',
     meta: metaBits.join(' · '),
@@ -1642,7 +1784,7 @@ function makeRequestTurnChip(requestID) {
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
     if (e.shiftKey) {
-      navigator.clipboard.writeText(requestID);
+      void writeClipboardText(requestID).catch(() => {});
       return;
     }
     if (typeof window.onRequestChipClick === 'function') {
@@ -1876,8 +2018,8 @@ function connectSSE() {
 
   es.addEventListener('snapshot', (e) => {
     const statuses = JSON.parse(e.data);
-    allLoopStatuses = statuses.map((status) => ({ ...status }));
-    const match = statuses.find(s => s.id === nodeId);
+    replaceLoopStatusSnapshot(Array.isArray(statuses) ? statuses : []);
+    const match = loopStatusByID.get(nodeId);
     if (match) {
       // Seed iteration history from server-side ring buffer.
       if (match.recent_iterations && match.recent_iterations.length > 0) {
@@ -2108,12 +2250,17 @@ forensics.openRequest?.addEventListener('click', () => {
 
 forensics.copyJSON?.addEventListener('click', () => {
   if (!activeRequestJSON) return;
-  navigator.clipboard.writeText(activeRequestJSON).then(() => {
+  writeClipboardText(activeRequestJSON).then(() => {
     forensics.copyJSON.textContent = 'Copied';
     forensics.copyJSON.classList.add('copy-btn--copied');
     setTimeout(() => {
       forensics.copyJSON.textContent = 'JSON';
       forensics.copyJSON.classList.remove('copy-btn--copied');
+    }, 1200);
+  }).catch(() => {
+    forensics.copyJSON.textContent = 'Failed';
+    setTimeout(() => {
+      forensics.copyJSON.textContent = 'JSON';
     }, 1200);
   });
 });

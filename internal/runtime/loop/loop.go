@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,6 +155,11 @@ const recentConvIDsCap = 10
 // recentIterationsCap is the maximum number of completed iteration
 // snapshots retained for the dashboard timeline.
 const recentIterationsCap = 10
+
+// maxIterationRequestTextRunes bounds the prompt excerpt copied into
+// dashboard snapshots. Full prompt content remains available through
+// retained request detail when configured.
+const maxIterationRequestTextRunes = 512
 
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
@@ -864,6 +870,7 @@ func (l *Loop) run(ctx context.Context) {
 		var err error
 		var handlerSummary map[string]any
 		var noOp bool
+		var requestText string
 		// Transition to processing and emit iteration_start before
 		// dispatching work so the dashboard sees activity immediately.
 		l.setState(StateProcessing)
@@ -944,6 +951,10 @@ func (l *Loop) run(ctx context.Context) {
 				result.RequestID = rid
 				delete(summary, "request_id")
 			}
+			if text, ok := summary["request_text"].(string); ok && text != "" {
+				requestText = compactIterationRequestText(text)
+				delete(summary, "request_text")
+			}
 			if reportedConvID, ok := summary["conversation_id"].(string); ok && reportedConvID != "" {
 				convID = reportedConvID
 				delete(summary, "conversation_id")
@@ -999,6 +1010,7 @@ func (l *Loop) run(ctx context.Context) {
 						l.currentConvID = convID
 						l.mu.Unlock()
 					}
+					requestText = summarizeIterationRequest(req.Messages)
 					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
 					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor)
 					runCancel()
@@ -1111,6 +1123,7 @@ func (l *Loop) run(ctx context.Context) {
 
 				snap.Model = result.Model
 				snap.RequestID = result.RequestID
+				snap.RequestText = requestText
 				snap.InputTokens = result.InputTokens
 				snap.OutputTokens = result.OutputTokens
 				snap.ContextWindow = result.ContextWindow
@@ -1500,6 +1513,34 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		Elapsed:            time.Since(iterStart),
 		Supervisor:         isSupervisor,
 	}, resp, nil
+}
+
+func summarizeIterationRequest(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			if text := compactIterationRequestText(messages[i].Content); text != "" {
+				return text
+			}
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if text := compactIterationRequestText(messages[i].Content); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func compactIterationRequestText(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxIterationRequestTextRunes {
+		return text
+	}
+	return string(runes[:maxIterationRequestTextRunes]) + "..."
 }
 
 // mergeTurnRunContext combines the loop iteration context with an optional
