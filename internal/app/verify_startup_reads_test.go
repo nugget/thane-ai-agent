@@ -68,13 +68,13 @@ func writeTestFile(t *testing.T, path, body string) {
 	}
 }
 
-// TestVerifyStartupReads_RequiredBlocksUnsignedInjectFile confirms
-// that an inject-file living inside a managed root with
+// TestVerifyStartupReads_RequiredBlocksUnsignedCorePromptFile confirms
+// that a core prompt file living inside a managed root with
 // verify_signatures: required fails startup when the verifier says
 // the file isn't trusted. This is the core #788 guarantee — a model
 // that asks for `core:config.yaml` should not be able to bypass the
 // gate by being injected via the runtime startup path either.
-func TestVerifyStartupReads_RequiredBlocksUnsignedInjectFile(t *testing.T) {
+func TestVerifyStartupReads_RequiredBlocksUnsignedCorePromptFile(t *testing.T) {
 	t.Parallel()
 
 	rootDir := t.TempDir()
@@ -96,10 +96,10 @@ func TestVerifyStartupReads_RequiredBlocksUnsignedInjectFile(t *testing.T) {
 	a := &App{cfg: &config.Config{}}
 	err := a.verifyStartupReads(context.Background(), store, []string{injectPath})
 	if err == nil {
-		t.Fatal("verifyStartupReads should block unsigned inject file under required mode")
+		t.Fatal("verifyStartupReads should block unsigned core prompt file under required mode")
 	}
-	if !strings.Contains(err.Error(), "inject_files verification") {
-		t.Fatalf("error = %v, want inject_files verification wrapper", err)
+	if !strings.Contains(err.Error(), "core_prompt_files verification") {
+		t.Fatalf("error = %v, want core_prompt_files verification wrapper", err)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestVerifyStartupReads_WarnDoesNotBlock(t *testing.T) {
 
 // TestVerifyStartupReads_NoneSkipsVerification confirms that when
 // the policy is none, the verifier is not consulted at all and any
-// inject-file content loads regardless of signing state.
+// core prompt file content loads regardless of signing state.
 func TestVerifyStartupReads_NoneSkipsVerification(t *testing.T) {
 	t.Parallel()
 
@@ -161,10 +161,10 @@ func TestVerifyStartupReads_NoneSkipsVerification(t *testing.T) {
 	}
 }
 
-// TestVerifyStartupReads_OutsideAnyRootIsPassthrough confirms that
-// inject-files living outside every managed root pass through
-// without verification. This preserves the legitimate operator
-// workflow of injecting files from arbitrary disk locations.
+// TestVerifyStartupReads_OutsideAnyRootIsPassthrough confirms that core
+// prompt files living outside every managed root pass through without
+// verification. This preserves the legitimate operator workflow of
+// injecting files from arbitrary disk locations.
 func TestVerifyStartupReads_OutsideAnyRootIsPassthrough(t *testing.T) {
 	t.Parallel()
 

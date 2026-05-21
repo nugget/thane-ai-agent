@@ -12,11 +12,11 @@ import (
 
 // verifyStartupReads closes the doc-root verification bypass paths
 // surfaced by issue #788. The model's file tools are gated at call
-// time once the verifier is installed; inject-files are model-facing
-// content that bypass the doc store. Run them through Store.VerifyPath
-// here so each root's verify_signatures policy fails fast during
-// startup. The agent loop also verifies inject-files again each time
-// they are read into the prompt.
+// time once the verifier is installed; core prompt files are
+// model-facing content that bypass the doc store. Run them through
+// Store.VerifyPath here so each root's verify_signatures policy fails
+// fast during startup. The agent loop also verifies core prompt files
+// again each time they are read into the prompt.
 //
 // Behavior matches the policy mode of the enclosing root:
 //   - none: no check (VerifyPath returns nil)
@@ -25,8 +25,8 @@ import (
 //     a wrapped error identifying the consumer site
 //
 // Paths outside any managed root are no-ops inside VerifyPath, so
-// non-managed inject-files keep their original unverified behavior.
-func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, injectFiles []string) error {
+// non-managed core prompt files keep their original unverified behavior.
+func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, corePromptFiles []string) error {
 	if store == nil {
 		return nil
 	}
@@ -34,12 +34,12 @@ func (a *App) verifyStartupReads(ctx context.Context, store *documents.Store, in
 		ctx = context.Background()
 	}
 
-	for _, p := range injectFiles {
+	for _, p := range corePromptFiles {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		if err := store.VerifyPath(ctx, p, "inject_files"); err != nil {
-			return fmt.Errorf("inject_files verification: %w", err)
+		if err := store.VerifyPath(ctx, p, "core_prompt_files"); err != nil {
+			return fmt.Errorf("core_prompt_files verification: %w", err)
 		}
 	}
 

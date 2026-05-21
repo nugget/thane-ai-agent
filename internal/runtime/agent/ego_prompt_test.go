@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -37,6 +38,66 @@ func TestBuildSystemPrompt_EgoFileIncluded(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Self-Reflection (ego.md)") {
 		t.Error("system prompt should contain ego section heading")
+	}
+}
+
+func TestBuildSystemPrompt_AxiomsFileIncludedBeforePersona(t *testing.T) {
+	dir := t.TempDir()
+	axiomsPath := filepath.Join(dir, "axioms.md")
+	content := "# Axioms\n\nBe grounded before being clever."
+	if err := os.WriteFile(axiomsPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write axioms.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.persona = "PERSONA_MARKER"
+	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
+
+	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", nil, llm.DefaultModelInteractionProfile())
+
+	if !strings.Contains(prompt, content) {
+		t.Error("system prompt should contain axioms.md content")
+	}
+	if !strings.Contains(prompt, "Axioms (axioms.md)") {
+		t.Error("system prompt should contain axioms section heading")
+	}
+	axiomsIdx := strings.Index(prompt, "Be grounded before being clever.")
+	personaIdx := strings.Index(prompt, "PERSONA_MARKER")
+	if axiomsIdx < 0 || personaIdx < 0 || axiomsIdx > personaIdx {
+		t.Fatalf("axioms should appear before persona:\n%s", prompt)
+	}
+	sectionIndex := promptSectionIndex(t, sections)
+	assertPromptSectionOrder(t, sectionIndex, "AXIOMS", "PERSONA")
+	if got := sections[sectionIndex["AXIOMS"]].CacheTTL; got != "1h" {
+		t.Fatalf("AXIOMS CacheTTL = %q, want 1h", got)
+	}
+}
+
+func TestBuildSystemPrompt_AxiomsFileMissing(t *testing.T) {
+	l := newMinimalLoop()
+	l.ensureCoreContextProvider().updateAxiomsFile(filepath.Join(t.TempDir(), "nonexistent.md"))
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if strings.Contains(prompt, "axioms.md") {
+		t.Error("system prompt should not contain axioms section when file is missing")
+	}
+}
+
+func TestBuildSystemPrompt_AxiomsFileEmpty(t *testing.T) {
+	dir := t.TempDir()
+	axiomsPath := filepath.Join(dir, "axioms.md")
+	if err := os.WriteFile(axiomsPath, []byte(""), 0644); err != nil {
+		t.Fatalf("write axioms.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if strings.Contains(prompt, "axioms.md") {
+		t.Error("system prompt should not contain axioms section when file is empty")
 	}
 }
 

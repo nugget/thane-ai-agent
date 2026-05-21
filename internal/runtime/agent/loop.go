@@ -98,6 +98,11 @@ const (
 	KindLLMStart      = llm.KindLLMStart
 )
 
+// maxAxiomsBytes is the maximum size of axioms.md content published as
+// the system-prompt preamble. Content beyond this limit is truncated
+// with a marker.
+const maxAxiomsBytes = 16 * 1024
+
 // maxEgoBytes is the maximum size of ego.md content published through
 // the core context provider. Content beyond this limit is truncated
 // with a marker.
@@ -323,6 +328,7 @@ type LoopOptions struct {
 
 	// Optional, stable at construction.
 	Persona             string
+	AxiomsFile          string
 	ParsedTalents       []talents.Talent
 	Timezone            string
 	RecoveryModel       string
@@ -377,7 +383,8 @@ func NewLoop(opts LoopOptions) (*Loop, error) {
 		requestRecorder:     opts.RequestRecorder,
 		nowFunc:             time.Now,
 	}
-	if opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+	if opts.AxiomsFile != "" || opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+		l.ensureCoreContextProvider().updateAxiomsFile(opts.AxiomsFile)
 		l.ensureCoreContextProvider().updateEgoFile(opts.EgoFile)
 		l.coreContextProvider.updateProvenanceStore(opts.ProvenanceStore)
 		l.coreContextProvider.updateInjectFiles(opts.InjectFiles)
@@ -975,7 +982,19 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	mark := func(name string) { sections = append(sections, promptSection{name: name, start: sb.Len()}) }
 	seal := func() { sections[len(sections)-1].end = sb.Len() }
 
+	// 0. Axioms (highest-level preamble — what must be true before identity)
+	if !taskPrompt && l.coreContextProvider != nil {
+		for _, preambleSection := range l.coreContextProvider.preambleSections(ctx) {
+			mark(preambleSection.name)
+			promptfmt.AppendMarkdownSection(&sb, 2, preambleSection.title, preambleSection.content)
+			seal()
+		}
+	}
+
 	// 1. Persona (identity — who am I)
+	if sb.Len() > 0 {
+		sb.WriteString("\n\n")
+	}
 	mark("PERSONA")
 	if taskPrompt {
 		sb.WriteString(prompts.DelegateSystemPrompt())
@@ -1193,7 +1212,7 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 // instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
-	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
+	case "AXIOMS", "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
 		return "1h"
 	case "TALENTS TAGGED":
 		return "5m"

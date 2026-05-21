@@ -33,16 +33,17 @@ same thing.
 
 Today, prompt assembly in `internal/runtime/agent/loop.go` roughly looks like:
 
-1. persona
-2. ego and injected core context files
-3. runtime contract
-4. model-family tool-calling contract
-5. talents
-6. active capability summary
-7. session origin context
-8. typed context buckets: tagged guidance, continuity, related context, live state
-9. current conditions
-10. conversation history and carry-forward context
+1. axioms, when `core/axioms.md` exists
+2. persona
+3. ego and injected core context files
+4. runtime contract
+5. model-family tool-calling contract
+6. talents
+7. active capability summary
+8. session origin context
+9. typed context buckets: tagged guidance, continuity, related context, live state
+10. current conditions
+11. conversation history and carry-forward context
 
 This layering is mostly sound. The problem is that the always-on layers
 still carry too much evergreen tool doctrine, and the tagged/contextual
@@ -386,6 +387,7 @@ Core files are the canonical always-on documents rooted at
 `{workspace}/core`. They should stay small, high-signal, and stable in
 purpose:
 
+- `axioms.md`: highest-level preamble before identity
 - `persona.md`: identity, voice, values
 - `ego.md`: self-reflection and continuity of internal stance
 - `mission.md`: durable mission framing and major operational truths

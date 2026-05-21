@@ -32,6 +32,7 @@ and regression tests.
 
 | Section                 | Stability | Rationale |
 |-------------------------|-----------|-----------|
+| `AXIOMS`                | stable    | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | stable    | Identity. Changes only when persona files are edited. |
 | `EGO`                   | stable    | Self-reflection file. Stable across long sessions. |
 | `INJECTED CONTEXT`      | stable    | Mission + configured core files. Stable across a session. |
@@ -102,6 +103,7 @@ Anthropic exposes explicit prompt-cache breakpoints through
 
 | Section                 | Anthropic TTL | Rationale |
 |-------------------------|---------------|-----------|
+| `AXIOMS`                | 1h            | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | 1h            | Identity. Changes only when persona files are edited. |
 | `EGO`                   | 1h            | Self-reflection file. Stable across long sessions. |
 | `INJECTED CONTEXT`      | 1h            | Mission + configured core files. Stable across a session. |

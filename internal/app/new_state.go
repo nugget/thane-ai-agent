@@ -25,7 +25,8 @@ type newState struct {
 
 	// Resolved in initAgentLoop, consumed by initChannels for startup
 	// verification once the document store exists.
-	resolvedInjectFiles []string
+	resolvedCorePromptFiles []string
+	resolvedInjectFiles     []string
 
 	// Forward-declared in initStores (for connwatch OnReady closure),
 	// constructed in initAwareness.

@@ -158,6 +158,7 @@ The system prompt is assembled from four layers, each with a distinct
 purpose. Mixing concerns across layers degrades agent behavior — this
 was learned empirically, not theorized.
 
+**Axioms** are the highest-level preamble, when `core/axioms.md` exists.
 **Persona** is identity: who the agent is, its voice and values. **Core
 context** publishes curated knowledge and continuity such as
 `core/ego.md` and configured mission files as stable prompt sections.

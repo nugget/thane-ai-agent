@@ -142,8 +142,8 @@ embeddings:
 # Workspace configures the agent's sandboxed file system access.
 # The workspace root is also the anchor for Thane's fixed core
 # document root at {workspace.path}/core, which holds canonical
-# always-on files at stable locations such as persona.md, ego.md,
-# mission.md, and metacognitive.md.
+# always-on files at stable locations such as axioms.md, persona.md,
+# ego.md, mission.md, and metacognitive.md.
 workspace:
   # Path is the root directory for file operations. If empty, file
   # tools are disabled entirely. In multi-root setups, this should be

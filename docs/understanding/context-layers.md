@@ -55,11 +55,11 @@ only when those tags are active.
 
 **Purpose:** Knowledge — what the agent *knows*.
 
-Core context publishes curated reference material such as `core/ego.md`
-and configured mission/context files as first-class stable prompt
-sections. These files are read fresh each turn, verified when
-managed-root policy applies, and suppressed for task-focused delegate
-runs.
+Core context publishes curated reference material such as
+`core/axioms.md`, `core/ego.md`, and configured mission/context files as
+first-class stable prompt sections. These files are read fresh each
+turn, verified when managed-root policy applies, and suppressed for
+task-focused delegate runs.
 
 **Contains:** Factual information, user preferences, infrastructure notes,
 memory files, identity documents.
@@ -67,6 +67,7 @@ memory files, identity documents.
 **Does NOT contain:** Behavioral directives, personality definitions.
 
 **Common core context files:**
+- `axioms.md` — highest-level preamble rendered before persona
 - `ego.md` — self-reflection and continuity notes
 - `mission.md` — deployment-specific mission context
 
@@ -84,15 +85,16 @@ compaction context.
 
 The system prompt is assembled in this order:
 
-1. **Persona** — identity (who am I)
-2. **Core context** — ego and configured stable context files
-3. **Runtime contract** — execution semantics
-4. **Talents** — behavior (how should I act)
-5. **Active capabilities** — currently loaded tool and context surface
-6. **Session origin context** — generated data about why this run was shaped
-7. **Typed context buckets** — tagged guidance, continuity, related context, live state
-8. **Current conditions** — environment (where/when am I)
-9. **Conversation history** — continuity for full-context runs
+1. **Axioms** — highest-level preamble, when `core/axioms.md` exists
+2. **Persona** — identity (who am I)
+3. **Core context** — ego and configured stable context files
+4. **Runtime contract** — execution semantics
+5. **Talents** — behavior (how should I act)
+6. **Active capabilities** — currently loaded tool and context surface
+7. **Session origin context** — generated data about why this run was shaped
+8. **Typed context buckets** — tagged guidance, continuity, related context, live state
+9. **Current conditions** — environment (where/when am I)
+10. **Conversation history** — continuity for full-context runs
 
 Task-focused delegate runs keep the compact worker persona, runtime
 contract, active capabilities, tagged context, and current conditions,
