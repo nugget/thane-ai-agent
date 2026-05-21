@@ -86,13 +86,23 @@ type SessionView struct {
 // tool's overall byte budget and forcing the handler to drop everything.
 const maxMessageContentBytes = 2000
 
+// maxMessageMetadataValueBytes bounds each transport metadata value in
+// archive-facing JSON and stored-history headers. Metadata is small
+// provenance, not corpus; bounding it prevents unusual channel labels from
+// dominating byte-capped archive tool output.
+const maxMessageMetadataValueBytes = 256
+
+const maxMessageMetadataKeyBytes = 64
+
 // MessageView is the JSON-facing projection of an archived message.
 // T is a signed-second delta via [promptfmt.FormatDeltaOnly]. SessionID
 // is always emitted (empty string when unknown) so the model sees a
 // stable schema across calls. ContentTruncated signals when Content was
 // clipped to [maxMessageContentBytes]. Metadata carries transport
 // provenance separated from the literal message body when a known channel
-// envelope is detected.
+// envelope is detected. Metadata keys and values are individually capped
+// so one malformed envelope cannot force byte-capped tools to drop all
+// messages.
 type MessageView struct {
 	T                string            `json:"t"`
 	Role             string            `json:"role"`
@@ -311,8 +321,8 @@ type metadataPart struct {
 func renderStoredHistoryContent(kind string, metadata []metadataPart, content string) string {
 	parts := []string{kind}
 	for _, part := range metadata {
-		key := sanitizeMetadataValue(part.key)
-		value := sanitizeMetadataValue(part.value)
+		key := sanitizeMetadataToken(part.key, maxMessageMetadataKeyBytes)
+		value := sanitizeMetadataToken(part.value, maxMessageMetadataValueBytes)
 		if key == "" || value == "" {
 			continue
 		}
@@ -334,6 +344,12 @@ func sanitizeMetadataValue(value string) string {
 	value = strings.ReplaceAll(value, "\r", " ")
 	value = strings.ReplaceAll(value, ";", ",")
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func sanitizeMetadataToken(value string, maxBytes int) string {
+	value = sanitizeMetadataValue(value)
+	value, _ = clipContent(value, maxBytes)
+	return value
 }
 
 func storedHistoryTransportMetadataParts(metadata map[string]string) []metadataPart {
@@ -368,7 +384,26 @@ func splitTransportEnvelope(content string) (string, map[string]string) {
 	if group := strings.TrimSpace(match[2]); group != "" {
 		metadata["group_id"] = group
 	}
-	return match[4], metadata
+	return match[4], normalizeMetadata(metadata)
+}
+
+func normalizeMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = sanitizeMetadataToken(key, maxMessageMetadataKeyBytes)
+		value = sanitizeMetadataToken(value, maxMessageMetadataValueBytes)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func messagesToViews(messages []Message, now time.Time) []MessageView {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestFormatSessionsList_StableSchema(t *testing.T) {
@@ -227,6 +228,46 @@ func TestFormatRecentMessages_SeparatesSignalEnvelopeMetadata(t *testing.T) {
 	}
 }
 
+func TestFormatRecentMessages_ClipsSignalEnvelopeMetadata(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	hugeSender := strings.Repeat("sender", maxMessageMetadataValueBytes)
+	hugeGroup := strings.Repeat("group", maxMessageMetadataValueBytes)
+	hugeTransportTS := strings.Repeat("1", maxMessageMetadataValueBytes*2)
+	messages := []Message{{
+		Role:      "user",
+		Content:   "Signal message from " + hugeSender + " in group " + hugeGroup + " [ts:" + hugeTransportTS + "]:\n\nbody",
+		Timestamp: now.Add(-30 * time.Minute),
+		SessionID: "s_abc",
+	}}
+
+	data := FormatRecentMessages(messages, now, false)
+
+	var parsed struct {
+		Messages []MessageView `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(parsed.Messages))
+	}
+	for _, key := range []string{"sender", "group_id", "transport_ts"} {
+		value := parsed.Messages[0].Metadata[key]
+		if value == "" {
+			t.Fatalf("metadata[%s] is empty", key)
+		}
+		if len(value) > maxMessageMetadataValueBytes {
+			t.Fatalf("metadata[%s] len = %d, want <= %d", key, len(value), maxMessageMetadataValueBytes)
+		}
+		if !utf8.ValidString(value) {
+			t.Fatalf("metadata[%s] is not valid UTF-8", key)
+		}
+	}
+	if strings.Contains(string(data), hugeSender) || strings.Contains(string(data), hugeGroup) || strings.Contains(string(data), hugeTransportTS) {
+		t.Fatalf("metadata output contains an unclipped huge field: %s", data)
+	}
+}
+
 func TestFormatStoredHistoryMessage_SeparatesMetadataAndCorpus(t *testing.T) {
 	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
 	entry, ok := FormatStoredHistoryMessage(Message{
@@ -258,6 +299,24 @@ func TestFormatStoredHistoryMessage_SeparatesMetadataAndCorpus(t *testing.T) {
 		if strings.Contains(entry.Content, unwanted) {
 			t.Fatalf("content contains %q:\n%s", unwanted, entry.Content)
 		}
+	}
+}
+
+func TestFormatStoredHistoryMessage_ClipsHeaderMetadata(t *testing.T) {
+	hugeRole := strings.Repeat("historical_role", maxMessageMetadataValueBytes)
+	entry, ok := FormatStoredHistoryMessage(Message{
+		Role:    hugeRole,
+		Content: "body",
+	}, time.Time{})
+	if !ok {
+		t.Fatal("FormatStoredHistoryMessage returned ok=false")
+	}
+	if strings.Contains(entry.Content, hugeRole) {
+		t.Fatalf("stored-history header contains unclipped metadata:\n%s", entry.Content)
+	}
+	want := "original_role=" + hugeRole[:maxMessageMetadataValueBytes]
+	if !strings.Contains(entry.Content, want) {
+		t.Fatalf("stored-history header = %q, want clipped role metadata %q", entry.Content, want)
 	}
 }
 
