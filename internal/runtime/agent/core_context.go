@@ -14,12 +14,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
-// CoreContextProvider publishes curated core identity and continuity
-// documents through the normal context-provider pipeline.
+// CoreContextProvider reads curated core identity documents for prompt
+// assembly.
 type CoreContextProvider struct {
 	mu sync.RWMutex
 
 	logger             *slog.Logger
+	axiomsFile         string
 	egoFile            string
 	provenanceStore    *provenance.Store
 	injectFiles        []string
@@ -27,10 +28,17 @@ type CoreContextProvider struct {
 	now                func() time.Time
 }
 
+type corePromptSection struct {
+	name    string
+	title   string
+	content string
+}
+
 // CoreContextProviderConfig holds optional wiring for
 // [CoreContextProvider].
 type CoreContextProviderConfig struct {
 	Logger          *slog.Logger
+	AxiomsFile      string
 	EgoFile         string
 	ProvenanceStore *provenance.Store
 	InjectFiles     []string
@@ -47,11 +55,21 @@ func NewCoreContextProvider(cfg CoreContextProviderConfig) *CoreContextProvider 
 	}
 	return &CoreContextProvider{
 		logger:          cfg.Logger,
+		axiomsFile:      cfg.AxiomsFile,
 		egoFile:         cfg.EgoFile,
 		provenanceStore: cfg.ProvenanceStore,
 		injectFiles:     append([]string(nil), cfg.InjectFiles...),
 		now:             cfg.Now,
 	}
+}
+
+func (p *CoreContextProvider) updateAxiomsFile(path string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.axiomsFile = path
+	p.mu.Unlock()
 }
 
 func (p *CoreContextProvider) updateEgoFile(path string) {
@@ -90,16 +108,58 @@ func (p *CoreContextProvider) updateProvenanceStore(store *provenance.Store) {
 	p.mu.Unlock()
 }
 
-// TagContextBucket keeps current core context in continuity until the
-// dedicated core preamble path owns axioms, mission, and ego sections.
+// TagContextBucket keeps compatibility output in continuity when a
+// CoreContextProvider is explicitly registered as a context provider.
+// Normal prompt assembly renders core files as first-class stable
+// sections before runtime context.
 func (p *CoreContextProvider) TagContextBucket() agentctx.ContextBucket {
 	return agentctx.ContextBucketContinuity
 }
 
-// TagContext returns core continuity context for always-on injection.
+// TagContext returns core context for compatibility with the
+// context-provider interface.
 func (p *CoreContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	if p == nil {
+	sections := p.promptSections(ctx)
+	if len(sections) == 0 {
 		return "", nil
+	}
+	var sb strings.Builder
+	for _, section := range sections {
+		promptfmt.AppendMarkdownSection(&sb, 3, section.title, section.content)
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
+func (p *CoreContextProvider) preambleSections(ctx context.Context) []corePromptSection {
+	if p == nil {
+		return nil
+	}
+
+	p.mu.RLock()
+	axiomsFile := p.axiomsFile
+	verifier := p.injectFileVerifier
+	logger := p.logger
+	p.mu.RUnlock()
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	content := p.readPlainCoreFile(ctx, axiomsFile, verifier, "axioms_file", maxAxiomsBytes, "\n\n[axioms.md truncated — exceeded 16 KB limit]", logger)
+	if content == "" {
+		return nil
+	}
+	return []corePromptSection{
+		{
+			name:    "AXIOMS",
+			title:   "Axioms (axioms.md)",
+			content: content,
+		},
+	}
+}
+
+func (p *CoreContextProvider) promptSections(ctx context.Context) []corePromptSection {
+	if p == nil {
+		return nil
 	}
 
 	p.mu.RLock()
@@ -117,43 +177,38 @@ func (p *CoreContextProvider) TagContext(ctx context.Context, _ agentctx.Context
 		now = time.Now
 	}
 
-	var sb strings.Builder
-	p.appendEgo(ctx, &sb, egoFile, prov, verifier, now, logger)
-	p.appendInjectFiles(ctx, &sb, injectFiles, verifier, logger)
-	return strings.TrimSpace(sb.String()), nil
+	var sections []corePromptSection
+	if content := p.readEgo(ctx, egoFile, prov, verifier, now, logger); content != "" {
+		sections = append(sections, corePromptSection{
+			name:    "EGO",
+			title:   "Self-Reflection (ego.md)",
+			content: content,
+		})
+	}
+	if content := p.readInjectFiles(ctx, injectFiles, verifier, logger); content != "" {
+		sections = append(sections, corePromptSection{
+			name:    "INJECTED CONTEXT",
+			title:   "Injected Context",
+			content: content,
+		})
+	}
+	return sections
 }
 
-func (p *CoreContextProvider) appendEgo(ctx context.Context, sb *strings.Builder, egoFile string, prov *provenance.Store, verifier func(context.Context, string, string) error, now func() time.Time, logger *slog.Logger) {
+func (p *CoreContextProvider) readEgo(ctx context.Context, egoFile string, prov *provenance.Store, verifier func(context.Context, string, string) error, now func() time.Time, logger *slog.Logger) string {
 	if prov != nil {
-		p.appendEgoFromProvenance(ctx, sb, prov, now, logger)
-		return
+		return p.readEgoFromProvenance(ctx, prov, now, logger)
 	}
-	if strings.TrimSpace(egoFile) == "" {
-		return
-	}
-	if verifier != nil {
-		if err := verifier(ctx, egoFile, "ego_file"); err != nil {
-			logger.Warn("ego file blocked by verification policy", "path", egoFile, "error", err)
-			return
-		}
-	}
-	data, err := os.ReadFile(egoFile)
-	if err != nil || len(data) == 0 {
-		return
-	}
-	appendProviderSeparator(sb)
-	sb.WriteString("### Self-Reflection (ego.md)\n\n")
-	sb.WriteString(truncateCoreContext(string(data), maxEgoBytes, "\n\n[ego.md truncated — exceeded 16 KB limit]"))
+	return p.readPlainCoreFile(ctx, egoFile, verifier, "ego_file", maxEgoBytes, "\n\n[ego.md truncated — exceeded 16 KB limit]", logger)
 }
 
-func (p *CoreContextProvider) appendEgoFromProvenance(ctx context.Context, sb *strings.Builder, prov *provenance.Store, now func() time.Time, logger *slog.Logger) {
+func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *provenance.Store, now func() time.Time, logger *slog.Logger) string {
 	content, err := prov.Read("ego.md")
 	if err != nil || len(content) == 0 {
-		return
+		return ""
 	}
 
-	appendProviderSeparator(sb)
-	sb.WriteString("### Self-Reflection (ego.md)\n")
+	var sb strings.Builder
 	if hist, err := prov.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
 		sb.WriteString(fmt.Sprintf("(updated %s by %s, revision %d)\n",
 			promptfmt.FormatDeltaOnly(hist.LastModified, now()), hist.LastMessage, hist.RevisionCount))
@@ -162,9 +217,10 @@ func (p *CoreContextProvider) appendEgoFromProvenance(ctx context.Context, sb *s
 	}
 	sb.WriteString("\n")
 	sb.WriteString(truncateCoreContext(content, maxEgoBytes, "\n\n[ego.md truncated — exceeded 16 KB limit]"))
+	return strings.TrimSpace(sb.String())
 }
 
-func (p *CoreContextProvider) appendInjectFiles(ctx context.Context, sb *strings.Builder, injectFiles []string, verifier func(context.Context, string, string) error, logger *slog.Logger) {
+func (p *CoreContextProvider) readInjectFiles(ctx context.Context, injectFiles []string, verifier func(context.Context, string, string) error, logger *slog.Logger) string {
 	var ctxBuf strings.Builder
 	for _, path := range injectFiles {
 		if verifier != nil {
@@ -183,17 +239,26 @@ func (p *CoreContextProvider) appendInjectFiles(ctx context.Context, sb *strings
 		ctxBuf.Write(data)
 	}
 	if ctxBuf.Len() == 0 {
-		return
+		return ""
 	}
-	appendProviderSeparator(sb)
-	sb.WriteString("### Injected Context\n\n")
-	sb.WriteString(ctxBuf.String())
+	return ctxBuf.String()
 }
 
-func appendProviderSeparator(sb *strings.Builder) {
-	if sb.Len() > 0 {
-		sb.WriteString("\n\n---\n\n")
+func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string, verifier func(context.Context, string, string) error, consumer string, maxBytes int, marker string, logger *slog.Logger) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
 	}
+	if verifier != nil {
+		if err := verifier(ctx, path, consumer); err != nil {
+			logger.Warn("core prompt file blocked by verification policy", "path", path, "consumer", consumer, "error", err)
+			return ""
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return truncateCoreContext(string(data), maxBytes, marker)
 }
 
 func truncateCoreContext(s string, maxBytes int, marker string) string {

@@ -339,8 +339,9 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 	finalStatus := make(chan Status, 1)
 	go func() {
 		<-l.Done()
-		finalStatus <- l.Status()
+		st := l.Status()
 		r.Deregister(l.id)
+		finalStatus <- st
 	}()
 
 	waitCtx := ctx

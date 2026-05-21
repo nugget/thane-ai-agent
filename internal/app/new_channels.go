@@ -332,7 +332,7 @@ func (a *App) initChannels(s *newState) error {
 				ft.SetPathVerifier(docStore)
 			}
 			a.loop.UseInjectFileVerifier(docStore.VerifyPath)
-			if err := a.verifyStartupReads(s.ctx, docStore, s.resolvedInjectFiles); err != nil {
+			if err := a.verifyStartupReads(s.ctx, docStore, s.resolvedCorePromptFiles); err != nil {
 				return err
 			}
 		}

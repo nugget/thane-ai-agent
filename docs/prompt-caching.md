@@ -32,10 +32,11 @@ and regression tests.
 
 | Section                 | Stability | Rationale |
 |-------------------------|-----------|-----------|
+| `AXIOMS`                | stable    | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | stable    | Identity. Changes only when persona files are edited. |
 | `EGO`                   | stable    | Self-reflection file. Stable across long sessions. |
-| `RUNTIME CONTRACT`      | stable    | Execution semantics. Model-invariant. |
 | `INJECTED CONTEXT`      | stable    | Mission + configured core files. Stable across a session. |
+| `RUNTIME CONTRACT`      | stable    | Execution semantics. Model-invariant. |
 | `TOOL CALLING CONTRACT` | stable    | Model-family-specific tool-calling guidance. |
 | `TALENTS ALWAYS ON`     | stable    | Behavioral guidance. Stable across a session. |
 | `TALENTS TAGGED`        | semi-stable | Tag-scoped talents. Can change when tags flip or talent files are edited. |
@@ -102,10 +103,11 @@ Anthropic exposes explicit prompt-cache breakpoints through
 
 | Section                 | Anthropic TTL | Rationale |
 |-------------------------|---------------|-----------|
+| `AXIOMS`                | 1h            | Highest-level preamble. Changes only when axioms.md is edited. |
 | `PERSONA`               | 1h            | Identity. Changes only when persona files are edited. |
 | `EGO`                   | 1h            | Self-reflection file. Stable across long sessions. |
-| `RUNTIME CONTRACT`      | 1h            | Execution semantics. Model-invariant. |
 | `INJECTED CONTEXT`      | 1h            | Mission + configured core files. Stable across a session. |
+| `RUNTIME CONTRACT`      | 1h            | Execution semantics. Model-invariant. |
 | `TOOL CALLING CONTRACT` | 1h            | Model-family-specific tool-calling guidance. |
 | `TALENTS ALWAYS ON`     | 1h            | Behavioral guidance. Stable across a session. |
 | `TALENTS TAGGED`        | 5m            | Tag-scoped talents. Can change per turn if tags flip. |

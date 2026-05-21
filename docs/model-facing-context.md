@@ -3,7 +3,7 @@
 Read this before changing code that emits text or data for later model
 consumption. It keeps reusable lessons out of scattered issues and
 inside project memory. If an output may become system prompt content,
-capability context, delegate bootstrap context, tool output, summary
+typed context buckets, delegate bootstrap context, tool output, summary
 scaffolding, or any other loop input, the audience is a model.
 
 ## Mission
@@ -292,8 +292,8 @@ Before adding or changing model-facing context, ask:
 1. What work is the model still being forced to do that Go could do first?
 2. Is this shape optimized for a model, or only for a human maintainer?
 3. Are tense, audience, and referents clear from the model's point of view?
-4. Does this belong in always-on context, capability context, a tool
-   result, or nowhere at all?
+4. Does this belong in stable core context, tagged guidance, continuity
+   context, related context, live state, a tool result, or nowhere at all?
 5. If this data changes often, why is it static?
 
 If those questions are answered well, the formatting is probably on the

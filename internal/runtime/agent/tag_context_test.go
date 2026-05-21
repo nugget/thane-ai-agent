@@ -272,10 +272,10 @@ func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 		t.Fatal("prompt should contain current conditions")
 	}
 
-	// Core context now enters through the continuity provider bucket,
-	// after tagged guidance and before current conditions.
-	if injectedIdx < tagCtxIdx {
-		t.Error("core context should appear after tagged context")
+	// Core context is first-class stable context, before generated
+	// tagged guidance and live/runtime sections.
+	if injectedIdx > tagCtxIdx {
+		t.Error("core context should appear before tagged context")
 	}
 	if injectedIdx > conditionsIdx {
 		t.Error("core context should appear before current conditions")
