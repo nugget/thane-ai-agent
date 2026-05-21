@@ -32,6 +32,12 @@ func NewContextProvider(mgr *Manager, opLog *OperationLog) *ContextProvider {
 	}
 }
 
+// TagContextBucket places forge account config and recent operations in
+// live state because the output reflects current runtime configuration.
+func (p *ContextProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
+}
+
 // forgeContextJSON is the JSON structure emitted by the provider.
 type forgeContextJSON struct {
 	Forges    []accountView  `json:"forges"`

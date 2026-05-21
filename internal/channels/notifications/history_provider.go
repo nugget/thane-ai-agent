@@ -57,6 +57,12 @@ func NewHistoryProvider(cfg HistoryProviderConfig) *HistoryProvider {
 	}
 }
 
+// TagContextBucket places notification history in continuity because it
+// prevents duplicate outreach by showing recent conversational actions.
+func (p *HistoryProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // historySummary is the JSON structure for a single notification in the
 // system prompt output.
 type historySummary struct {

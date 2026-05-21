@@ -26,7 +26,7 @@ func (a *App) initAgentLoop(s *newState) error {
 	// row left behind by older builds. The ego loop replaces it.
 	a.removeLegacyPeriodicReflectionTask(logger)
 
-	// --- Path prefix resolver + inject files ---
+	// --- Path prefix resolver + core prompt files ---
 	// Resolve workspace-derived paths and core context-injection files
 	// before constructing the agent loop so they can be passed via
 	// LoopOptions instead of post-construction setters.
@@ -61,36 +61,18 @@ func (a *App) initAgentLoop(s *newState) error {
 	}
 	s.resolver = resolver
 
-	// Resolve fixed core context files at startup (tilde expansion,
-	// existence check) but defer reading to the core context provider
-	// each agent turn so edits under workspace/core are visible without
-	// restart.
-	var resolvedInjectFiles []string
-	if injectFiles := cfg.CoreInjectFiles(); len(injectFiles) > 0 {
-		for _, path := range injectFiles {
-			path = resolvePath(path, resolver)
-			if _, err := os.Stat(path); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					logger.Warn("core context file not found", "path", path)
-				} else {
-					logger.Warn("core context file unreadable", "path", path, "error", err)
-				}
-				// Still include the path — the file may appear later.
-			}
-			resolvedInjectFiles = append(resolvedInjectFiles, path)
-			logger.Debug("core context file registered", "path", path)
-		}
-		logger.Info("core context files registered", "files", len(resolvedInjectFiles))
-	}
-	s.resolvedInjectFiles = resolvedInjectFiles
-
-	// Resolve ego.md path if a workspace is configured. The core context
-	// provider reads the file fresh on every turn, so the path is enough
-	// at startup.
-	var egoFile string
+	// Resolve fixed core prompt files if a workspace is configured. The
+	// core context provider reads them fresh on every turn, so paths are
+	// enough at startup.
+	var axiomsFile, personaFile, missionFile, egoFile string
 	if cfg.Workspace.Path != "" {
+		axiomsFile = resolvePath(coreFilePath(cfg.Workspace.Path, "axioms.md"), nil)
+		personaFile = resolvePath(coreFilePath(cfg.Workspace.Path, "persona.md"), nil)
+		missionFile = resolvePath(coreFilePath(cfg.Workspace.Path, "mission.md"), nil)
 		egoFile = resolvePath(coreFilePath(cfg.Workspace.Path, "ego.md"), nil)
 	}
+
+	s.resolvedCorePromptFiles = corePromptFilesForStartupVerification(logger, axiomsFile, personaFile, missionFile, egoFile)
 
 	// --- Agent loop ---
 	// The core conversation engine. Receives messages, manages context,
@@ -114,12 +96,13 @@ func (a *App) initAgentLoop(s *newState) error {
 		LLM:                 a.llmClient,
 		Model:               defaultModel,
 		ContextWindow:       defaultContextWindow,
-		Persona:             s.personaContent,
+		AxiomsFile:          axiomsFile,
+		PersonaFile:         personaFile,
+		MissionFile:         missionFile,
 		ParsedTalents:       s.parsedTalents,
 		Timezone:            cfg.Timezone,
 		RecoveryModel:       recoveryModel,
 		Archiver:            a.archiveAdapter,
-		InjectFiles:         resolvedInjectFiles,
 		EgoFile:             egoFile,
 		HAInject:            haInject,
 		ModelRegistry:       a.modelRegistry,
@@ -139,6 +122,26 @@ func (a *App) initAgentLoop(s *newState) error {
 	a.archiveAdapter.EnsureSession("default")
 
 	return nil
+}
+
+func corePromptFilesForStartupVerification(logger *slog.Logger, paths ...string) []string {
+	var out []string
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			if logger != nil {
+				logger.Warn("core prompt file unreadable", "path", path, "error", err)
+			}
+			// Keep unreadable paths in startup verification so managed-root
+			// policy failures surface instead of being silently skipped.
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 // removeLegacyPeriodicReflectionTask deletes the persisted

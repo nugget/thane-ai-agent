@@ -98,10 +98,27 @@ const (
 	KindLLMStart      = llm.KindLLMStart
 )
 
-// maxEgoBytes is the maximum size of ego.md content published through
-// the core context provider. Content beyond this limit is truncated
+// maxAxiomsBytes is the maximum size of axioms.md content published as
+// the system-prompt preamble. Content beyond this limit is truncated
 // with a marker.
+const maxAxiomsBytes = 16 * 1024
+
+// maxPersonaBytes is the maximum size of persona.md content published as the
+// identity section. Content beyond this limit is truncated with a marker.
+const maxPersonaBytes = 16 * 1024
+
+// maxEgoBytes is the maximum size of ego.md content published as a stable
+// core prompt section. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
+
+// maxMissionBytes is the maximum size of mission.md content published as a
+// stable core prompt section. Content beyond this limit is truncated with a
+// marker.
+const maxMissionBytes = 16 * 1024
+
+// maxInjectFileBytes is the maximum size of each configured supplemental core
+// prompt file. Content beyond this limit is truncated with a marker.
+const maxInjectFileBytes = 16 * 1024
 
 // maxTagContextBytes is the aggregate size limit for all tag context
 // files injected into the system prompt. Individual files exceeding
@@ -189,6 +206,9 @@ type ContextRequest = agentctx.ContextRequest
 // always-on bucket (via [Loop.RegisterAlwaysContextProvider]), where
 // they fire on every main-loop run but are suppressed for delegate
 // runs that pass [agentctx.ContextRequest.IncludeAlways] = false.
+// Curated core files such as ego.md and configured inject files are
+// rendered by the prompt assembler as first-class stable sections
+// before this generated context pipeline.
 //
 // Output should follow #458 conventions: delta-annotated timestamps
 // via [promptfmt.FormatDelta], machine-first format, pre-computed
@@ -277,8 +297,8 @@ type Loop struct {
 	pendingTagProviders    map[string]TagContextProvider
 	pendingAlwaysProviders []TagContextProvider
 
-	// tagContextAssembler builds the Capability Context section from
-	// tagged KB articles, tagged providers, and always-on providers.
+	// tagContextAssembler builds typed context sections from tagged KB
+	// articles, tagged providers, and always-on providers.
 	// Set via SetTagContextAssembler; nil disables tag context.
 	tagContextAssembler *TagContextAssembler
 
@@ -320,6 +340,9 @@ type LoopOptions struct {
 
 	// Optional, stable at construction.
 	Persona             string
+	AxiomsFile          string
+	PersonaFile         string
+	MissionFile         string
 	ParsedTalents       []talents.Talent
 	Timezone            string
 	RecoveryModel       string
@@ -374,7 +397,10 @@ func NewLoop(opts LoopOptions) (*Loop, error) {
 		requestRecorder:     opts.RequestRecorder,
 		nowFunc:             time.Now,
 	}
-	if opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+	if opts.AxiomsFile != "" || opts.PersonaFile != "" || opts.MissionFile != "" || opts.EgoFile != "" || opts.ProvenanceStore != nil || len(opts.InjectFiles) > 0 {
+		l.ensureCoreContextProvider().updateAxiomsFile(opts.AxiomsFile)
+		l.ensureCoreContextProvider().updatePersonaFile(opts.PersonaFile)
+		l.ensureCoreContextProvider().updateMissionFile(opts.MissionFile)
 		l.ensureCoreContextProvider().updateEgoFile(opts.EgoFile)
 		l.coreContextProvider.updateProvenanceStore(opts.ProvenanceStore)
 		l.coreContextProvider.updateInjectFiles(opts.InjectFiles)
@@ -448,14 +474,14 @@ func (l *Loop) RegisterAlwaysContextProvider(p TagContextProvider) {
 // grouped Configure* methods for late-binding state; new code should
 // prefer those entry points.
 
-// SetEgoFile sets the path to ego.md. The file is published through
-// the always-on context-provider pipeline and read fresh on each turn.
+// SetEgoFile sets the path to ego.md. The file is read fresh on each
+// full prompt turn and rendered as a first-class stable section.
 func (l *Loop) SetEgoFile(path string) {
 	l.ensureCoreContextProvider().updateEgoFile(path)
 }
 
-// SetInjectFiles sets the core context files published through the
-// always-on context-provider pipeline on each turn.
+// SetInjectFiles sets the core context files rendered as stable
+// injected context on each full prompt turn.
 func (l *Loop) SetInjectFiles(paths []string) {
 	l.ensureCoreContextProvider().updateInjectFiles(paths)
 }
@@ -474,7 +500,6 @@ func (l *Loop) ensureCoreContextProvider() *CoreContextProvider {
 		Logger: l.logger,
 		Now:    l.nowFunc,
 	})
-	l.RegisterAlwaysContextProvider(l.coreContextProvider)
 	return l.coreContextProvider
 }
 
@@ -576,9 +601,9 @@ func (l *Loop) ConfigureChannelDelegation(w ChannelDelegationWiring) {
 }
 
 // SetTagContextAssembler configures the shared assembler that builds
-// the Capability Context section of the system prompt from tagged KB
-// articles, tagged providers, and always-on providers. Drains any
-// provider registrations staged before this call into the assembler.
+// typed context sections of the system prompt from tagged KB articles,
+// tagged providers, and always-on providers. Drains any provider
+// registrations staged before this call into the assembler.
 func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	l.pendingProvidersMu.Lock()
 	pendingTagged := l.pendingTagProviders
@@ -594,15 +619,8 @@ func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
 	for tag, p := range pendingTagged {
 		a.RegisterTaggedProvider(tag, p)
 	}
-	coreRegistered := false
 	for _, p := range pendingAlways {
 		a.RegisterAlwaysProvider(p)
-		if p == l.coreContextProvider {
-			coreRegistered = true
-		}
-	}
-	if l.coreContextProvider != nil && !coreRegistered {
-		a.RegisterAlwaysProvider(l.coreContextProvider)
 	}
 }
 
@@ -975,38 +993,76 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// Snapshot active tags from the per-Run capability scope.
 	tags := snapshotTagsFromContext(ctx)
 
-	// Track section boundaries for debug dump.
+	// Track section boundaries for debug dumps and provider-side prompt
+	// cache blocks. Separators belong between sections, so write them
+	// before marking the section start.
 	var sections []promptSection
-	mark := func(name string) { sections = append(sections, promptSection{name: name, start: sb.Len()}) }
-	seal := func() { sections[len(sections)-1].end = sb.Len() }
+	appendTracked := func(name string, write func()) {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		sections = append(sections, promptSection{name: name, start: sb.Len()})
+		write()
+		sections[len(sections)-1].end = sb.Len()
+	}
+	appendTrackedMarkdown := func(name string, level int, title string, content string) {
+		var section strings.Builder
+		if !promptfmt.AppendMarkdownSection(&section, level, title, content) {
+			return
+		}
+		appendTracked(name, func() {
+			sb.WriteString(section.String())
+		})
+	}
+
+	// 0. Axioms (highest-level preamble — what must be true before identity)
+	if !taskPrompt && l.coreContextProvider != nil {
+		for _, preambleSection := range l.coreContextProvider.preambleSections(ctx) {
+			appendTrackedMarkdown(preambleSection.name, 2, preambleSection.title, preambleSection.content)
+		}
+	}
 
 	// 1. Persona (identity — who am I)
-	mark("PERSONA")
-	if taskPrompt {
-		sb.WriteString(prompts.DelegateSystemPrompt())
-	} else if l.persona != "" {
-		sb.WriteString(l.persona)
-	} else {
-		sb.WriteString(prompts.BaseSystemPrompt())
-	}
-	seal()
+	appendTracked("PERSONA", func() {
+		if taskPrompt {
+			sb.WriteString(prompts.DelegateSystemPrompt())
+		} else if l.coreContextProvider != nil {
+			if persona := l.coreContextProvider.personaContent(ctx); persona != "" {
+				sb.WriteString(persona)
+			} else if l.persona != "" {
+				sb.WriteString(l.persona)
+			} else {
+				sb.WriteString(prompts.BaseSystemPrompt())
+			}
+		} else if l.persona != "" {
+			sb.WriteString(l.persona)
+		} else {
+			sb.WriteString(prompts.BaseSystemPrompt())
+		}
+	})
 
-	// 2. Runtime contract (execution semantics — how should I use tools)
-	mark("RUNTIME CONTRACT")
-	sb.WriteString("\n\n")
-	if taskPrompt {
-		sb.WriteString(prompts.DelegateRuntimeContract())
-	} else {
-		sb.WriteString(prompts.RuntimeContract())
+	// 2. Stable core context (durable self-orientation).
+	if !taskPrompt && l.coreContextProvider != nil {
+		for _, coreSection := range l.coreContextProvider.promptSections(ctx) {
+			appendTrackedMarkdown(coreSection.name, 2, coreSection.title, coreSection.content)
+		}
 	}
-	seal()
+
+	// 3. Runtime contract (execution semantics — how should I use tools)
+	appendTracked("RUNTIME CONTRACT", func() {
+		if taskPrompt {
+			sb.WriteString(prompts.DelegateRuntimeContract())
+		} else {
+			sb.WriteString(prompts.RuntimeContract())
+		}
+	})
 
 	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
-		mark("TOOL CALLING CONTRACT")
-		sb.WriteString("\n\n## Tool Calling Contract\n\n")
-		sb.WriteString(contract)
-		sb.WriteString("\n")
-		seal()
+		appendTracked("TOOL CALLING CONTRACT", func() {
+			sb.WriteString("## Tool Calling Contract\n\n")
+			sb.WriteString(contract)
+			sb.WriteString("\n")
+		})
 	}
 
 	// 4. Talents (behavior — how should I act)
@@ -1014,46 +1070,47 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 	// prompt caching can retain the stable behavioral prefix.
 	alwaysOnTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, tags)
 	if !taskPrompt && alwaysOnTalents != "" {
-		mark("TALENTS ALWAYS ON")
-		sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		sb.WriteString(alwaysOnTalents)
-		seal()
+		appendTracked("TALENTS ALWAYS ON", func() {
+			sb.WriteString("## Behavioral Guidance\n\n")
+			sb.WriteString(alwaysOnTalents)
+		})
 	}
 	if taggedTalents != "" {
-		mark("TALENTS TAGGED")
-		if !taskPrompt && alwaysOnTalents != "" {
-			sb.WriteString("\n\n---\n\n")
-		} else {
-			sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		}
-		sb.WriteString(taggedTalents)
-		seal()
+		appendTracked("TALENTS TAGGED", func() {
+			if !taskPrompt && alwaysOnTalents != "" {
+				sb.WriteString("---\n\n")
+			} else {
+				sb.WriteString("## Behavioral Guidance\n\n")
+			}
+			sb.WriteString(taggedTalents)
+		})
 	}
 
 	// 5. Active capabilities (dynamic runtime state).
 	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
-		mark("ACTIVE CAPABILITIES")
-		sb.WriteString("\n\n## Active Capabilities\n\n")
-		sb.WriteString(activeSummary)
-		sb.WriteString("\n")
-		seal()
+		appendTracked("ACTIVE CAPABILITIES", func() {
+			sb.WriteString("## Active Capabilities\n\n")
+			sb.WriteString(activeSummary)
+			sb.WriteString("\n")
+		})
 	}
 
-	// 5b. Session origin policy (runtime data about why this run was shaped).
+	// 6. Session origin policy (runtime data about why this run was shaped).
 	if !taskPrompt {
 		if originCtx := l.renderSessionOriginContext(ctx); originCtx != "" {
-			mark("SESSION ORIGIN CONTEXT")
-			sb.WriteString("\n\n## Session Origin Context\n\n")
-			sb.WriteString(originCtx)
-			seal()
+			appendTracked("SESSION ORIGIN CONTEXT", func() {
+				sb.WriteString("## Session Origin Context\n\n")
+				sb.WriteString(originCtx)
+			})
 		}
 	}
 
-	// 6. Capability context (capability knowledge + ambient context)
-	// One unified section assembled by TagContextAssembler from three
-	// sources: tagged KB articles, tagged providers, and always-on
-	// providers. Always-on providers are gated by IncludeAlways: main
-	// loop runs include them; delegate runs (which set
+	// 7. Typed context buckets (capability knowledge + ambient context).
+	// TagContextAssembler walks tagged KB articles, tagged providers, and
+	// always-on providers, then returns named buckets so durable guidance,
+	// continuity, related context, and live state are not flattened into
+	// one generic section. Always-on providers are gated by IncludeAlways:
+	// main loop runs include them; delegate runs (which set
 	// req.SuppressAlwaysContext via the loops launch) do not.
 	if assembler := l.contextAssemblerForPrompt(); assembler != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -1064,19 +1121,15 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			ActiveTags:    tags,
 			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
 		}
-		if capCtx := assembler.Build(haCtx, req); capCtx != "" {
-			mark("CAPABILITY CONTEXT")
-			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(capCtx)
-			seal()
+		for _, contextSection := range assembler.BuildSections(haCtx, req) {
+			appendTrackedMarkdown(strings.ToUpper(contextSection.Title), 2, contextSection.Title, contextSection.Content)
 		}
 	}
 
-	// 7. Current Conditions (environment — where/when am I)
-	mark("CURRENT CONDITIONS")
-	sb.WriteString("\n\n")
-	sb.WriteString(awareness.CurrentConditions(l.timezone))
-	seal()
+	// 8. Current Conditions (environment — where/when am I)
+	appendTracked("CURRENT CONDITIONS", func() {
+		sb.WriteString(awareness.CurrentConditions(l.timezone))
+	})
 
 	text := sb.String()
 	return text, promptSectionsFromBoundaries(text, sections)
@@ -1182,14 +1235,14 @@ func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.P
 	return result
 }
 
-// promptSectionCacheTTL maps a system-prompt section name to its
-// Anthropic cache TTL. See docs/anthropic-caching.md for the policy,
-// the decision tree for adding new sections, and why volatile
-// sections must return "" rather than a short TTL (they'd churn the
-// cache instead of amortizing it).
+// promptSectionCacheTTL maps a system-prompt section name to the current
+// Anthropic-shaped cache TTL hint. See docs/prompt-caching.md for the
+// provider-neutral stability policy, provider adapter mapping, and why volatile
+// sections must return "" rather than a short TTL (they'd churn the cache
+// instead of amortizing it).
 func promptSectionCacheTTL(name string) string {
 	switch name {
-	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
+	case "AXIOMS", "PERSONA", "MISSION", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
 		return "1h"
 	case "TALENTS TAGGED":
 		return "5m"
@@ -3224,44 +3277,11 @@ func triggerMessagesForRequest(conversationID string, messages []Message) []Mess
 // compaction summaries and handoffs, not provider-level system prompts, so
 // they are carried as historical assistant notes.
 func historyMessageToLLM(m memory.Message, now time.Time) (llm.Message, bool) {
-	role := strings.TrimSpace(m.Role)
-	content := m.Content
-	if role == "" && strings.TrimSpace(content) == "" {
+	entry, ok := memory.FormatStoredHistoryMessage(m, now)
+	if !ok {
 		return llm.Message{}, false
 	}
-	switch role {
-	case "user", "assistant":
-		return llm.Message{Role: role, Content: historyContentHeader("stored conversation history", role, m.Timestamp, now) + content}, true
-	case "system":
-		return llm.Message{
-			Role:    "assistant",
-			Content: historyContentHeader("stored conversation memory note; original_role=system; not active instruction", "", m.Timestamp, now) + content,
-		}, true
-	case "tool":
-		return llm.Message{
-			Role:    "assistant",
-			Content: historyContentHeader("stored historical tool result; original_role=tool; context only", "", m.Timestamp, now) + content,
-		}, true
-	default:
-		return llm.Message{
-			Role:    "user",
-			Content: historyContentHeader("stored historical message; original_role="+role, "", m.Timestamp, now) + content,
-		}, true
-	}
-}
-
-func historyContentHeader(kind, role string, timestamp, now time.Time) string {
-	var parts []string
-	if kind != "" {
-		parts = append(parts, kind)
-	}
-	if role != "" {
-		parts = append(parts, "role="+role)
-	}
-	if !timestamp.IsZero() && !now.IsZero() {
-		parts = append(parts, "age_delta="+promptfmt.FormatDeltaOnly(timestamp, now))
-	}
-	return "[" + strings.Join(parts, "; ") + "]\n"
+	return llm.Message{Role: entry.Role, Content: entry.Content}, true
 }
 
 func historyGapMarker(previous, next memory.Message) (llm.Message, bool) {

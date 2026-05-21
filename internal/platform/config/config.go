@@ -133,8 +133,8 @@ type Config struct {
 	// Workspace configures the agent's sandboxed file system access.
 	// The workspace root is also the anchor for Thane's fixed core
 	// document root at {workspace.path}/core, which holds canonical
-	// always-on files at stable locations such as persona.md, ego.md,
-	// mission.md, and metacognitive.md.
+	// always-on files at stable locations such as axioms.md, persona.md,
+	// ego.md, mission.md, and metacognitive.md.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Roots is the unified document-root config. Each entry names one
@@ -2693,16 +2693,6 @@ func (c *Config) CoreFile(name string) string {
 		return ""
 	}
 	return filepath.Join(root, name)
-}
-
-// CoreInjectFiles returns the curated always-on files that should be
-// re-read and injected into the system prompt on every turn.
-func (c *Config) CoreInjectFiles() []string {
-	mission := c.CoreFile("mission.md")
-	if mission == "" {
-		return nil
-	}
-	return []string{mission}
 }
 
 func (c *Config) validateLoops() error {

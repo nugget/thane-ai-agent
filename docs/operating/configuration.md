@@ -253,8 +253,9 @@ talents_dir: ~/Thane/talents
 
 See [Context Layers](../understanding/context-layers.md) for how these
 fit into the system prompt. `workspace.path` derives the protected
-`core` root; `core/persona.md`, `core/ego.md`, and `core/mission.md`
-are picked up by the runtime without a separate inject-file list.
+`core` root; `core/axioms.md`, `core/persona.md`, `core/ego.md`, and
+`core/mission.md` are picked up by the runtime without a separate
+inject-file list.
 
 ## Scheduler
 

@@ -82,8 +82,8 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	if !strings.Contains(prompt, "Tabs not spaces") {
 		t.Error("system prompt should contain second KB article content")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should contain capability context section heading")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should contain tagged guidance section heading")
 	}
 }
 
@@ -113,8 +113,8 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 	if strings.Contains(prompt, "Secret content") {
 		t.Error("system prompt should not contain context from inactive tags")
 	}
-	if strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should not contain capability context section when no active tags have context")
+	if strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should not contain tagged guidance section when no active tags have context")
 	}
 }
 
@@ -193,8 +193,8 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
-	if strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should not contain capability context section when capTags is nil")
+	if strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should not contain tagged guidance section when capTags is nil")
 	}
 }
 
@@ -225,8 +225,8 @@ func TestBuildSystemPrompt_TagContextChannelPinnedBuiltinTagIncluded(t *testing.
 	if !strings.Contains(prompt, "INTERACTIVE_CONTEXT_MARKER") {
 		t.Fatal("channel-pinned builtin helper tag should inject matching KB article")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Fatal("prompt should include capability context heading for channel-pinned helper tag")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Fatal("prompt should include tagged guidance heading for channel-pinned helper tag")
 	}
 }
 
@@ -272,10 +272,10 @@ func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 		t.Fatal("prompt should contain current conditions")
 	}
 
-	// Core context now enters through the always-on provider bucket,
-	// after tagged context and before current conditions.
-	if injectedIdx < tagCtxIdx {
-		t.Error("core context should appear after tagged context")
+	// Core context is first-class stable context, before generated
+	// tagged guidance and live/runtime sections.
+	if injectedIdx > tagCtxIdx {
+		t.Error("core context should appear before tagged context")
 	}
 	if injectedIdx > conditionsIdx {
 		t.Error("core context should appear before current conditions")
@@ -445,10 +445,15 @@ func TestSafeManagedRefPath_AllowsSymlinkInsideRoot(t *testing.T) {
 type mockTagProvider struct {
 	content string
 	err     error
+	bucket  agentctx.ContextBucket
 }
 
 func (m *mockTagProvider) TagContext(_ context.Context, _ agentctx.ContextRequest) (string, error) {
 	return m.content, m.err
+}
+
+func (m *mockTagProvider) TagContextBucket() agentctx.ContextBucket {
+	return m.bucket
 }
 
 type rejectingContextVerifier struct{}
@@ -570,12 +575,176 @@ func TestTagContextAssembler_KBAndLiveProvider(t *testing.T) {
 	}
 }
 
+func TestTagContextAssembler_BuildSectionsBuckets(t *testing.T) {
+	kbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(kbDir, "kb.md"),
+		[]byte("---\ntags: [forge]\n---\nKB_GUIDANCE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:   kbDir,
+	})
+	a.RegisterTaggedProvider("forge", &mockTagProvider{
+		content: "LIVE_PROVIDER",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
+	a.RegisterAlwaysProvider(&mockTagProvider{
+		content: "RELATED_PROVIDER",
+		bucket:  agentctx.ContextBucketRelated,
+	})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: true,
+	})
+	if len(sections) != 3 {
+		t.Fatalf("BuildSections returned %d sections, want 3: %#v", len(sections), sections)
+	}
+	wants := []struct {
+		bucket  agentctx.ContextBucket
+		title   string
+		content string
+	}{
+		{agentctx.ContextBucketTaggedGuidance, "Tagged Guidance", "KB_GUIDANCE"},
+		{agentctx.ContextBucketRelated, "Related Context", "RELATED_PROVIDER"},
+		{agentctx.ContextBucketLiveState, "Live State", "LIVE_PROVIDER"},
+	}
+	for i, want := range wants {
+		if sections[i].Bucket != want.bucket {
+			t.Fatalf("section %d bucket = %q, want %q", i, sections[i].Bucket, want.bucket)
+		}
+		if sections[i].Title != want.title {
+			t.Fatalf("section %d title = %q, want %q", i, sections[i].Title, want.title)
+		}
+		if !strings.Contains(sections[i].Content, want.content) {
+			t.Fatalf("section %d content = %q, want marker %q", i, sections[i].Content, want.content)
+		}
+	}
+
+	withoutAlways := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: false,
+	})
+	if len(withoutAlways) != 2 {
+		t.Fatalf("BuildSections without always returned %d sections, want 2: %#v", len(withoutAlways), withoutAlways)
+	}
+	for _, section := range withoutAlways {
+		if strings.Contains(section.Content, "RELATED_PROVIDER") {
+			t.Fatalf("IncludeAlways=false should suppress always-provider content: %#v", withoutAlways)
+		}
+		if section.Bucket == agentctx.ContextBucketRelated {
+			t.Fatalf("IncludeAlways=false should suppress always-provider bucket: %#v", withoutAlways)
+		}
+	}
+}
+
+func TestTagContextAssembler_TaggedProviderOrderIsStable(t *testing.T) {
+	a := NewTagContextAssembler(TagContextAssemblerConfig{})
+	a.RegisterTaggedProvider("zulu", &mockTagProvider{content: "ZULU_PROVIDER"})
+	a.RegisterTaggedProvider("alpha", &mockTagProvider{content: "ALPHA_PROVIDER"})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags: map[string]bool{
+			"zulu":  true,
+			"alpha": true,
+		},
+	})
+	if len(sections) != 1 {
+		t.Fatalf("BuildSections returned %d sections, want 1: %#v", len(sections), sections)
+	}
+	alphaIdx := strings.Index(sections[0].Content, "ALPHA_PROVIDER")
+	zuluIdx := strings.Index(sections[0].Content, "ZULU_PROVIDER")
+	if alphaIdx < 0 || zuluIdx < 0 {
+		t.Fatalf("missing provider markers in section content: %q", sections[0].Content)
+	}
+	if alphaIdx > zuluIdx {
+		t.Fatalf("tagged provider output should be sorted by tag: %q", sections[0].Content)
+	}
+}
+
+func TestTagContextAssembler_BucketCapDoesNotAbortOtherBuckets(t *testing.T) {
+	kbDir := t.TempDir()
+	oversizedGuidance := strings.Repeat("K", maxTagContextBytes+1024)
+	if err := os.WriteFile(filepath.Join(kbDir, "large.md"),
+		[]byte("---\ntags: [forge]\n---\n"+oversizedGuidance), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:   kbDir,
+	})
+	a.RegisterTaggedProvider("forge", &mockTagProvider{
+		content: "LIVE_AFTER_GUIDANCE_CAP",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
+	a.RegisterAlwaysProvider(&mockTagProvider{
+		content: "CONTINUITY_AFTER_GUIDANCE_CAP",
+		bucket:  agentctx.ContextBucketContinuity,
+	})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: true,
+	})
+	if len(sections) != 3 {
+		t.Fatalf("BuildSections returned %d sections, want 3: %#v", len(sections), sections)
+	}
+	assertSectionContains(t, sections, agentctx.ContextBucketTaggedGuidance, "Tagged Guidance truncated: exceeded 64 KB bucket limit")
+	assertSectionContains(t, sections, agentctx.ContextBucketLiveState, "LIVE_AFTER_GUIDANCE_CAP")
+	assertSectionContains(t, sections, agentctx.ContextBucketContinuity, "CONTINUITY_AFTER_GUIDANCE_CAP")
+}
+
+func TestAppendContextContentRespectsLimitWithCustomMarker(t *testing.T) {
+	t.Run("marker fits", func(t *testing.T) {
+		var buf strings.Builder
+		truncated := appendContextContent(&buf, []byte("abcdefghijk"), 10, "[cut]")
+		if !truncated {
+			t.Fatal("appendContextContent should report truncation")
+		}
+		if got := buf.Len(); got > 10 {
+			t.Fatalf("buffer length = %d, want <= 10", got)
+		}
+		if !strings.Contains(buf.String(), "[cut]") {
+			t.Fatalf("buffer missing marker: %q", buf.String())
+		}
+	})
+
+	t.Run("marker does not fit", func(t *testing.T) {
+		var buf strings.Builder
+		buf.WriteString(strings.Repeat("x", 10))
+		truncated := appendContextContent(&buf, []byte("abc"), 12, "[marker-too-long]")
+		if !truncated {
+			t.Fatal("appendContextContent should report truncation")
+		}
+		if got := buf.Len(); got > 12 {
+			t.Fatalf("buffer length = %d, want <= 12", got)
+		}
+	})
+}
+
 func TestTagContextAssembler_NilAssembler(t *testing.T) {
 	var a *TagContextAssembler
 	result := a.Build(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"forge": true}})
 	if result != "" {
 		t.Errorf("nil assembler should return empty, got %q", result)
 	}
+}
+
+func assertSectionContains(t *testing.T, sections []agentctx.ContextSection, bucket agentctx.ContextBucket, want string) {
+	t.Helper()
+	for _, section := range sections {
+		if section.Bucket != bucket {
+			continue
+		}
+		if strings.Contains(section.Content, want) {
+			return
+		}
+		t.Fatalf("section %q content = %q, want marker %q", bucket, section.Content, want)
+	}
+	t.Fatalf("missing section for bucket %q in %#v", bucket, sections)
 }
 
 func TestTagContextAssembler_KBArticleTags(t *testing.T) {
@@ -640,8 +809,8 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 	if !strings.Contains(prompt, "github-primary") {
 		t.Error("system prompt should contain live provider content")
 	}
-	if !strings.Contains(prompt, "Capability Context") {
-		t.Error("system prompt should contain capability context heading")
+	if !strings.Contains(prompt, "Tagged Guidance") {
+		t.Error("system prompt should contain tagged guidance heading")
 	}
 }
 

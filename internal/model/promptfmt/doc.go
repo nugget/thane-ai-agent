@@ -1,6 +1,7 @@
 // Package promptfmt provides presentation-layer helpers used to render
 // values into prompt and context strings: relative timestamps, ID
-// truncation for display, thousands-grouped numbers, and compact JSON.
+// truncation for display, thousands-grouped numbers, compact JSON, and
+// stable markdown section envelopes.
 //
 // These helpers are domain-agnostic pure functions. Any package that
 // builds text for injection into an LLM prompt (context providers,

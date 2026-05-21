@@ -32,6 +32,12 @@ func NewWorkingMemoryProvider(store *WorkingMemoryStore, convFunc func(context.C
 	}
 }
 
+// TagContextBucket places working memory in continuity context because
+// it carries durable state for the active conversation.
+func (p *WorkingMemoryProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // TagContext returns the working memory content for the current
 // conversation, formatted for system prompt injection. Returns empty
 // string if no working memory exists. Implements

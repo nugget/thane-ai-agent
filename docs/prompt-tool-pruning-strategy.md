@@ -33,17 +33,18 @@ same thing.
 
 Today, prompt assembly in `internal/runtime/agent/loop.go` roughly looks like:
 
-1. persona
-2. ego
-3. runtime contract
-4. injected core context files
-5. tagged capability context
-6. active capability summary
-7. model-family tool-calling contract
-8. current conditions
-9. talents
-10. dynamic context
-11. conversation history and carry-forward context
+1. axioms, when `core/axioms.md` exists
+2. persona
+3. mission, when `core/mission.md` exists
+4. ego and supplemental injected core context files
+5. runtime contract
+6. model-family tool-calling contract
+7. talents
+8. active capability summary
+9. session origin context
+10. typed context buckets: tagged guidance, continuity, related context, live state
+11. current conditions
+12. conversation history and carry-forward context
 
 This layering is mostly sound. The problem is that the always-on layers
 still carry too much evergreen tool doctrine, and the tagged/contextual
@@ -61,7 +62,7 @@ The high-level sections measured roughly:
 - ego: 9.8k
 - runtime contract: 1.2k
 - injected core context: 1.8k
-- capability context: 17.9k
+- legacy capability context: 17.9k
 - active capabilities: 1.4k
 - current conditions: 0.2k
 - behavioral guidance: 25.3k
@@ -71,7 +72,7 @@ The high-level sections measured roughly:
 That snapshot matters for two reasons:
 
 - the prompt is still far larger than it needs to be for routine turns
-- tool and capability doctrine are duplicated across capability context
+- tool and capability doctrine were duplicated across legacy capability context
   and behavioral guidance, not just immortal prompt layers
 
 ### Concrete duplicated sections from the snapshot
@@ -114,7 +115,7 @@ The same ideas currently appear in several places:
 - active capability descriptions
 - talents
 - injected core documents
-- tagged capability context
+- tagged guidance and other typed context buckets
 
 This duplication makes it hard to know which layer actually taught a
 behavior, and it causes drift when one layer is updated but another is
@@ -387,10 +388,17 @@ Core files are the canonical always-on documents rooted at
 `{workspace}/core`. They should stay small, high-signal, and stable in
 purpose:
 
+- `axioms.md`: highest-level preamble before identity
 - `persona.md`: identity, voice, values
 - `ego.md`: self-reflection and continuity of internal stance
 - `mission.md`: durable mission framing and major operational truths
 - `metacognitive.md`: metacognitive loop state, not general doctrine
+
+All fixed core prompt files should travel through the same mechanics:
+resolve the workspace/core path, verify the managed-root policy, read
+fresh each turn, enforce a prompt budget with an explicit truncation
+marker, and render into the intended semantic slot. The semantic slots
+can differ; the file plumbing should not.
 
 These files should not become a dumping ground for tool encyclopedias.
 

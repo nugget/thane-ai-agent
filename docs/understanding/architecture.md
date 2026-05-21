@@ -158,11 +158,15 @@ The system prompt is assembled from four layers, each with a distinct
 purpose. Mixing concerns across layers degrades agent behavior — this
 was learned empirically, not theorized.
 
-**Persona** is identity: who the agent is, its voice and values. **Core
-context providers** publish curated knowledge and continuity such as
-`core/ego.md` and `core/mission.md`. **Current conditions** are
-awareness: time, environment, active state. **Talents** are behavior:
-how the agent should act in specific situations.
+**Axioms** are the highest-level preamble, when `core/axioms.md` exists.
+**Persona** is identity: who the agent is, its voice and values.
+**Mission** is durable operational framing, when `core/mission.md`
+exists. **Core context** publishes curated knowledge and continuity such
+as `core/ego.md` and supplemental configured files as stable prompt
+sections.
+**Current conditions** are awareness: time, environment, active state.
+**Talents** are behavior: how the agent should act in specific
+situations.
 
 Putting tool rules in the persona suppresses personality. Putting
 identity in talents creates contradictions. The layer separation isn't

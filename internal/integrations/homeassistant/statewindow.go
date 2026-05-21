@@ -63,6 +63,12 @@ func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Loca
 	}
 }
 
+// TagContextBucket places recent Home Assistant state changes in live
+// state.
+func (p *StateWindowProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketLiveState
+}
+
 // HandleStateChange records a state transition in the circular buffer.
 // It matches the homeassistant.StateWatchHandler function signature and
 // can be composed directly into the state watcher handler chain.

@@ -12,6 +12,11 @@ specific purpose. Mixing concerns across layers degrades agent behavior.
 The persona defines voice, personality, values, and boundaries. It should
 read like a character description, not an instruction manual.
 
+When `workspace.path` is configured, `core/persona.md` is read fresh
+through the same verified core-prompt file path as the other fixed core
+documents. If it is absent, Thane falls back to the embedded base
+persona.
+
 **Contains:** Name, personality traits, communication style, values, boundaries.
 
 **Does NOT contain:** Tool usage rules, operational procedures, device lists,
@@ -51,15 +56,15 @@ alphabetically and injected into the system prompt. Talents are tag-filtered
 — each can declare required capability tags via YAML frontmatter, loading
 only when those tags are active.
 
-### 3. Core Context Providers
+### 3. Core Context
 
 **Purpose:** Knowledge — what the agent *knows*.
 
-Core context providers publish curated reference material such as
-`core/ego.md` and `core/mission.md` through the same runtime context
-pipeline as working memory, presence, notification history, and other
-ambient state. They are read fresh each turn, verified when managed-root
-policy applies, and suppressed for task-focused delegate runs.
+Core context publishes curated reference material such as
+`core/mission.md`, `core/ego.md`, and supplemental configured context
+files as stable prompt sections. These files are read fresh each turn,
+verified when managed-root policy applies, capped with explicit
+truncation markers, and suppressed for task-focused delegate runs.
 
 **Contains:** Factual information, user preferences, infrastructure notes,
 memory files, identity documents.
@@ -67,8 +72,15 @@ memory files, identity documents.
 **Does NOT contain:** Behavioral directives, personality definitions.
 
 **Common core context files:**
-- `ego.md` — self-reflection and continuity notes
+- `axioms.md` — highest-level preamble rendered before persona
+- `persona.md` — identity, voice, values, and boundaries
 - `mission.md` — deployment-specific mission context
+- `ego.md` — self-reflection and continuity notes
+- `metacognitive.md` — metacognitive loop state; only suitable for
+  supplemental injection when that state is intentionally part of the
+  main prompt
+
+See `examples/axioms.example.md` for a reference axioms preamble.
 
 ### 4. Session Context (dynamic)
 
@@ -84,17 +96,22 @@ compaction context.
 
 The system prompt is assembled in this order:
 
-1. **Persona** — identity (who am I)
-2. **Runtime contract** — execution semantics
-3. **Talents** — behavior (how should I act)
-4. **Active capabilities** — currently loaded tool and context surface
-5. **Capability context** — tagged KB, tagged providers, and always-on providers
-6. **Current conditions** — environment (where/when am I)
-7. **Conversation history** — continuity for full-context runs
+1. **Axioms** — highest-level preamble, when `core/axioms.md` exists
+2. **Persona** — identity (who am I)
+3. **Mission** — durable mission framing, when `core/mission.md` exists
+4. **Core context** — ego and supplemental stable context files
+5. **Runtime contract** — execution semantics
+6. **Talents** — behavior (how should I act)
+7. **Active capabilities** — currently loaded tool and context surface
+8. **Session origin context** — generated data about why this run was shaped
+9. **Typed context buckets** — tagged guidance, continuity, related context, live state
+10. **Current conditions** — environment (where/when am I)
+11. **Conversation history** — continuity for full-context runs
 
 Task-focused delegate runs keep the compact worker persona, runtime
 contract, active capabilities, tagged context, and current conditions,
-but omit full identity/continuity providers and conversation history.
+but omit full core context, always-on continuity providers, and
+conversation history.
 
 ## Anti-Patterns
 
@@ -107,5 +124,5 @@ but omit full identity/continuity providers and conversation history.
 
 ## Related
 
-- [Anthropic Caching](../anthropic-caching.md) — how the layer
-  boundaries map onto Anthropic cache TTLs.
+- [Prompt Caching](../prompt-caching.md) — how the layer boundaries map
+  onto global stability classes and provider-specific cache policy.

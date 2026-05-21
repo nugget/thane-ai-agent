@@ -77,6 +77,13 @@ func NewChannelOverviewProvider(cfg ChannelOverviewConfig) *ChannelOverviewProvi
 	}
 }
 
+// TagContextBucket places channel availability in the continuity
+// bucket because it gives conversational/session orientation rather
+// than domain-specific operational state.
+func (p *ChannelOverviewProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
+}
+
 // channelEntry is the JSON structure for a single channel in the overview.
 type channelEntry struct {
 	Channel      string `json:"channel"`

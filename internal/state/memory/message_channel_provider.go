@@ -56,8 +56,8 @@ type MessageChannelProviderConfig struct {
 // on the message_channel capability tag asserted by Signal (and future
 // Matrix/iMessage) inbound bridges.
 //
-// Output sits in the system prompt's DYNAMIC CONTEXT section per
-// [docs/anthropic-caching.md]: the delta timestamps tick every turn so
+// Output sits in the system prompt's CONTINUITY CONTEXT section per
+// [docs/prompt-caching.md]: the delta timestamps tick every turn so
 // the block is intrinsically uncached, but the cached prefix above it
 // stays warm.
 type MessageChannelProvider struct {
@@ -102,6 +102,12 @@ func NewMessageChannelProvider(archive *ArchiveStore, conversationIDFromCtx func
 		logger:                logger,
 		nowFunc:               time.Now,
 	}
+}
+
+// TagContextBucket places message-channel transcript tail and older
+// session catalogs in continuity context.
+func (p *MessageChannelProvider) TagContextBucket() agentctx.ContextBucket {
+	return agentctx.ContextBucketContinuity
 }
 
 // TagContext returns the verbatim tail + older-sessions blocks for the
