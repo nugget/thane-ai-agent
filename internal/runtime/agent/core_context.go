@@ -317,6 +317,9 @@ func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string
 	if strings.TrimSpace(path) == "" {
 		return ""
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if verifier != nil {
 		if err := verifier(ctx, path, consumer); err != nil {
 			logger.Warn("core prompt file blocked by verification policy", "path", path, "consumer", consumer, "error", err)
@@ -324,7 +327,13 @@ func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string
 		}
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn("core prompt file unreadable", "path", path, "consumer", consumer, "error", err)
+		}
+		return ""
+	}
+	if len(data) == 0 {
 		return ""
 	}
 	return truncateCoreContext(string(data), maxBytes, marker)

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -138,6 +139,30 @@ func TestBuildSystemPrompt_PersonaFileMissingUsesFallback(t *testing.T) {
 
 	if !strings.Contains(prompt, "PERSONA_FALLBACK") {
 		t.Fatalf("missing persona file should use fallback persona:\n%s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_PersonaFileReadErrorLogsWarning(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	personaPath := t.TempDir()
+	l := newMinimalLoop()
+	l.logger = logger
+	l.persona = "PERSONA_FALLBACK"
+	l.ensureCoreContextProvider().updatePersonaFile(personaPath)
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "PERSONA_FALLBACK") {
+		t.Fatalf("unreadable persona file should use fallback persona:\n%s", prompt)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "core prompt file unreadable") {
+		t.Fatalf("logs = %q, want unreadable warning", got)
+	}
+	if !strings.Contains(got, "consumer=persona_file") {
+		t.Fatalf("logs = %q, want persona_file consumer", got)
 	}
 }
 
