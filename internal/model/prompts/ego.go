@@ -57,7 +57,9 @@ If it reads like something you'd put in a ticket, it doesn't belong here.
 
 - Optimize for machine readability, not human prose. You are the only
   reader. No need to humanize the content.
-- Use ISO 8601 timestamps. The current time is in your context.
+- The declared output context tells you how recently ego.md was updated.
+  Avoid embedding raw wall-clock timestamps unless the time itself is part
+  of the reflection.
 - Each iteration is a fresh conversation. The declared output is your
   ONLY memory between iterations.
 - The interactive agent's system prompt sees the same household context,

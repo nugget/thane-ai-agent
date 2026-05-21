@@ -290,6 +290,11 @@ func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *p
 	} else if err != nil {
 		logger.Debug("failed to read ego.md provenance history", "error", err)
 	}
+	_, content = talents.ParseFrontmatterMetadata(content)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
 	sb.WriteString("\n")
 	sb.WriteString(truncateCoreContext(content, maxEgoBytes, "\n\n[ego.md truncated — exceeded 16 KB limit]"))
 	return strings.TrimSpace(sb.String())
@@ -350,7 +355,12 @@ func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string
 	if len(data) == 0 {
 		return ""
 	}
-	return truncateCoreContext(string(data), maxBytes, marker)
+	_, body := talents.ParseFrontmatterMetadata(string(data))
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	return truncateCoreContext(body, maxBytes, marker)
 }
 
 func truncateCoreContext(s string, maxBytes int, marker string) string {

@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -33,7 +36,7 @@ type loopOutputContextEntry struct {
 	Policy           string             `json:"policy"`
 	Exists           bool               `json:"exists"`
 	Title            string             `json:"title,omitempty"`
-	ModifiedAt       string             `json:"modified_at,omitempty"`
+	UpdatedDelta     string             `json:"updated_delta,omitempty"`
 	Content          string             `json:"content,omitempty"`
 	RecentContent    string             `json:"recent_content,omitempty"`
 	Truncated        bool               `json:"truncated,omitempty"`
@@ -62,7 +65,7 @@ func (a *App) hydrateLoopOutputs(spec looppkg.Spec) (looppkg.Spec, error) {
 		outputs := cloneLoopOutputs(spec.Outputs)
 		spec.RuntimeTools = append(spec.RuntimeTools, buildLoopOutputTools(a.documentStore, outputs)...)
 		spec.OutputContextBuilder = func(ctx context.Context, _ []looppkg.OutputSpec) (string, error) {
-			return renderLoopOutputContext(ctx, a.documentStore, outputs)
+			return renderLoopOutputContextWithNow(ctx, a.documentStore, outputs, time.Now())
 		}
 	}
 	return a.hydrateLoopFocusTools(spec)
@@ -143,9 +146,12 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 	return out
 }
 
-func renderLoopOutputContext(ctx context.Context, store *documents.Store, outputs []looppkg.OutputSpec) (string, error) {
+func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store, outputs []looppkg.OutputSpec, now time.Time) (string, error) {
 	if store == nil || len(outputs) == 0 {
 		return "", nil
+	}
+	if now.IsZero() {
+		now = time.Now()
 	}
 	payload := loopOutputContext{Outputs: make([]loopOutputContextEntry, 0, len(outputs))}
 	for _, output := range outputs {
@@ -178,7 +184,7 @@ func renderLoopOutputContext(ctx context.Context, store *documents.Store, output
 		}
 		entry.Exists = true
 		entry.Title = doc.Title
-		entry.ModifiedAt = doc.ModifiedAt
+		entry.UpdatedDelta = loopOutputUpdatedDelta(doc, now)
 		switch output.Type {
 		case looppkg.OutputTypeMaintainedDocument:
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
@@ -192,6 +198,31 @@ func renderLoopOutputContext(ctx context.Context, store *documents.Store, output
 		return "", fmt.Errorf("marshal loop output context: %w", err)
 	}
 	return "## Declared Durable Outputs\n\nThese are this loop's official durable document outputs. Use the generated output tools below instead of generic file tools; write policy belongs to the document root, not to the prompt.\n\n```json\n" + string(data) + "\n```", nil
+}
+
+func loopOutputUpdatedDelta(doc *documents.DocumentRecord, now time.Time) string {
+	if doc == nil {
+		return ""
+	}
+	for _, key := range []string{"updated", "updated_at"} {
+		for _, value := range doc.Frontmatter[key] {
+			if delta := loopOutputDelta(value, now); delta != "" {
+				return delta
+			}
+		}
+	}
+	return loopOutputDelta(doc.ModifiedAt, now)
+}
+
+func loopOutputDelta(value string, now time.Time) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	ts, err := database.ParseTimestamp(value)
+	if err != nil {
+		return ""
+	}
+	return promptfmt.FormatDeltaOnly(ts, now)
 }
 
 func outputInterfaceDescription(output looppkg.OutputSpec) string {

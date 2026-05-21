@@ -23,6 +23,12 @@ func TestEgoPrompt_NormalIteration(t *testing.T) {
 	if strings.Contains(got, "Supervisor Review") {
 		t.Error("normal iteration should not include supervisor section")
 	}
+	if strings.Contains(got, "Use ISO 8601 timestamps") {
+		t.Error("prompt should not ask ego loop to persist raw timestamps by default")
+	}
+	if !strings.Contains(got, "how recently ego.md was updated") {
+		t.Error("prompt should point to generated freshness context")
+	}
 }
 
 func TestEgoPrompt_SupervisorIteration(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -102,6 +103,54 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 		if !strings.Contains(ctx, want) {
 			t.Fatalf("output context missing %q:\n%s", want, ctx)
 		}
+	}
+}
+
+func TestRenderLoopOutputContextUsesDeltaFreshness(t *testing.T) {
+	t.Parallel()
+
+	store, coreDir := newLoopOutputDocumentStore(t)
+	now := time.Date(2026, 5, 21, 20, 0, 0, 0, time.UTC)
+	raw := `---
+created: 2026-05-21T17:00:00Z
+updated: 2026-05-21T18:00:00Z
+---
+
+## Current Sense
+
+Everything is calm.
+`
+	if err := os.WriteFile(filepath.Join(coreDir, "metacognitive.md"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write metacognitive.md: %v", err)
+	}
+
+	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{
+		{
+			Name:    "metacognitive_state",
+			Type:    looppkg.OutputTypeMaintainedDocument,
+			Ref:     "core:metacognitive.md",
+			Purpose: "Current metacognitive state.",
+		},
+	}, now)
+	if err != nil {
+		t.Fatalf("renderLoopOutputContextWithNow: %v", err)
+	}
+
+	if !strings.Contains(ctx, `"updated_delta": "-7200s"`) {
+		t.Fatalf("output context missing delta freshness:\n%s", ctx)
+	}
+	for _, unwanted := range []string{
+		`"modified_at"`,
+		"created:",
+		"updated:",
+		"2026-05-21T18:00:00Z",
+	} {
+		if strings.Contains(ctx, unwanted) {
+			t.Fatalf("output context contains raw timestamp metadata %q:\n%s", unwanted, ctx)
+		}
+	}
+	if !strings.Contains(ctx, "Everything is calm.") {
+		t.Fatalf("output context should include stripped document body:\n%s", ctx)
 	}
 }
 

@@ -42,6 +42,42 @@ func TestBuildSystemPrompt_EgoFileIncluded(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_EgoFileStripFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	egoPath := filepath.Join(dir, "ego.md")
+	if err := os.WriteFile(egoPath, []byte(`---
+created: 2026-05-21T20:14:00Z
+updated: 2026-05-21T20:16:00Z
+summary: Metadata should not be injected as ego corpus.
+---
+
+# Self-Reflection
+
+literal ego body
+`), 0o644); err != nil {
+		t.Fatalf("write ego.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.SetEgoFile(egoPath)
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "literal ego body") {
+		t.Fatal("system prompt should contain ego.md body")
+	}
+	for _, unwanted := range []string{
+		"created:",
+		"updated:",
+		"2026-05-21T20:14:00Z",
+		"Metadata should not be injected as ego corpus.",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("system prompt contains frontmatter %q:\n%s", unwanted, prompt)
+		}
+	}
+}
+
 func TestBuildSystemPrompt_AxiomsFileIncludedBeforePersona(t *testing.T) {
 	dir := t.TempDir()
 	axiomsPath := filepath.Join(dir, "axioms.md")

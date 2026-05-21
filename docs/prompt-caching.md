@@ -65,8 +65,8 @@ their prompt-budget impact.
 
 Fixed core prompt files (`axioms.md`, `persona.md`, `mission.md`,
 `ego.md`, and any configured supplemental injected file) share the same
-read/verify/reread/truncate mechanics. Their cache policy follows the
-section they render into, not a separate file-specific path.
+read/verify/frontmatter-strip/truncate mechanics. Their cache policy
+follows the section they render into, not a separate file-specific path.
 
 ## Adding a New Section
 
