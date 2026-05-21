@@ -53,6 +53,14 @@ Volatile sections should not receive provider cache markers unless the
 provider has a mechanism that can tolerate per-turn mutation without
 invalidating the stable prefix.
 
+The typed context buckets (`TAGGED GUIDANCE`, `CONTINUITY CONTEXT`,
+`RELATED CONTEXT`, and `LIVE STATE`) each enforce their own 64 KB cap.
+That is deliberate: truncating one noisy bucket must not suppress the
+other buckets. The tradeoff is an explicit ceiling expansion from one
+64 KB aggregate context block to as much as 256 KB across the four
+volatile buckets, so new buckets should justify both their ordering and
+their prompt-budget impact.
+
 ## Adding a New Section
 
 When adding a new system-prompt section, classify it before choosing any

@@ -622,6 +622,107 @@ func TestTagContextAssembler_BuildSectionsBuckets(t *testing.T) {
 			t.Fatalf("section %d content = %q, want marker %q", i, sections[i].Content, want.content)
 		}
 	}
+
+	withoutAlways := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: false,
+	})
+	if len(withoutAlways) != 2 {
+		t.Fatalf("BuildSections without always returned %d sections, want 2: %#v", len(withoutAlways), withoutAlways)
+	}
+	for _, section := range withoutAlways {
+		if strings.Contains(section.Content, "RELATED_PROVIDER") {
+			t.Fatalf("IncludeAlways=false should suppress always-provider content: %#v", withoutAlways)
+		}
+		if section.Bucket == agentctx.ContextBucketRelated {
+			t.Fatalf("IncludeAlways=false should suppress always-provider bucket: %#v", withoutAlways)
+		}
+	}
+}
+
+func TestTagContextAssembler_TaggedProviderOrderIsStable(t *testing.T) {
+	a := NewTagContextAssembler(TagContextAssemblerConfig{})
+	a.RegisterTaggedProvider("zulu", &mockTagProvider{content: "ZULU_PROVIDER"})
+	a.RegisterTaggedProvider("alpha", &mockTagProvider{content: "ALPHA_PROVIDER"})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags: map[string]bool{
+			"zulu":  true,
+			"alpha": true,
+		},
+	})
+	if len(sections) != 1 {
+		t.Fatalf("BuildSections returned %d sections, want 1: %#v", len(sections), sections)
+	}
+	alphaIdx := strings.Index(sections[0].Content, "ALPHA_PROVIDER")
+	zuluIdx := strings.Index(sections[0].Content, "ZULU_PROVIDER")
+	if alphaIdx < 0 || zuluIdx < 0 {
+		t.Fatalf("missing provider markers in section content: %q", sections[0].Content)
+	}
+	if alphaIdx > zuluIdx {
+		t.Fatalf("tagged provider output should be sorted by tag: %q", sections[0].Content)
+	}
+}
+
+func TestTagContextAssembler_BucketCapDoesNotAbortOtherBuckets(t *testing.T) {
+	kbDir := t.TempDir()
+	oversizedGuidance := strings.Repeat("K", maxTagContextBytes+1024)
+	if err := os.WriteFile(filepath.Join(kbDir, "large.md"),
+		[]byte("---\ntags: [forge]\n---\n"+oversizedGuidance), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:   kbDir,
+	})
+	a.RegisterTaggedProvider("forge", &mockTagProvider{
+		content: "LIVE_AFTER_GUIDANCE_CAP",
+		bucket:  agentctx.ContextBucketLiveState,
+	})
+	a.RegisterAlwaysProvider(&mockTagProvider{
+		content: "CONTINUITY_AFTER_GUIDANCE_CAP",
+		bucket:  agentctx.ContextBucketContinuity,
+	})
+
+	sections := a.BuildSections(context.Background(), agentctx.ContextRequest{
+		ActiveTags:    map[string]bool{"forge": true},
+		IncludeAlways: true,
+	})
+	if len(sections) != 3 {
+		t.Fatalf("BuildSections returned %d sections, want 3: %#v", len(sections), sections)
+	}
+	assertSectionContains(t, sections, agentctx.ContextBucketTaggedGuidance, "Tagged Guidance truncated: exceeded 64 KB bucket limit")
+	assertSectionContains(t, sections, agentctx.ContextBucketLiveState, "LIVE_AFTER_GUIDANCE_CAP")
+	assertSectionContains(t, sections, agentctx.ContextBucketContinuity, "CONTINUITY_AFTER_GUIDANCE_CAP")
+}
+
+func TestAppendContextContentRespectsLimitWithCustomMarker(t *testing.T) {
+	t.Run("marker fits", func(t *testing.T) {
+		var buf strings.Builder
+		truncated := appendContextContent(&buf, []byte("abcdefghijk"), 10, "[cut]")
+		if !truncated {
+			t.Fatal("appendContextContent should report truncation")
+		}
+		if got := buf.Len(); got > 10 {
+			t.Fatalf("buffer length = %d, want <= 10", got)
+		}
+		if !strings.Contains(buf.String(), "[cut]") {
+			t.Fatalf("buffer missing marker: %q", buf.String())
+		}
+	})
+
+	t.Run("marker does not fit", func(t *testing.T) {
+		var buf strings.Builder
+		buf.WriteString(strings.Repeat("x", 10))
+		truncated := appendContextContent(&buf, []byte("abc"), 12, "[marker-too-long]")
+		if !truncated {
+			t.Fatal("appendContextContent should report truncation")
+		}
+		if got := buf.Len(); got > 12 {
+			t.Fatalf("buffer length = %d, want <= 12", got)
+		}
+	})
 }
 
 func TestTagContextAssembler_NilAssembler(t *testing.T) {
@@ -630,6 +731,20 @@ func TestTagContextAssembler_NilAssembler(t *testing.T) {
 	if result != "" {
 		t.Errorf("nil assembler should return empty, got %q", result)
 	}
+}
+
+func assertSectionContains(t *testing.T, sections []agentctx.ContextSection, bucket agentctx.ContextBucket, want string) {
+	t.Helper()
+	for _, section := range sections {
+		if section.Bucket != bucket {
+			continue
+		}
+		if strings.Contains(section.Content, want) {
+			return
+		}
+		t.Fatalf("section %q content = %q, want marker %q", bucket, section.Content, want)
+	}
+	t.Fatalf("missing section for bucket %q in %#v", bucket, sections)
 }
 
 func TestTagContextAssembler_KBArticleTags(t *testing.T) {

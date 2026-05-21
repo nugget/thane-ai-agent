@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
@@ -195,9 +196,10 @@ func (a *TagContextAssembler) TaggedProviders() map[string]TagContextProvider {
 	return out
 }
 
-// Build assembles tag context for the request as one legacy string.
-// New prompt assembly should prefer [TagContextAssembler.BuildSections]
-// so typed buckets remain visible to the model and request forensics.
+// Build assembles tag context for the request as one compatibility string.
+// Production prompt assembly uses [TagContextAssembler.BuildSections] so typed
+// buckets remain visible to the model and request forensics, but tests and
+// older callers still use this flattened view.
 func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextRequest) string {
 	sections := a.BuildSections(ctx, req)
 	if len(sections) == 0 {
@@ -205,7 +207,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, req agentctx.ContextReq
 	}
 	var buf strings.Builder
 	for _, section := range sections {
-		appendContextContent(&buf, []byte(section.Content), maxTagContextBytes, truncationMarker)
+		appendContextContent(&buf, []byte(section.Content), maxTagContextBytes, contextBucketTruncationMarker(section.Bucket))
 	}
 	return buf.String()
 }
@@ -260,19 +262,16 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 		// the YAML metadata, just the knowledge content.
 		_, content := talents.ParseFrontmatterMetadata(string(data))
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
-		acc.append(agentctx.ContextBucketTaggedGuidance, data)
-		if acc.truncated(agentctx.ContextBucketTaggedGuidance) {
-			a.logger.Warn("tag context aggregate limit reached",
+		bucket := agentctx.ContextBucketTaggedGuidance
+		if acc.append(bucket, data) {
+			a.logger.Warn("tag context bucket limit reached",
+				"bucket", string(bucket), "bucket_title", bucket.Title(),
 				"source", "kb_article", "limit_bytes", maxTagContextBytes)
-			return acc.sections()
 		}
 	}
 
 	// Source 2: Tagged live providers, filtered by ActiveTags.
-	for tag, active := range req.ActiveTags {
-		if !active {
-			continue
-		}
+	for _, tag := range sortedActiveTags(req.ActiveTags) {
 		p, ok := tagProviders[tag]
 		if !ok {
 			continue
@@ -287,11 +286,10 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 			continue
 		}
 		bucket := providerContextBucket(p, agentctx.ContextBucketTaggedGuidance)
-		acc.append(bucket, []byte(content))
-		if acc.truncated(bucket) {
-			a.logger.Warn("tag context aggregate limit reached",
+		if acc.append(bucket, []byte(content)) {
+			a.logger.Warn("tag context bucket limit reached",
+				"bucket", string(bucket), "bucket_title", bucket.Title(),
 				"tag", tag, "source", "tagged_provider", "limit_bytes", maxTagContextBytes)
-			return acc.sections()
 		}
 	}
 
@@ -310,11 +308,10 @@ func (a *TagContextAssembler) BuildSections(ctx context.Context, req agentctx.Co
 				continue
 			}
 			bucket := providerContextBucket(p, agentctx.ContextBucketContinuity)
-			acc.append(bucket, []byte(content))
-			if acc.truncated(bucket) {
-				a.logger.Warn("tag context aggregate limit reached",
+			if acc.append(bucket, []byte(content)) {
+				a.logger.Warn("tag context bucket limit reached",
+					"bucket", string(bucket), "bucket_title", bucket.Title(),
 					"source", "always_provider", "limit_bytes", maxTagContextBytes)
-				return acc.sections()
 			}
 		}
 	}
@@ -365,8 +362,7 @@ func (a *TagContextAssembler) BuildRefs(ctx context.Context, refs []string) stri
 		entry.WriteString(ref)
 		entry.WriteString("\n\n")
 		entry.Write(resolved)
-		appendContextContent(&buf, []byte(entry.String()), maxTagContextBytes, truncationMarker)
-		if buf.Len() >= maxTagContextBytes {
+		if appendContextContent(&buf, []byte(entry.String()), maxTagContextBytes, contextRefTruncationMarker) {
 			a.logger.Warn("session origin context aggregate limit reached",
 				"ref", ref, "limit_bytes", maxTagContextBytes)
 			return buf.String()
@@ -441,7 +437,12 @@ func safeManagedRefPath(root, path string) (string, bool) {
 	return pathResolved, true
 }
 
-const truncationMarker = "\n\n[tag context truncated — exceeded aggregate 64 KB limit]"
+const contextRefTruncationMarker = "\n\n[session origin context truncated: exceeded 64 KB aggregate limit]"
+
+func contextBucketTruncationMarker(bucket agentctx.ContextBucket) string {
+	bucket = bucket.OrDefault(agentctx.ContextBucketContinuity)
+	return "\n\n[" + bucket.Title() + " truncated: exceeded 64 KB bucket limit]"
+}
 
 type contextAccumulator struct {
 	order   []agentctx.ContextBucket
@@ -456,10 +457,10 @@ func newContextAccumulator() *contextAccumulator {
 	}
 }
 
-func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) {
+func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) bool {
 	bucket = bucket.OrDefault(agentctx.ContextBucketContinuity)
 	if len(data) == 0 || a.capped[bucket] {
-		return
+		return false
 	}
 	buf := a.buffers[bucket]
 	if buf == nil {
@@ -467,15 +468,11 @@ func (a *contextAccumulator) append(bucket agentctx.ContextBucket, data []byte) 
 		a.buffers[bucket] = buf
 		a.order = append(a.order, bucket)
 	}
-	before := buf.Len()
-	appendContextContent(buf, data, maxTagContextBytes, truncationMarker)
-	if before < maxTagContextBytes && buf.Len() >= maxTagContextBytes {
+	if appendContextContent(buf, data, maxTagContextBytes, contextBucketTruncationMarker(bucket)) {
 		a.capped[bucket] = true
+		return true
 	}
-}
-
-func (a *contextAccumulator) truncated(bucket agentctx.ContextBucket) bool {
-	return a.capped[bucket.OrDefault(agentctx.ContextBucketContinuity)]
+	return false
 }
 
 func (a *contextAccumulator) sections() []agentctx.ContextSection {
@@ -526,34 +523,87 @@ func orderedContextBuckets(seen []agentctx.ContextBucket) []agentctx.ContextBuck
 
 func providerContextBucket(p TagContextProvider, fallback agentctx.ContextBucket) agentctx.ContextBucket {
 	if bucketer, ok := p.(TagContextBucketer); ok {
-		return bucketer.TagContextBucket().OrDefault(fallback)
+		if bucket := bucketer.TagContextBucket(); bucket.Valid() {
+			return bucket
+		}
 	}
-	return fallback.OrDefault(agentctx.ContextBucketContinuity)
+	if fallback.Valid() {
+		return fallback
+	}
+	return agentctx.ContextBucketContinuity
+}
+
+func sortedActiveTags(activeTags map[string]bool) []string {
+	if len(activeTags) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(activeTags))
+	for tag, active := range activeTags {
+		if active {
+			tags = append(tags, tag)
+		}
+	}
+	sort.Strings(tags)
+	return tags
 }
 
 // appendContextContent adds data to buf with a separator, respecting
 // limit. Truncates data if it would exceed the cap, reserving space for
-// marker so the buffer never exceeds the limit.
-func appendContextContent(buf *strings.Builder, data []byte, limit int, marker string) {
+// marker so the buffer never exceeds the limit. It reports whether any
+// requested data was truncated or skipped because the cap was reached.
+func appendContextContent(buf *strings.Builder, data []byte, limit int, marker string) bool {
 	if len(data) == 0 {
-		return
+		return false
 	}
-	if buf.Len() > 0 {
-		buf.WriteString("\n\n---\n\n")
+	if limit <= 0 || buf.Len() >= limit {
+		return true
 	}
 	remaining := limit - buf.Len()
-	if remaining <= 0 {
+	separator := ""
+	if buf.Len() > 0 {
+		separator = "\n\n---\n\n"
+	}
+	if len(separator)+len(data) <= remaining {
+		buf.WriteString(separator)
+		buf.Write(data)
+		return false
+	}
+
+	if marker == "" {
+		if remaining <= len(separator) {
+			return true
+		}
+		buf.WriteString(separator)
+		writeUTF8Prefix(buf, data, remaining-len(separator))
+		return true
+	}
+
+	if remaining < len(marker) {
+		return true
+	}
+	dataCap := remaining - len(marker)
+	if dataCap >= len(separator) {
+		buf.WriteString(separator)
+		writeUTF8Prefix(buf, data, dataCap-len(separator))
+	}
+	buf.WriteString(marker)
+	return true
+}
+
+func writeUTF8Prefix(buf *strings.Builder, data []byte, limit int) {
+	if limit <= 0 {
 		return
 	}
-	if len(data) > remaining {
-		// Reserve space for the truncation marker.
-		dataCap := remaining - len(truncationMarker)
-		if dataCap > 0 {
-			buf.Write(data[:dataCap])
-		}
-		buf.WriteString(truncationMarker)
-	} else {
+	if limit >= len(data) {
 		buf.Write(data)
+		return
+	}
+	n := limit
+	for n > 0 && !utf8.Valid(data[:n]) {
+		n--
+	}
+	if n > 0 {
+		buf.Write(data[:n])
 	}
 }
 
