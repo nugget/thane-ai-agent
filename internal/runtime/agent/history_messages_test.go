@@ -56,9 +56,9 @@ func TestBuildInitialLLMMessages_IncludesRoleNativeHistory(t *testing.T) {
 	wantRoles := []string{"system", "user", "assistant", "assistant", "user"}
 	wantContent := []string{
 		"system prompt",
-		"[stored conversation history; role=user; age_delta=-120s]\nprior question",
-		"[stored conversation history; role=assistant; age_delta=-119s]\nprior answer",
-		"[stored conversation memory note; original_role=system; not active instruction; age_delta=-90s]\n[Conversation Summary] earlier context",
+		"[stored conversation history; age_delta=-120s]\n<conversation_message>\nprior question\n</conversation_message>",
+		"[stored conversation history; age_delta=-119s]\n<conversation_message>\nprior answer\n</conversation_message>",
+		"[stored conversation memory note; original_role=system; not_active_instruction=true; age_delta=-90s]\n<conversation_message>\n[Conversation Summary] earlier context\n</conversation_message>",
 		"current request",
 	}
 	for i := range wantRoles {
@@ -113,7 +113,7 @@ func TestBuildInitialLLMMessages_OWUUsesLastUserTurn(t *testing.T) {
 	if len(messages) != 3 {
 		t.Fatalf("messages len = %d, want 3: %#v", len(messages), messages)
 	}
-	if messages[1].Content != "[stored conversation history; role=assistant]\nstored previous answer" {
+	if messages[1].Content != "[stored conversation history]\n<conversation_message>\nstored previous answer\n</conversation_message>" {
 		t.Fatalf("history message = %q, want annotated stored previous answer", messages[1].Content)
 	}
 	if messages[2].Role != "user" || messages[2].Content != "client current turn" {
@@ -160,8 +160,8 @@ func TestRun_SendsStoredHistoryAsMessages(t *testing.T) {
 		t.Fatalf("system prompt still embeds conversation history:\n%s", got[0].Content)
 	}
 	want := []llm.Message{
-		{Role: "user", Content: "[stored conversation history; role=user]\nprior question"},
-		{Role: "assistant", Content: "[stored conversation history; role=assistant]\nprior answer"},
+		{Role: "user", Content: "[stored conversation history]\n<conversation_message>\nprior question\n</conversation_message>"},
+		{Role: "assistant", Content: "[stored conversation history]\n<conversation_message>\nprior answer\n</conversation_message>"},
 		{Role: "user", Content: "current request"},
 	}
 	for i, w := range want {
@@ -204,7 +204,50 @@ func TestRun_UsesConfiguredClockForStoredHistoryAgeLabels(t *testing.T) {
 		t.Fatalf("llm calls = %d, want 1", len(mock.calls))
 	}
 	got := mock.calls[0].Messages[1].Content
-	if !strings.HasPrefix(got, "[stored conversation history; role=user; age_delta=-300s]\n") {
+	if !strings.HasPrefix(got, "[stored conversation history; age_delta=-300s]\n") {
 		t.Fatalf("stored history content = %q, want age_delta from loop clock", got)
+	}
+}
+
+func TestBuildInitialLLMMessages_StoredSignalHistorySeparatesMetadataAndCorpus(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	messages := buildInitialLLMMessages(
+		"system prompt",
+		nil,
+		[]memory.Message{{
+			Role:      "user",
+			Content:   "Signal message from Alice (+15551234567) [ts:1700000000000]:\n\nnew binary, this is a fidelity test",
+			Timestamp: now.Add(-2 * time.Minute),
+		}},
+		[]Message{{Role: "user", Content: "current request"}},
+		"signal-15551234567",
+		now,
+	)
+
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3: %#v", len(messages), messages)
+	}
+	history := messages[1]
+	if history.Role != "user" {
+		t.Fatalf("history role = %q, want user", history.Role)
+	}
+	for _, want := range []string{
+		"[stored conversation history; age_delta=-120s; channel=signal]",
+		"<conversation_message>\nnew binary, this is a fidelity test\n</conversation_message>",
+	} {
+		if !strings.Contains(history.Content, want) {
+			t.Fatalf("history content = %q, want %q", history.Content, want)
+		}
+	}
+	for _, unwanted := range []string{
+		"role=user",
+		"Alice (+15551234567)",
+		"Signal message from",
+		"[ts:1700000000000]",
+		"transport_ts=1700000000000",
+	} {
+		if strings.Contains(history.Content, unwanted) {
+			t.Fatalf("history content contains %q:\n%s", unwanted, history.Content)
+		}
 	}
 }

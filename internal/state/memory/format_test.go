@@ -192,6 +192,101 @@ func TestFormatRecentMessages_ContentTruncation(t *testing.T) {
 	}
 }
 
+func TestFormatRecentMessages_SeparatesSignalEnvelopeMetadata(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	messages := []Message{{
+		Role:      "user",
+		Content:   "Signal message from Alice (+15551234567) [ts:1700000000000]:\n\nnew binary, this is a fidelity test",
+		Timestamp: now.Add(-30 * time.Minute),
+		SessionID: "s_abc",
+	}}
+
+	data := FormatRecentMessages(messages, now, false)
+
+	var parsed struct {
+		Messages []MessageView `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(parsed.Messages))
+	}
+	msg := parsed.Messages[0]
+	if msg.Content != "new binary, this is a fidelity test" {
+		t.Fatalf("content = %q, want literal message body only", msg.Content)
+	}
+	if msg.Metadata["channel"] != "signal" {
+		t.Fatalf("metadata[channel] = %q, want signal", msg.Metadata["channel"])
+	}
+	if msg.Metadata["sender"] != "Alice (+15551234567)" {
+		t.Fatalf("metadata[sender] = %q", msg.Metadata["sender"])
+	}
+	if msg.Metadata["transport_ts"] != "1700000000000" {
+		t.Fatalf("metadata[transport_ts] = %q", msg.Metadata["transport_ts"])
+	}
+}
+
+func TestFormatStoredHistoryMessage_SeparatesMetadataAndCorpus(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	entry, ok := FormatStoredHistoryMessage(Message{
+		Role:      "user",
+		Content:   "Signal message from Alice (+15551234567) [ts:1700000000000]:\n\nnew binary, this is a fidelity test",
+		Timestamp: now.Add(-30 * time.Minute),
+	}, now)
+	if !ok {
+		t.Fatal("FormatStoredHistoryMessage returned ok=false")
+	}
+	if entry.Role != "user" {
+		t.Fatalf("role = %q, want user", entry.Role)
+	}
+	for _, want := range []string{
+		"[stored conversation history; age_delta=-1800s; channel=signal]",
+		"<conversation_message>\nnew binary, this is a fidelity test\n</conversation_message>",
+	} {
+		if !strings.Contains(entry.Content, want) {
+			t.Fatalf("content = %q, want %q", entry.Content, want)
+		}
+	}
+	for _, unwanted := range []string{
+		"role=user",
+		"Alice (+15551234567)",
+		"Signal message from",
+		"[ts:1700000000000]",
+		"transport_ts=1700000000000",
+	} {
+		if strings.Contains(entry.Content, unwanted) {
+			t.Fatalf("content contains %q:\n%s", unwanted, entry.Content)
+		}
+	}
+}
+
+func TestFormatStoredHistoryMessage_SystemRoleAsMemoryNote(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	entry, ok := FormatStoredHistoryMessage(Message{
+		Role:      "system",
+		Content:   "[Conversation Summary] earlier context",
+		Timestamp: now.Add(-10 * time.Minute),
+	}, now)
+	if !ok {
+		t.Fatal("FormatStoredHistoryMessage returned ok=false")
+	}
+	if entry.Role != "assistant" {
+		t.Fatalf("role = %q, want assistant", entry.Role)
+	}
+	for _, want := range []string{
+		"stored conversation memory note",
+		"original_role=system",
+		"not_active_instruction=true",
+		"age_delta=-600s",
+		"<conversation_message>\n[Conversation Summary] earlier context\n</conversation_message>",
+	} {
+		if !strings.Contains(entry.Content, want) {
+			t.Fatalf("content = %q, want %q", entry.Content, want)
+		}
+	}
+}
+
 func TestFormatSearchResults_StructurePreserved(t *testing.T) {
 	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
 	results := []SearchResult{
@@ -237,6 +332,38 @@ func TestFormatSearchResults_StructurePreserved(t *testing.T) {
 	}
 	if r.Highlight != "freezer alert" {
 		t.Errorf("highlight = %q", r.Highlight)
+	}
+}
+
+func TestFormatSearchResults_SeparatesSignalEnvelopeMetadata(t *testing.T) {
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	results := []SearchResult{{
+		Match: Message{
+			Role:      "user",
+			Content:   "Signal message from Alice (+15551234567) [ts:1700000000000]:\n\nnew binary, this is a fidelity test",
+			Timestamp: now.Add(-2 * time.Hour),
+			SessionID: "s_xyz",
+		},
+		SessionID: "s_xyz",
+	}}
+
+	data := FormatSearchResults(results, now, false)
+
+	var parsed struct {
+		Results []SearchResultView `json:"results"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(parsed.Results))
+	}
+	match := parsed.Results[0].Match
+	if match.Content != "new binary, this is a fidelity test" {
+		t.Fatalf("match content = %q, want literal message body only", match.Content)
+	}
+	if match.Metadata["channel"] != "signal" || match.Metadata["transport_ts"] != "1700000000000" {
+		t.Fatalf("match metadata = %#v, want signal transport metadata", match.Metadata)
 	}
 }
 

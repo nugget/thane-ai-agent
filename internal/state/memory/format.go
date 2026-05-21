@@ -2,6 +2,8 @@ package memory
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -88,13 +90,16 @@ const maxMessageContentBytes = 2000
 // T is a signed-second delta via [promptfmt.FormatDeltaOnly]. SessionID
 // is always emitted (empty string when unknown) so the model sees a
 // stable schema across calls. ContentTruncated signals when Content was
-// clipped to [maxMessageContentBytes].
+// clipped to [maxMessageContentBytes]. Metadata carries transport
+// provenance separated from the literal message body when a known channel
+// envelope is detected.
 type MessageView struct {
-	T                string `json:"t"`
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	ContentTruncated bool   `json:"content_truncated"`
-	SessionID        string `json:"session_id"`
+	T                string            `json:"t"`
+	Role             string            `json:"role"`
+	Content          string            `json:"content"`
+	ContentTruncated bool              `json:"content_truncated"`
+	SessionID        string            `json:"session_id"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
 }
 
 // SearchResultView is the JSON-facing projection of an archive search hit.
@@ -222,7 +227,8 @@ func sessionToView(s *Session, now time.Time) SessionView {
 const archiveAssistantRole = "past you"
 
 func messageToView(m Message, now time.Time) MessageView {
-	content, truncated := clipContent(m.Content, maxMessageContentBytes)
+	body, metadata := splitTransportEnvelope(m.Content)
+	content, truncated := clipContent(body, maxMessageContentBytes)
 	role := m.Role
 	if role == "assistant" {
 		role = archiveAssistantRole
@@ -233,7 +239,136 @@ func messageToView(m Message, now time.Time) MessageView {
 		Content:          content,
 		ContentTruncated: truncated,
 		SessionID:        m.SessionID,
+		Metadata:         metadata,
 	}
+}
+
+// StoredHistoryMessage is a provider-neutral message entry built from
+// stored conversation history. Role is the provider role to use in
+// messages[]. Content is the model-facing body for that role.
+type StoredHistoryMessage struct {
+	Role    string
+	Content string
+}
+
+// FormatStoredHistoryMessage renders one memory row for provider
+// messages[]. It keeps provider-native roles as the primary role signal
+// and separates curation/transport metadata from literal corpus content.
+func FormatStoredHistoryMessage(m Message, now time.Time) (StoredHistoryMessage, bool) {
+	role := strings.TrimSpace(m.Role)
+	if role == "" && strings.TrimSpace(m.Content) == "" {
+		return StoredHistoryMessage{}, false
+	}
+
+	providerRole := role
+	kind := "stored conversation history"
+	var metadata []metadataPart
+	switch role {
+	case "user", "assistant":
+		// Native provider role carries the speaker identity.
+	case "system":
+		providerRole = "assistant"
+		kind = "stored conversation memory note"
+		metadata = append(metadata,
+			metadataPart{key: "original_role", value: "system"},
+			metadataPart{key: "not_active_instruction", value: "true"},
+		)
+	case "tool":
+		providerRole = "assistant"
+		kind = "stored historical tool result"
+		metadata = append(metadata,
+			metadataPart{key: "original_role", value: "tool"},
+			metadataPart{key: "context_only", value: "true"},
+		)
+	default:
+		providerRole = "user"
+		kind = "stored historical message"
+		if role != "" {
+			metadata = append(metadata, metadataPart{key: "original_role", value: role})
+		}
+	}
+	if providerRole == "" {
+		providerRole = "user"
+	}
+
+	body, transportMetadata := splitTransportEnvelope(m.Content)
+	if !m.Timestamp.IsZero() && !now.IsZero() {
+		metadata = append(metadata, metadataPart{key: "age_delta", value: promptfmt.FormatDeltaOnly(m.Timestamp, now)})
+	}
+	metadata = append(metadata, storedHistoryTransportMetadataParts(transportMetadata)...)
+
+	return StoredHistoryMessage{
+		Role:    providerRole,
+		Content: renderStoredHistoryContent(kind, metadata, body),
+	}, true
+}
+
+type metadataPart struct {
+	key   string
+	value string
+}
+
+func renderStoredHistoryContent(kind string, metadata []metadataPart, content string) string {
+	parts := []string{kind}
+	for _, part := range metadata {
+		key := sanitizeMetadataValue(part.key)
+		value := sanitizeMetadataValue(part.value)
+		if key == "" || value == "" {
+			continue
+		}
+		parts = append(parts, key+"="+value)
+	}
+	var sb strings.Builder
+	sb.WriteString("[")
+	sb.WriteString(strings.Join(parts, "; "))
+	sb.WriteString("]\n")
+	sb.WriteString("<conversation_message>\n")
+	sb.WriteString(content)
+	sb.WriteString("\n</conversation_message>")
+	return sb.String()
+}
+
+func sanitizeMetadataValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, ";", ",")
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func storedHistoryTransportMetadataParts(metadata map[string]string) []metadataPart {
+	if len(metadata) == 0 {
+		return nil
+	}
+	parts := make([]metadataPart, 0, 3)
+	if channel := metadata["channel"]; channel != "" {
+		parts = append(parts, metadataPart{key: "channel", value: channel})
+	}
+	if groupID := metadata["group_id"]; groupID != "" {
+		if sender := metadata["sender"]; sender != "" {
+			parts = append(parts, metadataPart{key: "sender", value: sender})
+		}
+		parts = append(parts, metadataPart{key: "group_id", value: groupID})
+	}
+	return parts
+}
+
+var signalMessageEnvelopeRE = regexp.MustCompile(`(?s)^Signal message from (.+?)(?: in group (.+?))? \[ts:([^\]]+)\]:\n\n(.*)$`)
+
+func splitTransportEnvelope(content string) (string, map[string]string) {
+	match := signalMessageEnvelopeRE.FindStringSubmatch(content)
+	if match == nil {
+		return content, nil
+	}
+	metadata := map[string]string{
+		"channel":      "signal",
+		"sender":       strings.TrimSpace(match[1]),
+		"transport_ts": strings.TrimSpace(match[3]),
+	}
+	if group := strings.TrimSpace(match[2]); group != "" {
+		metadata["group_id"] = group
+	}
+	return match[4], metadata
 }
 
 func messagesToViews(messages []Message, now time.Time) []MessageView {
