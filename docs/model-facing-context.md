@@ -210,6 +210,31 @@ For model-facing data:
 
 Determinism helps the model compare turns without relearning the format.
 
+### Separate metadata from literal corpus
+
+When replaying stored conversation history, keep curation metadata outside
+the literal message body. Provider-native `messages[]` roles carry the
+speaker role; do not repeat `role=user` or `role=assistant` inside the
+content unless the original stored role differs from the provider role.
+
+Use an explicit boundary around the corpus:
+
+```text
+[stored conversation history; age_delta=-120s; channel=signal]
+<conversation_message>
+literal message text
+</conversation_message>
+```
+
+The same projection rules should back live stored-history messages and
+archive-derived JSON (`archive_search`, `archive_range`, and
+`archive_session_transcript`): known transport envelopes such as Signal
+sender/timestamp headers become metadata rather than corpus. Live
+provider `messages[]` should carry only the lightweight metadata needed
+for context; archive JSON can preserve fuller provenance fields for
+search and debugging. In both cases, `content` remains the literal
+conversation text.
+
 ### Scope context to the capability that needs it
 
 Do not inject every operational detail into every session. If a context

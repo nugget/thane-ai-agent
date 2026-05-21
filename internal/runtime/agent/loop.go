@@ -3248,44 +3248,11 @@ func triggerMessagesForRequest(conversationID string, messages []Message) []Mess
 // compaction summaries and handoffs, not provider-level system prompts, so
 // they are carried as historical assistant notes.
 func historyMessageToLLM(m memory.Message, now time.Time) (llm.Message, bool) {
-	role := strings.TrimSpace(m.Role)
-	content := m.Content
-	if role == "" && strings.TrimSpace(content) == "" {
+	entry, ok := memory.FormatStoredHistoryMessage(m, now)
+	if !ok {
 		return llm.Message{}, false
 	}
-	switch role {
-	case "user", "assistant":
-		return llm.Message{Role: role, Content: historyContentHeader("stored conversation history", role, m.Timestamp, now) + content}, true
-	case "system":
-		return llm.Message{
-			Role:    "assistant",
-			Content: historyContentHeader("stored conversation memory note; original_role=system; not active instruction", "", m.Timestamp, now) + content,
-		}, true
-	case "tool":
-		return llm.Message{
-			Role:    "assistant",
-			Content: historyContentHeader("stored historical tool result; original_role=tool; context only", "", m.Timestamp, now) + content,
-		}, true
-	default:
-		return llm.Message{
-			Role:    "user",
-			Content: historyContentHeader("stored historical message; original_role="+role, "", m.Timestamp, now) + content,
-		}, true
-	}
-}
-
-func historyContentHeader(kind, role string, timestamp, now time.Time) string {
-	var parts []string
-	if kind != "" {
-		parts = append(parts, kind)
-	}
-	if role != "" {
-		parts = append(parts, "role="+role)
-	}
-	if !timestamp.IsZero() && !now.IsZero() {
-		parts = append(parts, "age_delta="+promptfmt.FormatDeltaOnly(timestamp, now))
-	}
-	return "[" + strings.Join(parts, "; ") + "]\n"
+	return llm.Message{Role: entry.Role, Content: entry.Content}, true
 }
 
 func historyGapMarker(previous, next memory.Message) (llm.Message, bool) {
