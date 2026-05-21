@@ -107,5 +107,5 @@ but omit full identity/continuity providers and conversation history.
 
 ## Related
 
-- [Anthropic Caching](../anthropic-caching.md) — how the layer
-  boundaries map onto Anthropic cache TTLs.
+- [Prompt Caching](../prompt-caching.md) — how the layer boundaries map
+  onto global stability classes and provider-specific cache policy.

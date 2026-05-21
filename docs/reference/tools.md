@@ -3,8 +3,8 @@
 Thane provides ~130 native tools organized by capability tag. A tool is
 available to a given turn only when one of its default tags is active —
 see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
-on and off, and [Anthropic Caching](../anthropic-caching.md) for how
-tag choices interact with prompt caching.
+on and off, and [Prompt Caching](../prompt-caching.md) for how tag
+choices interact with prompt caching.
 
 Tools under the `always` heading below are not tag-gated and load on
 every turn. Everything else loads only when a relevant capability is

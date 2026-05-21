@@ -56,8 +56,8 @@ type MessageChannelProviderConfig struct {
 // on the message_channel capability tag asserted by Signal (and future
 // Matrix/iMessage) inbound bridges.
 //
-// Output sits in the system prompt's DYNAMIC CONTEXT section per
-// [docs/anthropic-caching.md]: the delta timestamps tick every turn so
+// Output sits in the system prompt's CONTINUITY CONTEXT section per
+// [docs/prompt-caching.md]: the delta timestamps tick every turn so
 // the block is intrinsically uncached, but the cached prefix above it
 // stays warm.
 type MessageChannelProvider struct {

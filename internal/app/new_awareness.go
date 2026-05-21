@@ -61,8 +61,8 @@ func (a *App) initAwareness(s *newState) error {
 
 	// Message-channel verbatim tail + older-sessions context. Gated on
 	// the message_channel capability tag, asserted by Signal (and
-	// future Matrix/iMessage) inbound bridges. Output sits in DYNAMIC
-	// CONTEXT (uncached) per docs/anthropic-caching.md — the delta
+	// future Matrix/iMessage) inbound bridges. Output sits in CONTINUITY
+	// CONTEXT (uncached) per docs/prompt-caching.md — the delta
 	// timestamps tick every turn so it's intrinsically uncacheable,
 	// but the cached prefix above stays warm.
 	messageChannelProvider := memory.NewMessageChannelProvider(
