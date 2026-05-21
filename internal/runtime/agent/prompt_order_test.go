@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,14 @@ import (
 func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing.T) {
 	dir := t.TempDir()
 	axiomsPath := filepath.Join(dir, "axioms.md")
+	missionPath := filepath.Join(dir, "mission.md")
 	egoPath := filepath.Join(dir, "ego.md")
-	injectPath := filepath.Join(dir, "mission.md")
+	injectPath := filepath.Join(dir, "metacognitive.md")
 	if err := os.WriteFile(axiomsPath, []byte("AXIOMS_MARKER"), 0o644); err != nil {
 		t.Fatalf("write axioms.md: %v", err)
+	}
+	if err := os.WriteFile(missionPath, []byte("MISSION_MARKER"), 0o644); err != nil {
+		t.Fatalf("write mission.md: %v", err)
 	}
 	if err := os.WriteFile(egoPath, []byte("EGO_MARKER"), 0o644); err != nil {
 		t.Fatalf("write ego.md: %v", err)
@@ -37,6 +42,7 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 	l := newPromptOrderLoop(t, kbDir)
 	l.persona = "PERSONA_MARKER"
 	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
+	l.ensureCoreContextProvider().updateMissionFile(missionPath)
 	l.SetEgoFile(egoPath)
 	l.SetInjectFiles([]string{injectPath})
 	l.RegisterTagContextProvider("forge", &mockTagProvider{
@@ -60,6 +66,7 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 	assertPromptSectionOrder(t, index,
 		"AXIOMS",
 		"PERSONA",
+		"MISSION",
 		"EGO",
 		"INJECTED CONTEXT",
 		"RUNTIME CONTRACT",
@@ -72,6 +79,7 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 		"CURRENT CONDITIONS",
 	)
 	assertPromptSectionContains(t, sections, "AXIOMS", "AXIOMS_MARKER")
+	assertPromptSectionContains(t, sections, "MISSION", "MISSION_MARKER")
 	assertPromptSectionContains(t, sections, "EGO", "EGO_MARKER")
 	assertPromptSectionContains(t, sections, "INJECTED CONTEXT", "INJECT_MARKER")
 	assertPromptSectionContains(t, sections, "TAGGED GUIDANCE", "TAGGED_GUIDANCE_MARKER")
@@ -82,10 +90,14 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	dir := t.TempDir()
 	axiomsPath := filepath.Join(dir, "axioms.md")
+	missionPath := filepath.Join(dir, "mission.md")
 	egoPath := filepath.Join(dir, "ego.md")
-	injectPath := filepath.Join(dir, "mission.md")
+	injectPath := filepath.Join(dir, "metacognitive.md")
 	if err := os.WriteFile(axiomsPath, []byte("AXIOMS_MARKER"), 0o644); err != nil {
 		t.Fatalf("write axioms.md: %v", err)
+	}
+	if err := os.WriteFile(missionPath, []byte("MISSION_MARKER"), 0o644); err != nil {
+		t.Fatalf("write mission.md: %v", err)
 	}
 	if err := os.WriteFile(egoPath, []byte("EGO_MARKER"), 0o644); err != nil {
 		t.Fatalf("write ego.md: %v", err)
@@ -103,6 +115,7 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	l := newPromptOrderLoop(t, kbDir)
 	l.persona = "PERSONA_MARKER"
 	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
+	l.ensureCoreContextProvider().updateMissionFile(missionPath)
 	l.SetEgoFile(egoPath)
 	l.SetInjectFiles([]string{injectPath})
 	l.RegisterTagContextProvider("forge", &mockTagProvider{
@@ -125,6 +138,7 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	assertPromptSectionsStartAtContent(t, sections)
 
 	assertPromptSectionAbsent(t, index, "AXIOMS")
+	assertPromptSectionAbsent(t, index, "MISSION")
 	assertPromptSectionAbsent(t, index, "EGO")
 	assertPromptSectionAbsent(t, index, "INJECTED CONTEXT")
 	assertPromptSectionAbsent(t, index, "TALENTS ALWAYS ON")
@@ -140,6 +154,50 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	)
 	assertPromptSectionContains(t, sections, "TAGGED GUIDANCE", "TAGGED_GUIDANCE_MARKER")
 	assertPromptSectionContains(t, sections, "LIVE STATE", "LIVE_STATE_MARKER")
+}
+
+func TestBuildSystemPromptSections_CoreFileBudgetTruncation(t *testing.T) {
+	dir := t.TempDir()
+	axiomsPath := filepath.Join(dir, "axioms.md")
+	personaPath := filepath.Join(dir, "persona.md")
+	missionPath := filepath.Join(dir, "mission.md")
+	egoPath := filepath.Join(dir, "ego.md")
+	injectPath := filepath.Join(dir, "metacognitive.md")
+	if err := os.WriteFile(axiomsPath, []byte(strings.Repeat("A", maxAxiomsBytes+1024)), 0o644); err != nil {
+		t.Fatalf("write axioms.md: %v", err)
+	}
+	if err := os.WriteFile(personaPath, []byte(strings.Repeat("P", maxPersonaBytes+1024)), 0o644); err != nil {
+		t.Fatalf("write persona.md: %v", err)
+	}
+	if err := os.WriteFile(missionPath, []byte(strings.Repeat("M", maxMissionBytes+1024)), 0o644); err != nil {
+		t.Fatalf("write mission.md: %v", err)
+	}
+	if err := os.WriteFile(egoPath, []byte(strings.Repeat("E", maxEgoBytes+1024)), 0o644); err != nil {
+		t.Fatalf("write ego.md: %v", err)
+	}
+	if err := os.WriteFile(injectPath, []byte(strings.Repeat("I", maxInjectFileBytes+1024)), 0o644); err != nil {
+		t.Fatalf("write inject file: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
+	l.ensureCoreContextProvider().updatePersonaFile(personaPath)
+	l.ensureCoreContextProvider().updateMissionFile(missionPath)
+	l.SetEgoFile(egoPath)
+	l.SetInjectFiles([]string{injectPath})
+
+	_, sections := l.buildSystemPromptWithProfileSections(
+		context.Background(),
+		"hello",
+		nil,
+		llm.DefaultModelInteractionProfile(),
+	)
+
+	assertPromptSectionContains(t, sections, "AXIOMS", "axioms.md truncated")
+	assertPromptSectionContains(t, sections, "PERSONA", "persona.md truncated")
+	assertPromptSectionContains(t, sections, "MISSION", "mission.md truncated")
+	assertPromptSectionContains(t, sections, "EGO", "ego.md truncated")
+	assertPromptSectionContains(t, sections, "INJECTED CONTEXT", "metacognitive.md truncated")
 }
 
 func newPromptOrderLoop(t *testing.T, kbDir string) *Loop {

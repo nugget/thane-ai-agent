@@ -101,6 +101,93 @@ func TestBuildSystemPrompt_AxiomsFileEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_PersonaFileIncludedAndReread(t *testing.T) {
+	dir := t.TempDir()
+	personaPath := filepath.Join(dir, "persona.md")
+	if err := os.WriteFile(personaPath, []byte("PERSONA_VERSION_1"), 0o644); err != nil {
+		t.Fatalf("write persona.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.persona = "PERSONA_FALLBACK"
+	l.ensureCoreContextProvider().updatePersonaFile(personaPath)
+
+	prompt1 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	if !strings.Contains(prompt1, "PERSONA_VERSION_1") {
+		t.Fatalf("prompt missing persona file content:\n%s", prompt1)
+	}
+	if strings.Contains(prompt1, "PERSONA_FALLBACK") {
+		t.Fatalf("persona file should override fallback persona:\n%s", prompt1)
+	}
+
+	if err := os.WriteFile(personaPath, []byte("PERSONA_VERSION_2"), 0o644); err != nil {
+		t.Fatalf("rewrite persona.md: %v", err)
+	}
+	prompt2 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	if strings.Contains(prompt2, "PERSONA_VERSION_1") || !strings.Contains(prompt2, "PERSONA_VERSION_2") {
+		t.Fatalf("persona file should be reread each turn:\n%s", prompt2)
+	}
+}
+
+func TestBuildSystemPrompt_PersonaFileMissingUsesFallback(t *testing.T) {
+	l := newMinimalLoop()
+	l.persona = "PERSONA_FALLBACK"
+	l.ensureCoreContextProvider().updatePersonaFile(filepath.Join(t.TempDir(), "missing.md"))
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "PERSONA_FALLBACK") {
+		t.Fatalf("missing persona file should use fallback persona:\n%s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_MissionFileIncluded(t *testing.T) {
+	dir := t.TempDir()
+	missionPath := filepath.Join(dir, "mission.md")
+	content := "# Mission\n\nKeep the household context coherent."
+	if err := os.WriteFile(missionPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write mission.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.ensureCoreContextProvider().updateMissionFile(missionPath)
+
+	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", nil, llm.DefaultModelInteractionProfile())
+
+	if !strings.Contains(prompt, content) {
+		t.Error("system prompt should contain mission.md content")
+	}
+	if !strings.Contains(prompt, "Mission (mission.md)") {
+		t.Error("system prompt should contain mission section heading")
+	}
+	sectionIndex := promptSectionIndex(t, sections)
+	assertPromptSectionOrder(t, sectionIndex, "PERSONA", "MISSION", "RUNTIME CONTRACT")
+	if got := sections[sectionIndex["MISSION"]].CacheTTL; got != "1h" {
+		t.Fatalf("MISSION CacheTTL = %q, want 1h", got)
+	}
+}
+
+func TestBuildSystemPrompt_MissionFileMissingAndEmpty(t *testing.T) {
+	l := newMinimalLoop()
+	l.ensureCoreContextProvider().updateMissionFile(filepath.Join(t.TempDir(), "missing.md"))
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	if strings.Contains(prompt, "mission.md") {
+		t.Fatalf("missing mission file should not render section:\n%s", prompt)
+	}
+
+	dir := t.TempDir()
+	missionPath := filepath.Join(dir, "mission.md")
+	if err := os.WriteFile(missionPath, nil, 0o644); err != nil {
+		t.Fatalf("write mission.md: %v", err)
+	}
+	l.ensureCoreContextProvider().updateMissionFile(missionPath)
+	prompt = l.buildSystemPrompt(context.Background(), "hello", nil)
+	if strings.Contains(prompt, "mission.md") {
+		t.Fatalf("empty mission file should not render section:\n%s", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_EgoFileMissing(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetEgoFile(filepath.Join(t.TempDir(), "nonexistent.md"))

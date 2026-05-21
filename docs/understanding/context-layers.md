@@ -12,6 +12,11 @@ specific purpose. Mixing concerns across layers degrades agent behavior.
 The persona defines voice, personality, values, and boundaries. It should
 read like a character description, not an instruction manual.
 
+When `workspace.path` is configured, `core/persona.md` is read fresh
+through the same verified core-prompt file path as the other fixed core
+documents. If it is absent, Thane falls back to the embedded base
+persona.
+
 **Contains:** Name, personality traits, communication style, values, boundaries.
 
 **Does NOT contain:** Tool usage rules, operational procedures, device lists,
@@ -56,10 +61,10 @@ only when those tags are active.
 **Purpose:** Knowledge — what the agent *knows*.
 
 Core context publishes curated reference material such as
-`core/axioms.md`, `core/ego.md`, and configured mission/context files as
-first-class stable prompt sections. These files are read fresh each
-turn, verified when managed-root policy applies, and suppressed for
-task-focused delegate runs.
+`core/mission.md`, `core/ego.md`, and supplemental configured context
+files as stable prompt sections. These files are read fresh each turn,
+verified when managed-root policy applies, capped with explicit
+truncation markers, and suppressed for task-focused delegate runs.
 
 **Contains:** Factual information, user preferences, infrastructure notes,
 memory files, identity documents.
@@ -68,8 +73,12 @@ memory files, identity documents.
 
 **Common core context files:**
 - `axioms.md` — highest-level preamble rendered before persona
-- `ego.md` — self-reflection and continuity notes
+- `persona.md` — identity, voice, values, and boundaries
 - `mission.md` — deployment-specific mission context
+- `ego.md` — self-reflection and continuity notes
+- `metacognitive.md` — metacognitive loop state; only suitable for
+  supplemental injection when that state is intentionally part of the
+  main prompt
 
 See `examples/axioms.example.md` for a reference axioms preamble.
 
@@ -89,14 +98,15 @@ The system prompt is assembled in this order:
 
 1. **Axioms** — highest-level preamble, when `core/axioms.md` exists
 2. **Persona** — identity (who am I)
-3. **Core context** — ego and configured stable context files
-4. **Runtime contract** — execution semantics
-5. **Talents** — behavior (how should I act)
-6. **Active capabilities** — currently loaded tool and context surface
-7. **Session origin context** — generated data about why this run was shaped
-8. **Typed context buckets** — tagged guidance, continuity, related context, live state
-9. **Current conditions** — environment (where/when am I)
-10. **Conversation history** — continuity for full-context runs
+3. **Mission** — durable mission framing, when `core/mission.md` exists
+4. **Core context** — ego and supplemental stable context files
+5. **Runtime contract** — execution semantics
+6. **Talents** — behavior (how should I act)
+7. **Active capabilities** — currently loaded tool and context surface
+8. **Session origin context** — generated data about why this run was shaped
+9. **Typed context buckets** — tagged guidance, continuity, related context, live state
+10. **Current conditions** — environment (where/when am I)
+11. **Conversation history** — continuity for full-context runs
 
 Task-focused delegate runs keep the compact worker persona, runtime
 contract, active capabilities, tagged context, and current conditions,

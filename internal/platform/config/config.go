@@ -2695,16 +2695,6 @@ func (c *Config) CoreFile(name string) string {
 	return filepath.Join(root, name)
 }
 
-// CoreInjectFiles returns the curated always-on files that should be
-// re-read and injected into the system prompt on every turn.
-func (c *Config) CoreInjectFiles() []string {
-	mission := c.CoreFile("mission.md")
-	if mission == "" {
-		return nil
-	}
-	return []string{mission}
-}
-
 func (c *Config) validateLoops() error {
 	if c.Loops.MaxRunning < 0 {
 		return fmt.Errorf("loops.max_running must be >= 0, got %d", c.Loops.MaxRunning)

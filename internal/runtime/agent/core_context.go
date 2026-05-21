@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,8 @@ type CoreContextProvider struct {
 
 	logger             *slog.Logger
 	axiomsFile         string
+	personaFile        string
+	missionFile        string
 	egoFile            string
 	provenanceStore    *provenance.Store
 	injectFiles        []string
@@ -39,6 +42,8 @@ type corePromptSection struct {
 type CoreContextProviderConfig struct {
 	Logger          *slog.Logger
 	AxiomsFile      string
+	PersonaFile     string
+	MissionFile     string
 	EgoFile         string
 	ProvenanceStore *provenance.Store
 	InjectFiles     []string
@@ -56,6 +61,8 @@ func NewCoreContextProvider(cfg CoreContextProviderConfig) *CoreContextProvider 
 	return &CoreContextProvider{
 		logger:          cfg.Logger,
 		axiomsFile:      cfg.AxiomsFile,
+		personaFile:     cfg.PersonaFile,
+		missionFile:     cfg.MissionFile,
 		egoFile:         cfg.EgoFile,
 		provenanceStore: cfg.ProvenanceStore,
 		injectFiles:     append([]string(nil), cfg.InjectFiles...),
@@ -69,6 +76,24 @@ func (p *CoreContextProvider) updateAxiomsFile(path string) {
 	}
 	p.mu.Lock()
 	p.axiomsFile = path
+	p.mu.Unlock()
+}
+
+func (p *CoreContextProvider) updatePersonaFile(path string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.personaFile = path
+	p.mu.Unlock()
+}
+
+func (p *CoreContextProvider) updateMissionFile(path string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.missionFile = path
 	p.mu.Unlock()
 }
 
@@ -144,17 +169,34 @@ func (p *CoreContextProvider) preambleSections(ctx context.Context) []corePrompt
 		logger = slog.Default()
 	}
 
-	content := p.readPlainCoreFile(ctx, axiomsFile, verifier, "axioms_file", maxAxiomsBytes, "\n\n[axioms.md truncated — exceeded 16 KB limit]", logger)
-	if content == "" {
-		return nil
+	if section, ok := p.readPlainCoreSection(ctx, corePromptFileSpec{
+		name:     "AXIOMS",
+		title:    "Axioms (axioms.md)",
+		path:     axiomsFile,
+		consumer: "axioms_file",
+		maxBytes: maxAxiomsBytes,
+		marker:   "\n\n[axioms.md truncated — exceeded 16 KB limit]",
+	}, verifier, logger); ok {
+		return []corePromptSection{section}
 	}
-	return []corePromptSection{
-		{
-			name:    "AXIOMS",
-			title:   "Axioms (axioms.md)",
-			content: content,
-		},
+	return nil
+}
+
+func (p *CoreContextProvider) personaContent(ctx context.Context) string {
+	if p == nil {
+		return ""
 	}
+
+	p.mu.RLock()
+	personaFile := p.personaFile
+	verifier := p.injectFileVerifier
+	logger := p.logger
+	p.mu.RUnlock()
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return p.readPlainCoreFile(ctx, personaFile, verifier, "persona_file", maxPersonaBytes, "\n\n[persona.md truncated — exceeded 16 KB limit]", logger)
 }
 
 func (p *CoreContextProvider) promptSections(ctx context.Context) []corePromptSection {
@@ -163,6 +205,7 @@ func (p *CoreContextProvider) promptSections(ctx context.Context) []corePromptSe
 	}
 
 	p.mu.RLock()
+	missionFile := p.missionFile
 	egoFile := p.egoFile
 	prov := p.provenanceStore
 	injectFiles := append([]string(nil), p.injectFiles...)
@@ -178,6 +221,16 @@ func (p *CoreContextProvider) promptSections(ctx context.Context) []corePromptSe
 	}
 
 	var sections []corePromptSection
+	if section, ok := p.readPlainCoreSection(ctx, corePromptFileSpec{
+		name:     "MISSION",
+		title:    "Mission (mission.md)",
+		path:     missionFile,
+		consumer: "mission_file",
+		maxBytes: maxMissionBytes,
+		marker:   "\n\n[mission.md truncated — exceeded 16 KB limit]",
+	}, verifier, logger); ok {
+		sections = append(sections, section)
+	}
 	if content := p.readEgo(ctx, egoFile, prov, verifier, now, logger); content != "" {
 		sections = append(sections, corePromptSection{
 			name:    "EGO",
@@ -193,6 +246,27 @@ func (p *CoreContextProvider) promptSections(ctx context.Context) []corePromptSe
 		})
 	}
 	return sections
+}
+
+type corePromptFileSpec struct {
+	name     string
+	title    string
+	path     string
+	consumer string
+	maxBytes int
+	marker   string
+}
+
+func (p *CoreContextProvider) readPlainCoreSection(ctx context.Context, spec corePromptFileSpec, verifier func(context.Context, string, string) error, logger *slog.Logger) (corePromptSection, bool) {
+	content := p.readPlainCoreFile(ctx, spec.path, verifier, spec.consumer, spec.maxBytes, spec.marker, logger)
+	if content == "" {
+		return corePromptSection{}, false
+	}
+	return corePromptSection{
+		name:    spec.name,
+		title:   spec.title,
+		content: content,
+	}, true
 }
 
 func (p *CoreContextProvider) readEgo(ctx context.Context, egoFile string, prov *provenance.Store, verifier func(context.Context, string, string) error, now func() time.Time, logger *slog.Logger) string {
@@ -223,20 +297,15 @@ func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *p
 func (p *CoreContextProvider) readInjectFiles(ctx context.Context, injectFiles []string, verifier func(context.Context, string, string) error, logger *slog.Logger) string {
 	var ctxBuf strings.Builder
 	for _, path := range injectFiles {
-		if verifier != nil {
-			if err := verifier(ctx, path, "inject_files"); err != nil {
-				logger.Warn("inject file blocked by verification policy", "path", path, "error", err)
-				continue
-			}
-		}
-		data, err := os.ReadFile(path)
-		if err != nil || len(data) == 0 {
+		content := p.readPlainCoreFile(ctx, path, verifier, "inject_files", maxInjectFileBytes,
+			fmt.Sprintf("\n\n[%s truncated — exceeded 16 KB limit]", filepath.Base(path)), logger)
+		if content == "" {
 			continue
 		}
 		if ctxBuf.Len() > 0 {
 			ctxBuf.WriteString("\n\n---\n\n")
 		}
-		ctxBuf.Write(data)
+		ctxBuf.WriteString(content)
 	}
 	if ctxBuf.Len() == 0 {
 		return ""
