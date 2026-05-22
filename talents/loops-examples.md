@@ -1,6 +1,6 @@
 ---
 kind: examples
-tags: [loops]
+tags: [loops_examples]
 ---
 
 # Loops Examples
