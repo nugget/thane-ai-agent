@@ -1552,7 +1552,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   briefGrid.className = 'loop-turn-brief__grid';
   const briefFacts = [
     { label: 'Thread', value: threadLabel },
-    { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+    { label: 'Request', value: entity.latestRequestID ? makeRequestChip(entity.latestRequestID) : 'pending' },
     { label: 'Model', value: latestModelLabel },
     { label: 'State', value: formatSchemaToken(entity.stateLabel) },
     { label: 'Context', value: contextLabel || 'pending' },
@@ -1565,7 +1565,11 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     cell.className = 'loop-turn-brief__metric';
     const value = document.createElement('div');
     value.className = 'loop-turn-brief__metric-value';
-    value.textContent = item.value;
+    if (item.value instanceof Node) {
+      value.appendChild(item.value);
+    } else {
+      value.textContent = item.value;
+    }
     cell.appendChild(value);
     const label = document.createElement('div');
     label.className = 'loop-turn-brief__metric-label';
@@ -4309,7 +4313,7 @@ function renderLoopEntityDetail(loop) {
     latestGrid.className = 'loop-turn-brief__grid';
     const latestFacts = [
       { label: 'Iteration', value: '#' + formatNumber(entity.latestSnapshot.number || entity.iterations || 0) },
-      { label: 'Request', value: entity.latestSnapshot.request_id ? shortID(entity.latestSnapshot.request_id) : 'pending' },
+      { label: 'Request', value: entity.latestSnapshot.request_id ? makeRequestChip(entity.latestSnapshot.request_id) : 'pending' },
       { label: 'Model', value: entity.latestSnapshot.model ? shortModelName(entity.latestSnapshot.model) : latestModelLabel },
       { label: 'Duration', value: entity.latestSnapshot.elapsed_ms ? formatDuration(entity.latestSnapshot.elapsed_ms) : 'pending' },
       { label: 'Input', value: entity.latestSnapshot.input_tokens ? formatTokens(entity.latestSnapshot.input_tokens) : '0' },
@@ -4320,7 +4324,11 @@ function renderLoopEntityDetail(loop) {
       cell.className = 'loop-turn-brief__metric';
       const value = document.createElement('div');
       value.className = 'loop-turn-brief__metric-value';
-      value.textContent = item.value;
+      if (item.value instanceof Node) {
+        value.appendChild(item.value);
+      } else {
+        value.textContent = item.value;
+      }
       cell.appendChild(value);
       const label = document.createElement('div');
       label.className = 'loop-turn-brief__metric-label';
@@ -5160,15 +5168,26 @@ function closeRequestDetail() {
 
 $('#request-detail-close').addEventListener('click', closeRequestDetail);
 $('#request-detail-copy').addEventListener('click', () => {
-  if (!activeRequestJSON) return;
   const btn = $('#request-detail-copy');
-  navigator.clipboard.writeText(activeRequestJSON).then(() => {
-    btn.textContent = 'Copied';
+  const flash = (label, ms = 1200) => {
+    btn.textContent = label;
+    setTimeout(() => { btn.textContent = 'JSON'; btn.classList.remove('copy-btn--copied'); }, ms);
+  };
+  // Fall back to a minimal envelope when full detail is unavailable
+  // (404, 503, content retention off) so the button always copies
+  // something identifiable rather than silently no-opping.
+  const payload = activeRequestJSON
+    || (activeRequestID ? JSON.stringify({ request_id: activeRequestID, error: 'detail unavailable' }, null, 2) : '');
+  if (!payload) {
+    flash('No request');
+    return;
+  }
+  navigator.clipboard.writeText(payload).then(() => {
     btn.classList.add('copy-btn--copied');
-    setTimeout(() => {
-      btn.textContent = 'JSON';
-      btn.classList.remove('copy-btn--copied');
-    }, 1200);
+    flash(activeRequestJSON ? 'Copied' : 'Copied ID only');
+  }).catch((err) => {
+    console.warn('Failed to copy request detail JSON:', err);
+    flash('Copy failed');
   });
 });
 
