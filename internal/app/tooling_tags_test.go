@@ -217,7 +217,7 @@ func TestResolveCapabilityTags_SortsBaselineTools(t *testing.T) {
 
 // TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider is the
 // regression test for issue #733. The watchlist tool provider
-// contributes three tools (add/list/remove_context_entity) tagged
+// contributes three tools (add/list/remove_entity_subscription) tagged
 // "awareness" in the builtin catalog. resolveCapabilityTags must
 // include them under that tag — but only if the snapshot is taken
 // *after* the provider is registered. Pre-fix, initDelegation ran
@@ -244,7 +244,7 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 	// be absent. Record the baseline so the post-registration check
 	// demonstrates a clean delta.
 	before := resolveCapabilityTags(reg, nil)
-	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
+	for _, name := range []string{"add_entity_subscription", "list_entity_subscriptions", "remove_entity_subscription"} {
 		if slices.Contains(before.Configs["awareness"].Tools, name) {
 			t.Fatalf("precondition: %q should not appear in awareness tag before provider registration", name)
 		}
@@ -253,7 +253,7 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 	reg.RegisterProvider(awareness.NewWatchlistTools(awareness.WatchlistToolsConfig{Store: store}))
 
 	after := resolveCapabilityTags(reg, nil)
-	wantTools := []string{"add_context_entity", "list_context_entities", "remove_context_entity"}
+	wantTools := []string{"add_entity_subscription", "list_entity_subscriptions", "remove_entity_subscription"}
 	for _, name := range wantTools {
 		if !slices.Contains(after.Configs["awareness"].Tools, name) {
 			t.Errorf("awareness tag missing %q after provider registration; got %v",

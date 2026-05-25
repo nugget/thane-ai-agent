@@ -497,7 +497,7 @@ func coerceInt(v any) (int, error) {
 // prefix is the load-bearing convention: API/UI layers filter for it
 // to find loop-owned subscriptions, capability-tag collisions are
 // impossible (no built-in tag contains a colon), and a human reading
-// list_context_entities knows at a glance which rows belong to a loop.
+// list_entity_subscriptions knows at a glance which rows belong to a loop.
 func newScopeTag() (string, error) {
 	var buf [3]byte
 	if _, err := rand.Read(buf[:]); err != nil {

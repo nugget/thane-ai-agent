@@ -205,9 +205,9 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"signal_send_reaction":        {CanonicalID: "native:signal_send_reaction", Source: NativeToolSource, Tags: []string{"signal"}},
 	"web_fetch":                   {CanonicalID: "native:web_fetch", Source: NativeToolSource, Tags: []string{"web"}},
 	"web_search":                  {CanonicalID: "native:web_search", Source: NativeToolSource, Tags: []string{"web"}},
-	"add_context_entity":          {CanonicalID: "native:add_context_entity", Source: NativeToolSource, Tags: []string{"awareness"}},
-	"list_context_entities":       {CanonicalID: "native:list_context_entities", Source: NativeToolSource, Tags: []string{"awareness"}},
-	"remove_context_entity":       {CanonicalID: "native:remove_context_entity", Source: NativeToolSource, Tags: []string{"awareness"}},
+	"add_entity_subscription":     {CanonicalID: "native:add_entity_subscription", Source: NativeToolSource, Tags: []string{"awareness"}},
+	"list_entity_subscriptions":   {CanonicalID: "native:list_entity_subscriptions", Source: NativeToolSource, Tags: []string{"awareness"}},
+	"remove_entity_subscription":  {CanonicalID: "native:remove_entity_subscription", Source: NativeToolSource, Tags: []string{"awareness"}},
 }
 
 // LookupBuiltinToolSpec returns the compiled-in tool spec for a tool name.

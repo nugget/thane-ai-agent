@@ -27,7 +27,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because the scope is baked in. " +
 			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
 			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
-			"To see what a loop currently watches, call list_context_entities with the loop's scope_tag (visible on loop_definition_get and on thane_curate's launch response). " +
+			"To see what a loop currently watches, call list_entity_subscriptions with the loop's scope_tag (visible on loop_definition_get and on thane_curate's launch response). " +
 			"Returns the loop's scope_tag plus counts of added and removed subscriptions.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
 		Parameters: map[string]any{
