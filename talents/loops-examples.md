@@ -71,8 +71,8 @@ document. Two questions decide which sub-shape fits:
      `loops_examples_curate_dashboard`
    - Append a dated entry → activate `loops_examples_curate_journal`
 
-2. **Does the loop need to pull the core's attention or accept new
-   focus from the core?**
+2. **Does the loop need to escalate decisions to you, or accept new
+   focus when you adjust its scope?**
    - Yes (bi-directional) → activate `loops_examples_curate_circle`
      after picking dashboard or journal
 
@@ -173,28 +173,30 @@ and yesterday's state is just noise.
 name: loops_examples_curate_circle
 tags: [loops_examples_curate_circle]
 kind: entry_point
-teaser: "Bi-directional curate loop: pulls the core in for decisions, accepts new focus from the core."
+teaser: "Bi-directional curate loop: escalates decisions to you, accepts new focus when you adjust its scope."
 ---
 
 # Curate: The Circle of Life
 
-A curate loop becomes bi-directional when it (a) pulls the core's
-attention when something deserves a decision and (b) accepts new focus
-from the core when its scope should shift.
+A curate loop becomes bi-directional when it (a) pulls your attention
+when something deserves a decision and (b) accepts new focus from you
+when its scope should shift.
 
 ## Four steps
 
-1. **Core launches the watcher** with `thane_curate` (dashboard or
+1. **You launch the watcher** with `thane_curate` (dashboard or
    journal shape — see those branches).
 
-2. **Watcher runs at its own pace** inside the envelope, tuning via
-   `set_next_sleep` and adjusting its own watch set via `watch_entity`
-   / `unwatch_entity`.
+2. **The watcher runs at its own pace** inside the envelope, tuning
+   via `set_next_sleep` and adjusting its own watch set via
+   `watch_entity` / `unwatch_entity`. You don't interact during this
+   phase.
 
-3. **Watcher pulls the core in when it matters** via
-   `request_core_attention`. This forces a supervisor turn on the
-   core's next iteration — costlier than a normal wake, so reserve it
-   for concerns that genuinely warrant the extra capacity.
+3. **The watcher pulls you in when something matters** via
+   `request_core_attention`. This forces a supervisor turn on your
+   next iteration — costlier than a normal wake, so the watcher
+   should reserve it for concerns that genuinely warrant the extra
+   capacity.
 
    ```json
    {
@@ -204,10 +206,10 @@ from the core when its scope should shift.
    }
    ```
 
-   State the concern as a decision or risk, not as a delivery command.
-   The core decides whether to notify, defer, or absorb.
+   The concern arrives stated as a decision or risk, not as a
+   delivery command. You decide whether to notify, defer, or absorb.
 
-4. **Core pushes new focus down when it matters** via
+4. **You push new focus down when something matters** via
    `update_entity_subscriptions`. Adds or removes entities on the
    running loop's watch set in place.
 
@@ -222,8 +224,8 @@ from the core when its scope should shift.
    ```
 
    The watcher sees the new entities on its next wake. Use
-   `remove: ["entity_id", ...]` to retire watches the core no longer
-   cares about.
+   `remove: ["entity_id", ...]` to retire watches you no longer care
+   about.
 
 For event-driven wakes (a new release on a repo, a new feed entry),
 producer tools like `forge_repo_follow` and `media_follow` take a
