@@ -86,7 +86,16 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		if a.emailPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires email poller runtime", emailPollerDefinitionName)
 		}
-		spec.TurnBuilder = emailPollTurnBuilder(a.emailPoller, a.logger)
+		spec.Handler = func(ctx context.Context, _ any) error {
+			wakes, err := a.emailPoller.CheckNewMessages(ctx)
+			if err != nil {
+				return err
+			}
+			if wakes == 0 {
+				return looppkg.ErrNoOp
+			}
+			return nil
+		}
 		return a.hydrateLoopOutputs(spec)
 	case forgeSubPollerDefinitionName:
 		if a.forgeSubPoller == nil {

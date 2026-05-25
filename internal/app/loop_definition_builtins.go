@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -67,11 +68,47 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	if cfg.Email.Configured() && cfg.Email.PollIntervalSec > 0 {
+		// Default landing zone for new-mail wakes when an operator
+		// hasn't pointed the poller at a custom handler. Event-driven
+		// so the loop sits idle on wakeCh until the poller delivers
+		// an event-source envelope. Profile mirrors the routing the
+		// retired emailPollTurnBuilder used to stamp on every wake —
+		// triage benefits from the cloud-eligible tier with a
+		// non-trivial quality floor; the per-iteration tags carried
+		// on the envelope (owner / trusted / household / known /
+		// stranger) let the model adapt depth without forking the
+		// route.
+		specs = append(specs, looppkg.Spec{
+			Name:       email.DefaultHandlerLoopName,
+			Enabled:    true,
+			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when a message warrants a deeper look, reply via email_reply or send a fresh message via email_send, file or trash with email_move when handled, and notify the owner about anything that genuinely needs attention.",
+			Operation:  looppkg.OperationEventDriven,
+			Completion: looppkg.CompletionNone,
+			// "email" stays in the loop's permanent tag set so the
+			// email_* tools are loadable regardless of which
+			// per-wake sender-trust tag (owner/trusted/etc.) is
+			// active. Without this, the per-wake tags become a
+			// non-empty InitialTags set that enables tag filtering,
+			// and the email-tagged tools the handler is told to use
+			// get filtered out.
+			Tags: []string{"email"},
+			Profile: router.LoopProfile{
+				Mission:      "email_triage",
+				LocalOnly:    "false",
+				QualityFloor: 5,
+				ExtraHints:   map[string]string{"source": "email_poll"},
+			},
+			Metadata: map[string]string{
+				"subsystem": "email",
+				"category":  "default_handler",
+			},
+		})
+
 		pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         emailPollerDefinitionName,
 			Enabled:      true,
-			Task:         "Poll configured email accounts for new inbound mail and dispatch triage when needed.",
+			Task:         "Poll configured email accounts for new inbound mail and dispatch event-source wakes to the configured handler loop.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
 			SleepMin:     pollInterval,

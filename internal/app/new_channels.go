@@ -164,11 +164,19 @@ func (a *App) initChannels(s *newState) error {
 		}
 
 		// --- Email polling ---
-		// Periodic IMAP check for new messages via the loop infrastructure.
-		// The handler checks UIDs against a high-water mark and dispatches
-		// an agent conversation only when new mail is detected.
+		// Periodic IMAP check for new mail. The poller advances the
+		// per-account high-water mark and dispatches an event-source
+		// envelope (one per account-poll cycle, one event per message)
+		// to the configured wake_loop target (default:
+		// email-default-handler). The contact resolver translates the
+		// sender's email into a trust zone so each event ships with an
+		// owner/trusted/household/known/stranger tag, letting the
+		// handler loop adapt depth without forking the route.
 		if a.cfg.Email.PollIntervalSec > 0 {
-			poller := email.NewPoller(emailMgr, a.opStore, a.logger)
+			poller := email.NewPoller(emailMgr, a.opStore, a.logger,
+				email.WithMessageBus(a.messageBus),
+				email.WithContactResolver(&emailContactResolver{store: contactStore}),
+			)
 			a.emailPoller = poller
 		}
 
