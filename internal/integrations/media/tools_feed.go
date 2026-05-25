@@ -212,11 +212,17 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 }
 
 // UnfollowHandler returns the tool handler for media_unfollow.
+// Accepts either subscription_id (cross-family canonical, matches
+// forge_repo_unfollow / mqtt_wake_remove) or the historical feed_id
+// alias.
 func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string]any) (string, error) {
 	return func(_ context.Context, args map[string]any) (string, error) {
-		id, _ := args["feed_id"].(string)
+		id, _ := args["subscription_id"].(string)
 		if id == "" {
-			return "", fmt.Errorf("media_unfollow: feed_id is required")
+			id, _ = args["feed_id"].(string)
+		}
+		if id == "" {
+			return "", fmt.Errorf("media_unfollow: subscription_id (or feed_id) is required")
 		}
 
 		// Verify feed exists.
@@ -271,7 +277,19 @@ func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string
 
 		ft.logger.Info("feed unfollowed", "feed_id", id, "name", name)
 
-		return fmt.Sprintf("Unfollowed %q (id: %s)", name, id), nil
+		// Match the JSON-response shape used by forge_repo_unfollow
+		// and the new mqtt_wake_remove — every subscription tool
+		// family returns structured JSON for mutations now, not
+		// prose.
+		out, err := json.Marshal(map[string]string{
+			"status":          "ok",
+			"subscription_id": id,
+			"name":            name,
+		})
+		if err != nil {
+			return "", fmt.Errorf("marshal response: %w", err)
+		}
+		return string(out), nil
 	}
 }
 
@@ -284,15 +302,16 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 		}
 
 		type feedInfo struct {
-			FeedID      string         `json:"feed_id"`
-			Name        string         `json:"name"`
-			URL         string         `json:"url"`
-			TrustZone   string         `json:"trust_zone"`
-			OutputPath  string         `json:"output_path,omitempty"`
-			LastChecked string         `json:"last_checked,omitempty"`
-			LatestEntry string         `json:"latest_entry,omitempty"`
-			Notify      bool           `json:"notify"`
-			WakeLoop    map[string]any `json:"wake_loop,omitempty"`
+			SubscriptionID string         `json:"subscription_id"`
+			FeedID         string         `json:"feed_id"` // deprecated alias of subscription_id; kept for compat
+			Name           string         `json:"name"`
+			URL            string         `json:"url"`
+			TrustZone      string         `json:"trust_zone"`
+			OutputPath     string         `json:"output_path,omitempty"`
+			LastChecked    string         `json:"last_checked,omitempty"`
+			LatestEntry    string         `json:"latest_entry,omitempty"`
+			Notify         bool           `json:"notify"`
+			WakeLoop       map[string]any `json:"wake_loop,omitempty"`
 		}
 
 		feeds := make([]feedInfo, 0, len(ids))
@@ -334,15 +353,16 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			}
 
 			feeds = append(feeds, feedInfo{
-				FeedID:      id,
-				Name:        name,
-				URL:         feedURL,
-				TrustZone:   trustZone,
-				OutputPath:  outputPath,
-				LastChecked: lastChecked,
-				LatestEntry: latestTitle,
-				Notify:      notifyStr != "false",
-				WakeLoop:    feedWakeTargetJSON(wakeTarget, wakeConfigured),
+				SubscriptionID: id,
+				FeedID:         id,
+				Name:           name,
+				URL:            feedURL,
+				TrustZone:      trustZone,
+				OutputPath:     outputPath,
+				LastChecked:    lastChecked,
+				LatestEntry:    latestTitle,
+				Notify:         notifyStr != "false",
+				WakeLoop:       feedWakeTargetJSON(wakeTarget, wakeConfigured),
 			})
 		}
 
@@ -388,12 +408,15 @@ func UnfollowDefinition() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"subscription_id": map[string]any{
+				"type":        "string",
+				"description": "The feed identifier returned by media_follow or media_feeds (the subscription_id field). Cross-family canonical name matching forge_repo_unfollow and mqtt_wake_remove.",
+			},
 			"feed_id": map[string]any{
 				"type":        "string",
-				"description": "The feed identifier returned by media_follow or media_feeds.",
+				"description": "Deprecated alias for subscription_id; kept for backwards compatibility with operator scripts.",
 			},
 		},
-		"required": []string{"feed_id"},
 	}
 }
 

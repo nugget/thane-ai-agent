@@ -285,7 +285,7 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 	if err != nil {
 		t.Fatalf("new mqtt subscription store: %v", err)
 	}
-	reg.RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore)))
+	reg.RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore, nil)))
 
 	resolved := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"mqtt_wake_add", "mqtt_wake_list", "mqtt_wake_remove"}

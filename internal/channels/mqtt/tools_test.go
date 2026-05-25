@@ -24,7 +24,10 @@ func newTestTools(t *testing.T) *Tools {
 	if err != nil {
 		t.Fatalf("new subscription store: %v", err)
 	}
-	return NewTools(store)
+	// Pass a nil resolver so wake_loop verification is skipped in
+	// tests that don't care about it. Tests that DO exercise the
+	// verification path supply their own resolver.
+	return NewTools(store, nil)
 }
 
 func TestToolsHandleListEmpty(t *testing.T) {
@@ -33,8 +36,12 @@ func TestToolsHandleListEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !strings.Contains(result, "No MQTT wake") {
-		t.Errorf("expected empty message, got %q", result)
+	// Empty store now emits the canonical empty JSON array (matches
+	// the cross-family return shape used by forge_repo_subscriptions
+	// and media_feeds); the legacy "No MQTT wake subscriptions
+	// configured." prose was retired in PR-T1.
+	if strings.TrimSpace(result) != "[]" {
+		t.Errorf("expected empty JSON array, got %q", result)
 	}
 }
 
@@ -106,8 +113,10 @@ func TestToolsHandleAddMissingTopic(t *testing.T) {
 func TestToolsHandleRemove(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Add then remove.
-	args := map[string]any{"topic": "remove/test"}
+	// Add with a non-empty legacy profile so the new "must declare
+	// wake_loop or a non-empty profile" validation passes; the
+	// remove path is what we're exercising here.
+	args := map[string]any{"topic": "remove/test", "mission": "automation"}
 	_, err := tools.HandleAddWakeSubscription(context.Background(), args)
 	if err != nil {
 		t.Fatalf("add: %v", err)
@@ -118,12 +127,15 @@ func TestToolsHandleRemove(t *testing.T) {
 		t.Fatalf("expected 1 sub, got %d", len(subs))
 	}
 
-	result, err := tools.HandleRemoveWakeSubscription(context.Background(), map[string]any{"id": subs[0].ID})
+	// Canonical parameter name post-PR-T1 is subscription_id; the
+	// `id` alias still works for backwards compat (covered by its
+	// own test below).
+	result, err := tools.HandleRemoveWakeSubscription(context.Background(), map[string]any{"subscription_id": subs[0].ID})
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if !strings.Contains(result, "removed") {
-		t.Errorf("expected removed message, got %q", result)
+	if !strings.Contains(result, `"status":"ok"`) {
+		t.Errorf("expected JSON ok response, got %q", result)
 	}
 
 	if subs := tools.store.List(); len(subs) != 0 {
@@ -146,7 +158,7 @@ func TestToolsHandleRemoveConfigProtected(t *testing.T) {
 		t.Fatalf("expected 1 sub, got %d", len(subs))
 	}
 
-	_, err := tools.HandleRemoveWakeSubscription(context.Background(), map[string]any{"id": subs[0].ID})
+	_, err := tools.HandleRemoveWakeSubscription(context.Background(), map[string]any{"subscription_id": subs[0].ID})
 	if err == nil {
 		t.Fatal("expected error removing config subscription")
 	}

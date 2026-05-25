@@ -97,33 +97,7 @@ func loadFeedWakeTarget(state *opstate.Store, feedID string) (messages.LoopWakeT
 }
 
 func feedWakeTargetDefinition() map[string]any {
-	return map[string]any{
-		"type":        "object",
-		"description": "Optional existing loop to wake when this feed has new entries. Use this to feed a thane_curate-managed document instead of starting the default media-analysis conversation.",
-		"properties": map[string]any{
-			"loop_id": map[string]any{
-				"type":        "string",
-				"description": "Exact live loop ID to signal. Preferred when available from loop_status.",
-			},
-			"name": map[string]any{
-				"type":        "string",
-				"description": "Exact live loop name to signal when loop_id is not known.",
-			},
-			"force_supervisor": map[string]any{
-				"type":        "boolean",
-				"description": "When true, force the target loop's next iteration to run as a supervisor turn (the more capable model with the augmented prompt). Costlier than a normal wake — reserve for signals that genuinely warrant the extra capacity.",
-			},
-			"priority": map[string]any{
-				"type":        "string",
-				"enum":        []string{"low", "normal", "urgent"},
-				"description": "Delivery priority recorded on the loop notification. Default: normal.",
-			},
-			"instructions": map[string]any{
-				"type":        "string",
-				"description": "Compact source-specific instructions included with the wake event.",
-			},
-		},
-	}
+	return messages.LoopWakeTargetSchema("Optional existing loop to wake when this feed has new entries. Use this to feed a thane_curate-managed document instead of starting the default media-analysis conversation.")
 }
 
 func feedWakeTargetJSON(target messages.LoopWakeTarget, ok bool) map[string]any {

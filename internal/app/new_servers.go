@@ -333,9 +333,10 @@ func (a *App) initServers(s *newState) error {
 		var mqttParentID atomic.Value
 		mqttParentID.Store("") // initialize with zero-value string
 		wakeDeps := mqttWakeDeps{
-			registry: a.loopRegistry,
-			eventBus: a.eventBus,
-			parentID: &mqttParentID,
+			registry:   a.loopRegistry,
+			messageBus: a.messageBus,
+			eventBus:   a.eventBus,
+			parentID:   &mqttParentID,
 		}
 
 		// Wrap with the wake handler: wake-configured topics dispatch
@@ -350,7 +351,9 @@ func (a *App) initServers(s *newState) error {
 		))
 
 		// Register MQTT wake subscription tools via the provider.
-		a.loop.Tools().RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore)))
+		// loopRegistry doubles as the LoopResolver so wake_loop
+		// arguments are verified against live loops at add time.
+		a.loop.Tools().RegisterProvider(mqtt.NewWakeTools(mqtt.NewTools(subStore, a.loopRegistry)))
 
 		// Defer MQTT connection to StartWorkers. The publisher object,
 		// tooling, and message handler are already wired above; this just

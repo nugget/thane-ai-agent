@@ -11,32 +11,73 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
-// WakeSubscription pairs an MQTT topic filter with the routing profile
-// and capability tag overlay used to wake the agent when a message
-// arrives on the topic.
+// WakeSubscription pairs an MQTT topic filter with one of two dispatch
+// shapes used to react to messages on the topic:
+//
+//   - **Wake-target dispatch (preferred):** WakeTarget points at an
+//     existing loop. Matching messages produce a
+//     [messages.LoopEventPayload] delivered to the target loop's
+//     pending notifications via [messages.NewEventSourceEnvelope].
+//     The target loop's next iteration sees the MQTT payload as an
+//     event-source wake and runs under its own Spec.Profile /
+//     SupervisorProfile / container cascade. No new loop is
+//     spawned; the registry stays clean.
+//
+//   - **Spawn dispatch (legacy):** Profile + InitialTags shape a
+//     fresh one-shot loop run when no WakeTarget is configured.
+//     Kept for backwards compatibility with subscriptions written
+//     before the trigger-unification work; new subscriptions
+//     should declare WakeTarget instead.
+//
+// HasWakeTarget reports which path a given subscription uses.
 type WakeSubscription struct {
 	ID    string `json:"id"`
 	Topic string `json:"topic"`
 
-	// Profile shapes the agent run dispatched on each matching message
-	// (model selection, mission, hints, exclude_tools, instructions).
-	// Routing/configuration only — capability tags live on InitialTags.
+	// WakeTarget identifies an existing loop to receive matching
+	// MQTT messages as event-source notifications. When non-empty
+	// this is the preferred dispatch route — Profile and InitialTags
+	// are unused on this path because the target loop owns its own
+	// routing via Spec.Profile.
+	WakeTarget messages.LoopWakeTarget `json:"wake_loop,omitempty"`
+
+	// Profile shapes the spawn-dispatch path (legacy). Used only
+	// when WakeTarget is empty.
 	Profile router.LoopProfile `json:"profile"`
 
-	// InitialTags lists capability tags activated at the start of the
-	// dispatched agent run. The dispatcher builds the agent.Request
-	// directly (no loop spec), so these are the only tags on the
-	// request itself; the agent's capability resolver then layers
-	// always-active tags on top.
+	// InitialTags lists capability tags activated at the start of
+	// the spawn-dispatch agent run (legacy path). Only used when
+	// WakeTarget is empty. Modern subscriptions delegate tag
+	// activation to the target loop's Spec.Tags.
 	InitialTags []string `json:"initial_tags,omitempty"`
 
 	Source    string    `json:"source"` // "config" or "runtime"
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// HasWakeTarget reports whether this subscription routes matching
+// messages to an existing loop via the event-source envelope path
+// (the modern dispatch shape), versus the legacy
+// spawn-a-one-shot-loop path that consumes Profile + InitialTags.
+func (ws WakeSubscription) HasWakeTarget() bool {
+	return !ws.WakeTarget.Empty()
+}
+
+// AddRequest is the parameter struct for [SubscriptionStore.Add]. At
+// least one of WakeTarget or Profile must carry meaningful
+// configuration — a subscription that points at neither would match
+// MQTT messages and then do nothing.
+type AddRequest struct {
+	Topic       string
+	WakeTarget  messages.LoopWakeTarget
+	Profile     router.LoopProfile
+	InitialTags []string
 }
 
 // SubscriptionStore manages wake-enabled MQTT subscriptions with
@@ -77,6 +118,14 @@ func NewSubscriptionStore(db *sql.DB, logger *slog.Logger) (*SubscriptionStore, 
 	if err := database.AddColumn(db, "mqtt_wake_subscriptions", "initial_tags_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return nil, fmt.Errorf("migrate mqtt_wake_subscriptions schema: %w", err)
 	}
+	// Wake-target dispatch added in the trigger-unification work:
+	// subscriptions can declare an existing loop to receive matching
+	// MQTT messages instead of spawning a fresh one-shot loop.
+	// Default '{}' lets older rows hydrate cleanly with an empty
+	// target (falling through to the legacy spawn path).
+	if err := database.AddColumn(db, "mqtt_wake_subscriptions", "wake_target_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return nil, fmt.Errorf("migrate mqtt_wake_subscriptions schema: %w", err)
+	}
 
 	s := &SubscriptionStore{
 		db:     db,
@@ -92,7 +141,7 @@ func NewSubscriptionStore(db *sql.DB, logger *slog.Logger) (*SubscriptionStore, 
 
 // loadRuntime reads persisted runtime subscriptions from SQLite.
 func (s *SubscriptionStore) loadRuntime() error {
-	rows, err := s.db.Query(`SELECT id, topic, seed_json, initial_tags_json, source, created_at FROM mqtt_wake_subscriptions`)
+	rows, err := s.db.Query(`SELECT id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at FROM mqtt_wake_subscriptions`)
 	if err != nil {
 		return err
 	}
@@ -100,8 +149,8 @@ func (s *SubscriptionStore) loadRuntime() error {
 
 	for rows.Next() {
 		var ws WakeSubscription
-		var profileJSON, initialTagsJSON, createdAt string
-		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &initialTagsJSON, &ws.Source, &createdAt); err != nil {
+		var profileJSON, initialTagsJSON, wakeTargetJSON, createdAt string
+		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &initialTagsJSON, &wakeTargetJSON, &ws.Source, &createdAt); err != nil {
 			return err
 		}
 		if err := json.Unmarshal([]byte(profileJSON), &ws.Profile); err != nil {
@@ -116,6 +165,17 @@ func (s *SubscriptionStore) loadRuntime() error {
 					"id", ws.ID, "error", err)
 			} else if len(tags) > 0 {
 				ws.InitialTags = tags
+			}
+		}
+		// wake_target_json is "{}" for pre-trigger-unification rows
+		// (column default). Unmarshal then Empty() detects "no
+		// target configured" and dispatch falls back to the legacy
+		// Profile-driven spawn path.
+		if wakeTargetJSON != "" && wakeTargetJSON != "{}" {
+			if err := json.Unmarshal([]byte(wakeTargetJSON), &ws.WakeTarget); err != nil {
+				s.logger.Warn("subscription wake_target_json invalid, ignoring",
+					"id", ws.ID, "error", err)
+				ws.WakeTarget = messages.LoopWakeTarget{}
 			}
 		}
 		ts, err := database.ParseTimestamp(createdAt)
@@ -175,23 +235,34 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 	s.subs = filtered
 
 	for i, sc := range subs {
-		if sc.Wake == nil {
+		// A config entry with neither WakeLoop nor Wake is
+		// ambient-awareness only; skip silently like before.
+		if sc.WakeLoop == nil && sc.Wake == nil {
 			continue
 		}
 		if err := router.ValidateTopicFilter(sc.Topic); err != nil {
 			return fmt.Errorf("mqtt.subscriptions[%d]: invalid topic %q: %w", i, sc.Topic, err)
 		}
-		if err := sc.Wake.Validate(); err != nil {
-			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake profile: %w", i, sc.Topic, err)
-		}
-		s.subs = append(s.subs, WakeSubscription{
+		ws := WakeSubscription{
 			ID:          fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
 			Topic:       sc.Topic,
-			Profile:     *sc.Wake,
 			InitialTags: append([]string{}, sc.InitialTags...),
 			Source:      "config",
 			CreatedAt:   time.Now(),
-		})
+		}
+		if sc.WakeLoop != nil {
+			if sc.WakeLoop.Empty() {
+				return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): wake_loop requires loop_id or name", i, sc.Topic)
+			}
+			ws.WakeTarget = *sc.WakeLoop
+		}
+		if sc.Wake != nil {
+			if err := sc.Wake.Validate(); err != nil {
+				return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake profile: %w", i, sc.Topic, err)
+			}
+			ws.Profile = *sc.Wake
+		}
+		s.subs = append(s.subs, ws)
 	}
 	return nil
 }
@@ -207,22 +278,36 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 }
 
 // Add creates a runtime wake subscription, persists it to SQLite, and
-// returns the new subscription. The topic filter and profile are validated
-// before persistence — invalid values are rejected early rather than
-// stored and retried forever.
-func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile, initialTags []string) (WakeSubscription, error) {
+// returns the new subscription. The topic filter and dispatch shape
+// are validated before persistence — invalid values are rejected
+// early rather than stored and retried forever. A subscription that
+// declares neither a WakeTarget nor a meaningful Profile is rejected
+// because it would match messages and do nothing on dispatch.
+func (s *SubscriptionStore) Add(req AddRequest) (WakeSubscription, error) {
+	topic := strings.TrimSpace(req.Topic)
 	if err := router.ValidateTopicFilter(topic); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
 	}
-	if err := profile.Validate(); err != nil {
+	if err := req.Profile.Validate(); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid loop profile: %w", err)
+	}
+	// A subscription that points at nothing is almost certainly an
+	// operator/model mistake: matching messages would dispatch
+	// against a zero-value Profile (no model preference, no
+	// instructions) and would still spawn a one-shot loop. Reject
+	// with an actionable error. LoopProfile contains slice/map
+	// fields so we can't `==`-compare against a zero literal;
+	// inspect each field instead.
+	if req.WakeTarget.Empty() && isLoopProfileEmpty(req.Profile) {
+		return WakeSubscription{}, fmt.Errorf("subscription must declare either wake_loop (preferred) or a non-empty profile")
 	}
 
 	ws := WakeSubscription{
 		ID:          fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
 		Topic:       topic,
-		Profile:     profile,
-		InitialTags: append([]string{}, initialTags...),
+		WakeTarget:  req.WakeTarget,
+		Profile:     req.Profile,
+		InitialTags: append([]string{}, req.InitialTags...),
 		Source:      "runtime",
 		CreatedAt:   time.Now(),
 	}
@@ -238,10 +323,14 @@ func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile, initia
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("marshal initial_tags: %w", err)
 	}
+	wakeTargetJSON, err := json.Marshal(ws.WakeTarget)
+	if err != nil {
+		return WakeSubscription{}, fmt.Errorf("marshal wake_target: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		ws.ID, ws.Topic, string(profileJSON), string(initialTagsJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ws.ID, ws.Topic, string(profileJSON), string(initialTagsJSON), string(wakeTargetJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("insert subscription: %w", err)
@@ -375,4 +464,21 @@ func matchTopicFilter(filter, topic string) bool {
 func topicHash(topic string) string {
 	h := sha256.Sum256([]byte(topic))
 	return hex.EncodeToString(h[:8])
+}
+
+// isLoopProfileEmpty reports whether every field on the profile is
+// zero-valued. Used to detect subscriptions that declare neither a
+// wake target nor a useful spawn-time routing shape (an operator
+// mistake we want to fail loud on, since the subscription would
+// otherwise match and silently produce a no-op spawn).
+func isLoopProfileEmpty(p router.LoopProfile) bool {
+	return p.Model == "" &&
+		p.QualityFloor == 0 &&
+		p.Mission == "" &&
+		p.LocalOnly == "" &&
+		p.DelegationGating == "" &&
+		p.PreferSpeed == "" &&
+		p.Instructions == "" &&
+		len(p.ExcludeTools) == 0 &&
+		len(p.ExtraHints) == 0
 }

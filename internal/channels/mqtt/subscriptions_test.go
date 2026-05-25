@@ -84,7 +84,7 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	}
 
 	// Add a subscription.
-	ws, err := s.Add("test/topic", router.LoopProfile{Mission: "automation"}, nil)
+	ws, err := s.Add(AddRequest{Topic: "test/topic", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 		t.Fatalf("new store 1: %v", err)
 	}
 
-	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: 5}, nil)
+	_, err = s1.Add(AddRequest{Topic: "persist/test", Profile: router.LoopProfile{Mission: "automation", QualityFloor: 5}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestSubscriptionStoreInitialTagsPersistence(t *testing.T) {
 		t.Fatalf("new store 1: %v", err)
 	}
 
-	ws, err := s1.Add("tagged/topic", router.LoopProfile{Mission: "automation"}, []string{"homeassistant", "security"})
+	ws, err := s1.Add(AddRequest{Topic: "tagged/topic", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: []string{"homeassistant", "security"}})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestSubscriptionStoreAddPersistsEmptyTagsAsArray(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 
-	ws, err := s.Add("empty/tags", router.LoopProfile{Mission: "automation"}, nil)
+	ws, err := s.Add(AddRequest{Topic: "empty/tags", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestSubscriptionStoreTopics(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if _, err := s.Add("topic/b", profile, nil); err != nil {
+	if _, err := s.Add(AddRequest{Topic: "topic/b", Profile: profile}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -358,7 +358,7 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 		hookedTopics = append(hookedTopics, topics...)
 	})
 
-	_, err := s.Add("hook/test", router.LoopProfile{Mission: "automation"}, nil)
+	_, err := s.Add(AddRequest{Topic: "hook/test", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -371,8 +371,10 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
 	s := newTestStore(t)
 
-	// No hook set — Add should not panic.
-	_, err := s.Add("no-hook/test", router.LoopProfile{}, nil)
+	// No hook set — Add should not panic. Supply a non-empty
+	// profile so the post-PR-T1 "wake_loop or non-empty profile"
+	// validation passes; the test isn't exercising that surface.
+	_, err := s.Add(AddRequest{Topic: "no-hook/test", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -382,25 +384,25 @@ func TestSubscriptionStoreAddValidation(t *testing.T) {
 	s := newTestStore(t)
 
 	// Invalid topic filter.
-	_, err := s.Add("", router.LoopProfile{}, nil)
+	_, err := s.Add(AddRequest{Topic: "", Profile: router.LoopProfile{Mission: "automation"}})
 	if err == nil {
 		t.Fatal("expected error for empty topic")
 	}
 
 	// Invalid topic with bad wildcard.
-	_, err = s.Add("foo/ba#r", router.LoopProfile{}, nil)
+	_, err = s.Add(AddRequest{Topic: "foo/ba#r", Profile: router.LoopProfile{}, InitialTags: nil})
 	if err == nil {
 		t.Fatal("expected error for bad wildcard in topic")
 	}
 
 	// Invalid seed.
-	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: 99}, nil)
+	_, err = s.Add(AddRequest{Topic: "valid/topic", Profile: router.LoopProfile{QualityFloor: 99}, InitialTags: nil})
 	if err == nil {
 		t.Fatal("expected error for invalid quality_floor")
 	}
 
 	// Valid — should succeed.
-	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: 7}, nil)
+	_, err = s.Add(AddRequest{Topic: "valid/topic", Profile: router.LoopProfile{Mission: "automation", QualityFloor: 7}, InitialTags: nil})
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}

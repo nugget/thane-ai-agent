@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -1305,20 +1306,43 @@ type MQTTConfig struct {
 // SubscriptionConfig describes a single MQTT topic subscription.
 // Each entry is subscribed on every broker (re-)connect. Wildcards
 // (+ and #) are supported per the MQTT specification.
+//
+// Two dispatch shapes are supported for matching messages:
+//
+//   - **WakeLoop (preferred):** identifies an existing loop to
+//     receive matching MQTT messages as event-source notifications.
+//     The target loop's next iteration sees the message in its
+//     pending notifications and runs under its own Spec.Profile.
+//     No new loop is spawned.
+//
+//   - **Wake (legacy):** matching messages spawn a fresh one-shot
+//     loop using the embedded routing profile. Kept for
+//     backwards compatibility; new subscriptions should declare
+//     WakeLoop instead.
+//
+// When both are set, WakeLoop wins. When neither is set, the
+// subscription is ambient-awareness only (debug-logged, not
+// acted upon).
 type SubscriptionConfig struct {
 	// Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 	// "frigate/events"). Supports MQTT wildcard characters.
 	Topic string `yaml:"topic"`
 
-	// Wake, when non-nil, enables agent wake on this topic. Messages
-	// arriving on the topic trigger an agent conversation using the
-	// profile's routing configuration. When nil, messages are received
-	// for ambient awareness only (debug-logged, not acted upon).
+	// WakeLoop identifies an existing loop to receive matching MQTT
+	// messages as event-source notifications. Preferred dispatch
+	// route — the target loop's [Spec.Profile] governs routing.
+	WakeLoop *messages.LoopWakeTarget `yaml:"wake_loop,omitempty"`
+
+	// Wake is the legacy dispatch-via-spawn path: when non-nil and
+	// WakeLoop is unset, messages on this topic spawn a one-shot
+	// agent run using this routing profile. New subscriptions
+	// should use WakeLoop and let the target loop's own Profile
+	// govern routing instead.
 	Wake *router.LoopProfile `yaml:"wake,omitempty"`
 
 	// InitialTags lists capability tags activated at the start of the
-	// agent run dispatched for matching messages. Only meaningful when
-	// Wake is non-nil.
+	// spawn-dispatch agent run (legacy path). Only meaningful when
+	// Wake is non-nil and WakeLoop is unset.
 	InitialTags []string `yaml:"initial_tags,omitempty"`
 }
 

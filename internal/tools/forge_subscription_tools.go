@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+)
 
 func (r *Registry) registerForgeSubscriptionTools() {
 	if r.forgeTools == nil {
@@ -79,31 +83,5 @@ func (r *Registry) registerForgeSubscriptionTools() {
 }
 
 func forgeWakeLoopDefinition() map[string]any {
-	return map[string]any{
-		"type":        "object",
-		"description": "Existing loop to wake when repository events are detected. Usually a thane_curate loop that owns the managed document and tagging strategy.",
-		"properties": map[string]any{
-			"loop_id": map[string]any{
-				"type":        "string",
-				"description": "Exact live loop ID to signal. Preferred when available from loop_status.",
-			},
-			"name": map[string]any{
-				"type":        "string",
-				"description": "Exact live loop name to signal when loop_id is not known.",
-			},
-			"force_supervisor": map[string]any{
-				"type":        "boolean",
-				"description": "When true, force the target loop's next iteration to run as a supervisor turn (the more capable model with the augmented prompt). Costlier than a normal wake — reserve for signals that genuinely warrant the extra capacity.",
-			},
-			"priority": map[string]any{
-				"type":        "string",
-				"enum":        []string{"low", "normal", "urgent"},
-				"description": "Delivery priority recorded on the loop notification. Default: normal.",
-			},
-			"instructions": map[string]any{
-				"type":        "string",
-				"description": "Compact source-specific instructions included with the wake event.",
-			},
-		},
-	}
+	return messages.LoopWakeTargetSchema("Existing loop to wake when repository events are detected. Usually a thane_curate loop that owns the managed document and tagging strategy.")
 }

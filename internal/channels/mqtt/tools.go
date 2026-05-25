@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
@@ -14,45 +15,56 @@ import (
 // agent's tool registry. Each handler follows the standard tool
 // signature: func(ctx, args) (string, error).
 type Tools struct {
-	store *SubscriptionStore
+	store        *SubscriptionStore
+	loopResolver messages.LoopResolver
 }
 
 // NewTools creates MQTT tools backed by the given subscription store.
-func NewTools(store *SubscriptionStore) *Tools {
-	return &Tools{store: store}
+// loopResolver, when non-nil, is used to verify wake_loop targets at
+// subscription-add time so a typo'd loop name fails loud rather than
+// producing a permanent silent-drop on every matching message.
+func NewTools(store *SubscriptionStore, loopResolver messages.LoopResolver) *Tools {
+	return &Tools{store: store, loopResolver: loopResolver}
+}
+
+// listEntry is the JSON shape emitted by HandleListWakeSubscriptions.
+// One entry per subscription; the WakeLoop field is populated for
+// trigger-style subscriptions, the Profile fields for legacy
+// spawn-style subscriptions, so the model can tell at a glance which
+// dispatch shape each entry uses.
+type listEntry struct {
+	SubscriptionID string                   `json:"subscription_id"`
+	Topic          string                   `json:"topic"`
+	Source         string                   `json:"source"`
+	WakeLoop       *messages.LoopWakeTarget `json:"wake_loop,omitempty"`
+	Mission        string                   `json:"mission,omitempty"`
+	QualityFloor   int                      `json:"quality_floor,omitempty"`
+	Model          string                   `json:"model,omitempty"`
+	Instructions   string                   `json:"instructions,omitempty"`
 }
 
 // HandleListWakeSubscriptions returns a JSON list of all wake
 // subscriptions (config + runtime).
 func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any) (string, error) {
 	subs := t.store.List()
-	if len(subs) == 0 {
-		return "No MQTT wake subscriptions configured.", nil
-	}
-
-	type entry struct {
-		ID           string `json:"id"`
-		Topic        string `json:"topic"`
-		Source       string `json:"source"`
-		Mission      string `json:"mission,omitempty"`
-		QualityFloor int    `json:"quality_floor,omitempty"`
-		Model        string `json:"model,omitempty"`
-		Instructions string `json:"instructions,omitempty"`
-	}
-
-	entries := make([]entry, len(subs))
-	for i, ws := range subs {
-		entries[i] = entry{
-			ID:           ws.ID,
-			Topic:        ws.Topic,
-			Source:       ws.Source,
-			Mission:      ws.Profile.Mission,
-			QualityFloor: ws.Profile.QualityFloor,
-			Model:        ws.Profile.Model,
-			Instructions: ws.Profile.Instructions,
+	entries := make([]listEntry, 0, len(subs))
+	for _, ws := range subs {
+		entry := listEntry{
+			SubscriptionID: ws.ID,
+			Topic:          ws.Topic,
+			Source:         ws.Source,
 		}
+		if ws.HasWakeTarget() {
+			target := ws.WakeTarget
+			entry.WakeLoop = &target
+		} else {
+			entry.Mission = ws.Profile.Mission
+			entry.QualityFloor = ws.Profile.QualityFloor
+			entry.Model = ws.Profile.Model
+			entry.Instructions = ws.Profile.Instructions
+		}
+		entries = append(entries, entry)
 	}
-
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal subscriptions: %w", err)
@@ -60,13 +72,36 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 	return string(data), nil
 }
 
+// addResponse is the JSON shape returned by HandleAddWakeSubscription.
+// Uniform success-payload pattern matches forge_repo_follow /
+// media_follow.
+type addResponse struct {
+	Status         string                   `json:"status"`
+	SubscriptionID string                   `json:"subscription_id"`
+	Topic          string                   `json:"topic"`
+	WakeLoop       *messages.LoopWakeTarget `json:"wake_loop,omitempty"`
+	Note           string                   `json:"note,omitempty"`
+}
+
 // HandleAddWakeSubscription creates a new runtime wake subscription.
-// Required args: "topic". Optional: all LoopProfile fields.
+// Required args: "topic" plus one of (a) "wake_loop" naming an
+// existing target loop or (b) any of the legacy spawn-profile fields
+// (mission, model, quality_floor, etc.).
 func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any) (string, error) {
 	topic, _ := args["topic"].(string)
 	topic = strings.TrimSpace(topic)
 	if topic == "" {
 		return "", fmt.Errorf("topic is required")
+	}
+
+	wakeTarget, wakeConfigured, err := messages.ParseLoopWakeTarget(args["wake_loop"])
+	if err != nil {
+		return "", err
+	}
+	if wakeConfigured {
+		if err := messages.VerifyLoopWakeTarget(wakeTarget, t.loopResolver); err != nil {
+			return "", err
+		}
 	}
 
 	profile := router.LoopProfile{
@@ -94,28 +129,58 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		return "", fmt.Errorf("invalid profile: %w", err)
 	}
 
-	ws, err := t.store.Add(topic, profile, initialTags)
+	ws, err := t.store.Add(AddRequest{
+		Topic:       topic,
+		WakeTarget:  wakeTarget,
+		Profile:     profile,
+		InitialTags: initialTags,
+	})
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Wake subscription added (id=%s, topic=%s). Live subscribe attempted; activates on next reconnect if broker is not currently connected.", ws.ID, ws.Topic), nil
+	resp := addResponse{
+		Status:         "ok",
+		SubscriptionID: ws.ID,
+		Topic:          ws.Topic,
+		Note:           "Live subscribe attempted; activates on next reconnect if broker is not currently connected.",
+	}
+	if ws.HasWakeTarget() {
+		target := ws.WakeTarget
+		resp.WakeLoop = &target
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("marshal response: %w", err)
+	}
+	return string(data), nil
 }
 
 // HandleRemoveWakeSubscription removes a runtime subscription by ID.
-// Required args: "id".
+// Accepts either "subscription_id" (preferred, matching the forge /
+// media tool surface) or the legacy "id" alias for backwards
+// compatibility with operator scripts.
 func (t *Tools) HandleRemoveWakeSubscription(_ context.Context, args map[string]any) (string, error) {
-	id, _ := args["id"].(string)
-	id = strings.TrimSpace(id)
+	id := strings.TrimSpace(stringArg(args, "subscription_id"))
 	if id == "" {
-		return "", fmt.Errorf("id is required")
+		id = strings.TrimSpace(stringArg(args, "id"))
+	}
+	if id == "" {
+		return "", fmt.Errorf("subscription_id is required")
 	}
 
 	if err := t.store.Remove(id); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Wake subscription %q removed.", id), nil
+	data, err := json.Marshal(map[string]string{
+		"status":          "ok",
+		"subscription_id": id,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal response: %w", err)
+	}
+	return string(data), nil
 }
 
 // stringArg extracts a string from an args map, returning "" if absent
