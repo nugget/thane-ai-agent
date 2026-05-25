@@ -425,14 +425,14 @@ func TestBuildLoopConfig(t *testing.T) {
 	if lc.PostIterate == nil {
 		t.Error("PostIterate should be set")
 	}
-	if lc.Hints["source"] != "metacognitive" {
-		t.Errorf("Hints[source] = %q, want metacognitive", lc.Hints["source"])
+	if lc.RoutingFactors["source"] != "metacognitive" {
+		t.Errorf("Hints[source] = %q, want metacognitive", lc.RoutingFactors["source"])
 	}
-	if lc.Hints["mission"] != "metacognitive" {
-		t.Errorf("Hints[mission] = %q, want metacognitive", lc.Hints["mission"])
+	if lc.RoutingFactors["mission"] != "metacognitive" {
+		t.Errorf("Hints[mission] = %q, want metacognitive", lc.RoutingFactors["mission"])
 	}
-	if lc.Hints["delegation_gating"] != "disabled" {
-		t.Errorf("Hints[delegation_gating] = %q, want disabled", lc.Hints["delegation_gating"])
+	if lc.DelegationGating != "disabled" {
+		t.Errorf("Config.DelegationGating = %q, want disabled", lc.DelegationGating)
 	}
 
 	// Verify ExcludeTools contains key entries.

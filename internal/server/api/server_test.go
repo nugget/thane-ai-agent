@@ -280,7 +280,7 @@ func TestRunChatLoopRoutesThroughLoopRuntime(t *testing.T) {
 		Messages: []agent.Message{
 			{Role: "user", Content: "hello"},
 		},
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"channel": "api",
 		},
 	}, nil, "api/test")
@@ -305,11 +305,11 @@ func TestRunChatLoopRoutesThroughLoopRuntime(t *testing.T) {
 	if !slices.Equal(capturedReq.InitialTags, []string{"api"}) {
 		t.Fatalf("InitialTags = %v, want [api]", capturedReq.InitialTags)
 	}
-	if capturedReq.Hints["source"] != "api" || capturedReq.Hints["channel"] != "api" {
-		t.Fatalf("Hints = %#v, want source/channel api", capturedReq.Hints)
+	if capturedReq.RoutingFactors["source"] != "api" || capturedReq.RoutingFactors["channel"] != "api" {
+		t.Fatalf("Hints = %#v, want source/channel api", capturedReq.RoutingFactors)
 	}
-	if capturedReq.Hints["loop_id"] == "" || capturedReq.Hints["loop_name"] != "api/test" {
-		t.Fatalf("loop hints = %#v, want loop_id and loop_name api/test", capturedReq.Hints)
+	if capturedReq.RoutingFactors["loop_id"] == "" || capturedReq.RoutingFactors["loop_name"] != "api/test" {
+		t.Fatalf("loop hints = %#v, want loop_id and loop_name api/test", capturedReq.RoutingFactors)
 	}
 	if len(capturedReq.Messages) != 1 || capturedReq.Messages[0].Content != "hello" {
 		t.Fatalf("Messages = %#v, want user hello", capturedReq.Messages)
@@ -343,8 +343,8 @@ func TestHandleStreamingCompletionUsesChatLoopStream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	server.handleStreamingCompletion(rec, req, &agent.Request{
-		Messages: []agent.Message{{Role: "user", Content: "hello"}},
-		Hints:    map[string]string{"channel": "api"},
+		Messages:       []agent.Message{{Role: "user", Content: "hello"}},
+		RoutingFactors: map[string]string{"channel": "api"},
 	})
 
 	body := rec.Body.String()

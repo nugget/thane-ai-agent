@@ -8,14 +8,15 @@ import (
 
 func TestNormalizeModelSelection(t *testing.T) {
 	tests := []struct {
-		name             string
-		rawModel         string
-		hints            map[string]string
-		premiumFloor     string
-		wantModel        string
-		wantSystemPrompt bool
-		wantHintKey      string
-		wantHintValue    string
+		name                 string
+		rawModel             string
+		hints                map[string]string
+		premiumFloor         string
+		wantModel            string
+		wantSystemPrompt     bool
+		wantHintKey          string
+		wantHintValue        string
+		wantDelegationGating string
 	}{
 		{
 			name:         "default latest profile",
@@ -30,7 +31,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
 			wantModel:     "",
-			wantHintKey:   router.HintQualityFloor,
+			wantHintKey:   router.FactorQualityFloor,
 			wantHintValue: "8",
 		},
 		{
@@ -39,17 +40,16 @@ func TestNormalizeModelSelection(t *testing.T) {
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
 			wantModel:     "",
-			wantHintKey:   router.HintMission,
+			wantHintKey:   router.FactorMission,
 			wantHintValue: "device_control",
 		},
 		{
-			name:          "ops profile",
-			rawModel:      "thane:ops",
-			hints:         map[string]string{"channel": "api"},
-			premiumFloor:  "8",
-			wantModel:     "",
-			wantHintKey:   router.HintDelegationGating,
-			wantHintValue: "disabled",
+			name:                 "ops profile",
+			rawModel:             "thane:ops",
+			hints:                map[string]string{"channel": "api"},
+			premiumFloor:         "8",
+			wantModel:            "",
+			wantDelegationGating: "disabled",
 		},
 		{
 			name:         "explicit deployment preserved",
@@ -69,9 +69,12 @@ func TestNormalizeModelSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model, hints, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, testAPILogger())
+			model, hints, delegationGating, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, testAPILogger())
 			if model != tt.wantModel {
 				t.Fatalf("model = %q, want %q", model, tt.wantModel)
+			}
+			if delegationGating != tt.wantDelegationGating {
+				t.Fatalf("delegation_gating = %q, want %q", delegationGating, tt.wantDelegationGating)
 			}
 			if hints["channel"] != "api" {
 				t.Fatalf("channel hint = %q, want api", hints["channel"])
@@ -80,10 +83,10 @@ func TestNormalizeModelSelection(t *testing.T) {
 				if hints[router.HintVirtualModel] != "thane:premium" {
 					t.Fatalf("virtual model hint = %q, want thane:premium", hints[router.HintVirtualModel])
 				}
-				if got := hints[router.DelegateHintKey(router.HintQualityFloor)]; got != "" {
+				if got := hints[router.DelegateHintKey(router.FactorQualityFloor)]; got != "" {
 					t.Fatalf("delegate quality floor = %q, want empty", got)
 				}
-				if got := hints[router.DelegateHintKey(router.HintLocalOnly)]; got != "" {
+				if got := hints[router.DelegateHintKey(router.FactorLocalOnly)]; got != "" {
 					t.Fatalf("delegate local_only = %q, want empty", got)
 				}
 			}
@@ -91,8 +94,8 @@ func TestNormalizeModelSelection(t *testing.T) {
 				if hints[router.HintVirtualModel] != "thane:ops" {
 					t.Fatalf("virtual model hint = %q, want thane:ops", hints[router.HintVirtualModel])
 				}
-				if hints[router.DelegateHintKey(router.HintQualityFloor)] != "8" {
-					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.HintQualityFloor)])
+				if hints[router.DelegateHintKey(router.FactorQualityFloor)] != "8" {
+					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.FactorQualityFloor)])
 				}
 			}
 			if tt.wantHintKey != "" && hints[tt.wantHintKey] != tt.wantHintValue {

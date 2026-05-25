@@ -16,7 +16,7 @@ const (
 // Conditions describes optional runtime eligibility gates for a loop
 // definition. The first supported condition family is schedule-based,
 // and additional condition families can be added here over time
-// without changing the surrounding loops-ng contract shape.
+// without changing the surrounding loop contract shape.
 type Conditions struct {
 	// Schedule constrains when the definition is currently eligible for
 	// runtime use. When unset, the definition is always eligible unless

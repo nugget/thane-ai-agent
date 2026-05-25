@@ -6,7 +6,7 @@ import (
 )
 
 // DefinitionWarning is a non-fatal authoring concern discovered while
-// inspecting a persistable loops-ng definition. Warnings are surfaced
+// inspecting a persistable loop definition. Warnings are surfaced
 // through definition views and lint tooling so the model can correct
 // likely mistakes before they become noisy runtime behavior.
 type DefinitionWarning struct {
@@ -26,7 +26,7 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 	switch len(missingSleep) {
 	case 4:
 		warnings = append(warnings, DefinitionWarning{
-			Code: "service_default_cadence",
+			Code: "service_default_sleep_envelope",
 			Message: fmt.Sprintf(
 				"Service loop omits sleep_min, sleep_max, sleep_default, and jitter. It will use engine defaults of sleep_min=%s, sleep_max=%s, sleep_default=%s, jitter=%.1f. Natural-language timing in task text does not schedule the loop.",
 				DefaultSleepMin.String(),
@@ -37,7 +37,7 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 		})
 	case 1, 2, 3:
 		warnings = append(warnings, DefinitionWarning{
-			Code: "service_partial_cadence_defaults",
+			Code: "service_partial_sleep_defaults",
 			Message: fmt.Sprintf(
 				"Service loop leaves %s implicit. Omitted timing fields fall back to sleep_min=%s, sleep_max=%s, sleep_default=%s, jitter=%.1f.",
 				quotedFieldList(missingSleep),
@@ -49,10 +49,10 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 		})
 	}
 
-	if taskSuggestsCadence(spec.Task) && len(missingSleep) > 0 {
+	if taskSuggestsTiming(spec.Task) && len(missingSleep) > 0 {
 		warnings = append(warnings, DefinitionWarning{
-			Code:    "task_mentions_cadence_without_explicit_sleep",
-			Message: "Task text suggests a cadence such as hourly or daily, but service-loop timing comes only from sleep_min, sleep_max, sleep_default, and jitter.",
+			Code:    "task_mentions_timing_without_explicit_sleep",
+			Message: "Task text suggests a recurring schedule such as hourly or daily, but service-loop timing comes only from sleep_min, sleep_max, sleep_default, and jitter.",
 		})
 	}
 
@@ -78,8 +78,8 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 	}
 	if cfg.SleepMin == cfg.SleepMax && cfg.SleepDefault == cfg.SleepMin && jitter > 0 {
 		warnings = append(warnings, DefinitionWarning{
-			Code:    "fixed_cadence_with_jitter",
-			Message: "Fixed cadence is implied because sleep_min == sleep_max == sleep_default, but jitter is still non-zero. Set jitter to 0 if the loop should wake on a stable interval.",
+			Code:    "fixed_interval_with_jitter",
+			Message: "Fixed interval is implied because sleep_min == sleep_max == sleep_default, but jitter is still non-zero. Set jitter to 0 if the loop should wake on a stable interval.",
 		})
 	}
 
@@ -117,7 +117,7 @@ func quotedFieldList(fields []string) string {
 	return strings.Join(quoted[:len(quoted)-1], ", ") + ", and " + quoted[len(quoted)-1]
 }
 
-func taskSuggestsCadence(task string) bool {
+func taskSuggestsTiming(task string) bool {
 	task = strings.ToLower(strings.TrimSpace(task))
 	if task == "" {
 		return false

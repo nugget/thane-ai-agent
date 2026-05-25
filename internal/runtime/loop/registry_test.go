@@ -460,7 +460,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 				ExcludeTools: []string{"profile_block"},
 				Instructions: "profile guidance",
 			},
-			Hints: map[string]string{
+			RoutingFactors: map[string]string{
 				"source": "spec",
 			},
 			ExcludeTools: []string{"config_block"},
@@ -469,8 +469,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 		ParentID:        "parent-loop",
 		Metadata:        map[string]string{"origin": "launch"},
 		ConversationID:  "conv-123",
-		Model:           "deepslate/google/gemma-3-4b",
-		Hints:           map[string]string{"source": "launch", "custom": "1"},
+		RoutingFactors:  map[string]string{"source": "launch", "custom": "1"},
 		AllowedTools:    []string{"get_state"},
 		ExcludeTools:    []string{"launch_block"},
 		InitialTags:     []string{"launch_tag"},
@@ -492,7 +491,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 				AllowedTools:    append([]string(nil), req.AllowedTools...),
 				ExcludeTools:    append([]string(nil), req.ExcludeTools...),
 				SkipTagFilter:   req.SkipTagFilter,
-				Hints:           cloneStringMap(req.Hints),
+				RoutingFactors:  cloneStringMap(req.RoutingFactors),
 				InitialTags:     append([]string(nil), req.InitialTags...),
 				MaxIterations:   req.MaxIterations,
 				MaxOutputTokens: req.MaxOutputTokens,
@@ -516,8 +515,11 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 	if result.FinalStatus.Config.Metadata["origin"] != "launch" {
 		t.Fatalf("Metadata origin = %q, want launch", result.FinalStatus.Config.Metadata["origin"])
 	}
-	if captured.Model != "deepslate/google/gemma-3-4b" {
-		t.Fatalf("Model = %q, want deepslate/google/gemma-3-4b", captured.Model)
+	// Persistent model selection lives on Spec.Profile.Model — Launch
+	// no longer carries a Model override. The captured request should
+	// reflect the spec profile's model.
+	if captured.Model != "spark/base" {
+		t.Fatalf("Model = %q, want spark/base", captured.Model)
 	}
 	if captured.ConversationID != "conv-123" {
 		t.Fatalf("ConversationID = %q, want conv-123", captured.ConversationID)
@@ -541,14 +543,14 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 			t.Fatalf("InitialTags = %#v, missing %q", captured.InitialTags, want)
 		}
 	}
-	if captured.Hints["mission"] != "automation" {
-		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	if captured.RoutingFactors["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.RoutingFactors["mission"])
 	}
-	if captured.Hints["source"] != "launch" {
-		t.Fatalf("source hint = %q, want launch", captured.Hints["source"])
+	if captured.RoutingFactors["source"] != "launch" {
+		t.Fatalf("source hint = %q, want launch", captured.RoutingFactors["source"])
 	}
-	if captured.Hints["custom"] != "1" {
-		t.Fatalf("custom hint = %q, want 1", captured.Hints["custom"])
+	if captured.RoutingFactors["custom"] != "1" {
+		t.Fatalf("custom hint = %q, want 1", captured.RoutingFactors["custom"])
 	}
 	if captured.MaxIterations != 7 || captured.MaxOutputTokens != 321 {
 		t.Fatalf("limits = iterations %d output %d", captured.MaxIterations, captured.MaxOutputTokens)

@@ -73,7 +73,7 @@ func TestOWUTrackerDispatchRoutesThroughTurnBuilder(t *testing.T) {
 			Content: "what is in this image?",
 			Images:  []llm.ImageContent{{MediaType: "image/png", Data: "abc123"}},
 		}},
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"channel": "ollama",
 			"source":  "owu",
 		},
@@ -95,14 +95,14 @@ func TestOWUTrackerDispatchRoutesThroughTurnBuilder(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runner request")
 	}
-	if gotReq.Hints["loop_id"] == "" {
+	if gotReq.RoutingFactors["loop_id"] == "" {
 		t.Fatal("loop_id hint is empty; request did not traverse OWU child loop turn preparation")
 	}
-	if gotReq.Hints["loop_name"] != "owu/Home Chat" {
-		t.Fatalf("loop_name = %q, want owu/Home Chat", gotReq.Hints["loop_name"])
+	if gotReq.RoutingFactors["loop_name"] != "owu/Home Chat" {
+		t.Fatalf("loop_name = %q, want owu/Home Chat", gotReq.RoutingFactors["loop_name"])
 	}
-	if gotReq.Hints["source"] != "owu" || gotReq.Hints["channel"] != "ollama" {
-		t.Fatalf("hints = %#v", gotReq.Hints)
+	if gotReq.RoutingFactors["source"] != "owu" || gotReq.RoutingFactors["channel"] != "ollama" {
+		t.Fatalf("hints = %#v", gotReq.RoutingFactors)
 	}
 	if gotReq.SkipTagFilter {
 		t.Fatal("SkipTagFilter = true, want OWU loop tags to keep capability filtering active")

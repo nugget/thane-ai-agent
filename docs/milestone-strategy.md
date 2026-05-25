@@ -72,7 +72,7 @@ forward into point releases when priorities shift.
 
 Milestones track *when* something ships. Labels track *what area* it
 belongs to. An issue's thematic identity lives in its labels (e.g.,
-`security`, `architecture`, `loops-ng`), not its milestone.
+`security`, `architecture`, `loops`), not its milestone.
 
 To see progress on a pillar like identity/trust: filter by label across
 all milestones. To see what's shipping next: look at the current point

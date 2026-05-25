@@ -148,22 +148,22 @@ func mrExtractRouteHints(args map[string]any) map[string]string {
 		}
 	}
 	if mission := strings.TrimSpace(mrStringArg(args, "mission")); mission != "" {
-		hints[routepkg.HintMission] = mission
+		hints[routepkg.FactorMission] = mission
 	}
 	if channel := strings.TrimSpace(mrStringArg(args, "channel")); channel != "" {
-		hints[routepkg.HintChannel] = channel
+		hints[routepkg.FactorChannel] = channel
 	}
 	if pref := strings.TrimSpace(mrStringArg(args, "model_preference")); pref != "" {
-		hints[routepkg.HintModelPreference] = pref
+		hints[routepkg.FactorModelPreference] = pref
 	}
 	if v, ok := mrIntArgOK(args, "quality_floor"); ok && v > 0 {
-		hints[routepkg.HintQualityFloor] = strconv.Itoa(v)
+		hints[routepkg.FactorQualityFloor] = strconv.Itoa(v)
 	}
 	if v, ok := mrBoolArgOK(args, "local_only"); ok {
-		hints[routepkg.HintLocalOnly] = strconv.FormatBool(v)
+		hints[routepkg.FactorLocalOnly] = strconv.FormatBool(v)
 	}
 	if v, ok := mrBoolArgOK(args, "prefer_speed"); ok {
-		hints[routepkg.HintPreferSpeed] = strconv.FormatBool(v)
+		hints[routepkg.FactorPreferSpeed] = strconv.FormatBool(v)
 	}
 	if len(hints) == 0 {
 		return nil

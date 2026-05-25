@@ -14,7 +14,7 @@ const (
 )
 
 // LoopDefinitionToolDeps wires the live loop-definition registry into the
-// tool registry so the model can inspect and mutate the persistent loops-ng
+// tool registry so the model can inspect and mutate the persistent loops
 // definition overlay.
 type LoopDefinitionToolDeps struct {
 	Registry         *looppkg.DefinitionRegistry
@@ -48,7 +48,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_summary",
-		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, policy state, live runtime state, warning totals, and the known loop definition names.",
+		Description: "Return a compact structured summary of the persistent loops definition registry: generation, counts by source, operation, policy state, live runtime state, warning totals, and the known loop definition names.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -106,7 +106,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_get",
-		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name, including authoring warnings and its current live runtime state when available.",
+		Description: "Get one deep loop definition object from the persistent loops definition registry by name, including authoring warnings and its current live runtime state when available.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -122,7 +122,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_lint",
-		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted cadence fields or delegation-first gating.",
+		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted sleep envelope fields or delegation-first gating.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -138,7 +138,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_set",
-		Description: "Create or replace one dynamic loop definition in the persistent loops-ng overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
+		Description: "Create or replace one dynamic loop definition in the persistent loops overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -154,7 +154,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_delete",
-		Description: "Delete one dynamic loop definition from the persistent loops-ng overlay. Config-owned definitions are immutable and cannot be deleted.",
+		Description: "Delete one dynamic loop definition from the persistent loops overlay. Config-owned definitions are immutable and cannot be deleted.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -199,7 +199,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_launch",
-		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. Model routing, tool filtering, and iteration caps go in the top-level launch fields (model, allowed_tools, max_iterations, etc.) — NOT inside launch.metadata, which is opaque tagging only. When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
+		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. Tool filtering and iteration caps go in the top-level launch fields (allowed_tools, max_iterations, etc.) — NOT inside launch.metadata, which is opaque tagging only. Model selection is persistent and lives on spec.profile.model — set it via loop_definition_set, not via launch overrides (per-launch model is rejected here because it is silently dropped when a service loop is already running and is not persisted across restarts when it is not). When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
