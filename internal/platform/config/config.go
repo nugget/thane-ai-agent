@@ -1729,25 +1729,20 @@ type MetacognitiveConfig struct {
 	// duration. Default: 0.2. Set to 0.0 for deterministic timing.
 	Jitter *float64 `yaml:"jitter,omitempty"`
 
-	// SupervisorProbability is the chance (0.0–1.0) that each wake
-	// uses a frontier model with supervisor-augmented prompt.
-	// Default: 0.1. Set to 0.0 to disable supervisor turns.
+	// SupervisorProbability is the per-wake chance (0.0–1.0) that
+	// this iteration runs as a supervisor turn — a more capable
+	// model with the augmented prompt produced by
+	// [prompts.MetacognitivePrompt]. Default: 0.1. Set to 0.0 to
+	// disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
 	// iterations.
-	Router MetacognitiveRouterConfig `yaml:"router"`
+	Router RouterConfig `yaml:"router"`
 
 	// SupervisorRouter configures model routing for supervisor
 	// turns (frontier model with augmented prompt).
-	SupervisorRouter MetacognitiveRouterConfig `yaml:"supervisor_router"`
-}
-
-// MetacognitiveRouterConfig holds routing hints for metacognitive iterations.
-type MetacognitiveRouterConfig struct {
-	// QualityFloor is the minimum quality rating (1–10) for model
-	// selection. Default: 3 for normal iterations, 8 for supervisor.
-	QualityFloor int `yaml:"quality_floor"`
+	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
 }
 
 // EgoConfig configures the self-reflection ego loop. The loop runs as a
@@ -1774,23 +1769,33 @@ type EgoConfig struct {
 	// Set to 0.0 for deterministic timing.
 	Jitter *float64 `yaml:"jitter,omitempty"`
 
-	// SupervisorProbability is the chance (0.0–1.0) that each wake
-	// uses a frontier model with supervisor-augmented prompt.
-	// Default: 0.2. Set to 0.0 to disable supervisor turns.
+	// SupervisorProbability is the per-wake chance (0.0–1.0) that
+	// this iteration runs as a supervisor turn — a more capable
+	// model with the augmented prompt produced by
+	// [prompts.EgoPrompt]. Default: 0.2. Set to 0.0 to disable
+	// supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal iterations.
-	Router EgoRouterConfig `yaml:"router"`
+	Router RouterConfig `yaml:"router"`
 
 	// SupervisorRouter configures model routing for supervisor
 	// turns (frontier model with augmented prompt).
-	SupervisorRouter EgoRouterConfig `yaml:"supervisor_router"`
+	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
 }
 
-// EgoRouterConfig holds routing hints for ego iterations.
-type EgoRouterConfig struct {
+// RouterConfig holds routing hints used by the built-in services
+// (metacognitive, ego) for both normal and supervisor turns. It is
+// deliberately narrow — operator-tunable knobs only — and gets
+// translated into the spec-level [router.LoopProfile] /
+// [router.LoopProfile.QualityFloor] at hydration time. Replaces
+// the previously-duplicated `MetacognitiveRouterConfig` and
+// `EgoRouterConfig` types which were byte-identical apart from
+// their default floors.
+type RouterConfig struct {
 	// QualityFloor is the minimum quality rating (1–10) for model
-	// selection. Default: 5 for normal iterations, 8 for supervisor.
+	// selection. Built-in service defaults: metacognitive uses 3
+	// (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
 	QualityFloor int `yaml:"quality_floor"`
 }
 

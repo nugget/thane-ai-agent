@@ -852,21 +852,25 @@ talents_dir: ./talents
 #   0.2 means the actual sleep varies by ±20% of the computed
 #   duration. Default: 0.2. Set to 0.0 for deterministic timing.
 #   jitter: 0.2
-#   SupervisorProbability is the chance (0.0–1.0) that each wake
-#   uses a frontier model with supervisor-augmented prompt.
-#   Default: 0.1. Set to 0.0 to disable supervisor turns.
+#   SupervisorProbability is the per-wake chance (0.0–1.0) that
+#   this iteration runs as a supervisor turn — a more capable
+#   model with the augmented prompt produced by
+#   [prompts.MetacognitivePrompt]. Default: 0.1. Set to 0.0 to
+#   disable supervisor turns entirely.
 #   supervisor_probability: 0.1
 #   Router configures model routing for normal (non-supervisor)
 #   iterations.
 #   router:
 #     QualityFloor is the minimum quality rating (1–10) for model
-#     selection. Default: 3 for normal iterations, 8 for supervisor.
+#     selection. Built-in service defaults: metacognitive uses 3
+#     (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
 #     quality_floor: 3
 #   SupervisorRouter configures model routing for supervisor
 #   turns (frontier model with augmented prompt).
 #   supervisor_router:
 #     QualityFloor is the minimum quality rating (1–10) for model
-#     selection. Default: 3 for normal iterations, 8 for supervisor.
+#     selection. Built-in service defaults: metacognitive uses 3
+#     (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
 #     quality_floor: 8
 #
 # Ego configures the self-reflection loop. When enabled, a long-cycle
@@ -887,20 +891,24 @@ ego:
   # Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
   # Set to 0.0 for deterministic timing.
   jitter: 0.2
-  # SupervisorProbability is the chance (0.0–1.0) that each wake
-  # uses a frontier model with supervisor-augmented prompt.
-  # Default: 0.2. Set to 0.0 to disable supervisor turns.
+  # SupervisorProbability is the per-wake chance (0.0–1.0) that
+  # this iteration runs as a supervisor turn — a more capable
+  # model with the augmented prompt produced by
+  # [prompts.EgoPrompt]. Default: 0.2. Set to 0.0 to disable
+  # supervisor turns entirely.
   supervisor_probability: 0.2
   # Router configures model routing for normal iterations.
   router:
     # QualityFloor is the minimum quality rating (1–10) for model
-    # selection. Default: 5 for normal iterations, 8 for supervisor.
+    # selection. Built-in service defaults: metacognitive uses 3
+    # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 5
   # SupervisorRouter configures model routing for supervisor
   # turns (frontier model with augmented prompt).
   supervisor_router:
     # QualityFloor is the minimum quality rating (1–10) for model
-    # selection. Default: 5 for normal iterations, 8 for supervisor.
+    # selection. Built-in service defaults: metacognitive uses 3
+    # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 8
 #
 # (optional) Loops configures immutable loop definitions loaded from the config
@@ -952,9 +960,16 @@ ego:
 #       max_iter: 0
 #       supervisor: false
 #       supervisor_prob: 0.0
-#       quality_floor: 0
-#       supervisor_context: ""
-#       supervisor_quality_floor: 0
+#       supervisor_profile:
+#         model: ""
+#         quality_floor: ""
+#         mission: ""
+#         local_only: ""
+#         delegation_gating: ""
+#         prefer_speed: ""
+#         exclude_tools: []
+#         extra_hints: {}
+#         instructions: ""
 #       on_retrigger: 0
 #       routing_factors: {}
 #       delegation_gating: ""

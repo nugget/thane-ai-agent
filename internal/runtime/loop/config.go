@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 )
 
@@ -181,30 +182,32 @@ type Config struct {
 	// may make (including failures). Zero means unlimited.
 	MaxIter int
 
-	// Supervisor enables frontier model dice rolls. When true, a
-	// fraction of iterations (controlled by SupervisorProb) use a
-	// more capable model for oversight.
+	// Supervisor enables periodic supervisor turns: a Bernoulli trial
+	// at each wake decides whether the iteration uses the elevated
+	// SupervisorProfile overrides. Mirrors [Spec.Supervisor].
 	Supervisor bool
 
 	// SupervisorProb is the probability [0.0, 1.0] that a given
-	// iteration uses the supervisor model. Only meaningful when
-	// Supervisor is true. Zero means never (use DefaultSupervisorProb
-	// for the recommended default).
+	// iteration is a supervisor turn. Only meaningful when
+	// Supervisor is true. Zero means never. Mirrors
+	// [Spec.SupervisorProb].
 	SupervisorProb float64
 
-	// QualityFloor is the minimum model quality rating for normal
-	// iterations. Zero uses the router default.
-	QualityFloor int
-
-	// SupervisorContext is an optional prompt prepended to the Task
-	// during supervisor turns. Use it to give the frontier model
-	// review instructions, recent iteration summaries, or oversight
-	// criteria. Empty means supervisor runs the same Task as normal.
-	SupervisorContext string
-
-	// SupervisorQualityFloor is the minimum model quality rating
-	// for supervisor turns. Zero uses the router default.
-	SupervisorQualityFloor int
+	// SupervisorProfile carries the per-turn-mode overrides applied
+	// during supervisor turns. Overlay on the loop's normal routing
+	// shape (built from Profile-derived [requestBase]): any field
+	// set here wins, any field left empty falls back to the normal
+	// shape.
+	//
+	// Nil means "no SupervisorProfile overrides declared." Two
+	// hardcoded baseline routing flips still apply to every
+	// supervisor turn even with a nil SupervisorProfile:
+	// `supervisor` is stamped to "true" and `local_only` is forced
+	// to "false". A non-nil SupervisorProfile can override either
+	// (e.g. set `local_only: "true"` to keep supervisor turns
+	// local). See [prepareAgentTurnRequest] for the merge order.
+	// Mirrors [Spec.SupervisorProfile].
+	SupervisorProfile *router.LoopProfile
 
 	// OnRetrigger determines behavior when the loop's start
 	// condition fires again while running. Default: RetriggerSingle.
@@ -355,7 +358,7 @@ func (c *Config) validate() error {
 			c.TaskBuilder != nil, c.TurnBuilder != nil, c.Handler != nil, c.WaitFunc != nil, c.PostIterate != nil,
 			c.SleepMin, c.SleepMax, c.SleepDefault, c.MaxDuration,
 			c.Jitter, c.MaxIter,
-			c.Supervisor, c.SupervisorProb, c.SupervisorContext,
+			c.Supervisor, c.SupervisorProb,
 			len(c.Outputs), c.Completion,
 		); err != nil {
 			return err

@@ -18,8 +18,8 @@ func TestParseConfig_Valid(t *testing.T) {
 		DefaultSleep:          "6h",
 		Jitter:                &jitter,
 		SupervisorProbability: &supervisor,
-		Router:                config.EgoRouterConfig{QualityFloor: 5},
-		SupervisorRouter:      config.EgoRouterConfig{QualityFloor: 8},
+		Router:                config.RouterConfig{QualityFloor: 5},
+		SupervisorRouter:      config.RouterConfig{QualityFloor: 8},
 	}
 
 	cfg, err := ParseConfig(raw)
