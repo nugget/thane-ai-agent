@@ -111,3 +111,47 @@ type EffectiveTag struct {
 	// directly-declared tags, ancestor loop name otherwise.
 	From string `yaml:"from" json:"from"`
 }
+
+// EffectiveExcludeTool is a tool-exclusion entry annotated with its
+// origin in the loop graph. ExcludeTools cascades by union — every
+// ancestor's excludes contribute and a child cannot un-exclude a
+// container's restriction. This makes "no shell_exec in this
+// subtree" a structural safety guarantee. Returned by
+// [Registry.EffectiveExcludeTools].
+type EffectiveExcludeTool struct {
+	// Tool is the tool name that is excluded.
+	Tool string `yaml:"tool" json:"tool"`
+	// From follows the same provenance contract as [EffectiveTag.From].
+	From string `yaml:"from" json:"from"`
+}
+
+// EffectiveRoutingFactor is one routing-factor entry annotated with
+// its origin in the loop graph. RoutingFactors cascade with
+// child-wins semantics on key collision — a descendant's value
+// overrides the ancestor's. Returned by
+// [Registry.EffectiveRoutingFactors].
+type EffectiveRoutingFactor struct {
+	// Key is the routing-factor name.
+	Key string `yaml:"key" json:"key"`
+	// Value is the routing-factor value at this level of the graph.
+	Value string `yaml:"value" json:"value"`
+	// From is [EffectiveOriginSelf] when this loop declared the
+	// value, or the ancestor loop's name when it was inherited.
+	From string `yaml:"from" json:"from"`
+}
+
+// EffectiveDelegationGating is the resolved delegation-gating
+// directive plus its origin. DelegationGating cascades with
+// closest-non-empty semantics — the loop's own value wins if set;
+// otherwise the closest ancestor that declares a non-empty value
+// wins; otherwise the result is "". Returned by
+// [Registry.EffectiveDelegationGating] as a pointer so the absence
+// of a declaration anywhere in the chain is distinguishable from
+// the empty-string value (today empty means "no override" so the
+// distinction doesn't load-bear, but it leaves room).
+type EffectiveDelegationGating struct {
+	// Value is the resolved gating string (e.g. "disabled").
+	Value string `yaml:"value" json:"value"`
+	// From follows the same provenance contract as [EffectiveTag.From].
+	From string `yaml:"from" json:"from"`
+}

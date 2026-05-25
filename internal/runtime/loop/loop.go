@@ -278,11 +278,13 @@ type Loop struct {
 	ancestorTagsFunc func() []string
 
 	// effectiveStateFunc returns the full provenance-annotated
-	// effective tags and subscriptions for this loop. Installed by
-	// [Registry.Register] so [Status] can surface the same view that
-	// loop_definition_get exposes for the running loop. Nil for
-	// loops constructed outside a registry.
-	effectiveStateFunc func() ([]EffectiveTag, []EffectiveSubscription)
+	// effective state for this loop — every cascading field (tags,
+	// subscriptions, exclude tools, routing factors, delegation
+	// gating) in one atomic snapshot. Installed by
+	// [Registry.Register] so [Status] and the iteration-time merge
+	// in [prepareAgentTurnRequest] share one ancestor walk per call.
+	// Nil for loops constructed outside a registry.
+	effectiveStateFunc func() effectiveStateResult
 
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
@@ -660,7 +662,12 @@ func (l *Loop) Status() Status {
 	s.Tooling = BuildToolingState(configuredTags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
 
 	if effFunc != nil {
-		s.EffectiveTags, s.EffectiveSubscriptions = effFunc()
+		eff := effFunc()
+		s.EffectiveTags = eff.Tags
+		s.EffectiveSubscriptions = eff.Subscriptions
+		s.EffectiveExcludeTools = eff.ExcludeTools
+		s.EffectiveRoutingFactors = eff.RoutingFactors
+		s.EffectiveDelegationGating = eff.DelegationGating
 	}
 
 	return s
@@ -719,11 +726,49 @@ func (l *Loop) tagsSnapshot() []string {
 	return append([]string(nil), l.config.Tags...)
 }
 
+// excludeToolsSnapshot returns a copy of the loop's configured tool
+// exclusions under the loop lock. Same forward-compat shape as
+// [tagsSnapshot].
+func (l *Loop) excludeToolsSnapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.config.ExcludeTools) == 0 {
+		return nil
+	}
+	return append([]string(nil), l.config.ExcludeTools...)
+}
+
+// routingFactorsSnapshot returns a copy of the loop's configured
+// routing factors under the loop lock. Same forward-compat shape as
+// [tagsSnapshot].
+func (l *Loop) routingFactorsSnapshot() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.config.RoutingFactors) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(l.config.RoutingFactors))
+	for k, v := range l.config.RoutingFactors {
+		out[k] = v
+	}
+	return out
+}
+
+// delegationGatingSnapshot returns the loop's configured delegation-
+// gating value under the loop lock. Same forward-compat shape as
+// [tagsSnapshot].
+func (l *Loop) delegationGatingSnapshot() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.config.DelegationGating
+}
+
 // setEffectiveStateFunc installs the provenance-aware walker behind
-// [Status.EffectiveTags] and [Status.EffectiveSubscriptions]. Wired by
-// [Registry.Register] so the loop can report its effective state
-// without a direct registry handle; nil-safe in Status.
-func (l *Loop) setEffectiveStateFunc(fn func() ([]EffectiveTag, []EffectiveSubscription)) {
+// [Status]'s Effective* fields and the iteration-time cascade merge.
+// Wired by [Registry.Register] so the loop reports its effective
+// state without a direct registry handle; nil-safe everywhere it's
+// consulted.
+func (l *Loop) setEffectiveStateFunc(fn func() effectiveStateResult) {
 	l.mu.Lock()
 	l.effectiveStateFunc = fn
 	l.mu.Unlock()
@@ -750,6 +795,54 @@ func (l *Loop) inheritedTags() []string {
 		return nil
 	}
 	return fn()
+}
+
+// inheritedCascade is the per-iteration projection of effective
+// state that drops the loop's own contributions (those flow through
+// the existing l.config.* / l.requestBase.* / etc. merges) and
+// keeps only what ancestor containers contributed. Used by
+// [prepareAgentTurnRequest] to fold inherited values into the
+// existing merge chain without double-counting the loop's own.
+type inheritedCascade struct {
+	ExcludeTools     []string
+	RoutingFactors   map[string]string
+	DelegationGating string
+}
+
+func (l *Loop) inheritedCascade() inheritedCascade {
+	l.mu.Lock()
+	fn := l.effectiveStateFunc
+	l.mu.Unlock()
+	if fn == nil {
+		return inheritedCascade{}
+	}
+	eff := fn()
+
+	var out inheritedCascade
+	for _, e := range eff.ExcludeTools {
+		if e.From == EffectiveOriginSelf {
+			continue
+		}
+		out.ExcludeTools = append(out.ExcludeTools, e.Tool)
+	}
+	for _, f := range eff.RoutingFactors {
+		if f.From == EffectiveOriginSelf {
+			continue
+		}
+		if out.RoutingFactors == nil {
+			out.RoutingFactors = make(map[string]string)
+		}
+		// EffectiveRoutingFactors is already deduped closest-first,
+		// so the first ancestor entry for any key is the winner.
+		if _, dup := out.RoutingFactors[f.Key]; dup {
+			continue
+		}
+		out.RoutingFactors[f.Key] = f.Value
+	}
+	if eff.DelegationGating != nil && eff.DelegationGating.From != EffectiveOriginSelf {
+		out.DelegationGating = eff.DelegationGating.Value
+	}
+	return out
 }
 
 // CurrentConvID returns the conversation ID of the in-flight iteration,
@@ -1538,6 +1631,17 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		}
 		hints["local_only"] = "true"
 	}
+	// Container ancestors fold into the merge chain alongside
+	// capability tags. The cascade snapshot is taken once so every
+	// inheritable field (routing factors, exclude tools, delegation
+	// gating) shares one ancestor walk per iteration. Inherited
+	// values sit at the weakest priority — own config / per-turn
+	// overrides / per-launch overrides all win on collision — so
+	// ancestors set defaults that descendants can refine.
+	cascade := l.inheritedCascade()
+	for k, v := range cascade.RoutingFactors {
+		hints[k] = v
+	}
 	for k, v := range l.requestBase.RoutingFactors {
 		hints[k] = v
 	}
@@ -1551,10 +1655,6 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		hints[k] = v
 	}
 
-	// Container ancestors contribute capability tags to every descendant
-	// turn. The loop's own tags come first so any ordering-sensitive
-	// downstream resolution still prefers spec-declared tags over
-	// inherited ones; mergeUniqueStrings dedupes either way.
 	inheritedTags := l.inheritedTags()
 	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags, inheritedTags)
 	req.Model = firstNonEmpty(req.Model, l.requestBase.Model)
@@ -1566,10 +1666,17 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		return Request{}, err
 	}
 	req.AllowedTools = allowedTools
-	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools)
+	// Ancestor-container excludes union into the merge so a "no
+	// shell_exec under home_automation" restriction reaches every
+	// descendant regardless of what they declare locally.
+	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools, cascade.ExcludeTools)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
 	req.RoutingFactors = hints
-	req.DelegationGating = firstNonEmpty(l.requestOverride.DelegationGating, req.DelegationGating, l.config.DelegationGating, l.requestBase.DelegationGating)
+	// Inherited gating is the weakest priority — own config and
+	// runtime overrides take precedence, but a container's
+	// "disabled" default reaches descendants when nothing closer
+	// declares a value.
+	req.DelegationGating = firstNonEmpty(l.requestOverride.DelegationGating, req.DelegationGating, l.config.DelegationGating, l.requestBase.DelegationGating, cascade.DelegationGating)
 	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
 	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
 	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)
