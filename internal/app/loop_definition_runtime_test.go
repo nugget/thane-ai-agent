@@ -601,9 +601,9 @@ func TestLoopDefinitionRuntimeLaunchDefinitionRunningServiceRejectsOverrides(t *
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runtime.LaunchDefinition(context.Background(), "closet_guardian", tc.launch)
-			var running *looppkg.RunningServiceOverridesError
+			var running *looppkg.RunningDurableLoopOverridesError
 			if err == nil || !errors.As(err, &running) {
-				t.Fatalf("LaunchDefinition(%s) error = %v, want *RunningServiceOverridesError", tc.name, err)
+				t.Fatalf("LaunchDefinition(%s) error = %v, want *RunningDurableLoopOverridesError", tc.name, err)
 			}
 			if running.Name != "closet_guardian" {
 				t.Fatalf("error.Name = %q, want %q", running.Name, "closet_guardian")

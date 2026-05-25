@@ -430,6 +430,7 @@ func (a *App) initChannels(s *newState) error {
 			LaunchDefinition:    a.launchLoopDefinition,
 			WatchlistStore:      a.watchlistStore,
 			RegisterTagProvider: registerTagProvider,
+			LiveRegistry:        a.loopRegistry,
 		})
 	}
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{

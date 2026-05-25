@@ -270,6 +270,13 @@ type Loop struct {
 	// in ActiveTags so the dashboard can display dynamic capabilities.
 	activeTagsFunc func() []string
 
+	// ancestorTagsFunc returns capability tags inherited from container
+	// ancestors in the registry. Installed by [Registry.Register] so the
+	// loop sees its parents' inheritable state without taking a direct
+	// registry dependency. Nil for loops constructed outside a registry
+	// (e.g. unit tests on [New] directly).
+	ancestorTagsFunc func() []string
+
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
@@ -290,7 +297,10 @@ type Loop struct {
 // Returns an error if required fields are missing or invalid.
 // Call [Loop.Start] to launch the background goroutine.
 func New(cfg Config, deps Deps) (*Loop, error) {
-	if cfg.Handler == nil && deps.Runner == nil {
+	// Containers never wake and never run a turn, so they need
+	// neither a Runner nor a Handler. Every other operation type
+	// requires at least one execution path.
+	if cfg.Operation != OperationContainer && cfg.Handler == nil && deps.Runner == nil {
 		return nil, ErrNilRunner
 	}
 	if cfg.Name == "" {
@@ -381,6 +391,11 @@ func (l *Loop) ID() string { return l.id }
 // Name returns the loop's configured name.
 func (l *Loop) Name() string { return l.config.Name }
 
+// ParentID returns the loop ID of this loop's parent in the registry,
+// or empty for top-level loops. Reads the config snapshot taken at
+// construction time, so callers don't need the registry lock.
+func (l *Loop) ParentID() string { return l.config.ParentID }
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")
@@ -389,6 +404,11 @@ var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")
 // running loop is a no-op (returns nil). Returns [ErrLoopStopped] if
 // [Loop.Stop] was called before Start. The goroutine runs until ctx is
 // cancelled or [Loop.Stop] is called.
+//
+// Container loops (operation: container) are marked started but no
+// goroutine is spawned. They exist in the registry to hold inheritable
+// state (tags, entity subscriptions, parent_id) and to participate in
+// the loop graph for visualization; they never wake and never execute.
 func (l *Loop) Start(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -401,6 +421,15 @@ func (l *Loop) Start(ctx context.Context) error {
 	}
 	l.started = true
 	l.startedAt = time.Now()
+
+	if l.config.Operation == OperationContainer {
+		// Containers are inert: present in the registry but never
+		// dispatched. Skip the goroutine so we don't pay the cost of
+		// an idle wake-timer per container.
+		l.done = make(chan struct{})
+		close(l.done)
+		return nil
+	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
@@ -637,6 +666,29 @@ func (l *Loop) SetActiveTagsFunc(fn func() []string) {
 	l.mu.Lock()
 	l.activeTagsFunc = fn
 	l.mu.Unlock()
+}
+
+// setAncestorTagsFunc is package-private because only [Registry.Register]
+// has the wiring to compute the loop's inherited tags from a live
+// registry. Tests that need to inject a synthetic ancestor chain should
+// use a registry rather than reaching into this hook directly.
+func (l *Loop) setAncestorTagsFunc(fn func() []string) {
+	l.mu.Lock()
+	l.ancestorTagsFunc = fn
+	l.mu.Unlock()
+}
+
+// inheritedTags returns the deduplicated ancestor-container tag list
+// for this iteration's request preparation. Returns nil when no
+// ancestor-tags hook is installed.
+func (l *Loop) inheritedTags() []string {
+	l.mu.Lock()
+	fn := l.ancestorTagsFunc
+	l.mu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 // CurrentConvID returns the conversation ID of the in-flight iteration,
@@ -1438,7 +1490,12 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		hints[k] = v
 	}
 
-	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags)
+	// Container ancestors contribute capability tags to every descendant
+	// turn. The loop's own tags come first so any ordering-sensitive
+	// downstream resolution still prefers spec-declared tags over
+	// inherited ones; mergeUniqueStrings dedupes either way.
+	inheritedTags := l.inheritedTags()
+	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags, inheritedTags)
 	req.Model = firstNonEmpty(req.Model, l.requestBase.Model)
 	req.ConversationID = firstNonEmpty(l.requestOverride.ConversationID, req.ConversationID, convID)
 	req.ChannelBinding = firstNonNilChannelBinding(l.requestOverride.ChannelBinding, req.ChannelBinding, l.requestBase.ChannelBinding)

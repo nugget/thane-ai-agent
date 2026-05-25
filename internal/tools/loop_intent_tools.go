@@ -34,6 +34,8 @@ type EntitySubscriptionStore interface {
 //     app.initDelegation via delegate.AssignToolHandler; not part of
 //     this package.
 //   - thane_curate (recurring service loop) — registered below.
+//   - thane_create_container (durable, non-executing node that groups
+//     loops and holds inheritable tags) — registered below.
 //
 // External wakes to live loops are infrastructural rather than
 // tool-shaped: producer subsystems dispatch structured envelopes over
@@ -59,23 +61,183 @@ type LoopIntentToolDeps struct {
 	// context provider exists in the registry. Mirrors the TagRegistrar
 	// callback awareness.WatchlistTools uses.
 	RegisterTagProvider func(tag string)
+	// LiveRegistry resolves container parent names to live loop IDs at
+	// container-creation time. Optional: when nil, thane_create_container
+	// only supports top-level containers (no nesting).
+	LiveRegistry *looppkg.Registry
 }
 
 // ConfigureLoopIntentTools registers the intent-shaped loop creation
-// tools on the registry. Requires the document store (for
-// output-target scaffolding), the loop-definition registry (for spec
-// persistence), and the LaunchDefinition helper (for actually
-// starting the loop). Missing any of those silently disables the
-// family rather than registering tools that would panic at call time.
+// tools on the registry. The definition registry and LaunchDefinition
+// helper are required for any tool in the family. thane_curate also
+// needs the document store; when DocTools is nil, it is skipped while
+// thane_create_container still registers (containers don't own
+// documents). Missing the load-bearing pieces silently disables a
+// tool rather than registering one that would panic at call time.
 func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
-	if r == nil || deps.DocTools == nil || deps.Registry == nil || deps.LaunchDefinition == nil {
+	if r == nil || deps.Registry == nil || deps.LaunchDefinition == nil {
 		return
 	}
 	r.loopIntentDeps = deps
-	r.registerThaneCurate()
+	if deps.DocTools != nil {
+		r.registerThaneCurate()
+	}
+	r.registerThaneCreateContainer()
 	if deps.WatchlistStore != nil {
 		r.registerUpdateEntitySubscriptions()
 	}
+}
+
+func (r *Registry) registerThaneCreateContainer() {
+	r.Register(&Tool{
+		Name: "thane_create_container",
+		Description: "Create a durable container loop that groups related loops and provides inheritable capability tags to its descendants. " +
+			"A container is a non-executing node in the loop graph — it never wakes, never runs a task, and produces no output. It exists to organize loops (like a folder), to hold capability tags every descendant inherits at iteration time, and to give the loop visualizer a stable structural node. " +
+			"Use this when you have several loops that share context (e.g., \"home_automation\" containing curate loops for upstairs, downstairs, and the garage) and want them to all inherit a common tag set. " +
+			"parent_name optionally nests this container inside another container by name; omit for a top-level container. " +
+			"tags are the capability tags every descendant loop will see in addition to its own — leave empty if you only want the container for organization. " +
+			"intent records the container's purpose so a future inspector knows what belongs here. " +
+			"Returns the container's loop_id (use as parent_id when launching loops that should sit inside this container) and the definition name.",
+		ContentResolveExempt: []string{"name", "intent", "parent_name", "tags", "replace"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Unique container loop definition name (lowercase, snake_case). Used as the parent reference for descendants and shown in the loop graph.",
+				},
+				"intent": map[string]any{
+					"type":        "string",
+					"description": "One- or two-sentence description of what this container groups and why it exists. Recorded on the container's metadata for future inspection.",
+				},
+				"parent_name": map[string]any{
+					"type":        "string",
+					"description": "Optional parent container's definition name. When set, this container is nested inside the named container at the current time of launch. Omit for a top-level container.",
+				},
+				"tags": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional capability tags inherited by every descendant loop. Each descendant turn sees the union of its own tags and every container ancestor's tags.",
+				},
+				"replace": map[string]any{
+					"type":        "boolean",
+					"description": "When true, overwrite an existing container definition of the same name. Default false; the tool refuses to clobber existing containers.",
+				},
+			},
+			"required": []string{"name", "intent"},
+		},
+		Handler: r.handleThaneCreateContainer,
+	})
+}
+
+func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[string]any) (string, error) {
+	deps := r.loopIntentDeps
+	if deps.Registry == nil || deps.LaunchDefinition == nil {
+		return "", fmt.Errorf("thane_create_container not configured: ConfigureLoopIntentTools must be called at startup")
+	}
+
+	name := strings.TrimSpace(ldStringArg(args, "name"))
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	intent := strings.TrimSpace(ldStringArg(args, "intent"))
+	if intent == "" {
+		return "", fmt.Errorf("intent is required")
+	}
+	parentName := strings.TrimSpace(ldStringArg(args, "parent_name"))
+	replace, _ := args["replace"].(bool)
+
+	var tags []string
+	if rawTags, ok := args["tags"].([]any); ok {
+		for _, t := range rawTags {
+			if s, ok := t.(string); ok && strings.TrimSpace(s) != "" {
+				tags = append(tags, strings.TrimSpace(s))
+			}
+		}
+	}
+
+	// Refuse to clobber existing definition unless replace=true. The
+	// snapshot read here mirrors handleThaneCurate; the path is duplicated
+	// rather than abstracted because the surrounding handler shape is
+	// shallow and an extracted helper would obscure the refusal flow.
+	if snap := deps.Registry.Snapshot(); snap != nil {
+		if existing, ok := findLoopDefinition(snap, name); ok {
+			if existing.Source == looppkg.DefinitionSourceConfig {
+				return "", (&looppkg.ImmutableDefinitionError{Name: name})
+			}
+			if !replace {
+				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
+			}
+			if existing.Spec.Operation != looppkg.OperationContainer {
+				return "", fmt.Errorf("loop definition %q already exists as operation %q; refusing to convert into a container", name, existing.Spec.Operation)
+			}
+		}
+	}
+
+	if parentName != "" {
+		if deps.LiveRegistry == nil {
+			return "", fmt.Errorf("parent_name set but live registry is not configured; tool cannot resolve container ancestry")
+		}
+		if parent := deps.LiveRegistry.GetByName(parentName); parent == nil {
+			return "", fmt.Errorf("parent container %q is not currently registered; create it first or wait for hydration", parentName)
+		}
+	}
+
+	spec := looppkg.Spec{
+		Name:       name,
+		Enabled:    true,
+		Operation:  looppkg.OperationContainer,
+		Tags:       tags,
+		ParentName: parentName,
+		Metadata: map[string]string{
+			"intent": intent,
+		},
+	}
+	if err := spec.ValidatePersistable(); err != nil {
+		return "", fmt.Errorf("derived container spec invalid: %w", err)
+	}
+
+	updatedAt := time.Now().UTC()
+	if deps.PersistSpec != nil {
+		if err := deps.PersistSpec(spec, updatedAt); err != nil {
+			return "", fmt.Errorf("persist container definition: %w", err)
+		}
+	}
+	if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
+		return "", err
+	}
+	if deps.Reconcile != nil {
+		if err := deps.Reconcile(ctx, name); err != nil {
+			return "", fmt.Errorf("reconcile container definition: %w", err)
+		}
+	}
+
+	// Launch with an empty Launch so a retry of this tool against an
+	// already-running container short-circuits to the existing loop ID
+	// instead of tripping the running-durable-loop-with-overrides guard.
+	// The parent relationship is on the spec via ParentName and resolved
+	// at hydration time, so the launch payload stays free of overrides.
+	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{})
+	if err != nil {
+		return "", fmt.Errorf("launch container: %w", err)
+	}
+
+	var parentID string
+	if deps.LiveRegistry != nil {
+		if running := deps.LiveRegistry.Get(launchResult.LoopID); running != nil {
+			parentID = running.ParentID()
+		}
+	}
+
+	return ldMarshalToolJSON(map[string]any{
+		"status":               "ok",
+		"loop_definition_name": name,
+		"loop_id":              launchResult.LoopID,
+		"operation":            string(looppkg.OperationContainer),
+		"parent_name":          parentName,
+		"parent_loop_id":       parentID,
+		"tags":                 tags,
+	})
 }
 
 func (r *Registry) registerThaneCurate() {

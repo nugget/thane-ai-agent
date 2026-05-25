@@ -961,6 +961,7 @@ ego:
 #       metadata:
 #         category: observer
 #       parent_id: ""
+#       parent_name: ""
 #
 # (optional) Debug configures diagnostic options for inspecting the assembled
 # debug:

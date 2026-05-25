@@ -281,6 +281,13 @@ type Config struct {
 	// ParentID is the loop ID of the parent that spawned this loop,
 	// if any. Empty for top-level loops.
 	ParentID string
+
+	// ParentName is the durable name of the parent loop. Carries
+	// across the spec→config boundary so hydration paths that haven't
+	// resolved a live ParentID yet still know which parent the loop
+	// belongs under. The runtime resolves [ParentName] to [ParentID]
+	// at launch time when a live parent exists.
+	ParentName string
 }
 
 // Default configuration values. Exported so callers can reference them
@@ -307,6 +314,11 @@ func Float64Ptr(v float64) *float64 { return &v }
 // SupervisorProb is intentionally left as-is so that zero means
 // "disabled" — callers opt in explicitly.
 func (c *Config) applyDefaults() {
+	if c.Operation == OperationContainer {
+		// Containers never wake; don't synthesize sleep defaults
+		// that would otherwise be inert-but-confusing on the Config.
+		return
+	}
 	if c.SleepMin == 0 {
 		c.SleepMin = DefaultSleepMin
 	}
@@ -324,6 +336,24 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
+	if c.Operation == OperationContainer {
+		// Containers are inert nodes — no execution hook, no wake
+		// timer. Reject execution-shaped fields the same way
+		// [Spec.Validate] does so callers that build a Config directly
+		// (tests, internal adapters) get the same category-error
+		// contract instead of having fields silently ignored at start.
+		if err := containerShape(
+			c.Name, c.Task,
+			c.TaskBuilder != nil, c.TurnBuilder != nil, c.Handler != nil, c.WaitFunc != nil, c.PostIterate != nil,
+			c.SleepMin, c.SleepMax, c.SleepDefault, c.MaxDuration,
+			c.Jitter, c.MaxIter,
+			c.Supervisor, c.SupervisorProb, c.SupervisorContext,
+			len(c.Outputs), c.Completion,
+		); err != nil {
+			return err
+		}
+		return nil
+	}
 	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil && c.TurnBuilder == nil {
 		return fmt.Errorf("loop: Task, TaskBuilder, TurnBuilder, or Handler is required")
 	}

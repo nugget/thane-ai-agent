@@ -79,10 +79,30 @@ func (r *loopDefinitionRuntime) definitionLogger(name string) *slog.Logger {
 }
 
 func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, error) {
-	if r == nil || r.hydrate == nil {
+	if r == nil {
 		return spec, nil
 	}
-	return r.hydrate(spec)
+	if r.hydrate != nil {
+		var err error
+		spec, err = r.hydrate(spec)
+		if err != nil {
+			return spec, err
+		}
+	}
+	// Resolve parent_name → live ParentID late, after every other
+	// hydration has had its say. ParentID survives only as long as the
+	// parent's current launch, so the runtime — not the stored spec —
+	// is the source of truth here. If the named parent isn't yet
+	// registered, ParentID stays empty and the loop lands at the root;
+	// container tag inheritance walks the live registry, so the link
+	// re-establishes naturally if the parent comes up later in the
+	// same startup pass.
+	if r.loops != nil && spec.ParentName != "" && spec.ParentID == "" {
+		if parent := r.loops.GetByName(spec.ParentName); parent != nil {
+			spec.ParentID = parent.ID()
+		}
+	}
+	return spec, nil
 }
 
 func (r *loopDefinitionRuntime) definition(name string) (looppkg.DefinitionSnapshot, bool) {
@@ -263,38 +283,116 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 	if logger == nil {
 		logger = slog.Default()
 	}
-	for _, def := range snap.Definitions {
-		spec := def.Spec
-		switch {
-		case spec.Operation != looppkg.OperationService:
-			result.SkippedNonService++
-			continue
-		case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
-			result.SkippedInactive++
-			continue
-		case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
-			result.SkippedPaused++
-			continue
-		case !def.Spec.Conditions.Evaluate(r.nowTime()).Eligible:
-			result.SkippedIneligible++
-			continue
-		case r.loops.GetByName(spec.Name) != nil:
-			result.SkippedExisting++
-			logger.Debug("skipping loop definition bootstrap for existing loop", "name", spec.Name)
-			continue
-		}
 
-		runtimeSpec, err := r.runtimeSpec(spec)
-		if err != nil {
-			return result, fmt.Errorf("hydrate loop definition %q: %w", spec.Name, err)
+	// Containers must come up before any descendant that references
+	// them by parent_name, otherwise the descendant lands at the root
+	// with no inheritance. Order them by ancestry depth (roots first,
+	// nested second) before spawning. Services come last because they
+	// can sit under containers but never the other way around.
+	containerSpecs, serviceSpecs := splitContainerSpecs(snap.Definitions, r.nowTime)
+	// Count non-durable definitions (request_reply, background_task)
+	// up front so the accounting still matches the pre-refactor
+	// behavior. Partitioning silently drops them, so we surface them
+	// here as SkippedNonService for parity with existing callers and
+	// dashboards.
+	for _, def := range snap.Definitions {
+		if def.Spec.Operation != looppkg.OperationService && def.Spec.Operation != looppkg.OperationContainer {
+			result.SkippedNonService++
 		}
-		if _, err := r.loops.SpawnSpec(ctx, runtimeSpec, r.deps()); err != nil {
-			return result, fmt.Errorf("spawn loop definition %q: %w", spec.Name, err)
+	}
+	for _, spec := range containerSpecs {
+		if err := r.bootstrapDefinitionSpawn(ctx, spec, logger, &result); err != nil {
+			return result, err
 		}
-		result.Started++
+	}
+	for _, spec := range serviceSpecs {
+		if err := r.bootstrapDefinitionSpawn(ctx, spec, logger, &result); err != nil {
+			return result, err
+		}
 	}
 
 	return result, nil
+}
+
+// bootstrapDefinitionSpawn runs the eligibility/policy gating and spawn
+// for one definition during startup hydration. Extracted from
+// [StartEnabledServices] so the container-first / service-last passes
+// share identical decision logic.
+func (r *loopDefinitionRuntime) bootstrapDefinitionSpawn(ctx context.Context, def looppkg.DefinitionSnapshot, logger *slog.Logger, result *loopDefinitionBootstrapResult) error {
+	spec := def.Spec
+	switch {
+	case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
+		result.SkippedInactive++
+		return nil
+	case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
+		result.SkippedPaused++
+		return nil
+	case !def.Spec.Conditions.Evaluate(r.nowTime()).Eligible:
+		result.SkippedIneligible++
+		return nil
+	case r.loops.GetByName(spec.Name) != nil:
+		result.SkippedExisting++
+		logger.Debug("skipping loop definition bootstrap for existing loop", "name", spec.Name)
+		return nil
+	}
+
+	runtimeSpec, err := r.runtimeSpec(spec)
+	if err != nil {
+		return fmt.Errorf("hydrate loop definition %q: %w", spec.Name, err)
+	}
+	if _, err := r.loops.SpawnSpec(ctx, runtimeSpec, r.deps()); err != nil {
+		return fmt.Errorf("spawn loop definition %q: %w", spec.Name, err)
+	}
+	result.Started++
+	return nil
+}
+
+// splitContainerSpecs partitions definitions into container and service
+// hydration order. Containers come first, sorted root-first so a
+// parent_name reference resolves to a live loop by the time the child
+// hydrates. Non-container, non-service operations (request_reply,
+// background_task) are dropped — they're transient and shouldn't be
+// hydrated at startup at all. nowTime is unused today but threaded
+// through so future condition-driven ordering doesn't reshape the API.
+func splitContainerSpecs(defs []looppkg.DefinitionSnapshot, _ func() time.Time) (containers, services []looppkg.DefinitionSnapshot) {
+	byName := make(map[string]looppkg.DefinitionSnapshot, len(defs))
+	for _, def := range defs {
+		byName[def.Spec.Name] = def
+	}
+	for _, def := range defs {
+		switch def.Spec.Operation {
+		case looppkg.OperationContainer:
+			containers = append(containers, def)
+		case looppkg.OperationService:
+			services = append(services, def)
+		}
+	}
+	// Stable topo sort: containers with no parent first, then those
+	// whose parent has already been emitted. Anything left over (orphan
+	// parent_name) falls back to the original definition order so we
+	// still spawn the container — its tag inheritance will simply
+	// resolve to nil until the operator fixes the missing parent.
+	emitted := make(map[string]bool, len(containers))
+	ordered := make([]looppkg.DefinitionSnapshot, 0, len(containers))
+	progressed := true
+	remaining := containers
+	for progressed && len(remaining) > 0 {
+		progressed = false
+		next := remaining[:0]
+		for _, def := range remaining {
+			pname := def.Spec.ParentName
+			if pname == "" || emitted[pname] || byName[pname].Spec.Operation != looppkg.OperationContainer {
+				ordered = append(ordered, def)
+				emitted[def.Spec.Name] = true
+				progressed = true
+				continue
+			}
+			next = append(next, def)
+		}
+		remaining = next
+	}
+	ordered = append(ordered, remaining...) // orphans (cycle or missing parent)
+	return ordered, services
 }
 
 // ReconcileDefinition applies the current effective definition state to
@@ -324,12 +422,13 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		return nil
 	}
 	eligibility := def.Spec.Conditions.Evaluate(r.nowTime())
-	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
+	durable := def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer
+	if !durable || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
-			reason := "not_service"
+			reason := "not_durable"
 			switch {
-			case def.Spec.Operation != looppkg.OperationService:
-				reason = "non_service_definition"
+			case !durable:
+				reason = "non_durable_definition"
 			case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
 				reason = "policy_inactive"
 			case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
@@ -391,29 +490,30 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	if eligibility := def.Spec.Conditions.Evaluate(r.nowTime()); !eligibility.Eligible {
 		return looppkg.LaunchResult{}, &looppkg.IneligibleDefinitionError{Name: name, Reason: eligibility.Reason}
 	}
-	if def.Spec.Operation == looppkg.OperationService {
+	if def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer {
 		if existing := r.loops.GetByName(name); existing != nil {
-			// Loud-fail on caller payload for already-running service
-			// loops. The runtime captures requestOverride at launch
-			// time and never re-applies it, and the spec-overwrite
-			// further down doesn't run on this early-return path —
-			// silently returning the existing loop ID would hide both
-			// drops from the caller. HasOverrides covers per-launch
-			// override fields and inline launch.spec alike.
+			// Loud-fail on caller payload for already-running durable
+			// loops (services and containers). The runtime captures
+			// requestOverride at launch time and never re-applies it,
+			// and the spec-overwrite further down doesn't run on this
+			// early-return path — silently returning the existing loop
+			// ID would hide both drops from the caller. HasOverrides
+			// covers per-launch override fields and inline launch.spec
+			// alike.
 			if launch.HasOverrides() {
-				log.Warn("rejecting launch overrides for running service definition",
+				log.Warn("rejecting launch overrides for running durable definition",
 					"loop_id", existing.ID(),
-					"operation", looppkg.OperationService,
+					"operation", def.Spec.Operation,
 				)
-				return looppkg.LaunchResult{}, &looppkg.RunningServiceOverridesError{Name: name}
+				return looppkg.LaunchResult{}, &looppkg.RunningDurableLoopOverridesError{Name: name}
 			}
-			log.Info("using existing running loop definition service",
+			log.Info("using existing running loop definition",
 				"loop_id", existing.ID(),
-				"operation", looppkg.OperationService,
+				"operation", def.Spec.Operation,
 			)
 			return looppkg.LaunchResult{
 				LoopID:    existing.ID(),
-				Operation: looppkg.OperationService,
+				Operation: def.Spec.Operation,
 				Detached:  true,
 			}, nil
 		}

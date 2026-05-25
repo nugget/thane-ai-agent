@@ -71,6 +71,23 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 
+	// Containers anchor a chunk of the loop graph; deleting one while
+	// children still live would orphan their parent_id and silently drop
+	// inherited tags. Refuse here so the model removes children first
+	// (or moves them to a different parent), keeping the parent->child
+	// invariant honest.
+	if existing.Spec.Operation == looppkg.OperationContainer && r.loopIntentDeps.LiveRegistry != nil {
+		if container := r.loopIntentDeps.LiveRegistry.GetByName(name); container != nil {
+			if children := r.loopIntentDeps.LiveRegistry.Children(container.ID()); len(children) > 0 {
+				names := make([]string, 0, len(children))
+				for _, child := range children {
+					names = append(names, child.Name())
+				}
+				return "", fmt.Errorf("container %q still has %d child loop(s): %v; remove or re-parent them before deleting the container", name, len(children), names)
+			}
+		}
+	}
+
 	// Tear down any entity subscriptions scoped to this loop's scope
 	// tag before the definition itself is removed. The scope_tag
 	// binding is stored on Spec.Metadata so it persists across replace
