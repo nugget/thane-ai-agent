@@ -88,7 +88,7 @@ func (r *Registry) registerThaneCurate() {
 			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
 			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop focus tag and surfaced into the loop's prompt automatically. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the resolved sleep envelope.",
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal scope_tag, and the resolved sleep envelope.",
 		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -247,10 +247,12 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
 	// rather than the registry handle this tool was configured with.
 	//
-	// When replace=true and the prior spec has a focus_tag, reuse it
+	// When replace=true and the prior spec has a scope tag, reuse it
 	// so existing subscriptions are renormalized under a stable tag
-	// rather than orphaned under a stale one.
-	var existingFocusTag string
+	// rather than orphaned under a stale one. [looppkg.SpecScopeTag]
+	// reads scope_tag and falls back to the legacy focus_tag key for
+	// definitions persisted before the rename.
+	var existingScopeTag string
 	if snap := deps.Registry.Snapshot(); snap != nil {
 		if existing, ok := findLoopDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
@@ -259,24 +261,24 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			if !replace {
 				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 			}
-			existingFocusTag = strings.TrimSpace(existing.Spec.Metadata["focus_tag"])
+			existingScopeTag = looppkg.SpecScopeTag(existing.Spec)
 		}
 	}
 
-	focusTag := existingFocusTag
-	if focusTag == "" {
-		focusTag, err = newFocusTag()
+	scopeTag := existingScopeTag
+	if scopeTag == "" {
+		scopeTag, err = newScopeTag()
 		if err != nil {
-			return "", fmt.Errorf("generate focus tag: %w", err)
+			return "", fmt.Errorf("generate scope tag: %w", err)
 		}
 	}
 
 	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
 
-	// The focus tag is prepended to Spec.Tags so each iteration activates
+	// The scope tag is prepended to Spec.Tags so each iteration activates
 	// the loop-scoped watchlist provider without the caller having to
 	// repeat it. Caller-supplied tags follow.
-	finalTags := append([]string{focusTag}, tags...)
+	finalTags := append([]string{scopeTag}, tags...)
 
 	jitterRatio := envelope.jitter
 	spec := looppkg.Spec{
@@ -291,7 +293,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		Tags:         finalTags,
 		Outputs:      []looppkg.OutputSpec{outputSpec},
 		Metadata: map[string]string{
-			"focus_tag": focusTag,
+			looppkg.MetadataScopeTag: scopeTag,
 		},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
@@ -334,24 +336,24 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	_ = docResult // discard structured result; we surface the ref directly
 
-	// Entity subscriptions: wipe-and-re-add under the focus tag. On a
-	// fresh create existingFocusTag is empty and wipe is a no-op; on
+	// Entity subscriptions: wipe-and-re-add under the scope tag. On a
+	// fresh create existingScopeTag is empty and wipe is a no-op; on
 	// replace=true we wipe the prior watch set before adding the new
 	// one so the loop never sees stale entities. Wipe runs even when
 	// the new entities list is empty (an explicit clear).
-	if deps.WatchlistStore != nil && (existingFocusTag != "" || len(entities) > 0) {
-		if existingFocusTag != "" {
-			if err := deps.WatchlistStore.RemoveAllForScope(focusTag); err != nil {
+	if deps.WatchlistStore != nil && (existingScopeTag != "" || len(entities) > 0) {
+		if existingScopeTag != "" {
+			if err := deps.WatchlistStore.RemoveAllForScope(scopeTag); err != nil {
 				return "", fmt.Errorf("wipe prior entity subscriptions: %w", err)
 			}
 		}
 		for _, e := range entities {
-			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{focusTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
+			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
 				return "", fmt.Errorf("add entity subscription %q: %w", e.EntityID, err)
 			}
 		}
 		if deps.RegisterTagProvider != nil && len(entities) > 0 {
-			deps.RegisterTagProvider(focusTag)
+			deps.RegisterTagProvider(scopeTag)
 		}
 	}
 
@@ -385,7 +387,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
 		"output_tool":          outputSpec.ToolName(),
-		"focus_tag":            focusTag,
+		"scope_tag":            scopeTag,
 		"entity_subscriptions": len(entities),
 		"sleep_envelope": map[string]any{
 			"sleep_min":     envelope.sleepMin.String(),
@@ -491,12 +493,12 @@ func coerceInt(v any) (int, error) {
 	}
 }
 
-// newFocusTag mints a fresh per-loop watchlist scope. The "loop:" prefix
-// is the load-bearing convention: API/UI layers filter for it to find
-// loop-owned subscriptions, capability-tag collisions are impossible
-// (no built-in tag contains a colon), and a human reading
+// newScopeTag mints a fresh per-loop watchlist scope. The "loop:"
+// prefix is the load-bearing convention: API/UI layers filter for it
+// to find loop-owned subscriptions, capability-tag collisions are
+// impossible (no built-in tag contains a colon), and a human reading
 // list_context_entities knows at a glance which rows belong to a loop.
-func newFocusTag() (string, error) {
+func newScopeTag() (string, error) {
 	var buf [3]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", err
