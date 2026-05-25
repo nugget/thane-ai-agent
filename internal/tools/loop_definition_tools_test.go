@@ -112,6 +112,15 @@ func sharedLoopLaunchSchemaKeys() []string {
 		switch name {
 		case "", "-", "spec":
 			continue
+		case "model":
+			// Intentionally not exposed on the agent-facing schema.
+			// Persistent model selection lives on spec.profile.model;
+			// per-launch overrides are silently dropped for service
+			// loops that are already running and lost on restart when
+			// they are not. The Go field stays in place for internal
+			// callers (delegates, scheduled tasks) that build one-shot
+			// Launches with throwaway Specs.
+			continue
 		default:
 			keys = append(keys, name)
 		}
@@ -406,19 +415,37 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 }
 
-func TestLoopDefinitionLaunchRoutesTopLevelModelOverride(t *testing.T) {
+func TestLoopDefinitionLaunchRejectsTopLevelModelOverride(t *testing.T) {
 	deps := newTestLoopDefinitionDeps(t)
 
-	if _, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
 		"name": "metacog_like",
 		"launch": map[string]any{
 			"model": "claude-sonnet-4-5",
 		},
-	}); err != nil {
-		t.Fatalf("loop_definition_launch: %v", err)
+	})
+	if err == nil {
+		t.Fatal("expected error for launch.model override, got nil")
 	}
-	if deps.lastLaunch.Model != "claude-sonnet-4-5" {
-		t.Fatalf("lastLaunch.Model = %q, want claude-sonnet-4-5", deps.lastLaunch.Model)
+	if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+		t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
+	}
+	if deps.lastLaunch.Model != "" {
+		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
+	}
+}
+
+func TestLoopDefinitionLaunchSchemaOmitsModel(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	tool := deps.reg.Get("loop_definition_launch")
+	if tool == nil {
+		t.Fatal("loop_definition_launch tool not registered")
+	}
+	launchSchema := schemaObjectProperty(t, tool.Parameters, "launch")
+	props := schemaProperties(t, launchSchema)
+	if _, ok := props["model"]; ok {
+		t.Fatal("launch schema must not expose \"model\"; persistent model selection lives on spec.profile.model")
 	}
 }
 
@@ -475,8 +502,8 @@ func TestLoopDefinitionLaunchRejectsModelInsideMetadata(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for metadata.model override, got nil")
 	}
-	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "launch.model") {
-		t.Fatalf("error = %q, want guidance pointing from metadata.model to launch.model", err.Error())
+	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+		t.Fatalf("error = %q, want guidance pointing from metadata.model to spec.profile.model", err.Error())
 	}
 	if deps.lastLaunch.Model != "" {
 		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)

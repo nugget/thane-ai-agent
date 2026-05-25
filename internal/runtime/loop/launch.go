@@ -14,19 +14,27 @@ import (
 // from [Spec] so per-launch overrides and delivery hooks can grow here
 // over time without turning [Spec] itself into an ephemeral run object.
 type Launch struct {
-	Spec           Spec                                   `yaml:"spec,omitempty" json:"spec,omitempty"`
-	Task           string                                 `yaml:"task,omitempty" json:"task,omitempty"`
-	ParentID       string                                 `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
-	Metadata       map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
-	ConversationID string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	ChannelBinding *memory.ChannelBinding                 `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
-	Model          string                                 `yaml:"model,omitempty" json:"model,omitempty"`
-	Hints          map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
-	AllowedTools   []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	ExcludeTools   []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
-	InitialTags    []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
-	OnProgress     func(kind string, data map[string]any) `yaml:"-" json:"-"`
-	RunTimeout     time.Duration                          `yaml:"run_timeout,omitempty" json:"run_timeout,omitempty"`
+	Spec           Spec                   `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Task           string                 `yaml:"task,omitempty" json:"task,omitempty"`
+	ParentID       string                 `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
+	Metadata       map[string]string      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
+	ConversationID string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
+	// Model overrides the model for this single Launch. Reserved for
+	// internal Go callers (delegates, scheduled tasks) that build
+	// one-shot Launches with throwaway Specs. The agent-facing tool
+	// surface (loop_definition_launch, spawn_loop) intentionally does
+	// not expose this field and rejects it on input: for service-mode
+	// loops the runtime drops every launch override when the loop is
+	// already running, and Launch itself is not persisted across
+	// restarts. Persistent model selection lives on Spec.Profile.Model.
+	Model        string                                 `yaml:"model,omitempty" json:"model,omitempty"`
+	Hints        map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	AllowedTools []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	InitialTags  []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
+	OnProgress   func(kind string, data map[string]any) `yaml:"-" json:"-"`
+	RunTimeout   time.Duration                          `yaml:"run_timeout,omitempty" json:"run_timeout,omitempty"`
 	// CompletionConversationID names the live conversation that should
 	// receive detached completion delivery when Spec.Completion is
 	// CompletionConversation.
@@ -158,6 +166,54 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		SuppressAlwaysContext:    wire.SuppressAlwaysContext,
 	}
 	return nil
+}
+
+// HasOverrides reports whether the launch carries any caller-supplied
+// per-launch override field. Returns false for the zero value (callers
+// joining an existing loop with no per-run customization). Spec is
+// excluded because [loopDefinitionRuntime.LaunchDefinition] overwrites
+// it with the stored runtime spec, and OnProgress is excluded because
+// it is an internal-only delivery hook.
+//
+// Used by the active-service-loop guard to surface a loud error when a
+// caller passes overrides that would be silently dropped (the runtime
+// returns the existing loop ID without re-applying any override fields).
+func (l *Launch) HasOverrides() bool {
+	if l == nil {
+		return false
+	}
+	if l.Task != "" ||
+		l.ParentID != "" ||
+		l.ConversationID != "" ||
+		l.Model != "" ||
+		l.SystemPrompt != "" ||
+		l.FallbackContent != "" ||
+		l.CompletionConversationID != "" ||
+		l.UsageRole != "" ||
+		l.UsageTaskName != "" ||
+		l.PromptMode != "" {
+		return true
+	}
+	if l.SkipContext || l.SkipTagFilter || l.SuppressAlwaysContext {
+		return true
+	}
+	if l.MaxIterations != 0 || l.MaxOutputTokens != 0 {
+		return true
+	}
+	if l.RunTimeout != 0 || l.ToolTimeout != 0 {
+		return true
+	}
+	if l.ChannelBinding != nil || l.CompletionChannel != nil {
+		return true
+	}
+	if len(l.Metadata) > 0 ||
+		len(l.Hints) > 0 ||
+		len(l.AllowedTools) > 0 ||
+		len(l.ExcludeTools) > 0 ||
+		len(l.InitialTags) > 0 {
+		return true
+	}
+	return false
 }
 
 // Validate checks that the launch is well-formed.

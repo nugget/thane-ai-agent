@@ -393,6 +393,17 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	}
 	if def.Spec.Operation == looppkg.OperationService {
 		if existing := r.loops.GetByName(name); existing != nil {
+			// Loud-fail on overrides for already-running service loops.
+			// The runtime captures requestOverride at launch time and
+			// never re-applies it; returning the existing loop ID
+			// silently would hide that fact from the caller.
+			if launch.HasOverrides() {
+				log.Warn("rejecting launch overrides for running service definition",
+					"loop_id", existing.ID(),
+					"operation", looppkg.OperationService,
+				)
+				return looppkg.LaunchResult{}, &looppkg.RunningServiceOverridesError{Name: name}
+			}
 			log.Info("using existing running loop definition service",
 				"loop_id", existing.ID(),
 				"operation", looppkg.OperationService,

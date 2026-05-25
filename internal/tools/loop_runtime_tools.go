@@ -121,7 +121,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "spawn_loop",
-		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context. Model routing and tool filtering go in the top-level launch fields (model, allowed_tools, etc.) — NOT inside launch.metadata.",
+		Description: "Launch an ad hoc loop immediately using the loops-ng launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context. Tool filtering goes in the top-level launch fields (allowed_tools, etc.) — NOT inside launch.metadata. To pin a model, set spec.profile.model inside the spec object; per-launch model overrides are rejected.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -68,21 +68,37 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 	return launch, nil
 }
 
-// validateLoopLaunchOverrides catches common mistakes where a caller
-// placed a routing override inside the opaque metadata map instead of
-// the corresponding top-level Launch field. Metadata is informational
-// tagging only; it does not influence routing, tool selection, or
-// budgets. Returning an actionable error here is preferable to silently
-// ignoring the override and letting the caller misinterpret the run.
+// validateLoopLaunchOverrides rejects tool-facing launch payloads that
+// attempt to set the model. The router's persistent baseline lives on
+// the stored spec (`spec.profile.model`) and is the only durable place
+// to pin a model. `launch.model` is intentionally not exposed on the
+// agent-facing schema: for service-mode loops, calling
+// loop_definition_launch on an already-running definition silently
+// drops every launch field (the runtime returns the existing loop ID
+// without re-applying overrides), and even on a fresh service launch
+// the per-launch model is lost on restart because Launch is not
+// persisted. The Go-level field stays for internal callers (delegates,
+// scheduled tasks) that legitimately construct one-shot Launches with
+// throwaway Specs; the rejection here only guards the JSON tool path.
 func validateLoopLaunchOverrides(launch looppkg.Launch) error {
+	if model := strings.TrimSpace(launch.Model); model != "" {
+		return fmt.Errorf(
+			"launch.model=%q is no longer accepted from tool input; "+
+				"to pin a model, set spec.profile.model "+
+				"(via loop_definition_set for persisted definitions, "+
+				"or inside the spec passed to spawn_loop for ad-hoc loops)",
+			model)
+	}
 	if len(launch.Metadata) == 0 {
 		return nil
 	}
-	if model, ok := launch.Metadata["model"]; ok && strings.TrimSpace(model) != "" && strings.TrimSpace(launch.Model) == "" {
+	if model, ok := launch.Metadata["model"]; ok && strings.TrimSpace(model) != "" {
 		return fmt.Errorf(
 			"launch.metadata.model=%q is opaque tagging and does not override the model; "+
-				"use the top-level launch.model field (e.g. \"launch\": {\"model\": %q})",
-			model, model)
+				"set spec.profile.model instead "+
+				"(via loop_definition_set for persisted definitions, "+
+				"or inside the spec passed to spawn_loop for ad-hoc loops)",
+			model)
 	}
 	return nil
 }
@@ -149,15 +165,16 @@ func loopChannelBindingProperty() map[string]any {
 // the per-launch override fields accepted by both
 // [Registry.handleLoopDefinitionLaunch] and [Registry.handleSpawnLoop].
 // Exposing a typed schema lets the model see the real field names and
-// their behavior rather than guessing at an opaque object — the
-// disaster mode we most care about is putting a `model` override inside
-// `metadata`, where it has no effect on routing.
+// their behavior rather than guessing at an opaque object.
+//
+// `model` is deliberately omitted: the persistent model selection lives
+// on `spec.profile.model`, and per-launch model overrides are silently
+// dropped when a service definition is already running. Callers that
+// reach for a model override should mutate the stored spec via
+// loop_definition_set, or set profile.model inside the spec passed to
+// spawn_loop. See [validateLoopLaunchOverrides] for the rejection path.
 func loopLaunchOverrideProperties() map[string]any {
 	return map[string]any{
-		"model": map[string]any{
-			"type":        "string",
-			"description": "Override the model for this launch (e.g. \"claude-sonnet-4-5\", \"gpt-oss:120b\"). This is the field the router reads. metadata.model is NOT read by the router and does not change the model.",
-		},
 		"task": map[string]any{
 			"type":        "string",
 			"description": "Override the task text for this launch. Applied only when the stored spec does not already supply a task.",
@@ -184,7 +201,7 @@ func loopLaunchOverrideProperties() map[string]any {
 		"hints": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{"type": "string"},
-			"description":          "Free-form string/string routing or context hints. Use named top-level fields (model, allowed_tools, etc.) for well-known behavior overrides; hints are for softer signals.",
+			"description":          "Free-form string/string routing or context hints. Use named top-level fields (allowed_tools, max_iterations, etc.) for well-known behavior overrides; hints are for softer signals. To pin a model, set spec.profile.model on the stored definition or in the spec passed to spawn_loop — not via hints.",
 		},
 		"max_iterations": map[string]any{
 			"type":        "integer",
@@ -232,7 +249,7 @@ func loopLaunchOverrideProperties() map[string]any {
 		"metadata": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{"type": "string"},
-			"description":          "Opaque string/string tags attached to the launched loop for correlation or audit. NOT used for routing, tools, budgets, or any runtime behavior. To override the model use top-level \"model\". To override tools use \"allowed_tools\" / \"exclude_tools\". To override budgets use \"max_iterations\" / \"max_output_tokens\".",
+			"description":          "Opaque string/string tags attached to the launched loop for correlation or audit. NOT used for routing, tools, budgets, or any runtime behavior. To pin a model, set spec.profile.model on the stored definition (or in the spec passed to spawn_loop). To override tools use \"allowed_tools\" / \"exclude_tools\". To override budgets use \"max_iterations\" / \"max_output_tokens\".",
 		},
 		"fallback_content": map[string]any{
 			"type":        "string",

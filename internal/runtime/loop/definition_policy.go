@@ -79,6 +79,26 @@ func (e *PausedDefinitionError) Error() string {
 	return fmt.Sprintf("loop: definition %q is paused", e.Name)
 }
 
+// RunningServiceOverridesError reports that the caller targeted a
+// service-mode loop that is already running and attached per-launch
+// override fields that the runtime would silently drop. The remediation
+// is to mutate the stored spec (e.g. spec.profile.model via
+// loop_definition_set) and stop+relaunch, rather than re-issuing the
+// launch with overrides that have no effect.
+type RunningServiceOverridesError struct {
+	Name string
+}
+
+func (e *RunningServiceOverridesError) Error() string {
+	return fmt.Sprintf(
+		"loop: service definition %q is already running; "+
+			"per-launch overrides are dropped for active service loops. "+
+			"To apply new settings, update the stored spec via loop_definition_set "+
+			"(e.g. spec.profile.model) and restart with stop_loop + loop_definition_launch. "+
+			"To just retrieve the loop ID, call loop_definition_launch with an empty launch ({}).",
+		e.Name)
+}
+
 func defaultDefinitionPolicyState(spec Spec) DefinitionPolicyState {
 	if spec.Enabled {
 		return DefinitionPolicyStateActive

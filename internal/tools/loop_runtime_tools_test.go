@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,10 +96,37 @@ func TestSpawnLoopSchemaExposesSharedLaunchFields(t *testing.T) {
 	if _, ok := launchProps["spec"]; !ok {
 		t.Fatal("spawn_loop launch schema missing spec")
 	}
+	if _, ok := launchProps["model"]; ok {
+		t.Fatal("spawn_loop launch schema must not expose \"model\"; set spec.profile.model inside the spec")
+	}
 	for _, key := range sharedLoopLaunchSchemaKeys() {
 		if _, ok := launchProps[key]; !ok {
 			t.Errorf("spawn_loop launch schema missing %q", key)
 		}
+	}
+}
+
+func TestSpawnLoopRejectsTopLevelModelOverride(t *testing.T) {
+	deps := newTestLoopRuntimeDeps(t)
+
+	_, err := deps.reg.Get("spawn_loop").Handler(context.Background(), map[string]any{
+		"launch": map[string]any{
+			"model": "claude-sonnet-4-5",
+			"spec": map[string]any{
+				"name":      "ad_hoc",
+				"task":      "Probe.",
+				"operation": "background_task",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for launch.model override, got nil")
+	}
+	if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+		t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
+	}
+	if deps.lastLaunch.Model != "" {
+		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
 	}
 }
 

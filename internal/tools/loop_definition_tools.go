@@ -199,7 +199,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_launch",
-		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. Model routing, tool filtering, and iteration caps go in the top-level launch fields (model, allowed_tools, max_iterations, etc.) — NOT inside launch.metadata, which is opaque tagging only. When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
+		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. Tool filtering and iteration caps go in the top-level launch fields (allowed_tools, max_iterations, etc.) — NOT inside launch.metadata, which is opaque tagging only. Model selection is persistent and lives on spec.profile.model — set it via loop_definition_set, not via launch overrides (per-launch model is rejected here because it is silently dropped when a service loop is already running and is not persisted across restarts when it is not). When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

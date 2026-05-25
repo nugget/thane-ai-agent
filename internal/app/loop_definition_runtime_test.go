@@ -519,6 +519,91 @@ func TestLoopDefinitionRuntimeReconcileDefinitionStopsWhenConditionsNoLongerMatc
 	}
 }
 
+func TestLoopDefinitionRuntimeLaunchDefinitionRunningServiceRejectsOverrides(t *testing.T) {
+	t.Parallel()
+
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:         "closet_guardian",
+			Enabled:      true,
+			Task:         "Watch the closet.",
+			Operation:    looppkg.OperationService,
+			Completion:   looppkg.CompletionNone,
+			SleepMin:     time.Minute,
+			SleepMax:     time.Minute,
+			SleepDefault: time.Minute,
+			Jitter:       looppkg.Float64Ptr(0),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+	if _, err := loops.SpawnLoop(context.Background(), looppkg.Config{
+		Name:         "closet_guardian",
+		Handler:      func(context.Context, any) error { return nil },
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       looppkg.Float64Ptr(0),
+	}, looppkg.Deps{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}); err != nil {
+		t.Fatalf("SpawnLoop: %v", err)
+	}
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	// Empty launch joins the running loop and returns its ID.
+	result, err := runtime.LaunchDefinition(context.Background(), "closet_guardian", looppkg.Launch{})
+	if err != nil {
+		t.Fatalf("LaunchDefinition(empty): unexpected error %v", err)
+	}
+	if result.LoopID == "" || result.Operation != looppkg.OperationService || !result.Detached {
+		t.Fatalf("empty launch result = %+v, want running service handle", result)
+	}
+
+	// Any caller-supplied override field on the same running service
+	// loop must surface a typed error rather than silently dropping
+	// the override.
+	overrides := []struct {
+		name   string
+		launch looppkg.Launch
+	}{
+		{"model", looppkg.Launch{Model: "claude-sonnet-4-5"}},
+		{"hints", looppkg.Launch{Hints: map[string]string{"quality_floor": "7"}}},
+		{"allowed_tools", looppkg.Launch{AllowedTools: []string{"get_state"}}},
+		{"max_iterations", looppkg.Launch{MaxIterations: 5}},
+		{"metadata", looppkg.Launch{Metadata: map[string]string{"reason": "experiment"}}},
+	}
+	for _, tc := range overrides {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runtime.LaunchDefinition(context.Background(), "closet_guardian", tc.launch)
+			var running *looppkg.RunningServiceOverridesError
+			if err == nil || !errors.As(err, &running) {
+				t.Fatalf("LaunchDefinition(%s) error = %v, want *RunningServiceOverridesError", tc.name, err)
+			}
+			if running.Name != "closet_guardian" {
+				t.Fatalf("error.Name = %q, want %q", running.Name, "closet_guardian")
+			}
+		})
+	}
+}
+
 func TestLoopDefinitionRuntimeLaunchDefinitionRejectsIneligibleDefinition(t *testing.T) {
 	t.Parallel()
 
