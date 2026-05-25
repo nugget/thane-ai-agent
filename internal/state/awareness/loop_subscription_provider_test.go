@@ -53,7 +53,7 @@ func setupLoopSubProvider(t *testing.T) (*LoopSubscriptionProvider, *WatchlistSt
 func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 	t.Parallel()
 
-	p, store, reg, ha := setupLoopSubProvider(t)
+	p, store, reg, _ := setupLoopSubProvider(t)
 
 	// Always-visible subscription via the store (no scope).
 	if err := store.Add("sensor.shared"); err != nil {
@@ -92,27 +92,13 @@ func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 		t.Errorf("loop-scoped render leaked sensor.shared (already always-visible): %q", out)
 	}
 
-	// And only sensor.loop should have hit the HA state getter on
-	// this provider's pass. (sensor.shared is fetched by the
-	// always-visible WatchlistProvider on its own pass; that's
-	// not our concern here.)
-	for _, fetched := range haStateFetches(ha) {
-		if fetched == "sensor.shared" {
-			t.Errorf("provider fetched sensor.shared despite always-visible dedup")
-		}
-	}
-}
-
-// haStateFetches reconstructs the entity IDs the provider asked
-// for via the fakeHA's recorded interactions. fakeHA doesn't
-// track GetState calls directly; we approximate by checking what
-// it WOULD have been able to return.
-func haStateFetches(_ *fakeHA) []string {
-	// fakeHA doesn't have a GetState tracking slice today. The
-	// behavioral check above (output text) is what enforces the
-	// dedup. This helper exists as a clear extension point if
-	// future hardening needs to assert fetch counts.
-	return nil
+	// The output-text check above is what enforces the dedup;
+	// fakeHA doesn't track GetState call counts, so asserting on
+	// the rendered block is the strongest signal we have without
+	// extending the stub. Promoting that to a fetch-count
+	// assertion (by recording GetState invocations on fakeHA) is
+	// a worthwhile follow-up if the provider's render path ever
+	// grows more side effects.
 }
 
 // noopRunnerForLoopSub satisfies the Runner interface so a loop

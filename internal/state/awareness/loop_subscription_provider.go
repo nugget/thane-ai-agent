@@ -85,20 +85,28 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	// entity that's both always-on and loop-scoped. Each duplicate
 	// would add an HA fetch and a redundant prompt block; the
 	// always-visible rendering wins because it would appear in
-	// every loop's context anyway. Defensive: if the store query
-	// errors, log and continue without the filter (better to
-	// double-render than to break context entirely).
+	// every loop's context anyway. We use
+	// [WatchlistStore.UntaggedEntityIDSet] (bounded IN-clause query,
+	// no TTL cleanup writes) so the dedup check costs one indexed
+	// scan over the loop's own candidate list rather than a full
+	// always-visible scan + cleanup pass — the cleanup is left to
+	// [WatchlistProvider]'s own iteration on the same turn.
+	// Defensive: if the store query errors, log and continue
+	// without the filter (better to double-render than to break
+	// context entirely).
 	alreadyVisible := make(map[string]struct{})
-	if p.store != nil {
-		untagged, err := p.store.ListUntaggedSubscriptions()
+	if p.store != nil && len(subs) > 0 {
+		candidates := make([]string, 0, len(subs))
+		for _, sub := range subs {
+			candidates = append(candidates, sub.EntityID)
+		}
+		set, err := p.store.UntaggedEntityIDSet(candidates)
 		if err != nil {
 			p.logger.Warn("loop subscription provider could not enumerate always-visible store",
 				"error", err,
 			)
 		} else {
-			for _, row := range untagged {
-				alreadyVisible[row.EntityID] = struct{}{}
-			}
+			alreadyVisible = set
 		}
 	}
 
