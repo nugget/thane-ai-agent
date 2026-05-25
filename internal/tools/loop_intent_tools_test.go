@@ -239,7 +239,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Profile.DelegationGating != "disabled" {
 		t.Errorf("DelegationGating = %q, want disabled", found.Spec.Profile.DelegationGating)
 	}
-	// The focus tag is generated internally and prepended to Spec.Tags;
+	// The scope tag is generated internally and prepended to Spec.Tags;
 	// caller-supplied tags follow.
 	if len(found.Spec.Tags) != 2 {
 		t.Fatalf("Tags = %v, want [loop:<id>, forge]", found.Spec.Tags)
@@ -250,7 +250,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Tags[1] != "forge" {
 		t.Errorf("Tags[1] = %q, want forge", found.Spec.Tags[1])
 	}
-	// The focus tag is also stored in Spec.Metadata so it survives
+	// The scope tag is also stored in Spec.Metadata so it survives
 	// persistence and is discoverable by management tools.
 	if got := found.Spec.Metadata[looppkg.MetadataScopeTag]; got != found.Spec.Tags[0] {
 		t.Errorf("Metadata[scope_tag] = %q, want %q (same as Tags[0])", got, found.Spec.Tags[0])
@@ -846,7 +846,7 @@ func (rig *curateTestRig) findCurateSpec(t *testing.T, name string) looppkg.Spec
 
 // TestThaneCurate_PersistsEntitySubscriptions covers the create-time
 // path: entities are written to the watchlist store under the generated
-// focus tag, and the tag-provider registrar is invoked once so the
+// scope tag, and the tag-provider registrar is invoked once so the
 // loop's iterations see those entities in context.
 func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	t.Parallel()
@@ -917,7 +917,7 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 		t.Errorf("registeredTags = %v, want [%q]", rig.registeredTags, scopeTag)
 	}
 
-	// The spec carries the focus tag in both Metadata (canonical binding)
+	// The spec carries the scope tag in both Metadata (canonical binding)
 	// and Tags[0] (active during every iteration).
 	spec := rig.findCurateSpec(t, "thermostat_journal")
 	if got := spec.Metadata[looppkg.MetadataScopeTag]; got != scopeTag {
@@ -929,7 +929,7 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 }
 
 // TestThaneCurate_ReplacePreservesScopeTag verifies the replace=true
-// branch: the focus tag from the prior spec is reused (not minted
+// branch: the scope tag from the prior spec is reused (not minted
 // anew), the watchlist scope is wiped, and the new entities are added
 // under the same stable tag.
 func TestThaneCurate_ReplacePreservesScopeTag(t *testing.T) {

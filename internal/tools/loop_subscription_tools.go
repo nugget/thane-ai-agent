@@ -35,7 +35,7 @@ func (r *Registry) registerLoopUpdateEntitySubscriptions() {
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a scope_tag in Spec.Metadata).",
+					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a scope_tag in Spec.Metadata; legacy persisted definitions with the older focus_tag key are accepted during the rename fallback window).",
 				},
 				"add": map[string]any{
 					"type":        "array",
