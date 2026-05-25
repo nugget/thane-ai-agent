@@ -348,7 +348,7 @@ See [MQTT](../operating/mqtt.md) for the broker-side conventions.
 | Tool | Description |
 |------|-------------|
 | `mqtt_wake_list` | List runtime and config-defined wake subscriptions. |
-| `mqtt_wake_add` | Add a runtime wake subscription with routing config. |
+| `mqtt_wake_add` | Add a runtime wake subscription that delivers matching messages to a `wake_loop` target. Required args: `topic` and `wake_loop` (loop name/ID, optional tags + instructions). The legacy inline routing fields (`mission`, `quality_floor`, etc.) were retired in PR-T2b; point `wake_loop` at the built-in `mqtt-default-handler` for generic triage. |
 | `mqtt_wake_remove` | Remove a runtime wake subscription by ID. |
 
 ## `message_channel` — current message-app conversation

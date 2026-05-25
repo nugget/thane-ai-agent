@@ -131,6 +131,11 @@ func (s *SubscriptionStore) loadRuntime() error {
 	if err != nil {
 		return err
 	}
+	// rows.Close is idempotent so deferring is safe even though the
+	// happy path closes the cursor explicitly below (some drivers
+	// block UPDATEs while a SELECT cursor is open, hence the early
+	// close). The defer is the safety net for the rows.Scan/Err
+	// early-return paths.
 	defer rows.Close()
 
 	type loadedRow struct {
@@ -188,14 +193,17 @@ func (s *SubscriptionStore) loadRuntime() error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	// Release the cursor before running UPDATE statements — some
+	// drivers reject DML while a SELECT cursor is still open. The
+	// deferred Close above runs again on return; sql.Rows.Close is
+	// idempotent so the second call is a no-op.
 	if err := rows.Close(); err != nil {
 		return err
 	}
 
-	// Persist migrated targets after the query is fully drained — some
-	// drivers won't let us issue UPDATE statements while a SELECT cursor
-	// is still open. Migration failures here are not fatal; the next
-	// boot will retry the same rewrite.
+	// Persist migrated targets after the query is fully drained.
+	// Migration failures here are not fatal; the next boot will retry
+	// the same rewrite.
 	for _, row := range loaded {
 		if row.needsWrite {
 			blob, err := json.Marshal(row.ws.WakeTarget)
@@ -367,6 +375,34 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscribeHook = fn
+}
+
+// VerifyTargets checks that every loaded subscription's wake target
+// resolves against the supplied loop resolver. Intended to run after
+// the live loop registry has finished hydrating (typically right after
+// [loopDefinitionRuntime.StartEnabledServices]) so config-declared
+// targets fail startup loud instead of silently dropping the first
+// matching message at delivery time.
+//
+// Runtime tool adds already verify at the moment of Add — this method
+// closes the gap on config-defined entries, which load before any loop
+// is registered. A nil resolver is a no-op so test wiring without a
+// registry stays simple.
+func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error {
+	if resolver == nil {
+		return nil
+	}
+	s.mu.RLock()
+	subs := make([]WakeSubscription, len(s.subs))
+	copy(subs, s.subs)
+	s.mu.RUnlock()
+
+	for _, ws := range subs {
+		if err := messages.VerifyLoopWakeTarget(ws.WakeTarget, resolver); err != nil {
+			return fmt.Errorf("mqtt subscription %q (topic %q, source=%s) wake_loop unresolved: %w", ws.ID, ws.Topic, ws.Source, err)
+		}
+	}
+	return nil
 }
 
 // Add creates a runtime wake subscription, persists it to SQLite, and

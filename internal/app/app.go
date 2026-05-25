@@ -135,6 +135,7 @@ type App struct {
 	// MQTT
 	mqttPub        *mqtt.Publisher
 	mqttInstanceID string
+	mqttSubStore   *mqtt.SubscriptionStore
 
 	// Notifications
 	notifSender             *notifications.Sender

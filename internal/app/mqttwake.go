@@ -147,21 +147,35 @@ func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic st
 
 // sanitizePayload converts raw MQTT bytes to a valid UTF-8 string,
 // replacing invalid sequences and truncating to [maxWakePayloadBytes]
-// on a rune boundary.
+// on a rune boundary. The byte slice is cropped before any string
+// conversion so a multi-megabyte payload from a chatty topic doesn't
+// force an allocation of the full body just to throw most of it away.
+// A small UTF-8 slack (4 bytes — the maximum encoding length for a
+// single rune) is included in the crop so a multi-byte rune
+// straddling the limit can be discarded cleanly by the rune-boundary
+// trim below.
 func sanitizePayload(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
+	}
+	totalBytes := len(payload)
+	truncated := totalBytes > maxWakePayloadBytes
+	if truncated {
+		const utf8Slack = utf8.UTFMax
+		payload = payload[:maxWakePayloadBytes+utf8Slack]
 	}
 	s := string(payload)
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, "�")
 	}
-	if len(s) <= maxWakePayloadBytes {
+	if !truncated {
 		return s
 	}
-	truncated := s[:maxWakePayloadBytes]
-	for len(truncated) > 0 && !utf8.ValidString(truncated) {
-		truncated = truncated[:len(truncated)-1]
+	if len(s) > maxWakePayloadBytes {
+		s = s[:maxWakePayloadBytes]
 	}
-	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", totalBytes, maxWakePayloadBytes)
 }

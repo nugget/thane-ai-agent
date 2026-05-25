@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -417,6 +418,61 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 
 	if len(hookedTopics) != 1 || hookedTopics[0] != "hook/test" {
 		t.Errorf("hook received %v, want [hook/test]", hookedTopics)
+	}
+}
+
+// stubResolver implements messages.LoopResolver for VerifyTargets
+// tests. Names listed at construction time resolve; everything else
+// is treated as unregistered.
+type stubResolver struct {
+	known map[string]bool
+}
+
+func (s stubResolver) LoopExistsByID(string) bool        { return false }
+func (s stubResolver) LoopExistsByName(name string) bool { return s.known[name] }
+func (s stubResolver) KnownLoopNames() []string {
+	out := make([]string, 0, len(s.known))
+	for name := range s.known {
+		out = append(out, name)
+	}
+	return out
+}
+
+// TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered pins the
+// Codex P2 fix: config-defined subscriptions referencing a loop that
+// nobody registers now error out at the post-StartEnabledServices
+// verification pass, instead of silently dropping the first matching
+// message at delivery time.
+func TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered(t *testing.T) {
+	s := newTestStore(t)
+	good := wakeTarget("real_handler")
+	bad := wakeTarget("typo_handler")
+	if err := s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "ok/topic", WakeLoop: &good},
+		{Topic: "broken/topic", WakeLoop: &bad},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	resolver := stubResolver{known: map[string]bool{"real_handler": true}}
+	err := s.VerifyTargets(resolver)
+	if err == nil {
+		t.Fatal("expected VerifyTargets to fail on unregistered target")
+	}
+	if !strings.Contains(err.Error(), "typo_handler") {
+		t.Fatalf("error = %v, want mention of typo_handler", err)
+	}
+}
+
+func TestSubscriptionStoreVerifyTargetsNilResolverIsNoop(t *testing.T) {
+	s := newTestStore(t)
+	target := wakeTarget("anything")
+	if err := s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "ok/topic", WakeLoop: &target},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := s.VerifyTargets(nil); err != nil {
+		t.Fatalf("VerifyTargets(nil) = %v, want nil", err)
 	}
 }
 
