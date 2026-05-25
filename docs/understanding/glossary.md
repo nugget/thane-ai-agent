@@ -138,7 +138,7 @@ a frontier model to catch blind spots.
 A long-cycle self-reflection loop that maintains `core/ego.md` — the
 agent's own evolving notes on how its thinking is changing, what
 patterns it observes in itself, and honest self-assessment. Runs as a
-loops-ng service with bounded voluntary sleep, supervisor randomization,
+service loop with bounded voluntary sleep, supervisor randomization,
 and a declared maintained-document output. The interactive agent reads
 `ego.md` every turn; the ego loop is the sole writer.
 

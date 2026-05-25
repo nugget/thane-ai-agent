@@ -14,7 +14,7 @@ const (
 )
 
 // LoopDefinitionToolDeps wires the live loop-definition registry into the
-// tool registry so the model can inspect and mutate the persistent loops-ng
+// tool registry so the model can inspect and mutate the persistent loops
 // definition overlay.
 type LoopDefinitionToolDeps struct {
 	Registry         *looppkg.DefinitionRegistry
@@ -48,7 +48,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_summary",
-		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, policy state, live runtime state, warning totals, and the known loop definition names.",
+		Description: "Return a compact structured summary of the persistent loops definition registry: generation, counts by source, operation, policy state, live runtime state, warning totals, and the known loop definition names.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -106,7 +106,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_get",
-		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name, including authoring warnings and its current live runtime state when available.",
+		Description: "Get one deep loop definition object from the persistent loops definition registry by name, including authoring warnings and its current live runtime state when available.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -138,7 +138,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_set",
-		Description: "Create or replace one dynamic loop definition in the persistent loops-ng overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
+		Description: "Create or replace one dynamic loop definition in the persistent loops overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -154,7 +154,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_delete",
-		Description: "Delete one dynamic loop definition from the persistent loops-ng overlay. Config-owned definitions are immutable and cannot be deleted.",
+		Description: "Delete one dynamic loop definition from the persistent loops overlay. Config-owned definitions are immutable and cannot be deleted.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

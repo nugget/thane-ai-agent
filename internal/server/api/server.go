@@ -145,14 +145,14 @@ func (s *Server) UseContactStore(store *contacts.Store) {
 	s.contactStore = store
 }
 
-// UseLoopDefinitionRegistry configures the persistent loops-ng definition
+// UseLoopDefinitionRegistry configures the persistent loop definition
 // registry exposed by the API.
 func (s *Server) UseLoopDefinitionRegistry(reg *looppkg.DefinitionRegistry) {
 	s.loopDefinitionRegistry = reg
 }
 
 // ConfigureLoopDefinitionView configures the effective combined
-// definition registry view used by loops-ng read surfaces.
+// definition registry view used by loop read surfaces.
 func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegistryView) {
 	s.loopDefinitionView = fn
 }

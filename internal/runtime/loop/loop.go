@@ -78,8 +78,8 @@ type Request struct {
 	SuppressAlwaysContext bool `yaml:"suppress_always_context,omitempty" json:"suppress_always_context,omitempty"`
 }
 
-// RunRequest is kept as a compatibility alias while loops-ng migrates
-// onto Request as the primary loop-facing run descriptor.
+// RunRequest is a compatibility alias for [Request], the primary
+// loop-facing run descriptor.
 type RunRequest = Request
 
 // Message is a chat message for the runner. It intentionally mirrors
@@ -97,8 +97,8 @@ type Message struct {
 	Images []llm.ImageContent `yaml:"-" json:"-"`
 }
 
-// RunMessage is kept as a compatibility alias while loops-ng migrates
-// onto Message as the primary loop-facing message type.
+// RunMessage is a compatibility alias for [Message], the primary
+// loop-facing message type.
 type RunMessage = Message
 
 // Response mirrors agent.Response fields that loops consume. It holds
@@ -124,8 +124,8 @@ type Response struct {
 	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
 }
 
-// RunResponse is kept as a compatibility alias while loops-ng
-// migrates onto Response as the primary loop-facing response type.
+// RunResponse is a compatibility alias for [Response], the primary
+// loop-facing response type.
 type RunResponse = Response
 
 // StreamCallback receives raw streaming events from a [Runner]. The event
@@ -214,17 +214,17 @@ type Loop struct {
 	currentConvID string
 
 	// requestBase carries the per-iteration request shaping derived
-	// from a loops-ng [Spec]'s [router.LoopProfile]. It is additive and
-	// only populated for loops created via [NewFromSpec].
+	// from a [Spec]'s [router.LoopProfile]. It is additive and only
+	// populated for loops created via [NewFromSpec].
 	requestBase Request
 
 	// requestOverride carries launch-specific per-run overrides
 	// applied on top of the spec/profile-derived request shaping.
 	requestOverride Request
 
-	// requestInstructions is extra guidance derived from a loops-ng
-	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
-	// task when present.
+	// requestInstructions is extra guidance derived from a [Spec]'s
+	// [router.LoopProfile]. It is prepended to each iteration task
+	// when present.
 	requestInstructions string
 
 	// lastResponse is the most recent successful runner response for
@@ -319,9 +319,8 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 	}, nil
 }
 
-// NewFromSpec creates a loop from a [Spec], validating the loops-ng
-// fields before compiling the engine-facing [Config]. This is an
-// additive bridge for gradually moving call sites onto Spec.
+// NewFromSpec creates a loop from a [Spec], validating it before
+// compiling the engine-facing [Config].
 func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err

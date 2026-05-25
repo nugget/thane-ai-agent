@@ -15,7 +15,7 @@ import (
 
 // initAgentLoop builds the core agent loop, resolves path prefixes and
 // context injection files, and starts the initial conversation session.
-// Self-reflection runs as the ego loops-ng service (see internal/runtime/ego).
+// Self-reflection runs as the ego service loop (see internal/runtime/ego).
 func (a *App) initAgentLoop(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -146,7 +146,7 @@ func corePromptFilesForStartupVerification(logger *slog.Logger, paths ...string)
 
 // removeLegacyPeriodicReflectionTask deletes the persisted
 // periodic_reflection scheduler row from older builds. Self-reflection
-// is now handled by the ego loops-ng service. Best-effort: errors are
+// is now handled by the ego service loop. Best-effort: errors are
 // logged and ignored so a missing row or transient error does not block
 // startup.
 func (a *App) removeLegacyPeriodicReflectionTask(logger *slog.Logger) {
@@ -170,7 +170,7 @@ func (a *App) removeLegacyPeriodicReflectionTask(logger *slog.Logger) {
 	}
 	logger.Info("removed legacy periodic_reflection scheduler task",
 		"id", existing.ID,
-		"replacement", "ego loops-ng service",
+		"replacement", "ego service loop",
 	)
 }
 

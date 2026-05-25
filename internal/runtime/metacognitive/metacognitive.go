@@ -36,7 +36,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// DefinitionName is the durable loops-ng definition name for the
+// DefinitionName is the durable loop definition name for the
 // metacognitive service.
 const DefinitionName = "metacognitive"
 
@@ -152,7 +152,7 @@ type Opts struct {
 	StateFileName string
 }
 
-// DefinitionSpec returns the persistable loops-ng definition for the
+// DefinitionSpec returns the persistable loop definition for the
 // metacognitive service. Runtime hooks are attached later by
 // [HydrateSpec] so the definition can live in the durable registry.
 func DefinitionSpec(cfg Config) loop.Spec {
@@ -195,7 +195,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 }
 
 // HydrateSpec attaches the runtime-only hooks needed to execute the
-// metacognitive service from a durable loops-ng definition.
+// metacognitive service from a durable loop definition.
 func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 	spec = loop.Spec(spec)
 	if strings.TrimSpace(spec.Name) == "" {
@@ -213,8 +213,8 @@ func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 }
 
 // BuildSpec returns a [loop.Spec] that implements the metacognitive
-// loop as a standard loops-ng service. The returned spec declares the
-// durable output document and uses runtime hooks to build prompts and
+// loop as a service loop. The returned spec declares the durable
+// output document and uses runtime hooks to build prompts and
 // append iteration logs.
 func BuildSpec(cfg Config, opts Opts) loop.Spec {
 	spec := DefinitionSpec(cfg)
@@ -225,8 +225,8 @@ func BuildSpec(cfg Config, opts Opts) loop.Spec {
 }
 
 // BuildLoopConfig returns the engine-facing [loop.Config] view of the
-// metacognitive loop. Kept as a compatibility bridge while loops-ng
-// adoption is in progress.
+// metacognitive loop. Kept as a compatibility shim for callers that
+// work directly with [loop.Config] rather than [loop.Spec].
 func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 	spec := BuildSpec(cfg, opts)
 	out := spec.ToConfig()

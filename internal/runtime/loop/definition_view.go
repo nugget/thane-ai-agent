@@ -31,7 +31,7 @@ type DefinitionRuntimeStatus struct {
 }
 
 // DefinitionView is the combined stored-definition and live-runtime view
-// exposed by loops-ng read surfaces.
+// exposed by loop read surfaces.
 type DefinitionView struct {
 	DefinitionSnapshot `yaml:",inline"`
 	Eligibility        DefinitionEligibilityStatus `yaml:"eligibility,omitempty" json:"eligibility"`
@@ -56,7 +56,7 @@ type DefinitionRegistryView struct {
 }
 
 // BuildDefinitionRegistryView combines the durable definition snapshot
-// with an optional runtime-state map to produce the effective loops-ng
+// with an optional runtime-state map to produce the effective loop
 // registry view used by API and tool read surfaces.
 func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus) *DefinitionRegistryView {
 	return buildDefinitionRegistryViewAt(snapshot, runtime, time.Now())

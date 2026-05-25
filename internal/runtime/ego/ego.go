@@ -1,5 +1,5 @@
 // Package ego implements the self-reflection loop that maintains
-// core/ego.md. It runs as a loops-ng service: each iteration is a fresh
+// core/ego.md. It runs as a service loop: each iteration is a fresh
 // conversation with bounded voluntary sleep, supervisor randomization
 // for periodic frontier review, and a declared maintained-document
 // output that pins ego.md to the loop.
@@ -21,7 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// DefinitionName is the durable loops-ng definition name for the ego
+// DefinitionName is the durable loop definition name for the ego
 // service.
 const DefinitionName = "ego"
 
@@ -84,7 +84,7 @@ func derefFloat(p *float64, def float64) float64 {
 	return *p
 }
 
-// DefinitionSpec returns the persistable loops-ng definition for the ego
+// DefinitionSpec returns the persistable loop definition for the ego
 // service. Runtime hooks are attached later by [HydrateSpec] so the
 // definition can live in the durable registry.
 func DefinitionSpec(cfg Config) loop.Spec {
@@ -126,7 +126,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 }
 
 // HydrateSpec attaches the runtime-only hooks needed to execute the ego
-// service from a durable loops-ng definition.
+// service from a durable loop definition.
 func HydrateSpec(spec loop.Spec, cfg Config) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
@@ -138,8 +138,8 @@ func HydrateSpec(spec loop.Spec, cfg Config) loop.Spec {
 }
 
 // BuildSpec returns a [loop.Spec] that implements the ego loop as a
-// standard loops-ng service. The returned spec declares the durable
-// output document and uses runtime hooks to build prompts.
+// service loop. The returned spec declares the durable output document
+// and uses runtime hooks to build prompts.
 func BuildSpec(cfg Config) loop.Spec {
 	spec := DefinitionSpec(cfg)
 	spec.SupervisorContext = ""
@@ -147,8 +147,8 @@ func BuildSpec(cfg Config) loop.Spec {
 }
 
 // BuildLoopConfig returns the engine-facing [loop.Config] view of the
-// ego loop. Kept as a compatibility bridge while loops-ng adoption is
-// in progress.
+// ego loop. Kept as a compatibility shim for callers that work directly
+// with [loop.Config] rather than [loop.Spec].
 func BuildLoopConfig(cfg Config) loop.Config {
 	spec := BuildSpec(cfg)
 	out := spec.ToConfig()

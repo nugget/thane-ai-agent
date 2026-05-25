@@ -314,7 +314,7 @@ type Config struct {
 	Ego EgoConfig `yaml:"ego"`
 
 	// Loops configures immutable loop definitions loaded from the config
-	// file. These definitions become the base layer for the loops-ng
+	// file. These definitions become the base layer for the loop
 	// definition registry, with a persistent dynamic overlay applied at
 	// runtime.
 	Loops LoopsConfig `yaml:"loops"`
@@ -1751,8 +1751,8 @@ type MetacognitiveRouterConfig struct {
 }
 
 // EgoConfig configures the self-reflection ego loop. The loop runs as a
-// loops-ng service: bounded voluntary sleep, supervisor randomization,
-// and a declared maintained-document output at core/ego.md. Replaces the
+// service loop: bounded voluntary sleep, supervisor randomization, and
+// a declared maintained-document output at core/ego.md. Replaces the
 // legacy periodic_reflection scheduled task.
 type EgoConfig struct {
 	// Enabled controls whether the ego loop starts. Default: false.
@@ -1794,7 +1794,7 @@ type EgoRouterConfig struct {
 	QualityFloor int `yaml:"quality_floor"`
 }
 
-// LoopsConfig configures immutable loops-ng definitions loaded from the
+// LoopsConfig configures immutable loop definitions loaded from the
 // config file.
 type LoopsConfig struct {
 	// MaxRunning caps the number of concurrently running loops across

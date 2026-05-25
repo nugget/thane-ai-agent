@@ -10,8 +10,8 @@ import (
 )
 
 // Operation describes the runtime pattern a loop is expected to
-// follow. The zero value is accepted while loops-ng adoption is
-// incremental.
+// follow. The zero value is accepted and defaults to
+// [OperationRequestReply].
 type Operation string
 
 const (
@@ -27,7 +27,7 @@ const (
 )
 
 // Completion describes how a loop's result should be delivered.
-// The zero value is accepted while loops-ng adoption is incremental.
+// The zero value is accepted and means "no outward delivery declared".
 type Completion string
 
 const (
@@ -63,12 +63,9 @@ func effectiveOperation(op Operation) Operation {
 	return op
 }
 
-// Spec is the loops-ng contract for describing a loop. It carries
-// both the current engine-facing config fields and the forward-looking
-// loops-ng semantics. Today it compiles to [Config], while [Profile]
-// already shapes requests for loops created via [NewFromSpec].
-// [Operation] and [Completion] are retained for the upcoming RunV2
-// work.
+// Spec is the contract for describing a loop. It compiles to
+// [Config] for the runtime, and [Profile] shapes requests for loops
+// created via [NewFromSpec].
 type Spec struct {
 	// Name is the unique identifier for the loop. Required.
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
@@ -191,8 +188,8 @@ type Spec struct {
 	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
 }
 
-// Validate checks that the loops-ng-facing fields and the current
-// engine-facing configuration are internally consistent.
+// Validate checks that the spec fields and derived engine-facing
+// configuration are internally consistent.
 func (s *Spec) Validate() error {
 	if s == nil {
 		return fmt.Errorf("loop: spec is nil")

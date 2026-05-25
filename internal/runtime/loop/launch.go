@@ -10,7 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// Launch describes a single loops-ng launch request. It is separate
+// Launch describes a single loops launch request. It is separate
 // from [Spec] so per-launch overrides and delivery hooks can grow here
 // over time without turning [Spec] itself into an ephemeral run object.
 type Launch struct {
