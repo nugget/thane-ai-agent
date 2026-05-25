@@ -18,19 +18,14 @@ import (
 // callback invoked when new scoped tags are introduced (so the caller
 // can wire up tag-specific context providers on demand).
 type WatchlistTools struct {
-	store        *WatchlistStore
-	tagRegistrar func(tag string)
-	logger       *slog.Logger
+	store  *WatchlistStore
+	logger *slog.Logger
 }
 
 // WatchlistToolsConfig captures the dependencies for [NewWatchlistTools].
 type WatchlistToolsConfig struct {
 	// Store is the persistent watchlist store. Required.
 	Store *WatchlistStore
-	// TagRegistrar is invoked when add_entity_subscription introduces
-	// a new tag; typical callers use it to register a tag-scoped
-	// context provider. Optional.
-	TagRegistrar func(tag string)
 	// Logger defaults to slog.Default when nil.
 	Logger *slog.Logger
 }
@@ -47,9 +42,8 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 		logger = slog.Default()
 	}
 	return &WatchlistTools{
-		store:        cfg.Store,
-		tagRegistrar: cfg.TagRegistrar,
-		logger:       logger,
+		store:  cfg.Store,
+		logger: logger,
 	}
 }
 
@@ -62,10 +56,10 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{
 			Name: "add_entity_subscription",
-			Description: "Subscribe to a Home Assistant entity so its live state is injected into the model's context every turn the subscription's scope is active. Rich domains (weather, climate, light, person) automatically include relevant attributes. " +
-				"Scope is the only thing that varies between callers: omit tags for an always-on subscription (visible on every turn regardless of loaded capability tags); pass capability tags to scope to specific surfaces (visible only when one of those tags is active); pass a loop's scope_tag to scope to that one loop's turns. " +
-				"Subscriptions are additive — the same entity can carry multiple subscriptions in different scopes. " +
-				"To target a loop by name instead of spelling its scope_tag, use update_entity_subscriptions. From inside a running loop's own turn, prefer the shorthand watch_entity (scope is hydrated from the loop's identity). " +
+			Description: "Subscribe to a Home Assistant entity so its live state is injected into the model's context. " +
+				"This tool adds always-visible subscriptions: the entity appears in every turn, regardless of which loop or capability tags are active. " +
+				"For loop-scoped subscriptions, use update_entity_subscriptions (by name) or watch_entity (from inside the loop's own turn). " +
+				"Optional tags carry lens-style classifiers on the subscription itself for future filtering; they no longer act as a scope binding. " +
 				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -77,7 +71,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					"tags": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Scope for this subscription. Capability tag(s) or a loop's scope_tag. Omit for an always-on subscription visible on every turn.",
+						"description": "Optional lens-style classifiers attached to the subscription. Not used to bind it to any loop — for that, use the loop-scoped tools.",
 					},
 					"history": map[string]any{
 						"type":        "array",
@@ -100,13 +94,13 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 		},
 		{
 			Name:        "list_entity_subscriptions",
-			Description: "List entity subscriptions used for live context injection. Returns one row per subscription scope, so the same entity subscribed under multiple scopes appears multiple times — you can see always-on subscriptions, capability-tag-scoped ones, and loop-scoped ones side by side before changing them.",
+			Description: "List always-visible entity subscriptions used for live context injection — entities that are surfaced on every turn regardless of which loop or capability tags are active. For per-loop subscriptions, call loop_definition_get and read the spec's subscriptions field; effective inherited subscriptions are surfaced there too.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"tag": map[string]any{
 						"type":        "string",
-						"description": "Optional scope filter. Pass a capability tag or a loop's scope_tag to see only subscriptions in that scope. Omit to list every active subscription.",
+						"description": "Optional lens-tag filter. Only matches subscriptions that carry the given lens tag.",
 					},
 					"entity_id": map[string]any{
 						"type":        "string",
@@ -117,10 +111,8 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 			Handler: w.handleListEntitySubscriptions,
 		},
 		{
-			Name: "remove_entity_subscription",
-			Description: "Remove an entity subscription. " +
-				"By default this removes every subscription for the entity across all scopes. " +
-				"Pass tags to remove only specific scoped subscriptions — useful when one loop should stop watching an entity that other loops or the always-on context still care about.",
+			Name:        "remove_entity_subscription",
+			Description: "Remove an always-visible entity subscription. Touches only always-on rows; per-loop subscriptions are not affected (use unwatch_entity inside the loop, or update_entity_subscriptions by name).",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -131,7 +123,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					"tags": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Optional scope tags to remove. Omit to remove every subscription for this entity across all scopes.",
+						"description": "Optional lens-tag filter — when present, only removes always-visible rows that also carry one of these tags.",
 					},
 				},
 				"required": []string{"entity_id"},
@@ -204,11 +196,6 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 
 	w.logger.Info("entity subscription added",
 		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "ttl_seconds", ttlSeconds)
-	if w.tagRegistrar != nil {
-		for _, tag := range tags {
-			w.tagRegistrar(tag)
-		}
-	}
 	return msg, nil
 }
 

@@ -4,50 +4,50 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // hydrateLoopFocusTools generates the in-loop entity-subscription
-// mutation tools — watch_entity and unwatch_entity — whenever a spec
-// carries a scope_tag in Metadata. The scope tag is captured in the
-// closure at hydration time, so the model running an iteration never
-// sees or types it; the tool surface is the inside-the-loop cognitive
-// frame ("watch this entity") rather than the outside-the-loop one
-// ("update loop X's subscriptions").
+// mutation tools — watch_entity and unwatch_entity — for every spec.
+// The loop's own name is captured in the closure at hydration time,
+// so the model running an iteration never sees or types it; the tool
+// surface is the inside-the-loop cognitive frame ("watch this
+// entity") rather than the outside-the-loop one ("update loop X's
+// subscriptions").
 //
-// No-op when the spec has no scope tag or when the watchlist store is
-// not configured. Errors only when the store is missing AND the spec
-// declares a scope tag (a misconfiguration worth surfacing).
-// [looppkg.SpecScopeTag] handles the read fallback to the legacy
-// "focus_tag" key for specs persisted before the rename.
+// Mutations write through to the persisted spec via the definition
+// registry and reflect immediately on the live loop, so the next
+// iteration sees the change and a subsequent restart preserves it.
 func (a *App) hydrateLoopFocusTools(spec looppkg.Spec) (looppkg.Spec, error) {
-	scopeTag := looppkg.SpecScopeTag(spec)
-	if scopeTag == "" {
+	if a == nil || a.loopDefinitionRegistry == nil {
 		return spec, nil
 	}
-	if a == nil || a.watchlistStore == nil {
-		return looppkg.Spec{}, fmt.Errorf("loop %q declares scope_tag %q but the entity watchlist store is not configured", spec.Name, scopeTag)
+	if strings.TrimSpace(spec.Name) == "" {
+		return spec, nil
 	}
-	spec.RuntimeTools = append(spec.RuntimeTools, buildLoopFocusTools(a.watchlistStore, scopeTag)...)
+	spec.RuntimeTools = append(spec.RuntimeTools, a.buildLoopFocusTools(spec.Name)...)
 	return spec, nil
 }
 
-// loopFocusWatchStore is the narrow store contract these runtime tools
-// need. Matches the methods on awareness.WatchlistStore.
-type loopFocusWatchStore interface {
-	AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error
-	RemoveWithScopes(entityID string, scopes []string) error
+// subscriptionMutator is the narrow contract the in-loop entity tools
+// need from the surrounding runtime: take the loop's name and a
+// transformer for its current subscriptions, return the new effective
+// list. The app-level implementation persists + propagates to the live
+// loop; tests pass a thin in-memory variant so the tool surface can be
+// exercised without standing up a full app.
+type subscriptionMutator func(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error)
+
+func (a *App) buildLoopFocusTools(loopName string) []looppkg.RuntimeTool {
+	return buildLoopFocusToolsWithMutator(loopName, a.mutateLoopSubscriptions)
 }
 
-func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.RuntimeTool {
-	if store == nil || scopeTag == "" {
-		return nil
-	}
+func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator) []looppkg.RuntimeTool {
 	return []looppkg.RuntimeTool{
 		{
 			Name:               "watch_entity",
-			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected.",
+			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -73,7 +73,7 @@ func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.R
 				},
 				"required": []string{"entity_id"},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				entityID := strings.TrimSpace(stringMapValue(args, "entity_id"))
 				if entityID == "" {
 					return "", fmt.Errorf("entity_id is required")
@@ -90,7 +90,17 @@ func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.R
 					return "", fmt.Errorf("ttl_seconds must be >= 0")
 				}
 				forecast := strings.TrimSpace(stringMapValue(args, "forecast"))
-				if err := store.AddWithOptions(entityID, []string{scopeTag}, history, ttlSeconds, forecast); err != nil {
+				now := time.Now().UTC()
+				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+					return upsertSubscription(current, looppkg.EntitySubscription{
+						EntityID:   entityID,
+						History:    history,
+						Forecast:   forecast,
+						TTLSeconds: ttlSeconds,
+						AddedAt:    now,
+					}), nil
+				})
+				if err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","entity_id":%q}`, entityID), nil
@@ -98,7 +108,7 @@ func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.R
 		},
 		{
 			Name:               "unwatch_entity",
-			Description:        "Remove an entity from this loop's watched set. Removes only this loop's scoped subscription; if the same entity is also tagged elsewhere (another loop, an always-on watch), those rows are left alone.",
+			Description:        "Remove an entity from this loop's watched set. Removes only this loop's own subscription; inherited subscriptions from container ancestors are left alone (override locally by re-declaring with new options if needed).",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -110,18 +120,105 @@ func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.R
 				},
 				"required": []string{"entity_id"},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				entityID := strings.TrimSpace(stringMapValue(args, "entity_id"))
 				if entityID == "" {
 					return "", fmt.Errorf("entity_id is required")
 				}
-				if err := store.RemoveWithScopes(entityID, []string{scopeTag}); err != nil {
+				_, err := mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+					return dropSubscription(current, entityID), nil
+				})
+				if err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","entity_id":%q}`, entityID), nil
 			},
 		},
 	}
+}
+
+// mutateLoopSubscriptions is the app-side counterpart to the tools-
+// package helper of the same shape. Both routes converge on the same
+// persistence model: read the persisted spec, apply the mutation,
+// write back, and patch the live loop. Two call sites exist because
+// hydration runs in the app package (which has the definition
+// registry handle directly) and the model-facing tool-family handlers
+// live in the tools package, and Go's package layering forbids the
+// cycle that a single helper would create.
+func (a *App) mutateLoopSubscriptions(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
+	if a == nil || a.loopDefinitionRegistry == nil {
+		return nil, fmt.Errorf("loop definition registry not configured")
+	}
+	snap := a.loopDefinitionRegistry.Snapshot()
+	var existing looppkg.DefinitionSnapshot
+	found := false
+	if snap != nil {
+		for _, def := range snap.Definitions {
+			if def.Name == loopName {
+				existing = def
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return nil, &looppkg.UnknownDefinitionError{Name: loopName}
+	}
+	if existing.Source == looppkg.DefinitionSourceConfig {
+		return nil, &looppkg.ImmutableDefinitionError{Name: loopName}
+	}
+
+	next, err := mutate(existing.Spec.Subscriptions)
+	if err != nil {
+		return nil, err
+	}
+
+	newSpec := existing.Spec
+	newSpec.Subscriptions = next
+	updatedAt := time.Now().UTC()
+	if err := a.persistLoopDefinition(newSpec, updatedAt); err != nil {
+		return nil, fmt.Errorf("persist loop definition: %w", err)
+	}
+	if err := a.loopDefinitionRegistry.Upsert(newSpec, updatedAt); err != nil {
+		return nil, err
+	}
+	if a.loopRegistry != nil {
+		if live := a.loopRegistry.GetByName(loopName); live != nil {
+			live.SetSubscriptions(next)
+		}
+	}
+	_ = ctx
+	return next, nil
+}
+
+// upsertSubscription replaces any existing entry for sub.EntityID
+// with the new one (preserving caller-supplied options exactly) and
+// appends fresh ones at the end. Used by watch_entity so calling it
+// twice for the same entity replaces options rather than duplicating.
+func upsertSubscription(current []looppkg.EntitySubscription, sub looppkg.EntitySubscription) []looppkg.EntitySubscription {
+	out := make([]looppkg.EntitySubscription, 0, len(current)+1)
+	for _, c := range current {
+		if c.EntityID == sub.EntityID {
+			continue
+		}
+		out = append(out, c)
+	}
+	out = append(out, sub)
+	return out
+}
+
+// dropSubscription returns the current list minus the entry matching
+// entityID. Missing IDs are silently a no-op; tools can surface
+// "not watched" themselves if they want louder behavior.
+func dropSubscription(current []looppkg.EntitySubscription, entityID string) []looppkg.EntitySubscription {
+	out := make([]looppkg.EntitySubscription, 0, len(current))
+	for _, c := range current {
+		if c.EntityID == entityID {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // stringMapValue safely reads a string field from a map[string]any.

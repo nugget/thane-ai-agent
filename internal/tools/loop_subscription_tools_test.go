@@ -10,15 +10,14 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// TestUpdateEntitySubscriptions_AddRemove exercises the happy
-// path: a loop created by thane_curate has its watch set adjusted
-// via the external tool, and both add and remove arrive at the
-// underlying store with the resolved scope_tag baked in.
+// TestUpdateEntitySubscriptions_AddRemove exercises the happy path:
+// a loop's spec.Subscriptions is rewritten in place — removes drop
+// their entries, adds append new ones, and the resulting list is
+// what the spec carries after the call.
 func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
-	// Seed a curate loop with one entity so we have something to remove.
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "watcher",
 		"intent":    "watch things",
@@ -34,16 +33,6 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("thane_curate seed: %v", err)
 	}
-	spec := rig.findCurateSpec(t, "watcher")
-	scopeTag := spec.Metadata[looppkg.MetadataScopeTag]
-	if scopeTag == "" {
-		t.Fatal("scope_tag missing after seed")
-	}
-
-	// Reset captures so we isolate the update call.
-	rig.subStore.added = nil
-	rig.subStore.removed = nil
-	rig.subStore.wiped = nil
 
 	updateTool := rig.reg.Get("update_entity_subscriptions")
 	if updateTool == nil {
@@ -69,35 +58,39 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	if resp["status"] != "ok" {
 		t.Errorf("status = %v, want ok", resp["status"])
 	}
-	if resp[looppkg.MetadataScopeTag] != scopeTag {
-		t.Errorf("response scope_tag = %v, want %q", resp[looppkg.MetadataScopeTag], scopeTag)
-	}
 	if resp["added"] != float64(2) || resp["removed"] != float64(1) {
 		t.Errorf("counts wrong: added=%v removed=%v", resp["added"], resp["removed"])
 	}
-
-	// Removes are applied before adds (so re-adding the same entity
-	// works cleanly in a single call).
-	if len(rig.subStore.removed) != 1 {
-		t.Fatalf("removed len = %d, want 1", len(rig.subStore.removed))
-	}
-	if rig.subStore.removed[0].EntityID != "sensor.old" {
-		t.Errorf("removed[0].EntityID = %q, want sensor.old", rig.subStore.removed[0].EntityID)
-	}
-	if len(rig.subStore.removed[0].Scopes) != 1 || rig.subStore.removed[0].Scopes[0] != scopeTag {
-		t.Errorf("removed[0].Scopes = %v, want [%q]", rig.subStore.removed[0].Scopes, scopeTag)
+	if resp["subscription_count"] != float64(2) {
+		t.Errorf("subscription_count = %v, want 2", resp["subscription_count"])
 	}
 
-	if len(rig.subStore.added) != 2 {
-		t.Fatalf("added len = %d, want 2", len(rig.subStore.added))
+	spec := rig.findCurateSpec(t, "watcher")
+	if len(spec.Subscriptions) != 2 {
+		t.Fatalf("Subscriptions len = %d, want 2: %+v", len(spec.Subscriptions), spec.Subscriptions)
 	}
-	for i, sub := range rig.subStore.added {
-		if len(sub.Tags) != 1 || sub.Tags[0] != scopeTag {
-			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, scopeTag)
+	for _, sub := range spec.Subscriptions {
+		if sub.EntityID == "sensor.old" {
+			t.Errorf("sensor.old still present after remove")
 		}
 	}
-	if rig.subStore.added[1].Forecast != "hourly" {
-		t.Errorf("added[1].Forecast = %q, want hourly", rig.subStore.added[1].Forecast)
+	var seenNew, seenWeather bool
+	for _, sub := range spec.Subscriptions {
+		if sub.EntityID == "sensor.new" {
+			seenNew = true
+			if len(sub.History) != 1 || sub.History[0] != 600 {
+				t.Errorf("sensor.new history = %v, want [600]", sub.History)
+			}
+		}
+		if sub.EntityID == "weather.home" {
+			seenWeather = true
+			if sub.Forecast != "hourly" {
+				t.Errorf("weather.home forecast = %q, want hourly", sub.Forecast)
+			}
+		}
+	}
+	if !seenNew || !seenWeather {
+		t.Errorf("missing expected entries; subs = %+v", spec.Subscriptions)
 	}
 }
 
@@ -123,17 +116,14 @@ func TestUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	}
 }
 
-// TestUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag covers
-// the case where the named loop exists but predates the scope_tag
-// machinery (e.g. an older loop_definition_set spec without the
-// metadata key). The model should learn the loop doesn't support
-// entity subscriptions rather than have the update silently apply
-// to scope="".
-func TestUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) {
+// TestUpdateEntitySubscriptions_AppliesToTaglessLoop covers the
+// post-migration behavior: any overlay loop can carry subscriptions,
+// not just curate-style loops. A hand-seeded service spec with no
+// metadata still accepts add/remove via update_entity_subscriptions.
+func TestUpdateEntitySubscriptions_AppliesToTaglessLoop(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
-	// Hand-seed a definition with no scope_tag in Metadata.
 	bareSpec := looppkg.Spec{
 		Name:         "tagless",
 		Enabled:      true,
@@ -151,15 +141,16 @@ func TestUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) {
 	if tool == nil {
 		t.Fatal("update_entity_subscriptions not registered")
 	}
-	_, err := tool.Handler(context.Background(), map[string]any{
+	if _, err := tool.Handler(context.Background(), map[string]any{
 		"name": "tagless",
 		"add":  []any{map[string]any{"entity_id": "sensor.foo"}},
-	})
-	if err == nil {
-		t.Fatal("expected error for loop without scope_tag")
+	}); err != nil {
+		t.Fatalf("update on tagless loop: %v", err)
 	}
-	if !strings.Contains(err.Error(), "scope_tag") {
-		t.Errorf("error %q should mention scope_tag", err)
+
+	spec := rig.findCurateSpec(t, "tagless")
+	if len(spec.Subscriptions) != 1 || spec.Subscriptions[0].EntityID != "sensor.foo" {
+		t.Errorf("Subscriptions = %+v, want one entry for sensor.foo", spec.Subscriptions)
 	}
 }
 
@@ -222,7 +213,6 @@ func TestUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
 	if tool == nil {
 		t.Fatal("update_entity_subscriptions not registered")
 	}
-	// Trigger a missing-entity_id error inside add[0].
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"name": "scope_test",
 		"add":  []any{map[string]any{}},

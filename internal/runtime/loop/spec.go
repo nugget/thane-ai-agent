@@ -102,6 +102,16 @@ type Spec struct {
 	// maintain through scoped runtime tools.
 	Outputs []OutputSpec `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 
+	// Subscriptions are entities this loop wants to see in context
+	// every iteration. Each iteration's effective subscription list
+	// is the union of this loop's Subscriptions and every container
+	// ancestor's (see [Registry.AncestorSubscriptions]).
+	//
+	// This is the structural successor to the scope_tag-and-watchlist-
+	// row binding the codebase used before the container loops rollout.
+	// The scope tag is gone; the parent_id graph is the binding.
+	Subscriptions []EntitySubscription `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
+
 	// Conditions constrain when the definition is currently eligible to
 	// run or launch. When empty, the definition is always eligible
 	// unless blocked by policy.
@@ -324,6 +334,7 @@ func (s *Spec) ToConfig() Config {
 		Operation:              ns.Operation,
 		Completion:             ns.Completion,
 		Outputs:                cloneOutputs(ns.Outputs),
+		Subscriptions:          cloneEntitySubscriptions(ns.Subscriptions),
 		Tags:                   append([]string(nil), ns.Tags...),
 		ExcludeTools:           append([]string(nil), ns.ExcludeTools...),
 		SleepMin:               ns.SleepMin,

@@ -87,32 +87,20 @@ func (a *App) initAwareness(s *newState) error {
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
-		// Register tag-scoped watchlist providers for entities added
-		// with tags. Each distinct tag in the store gets a provider that
-		// emits those entities only when the tag is active.
-		if taggedTags, err := watchlistStore.DistinctTags(); err == nil && len(taggedTags) > 0 {
-			for _, tag := range taggedTags {
-				tagProvider := awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger)
-				tagProvider.SetRegistryClient(a.ha)
-				a.loop.RegisterTagContextProvider(tag, tagProvider)
-			}
-			logger.Info("tagged watchlist entities registered",
-				"tags", taggedTags)
-		}
+		// One always-on provider walks the loop registry's ancestor
+		// chain on each iteration to assemble effective subscriptions
+		// for the current loop. Per-tag watchlist providers are gone —
+		// the structural parent/child binding from container loops
+		// replaces the scope_tag indirection.
+		loopSubProvider := awareness.NewLoopSubscriptionProvider(a.loopRegistry, a.ha, logger)
+		loopSubProvider.SetRegistryClient(a.ha)
+		a.loop.RegisterAlwaysContextProvider(loopSubProvider)
 
 		logger.Info("entity watchlist context enabled")
 	}
 
 	a.loop.Tools().RegisterProvider(awareness.NewWatchlistTools(awareness.WatchlistToolsConfig{
-		Store: watchlistStore,
-		TagRegistrar: func(tag string) {
-			if a.ha == nil || strings.TrimSpace(tag) == "" {
-				return
-			}
-			tagProvider := awareness.NewWatchlistTagProvider(tag, watchlistStore, a.ha, logger)
-			tagProvider.SetRegistryClient(a.ha)
-			a.loop.RegisterTagContextProvider(tag, tagProvider)
-		},
+		Store:  watchlistStore,
 		Logger: logger,
 	}))
 

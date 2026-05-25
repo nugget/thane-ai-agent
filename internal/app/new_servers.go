@@ -552,6 +552,9 @@ func (a *App) initServers(s *newState) error {
 	// as first-class definitions via runtime spec hydration.
 	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
+			if err := a.migrateLegacyScopeTagSubscriptions(); err != nil {
+				logger.Warn("legacy scope_tag migration encountered errors", "error", err)
+			}
 			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
 			if err != nil {
 				return err

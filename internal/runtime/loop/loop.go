@@ -668,6 +668,27 @@ func (l *Loop) SetActiveTagsFunc(fn func() []string) {
 	l.mu.Unlock()
 }
 
+// SetSubscriptions replaces this loop's effective subscription list in
+// place. Used by runtime tools (watch_entity, unwatch_entity,
+// update_entity_subscriptions) so subscription changes take effect on
+// the next iteration without waiting for a stop/restart. Durability is
+// the caller's responsibility — the persisted spec is the source of
+// truth, and the caller is expected to persist before invoking this.
+func (l *Loop) SetSubscriptions(subs []EntitySubscription) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.config.Subscriptions = cloneEntitySubscriptions(subs)
+}
+
+// Subscriptions returns a defensive copy of the loop's current
+// subscriptions. Used by introspection paths and tests that need to
+// observe the live state without acquiring the lock themselves.
+func (l *Loop) Subscriptions() []EntitySubscription {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneEntitySubscriptions(l.config.Subscriptions)
+}
+
 // setAncestorTagsFunc is package-private because only [Registry.Register]
 // has the wiring to compute the loop's inherited tags from a live
 // registry. Tests that need to inject a synthetic ancestor chain should

@@ -7,34 +7,35 @@ import (
 )
 
 type specJSON struct {
-	Name                   string            `json:"name,omitempty"`
-	Enabled                bool              `json:"enabled"`
-	Task                   string            `json:"task,omitempty"`
-	Profile                any               `json:"profile,omitempty"`
-	Operation              Operation         `json:"operation,omitempty"`
-	Completion             Completion        `json:"completion,omitempty"`
-	Outputs                []OutputSpec      `json:"outputs,omitempty"`
-	Conditions             Conditions        `json:"conditions,omitempty"`
-	Tags                   []string          `json:"tags,omitempty"`
-	ExcludeTools           []string          `json:"exclude_tools,omitempty"`
-	SleepMin               string            `json:"sleep_min,omitempty"`
-	SleepMax               string            `json:"sleep_max,omitempty"`
-	SleepDefault           string            `json:"sleep_default,omitempty"`
-	Jitter                 *float64          `json:"jitter,omitempty"`
-	MaxDuration            string            `json:"max_duration,omitempty"`
-	MaxIter                int               `json:"max_iter,omitempty"`
-	Supervisor             bool              `json:"supervisor,omitempty"`
-	SupervisorProb         float64           `json:"supervisor_prob,omitempty"`
-	QualityFloor           int               `json:"quality_floor,omitempty"`
-	SupervisorContext      string            `json:"supervisor_context,omitempty"`
-	SupervisorQualityFloor int               `json:"supervisor_quality_floor,omitempty"`
-	OnRetrigger            string            `json:"on_retrigger,omitempty"`
-	RoutingFactors         map[string]string `json:"routing_factors,omitempty"`
-	DelegationGating       string            `json:"delegation_gating,omitempty"`
-	FallbackContent        string            `json:"fallback_content,omitempty"`
-	Metadata               map[string]string `json:"metadata,omitempty"`
-	ParentID               string            `json:"parent_id,omitempty"`
-	ParentName             string            `json:"parent_name,omitempty"`
+	Name                   string               `json:"name,omitempty"`
+	Enabled                bool                 `json:"enabled"`
+	Task                   string               `json:"task,omitempty"`
+	Profile                any                  `json:"profile,omitempty"`
+	Operation              Operation            `json:"operation,omitempty"`
+	Completion             Completion           `json:"completion,omitempty"`
+	Outputs                []OutputSpec         `json:"outputs,omitempty"`
+	Subscriptions          []EntitySubscription `json:"subscriptions,omitempty"`
+	Conditions             Conditions           `json:"conditions,omitempty"`
+	Tags                   []string             `json:"tags,omitempty"`
+	ExcludeTools           []string             `json:"exclude_tools,omitempty"`
+	SleepMin               string               `json:"sleep_min,omitempty"`
+	SleepMax               string               `json:"sleep_max,omitempty"`
+	SleepDefault           string               `json:"sleep_default,omitempty"`
+	Jitter                 *float64             `json:"jitter,omitempty"`
+	MaxDuration            string               `json:"max_duration,omitempty"`
+	MaxIter                int                  `json:"max_iter,omitempty"`
+	Supervisor             bool                 `json:"supervisor,omitempty"`
+	SupervisorProb         float64              `json:"supervisor_prob,omitempty"`
+	QualityFloor           int                  `json:"quality_floor,omitempty"`
+	SupervisorContext      string               `json:"supervisor_context,omitempty"`
+	SupervisorQualityFloor int                  `json:"supervisor_quality_floor,omitempty"`
+	OnRetrigger            string               `json:"on_retrigger,omitempty"`
+	RoutingFactors         map[string]string    `json:"routing_factors,omitempty"`
+	DelegationGating       string               `json:"delegation_gating,omitempty"`
+	FallbackContent        string               `json:"fallback_content,omitempty"`
+	Metadata               map[string]string    `json:"metadata,omitempty"`
+	ParentID               string               `json:"parent_id,omitempty"`
+	ParentName             string               `json:"parent_name,omitempty"`
 }
 
 // MarshalJSON renders a loop spec in a human-facing contract shape
@@ -49,6 +50,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Operation:              s.Operation,
 		Completion:             s.Completion,
 		Outputs:                cloneOutputs(s.Outputs),
+		Subscriptions:          cloneEntitySubscriptions(s.Subscriptions),
 		Conditions:             s.Conditions,
 		Tags:                   s.Tags,
 		ExcludeTools:           s.ExcludeTools,
@@ -115,6 +117,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Operation:              wire.Operation,
 		Completion:             wire.Completion,
 		Outputs:                cloneOutputs(wire.Outputs),
+		Subscriptions:          cloneEntitySubscriptions(wire.Subscriptions),
 		Conditions:             cloneConditions(wire.Conditions),
 		Tags:                   append([]string(nil), wire.Tags...),
 		ExcludeTools:           append([]string(nil), wire.ExcludeTools...),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -77,25 +78,15 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 	})
 }
 
-func (r *Registry) handleUpdateEntitySubscriptions(_ context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map[string]any) (string, error) {
 	deps := r.loopIntentDeps
-	if deps.Registry == nil || deps.WatchlistStore == nil {
-		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop registry and watchlist store")
+	if deps.Registry == nil {
+		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop definition registry")
 	}
 
 	name := strings.TrimSpace(ldStringArg(args, "name"))
 	if name == "" {
 		return "", fmt.Errorf("name is required")
-	}
-
-	snap := deps.Registry.Snapshot()
-	existing, ok := findLoopDefinition(snap, name)
-	if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	scopeTag := looppkg.SpecScopeTag(existing.Spec)
-	if scopeTag == "" {
-		return "", fmt.Errorf("loop %q has no scope_tag; only loops created with thane_curate (or another tool that mints a scope_tag) support entity subscriptions", name)
 	}
 
 	addList, err := parseEntityList("add", args["add"])
@@ -110,27 +101,55 @@ func (r *Registry) handleUpdateEntitySubscriptions(_ context.Context, args map[s
 		return "", fmt.Errorf("at least one of add or remove must contain entries")
 	}
 
-	// Removes first so re-adding the same entity with different options
-	// (e.g. swap history windows) is a single round-trip and lands as
-	// an insert rather than a no-op upsert with stale state.
-	for _, eid := range removeList {
-		if err := deps.WatchlistStore.RemoveWithScopes(eid, []string{scopeTag}); err != nil {
-			return "", fmt.Errorf("remove %q: %w", eid, err)
-		}
-	}
-	for _, e := range addList {
-		if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
-			return "", fmt.Errorf("add %q: %w", e.EntityID, err)
-		}
+	next, err := r.mutateLoopSubscriptions(ctx, name, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+		return applySubscriptionDelta(current, addList, removeList, time.Now().UTC()), nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	return ldMarshalToolJSON(map[string]any{
 		"status":               "ok",
 		"loop_definition_name": name,
-		"scope_tag":            scopeTag,
 		"added":                len(addList),
 		"removed":              len(removeList),
+		"subscription_count":   len(next),
 	})
+}
+
+// applySubscriptionDelta returns the updated subscription list after
+// removing every entry in removeIDs and (re-)adding every entry in
+// addList. Removes run first so re-adding the same entity with new
+// options lands as a fresh insert rather than colliding with the
+// stale row. Existing subscriptions for an entity in addList are
+// replaced wholesale by the new options; previously-set fields not
+// repeated in the add carry no precedence. addedAt is stamped on
+// every newly-added entry so TTL countdown starts from the mutation.
+func applySubscriptionDelta(current []looppkg.EntitySubscription, addList []curateEntity, removeIDs []string, addedAt time.Time) []looppkg.EntitySubscription {
+	skip := make(map[string]struct{}, len(removeIDs)+len(addList))
+	for _, eid := range removeIDs {
+		skip[eid] = struct{}{}
+	}
+	for _, e := range addList {
+		skip[e.EntityID] = struct{}{}
+	}
+	kept := make([]looppkg.EntitySubscription, 0, len(current))
+	for _, sub := range current {
+		if _, drop := skip[sub.EntityID]; drop {
+			continue
+		}
+		kept = append(kept, sub)
+	}
+	for _, e := range addList {
+		kept = append(kept, looppkg.EntitySubscription{
+			EntityID:   e.EntityID,
+			History:    append([]int(nil), e.History...),
+			Forecast:   e.Forecast,
+			TTLSeconds: e.TTLSeconds,
+			AddedAt:    addedAt,
+		})
+	}
+	return kept
 }
 
 // parseRemoveEntityIDs validates the remove[] parameter shape and

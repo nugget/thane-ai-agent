@@ -24,7 +24,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
-	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -409,28 +408,13 @@ func (a *App) initChannels(s *newState) error {
 		LaunchDefinition: a.launchLoopDefinition,
 	})
 	if a.documentTools != nil {
-		// RegisterTagProvider mirrors the TagRegistrar callback wired into
-		// awareness.WatchlistTools (see initAwareness): when thane_curate
-		// mints a new focus tag for a loop's entity subscriptions, this
-		// callback registers the matching tag-scoped context provider so
-		// the loop's iterations actually see those entities in prompt.
-		registerTagProvider := func(tag string) {
-			if a.ha == nil || strings.TrimSpace(tag) == "" {
-				return
-			}
-			tagProvider := awareness.NewWatchlistTagProvider(tag, a.watchlistStore, a.ha, a.logger)
-			tagProvider.SetRegistryClient(a.ha)
-			a.loop.RegisterTagContextProvider(tag, tagProvider)
-		}
 		a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{
-			DocTools:            a.documentTools,
-			Registry:            a.loopDefinitionRegistry,
-			PersistSpec:         a.persistLoopDefinition,
-			Reconcile:           a.reconcileLoopDefinition,
-			LaunchDefinition:    a.launchLoopDefinition,
-			WatchlistStore:      a.watchlistStore,
-			RegisterTagProvider: registerTagProvider,
-			LiveRegistry:        a.loopRegistry,
+			DocTools:         a.documentTools,
+			Registry:         a.loopDefinitionRegistry,
+			PersistSpec:      a.persistLoopDefinition,
+			Reconcile:        a.reconcileLoopDefinition,
+			LaunchDefinition: a.launchLoopDefinition,
+			LiveRegistry:     a.loopRegistry,
 		})
 	}
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
