@@ -249,24 +249,12 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Profile.DelegationGating != "disabled" {
 		t.Errorf("DelegationGating = %q, want disabled", found.Spec.Profile.DelegationGating)
 	}
-	// The scope tag is generated internally and prepended to Spec.Tags;
-	// caller-supplied tags follow.
-	if len(found.Spec.Tags) != 2 {
-		t.Fatalf("Tags = %v, want [loop:<id>, forge]", found.Spec.Tags)
+	// Only caller-supplied tags; the scope-tag mechanism is gone.
+	if len(found.Spec.Tags) != 1 || found.Spec.Tags[0] != "forge" {
+		t.Errorf("Tags = %v, want [forge]", found.Spec.Tags)
 	}
-	if !strings.HasPrefix(found.Spec.Tags[0], "loop:") {
-		t.Errorf("Tags[0] = %q, want loop:<id> prefix", found.Spec.Tags[0])
-	}
-	if found.Spec.Tags[1] != "forge" {
-		t.Errorf("Tags[1] = %q, want forge", found.Spec.Tags[1])
-	}
-	// The scope tag is also stored in Spec.Metadata so it survives
-	// persistence and is discoverable by management tools.
-	if got := found.Spec.Metadata[looppkg.MetadataScopeTag]; got != found.Spec.Tags[0] {
-		t.Errorf("Metadata[scope_tag] = %q, want %q (same as Tags[0])", got, found.Spec.Tags[0])
-	}
-	if resp[looppkg.MetadataScopeTag] != found.Spec.Tags[0] {
-		t.Errorf("response scope_tag = %v, want %q", resp[looppkg.MetadataScopeTag], found.Spec.Tags[0])
+	if _, ok := found.Spec.Metadata["scope_tag"]; ok {
+		t.Errorf("scope_tag metadata should be gone, found %v", found.Spec.Metadata["scope_tag"])
 	}
 
 	// Verify the declared output rides on the spec so the hydration
@@ -732,68 +720,16 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 	}
 }
 
-// fakeSubscriptionStore captures the interface-method calls so tests
-// can assert on the per-loop watchlist plumbing without standing up
-// a real SQLite database.
-type fakeSubscriptionStore struct {
-	added   []fakeSubAdd
-	removed []fakeSubRemove
-	wiped   []string
-	failAdd error
-}
-
-type fakeSubAdd struct {
-	EntityID   string
-	Tags       []string
-	History    []int
-	TTLSeconds int
-	Forecast   string
-}
-
-type fakeSubRemove struct {
-	EntityID string
-	Scopes   []string
-}
-
-func (f *fakeSubscriptionStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error {
-	if f.failAdd != nil {
-		return f.failAdd
-	}
-	f.added = append(f.added, fakeSubAdd{
-		EntityID:   entityID,
-		Tags:       append([]string(nil), tags...),
-		History:    append([]int(nil), history...),
-		TTLSeconds: ttlSeconds,
-		Forecast:   forecast,
-	})
-	return nil
-}
-
-func (f *fakeSubscriptionStore) RemoveWithScopes(entityID string, scopes []string) error {
-	f.removed = append(f.removed, fakeSubRemove{
-		EntityID: entityID,
-		Scopes:   append([]string(nil), scopes...),
-	})
-	return nil
-}
-
-func (f *fakeSubscriptionStore) RemoveAllForScope(scope string) error {
-	f.wiped = append(f.wiped, scope)
-	return nil
-}
-
 // newCurateTestRig builds the minimum machinery needed for
 // thane_curate-handler tests: in-memory document store, empty
 // definition registry, fake subscription store, stub launch + reconcile,
 // and a registered-tag recorder. Returned values let each test inspect
 // post-call state without re-running the setup boilerplate.
 type curateTestRig struct {
-	reg            *Registry
-	tool           *Tool
-	defRegistry    *looppkg.DefinitionRegistry
-	subStore       *fakeSubscriptionStore
-	registeredTags []string
-	docTools       *documents.Tools
+	reg         *Registry
+	tool        *Tool
+	defRegistry *looppkg.DefinitionRegistry
+	docTools    *documents.Tools
 }
 
 func newCurateTestRig(t *testing.T) *curateTestRig {
@@ -817,10 +753,8 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 	if err != nil {
 		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
-	subStore := &fakeSubscriptionStore{}
 	rig := &curateTestRig{
 		defRegistry: defRegistry,
-		subStore:    subStore,
 		docTools:    docTools,
 	}
 	rig.reg = NewEmptyRegistry()
@@ -831,10 +765,6 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 		Reconcile:   func(_ context.Context, _ string) error { return nil },
 		LaunchDefinition: func(_ context.Context, name string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-test-" + name}, nil
-		},
-		WatchlistStore: subStore,
-		RegisterTagProvider: func(tag string) {
-			rig.registeredTags = append(rig.registeredTags, tag)
 		},
 	})
 	rig.tool = rig.reg.Get("thane_curate")
@@ -857,11 +787,10 @@ func (rig *curateTestRig) findCurateSpec(t *testing.T, name string) looppkg.Spec
 	return looppkg.Spec{}
 }
 
-// TestThaneCurate_PersistsEntitySubscriptions covers the create-time
-// path: entities are written to the watchlist store under the generated
-// scope tag, and the tag-provider registrar is invoked once so the
-// loop's iterations see those entities in context.
-func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
+// TestThaneCurate_PersistsSubscriptions covers the create-time path:
+// entities land on Spec.Subscriptions in the new structural shape, no
+// scope_tag is minted, and the response reports the count.
+func TestThaneCurate_PersistsSubscriptions(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
@@ -894,62 +823,43 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	scopeTag, _ := resp[looppkg.MetadataScopeTag].(string)
-	if !strings.HasPrefix(scopeTag, "loop:") || len(scopeTag) <= len("loop:") {
-		t.Fatalf("scope_tag = %q, want loop:<hex> shape", scopeTag)
+	if _, present := resp["scope_tag"]; present {
+		t.Errorf("response carries dead scope_tag field: %v", resp["scope_tag"])
 	}
 	if got := resp["entity_subscriptions"]; got != float64(2) {
 		t.Errorf("entity_subscriptions = %v, want 2", got)
 	}
 
-	if len(rig.subStore.added) != 2 {
-		t.Fatalf("added subs = %d, want 2: %+v", len(rig.subStore.added), rig.subStore.added)
-	}
-	for i, sub := range rig.subStore.added {
-		if len(sub.Tags) != 1 || sub.Tags[0] != scopeTag {
-			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, scopeTag)
-		}
-	}
-	if rig.subStore.added[0].EntityID != "climate.upstairs" {
-		t.Errorf("added[0].EntityID = %q, want climate.upstairs", rig.subStore.added[0].EntityID)
-	}
-	if h := rig.subStore.added[0].History; len(h) != 2 || h[0] != 3600 || h[1] != 86400 {
-		t.Errorf("added[0].History = %v, want [3600 86400]", h)
-	}
-	if rig.subStore.added[1].Forecast != "hourly" {
-		t.Errorf("added[1].Forecast = %q, want hourly", rig.subStore.added[1].Forecast)
-	}
-	if rig.subStore.added[1].TTLSeconds != 86400 {
-		t.Errorf("added[1].TTLSeconds = %d, want 86400", rig.subStore.added[1].TTLSeconds)
-	}
-
-	// The RegisterTagProvider callback fires exactly once per create, so
-	// the loop's tag-scoped context provider is wired before the first
-	// iteration runs.
-	if len(rig.registeredTags) != 1 || rig.registeredTags[0] != scopeTag {
-		t.Errorf("registeredTags = %v, want [%q]", rig.registeredTags, scopeTag)
-	}
-
-	// The spec carries the scope tag in both Metadata (canonical binding)
-	// and Tags[0] (active during every iteration).
 	spec := rig.findCurateSpec(t, "thermostat_journal")
-	if got := spec.Metadata[looppkg.MetadataScopeTag]; got != scopeTag {
-		t.Errorf("Metadata[scope_tag] = %q, want %q", got, scopeTag)
+	if _, ok := spec.Metadata["scope_tag"]; ok {
+		t.Errorf("scope_tag metadata should be gone, found %q", spec.Metadata["scope_tag"])
 	}
-	if len(spec.Tags) == 0 || spec.Tags[0] != scopeTag {
-		t.Errorf("Tags[0] = %q, want %q", spec.Tags, scopeTag)
+	if len(spec.Subscriptions) != 2 {
+		t.Fatalf("Subscriptions len = %d, want 2: %+v", len(spec.Subscriptions), spec.Subscriptions)
+	}
+	if spec.Subscriptions[0].EntityID != "climate.upstairs" {
+		t.Errorf("Subscriptions[0].EntityID = %q, want climate.upstairs", spec.Subscriptions[0].EntityID)
+	}
+	if h := spec.Subscriptions[0].History; len(h) != 2 || h[0] != 3600 || h[1] != 86400 {
+		t.Errorf("Subscriptions[0].History = %v, want [3600 86400]", h)
+	}
+	if spec.Subscriptions[1].Forecast != "hourly" {
+		t.Errorf("Subscriptions[1].Forecast = %q, want hourly", spec.Subscriptions[1].Forecast)
+	}
+	if spec.Subscriptions[1].TTLSeconds != 86400 {
+		t.Errorf("Subscriptions[1].TTLSeconds = %d, want 86400", spec.Subscriptions[1].TTLSeconds)
 	}
 }
 
-// TestThaneCurate_ReplacePreservesScopeTag verifies the replace=true
-// branch: the scope tag from the prior spec is reused (not minted
-// anew), the watchlist scope is wiped, and the new entities are added
-// under the same stable tag.
-func TestThaneCurate_ReplacePreservesScopeTag(t *testing.T) {
+// TestThaneCurate_ReplaceOverwritesSubscriptions verifies that
+// replace=true on a re-creation swaps the subscription list entirely
+// to whatever the new entities argument supplies — the prior set is
+// not merged or otherwise leaked through.
+func TestThaneCurate_ReplaceOverwritesSubscriptions(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
-	create := func(extra map[string]any) string {
+	create := func(extra map[string]any) {
 		args := map[string]any{
 			"name":      "hvac_curate",
 			"intent":    "HVAC summary.",
@@ -963,100 +873,37 @@ func TestThaneCurate_ReplacePreservesScopeTag(t *testing.T) {
 		for k, v := range extra {
 			args[k] = v
 		}
-		result, err := rig.tool.Handler(context.Background(), args)
-		if err != nil {
+		if _, err := rig.tool.Handler(context.Background(), args); err != nil {
 			t.Fatalf("thane_curate: %v", err)
 		}
-		var resp map[string]any
-		if err := json.Unmarshal([]byte(result), &resp); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		return resp[looppkg.MetadataScopeTag].(string)
 	}
 
-	firstTag := create(map[string]any{
+	create(map[string]any{
 		"entities": []any{
 			map[string]any{"entity_id": "climate.upstairs"},
 		},
 	})
-	if len(rig.subStore.added) != 1 || rig.subStore.added[0].EntityID != "climate.upstairs" {
-		t.Fatalf("first create added = %+v", rig.subStore.added)
-	}
-	if len(rig.subStore.wiped) != 0 {
-		t.Fatalf("first create should not wipe anything, got %v", rig.subStore.wiped)
+	first := rig.findCurateSpec(t, "hvac_curate")
+	if len(first.Subscriptions) != 1 || first.Subscriptions[0].EntityID != "climate.upstairs" {
+		t.Fatalf("first create Subscriptions = %+v", first.Subscriptions)
 	}
 
-	secondTag := create(map[string]any{
+	create(map[string]any{
 		"replace": true,
 		"entities": []any{
 			map[string]any{"entity_id": "sensor.upstairs_temp"},
 			map[string]any{"entity_id": "weather.home", "forecast": "daily"},
 		},
 	})
-	if secondTag != firstTag {
-		t.Errorf("scope_tag changed across replace: %q → %q (should be stable)", firstTag, secondTag)
+	second := rig.findCurateSpec(t, "hvac_curate")
+	if len(second.Subscriptions) != 2 {
+		t.Fatalf("after replace Subscriptions len = %d, want 2: %+v", len(second.Subscriptions), second.Subscriptions)
 	}
-	if len(rig.subStore.wiped) != 1 || rig.subStore.wiped[0] != firstTag {
-		t.Errorf("expected exactly one wipe of %q, got %v", firstTag, rig.subStore.wiped)
+	if second.Subscriptions[0].EntityID != "sensor.upstairs_temp" || second.Subscriptions[1].EntityID != "weather.home" {
+		t.Errorf("replace-side Subscriptions = %+v", second.Subscriptions)
 	}
-	// Three adds total: 1 from first create + 2 from replace.
-	if len(rig.subStore.added) != 3 {
-		t.Fatalf("total added = %d, want 3", len(rig.subStore.added))
-	}
-	if rig.subStore.added[1].EntityID != "sensor.upstairs_temp" || rig.subStore.added[2].EntityID != "weather.home" {
-		t.Errorf("replace-side adds = %+v %+v", rig.subStore.added[1], rig.subStore.added[2])
-	}
-}
-
-// TestLoopDefinitionDelete_WipesEntitySubscriptions covers the
-// teardown path: deleting a curate loop cleans up its scoped entity
-// subscriptions so they don't linger as orphans in the watchlist.
-func TestLoopDefinitionDelete_WipesEntitySubscriptions(t *testing.T) {
-	t.Parallel()
-	rig := newCurateTestRig(t)
-
-	// Configure loop-definition tools against the same registry the
-	// intent tool wrote into. View is omitted so the delete handler
-	// falls through to building one from the registry directly.
-	rig.reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
-		Registry:   rig.defRegistry,
-		DeleteSpec: func(_ string) error { return nil },
-		Reconcile:  func(_ context.Context, _ string) error { return nil },
-	})
-
-	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":      "curate_to_delete",
-		"intent":    "Short-lived watcher.",
-		"sleep_min": "54m",
-		"sleep_max": "66m",
-		"output": map[string]any{
-			"mode":     "journal",
-			"document": "kb:scratch/short.md",
-		},
-		"entities": []any{
-			map[string]any{"entity_id": "binary_sensor.door"},
-		},
-	}); err != nil {
-		t.Fatalf("thane_curate: %v", err)
-	}
-
-	spec := rig.findCurateSpec(t, "curate_to_delete")
-	scopeTag := spec.Metadata[looppkg.MetadataScopeTag]
-	if scopeTag == "" {
-		t.Fatal("scope_tag missing on spec")
-	}
-	// Reset wiped log so we can isolate the delete's contribution.
-	rig.subStore.wiped = nil
-
-	delTool := rig.reg.Get("loop_definition_delete")
-	if delTool == nil {
-		t.Fatal("loop_definition_delete not registered")
-	}
-	if _, err := delTool.Handler(context.Background(), map[string]any{"name": "curate_to_delete"}); err != nil {
-		t.Fatalf("loop_definition_delete: %v", err)
-	}
-	if len(rig.subStore.wiped) != 1 || rig.subStore.wiped[0] != scopeTag {
-		t.Errorf("delete should wipe scope_tag %q exactly once, got %v", scopeTag, rig.subStore.wiped)
+	if second.Subscriptions[1].Forecast != "daily" {
+		t.Errorf("replace-side Subscriptions[1].Forecast = %q, want daily", second.Subscriptions[1].Forecast)
 	}
 }
 

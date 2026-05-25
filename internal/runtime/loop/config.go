@@ -140,6 +140,12 @@ type Config struct {
 	// maintain through scoped runtime tools.
 	Outputs []OutputSpec
 
+	// Subscriptions are entities this loop wants to see in context
+	// every iteration. Carried through from [Spec.Subscriptions] at
+	// hydration time; see [Registry.AncestorSubscriptions] for the
+	// ancestor walk that assembles the effective list.
+	Subscriptions []EntitySubscription
+
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
 	// tags (plus always-active tags).

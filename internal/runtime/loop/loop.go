@@ -396,6 +396,10 @@ func (l *Loop) Name() string { return l.config.Name }
 // construction time, so callers don't need the registry lock.
 func (l *Loop) ParentID() string { return l.config.ParentID }
 
+// Operation returns the loop's runtime operation kind. Set once at
+// construction; safe to read without the loop lock.
+func (l *Loop) Operation() Operation { return l.config.Operation }
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")
@@ -666,6 +670,27 @@ func (l *Loop) SetActiveTagsFunc(fn func() []string) {
 	l.mu.Lock()
 	l.activeTagsFunc = fn
 	l.mu.Unlock()
+}
+
+// SetSubscriptions replaces this loop's effective subscription list in
+// place. Used by runtime tools (watch_entity, unwatch_entity,
+// update_entity_subscriptions) so subscription changes take effect on
+// the next iteration without waiting for a stop/restart. Durability is
+// the caller's responsibility — the persisted spec is the source of
+// truth, and the caller is expected to persist before invoking this.
+func (l *Loop) SetSubscriptions(subs []EntitySubscription) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.config.Subscriptions = cloneEntitySubscriptions(subs)
+}
+
+// Subscriptions returns a defensive copy of the loop's current
+// subscriptions. Used by introspection paths and tests that need to
+// observe the live state without acquiring the lock themselves.
+func (l *Loop) Subscriptions() []EntitySubscription {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneEntitySubscriptions(l.config.Subscriptions)
 }
 
 // setAncestorTagsFunc is package-private because only [Registry.Register]

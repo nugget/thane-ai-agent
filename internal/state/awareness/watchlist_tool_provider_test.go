@@ -26,11 +26,14 @@ func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]
 		t.Fatalf("new store: %v", err)
 	}
 
-	var registered []string
+	// TagRegistrar is gone post-migration; the third return is kept
+	// so the tuple shape doesn't churn across all existing callers,
+	// but it points at an always-empty slice. New tests should not
+	// assert on it.
 	p := NewWatchlistTools(WatchlistToolsConfig{
-		Store:        store,
-		TagRegistrar: func(tag string) { registered = append(registered, tag) },
+		Store: store,
 	})
+	var registered []string
 	return p, store, &registered
 }
 
@@ -128,9 +131,10 @@ func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
 		t.Fatalf("result = %q, want TTL text", result)
 	}
 
-	if !slices.Equal(*registered, []string{"battery_focus"}) {
-		t.Fatalf("registered tags = %v, want [battery_focus]", *registered)
-	}
+	// The pre-migration TagRegistrar callback is gone; this test no
+	// longer checks for it. The tags are recorded on the row itself
+	// (asserted below via ListByTag) instead.
+	_ = registered
 
 	subs, err := store.ListByTag("battery_focus")
 	if err != nil {

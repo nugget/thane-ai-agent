@@ -231,6 +231,75 @@ func (r *Registry) Children(loopID string) []*Loop {
 	return children
 }
 
+// AncestorSubscriptions returns the deduplicated effective entity
+// subscriptions for loopID: the union of the loop's own Subscriptions
+// and every container ancestor's, walked parent-first. Dedup is
+// first-wins by EntityID — the loop's own declaration takes precedence
+// over an inherited one, so a child can override a container's default
+// history/forecast settings by listing the same entity locally with
+// different options. Returns nil when the loop is not registered or
+// nothing in the chain subscribes to anything.
+//
+// Today only container ancestors contribute; service-loop ancestors
+// (rare, since the loop graph is mostly tree-shaped under containers)
+// are skipped to match the tag-inheritance contract from Phase 1A.
+func (r *Registry) AncestorSubscriptions(loopID string) []EntitySubscription {
+	// Snapshot the walk under the registry lock — we only need the
+	// parent chain and operation bits, both of which are config-shape
+	// invariants that don't move after construction. ParentID is set
+	// once at construction; Operation is too. The per-loop
+	// Subscriptions slice is the one mutable field [SetSubscriptions]
+	// can change concurrently, so we pull it from each loop via
+	// [Loop.Subscriptions], which clones under l.mu — avoiding the
+	// data race that would arise from reading l.config.Subscriptions
+	// while holding only r.mu.
+	r.mu.RLock()
+	walk := make([]*Loop, 0, 4)
+	current := r.loops[loopID]
+	if current != nil {
+		walk = append(walk, current)
+		for i := 0; i < ancestorWalkLimit; i++ {
+			parentID := current.config.ParentID
+			if parentID == "" {
+				break
+			}
+			parent, ok := r.loops[parentID]
+			if !ok {
+				break
+			}
+			walk = append(walk, parent)
+			current = parent
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(walk) == 0 {
+		return nil
+	}
+
+	var collected []EntitySubscription
+	seen := make(map[string]struct{})
+	for i, l := range walk {
+		// The starting loop contributes regardless of operation; only
+		// ancestors are filtered to container nodes (matches the tag-
+		// inheritance contract from Phase 1A).
+		if i > 0 && l.Operation() != OperationContainer {
+			continue
+		}
+		for _, sub := range l.Subscriptions() {
+			if sub.EntityID == "" {
+				continue
+			}
+			if _, dup := seen[sub.EntityID]; dup {
+				continue
+			}
+			seen[sub.EntityID] = struct{}{}
+			collected = append(collected, sub)
+		}
+	}
+	return collected
+}
+
 // ancestorContainerTags collects deduplicated capability tags from each
 // container ancestor of loopID, in walk order (immediate parent first).
 // Non-container ancestors contribute nothing — only container loops are

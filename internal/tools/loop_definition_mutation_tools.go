@@ -88,24 +88,9 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 		}
 	}
 
-	// Tear down any entity subscriptions scoped to this loop's scope
-	// tag before the definition itself is removed. The scope_tag
-	// binding is stored on Spec.Metadata so it persists across replace
-	// cycles; only delete crosses the threshold where the subscriptions
-	// become orphans. A wipe failure aborts the whole delete: the
-	// alternative (proceed anyway) would leave watchlist rows scoped to
-	// a scope_tag whose owning loop no longer exists, with no later
-	// operation that could reach them. Hard-fail keeps state
-	// consistent and lets the caller retry once the underlying issue
-	// clears. Skip when the watchlist store isn't wired (test
-	// harnesses, alternate registries).
-	if r.loopIntentDeps.WatchlistStore != nil {
-		if scopeTag := looppkg.SpecScopeTag(existing.Spec); scopeTag != "" {
-			if err := r.loopIntentDeps.WatchlistStore.RemoveAllForScope(scopeTag); err != nil {
-				return "", fmt.Errorf("wipe loop entity subscriptions for %q: %w", scopeTag, err)
-			}
-		}
-	}
+	// Subscriptions live on Spec.Subscriptions; deleting the spec
+	// removes them transitively. No watchlist-store wipe needed —
+	// that path was for the old scope_tag indirection.
 
 	if r.deletePersistedLoopDefinition != nil {
 		if err := r.deletePersistedLoopDefinition(name); err != nil {

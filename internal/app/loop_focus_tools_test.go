@@ -8,55 +8,35 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// fakeFocusStore captures AddWithOptions / RemoveWithScopes calls so
-// the loop_focus_tools tests can assert on what the runtime-tool
-// handlers actually do without standing up the awareness store.
-type fakeFocusStore struct {
-	added   []focusAdd
-	removed []focusRemove
+// fakeMutator is a thin in-memory implementation of subscriptionMutator
+// for the loop_focus_tools tests. It keeps a per-loop subscription list
+// so the tests can assert on the spec-shape state without standing up
+// the definition registry or the live loop registry.
+type fakeMutator struct {
+	subs map[string][]looppkg.EntitySubscription
 }
 
-type focusAdd struct {
-	EntityID   string
-	Tags       []string
-	History    []int
-	TTLSeconds int
-	Forecast   string
+func newFakeMutator() *fakeMutator {
+	return &fakeMutator{subs: make(map[string][]looppkg.EntitySubscription)}
 }
 
-type focusRemove struct {
-	EntityID string
-	Scopes   []string
+func (f *fakeMutator) Mutate(_ context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
+	next, err := mutate(f.subs[loopName])
+	if err != nil {
+		return nil, err
+	}
+	f.subs[loopName] = next
+	return next, nil
 }
 
-func (f *fakeFocusStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error {
-	f.added = append(f.added, focusAdd{
-		EntityID:   entityID,
-		Tags:       append([]string(nil), tags...),
-		History:    append([]int(nil), history...),
-		TTLSeconds: ttlSeconds,
-		Forecast:   forecast,
-	})
-	return nil
-}
-
-func (f *fakeFocusStore) RemoveWithScopes(entityID string, scopes []string) error {
-	f.removed = append(f.removed, focusRemove{
-		EntityID: entityID,
-		Scopes:   append([]string(nil), scopes...),
-	})
-	return nil
-}
-
-// TestBuildLoopFocusTools_WatchEntity exercises the watch_entity
-// runtime tool's full path: the focus_tag is baked into the closure
-// at hydration time, the model running an iteration calls the tool
-// without naming it, and the store receives a subscription scoped to
-// exactly that tag.
+// TestBuildLoopFocusTools_WatchEntity walks watch_entity end-to-end
+// through the mutator path: the model invokes the tool with no scope
+// (the loop name is baked into the closure at hydration), and the
+// resulting subscription lands on the loop's effective list.
 func TestBuildLoopFocusTools_WatchEntity(t *testing.T) {
 	t.Parallel()
-	store := &fakeFocusStore{}
-	tools := buildLoopFocusTools(store, "loop:abc123")
+	m := newFakeMutator()
+	tools := buildLoopFocusToolsWithMutator("watcher_loop", m.Mutate)
 	if len(tools) != 2 {
 		t.Fatalf("buildLoopFocusTools returned %d tools, want 2", len(tools))
 	}
@@ -84,36 +64,36 @@ func TestBuildLoopFocusTools_WatchEntity(t *testing.T) {
 	if !strings.Contains(out, "climate.upstairs") {
 		t.Errorf("response %q should echo entity_id", out)
 	}
-	if len(store.added) != 1 {
-		t.Fatalf("added len = %d, want 1", len(store.added))
+	got := m.subs["watcher_loop"]
+	if len(got) != 1 {
+		t.Fatalf("Subscriptions len = %d, want 1: %+v", len(got), got)
 	}
-	got := store.added[0]
-	if got.EntityID != "climate.upstairs" {
-		t.Errorf("EntityID = %q, want climate.upstairs", got.EntityID)
+	if got[0].EntityID != "climate.upstairs" {
+		t.Errorf("EntityID = %q, want climate.upstairs", got[0].EntityID)
 	}
-	// Critical: the model never typed "loop:abc123", but the store
-	// received that scope because it was baked into the handler closure.
-	if len(got.Tags) != 1 || got.Tags[0] != "loop:abc123" {
-		t.Errorf("Tags = %v, want [loop:abc123]", got.Tags)
+	if len(got[0].History) != 2 || got[0].History[0] != 3600 || got[0].History[1] != 86400 {
+		t.Errorf("History = %v, want [3600 86400]", got[0].History)
 	}
-	if len(got.History) != 2 || got.History[0] != 3600 || got.History[1] != 86400 {
-		t.Errorf("History = %v, want [3600 86400]", got.History)
+	if got[0].Forecast != "hourly" {
+		t.Errorf("Forecast = %q, want hourly", got[0].Forecast)
 	}
-	if got.Forecast != "hourly" {
-		t.Errorf("Forecast = %q, want hourly", got.Forecast)
+	if got[0].TTLSeconds != 7200 {
+		t.Errorf("TTLSeconds = %d, want 7200", got[0].TTLSeconds)
 	}
-	if got.TTLSeconds != 7200 {
-		t.Errorf("TTLSeconds = %d, want 7200", got.TTLSeconds)
+	if got[0].AddedAt.IsZero() {
+		t.Error("AddedAt should be stamped at mutation time, got zero")
 	}
 }
 
-// TestBuildLoopFocusTools_UnwatchEntity mirrors the watch test for
-// the removal path. The remove targets only this loop's scope.
+// TestBuildLoopFocusTools_UnwatchEntity covers the symmetric remove
+// path: unwatch drops the entry from the loop's subscription list.
 func TestBuildLoopFocusTools_UnwatchEntity(t *testing.T) {
 	t.Parallel()
-	store := &fakeFocusStore{}
-	tools := buildLoopFocusTools(store, "loop:xyz789")
+	m := newFakeMutator()
+	// Seed an existing subscription so unwatch has something to drop.
+	m.subs["unwatch_loop"] = []looppkg.EntitySubscription{{EntityID: "sensor.gone"}}
 
+	tools := buildLoopFocusToolsWithMutator("unwatch_loop", m.Mutate)
 	var unwatch *looppkg.RuntimeTool
 	for i, rt := range tools {
 		if rt.Name == "unwatch_entity" {
@@ -130,15 +110,44 @@ func TestBuildLoopFocusTools_UnwatchEntity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("unwatch_entity handler: %v", err)
 	}
-	if len(store.removed) != 1 {
-		t.Fatalf("removed len = %d, want 1", len(store.removed))
+	if got := m.subs["unwatch_loop"]; len(got) != 0 {
+		t.Errorf("Subscriptions after unwatch = %+v, want empty", got)
 	}
-	got := store.removed[0]
-	if got.EntityID != "sensor.gone" {
-		t.Errorf("EntityID = %q, want sensor.gone", got.EntityID)
+}
+
+// TestBuildLoopFocusTools_WatchReplacesExisting exercises the upsert
+// semantics of watch_entity: re-invoking it for the same entity_id
+// replaces options rather than duplicating the entry.
+func TestBuildLoopFocusTools_WatchReplacesExisting(t *testing.T) {
+	t.Parallel()
+	m := newFakeMutator()
+	tools := buildLoopFocusToolsWithMutator("upsert_loop", m.Mutate)
+	var watch *looppkg.RuntimeTool
+	for i, rt := range tools {
+		if rt.Name == "watch_entity" {
+			watch = &tools[i]
+			break
+		}
 	}
-	if len(got.Scopes) != 1 || got.Scopes[0] != "loop:xyz789" {
-		t.Errorf("Scopes = %v, want [loop:xyz789]", got.Scopes)
+
+	if _, err := watch.Handler(context.Background(), map[string]any{
+		"entity_id": "sensor.same",
+		"history":   []any{600},
+	}); err != nil {
+		t.Fatalf("first watch_entity: %v", err)
+	}
+	if _, err := watch.Handler(context.Background(), map[string]any{
+		"entity_id": "sensor.same",
+		"history":   []any{3600},
+	}); err != nil {
+		t.Fatalf("second watch_entity: %v", err)
+	}
+	got := m.subs["upsert_loop"]
+	if len(got) != 1 {
+		t.Fatalf("Subscriptions len = %d, want 1 (upsert): %+v", len(got), got)
+	}
+	if len(got[0].History) != 1 || got[0].History[0] != 3600 {
+		t.Errorf("History = %v, want [3600] (second call's value)", got[0].History)
 	}
 }
 
@@ -146,8 +155,8 @@ func TestBuildLoopFocusTools_UnwatchEntity(t *testing.T) {
 // path on both tools.
 func TestBuildLoopFocusTools_EmptyEntityID(t *testing.T) {
 	t.Parallel()
-	store := &fakeFocusStore{}
-	tools := buildLoopFocusTools(store, "loop:abc")
+	m := newFakeMutator()
+	tools := buildLoopFocusToolsWithMutator("any_loop", m.Mutate)
 
 	for _, rt := range tools {
 		_, err := rt.Handler(context.Background(), map[string]any{"entity_id": "   "})
@@ -158,11 +167,11 @@ func TestBuildLoopFocusTools_EmptyEntityID(t *testing.T) {
 }
 
 // TestBuildLoopFocusTools_RejectsFractionalIntegers mirrors the
-// thane_curate-side coerceInt guard for the in-loop tool surface.
+// thane_curate-side coerceInt guard.
 func TestBuildLoopFocusTools_RejectsFractionalIntegers(t *testing.T) {
 	t.Parallel()
-	store := &fakeFocusStore{}
-	tools := buildLoopFocusTools(store, "loop:abc")
+	m := newFakeMutator()
+	tools := buildLoopFocusToolsWithMutator("any_loop", m.Mutate)
 	var watch *looppkg.RuntimeTool
 	for i, rt := range tools {
 		if rt.Name == "watch_entity" {

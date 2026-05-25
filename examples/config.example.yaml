@@ -928,6 +928,7 @@ ego:
 #       operation: service
 #       completion: none
 #       outputs: []
+#       subscriptions: []
 #       conditions:
 #         schedule:
 #           timezone: America/Chicago

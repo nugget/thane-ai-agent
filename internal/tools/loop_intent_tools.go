@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -12,16 +10,6 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
-
-// EntitySubscriptionStore is the narrow contract loop-intent tools need
-// from the entity-watchlist store. Defined here rather than imported
-// from state/awareness because that package transitively imports this
-// one (area_activity_tool.go); the interface inverts the dependency.
-type EntitySubscriptionStore interface {
-	AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error
-	RemoveWithScopes(entityID string, scopes []string) error
-	RemoveAllForScope(scope string) error
-}
 
 // LoopIntentToolDeps wires the loop-definition registry, document
 // store, and launch helper into the intent-shaped loop creation tools.
@@ -52,18 +40,11 @@ type LoopIntentToolDeps struct {
 	PersistSpec      func(looppkg.Spec, time.Time) error
 	Reconcile        func(context.Context, string) error
 	LaunchDefinition func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
-	// WatchlistStore wires entity-subscription writes into thane_curate's
-	// entities parameter. Optional: when nil, the entities parameter is
-	// rejected and only the document/output side of the loop is set up.
-	WatchlistStore EntitySubscriptionStore
-	// RegisterTagProvider, if set, is invoked once after thane_curate
-	// adds entity subscriptions under a new scope tag so the tag-scoped
-	// context provider exists in the registry. Mirrors the TagRegistrar
-	// callback awareness.WatchlistTools uses.
-	RegisterTagProvider func(tag string)
-	// LiveRegistry resolves container parent names to live loop IDs at
-	// container-creation time. Optional: when nil, thane_create_container
-	// only supports top-level containers (no nesting).
+	// LiveRegistry resolves container parent names to live loop IDs and
+	// propagates subscription mutations to running loops. Optional but
+	// strongly recommended: when nil, thane_create_container only
+	// supports top-level containers, and runtime subscription
+	// mutations do not reflect on the live loop until restart.
 	LiveRegistry *looppkg.Registry
 }
 
@@ -83,9 +64,7 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 		r.registerThaneCurate()
 	}
 	r.registerThaneCreateContainer()
-	if deps.WatchlistStore != nil {
-		r.registerUpdateEntitySubscriptions()
-	}
+	r.registerUpdateEntitySubscriptions()
 }
 
 func (r *Registry) registerThaneCreateContainer() {
@@ -399,22 +378,12 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	if len(entities) > 0 && deps.WatchlistStore == nil {
-		return "", fmt.Errorf("entities provided but watchlist store is not configured")
-	}
 
 	// Refuse to clobber an existing definition unless replace=true.
 	// Read directly from deps.Registry rather than going through
 	// currentLoopDefinitionSnapshot, because the latter checks
 	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
 	// rather than the registry handle this tool was configured with.
-	//
-	// When replace=true and the prior spec has a scope tag, reuse it
-	// so existing subscriptions are renormalized under a stable tag
-	// rather than orphaned under a stale one. [looppkg.SpecScopeTag]
-	// reads scope_tag and falls back to the legacy focus_tag key for
-	// definitions persisted before the rename.
-	var existingScopeTag string
 	if snap := deps.Registry.Snapshot(); snap != nil {
 		if existing, ok := findLoopDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
@@ -423,40 +392,25 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			if !replace {
 				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 			}
-			existingScopeTag = looppkg.SpecScopeTag(existing.Spec)
-		}
-	}
-
-	scopeTag := existingScopeTag
-	if scopeTag == "" {
-		scopeTag, err = newScopeTag()
-		if err != nil {
-			return "", fmt.Errorf("generate scope tag: %w", err)
 		}
 	}
 
 	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
 
-	// The scope tag is prepended to Spec.Tags so each iteration activates
-	// the loop-scoped watchlist provider without the caller having to
-	// repeat it. Caller-supplied tags follow.
-	finalTags := append([]string{scopeTag}, tags...)
-
+	now := time.Now().UTC()
 	jitterRatio := envelope.jitter
 	spec := looppkg.Spec{
-		Name:         name,
-		Enabled:      true,
-		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
-		Operation:    looppkg.OperationService,
-		SleepMin:     envelope.sleepMin,
-		SleepMax:     envelope.sleepMax,
-		SleepDefault: envelope.sleepDefault,
-		Jitter:       &jitterRatio,
-		Tags:         finalTags,
-		Outputs:      []looppkg.OutputSpec{outputSpec},
-		Metadata: map[string]string{
-			looppkg.MetadataScopeTag: scopeTag,
-		},
+		Name:          name,
+		Enabled:       true,
+		Task:          buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
+		Operation:     looppkg.OperationService,
+		SleepMin:      envelope.sleepMin,
+		SleepMax:      envelope.sleepMax,
+		SleepDefault:  envelope.sleepDefault,
+		Jitter:        &jitterRatio,
+		Tags:          tags,
+		Outputs:       []looppkg.OutputSpec{outputSpec},
+		Subscriptions: curateEntitiesToSubscriptions(entities, now),
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 			Instructions:     strings.TrimSpace(instructions),
@@ -485,7 +439,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"output_mode":          {outputMode},
 		"sleep_min":            {envelope.sleepMin.String()},
 		"sleep_max":            {envelope.sleepMax.String()},
-		"created":              {time.Now().UTC().Format(time.RFC3339)},
+		"created":              {now.Format(time.RFC3339)},
 	}
 	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
 		Ref:         documentRef,
@@ -498,31 +452,10 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	_ = docResult // discard structured result; we surface the ref directly
 
-	// Entity subscriptions: wipe-and-re-add under the scope tag. On a
-	// fresh create existingScopeTag is empty and wipe is a no-op; on
-	// replace=true we wipe the prior watch set before adding the new
-	// one so the loop never sees stale entities. Wipe runs even when
-	// the new entities list is empty (an explicit clear).
-	if deps.WatchlistStore != nil && (existingScopeTag != "" || len(entities) > 0) {
-		if existingScopeTag != "" {
-			if err := deps.WatchlistStore.RemoveAllForScope(scopeTag); err != nil {
-				return "", fmt.Errorf("wipe prior entity subscriptions: %w", err)
-			}
-		}
-		for _, e := range entities {
-			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
-				return "", fmt.Errorf("add entity subscription %q: %w", e.EntityID, err)
-			}
-		}
-		if deps.RegisterTagProvider != nil && len(entities) > 0 {
-			deps.RegisterTagProvider(scopeTag)
-		}
-	}
-
 	// Persist + reconcile + launch. Mirrors handleLoopDefinitionSet +
 	// handleLoopDefinitionLaunch; collapsed here so the model only sees
 	// one round-trip for the intent.
-	updatedAt := time.Now().UTC()
+	updatedAt := now
 	if deps.PersistSpec != nil {
 		if err := deps.PersistSpec(spec, updatedAt); err != nil {
 			return "", fmt.Errorf("persist loop definition: %w", err)
@@ -549,7 +482,6 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
 		"output_tool":          outputSpec.ToolName(),
-		"scope_tag":            scopeTag,
 		"entity_subscriptions": len(entities),
 		"sleep_envelope": map[string]any{
 			"sleep_min":     envelope.sleepMin.String(),
@@ -559,6 +491,82 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		},
 		"warnings": warnings,
 	})
+}
+
+// mutateLoopSubscriptions reads the current spec for loopName, calls
+// mutate to compute the next subscriptions, persists the updated
+// spec, and propagates the change to the live loop if one is
+// registered. Used by watch_entity, unwatch_entity, and
+// update_entity_subscriptions so runtime changes to subscriptions
+// survive restart and take effect on the next iteration.
+//
+// Returns the resulting subscription list (after mutation) along
+// with any error. Mutators that need to compute removed/added
+// deltas should diff against the pre-mutation list inside their
+// closure.
+func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
+	deps := r.loopIntentDeps
+	if deps.Registry == nil {
+		return nil, fmt.Errorf("loop definition registry not configured")
+	}
+	snap := deps.Registry.Snapshot()
+	existing, ok := findLoopDefinition(snap, loopName)
+	if !ok {
+		return nil, (&looppkg.UnknownDefinitionError{Name: loopName})
+	}
+	if existing.Source == looppkg.DefinitionSourceConfig {
+		return nil, (&looppkg.ImmutableDefinitionError{Name: loopName})
+	}
+
+	next, err := mutate(existing.Spec.Subscriptions)
+	if err != nil {
+		return nil, err
+	}
+	newSpec := existing.Spec
+	newSpec.Subscriptions = next
+
+	updatedAt := time.Now().UTC()
+	if deps.PersistSpec != nil {
+		if err := deps.PersistSpec(newSpec, updatedAt); err != nil {
+			return nil, fmt.Errorf("persist loop definition: %w", err)
+		}
+	}
+	if err := deps.Registry.Upsert(newSpec, updatedAt); err != nil {
+		return nil, err
+	}
+	if deps.LiveRegistry != nil {
+		if live := deps.LiveRegistry.GetByName(loopName); live != nil {
+			live.SetSubscriptions(next)
+		}
+	}
+	// ctx reserved for future async hooks (e.g. notifying a watcher).
+	_ = ctx
+	return next, nil
+}
+
+// curateEntitiesToSubscriptions converts the parsed thane_curate
+// entity input into the typed [looppkg.EntitySubscription] form
+// persisted on Spec.Subscriptions. AddedAt is stamped at creation
+// so TTL countdown is meaningful from the moment the loop is
+// launched; without it [EntitySubscription.IsExpired] treats the
+// row as immortal regardless of TTL. Returns nil for an empty
+// input so the spec field stays empty rather than carrying an
+// allocated zero-length slice.
+func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) []looppkg.EntitySubscription {
+	if len(entities) == 0 {
+		return nil
+	}
+	out := make([]looppkg.EntitySubscription, 0, len(entities))
+	for _, e := range entities {
+		out = append(out, looppkg.EntitySubscription{
+			EntityID:   e.EntityID,
+			History:    append([]int(nil), e.History...),
+			Forecast:   e.Forecast,
+			TTLSeconds: e.TTLSeconds,
+			AddedAt:    addedAt,
+		})
+	}
+	return out
 }
 
 // curateEntity is the parsed shape of one element from the thane_curate
@@ -618,8 +626,16 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				ent.History = append(ent.History, n)
 			}
 		}
-		if forecast, ok := obj["forecast"].(string); ok {
-			ent.Forecast = strings.TrimSpace(forecast)
+		if rawForecast, present := obj["forecast"]; present && rawForecast != nil {
+			forecast, ok := rawForecast.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].forecast: must be a string, got %T", fieldName, i, rawForecast)
+			}
+			normalized, err := normalizeForecast(forecast)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].forecast: %w", fieldName, i, err)
+			}
+			ent.Forecast = normalized
 		}
 		if rawTTL, present := obj["ttl_seconds"]; present {
 			ttl, err := coerceInt(rawTTL)
@@ -634,6 +650,33 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		out = append(out, ent)
 	}
 	return out, nil
+}
+
+// normalizeForecast validates a forecast value at the tool boundary
+// so invalid strings can't reach the renderer. "none" and empty
+// collapse to "" (no forecast fetch); the three real types pass
+// through unchanged; anything else is an actionable error. Exposed
+// for the app-side watch_entity handler too, since both surfaces
+// land in Spec.Subscriptions.Forecast and downstream rendering
+// treats any non-empty value as a real HA forecast type.
+func normalizeForecast(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	switch v {
+	case "", "none":
+		return "", nil
+	case "daily", "hourly", "twice_daily":
+		return v, nil
+	default:
+		return "", fmt.Errorf("must be one of [daily, hourly, twice_daily, none], got %q", raw)
+	}
+}
+
+// NormalizeForecast is the exported form of [normalizeForecast] used
+// by the app-side runtime tools that also persist subscriptions.
+// Kept thin so the two surfaces share one source of truth for what
+// is and isn't a valid forecast value.
+func NormalizeForecast(raw string) (string, error) {
+	return normalizeForecast(raw)
 }
 
 func coerceInt(v any) (int, error) {
@@ -653,19 +696,6 @@ func coerceInt(v any) (int, error) {
 	default:
 		return 0, fmt.Errorf("must be an integer, got %T", v)
 	}
-}
-
-// newScopeTag mints a fresh per-loop watchlist scope. The "loop:"
-// prefix is the load-bearing convention: API/UI layers filter for it
-// to find loop-owned subscriptions, capability-tag collisions are
-// impossible (no built-in tag contains a colon), and a human reading
-// list_entity_subscriptions knows at a glance which rows belong to a loop.
-func newScopeTag() (string, error) {
-	var buf [3]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", err
-	}
-	return "loop:" + hex.EncodeToString(buf[:]), nil
 }
 
 // buildCurateOutputSpec converts the intent-shaped output argument into

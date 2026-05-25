@@ -4,38 +4,40 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // registerUpdateEntitySubscriptions wires the external CRUD tool for
-// adjusting a named loop's entity-subscription watch set post-launch.
-// Loop creation already accepts an entities parameter via
-// thane_curate; this tool is for the model managing an existing,
-// running loop without re-launching it.
+// adjusting a named loop's entity-subscription set post-launch. Loop
+// creation already accepts an entities parameter via thane_curate;
+// this tool is for the model managing an existing loop without
+// re-launching it. Changes write through to the persisted spec and
+// land on the live loop on the next iteration.
 //
 // The internal counterpart — watch_entity / unwatch_entity hydrated
-// as runtime tools alongside the loop's scoped output tools — lives in
+// as runtime tools on every running loop — lives in
 // internal/app/loop_focus_tools.go. That surface targets the model
-// running an iteration and has no name parameter (the scope tag is
+// running an iteration and has no name parameter (the loop name is
 // baked in at hydration). Two surfaces, two cognitive frames.
 func (r *Registry) registerUpdateEntitySubscriptions() {
 	r.Register(&Tool{
 		Name: "update_entity_subscriptions",
-		Description: "Add or remove Home Assistant entities from a running loop's watch set. " +
+		Description: "Add or remove Home Assistant entities from a running loop's subscription set. " +
 			"Use this when you want a peer loop or conversation to start (or stop) seeing specific entities in its context every iteration — for example, when the core loop learns that a curate loop should also watch a newly-relevant sensor. " +
-			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because the scope is baked in. " +
+			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because it is baked in. " +
 			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
 			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
-			"To see what a loop currently watches, call list_entity_subscriptions with the loop's scope_tag (visible on loop_definition_get and on thane_curate's launch response). " +
-			"Returns the loop's scope_tag plus counts of added and removed subscriptions.",
+			"To inspect what a loop currently watches, call loop_definition_get on its name — Spec.Subscriptions is the source of truth, plus any inherited entries from container ancestors. " +
+			"Returns counts of added and removed entries and the resulting subscription_count.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a scope_tag in Spec.Metadata; legacy persisted definitions with the older focus_tag key are accepted during the rename fallback window).",
+					"description": "Loop definition name to operate on. Any overlay-source loop is eligible — the structural Spec.Subscriptions list is updated directly.",
 				},
 				"add": map[string]any{
 					"type":        "array",
@@ -68,7 +70,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 				"remove": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Entity IDs to unsubscribe from this loop. Removes only the row scoped to this loop's scope_tag; other scopes for the same entity are left alone.",
+					"description": "Entity IDs to unsubscribe from this loop. Removes only the loop's own entries; inherited subscriptions from container ancestors are left alone (override locally by re-declaring with new options if needed).",
 				},
 			},
 			"required": []string{"name"},
@@ -77,25 +79,15 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 	})
 }
 
-func (r *Registry) handleUpdateEntitySubscriptions(_ context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map[string]any) (string, error) {
 	deps := r.loopIntentDeps
-	if deps.Registry == nil || deps.WatchlistStore == nil {
-		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop registry and watchlist store")
+	if deps.Registry == nil {
+		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop definition registry")
 	}
 
 	name := strings.TrimSpace(ldStringArg(args, "name"))
 	if name == "" {
 		return "", fmt.Errorf("name is required")
-	}
-
-	snap := deps.Registry.Snapshot()
-	existing, ok := findLoopDefinition(snap, name)
-	if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	scopeTag := looppkg.SpecScopeTag(existing.Spec)
-	if scopeTag == "" {
-		return "", fmt.Errorf("loop %q has no scope_tag; only loops created with thane_curate (or another tool that mints a scope_tag) support entity subscriptions", name)
 	}
 
 	addList, err := parseEntityList("add", args["add"])
@@ -110,27 +102,55 @@ func (r *Registry) handleUpdateEntitySubscriptions(_ context.Context, args map[s
 		return "", fmt.Errorf("at least one of add or remove must contain entries")
 	}
 
-	// Removes first so re-adding the same entity with different options
-	// (e.g. swap history windows) is a single round-trip and lands as
-	// an insert rather than a no-op upsert with stale state.
-	for _, eid := range removeList {
-		if err := deps.WatchlistStore.RemoveWithScopes(eid, []string{scopeTag}); err != nil {
-			return "", fmt.Errorf("remove %q: %w", eid, err)
-		}
-	}
-	for _, e := range addList {
-		if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
-			return "", fmt.Errorf("add %q: %w", e.EntityID, err)
-		}
+	next, err := r.mutateLoopSubscriptions(ctx, name, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+		return applySubscriptionDelta(current, addList, removeList, time.Now().UTC()), nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	return ldMarshalToolJSON(map[string]any{
 		"status":               "ok",
 		"loop_definition_name": name,
-		"scope_tag":            scopeTag,
 		"added":                len(addList),
 		"removed":              len(removeList),
+		"subscription_count":   len(next),
 	})
+}
+
+// applySubscriptionDelta returns the updated subscription list after
+// removing every entry in removeIDs and (re-)adding every entry in
+// addList. Removes run first so re-adding the same entity with new
+// options lands as a fresh insert rather than colliding with the
+// stale row. Existing subscriptions for an entity in addList are
+// replaced wholesale by the new options; previously-set fields not
+// repeated in the add carry no precedence. addedAt is stamped on
+// every newly-added entry so TTL countdown starts from the mutation.
+func applySubscriptionDelta(current []looppkg.EntitySubscription, addList []curateEntity, removeIDs []string, addedAt time.Time) []looppkg.EntitySubscription {
+	skip := make(map[string]struct{}, len(removeIDs)+len(addList))
+	for _, eid := range removeIDs {
+		skip[eid] = struct{}{}
+	}
+	for _, e := range addList {
+		skip[e.EntityID] = struct{}{}
+	}
+	kept := make([]looppkg.EntitySubscription, 0, len(current))
+	for _, sub := range current {
+		if _, drop := skip[sub.EntityID]; drop {
+			continue
+		}
+		kept = append(kept, sub)
+	}
+	for _, e := range addList {
+		kept = append(kept, looppkg.EntitySubscription{
+			EntityID:   e.EntityID,
+			History:    append([]int(nil), e.History...),
+			Forecast:   e.Forecast,
+			TTLSeconds: e.TTLSeconds,
+			AddedAt:    addedAt,
+		})
+	}
+	return kept
 }
 
 // parseRemoveEntityIDs validates the remove[] parameter shape and
