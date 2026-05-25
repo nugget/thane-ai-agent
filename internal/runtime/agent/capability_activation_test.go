@@ -414,7 +414,7 @@ func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 
 	resp1, err := loop.Run(context.Background(), &Request{
 		ConversationID: "conv-1",
-		Hints:          map[string]string{"source": "signal"},
+		RoutingFactors: map[string]string{"source": "signal"},
 		Messages:       []Message{{Role: "user", Content: "activate forge"}},
 	}, nil)
 	if err != nil {
@@ -430,7 +430,7 @@ func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 
 	resp2, err := loop.Run(context.Background(), &Request{
 		ConversationID: "conv-1",
-		Hints:          map[string]string{"source": "signal"},
+		RoutingFactors: map[string]string{"source": "signal"},
 		Messages:       []Message{{Role: "user", Content: "fresh session"}},
 	}, nil)
 	if err != nil {

@@ -31,13 +31,13 @@ func TestEgoPrompt_NormalIteration(t *testing.T) {
 	}
 }
 
-func TestEgoPrompt_SupervisorIteration(t *testing.T) {
+func TestEgoPrompt_SupervisorTurn(t *testing.T) {
 	got := EgoPrompt(true)
 
 	if !strings.Contains(got, "Supervisor Review") {
-		t.Error("supervisor iteration should include supervisor review section")
+		t.Error("supervisor turn should include supervisor review section")
 	}
 	if !strings.Contains(got, "Ego loop iteration") {
-		t.Error("supervisor iteration should still include base prompt")
+		t.Error("supervisor turn should still include base prompt")
 	}
 }

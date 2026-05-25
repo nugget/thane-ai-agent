@@ -35,7 +35,7 @@ func (r *Registry) handleModelRouteExplain(_ context.Context, args map[string]an
 			"needs_images":    req.NeedsImages,
 			"tool_count":      req.ToolCount,
 			"priority":        mrPriorityString(req.Priority),
-			"hints":           req.Hints,
+			"hints":           req.RoutingFactors,
 		},
 		"default_model": r.modelRegistry.Snapshot().DefaultModel,
 		"decision":      decision,
@@ -51,6 +51,6 @@ func routeRequestForExplanation(args map[string]any, toolCount int, priority rou
 		NeedsImages:    mrBoolArg(args, "needs_images"),
 		ToolCount:      toolCount,
 		Priority:       priority,
-		Hints:          hints,
+		RoutingFactors: hints,
 	}
 }

@@ -48,8 +48,7 @@ names the generated replacement tool for the document.
   tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
-// metacognitiveSupervisorAugmentation is appended for frontier/supervisor
-// iterations.
+// metacognitiveSupervisorAugmentation is appended for frontier/supervisor turns.
 const metacognitiveSupervisorAugmentation = `
 
 ## Supervisor Review (Frontier Iteration)

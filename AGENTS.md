@@ -39,6 +39,10 @@ on GitHub Actions to catch what you could have caught locally.
   `httpkit.NewTransport()` — never construct `http.Client{}` directly.
   httpkit is the single source of truth for outbound HTTP: retry
   transport, User-Agent injection, connection pool management.
+- **HTTP handlers**: Set explicit timeouts at the server boundary, keep
+  handlers thin, and return bounded responses. The handler should be a
+  shell around package-level logic that can be unit-tested without
+  standing up a server.
 - **Prefer the standard library**. Third-party imports add supply chain
   risk, version churn, and transitive deps. Use stdlib when it can do the
   job.
@@ -73,13 +77,48 @@ on GitHub Actions to catch what you could have caught locally.
 - **Tool result sizes**: Cap output (search: 16 KB, transcripts: 32 KB).
   Watch for unbounded data returns.
 - **Config defaults**: Set in `applyDefaults()`, not struct tags.
-- **Go doc comments**: GoDoc is a primary audience for this codebase.
-  Every exported symbol gets a doc comment starting with its name that
-  reads as a complete sentence. Every package gets `// Package foo ...`.
-  Write comments that help a reader understand *why*, not just *what* —
-  the signature already says what.
+- **Documentation**: See the [Documentation](#documentation) section
+  below. The short version: GoDoc is a product surface, not commentary,
+  and the bar differs for exported (full contract) vs unexported
+  (rationale where it earns its place).
+- **Package boundaries**: Keep them honest. Avoid shared "utility"
+  packages until two real call sites prove the abstraction belongs
+  there. Prefer placing helpers in the package that owns the type.
 - **Provider pattern**: New integrations implement a provider interface
   (see `search.Provider`).
+
+## Documentation
+
+GoDoc is a primary product surface, not commentary on the source. A
+reader on pkg.go.dev (or running `go doc`) should be able to use any
+package correctly without opening it.
+
+**Exported symbols** carry that load: document the contract, not the Go
+shape. Every exported symbol gets a doc comment starting with its name
+that reads as a complete sentence. Every package gets
+`// Package foo ...`. Use Go 1.19+ heading syntax for navigable
+package-level docs, cross-reference related symbols with
+`[Identifier]` doc links, and add runnable `Example*` tests for primary
+usage patterns so the docs cannot bit-rot.
+
+**Unexported symbols** answer a different question: *why is this here
+in its current form?* The test for whether a comment is earning its
+place:
+
+> If a contributor deleted this symbol in a PR, would the surrounding
+> code make clear why that's wrong?
+
+If no, document the why. If yes, no comment needed. This bar prevents
+two failure modes: undocumented decisions that look like accidents
+("why is this field still here?") and reflexive doc comments that just
+restate the signature. Fields that look like relics but aren't — kept
+for internal callers, retained for backwards compatibility, deliberately
+narrower than the surrounding type implies — are exactly where this
+rationale earns its place.
+
+Model-facing context and tool authoring have their own conventions; see
+[docs/model-facing-context.md](docs/model-facing-context.md) and
+[docs/model-facing-tools.md](docs/model-facing-tools.md).
 
 ## Architecture at a Glance
 

@@ -10,7 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// Launch describes a single loops-ng launch request. It is separate
+// Launch describes a single loops launch request. It is separate
 // from [Spec] so per-launch overrides and delivery hooks can grow here
 // over time without turning [Spec] itself into an ephemeral run object.
 type Launch struct {
@@ -20,8 +20,7 @@ type Launch struct {
 	Metadata       map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 	ConversationID string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
 	ChannelBinding *memory.ChannelBinding                 `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
-	Model          string                                 `yaml:"model,omitempty" json:"model,omitempty"`
-	Hints          map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	RoutingFactors map[string]string                      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 	AllowedTools   []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
 	ExcludeTools   []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 	InitialTags    []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
@@ -62,8 +61,7 @@ type launchJSON struct {
 	Metadata                 map[string]string        `json:"metadata,omitempty"`
 	ConversationID           string                   `json:"conversation_id,omitempty"`
 	ChannelBinding           *memory.ChannelBinding   `json:"channel_binding,omitempty"`
-	Model                    string                   `json:"model,omitempty"`
-	Hints                    map[string]string        `json:"hints,omitempty"`
+	RoutingFactors           map[string]string        `json:"routing_factors,omitempty"`
 	AllowedTools             []string                 `json:"allowed_tools,omitempty"`
 	ExcludeTools             []string                 `json:"exclude_tools,omitempty"`
 	InitialTags              []string                 `json:"initial_tags,omitempty"`
@@ -91,8 +89,7 @@ func (l Launch) MarshalJSON() ([]byte, error) {
 		Metadata:                 cloneStringMap(l.Metadata),
 		ConversationID:           l.ConversationID,
 		ChannelBinding:           l.ChannelBinding.Clone(),
-		Model:                    l.Model,
-		Hints:                    cloneStringMap(l.Hints),
+		RoutingFactors:           cloneStringMap(l.RoutingFactors),
 		AllowedTools:             append([]string(nil), l.AllowedTools...),
 		ExcludeTools:             append([]string(nil), l.ExcludeTools...),
 		InitialTags:              append([]string(nil), l.InitialTags...),
@@ -137,8 +134,7 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		Metadata:                 cloneStringMap(wire.Metadata),
 		ConversationID:           wire.ConversationID,
 		ChannelBinding:           wire.ChannelBinding.Clone(),
-		Model:                    wire.Model,
-		Hints:                    cloneStringMap(wire.Hints),
+		RoutingFactors:           cloneStringMap(wire.RoutingFactors),
 		AllowedTools:             append([]string(nil), wire.AllowedTools...),
 		ExcludeTools:             append([]string(nil), wire.ExcludeTools...),
 		InitialTags:              append([]string(nil), wire.InitialTags...),
@@ -158,6 +154,61 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		SuppressAlwaysContext:    wire.SuppressAlwaysContext,
 	}
 	return nil
+}
+
+// HasOverrides reports whether the launch carries any caller-supplied
+// payload. Returns false for the zero value (callers joining an
+// existing loop with no per-run customization).
+//
+// Includes Spec: a caller-supplied Spec is also caller payload. On the
+// normal launch path the runtime overwrites it with the stored runtime
+// spec so it's benign there, but the active-service-loop guard returns
+// before the overwrite, so flagging it here keeps that guard's check
+// to one expression. OnProgress is excluded because it is an
+// internal-only delivery hook.
+//
+// Used by the active-service-loop guard in
+// [loopDefinitionRuntime.LaunchDefinition] to surface a loud error
+// when a caller passes payload that would be silently dropped (the
+// runtime returns the existing loop ID without re-applying anything).
+func (l *Launch) HasOverrides() bool {
+	if l == nil {
+		return false
+	}
+	if !l.Spec.IsZero() {
+		return true
+	}
+	if l.Task != "" ||
+		l.ParentID != "" ||
+		l.ConversationID != "" ||
+		l.SystemPrompt != "" ||
+		l.FallbackContent != "" ||
+		l.CompletionConversationID != "" ||
+		l.UsageRole != "" ||
+		l.UsageTaskName != "" ||
+		l.PromptMode != "" {
+		return true
+	}
+	if l.SkipContext || l.SkipTagFilter || l.SuppressAlwaysContext {
+		return true
+	}
+	if l.MaxIterations != 0 || l.MaxOutputTokens != 0 {
+		return true
+	}
+	if l.RunTimeout != 0 || l.ToolTimeout != 0 {
+		return true
+	}
+	if l.ChannelBinding != nil || l.CompletionChannel != nil {
+		return true
+	}
+	if len(l.Metadata) > 0 ||
+		len(l.RoutingFactors) > 0 ||
+		len(l.AllowedTools) > 0 ||
+		len(l.ExcludeTools) > 0 ||
+		len(l.InitialTags) > 0 {
+		return true
+	}
+	return false
 }
 
 // Validate checks that the launch is well-formed.
@@ -191,14 +242,13 @@ func (l *Launch) requestOverride() Request {
 		return Request{}
 	}
 	return Request{
-		Model:                 l.Model,
 		ConversationID:        l.ConversationID,
 		ChannelBinding:        l.ChannelBinding.Clone(),
 		SkipContext:           l.SkipContext,
 		AllowedTools:          append([]string(nil), l.AllowedTools...),
 		ExcludeTools:          append([]string(nil), l.ExcludeTools...),
 		SkipTagFilter:         l.SkipTagFilter,
-		Hints:                 cloneStringMap(l.Hints),
+		RoutingFactors:        cloneStringMap(l.RoutingFactors),
 		InitialTags:           append([]string(nil), l.InitialTags...),
 		OnProgress:            l.OnProgress,
 		FallbackContent:       l.FallbackContent,

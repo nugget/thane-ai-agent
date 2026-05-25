@@ -31,15 +31,16 @@ type Runner interface {
 // Request mirrors the loop-facing fields of agent.Request. The loop
 // package defines its own type to avoid importing agent.
 type Request struct {
-	Model          string                 `yaml:"model,omitempty" json:"model,omitempty"`
-	ConversationID string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	ChannelBinding *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
-	Messages       []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
-	SkipContext    bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
-	AllowedTools   []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	ExcludeTools   []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
-	SkipTagFilter  bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
-	Hints          map[string]string      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	Model            string                 `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID   string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding   *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
+	Messages         []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext      bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools     []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools     []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	SkipTagFilter    bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	RoutingFactors   map[string]string      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
+	DelegationGating string                 `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"` // Typed feature switch; "disabled" gives the model direct tool access (no orchestrator-and-delegate gating).
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
@@ -78,8 +79,8 @@ type Request struct {
 	SuppressAlwaysContext bool `yaml:"suppress_always_context,omitempty" json:"suppress_always_context,omitempty"`
 }
 
-// RunRequest is kept as a compatibility alias while loops-ng migrates
-// onto Request as the primary loop-facing run descriptor.
+// RunRequest is a compatibility alias for [Request], the primary
+// loop-facing run descriptor.
 type RunRequest = Request
 
 // Message is a chat message for the runner. It intentionally mirrors
@@ -97,8 +98,8 @@ type Message struct {
 	Images []llm.ImageContent `yaml:"-" json:"-"`
 }
 
-// RunMessage is kept as a compatibility alias while loops-ng migrates
-// onto Message as the primary loop-facing message type.
+// RunMessage is a compatibility alias for [Message], the primary
+// loop-facing message type.
 type RunMessage = Message
 
 // Response mirrors agent.Response fields that loops consume. It holds
@@ -124,8 +125,8 @@ type Response struct {
 	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
 }
 
-// RunResponse is kept as a compatibility alias while loops-ng
-// migrates onto Response as the primary loop-facing response type.
+// RunResponse is a compatibility alias for [Response], the primary
+// loop-facing response type.
 type RunResponse = Response
 
 // StreamCallback receives raw streaming events from a [Runner]. The event
@@ -214,17 +215,17 @@ type Loop struct {
 	currentConvID string
 
 	// requestBase carries the per-iteration request shaping derived
-	// from a loops-ng [Spec]'s [router.LoopProfile]. It is additive and
-	// only populated for loops created via [NewFromSpec].
+	// from a [Spec]'s [router.LoopProfile]. It is additive and only
+	// populated for loops created via [NewFromSpec].
 	requestBase Request
 
 	// requestOverride carries launch-specific per-run overrides
 	// applied on top of the spec/profile-derived request shaping.
 	requestOverride Request
 
-	// requestInstructions is extra guidance derived from a loops-ng
-	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
-	// task when present.
+	// requestInstructions is extra guidance derived from a [Spec]'s
+	// [router.LoopProfile]. It is prepended to each iteration task
+	// when present.
 	requestInstructions string
 
 	// lastResponse is the most recent successful runner response for
@@ -253,7 +254,8 @@ type Loop struct {
 	recentIterations []IterationSnapshot
 
 	// lastSupervisorIter is the iteration number of the most recent
-	// successful supervisor iteration. Zero means none yet.
+	// iteration that ran a successful supervisor turn. Zero means
+	// none yet.
 	lastSupervisorIter int
 
 	// llmContext holds enrichment data from the most recent
@@ -319,9 +321,8 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 	}, nil
 }
 
-// NewFromSpec creates a loop from a [Spec], validating the loops-ng
-// fields before compiling the engine-facing [Config]. This is an
-// additive bridge for gradually moving call sites onto Spec.
+// NewFromSpec creates a loop from a [Spec], validating it before
+// compiling the engine-facing [Config].
 func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -488,10 +489,10 @@ func (l *Loop) Status() Status {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
 	}
-	if l.config.Hints != nil {
-		cfgCopy.Hints = make(map[string]string, len(l.config.Hints))
-		for k, v := range l.config.Hints {
-			cfgCopy.Hints[k] = v
+	if l.config.RoutingFactors != nil {
+		cfgCopy.RoutingFactors = make(map[string]string, len(l.config.RoutingFactors))
+		for k, v := range l.config.RoutingFactors {
+			cfgCopy.RoutingFactors[k] = v
 		}
 	}
 	if l.config.Metadata != nil {
@@ -846,7 +847,7 @@ func (l *Loop) run(ctx context.Context) {
 		l.currentConvID = convID
 		l.mu.Unlock()
 
-		// Determine if this is a supervisor iteration.
+		// Determine if this iteration runs a supervisor turn.
 		isSupervisor := forceSupervisor || (l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb)
 
 		iterLog := logger.With(
@@ -1346,9 +1347,10 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 	}
 }
 
-// buildAgentTurn chooses the loop's turn construction strategy. Custom
-// TurnBuilder hooks get the wake first; otherwise Task and TaskBuilder
-// are adapted into the same AgentTurn shape.
+// buildAgentTurn chooses the loop's turn construction strategy. A
+// custom TurnBuilder hook gets first refusal on this iteration's turn;
+// otherwise Task and TaskBuilder are adapted into the same AgentTurn
+// shape.
 func (l *Loop) buildAgentTurn(ctx context.Context, input TurnInput) (*AgentTurn, error) {
 	if l.config.TurnBuilder != nil {
 		return l.config.TurnBuilder(ctx, input)
@@ -1423,21 +1425,21 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		}
 		hints["local_only"] = "true"
 	}
-	for k, v := range l.requestBase.Hints {
+	for k, v := range l.requestBase.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range l.config.Hints {
+	for k, v := range l.config.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range req.Hints {
+	for k, v := range req.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range l.requestOverride.Hints {
+	for k, v := range l.requestOverride.RoutingFactors {
 		hints[k] = v
 	}
 
 	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags)
-	req.Model = firstNonEmpty(l.requestOverride.Model, req.Model, l.requestBase.Model)
+	req.Model = firstNonEmpty(req.Model, l.requestBase.Model)
 	req.ConversationID = firstNonEmpty(l.requestOverride.ConversationID, req.ConversationID, convID)
 	req.ChannelBinding = firstNonNilChannelBinding(l.requestOverride.ChannelBinding, req.ChannelBinding, l.requestBase.ChannelBinding)
 	req.SkipContext = l.requestOverride.SkipContext || req.SkipContext
@@ -1448,7 +1450,8 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	req.AllowedTools = allowedTools
 	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
-	req.Hints = hints
+	req.RoutingFactors = hints
+	req.DelegationGating = firstNonEmpty(l.requestOverride.DelegationGating, req.DelegationGating, l.config.DelegationGating, l.requestBase.DelegationGating)
 	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
 	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
 	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)

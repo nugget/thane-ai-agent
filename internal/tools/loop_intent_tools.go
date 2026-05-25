@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -57,7 +55,7 @@ type LoopIntentToolDeps struct {
 	// rejected and only the document/output side of the loop is set up.
 	WatchlistStore EntitySubscriptionStore
 	// RegisterTagProvider, if set, is invoked once after thane_curate
-	// adds entity subscriptions under a new focus tag so the tag-scoped
+	// adds entity subscriptions under a new scope tag so the tag-scoped
 	// context provider exists in the registry. Mirrors the TagRegistrar
 	// callback awareness.WatchlistTools uses.
 	RegisterTagProvider func(tag string)
@@ -87,11 +85,11 @@ func (r *Registry) registerThaneCurate() {
 			"Output-first: the target document (kb:, core:, scratchpad:, generated:) is scaffolded with frontmatter recording loop ownership before the loop is registered, so the loop's identity and intent are self-describing on disk. " +
 			"Two output modes today: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
-			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
+			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
-			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop focus tag and surfaced into the loop's prompt automatically. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the derived sleep_min/max/default cadence triple.",
-		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "entities", "replace"},
+			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop scope tag and surfaced into the loop's prompt automatically. " +
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal scope_tag, and the resolved sleep envelope.",
+		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -103,9 +101,21 @@ func (r *Registry) registerThaneCurate() {
 					"type":        "string",
 					"description": "One- or two-sentence description of what the loop tracks, why it exists, and what the document should contain. The model running each iteration sees this in its task prompt.",
 				},
-				"cadence": map[string]any{
+				"sleep_min": map[string]any{
 					"type":        "string",
-					"description": "How often the loop wakes. Accepts \"hourly\", \"daily\", \"every 30 minutes\", \"30m\", \"1h\", or any time.Duration string. Below 1 minute is rejected.",
+					"description": "Tightest interval between iterations (Go duration: \"5m\", \"30m\", \"1h\"). Floor at 1 minute. The loop's set_next_sleep can never wake sooner than this.",
+				},
+				"sleep_max": map[string]any{
+					"type":        "string",
+					"description": "Loosest interval between iterations (Go duration: \"30m\", \"6h\"). The loop's set_next_sleep can never sleep longer than this. Must be >= sleep_min; equal values pin a fixed interval.",
+				},
+				"sleep_default": map[string]any{
+					"type":        "string",
+					"description": "Optional initial sleep duration for the first wake. Defaults to the midpoint of sleep_min and sleep_max. Must lie within the envelope.",
+				},
+				"jitter": map[string]any{
+					"type":        "number",
+					"description": "Optional sleep randomization factor in [0, 1]. Defaults to 0.1. Set to 0 for deterministic timing.",
 				},
 				"output": map[string]any{
 					"type":        "object",
@@ -134,7 +144,7 @@ func (r *Registry) registerThaneCurate() {
 				},
 				"entities": map[string]any{
 					"type":        "array",
-					"description": "Optional Home Assistant entity subscriptions the loop should see in context every iteration. Each item declares an entity_id with optional history windows (seconds, e.g. [3600, 86400] for 1h and 1d summaries), weather forecast type for weather.* entities, and a ttl_seconds expiration. Subscriptions are persisted under a per-loop focus tag; you do not need to spell the tag.",
+					"description": "Optional Home Assistant entity subscriptions the loop should see in context every iteration. Each item declares an entity_id with optional history windows (seconds, e.g. [3600, 86400] for 1h and 1d summaries), weather forecast type for weather.* entities, and a ttl_seconds expiration. Subscriptions are persisted under a per-loop scope tag; you do not need to spell the tag.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -160,16 +170,16 @@ func (r *Registry) registerThaneCurate() {
 						"required": []string{"entity_id"},
 					},
 				},
-				"guidance": map[string]any{
+				"instructions": map[string]any{
 					"type":        "string",
-					"description": "Optional extra steering injected into each iteration's task prompt (output format hints, what to focus on, what to skip).",
+					"description": "Optional steering text prepended to every iteration's task (output format guidance, what to focus on, what to skip). Persists on the spec's Profile and shows up in loop_definition_get.",
 				},
 				"replace": map[string]any{
 					"type":        "boolean",
 					"description": "When true, overwrite an existing definition or document of the same name/ref. Default false; the tool refuses to clobber existing artifacts.",
 				},
 			},
-			"required": []string{"name", "intent", "cadence", "output"},
+			"required": []string{"name", "intent", "sleep_min", "sleep_max", "output"},
 		},
 		Handler: r.handleThaneCurate,
 	})
@@ -183,15 +193,16 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 
 	name, _ := args["name"].(string)
 	intent, _ := args["intent"].(string)
-	cadenceInput, _ := args["cadence"].(string)
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("name is required")
 	}
 	if strings.TrimSpace(intent) == "" {
 		return "", fmt.Errorf("intent is required")
 	}
-	if strings.TrimSpace(cadenceInput) == "" {
-		return "", fmt.Errorf("cadence is required")
+
+	envelope, err := parseSleepEnvelope(args)
+	if err != nil {
+		return "", err
 	}
 
 	output, _ := args["output"].(map[string]any)
@@ -219,7 +230,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			}
 		}
 	}
-	guidance, _ := args["guidance"].(string)
+	instructions, _ := args["instructions"].(string)
 	replace, _ := args["replace"].(bool)
 
 	entities, err := parseEntityList("entities", args["entities"])
@@ -230,21 +241,18 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		return "", fmt.Errorf("entities provided but watchlist store is not configured")
 	}
 
-	cad, err := parseCadence(cadenceInput)
-	if err != nil {
-		return "", err
-	}
-
 	// Refuse to clobber an existing definition unless replace=true.
 	// Read directly from deps.Registry rather than going through
 	// currentLoopDefinitionSnapshot, because the latter checks
 	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
 	// rather than the registry handle this tool was configured with.
 	//
-	// When replace=true and the prior spec has a focus_tag, reuse it
+	// When replace=true and the prior spec has a scope tag, reuse it
 	// so existing subscriptions are renormalized under a stable tag
-	// rather than orphaned under a stale one.
-	var existingFocusTag string
+	// rather than orphaned under a stale one. [looppkg.SpecScopeTag]
+	// reads scope_tag and falls back to the legacy focus_tag key for
+	// definitions persisted before the rename.
+	var existingScopeTag string
 	if snap := deps.Registry.Snapshot(); snap != nil {
 		if existing, ok := findLoopDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
@@ -253,42 +261,43 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			if !replace {
 				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
 			}
-			existingFocusTag = strings.TrimSpace(existing.Spec.Metadata["focus_tag"])
+			existingScopeTag = looppkg.SpecScopeTag(existing.Spec)
 		}
 	}
 
-	focusTag := existingFocusTag
-	if focusTag == "" {
-		focusTag, err = newFocusTag()
+	scopeTag := existingScopeTag
+	if scopeTag == "" {
+		scopeTag, err = newScopeTag()
 		if err != nil {
-			return "", fmt.Errorf("generate focus tag: %w", err)
+			return "", fmt.Errorf("generate scope tag: %w", err)
 		}
 	}
 
 	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
 
-	// The focus tag is prepended to Spec.Tags so each iteration activates
+	// The scope tag is prepended to Spec.Tags so each iteration activates
 	// the loop-scoped watchlist provider without the caller having to
 	// repeat it. Caller-supplied tags follow.
-	finalTags := append([]string{focusTag}, tags...)
+	finalTags := append([]string{scopeTag}, tags...)
 
-	jitterRatio := 0.1
+	jitterRatio := envelope.jitter
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
-		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), guidance),
+		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
 		Operation:    looppkg.OperationService,
-		SleepMin:     cad.sleepMin,
-		SleepMax:     cad.sleepMax,
-		SleepDefault: cad.sleepDefault,
+		SleepMin:     envelope.sleepMin,
+		SleepMax:     envelope.sleepMax,
+		SleepDefault: envelope.sleepDefault,
 		Jitter:       &jitterRatio,
 		Tags:         finalTags,
 		Outputs:      []looppkg.OutputSpec{outputSpec},
 		Metadata: map[string]string{
-			"focus_tag": focusTag,
+			looppkg.MetadataScopeTag: scopeTag,
 		},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
+			Instructions:     strings.TrimSpace(instructions),
 		},
 	}
 	if err := spec.ValidatePersistable(); err != nil {
@@ -312,7 +321,8 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_definition_name": {name},
 		"loop_intent":          {intent},
 		"output_mode":          {outputMode},
-		"cadence":              {cadenceInput},
+		"sleep_min":            {envelope.sleepMin.String()},
+		"sleep_max":            {envelope.sleepMax.String()},
 		"created":              {time.Now().UTC().Format(time.RFC3339)},
 	}
 	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
@@ -326,24 +336,24 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	_ = docResult // discard structured result; we surface the ref directly
 
-	// Entity subscriptions: wipe-and-re-add under the focus tag. On a
-	// fresh create existingFocusTag is empty and wipe is a no-op; on
+	// Entity subscriptions: wipe-and-re-add under the scope tag. On a
+	// fresh create existingScopeTag is empty and wipe is a no-op; on
 	// replace=true we wipe the prior watch set before adding the new
 	// one so the loop never sees stale entities. Wipe runs even when
 	// the new entities list is empty (an explicit clear).
-	if deps.WatchlistStore != nil && (existingFocusTag != "" || len(entities) > 0) {
-		if existingFocusTag != "" {
-			if err := deps.WatchlistStore.RemoveAllForScope(focusTag); err != nil {
+	if deps.WatchlistStore != nil && (existingScopeTag != "" || len(entities) > 0) {
+		if existingScopeTag != "" {
+			if err := deps.WatchlistStore.RemoveAllForScope(scopeTag); err != nil {
 				return "", fmt.Errorf("wipe prior entity subscriptions: %w", err)
 			}
 		}
 		for _, e := range entities {
-			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{focusTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
+			if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
 				return "", fmt.Errorf("add entity subscription %q: %w", e.EntityID, err)
 			}
 		}
 		if deps.RegisterTagProvider != nil && len(entities) > 0 {
-			deps.RegisterTagProvider(focusTag)
+			deps.RegisterTagProvider(scopeTag)
 		}
 	}
 
@@ -377,13 +387,13 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_id":              launchResult.LoopID,
 		"output_mode":          outputMode,
 		"output_tool":          outputSpec.ToolName(),
-		"focus_tag":            focusTag,
+		"scope_tag":            scopeTag,
 		"entity_subscriptions": len(entities),
-		"cadence": map[string]any{
-			"input":         cadenceInput,
-			"sleep_default": cad.sleepDefault.String(),
-			"sleep_min":     cad.sleepMin.String(),
-			"sleep_max":     cad.sleepMax.String(),
+		"sleep_envelope": map[string]any{
+			"sleep_min":     envelope.sleepMin.String(),
+			"sleep_max":     envelope.sleepMax.String(),
+			"sleep_default": envelope.sleepDefault.String(),
+			"jitter":        envelope.jitter,
 		},
 		"warnings": warnings,
 	})
@@ -483,12 +493,12 @@ func coerceInt(v any) (int, error) {
 	}
 }
 
-// newFocusTag mints a fresh per-loop watchlist scope. The "loop:" prefix
-// is the load-bearing convention: API/UI layers filter for it to find
-// loop-owned subscriptions, capability-tag collisions are impossible
-// (no built-in tag contains a colon), and a human reading
+// newScopeTag mints a fresh per-loop watchlist scope. The "loop:"
+// prefix is the load-bearing convention: API/UI layers filter for it
+// to find loop-owned subscriptions, capability-tag collisions are
+// impossible (no built-in tag contains a colon), and a human reading
 // list_context_entities knows at a glance which rows belong to a loop.
-func newFocusTag() (string, error) {
+func newScopeTag() (string, error) {
 	var buf [3]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", err
@@ -521,10 +531,13 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.Outp
 
 // buildCurateTask renders the per-iteration task prompt for a
 // thane_curate-created loop. The model running each iteration sees the
-// intent, the document target, the output mode, the scoped output tool
-// name, plus any caller guidance. Kept short and shape-clear so the
-// model can act without re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string) string {
+// intent, the document target, the output mode, and the scoped output
+// tool name. Caller-supplied steering text lives on
+// [router.LoopProfile.Instructions] and is prepended during task-turn
+// construction (see [loop.Loop.buildTaskTurn]), so it doesn't appear
+// here. Kept short and shape-clear so the model can act without
+// re-reading the loop's own definition.
+func buildCurateTask(intent, docRef, outputMode, outputToolName string) string {
 	var verb string
 	switch outputMode {
 	case "journal":
@@ -558,10 +571,6 @@ func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string
 	default:
 		sb.WriteString("The document's current contents are surfaced in the Declared Durable Outputs context block above.")
 	}
-	if strings.TrimSpace(guidance) != "" {
-		sb.WriteString("\n\nGuidance: ")
-		sb.WriteString(guidance)
-	}
 	return sb.String()
 }
 
@@ -585,96 +594,105 @@ func renderScaffoldBody(outputMode, title, intent string) string {
 	return sb.String()
 }
 
-// cadence captures the sleep_min/max/default/jitter triple derived from
-// a human-facing cadence string. The loops-ng spec already has these
-// fields; this helper centralizes the input parsing so the intent
-// tools share one parser.
-type cadence struct {
+// sleepEnvelope captures the sleep_min/max/default/jitter quartet that
+// shapes a service loop's sleep behavior. The fields mirror the
+// corresponding [looppkg.Spec] fields; this struct centralizes the
+// validation/defaulting that turns raw tool input into a known-good
+// envelope.
+type sleepEnvelope struct {
 	sleepMin     time.Duration
 	sleepMax     time.Duration
 	sleepDefault time.Duration
+	jitter       float64
 }
 
-var cadenceUnitPattern = regexp.MustCompile(`(\d+)\s*(minutes?|mins?|m|hours?|hrs?|h|days?|d)\b`)
-
-// parseCadence accepts canonical cadence strings ("hourly", "daily",
-// "5m", "1h") and natural-language equivalents ("every 30 minutes",
-// "every 2 hours"). Returns sleep_min, sleep_max, and a sleep_default
-// derived from a symmetric ~10% jitter window. Floor 1 minute.
-func parseCadence(input string) (cadence, error) {
-	s := strings.ToLower(strings.TrimSpace(input))
-	if s == "" {
-		return cadence{}, fmt.Errorf("cadence is required")
-	}
-
-	switch s {
-	case "hourly":
-		return cadenceFromInterval(time.Hour), nil
-	case "daily":
-		return cadenceFromInterval(24 * time.Hour), nil
-	}
-
-	// Strip leading "every " — "every 30 minutes" reads to "30 minutes".
-	s = strings.TrimPrefix(s, "every ")
-	s = strings.TrimSpace(s)
-
-	// Normalize natural-language units to time.Duration form. "30 minutes"
-	// → "30m", "2 hours" → "2h", "1 day" → "24h".
-	if normalized, ok := normalizeCadenceUnits(s); ok {
-		s = normalized
-	}
-
-	d, err := time.ParseDuration(s)
+// parseSleepEnvelope reads sleep_min, sleep_max, sleep_default, and
+// jitter from the tool args and returns a validated envelope. sleep_min
+// and sleep_max are required Go duration strings (>= 1 minute, with
+// sleep_min <= sleep_max). sleep_default defaults to the midpoint of
+// the envelope; jitter defaults to 0.1. Returns a single error per
+// failure, so the caller surfaces the first problem to the model
+// without piling on cascading complaints.
+func parseSleepEnvelope(args map[string]any) (sleepEnvelope, error) {
+	sleepMin, presentMin, err := parseDurationArg(args, "sleep_min")
 	if err != nil {
-		return cadence{}, fmt.Errorf("unsupported cadence %q: try \"hourly\", \"daily\", \"30m\", or \"1h\"", input)
+		return sleepEnvelope{}, err
 	}
-	if d < time.Minute {
-		return cadence{}, fmt.Errorf("cadence %q is below the 1 minute floor", input)
+	if !presentMin {
+		return sleepEnvelope{}, fmt.Errorf("sleep_min is required (Go duration string, e.g. \"5m\")")
 	}
-	return cadenceFromInterval(d), nil
-}
-
-func cadenceFromInterval(d time.Duration) cadence {
-	jit := d / 10
-	if jit < 30*time.Second {
-		jit = 30 * time.Second
+	sleepMax, presentMax, err := parseDurationArg(args, "sleep_max")
+	if err != nil {
+		return sleepEnvelope{}, err
 	}
-	sleepMin := d - jit
-	// Clamp sleepMin to the same 1-minute floor parseCadence enforces
-	// on the input interval. Without this clamp a 1m cadence with the
-	// 30s minimum jitter would yield sleepMin=30s, breaching the floor.
+	if !presentMax {
+		return sleepEnvelope{}, fmt.Errorf("sleep_max is required (Go duration string, e.g. \"30m\")")
+	}
 	if sleepMin < time.Minute {
-		sleepMin = time.Minute
+		return sleepEnvelope{}, fmt.Errorf("sleep_min %s is below the 1 minute floor", sleepMin)
 	}
-	return cadence{
+	if sleepMax < sleepMin {
+		return sleepEnvelope{}, fmt.Errorf("sleep_max %s must be >= sleep_min %s", sleepMax, sleepMin)
+	}
+
+	sleepDefault, presentDefault, err := parseDurationArg(args, "sleep_default")
+	if err != nil {
+		return sleepEnvelope{}, err
+	}
+	if !presentDefault {
+		sleepDefault = (sleepMin + sleepMax) / 2
+	} else if sleepDefault < sleepMin || sleepDefault > sleepMax {
+		return sleepEnvelope{}, fmt.Errorf("sleep_default %s must lie in [%s, %s]", sleepDefault, sleepMin, sleepMax)
+	}
+
+	jitter := 0.1
+	if v, present := args["jitter"]; present && v != nil {
+		switch j := v.(type) {
+		case float64:
+			jitter = j
+		case int:
+			jitter = float64(j)
+		default:
+			return sleepEnvelope{}, fmt.Errorf("jitter must be a number in [0, 1], got %T", v)
+		}
+		if jitter < 0 || jitter > 1 {
+			return sleepEnvelope{}, fmt.Errorf("jitter %v must be in [0, 1]", jitter)
+		}
+	}
+
+	return sleepEnvelope{
 		sleepMin:     sleepMin,
-		sleepMax:     d + jit,
-		sleepDefault: d,
-	}
+		sleepMax:     sleepMax,
+		sleepDefault: sleepDefault,
+		jitter:       jitter,
+	}, nil
 }
 
-// normalizeCadenceUnits replaces natural-language unit suffixes with
-// time.Duration-compatible single-letter units. Returns (normalized,
-// true) on a successful match anywhere in the input; otherwise
-// (input, false) so the caller can try time.ParseDuration directly.
-func normalizeCadenceUnits(input string) (string, bool) {
-	matched := false
-	out := cadenceUnitPattern.ReplaceAllStringFunc(input, func(match string) string {
-		parts := cadenceUnitPattern.FindStringSubmatch(match)
-		if len(parts) < 3 {
-			return match
-		}
-		matched = true
-		n, _ := strconv.Atoi(parts[1])
-		switch parts[2] {
-		case "minute", "minutes", "min", "mins", "m":
-			return fmt.Sprintf("%dm", n)
-		case "hour", "hours", "hr", "hrs", "h":
-			return fmt.Sprintf("%dh", n)
-		case "day", "days", "d":
-			return fmt.Sprintf("%dh", n*24)
-		}
-		return match
-	})
-	return strings.ReplaceAll(out, " ", ""), matched
+// parseDurationArg returns the parsed duration from args[key]. present
+// is false when the key is absent, JSON null, or an empty/whitespace
+// string — all "caller didn't set this" shapes. Returns an error when
+// the key is present with a non-string type or a string that does not
+// parse as a Go duration. Distinguishing "wrong type present" from
+// "absent" matters because the JSON schema isn't enforced at handler
+// entry; a caller sending `{"sleep_default": 300}` would otherwise
+// have the value silently ignored and the loop launched with an
+// unexpected default.
+func parseDurationArg(args map[string]any, key string) (d time.Duration, present bool, err error) {
+	v, found := args[key]
+	if !found || v == nil {
+		return 0, false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, true, fmt.Errorf("%s must be a Go duration string (e.g. \"5m\"), got %T", key, v)
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false, nil
+	}
+	d, err = time.ParseDuration(s)
+	if err != nil {
+		return 0, true, fmt.Errorf("%s %q: %w", key, s, err)
+	}
+	return d, true, nil
 }

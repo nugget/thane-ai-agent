@@ -86,7 +86,7 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 		ExcludeTools:    []string{"shell_exec"},
 		Jitter:          &jitter,
 		FallbackContent: "please try again",
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"source": "loop",
 		},
 		Metadata: map[string]string{
@@ -97,7 +97,7 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	cfg := spec.ToConfig()
 	cfg.Tags[0] = "changed"
 	cfg.ExcludeTools[0] = "other"
-	cfg.Hints["source"] = "changed"
+	cfg.RoutingFactors["source"] = "changed"
 	cfg.Metadata["room"] = "changed"
 	*cfg.Jitter = 0.9
 
@@ -107,8 +107,8 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	if spec.ExcludeTools[0] != "shell_exec" {
 		t.Fatalf("spec.ExcludeTools mutated = %q", spec.ExcludeTools[0])
 	}
-	if spec.Hints["source"] != "loop" {
-		t.Fatalf("spec.Hints mutated = %q", spec.Hints["source"])
+	if spec.RoutingFactors["source"] != "loop" {
+		t.Fatalf("spec.RoutingFactors mutated = %q", spec.RoutingFactors["source"])
 	}
 	if spec.Metadata["room"] != "office" {
 		t.Fatalf("spec.Metadata mutated = %q", spec.Metadata["room"])
@@ -265,11 +265,13 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 				}},
 			},
 		},
-		SleepMin:     5 * time.Minute,
-		SleepMax:     30 * time.Minute,
-		SleepDefault: 10 * time.Minute,
-		MaxDuration:  time.Hour,
-		OnRetrigger:  RetriggerRestart,
+		SleepMin:         5 * time.Minute,
+		SleepMax:         30 * time.Minute,
+		SleepDefault:     10 * time.Minute,
+		MaxDuration:      time.Hour,
+		OnRetrigger:      RetriggerRestart,
+		DelegationGating: "disabled",
+		RoutingFactors:   map[string]string{router.FactorPreferSpeed: "true"},
 	}
 
 	data, err := json.Marshal(spec)
@@ -277,7 +279,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	gotJSON := string(data)
-	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`} {
+	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`, `"delegation_gating":"disabled"`, `"routing_factors":{"prefer_speed":"true"}`} {
 		if !strings.Contains(gotJSON, want) {
 			t.Fatalf("json = %s, want substring %s", gotJSON, want)
 		}
@@ -298,6 +300,12 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	}
 	if roundTrip.Conditions.Schedule == nil || roundTrip.Conditions.Schedule.Timezone != "America/Chicago" {
 		t.Fatalf("Conditions = %+v, want America/Chicago schedule", roundTrip.Conditions)
+	}
+	if roundTrip.DelegationGating != "disabled" {
+		t.Fatalf("DelegationGating = %q, want disabled", roundTrip.DelegationGating)
+	}
+	if got := roundTrip.RoutingFactors[router.FactorPreferSpeed]; got != "true" {
+		t.Fatalf("RoutingFactors[prefer_speed] = %q, want true", got)
 	}
 }
 
@@ -326,4 +334,30 @@ func TestSpecJSONMarshalRejectsUnsupportedRetriggerMode(t *testing.T) {
 	if !strings.Contains(err.Error(), "unsupported retrigger mode") {
 		t.Fatalf("error = %v, want unsupported retrigger mode", err)
 	}
+}
+
+func TestSpecIsZero(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero value", func(t *testing.T) {
+		if !(Spec{}).IsZero() {
+			t.Fatal("Spec{}.IsZero() = false, want true")
+		}
+	})
+	t.Run("name set", func(t *testing.T) {
+		if (Spec{Name: "x"}).IsZero() {
+			t.Fatal("Spec with Name set reported IsZero")
+		}
+	})
+	t.Run("nested profile set", func(t *testing.T) {
+		s := Spec{Profile: router.LoopProfile{Model: "x"}}
+		if s.IsZero() {
+			t.Fatal("Spec with Profile.Model set reported IsZero")
+		}
+	})
+	t.Run("metadata set", func(t *testing.T) {
+		if (Spec{Metadata: map[string]string{"k": "v"}}).IsZero() {
+			t.Fatal("Spec with Metadata set reported IsZero")
+		}
+	})
 }

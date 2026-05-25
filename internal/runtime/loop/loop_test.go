@@ -415,7 +415,7 @@ func TestLoopSupervisorDice(t *testing.T) {
 		var supervisorSeen atomic.Bool
 		runner := &inspectingRunner{
 			onRun: func(req RunRequest) {
-				if req.Hints["supervisor"] == "true" {
+				if req.RoutingFactors["supervisor"] == "true" {
 					supervisorSeen.Store(true)
 				}
 			},
@@ -449,7 +449,7 @@ func TestLoopSupervisorDice(t *testing.T) {
 		var supervisorCount atomic.Int32
 		runner := &inspectingRunner{
 			onRun: func(req RunRequest) {
-				if req.Hints["supervisor"] == "true" {
+				if req.RoutingFactors["supervisor"] == "true" {
 					supervisorCount.Add(1)
 				}
 			},
@@ -821,7 +821,7 @@ func TestTurnBuilderRunsThroughLoopRunner(t *testing.T) {
 				Request: Request{
 					ConversationID: "email-poll-123",
 					Messages:       []Message{{Role: "user", Content: "triage this mail"}},
-					Hints:          map[string]string{"source": "email_poll"},
+					RoutingFactors: map[string]string{"source": "email_poll"},
 				},
 				Summary: map[string]any{"wake_msg_len": 42},
 			}, nil
@@ -840,11 +840,11 @@ func TestTurnBuilderRunsThroughLoopRunner(t *testing.T) {
 	if len(gotReq.Messages) != 1 || gotReq.Messages[0].Content != "triage this mail" {
 		t.Fatalf("Messages = %#v, want triage prompt", gotReq.Messages)
 	}
-	if gotReq.Hints["source"] != "email_poll" {
-		t.Fatalf("source hint = %q, want email_poll", gotReq.Hints["source"])
+	if gotReq.RoutingFactors["source"] != "email_poll" {
+		t.Fatalf("source hint = %q, want email_poll", gotReq.RoutingFactors["source"])
 	}
-	if gotReq.Hints["loop_name"] != "turn-builder" {
-		t.Fatalf("loop_name hint = %q, want turn-builder", gotReq.Hints["loop_name"])
+	if gotReq.RoutingFactors["loop_name"] != "turn-builder" {
+		t.Fatalf("loop_name hint = %q, want turn-builder", gotReq.RoutingFactors["loop_name"])
 	}
 	if !slices.Equal(gotReq.InitialTags, []string{"email"}) {
 		t.Fatalf("InitialTags = %v, want [email]", gotReq.InitialTags)
@@ -1328,7 +1328,7 @@ func TestHintsMerge(t *testing.T) {
 	runner := &inspectingRunner{
 		onRun: func(req RunRequest) {
 			mu.Lock()
-			capturedHints = req.Hints
+			capturedHints = req.RoutingFactors
 			mu.Unlock()
 		},
 	}
@@ -1341,7 +1341,7 @@ func TestHintsMerge(t *testing.T) {
 		SleepDefault: 1 * time.Millisecond,
 		Jitter:       Float64Ptr(0),
 		MaxIter:      1,
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"source":  "metacognitive", // overrides loop default
 			"mission": "reflect",       // new hint
 		},
@@ -1383,12 +1383,12 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 		onRun: func(req RunRequest) {
 			mu.Lock()
 			captured = Request{
-				Model:         req.Model,
-				Messages:      append([]Message(nil), req.Messages...),
-				ExcludeTools:  append([]string(nil), req.ExcludeTools...),
-				InitialTags:   append([]string(nil), req.InitialTags...),
-				SkipTagFilter: req.SkipTagFilter,
-				Hints:         cloneStringMap(req.Hints),
+				Model:          req.Model,
+				Messages:       append([]Message(nil), req.Messages...),
+				ExcludeTools:   append([]string(nil), req.ExcludeTools...),
+				InitialTags:    append([]string(nil), req.InitialTags...),
+				SkipTagFilter:  req.SkipTagFilter,
+				RoutingFactors: cloneStringMap(req.RoutingFactors),
 			}
 			mu.Unlock()
 		},
@@ -1414,7 +1414,7 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 			ExtraHints:   map[string]string{"source": "profile"},
 		},
 		ExcludeTools: []string{"dangerous_tool"},
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"source": "spec",
 		},
 	}, Deps{Runner: runner})
@@ -1437,17 +1437,17 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 	if got := captured.Messages[0].Content; got != "Instructions: stay concise\n\nevaluate the alert" {
 		t.Fatalf("Message content = %q", got)
 	}
-	if captured.Hints["mission"] != "automation" {
-		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	if captured.RoutingFactors["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.RoutingFactors["mission"])
 	}
-	if captured.Hints["quality_floor"] != "7" {
-		t.Fatalf("quality_floor hint = %q, want 7", captured.Hints["quality_floor"])
+	if captured.RoutingFactors["quality_floor"] != "7" {
+		t.Fatalf("quality_floor hint = %q, want 7", captured.RoutingFactors["quality_floor"])
 	}
-	if captured.Hints["prefer_speed"] != "true" {
-		t.Fatalf("prefer_speed hint = %q, want true", captured.Hints["prefer_speed"])
+	if captured.RoutingFactors["prefer_speed"] != "true" {
+		t.Fatalf("prefer_speed hint = %q, want true", captured.RoutingFactors["prefer_speed"])
 	}
-	if captured.Hints["source"] != "spec" {
-		t.Fatalf("source hint = %q, want spec", captured.Hints["source"])
+	if captured.RoutingFactors["source"] != "spec" {
+		t.Fatalf("source hint = %q, want spec", captured.RoutingFactors["source"])
 	}
 	if !slices.Contains(captured.ExcludeTools, "shell_exec") || !slices.Contains(captured.ExcludeTools, "dangerous_tool") {
 		t.Fatalf("ExcludeTools = %#v", captured.ExcludeTools)

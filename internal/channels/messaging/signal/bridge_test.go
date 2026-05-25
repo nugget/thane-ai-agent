@@ -165,11 +165,11 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")
 	}
-	if req.Hints["source"] != "signal" {
-		t.Errorf("hint source = %q, want %q", req.Hints["source"], "signal")
+	if req.RoutingFactors["source"] != "signal" {
+		t.Errorf("hint source = %q, want %q", req.RoutingFactors["source"], "signal")
 	}
-	if req.Hints["sender"] != "+15551234567" {
-		t.Errorf("hint sender = %q, want %q", req.Hints["sender"], "+15551234567")
+	if req.RoutingFactors["sender"] != "+15551234567" {
+		t.Errorf("hint sender = %q, want %q", req.RoutingFactors["sender"], "+15551234567")
 	}
 	if !containsString(req.RuntimeTags, "message_channel") {
 		t.Errorf("RuntimeTags = %#v, want message_channel", req.RuntimeTags)
@@ -216,11 +216,11 @@ func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	if req.Hints["loop_id"] == "" {
+	if req.RoutingFactors["loop_id"] == "" {
 		t.Fatal("loop_id hint is empty; request did not traverse sender loop turn preparation")
 	}
-	if req.Hints["loop_name"] != "signal/15551234567" {
-		t.Fatalf("loop_name = %q, want signal/15551234567", req.Hints["loop_name"])
+	if req.RoutingFactors["loop_name"] != "signal/15551234567" {
+		t.Fatalf("loop_name = %q, want signal/15551234567", req.RoutingFactors["loop_name"])
 	}
 }
 
@@ -262,8 +262,8 @@ func TestBridge_ZeroValueRoutingConfig(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	if req.Hints["quality_floor"] != "" {
-		t.Errorf("quality_floor hint = %q, want empty (zero-value config)", req.Hints["quality_floor"])
+	if req.RoutingFactors["quality_floor"] != "" {
+		t.Errorf("quality_floor hint = %q, want empty (zero-value config)", req.RoutingFactors["quality_floor"])
 	}
 	if req.Model != "" {
 		t.Errorf("Model = %q, want empty (zero-value config)", req.Model)
@@ -296,11 +296,11 @@ func TestBridge_CustomRoutingConfigKeepsSignalContext(t *testing.T) {
 	if req.Model != "claude-sonnet-4-20250514" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-sonnet-4-20250514")
 	}
-	if req.Hints["source"] != "signal" {
-		t.Errorf("source = %q, want %q", req.Hints["source"], "signal")
+	if req.RoutingFactors["source"] != "signal" {
+		t.Errorf("source = %q, want %q", req.RoutingFactors["source"], "signal")
 	}
-	if req.Hints["sender"] != "+15551234567" {
-		t.Errorf("sender = %q, want %q", req.Hints["sender"], "+15551234567")
+	if req.RoutingFactors["sender"] != "+15551234567" {
+		t.Errorf("sender = %q, want %q", req.RoutingFactors["sender"], "+15551234567")
 	}
 }
 
@@ -318,14 +318,14 @@ func TestSignalRoutingConfigLoopProfile(t *testing.T) {
 	if opts.Model != "claude-sonnet-4-20250514" {
 		t.Errorf("Model = %q, want %q", opts.Model, "claude-sonnet-4-20250514")
 	}
-	if opts.Hints[router.HintQualityFloor] != "8" {
-		t.Errorf("quality_floor = %q, want %q", opts.Hints[router.HintQualityFloor], "8")
+	if opts.RoutingFactors[router.FactorQualityFloor] != "8" {
+		t.Errorf("quality_floor = %q, want %q", opts.RoutingFactors[router.FactorQualityFloor], "8")
 	}
-	if opts.Hints[router.HintMission] != "conversation" {
-		t.Errorf("mission = %q, want %q", opts.Hints[router.HintMission], "conversation")
+	if opts.RoutingFactors[router.FactorMission] != "conversation" {
+		t.Errorf("mission = %q, want %q", opts.RoutingFactors[router.FactorMission], "conversation")
 	}
-	if opts.Hints[router.HintDelegationGating] != "disabled" {
-		t.Errorf("delegation_gating = %q, want %q", opts.Hints[router.HintDelegationGating], "disabled")
+	if opts.DelegationGating != "disabled" {
+		t.Errorf("DelegationGating = %q, want %q", opts.DelegationGating, "disabled")
 	}
 }
 
@@ -629,7 +629,7 @@ func TestSignalResponseRunner_ReturnsReplySendError(t *testing.T) {
 
 	resp, err := signalResponseRunner{bridge: bridge, runner: runner}.Run(ctx, loop.Request{
 		ConversationID: "signal-15551234567",
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"sender": "+15551234567",
 		},
 	}, nil)
@@ -781,8 +781,8 @@ func TestBridge_ContactResolution(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	if req.Hints["sender_name"] != "Alice Smith" {
-		t.Errorf("sender_name hint = %q, want %q", req.Hints["sender_name"], "Alice Smith")
+	if req.RoutingFactors["sender_name"] != "Alice Smith" {
+		t.Errorf("sender_name hint = %q, want %q", req.RoutingFactors["sender_name"], "Alice Smith")
 	}
 	if req.ChannelBinding == nil || req.ChannelBinding.ContactID != "contact-1" || req.ChannelBinding.ContactName != "Alice Smith" {
 		t.Fatalf("ChannelBinding = %#v", req.ChannelBinding)
@@ -811,8 +811,8 @@ func TestBridge_ContactResolution_Unknown(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	if _, exists := req.Hints["sender_name"]; exists {
-		t.Errorf("sender_name hint should not be set for unknown sender, got %q", req.Hints["sender_name"])
+	if _, exists := req.RoutingFactors["sender_name"]; exists {
+		t.Errorf("sender_name hint should not be set for unknown sender, got %q", req.RoutingFactors["sender_name"])
 	}
 	if req.ChannelBinding == nil || req.ChannelBinding.Channel != "signal" || req.ChannelBinding.Address != "+15551234567" {
 		t.Fatalf("ChannelBinding = %#v", req.ChannelBinding)
@@ -836,8 +836,8 @@ func TestBridge_ContactResolution_NilResolver(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	if _, exists := req.Hints["sender_name"]; exists {
-		t.Errorf("sender_name hint should not be set with nil resolver, got %q", req.Hints["sender_name"])
+	if _, exists := req.RoutingFactors["sender_name"]; exists {
+		t.Errorf("sender_name hint should not be set with nil resolver, got %q", req.RoutingFactors["sender_name"])
 	}
 }
 
@@ -905,29 +905,29 @@ func TestBridge_ReactionWakesAgent(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called for reaction")
 	}
-	if req.Hints["event_type"] != "reaction" {
-		t.Errorf("event_type hint = %q, want %q", req.Hints["event_type"], "reaction")
+	if req.RoutingFactors["event_type"] != "reaction" {
+		t.Errorf("event_type hint = %q, want %q", req.RoutingFactors["event_type"], "reaction")
 	}
-	if req.Hints["reaction_emoji"] != "❤️" {
-		t.Errorf("reaction_emoji hint = %q, want %q", req.Hints["reaction_emoji"], "❤️")
+	if req.RoutingFactors["reaction_emoji"] != "❤️" {
+		t.Errorf("reaction_emoji hint = %q, want %q", req.RoutingFactors["reaction_emoji"], "❤️")
 	}
-	if req.Hints["target_sent_timestamp"] != "1700000099000" {
-		t.Errorf("target_sent_timestamp hint = %q, want %q", req.Hints["target_sent_timestamp"], "1700000099000")
+	if req.RoutingFactors["target_sent_timestamp"] != "1700000099000" {
+		t.Errorf("target_sent_timestamp hint = %q, want %q", req.RoutingFactors["target_sent_timestamp"], "1700000099000")
 	}
-	if req.Hints["source"] != "signal" {
-		t.Errorf("source hint = %q, want %q", req.Hints["source"], "signal")
+	if req.RoutingFactors["source"] != "signal" {
+		t.Errorf("source hint = %q, want %q", req.RoutingFactors["source"], "signal")
 	}
 	if req.Model != "claude-sonnet-4-20250514" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-sonnet-4-20250514")
 	}
-	if req.Hints[router.HintQualityFloor] != "8" {
-		t.Errorf("quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "8")
+	if req.RoutingFactors[router.FactorQualityFloor] != "8" {
+		t.Errorf("quality_floor = %q, want %q", req.RoutingFactors[router.FactorQualityFloor], "8")
 	}
-	if req.Hints[router.HintMission] != "conversation" {
-		t.Errorf("mission = %q, want %q", req.Hints[router.HintMission], "conversation")
+	if req.RoutingFactors[router.FactorMission] != "conversation" {
+		t.Errorf("mission = %q, want %q", req.RoutingFactors[router.FactorMission], "conversation")
 	}
-	if req.Hints[router.HintDelegationGating] != "disabled" {
-		t.Errorf("delegation_gating = %q, want %q", req.Hints[router.HintDelegationGating], "disabled")
+	if req.DelegationGating != "disabled" {
+		t.Errorf("DelegationGating = %q, want %q", req.DelegationGating, "disabled")
 	}
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")

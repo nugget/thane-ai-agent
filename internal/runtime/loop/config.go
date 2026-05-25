@@ -191,13 +191,13 @@ type Config struct {
 	QualityFloor int
 
 	// SupervisorContext is an optional prompt prepended to the Task
-	// during supervisor iterations. Use it to give the frontier model
+	// during supervisor turns. Use it to give the frontier model
 	// review instructions, recent iteration summaries, or oversight
 	// criteria. Empty means supervisor runs the same Task as normal.
 	SupervisorContext string
 
 	// SupervisorQualityFloor is the minimum model quality rating
-	// for supervisor iterations. Zero uses the router default.
+	// for supervisor turns. Zero uses the router default.
 	SupervisorQualityFloor int
 
 	// OnRetrigger determines behavior when the loop's start
@@ -248,10 +248,16 @@ type Config struct {
 	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into Request hints for each iteration.
-	// Config hints override loop-generated defaults (e.g., setting
-	// "source" to "metacognitive" instead of "loop").
-	Hints map[string]string
+	// RoutingFactors are merged into the Request's routing factors for
+	// each iteration. Config factors override loop-generated defaults
+	// (e.g., setting "source" to "metacognitive" instead of "loop").
+	RoutingFactors map[string]string
+
+	// DelegationGating sets the typed feature switch on each
+	// iteration's Request. "disabled" gives the model direct tool
+	// access (no orchestrator-and-delegate gating). Empty means no
+	// override — the agent's default gating applies.
+	DelegationGating string
 
 	// FallbackContent is static text used when the loop's nested agent run
 	// or direct request/reply execution finishes without any user-visible
@@ -368,7 +374,7 @@ type IterationResult struct {
 	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
-	// Supervisor indicates whether this was a supervisor iteration.
+	// Supervisor indicates whether this iteration ran a supervisor turn.
 	Supervisor bool
 	// Sleep is the computed sleep duration before the next iteration.
 	Sleep time.Duration
@@ -406,7 +412,7 @@ type IterationSnapshot struct {
 	// value is directly usable by the client without nanosecond
 	// conversion.
 	ElapsedMs int64 `json:"elapsed_ms"`
-	// Supervisor indicates whether this was a supervisor iteration.
+	// Supervisor indicates whether this iteration ran a supervisor turn.
 	Supervisor bool `json:"supervisor,omitempty"`
 	// Error holds the error message if the iteration failed.
 	Error string `json:"error,omitempty"`
@@ -473,8 +479,8 @@ type Status struct {
 	// (newest first), used by the dashboard timeline.
 	RecentIterations []IterationSnapshot `json:"recent_iterations,omitempty"`
 	// LastSupervisorIter is the iteration number of the most recent
-	// successful supervisor iteration. Zero means no supervisor
-	// iteration has completed yet.
+	// iteration that ran a successful supervisor turn. Zero means
+	// no supervisor turn has completed yet.
 	LastSupervisorIter int `json:"last_supervisor_iter,omitempty"`
 	// LLMContext holds enrichment data from the most recent
 	// loop_llm_start event (model, est_tokens, messages, tools,

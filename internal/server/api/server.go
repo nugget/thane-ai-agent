@@ -145,14 +145,14 @@ func (s *Server) UseContactStore(store *contacts.Store) {
 	s.contactStore = store
 }
 
-// UseLoopDefinitionRegistry configures the persistent loops-ng definition
+// UseLoopDefinitionRegistry configures the persistent loop definition
 // registry exposed by the API.
 func (s *Server) UseLoopDefinitionRegistry(reg *looppkg.DefinitionRegistry) {
 	s.loopDefinitionRegistry = reg
 }
 
 // ConfigureLoopDefinitionView configures the effective combined
-// definition registry view used by loops-ng read surfaces.
+// definition registry view used by loop read surfaces.
 func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegistryView) {
 	s.loopDefinitionView = fn
 }
@@ -632,14 +632,14 @@ func (s *Server) runChatLoop(ctx context.Context, req *agent.Request, streamCall
 	}
 
 	loopReq := loopRequestFromAgent(req)
-	if loopReq.Hints == nil {
-		loopReq.Hints = make(map[string]string, 2)
+	if loopReq.RoutingFactors == nil {
+		loopReq.RoutingFactors = make(map[string]string, 2)
 	}
-	if _, ok := loopReq.Hints["source"]; !ok {
-		loopReq.Hints["source"] = "api"
+	if _, ok := loopReq.RoutingFactors["source"]; !ok {
+		loopReq.RoutingFactors["source"] = "api"
 	}
-	if _, ok := loopReq.Hints["channel"]; !ok {
-		loopReq.Hints["channel"] = "api"
+	if _, ok := loopReq.RoutingFactors["channel"]; !ok {
+		loopReq.RoutingFactors["channel"] = "api"
 	}
 	stream := loopStreamFromAgent(streamCallback)
 
@@ -690,13 +690,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	hints := map[string]string{
 		"channel": "api", // Native OpenAI-compatible API
 	}
-	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), log)
+	model, hints, delegationGating, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), log)
 
 	agentReq := &agent.Request{
-		Messages:     messages,
-		Model:        model,
-		Hints:        hints,
-		SystemPrompt: systemPrompt,
+		Messages:         messages,
+		Model:            model,
+		RoutingFactors:   hints,
+		DelegationGating: delegationGating,
+		SystemPrompt:     systemPrompt,
 	}
 
 	if req.Stream {
@@ -784,7 +785,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 			{Role: "user", Content: req.Message},
 		},
 		ConversationID: convID,
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"channel": "api",
 		},
 	}

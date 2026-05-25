@@ -23,76 +23,111 @@ func mkdirAllForTest(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-func TestParseCadence_AcceptedForms(t *testing.T) {
+func TestParseSleepEnvelope_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		input               string
-		wantSleepDefault    time.Duration
-		wantSleepMinAtMost  time.Duration
-		wantSleepMaxAtLeast time.Duration
+		name             string
+		args             map[string]any
+		wantSleepMin     time.Duration
+		wantSleepMax     time.Duration
+		wantSleepDefault time.Duration
+		wantJitter       float64
 	}{
-		{"hourly", time.Hour, 55 * time.Minute, 65 * time.Minute},
-		{"daily", 24 * time.Hour, 23*time.Hour - time.Second, 25 * time.Hour},
-		{"every 30 minutes", 30 * time.Minute, 28 * time.Minute, 32 * time.Minute},
-		{"30m", 30 * time.Minute, 28 * time.Minute, 32 * time.Minute},
-		{"1h", time.Hour, 55 * time.Minute, 65 * time.Minute},
-		{"every 2 hours", 2 * time.Hour, time.Hour + 50*time.Minute, 2*time.Hour + 10*time.Minute},
-		{"1 day", 24 * time.Hour, 23*time.Hour - time.Second, 25 * time.Hour},
+		{
+			name:             "minimal asymmetric",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m"},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 17*time.Minute + 30*time.Second, // midpoint
+			wantJitter:       0.1,
+		},
+		{
+			name:             "fixed cadence (min == max)",
+			args:             map[string]any{"sleep_min": "30m", "sleep_max": "30m"},
+			wantSleepMin:     30 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 30 * time.Minute,
+			wantJitter:       0.1,
+		},
+		{
+			name:             "explicit default and jitter",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "10m", "jitter": 0.0},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 10 * time.Minute,
+			wantJitter:       0.0,
+		},
+		{
+			name:             "jitter as int",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": 0},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 17*time.Minute + 30*time.Second,
+			wantJitter:       0,
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.input, func(t *testing.T) {
-			c, err := parseCadence(tc.input)
+		t.Run(tc.name, func(t *testing.T) {
+			env, err := parseSleepEnvelope(tc.args)
 			if err != nil {
-				t.Fatalf("parseCadence(%q): %v", tc.input, err)
+				t.Fatalf("parseSleepEnvelope: %v", err)
 			}
-			if c.sleepDefault != tc.wantSleepDefault {
-				t.Errorf("sleepDefault = %v, want %v", c.sleepDefault, tc.wantSleepDefault)
+			if env.sleepMin != tc.wantSleepMin {
+				t.Errorf("sleepMin = %v, want %v", env.sleepMin, tc.wantSleepMin)
 			}
-			if c.sleepMin > tc.wantSleepMinAtMost {
-				t.Errorf("sleepMin = %v, want ≤ %v", c.sleepMin, tc.wantSleepMinAtMost)
+			if env.sleepMax != tc.wantSleepMax {
+				t.Errorf("sleepMax = %v, want %v", env.sleepMax, tc.wantSleepMax)
 			}
-			if c.sleepMax < tc.wantSleepMaxAtLeast {
-				t.Errorf("sleepMax = %v, want ≥ %v", c.sleepMax, tc.wantSleepMaxAtLeast)
+			if env.sleepDefault != tc.wantSleepDefault {
+				t.Errorf("sleepDefault = %v, want %v", env.sleepDefault, tc.wantSleepDefault)
+			}
+			if env.jitter != tc.wantJitter {
+				t.Errorf("jitter = %v, want %v", env.jitter, tc.wantJitter)
 			}
 		})
 	}
 }
 
-func TestParseCadence_RejectsTooFast(t *testing.T) {
+func TestParseSleepEnvelope_Rejections(t *testing.T) {
 	t.Parallel()
-	if _, err := parseCadence("30s"); err == nil {
-		t.Fatal("expected error for sub-minute cadence")
-	}
-}
 
-func TestParseCadence_RejectsGarbage(t *testing.T) {
-	t.Parallel()
-	if _, err := parseCadence("when the cows come home"); err == nil {
-		t.Fatal("expected error for unparseable cadence")
+	cases := []struct {
+		name    string
+		args    map[string]any
+		wantMsg string
+	}{
+		{"missing sleep_min", map[string]any{"sleep_max": "30m"}, "sleep_min is required"},
+		{"missing sleep_max", map[string]any{"sleep_min": "5m"}, "sleep_max is required"},
+		{"empty sleep_min", map[string]any{"sleep_min": "  ", "sleep_max": "30m"}, "sleep_min is required"},
+		{"unparseable sleep_min", map[string]any{"sleep_min": "when the cows come home", "sleep_max": "30m"}, "sleep_min"},
+		{"unparseable sleep_max", map[string]any{"sleep_min": "5m", "sleep_max": "garbage"}, "sleep_max"},
+		{"below 1m floor", map[string]any{"sleep_min": "30s", "sleep_max": "30m"}, "below the 1 minute floor"},
+		{"max less than min", map[string]any{"sleep_min": "30m", "sleep_max": "5m"}, "must be >= sleep_min"},
+		{"sleep_default outside envelope", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "1h"}, "must lie in"},
+		{"unparseable sleep_default", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "bad"}, "sleep_default"},
+		// Non-string types for duration args must surface a typed
+		// error, not be silently dropped. The JSON schema isn't
+		// enforced at handler entry, so a caller sending
+		// {sleep_default: 300} would otherwise have the value
+		// ignored and the loop launched with the midpoint instead
+		// of what they requested.
+		{"sleep_default as number", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": 300}, "sleep_default must be a Go duration string"},
+		{"sleep_default as object", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": map[string]any{"x": 1}}, "sleep_default must be a Go duration string"},
+		{"sleep_min as number", map[string]any{"sleep_min": 300, "sleep_max": "30m"}, "sleep_min must be a Go duration string"},
+		{"sleep_max as bool", map[string]any{"sleep_min": "5m", "sleep_max": true}, "sleep_max must be a Go duration string"},
+		{"jitter out of range high", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": 1.5}, "must be in [0, 1]"},
+		{"jitter out of range low", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": -0.1}, "must be in [0, 1]"},
+		{"jitter non-numeric", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": "fast"}, "must be a number"},
 	}
-}
-
-func TestParseCadence_RejectsEmpty(t *testing.T) {
-	t.Parallel()
-	if _, err := parseCadence("   "); err == nil {
-		t.Fatal("expected error for empty cadence")
-	}
-}
-
-// TestParseCadence_SleepMinNeverDropsBelowMinute guards the floor
-// against a regression where the 30s minimum jitter could push
-// sleep_min below the documented 1-minute floor for short cadences.
-func TestParseCadence_SleepMinNeverDropsBelowMinute(t *testing.T) {
-	t.Parallel()
-	for _, input := range []string{"1m", "60s", "every 1 minute"} {
-		t.Run(input, func(t *testing.T) {
-			c, err := parseCadence(input)
-			if err != nil {
-				t.Fatalf("parseCadence(%q): %v", input, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSleepEnvelope(tc.args)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
-			if c.sleepMin < time.Minute {
-				t.Errorf("sleepMin = %v, want >= 1m (floor)", c.sleepMin)
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantMsg)
 			}
 		})
 	}
@@ -155,9 +190,10 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	}
 
 	result, err := tool.Handler(context.Background(), map[string]any{
-		"name":    "test_pr_watchlist",
-		"intent":  "Track v1.0 PR activity for the upcoming release.",
-		"cadence": "hourly",
+		"name":      "test_pr_watchlist",
+		"intent":    "Track v1.0 PR activity for the upcoming release.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "maintain",
 			"document": "kb:dashboards/pr-watchlist.md",
@@ -213,7 +249,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Profile.DelegationGating != "disabled" {
 		t.Errorf("DelegationGating = %q, want disabled", found.Spec.Profile.DelegationGating)
 	}
-	// The focus tag is generated internally and prepended to Spec.Tags;
+	// The scope tag is generated internally and prepended to Spec.Tags;
 	// caller-supplied tags follow.
 	if len(found.Spec.Tags) != 2 {
 		t.Fatalf("Tags = %v, want [loop:<id>, forge]", found.Spec.Tags)
@@ -224,13 +260,13 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Tags[1] != "forge" {
 		t.Errorf("Tags[1] = %q, want forge", found.Spec.Tags[1])
 	}
-	// The focus tag is also stored in Spec.Metadata so it survives
+	// The scope tag is also stored in Spec.Metadata so it survives
 	// persistence and is discoverable by management tools.
-	if got := found.Spec.Metadata["focus_tag"]; got != found.Spec.Tags[0] {
-		t.Errorf("Metadata[focus_tag] = %q, want %q (same as Tags[0])", got, found.Spec.Tags[0])
+	if got := found.Spec.Metadata[looppkg.MetadataScopeTag]; got != found.Spec.Tags[0] {
+		t.Errorf("Metadata[scope_tag] = %q, want %q (same as Tags[0])", got, found.Spec.Tags[0])
 	}
-	if resp["focus_tag"] != found.Spec.Tags[0] {
-		t.Errorf("response focus_tag = %v, want %q", resp["focus_tag"], found.Spec.Tags[0])
+	if resp[looppkg.MetadataScopeTag] != found.Spec.Tags[0] {
+		t.Errorf("response scope_tag = %v, want %q", resp[looppkg.MetadataScopeTag], found.Spec.Tags[0])
 	}
 
 	// Verify the declared output rides on the spec so the hydration
@@ -354,9 +390,10 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	_, err = tool.Handler(context.Background(), map[string]any{
-		"name":    "existing_loop",
-		"intent":  "Replace the prior loop without permission.",
-		"cadence": "hourly",
+		"name":      "existing_loop",
+		"intent":    "Replace the prior loop without permission.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:journal/existing.md",
@@ -424,9 +461,10 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	_, err = tool.Handler(context.Background(), map[string]any{
-		"name":    "fresh_loop",
-		"intent":  "Track something the doc already covers.",
-		"cadence": "hourly",
+		"name":      "fresh_loop",
+		"intent":    "Track something the doc already covers.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "maintain",
 			"document": "kb:notes/existing.md",
@@ -490,9 +528,10 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	if _, err := tool.Handler(context.Background(), map[string]any{
-		"name":    "release_journal",
-		"intent":  "Capture forge releases as a dated log.",
-		"cadence": "hourly",
+		"name":      "release_journal",
+		"intent":    "Capture forge releases as a dated log.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:journal/releases.md",
@@ -538,6 +577,158 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 	// warning — appending doesn't need the full history.
 	if strings.Contains(found.Spec.Task, "truncated") {
 		t.Errorf("journal-mode task prompt should not carry maintain-mode truncation warning, got: %s", found.Spec.Task)
+	}
+}
+
+// TestThaneCurate_InstructionsFlowToProfile verifies that the
+// `instructions` tool arg lands on Spec.Profile.Instructions (the
+// canonical iteration-prepend surface) and NOT on the Spec.Task via
+// the older "Guidance: ..." fold. Two failure modes to guard against:
+// (1) the arg silently dropped, (2) the arg still being concatenated
+// into Task — both would mean a caller's steering text shows up in
+// the wrong place or twice if anything restores the old code path.
+func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "loop-inst-1"}, nil
+		},
+	})
+
+	const steering = "Focus on UPS load trends; ignore brief transients under 5 seconds."
+	tool := reg.Get("thane_curate")
+	if tool == nil {
+		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
+	}
+	if _, err := tool.Handler(context.Background(), map[string]any{
+		"name":         "instructions_test",
+		"intent":       "Watch the rack.",
+		"sleep_min":    "5m",
+		"sleep_max":    "30m",
+		"instructions": "  " + steering + "  ", // whitespace trimmed
+		"output": map[string]any{
+			"mode":     "maintain",
+			"document": "kb:dashboards/rack.md",
+		},
+	}); err != nil {
+		t.Fatalf("thane_curate handler: %v", err)
+	}
+
+	snap := defRegistry.Snapshot()
+	var found *looppkg.DefinitionSnapshot
+	for i := range snap.Definitions {
+		if snap.Definitions[i].Spec.Name == "instructions_test" {
+			found = &snap.Definitions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("definition not registered")
+	}
+	if found.Spec.Profile.Instructions != steering {
+		t.Errorf("Profile.Instructions = %q, want %q (whitespace trimmed)", found.Spec.Profile.Instructions, steering)
+	}
+	if strings.Contains(found.Spec.Task, "Guidance:") {
+		t.Errorf("Spec.Task should not carry legacy \"Guidance:\" fold, got: %s", found.Spec.Task)
+	}
+	if strings.Contains(found.Spec.Task, steering) {
+		t.Errorf("Spec.Task should not carry the steering text directly; it belongs on Profile.Instructions. Task: %s", found.Spec.Task)
+	}
+}
+
+// TestThaneCurate_InstructionsOmitted verifies that omitting
+// `instructions` results in an empty Profile.Instructions (not nil-vs-
+// empty-string weirdness, not a default value), and the Task text
+// stays minimal.
+func TestThaneCurate_InstructionsOmitted(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "loop-inst-2"}, nil
+		},
+	})
+
+	tool := reg.Get("thane_curate")
+	if _, err := tool.Handler(context.Background(), map[string]any{
+		"name":      "no_instructions",
+		"intent":    "Watch.",
+		"sleep_min": "5m",
+		"sleep_max": "30m",
+		"output": map[string]any{
+			"mode":     "maintain",
+			"document": "kb:dashboards/no-inst.md",
+		},
+	}); err != nil {
+		t.Fatalf("thane_curate handler: %v", err)
+	}
+
+	snap := defRegistry.Snapshot()
+	var found *looppkg.DefinitionSnapshot
+	for i := range snap.Definitions {
+		if snap.Definitions[i].Spec.Name == "no_instructions" {
+			found = &snap.Definitions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("definition not registered")
+	}
+	if found.Spec.Profile.Instructions != "" {
+		t.Errorf("Profile.Instructions = %q, want empty when omitted", found.Spec.Profile.Instructions)
 	}
 }
 
@@ -668,16 +859,17 @@ func (rig *curateTestRig) findCurateSpec(t *testing.T, name string) looppkg.Spec
 
 // TestThaneCurate_PersistsEntitySubscriptions covers the create-time
 // path: entities are written to the watchlist store under the generated
-// focus tag, and the tag-provider registrar is invoked once so the
+// scope tag, and the tag-provider registrar is invoked once so the
 // loop's iterations see those entities in context.
 func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
 	result, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "thermostat_journal",
-		"intent":  "Daily HVAC summary.",
-		"cadence": "daily",
+		"name":      "thermostat_journal",
+		"intent":    "Daily HVAC summary.",
+		"sleep_min": "21h",
+		"sleep_max": "27h",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:home/hvac.md",
@@ -702,9 +894,9 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	focusTag, _ := resp["focus_tag"].(string)
-	if !strings.HasPrefix(focusTag, "loop:") || len(focusTag) <= len("loop:") {
-		t.Fatalf("focus_tag = %q, want loop:<hex> shape", focusTag)
+	scopeTag, _ := resp[looppkg.MetadataScopeTag].(string)
+	if !strings.HasPrefix(scopeTag, "loop:") || len(scopeTag) <= len("loop:") {
+		t.Fatalf("scope_tag = %q, want loop:<hex> shape", scopeTag)
 	}
 	if got := resp["entity_subscriptions"]; got != float64(2) {
 		t.Errorf("entity_subscriptions = %v, want 2", got)
@@ -714,8 +906,8 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 		t.Fatalf("added subs = %d, want 2: %+v", len(rig.subStore.added), rig.subStore.added)
 	}
 	for i, sub := range rig.subStore.added {
-		if len(sub.Tags) != 1 || sub.Tags[0] != focusTag {
-			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, focusTag)
+		if len(sub.Tags) != 1 || sub.Tags[0] != scopeTag {
+			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, scopeTag)
 		}
 	}
 	if rig.subStore.added[0].EntityID != "climate.upstairs" {
@@ -734,34 +926,35 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	// The RegisterTagProvider callback fires exactly once per create, so
 	// the loop's tag-scoped context provider is wired before the first
 	// iteration runs.
-	if len(rig.registeredTags) != 1 || rig.registeredTags[0] != focusTag {
-		t.Errorf("registeredTags = %v, want [%q]", rig.registeredTags, focusTag)
+	if len(rig.registeredTags) != 1 || rig.registeredTags[0] != scopeTag {
+		t.Errorf("registeredTags = %v, want [%q]", rig.registeredTags, scopeTag)
 	}
 
-	// The spec carries the focus tag in both Metadata (canonical binding)
+	// The spec carries the scope tag in both Metadata (canonical binding)
 	// and Tags[0] (active during every iteration).
 	spec := rig.findCurateSpec(t, "thermostat_journal")
-	if got := spec.Metadata["focus_tag"]; got != focusTag {
-		t.Errorf("Metadata[focus_tag] = %q, want %q", got, focusTag)
+	if got := spec.Metadata[looppkg.MetadataScopeTag]; got != scopeTag {
+		t.Errorf("Metadata[scope_tag] = %q, want %q", got, scopeTag)
 	}
-	if len(spec.Tags) == 0 || spec.Tags[0] != focusTag {
-		t.Errorf("Tags[0] = %q, want %q", spec.Tags, focusTag)
+	if len(spec.Tags) == 0 || spec.Tags[0] != scopeTag {
+		t.Errorf("Tags[0] = %q, want %q", spec.Tags, scopeTag)
 	}
 }
 
-// TestThaneCurate_ReplacePreservesFocusTag verifies the replace=true
-// branch: the focus tag from the prior spec is reused (not minted
+// TestThaneCurate_ReplacePreservesScopeTag verifies the replace=true
+// branch: the scope tag from the prior spec is reused (not minted
 // anew), the watchlist scope is wiped, and the new entities are added
 // under the same stable tag.
-func TestThaneCurate_ReplacePreservesFocusTag(t *testing.T) {
+func TestThaneCurate_ReplacePreservesScopeTag(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
 	create := func(extra map[string]any) string {
 		args := map[string]any{
-			"name":    "hvac_curate",
-			"intent":  "HVAC summary.",
-			"cadence": "daily",
+			"name":      "hvac_curate",
+			"intent":    "HVAC summary.",
+			"sleep_min": "21h",
+			"sleep_max": "27h",
 			"output": map[string]any{
 				"mode":     "journal",
 				"document": "kb:home/hvac.md",
@@ -778,7 +971,7 @@ func TestThaneCurate_ReplacePreservesFocusTag(t *testing.T) {
 		if err := json.Unmarshal([]byte(result), &resp); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		return resp["focus_tag"].(string)
+		return resp[looppkg.MetadataScopeTag].(string)
 	}
 
 	firstTag := create(map[string]any{
@@ -801,7 +994,7 @@ func TestThaneCurate_ReplacePreservesFocusTag(t *testing.T) {
 		},
 	})
 	if secondTag != firstTag {
-		t.Errorf("focus_tag changed across replace: %q → %q (should be stable)", firstTag, secondTag)
+		t.Errorf("scope_tag changed across replace: %q → %q (should be stable)", firstTag, secondTag)
 	}
 	if len(rig.subStore.wiped) != 1 || rig.subStore.wiped[0] != firstTag {
 		t.Errorf("expected exactly one wipe of %q, got %v", firstTag, rig.subStore.wiped)
@@ -832,9 +1025,10 @@ func TestLoopDefinitionDelete_WipesEntitySubscriptions(t *testing.T) {
 	})
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "curate_to_delete",
-		"intent":  "Short-lived watcher.",
-		"cadence": "hourly",
+		"name":      "curate_to_delete",
+		"intent":    "Short-lived watcher.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:scratch/short.md",
@@ -847,9 +1041,9 @@ func TestLoopDefinitionDelete_WipesEntitySubscriptions(t *testing.T) {
 	}
 
 	spec := rig.findCurateSpec(t, "curate_to_delete")
-	focusTag := spec.Metadata["focus_tag"]
-	if focusTag == "" {
-		t.Fatal("focus_tag missing on spec")
+	scopeTag := spec.Metadata[looppkg.MetadataScopeTag]
+	if scopeTag == "" {
+		t.Fatal("scope_tag missing on spec")
 	}
 	// Reset wiped log so we can isolate the delete's contribution.
 	rig.subStore.wiped = nil
@@ -861,8 +1055,8 @@ func TestLoopDefinitionDelete_WipesEntitySubscriptions(t *testing.T) {
 	if _, err := delTool.Handler(context.Background(), map[string]any{"name": "curate_to_delete"}); err != nil {
 		t.Fatalf("loop_definition_delete: %v", err)
 	}
-	if len(rig.subStore.wiped) != 1 || rig.subStore.wiped[0] != focusTag {
-		t.Errorf("delete should wipe focus_tag %q exactly once, got %v", focusTag, rig.subStore.wiped)
+	if len(rig.subStore.wiped) != 1 || rig.subStore.wiped[0] != scopeTag {
+		t.Errorf("delete should wipe scope_tag %q exactly once, got %v", scopeTag, rig.subStore.wiped)
 	}
 }
 
@@ -875,9 +1069,10 @@ func TestThaneCurate_RejectsDuplicateEntityID(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "dup_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "dup_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:dup.md",
@@ -906,9 +1101,10 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "frac_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "frac_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:frac.md",
@@ -930,9 +1126,10 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	// Whole-number float (post-JSON-decode shape of an integer literal)
 	// must still pass — coerceInt accepts float64 when n == int64(n).
 	_, err = rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "whole_float_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "whole_float_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:whole.md",

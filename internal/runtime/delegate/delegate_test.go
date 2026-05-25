@@ -204,11 +204,11 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if len(captured.Messages) != 1 || !strings.Contains(captured.Messages[0].Content, "Check the office light") || !strings.Contains(captured.Messages[0].Content, "Be concise") {
 		t.Fatalf("Messages = %#v", captured.Messages)
 	}
-	if captured.Hints["source"] != "delegate" {
-		t.Fatalf("source hint = %q, want delegate", captured.Hints["source"])
+	if captured.RoutingFactors["source"] != "delegate" {
+		t.Fatalf("source hint = %q, want delegate", captured.RoutingFactors["source"])
 	}
-	if captured.Hints[router.HintDelegationGating] != "disabled" {
-		t.Fatalf("delegation gating hint = %q, want disabled", captured.Hints[router.HintDelegationGating])
+	if captured.DelegationGating != "disabled" {
+		t.Fatalf("captured.DelegationGating = %q, want disabled", captured.DelegationGating)
 	}
 	if captured.SkipTagFilter {
 		t.Fatal("SkipTagFilter = true, want false for ha profile default tag")
@@ -264,11 +264,11 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 			if captured.UsageTaskName != "ha" {
 				t.Fatalf("UsageTaskName = %q, want ha profile derived from %v tags", captured.UsageTaskName, tc.tags)
 			}
-			if captured.Hints[router.HintMission] != "device_control" {
-				t.Fatalf("mission hint = %q, want device_control", captured.Hints[router.HintMission])
+			if captured.RoutingFactors[router.FactorMission] != "device_control" {
+				t.Fatalf("mission hint = %q, want device_control", captured.RoutingFactors[router.FactorMission])
 			}
-			if captured.Hints[router.HintQualityFloor] != "4" {
-				t.Fatalf("quality_floor hint = %q, want 4", captured.Hints[router.HintQualityFloor])
+			if captured.RoutingFactors[router.FactorQualityFloor] != "4" {
+				t.Fatalf("quality_floor hint = %q, want 4", captured.RoutingFactors[router.FactorQualityFloor])
 			}
 			for _, tag := range tc.tags {
 				if !containsString(captured.InitialTags, tag) {
@@ -777,7 +777,7 @@ func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
 
 	_, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
 	if err == nil {
-		t.Fatal("Execute() without loops-ng wiring should return error")
+		t.Fatal("Execute() without loops wiring should return error")
 	}
 	if !strings.Contains(err.Error(), "ConfigureLoopExecution") {
 		t.Errorf("error %q should mention ConfigureLoopExecution", err)
@@ -786,17 +786,17 @@ func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
 
 // TestStartBackground_RequiresLoopExecutionWiring is the StartBackground
 // counterpart to TestExecute_RequiresLoopExecutionWiring. Same rationale:
-// the contract is that loops-ng wiring is mandatory and the failure mode
+// the contract is that loops wiring is mandatory and the failure mode
 // must be actionable.
 func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
 
 	_, err := exec.StartBackground(context.Background(), "Check the office light", "general", "", nil)
 	if err == nil {
-		t.Fatal("StartBackground() without loops-ng wiring should return error")
+		t.Fatal("StartBackground() without loops wiring should return error")
 	}
-	if !strings.Contains(err.Error(), "loops-ng") {
-		t.Errorf("error %q should mention loops-ng wiring", err)
+	if !strings.Contains(err.Error(), "loops") {
+		t.Errorf("error %q should mention loops wiring", err)
 	}
 }
 
@@ -849,19 +849,19 @@ func TestBuiltinProfiles_GeneralForcesLocalOnly(t *testing.T) {
 	}
 
 	if general.RouterHints == nil {
-		t.Fatal("general profile RouterHints is nil, want HintLocalOnly=true")
+		t.Fatal("general profile RouterHints is nil, want FactorLocalOnly=true")
 	}
-	if general.RouterHints[router.HintLocalOnly] != "true" {
-		t.Errorf("general profile HintLocalOnly = %q, want %q",
-			general.RouterHints[router.HintLocalOnly], "true")
+	if general.RouterHints[router.FactorLocalOnly] != "true" {
+		t.Errorf("general profile FactorLocalOnly = %q, want %q",
+			general.RouterHints[router.FactorLocalOnly], "true")
 	}
-	if general.RouterHints[router.HintQualityFloor] != "5" {
-		t.Errorf("general profile HintQualityFloor = %q, want %q",
-			general.RouterHints[router.HintQualityFloor], "5")
+	if general.RouterHints[router.FactorQualityFloor] != "5" {
+		t.Errorf("general profile FactorQualityFloor = %q, want %q",
+			general.RouterHints[router.FactorQualityFloor], "5")
 	}
-	if general.RouterHints[router.HintPreferSpeed] != "true" {
-		t.Errorf("general profile HintPreferSpeed = %q, want %q",
-			general.RouterHints[router.HintPreferSpeed], "true")
+	if general.RouterHints[router.FactorPreferSpeed] != "true" {
+		t.Errorf("general profile FactorPreferSpeed = %q, want %q",
+			general.RouterHints[router.FactorPreferSpeed], "true")
 	}
 }
 
@@ -872,21 +872,21 @@ func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
 		t.Fatal("missing 'ha' profile")
 	}
 
-	if ha.RouterHints[router.HintLocalOnly] != "true" {
-		t.Errorf("ha profile HintLocalOnly = %q, want %q",
-			ha.RouterHints[router.HintLocalOnly], "true")
+	if ha.RouterHints[router.FactorLocalOnly] != "true" {
+		t.Errorf("ha profile FactorLocalOnly = %q, want %q",
+			ha.RouterHints[router.FactorLocalOnly], "true")
 	}
-	if ha.RouterHints[router.HintMission] != "device_control" {
-		t.Errorf("ha profile HintMission = %q, want %q",
-			ha.RouterHints[router.HintMission], "device_control")
+	if ha.RouterHints[router.FactorMission] != "device_control" {
+		t.Errorf("ha profile FactorMission = %q, want %q",
+			ha.RouterHints[router.FactorMission], "device_control")
 	}
-	if ha.RouterHints[router.HintQualityFloor] != "4" {
-		t.Errorf("ha profile HintQualityFloor = %q, want %q",
-			ha.RouterHints[router.HintQualityFloor], "4")
+	if ha.RouterHints[router.FactorQualityFloor] != "4" {
+		t.Errorf("ha profile FactorQualityFloor = %q, want %q",
+			ha.RouterHints[router.FactorQualityFloor], "4")
 	}
-	if ha.RouterHints[router.HintPreferSpeed] != "true" {
-		t.Errorf("ha profile HintPreferSpeed = %q, want %q",
-			ha.RouterHints[router.HintPreferSpeed], "true")
+	if ha.RouterHints[router.FactorPreferSpeed] != "true" {
+		t.Errorf("ha profile FactorPreferSpeed = %q, want %q",
+			ha.RouterHints[router.FactorPreferSpeed], "true")
 	}
 	if len(ha.DefaultTags) != 1 || ha.DefaultTags[0] != "ha" {
 		t.Fatalf("ha profile DefaultTags = %#v, want [ha]", ha.DefaultTags)
@@ -931,7 +931,7 @@ func TestExecute_LoopBackedDelegateRequiresStreamingCapableModel(t *testing.T) {
 	}
 }
 
-// delegateCompletionSink is a test stub for the loops-ng completion
+// delegateCompletionSink is a test stub for the loop completion
 // delivery interface used by background delegate tests.
 type delegateCompletionSink struct {
 	deliveries chan looppkg.CompletionDelivery
