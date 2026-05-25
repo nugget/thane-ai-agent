@@ -174,6 +174,44 @@ func TestMarshalJSONOmitsLegacyFields(t *testing.T) {
 	}
 }
 
+// TestMarshalJSONOmitsNilSupervisorProfile is the regression
+// test for the typed-nil-interface gotcha in [specJSON]: when
+// the wire field was `any`, a nil [Spec.SupervisorProfile]
+// (typed *router.LoopProfile) stored in the interface registered
+// as non-nil to `omitempty`, so the field marshaled as
+// `"supervisor_profile": null` instead of being omitted. Wire
+// field is now `*router.LoopProfile` directly so omitempty does
+// the right thing on the pointer. Without this fix, consumers
+// distinguishing "field omitted" from "field present and null"
+// would have seen the field on every spec with no overrides
+// declared.
+func TestMarshalJSONOmitsNilSupervisorProfile(t *testing.T) {
+	t.Parallel()
+
+	s := Spec{
+		Name:         "no-supervisor-overrides",
+		Operation:    OperationService,
+		Task:         "t",
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		// SupervisorProfile intentionally nil — the most
+		// common case for loops without per-turn-mode
+		// overrides.
+	}
+	out, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	js := string(out)
+	if strings.Contains(js, `"supervisor_profile"`) {
+		t.Errorf("Marshal emitted supervisor_profile key for a nil SupervisorProfile: %s", js)
+	}
+	if strings.Contains(js, "null") {
+		t.Errorf("Marshal emitted a null somewhere; supervisor_profile should be omitted entirely: %s", js)
+	}
+}
+
 // TestEffectiveSupervisorRoutingFactorsCascadesFromContainers
 // pins the parallel cascade for SupervisorProfile: a container
 // ancestor's SupervisorProfile.QualityFloor reaches the

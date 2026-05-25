@@ -177,9 +177,22 @@ type Spec struct {
 	// [Profile.Instructions], SupervisorProfile.Instructions is
 	// self-only — it does not cascade through container ancestors.
 	//
-	// Nil means "supervisor turns use Profile as-is" — i.e. the
-	// supervisor flag still flips on the iteration record but no
-	// routing-shape overrides apply.
+	// Nil means "no SupervisorProfile overrides declared." Two
+	// hardcoded baseline behaviors still apply to every supervisor
+	// turn even with a nil SupervisorProfile, because they're the
+	// reason the supervisor mechanism exists at all:
+	//
+	//   - the `supervisor` routing factor is stamped to "true" so
+	//     the router can see this is a review turn;
+	//   - the `local_only` routing factor is forced to "false" so a
+	//     supervisor turn doesn't end up running on a cheap local
+	//     model (which would defeat the purpose of supervising).
+	//
+	// A non-nil SupervisorProfile can override either (e.g. set
+	// `local_only: "true"` to explicitly keep supervisor turns
+	// local), but the *defaults* are not "same as Profile" — they're
+	// "Profile plus those two flips." See [prepareAgentTurnRequest]
+	// for the merge order.
 	SupervisorProfile *router.LoopProfile `yaml:"supervisor_profile,omitempty" json:"supervisor_profile,omitempty"`
 
 	// OnRetrigger determines behavior when the loop is triggered again

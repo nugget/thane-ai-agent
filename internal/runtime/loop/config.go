@@ -197,9 +197,16 @@ type Config struct {
 	// during supervisor turns. Overlay on the loop's normal routing
 	// shape (built from Profile-derived [requestBase]): any field
 	// set here wins, any field left empty falls back to the normal
-	// shape. Nil means "no overrides; supervisor turns use the same
-	// routing shape as normal turns." Mirrors
-	// [Spec.SupervisorProfile].
+	// shape.
+	//
+	// Nil means "no SupervisorProfile overrides declared." Two
+	// hardcoded baseline routing flips still apply to every
+	// supervisor turn even with a nil SupervisorProfile:
+	// `supervisor` is stamped to "true" and `local_only` is forced
+	// to "false". A non-nil SupervisorProfile can override either
+	// (e.g. set `local_only: "true"` to keep supervisor turns
+	// local). See [prepareAgentTurnRequest] for the merge order.
+	// Mirrors [Spec.SupervisorProfile].
 	SupervisorProfile *router.LoopProfile
 
 	// OnRetrigger determines behavior when the loop's start

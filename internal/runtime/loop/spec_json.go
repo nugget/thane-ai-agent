@@ -10,33 +10,40 @@ import (
 )
 
 type specJSON struct {
-	Name              string               `json:"name,omitempty"`
-	Enabled           bool                 `json:"enabled"`
-	Task              string               `json:"task,omitempty"`
-	Profile           any                  `json:"profile,omitempty"`
-	Operation         Operation            `json:"operation,omitempty"`
-	Completion        Completion           `json:"completion,omitempty"`
-	Outputs           []OutputSpec         `json:"outputs,omitempty"`
-	Subscriptions     []EntitySubscription `json:"subscriptions,omitempty"`
-	Conditions        Conditions           `json:"conditions,omitempty"`
-	Tags              []string             `json:"tags,omitempty"`
-	ExcludeTools      []string             `json:"exclude_tools,omitempty"`
-	SleepMin          string               `json:"sleep_min,omitempty"`
-	SleepMax          string               `json:"sleep_max,omitempty"`
-	SleepDefault      string               `json:"sleep_default,omitempty"`
-	Jitter            *float64             `json:"jitter,omitempty"`
-	MaxDuration       string               `json:"max_duration,omitempty"`
-	MaxIter           int                  `json:"max_iter,omitempty"`
-	Supervisor        bool                 `json:"supervisor,omitempty"`
-	SupervisorProb    float64              `json:"supervisor_prob,omitempty"`
-	SupervisorProfile any                  `json:"supervisor_profile,omitempty"`
-	OnRetrigger       string               `json:"on_retrigger,omitempty"`
-	RoutingFactors    map[string]string    `json:"routing_factors,omitempty"`
-	DelegationGating  string               `json:"delegation_gating,omitempty"`
-	FallbackContent   string               `json:"fallback_content,omitempty"`
-	Metadata          map[string]string    `json:"metadata,omitempty"`
-	ParentID          string               `json:"parent_id,omitempty"`
-	ParentName        string               `json:"parent_name,omitempty"`
+	Name           string               `json:"name,omitempty"`
+	Enabled        bool                 `json:"enabled"`
+	Task           string               `json:"task,omitempty"`
+	Profile        any                  `json:"profile,omitempty"`
+	Operation      Operation            `json:"operation,omitempty"`
+	Completion     Completion           `json:"completion,omitempty"`
+	Outputs        []OutputSpec         `json:"outputs,omitempty"`
+	Subscriptions  []EntitySubscription `json:"subscriptions,omitempty"`
+	Conditions     Conditions           `json:"conditions,omitempty"`
+	Tags           []string             `json:"tags,omitempty"`
+	ExcludeTools   []string             `json:"exclude_tools,omitempty"`
+	SleepMin       string               `json:"sleep_min,omitempty"`
+	SleepMax       string               `json:"sleep_max,omitempty"`
+	SleepDefault   string               `json:"sleep_default,omitempty"`
+	Jitter         *float64             `json:"jitter,omitempty"`
+	MaxDuration    string               `json:"max_duration,omitempty"`
+	MaxIter        int                  `json:"max_iter,omitempty"`
+	Supervisor     bool                 `json:"supervisor,omitempty"`
+	SupervisorProb float64              `json:"supervisor_prob,omitempty"`
+	// SupervisorProfile is typed as a pointer (not [any]) so a nil
+	// [Spec.SupervisorProfile] is correctly omitted from the wire by
+	// `omitempty`. A typed-nil pointer in an `any` interface field
+	// would be non-nil to JSON's omitempty check and would emit
+	// `"supervisor_profile": null` instead of being omitted, which
+	// would contradict the doc on [Spec.SupervisorProfile] and
+	// surface a null where consumers expect an omitted field.
+	SupervisorProfile *router.LoopProfile `json:"supervisor_profile,omitempty"`
+	OnRetrigger       string              `json:"on_retrigger,omitempty"`
+	RoutingFactors    map[string]string   `json:"routing_factors,omitempty"`
+	DelegationGating  string              `json:"delegation_gating,omitempty"`
+	FallbackContent   string              `json:"fallback_content,omitempty"`
+	Metadata          map[string]string   `json:"metadata,omitempty"`
+	ParentID          string              `json:"parent_id,omitempty"`
+	ParentName        string              `json:"parent_name,omitempty"`
 
 	// Legacy top-level fields, accepted on UnmarshalJSON for backwards
 	// compatibility with persisted overlay specs written before the
@@ -173,17 +180,11 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("loop: profile: %w", err)
 		}
 	}
-	supervisorProfileData, err := json.Marshal(wire.SupervisorProfile)
-	if err != nil {
-		return err
-	}
-	if len(supervisorProfileData) != 0 && string(supervisorProfileData) != "null" {
-		var sp router.LoopProfile
-		if err := json.Unmarshal(supervisorProfileData, &sp); err != nil {
-			return fmt.Errorf("loop: supervisor_profile: %w", err)
-		}
-		s.SupervisorProfile = &sp
-	}
+	// wire.SupervisorProfile is already a typed *router.LoopProfile
+	// — JSON decoded it directly (including running
+	// LoopProfile.UnmarshalJSON for backwards-compat int/string
+	// quality_floor handling) before we got here.
+	s.SupervisorProfile = wire.SupervisorProfile
 	// Migration shim for pre-PR-R1 persisted specs: translate the
 	// legacy top-level quality_floor / supervisor_quality_floor /
 	// supervisor_context fields into the canonical Profile /
