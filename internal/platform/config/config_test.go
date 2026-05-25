@@ -454,6 +454,36 @@ func TestValidate_SignalInvalidRouting(t *testing.T) {
 	}
 }
 
+// TestValidate_SignalRoutingQualityFloorNonNumeric pins the
+// post-PR-Q1 explicit-parse check: an operator-supplied
+// non-numeric quality_floor like "high" used to silently drop
+// to 0 (treated as "unset") through SignalRoutingConfig.LoopProfile()
+// → LoopProfile.Validate() and pass validation. validateSignal
+// now parses the raw string first so a typo is caught loud at
+// config-load time.
+func TestValidate_SignalRoutingQualityFloorNonNumeric(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled: true,
+		Command: "signal-cli",
+		Account: "+15551234567",
+		Routing: SignalRoutingConfig{
+			QualityFloor: "high",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for non-numeric signal.routing.quality_floor")
+	}
+	if !strings.Contains(err.Error(), "signal.routing.quality_floor") {
+		t.Errorf("error should mention signal.routing.quality_floor, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "valid integer") {
+		t.Errorf("error should explain the failure (not a valid integer), got: %v", err)
+	}
+}
+
 func TestValidate_SignalEnabledMissingCommand(t *testing.T) {
 	cfg := Default()
 	cfg.Signal = SignalConfig{

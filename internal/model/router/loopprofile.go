@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -19,9 +20,15 @@ type LoopProfile struct {
 	// the router selects based on the other hint fields.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 
-	// QualityFloor is the minimum model quality rating (1–10). Maps
-	// to [FactorQualityFloor].
-	QualityFloor string `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
+	// QualityFloor is the minimum model quality rating (1–10).
+	// Maps to [FactorQualityFloor]. Zero means "unset" — let the
+	// router pick its own default.
+	//
+	// JSON/YAML accept both the canonical int form (`5`) and the
+	// legacy stringified form (`"5"`) for backwards compatibility
+	// with persisted overlay specs and operator YAML written
+	// before the int conversion; see [LoopProfile.UnmarshalJSON].
+	QualityFloor int `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
 
 	// Mission describes the task context for routing. Maps to
 	// [FactorMission]. Common values: "conversation", "automation",
@@ -56,6 +63,76 @@ type LoopProfile struct {
 	Instructions string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 }
 
+// loopProfileWire is the JSON wire representation used by
+// [LoopProfile.UnmarshalJSON]. QualityFloor is decoded as
+// [json.RawMessage] so both the canonical int form (`5`) and the
+// legacy stringified form (`"5"`) survive the round-trip — needed
+// for persisted overlay specs written before the int conversion.
+type loopProfileWire struct {
+	Model            string            `json:"model,omitempty"`
+	QualityFloor     json.RawMessage   `json:"quality_floor,omitempty"`
+	Mission          string            `json:"mission,omitempty"`
+	LocalOnly        string            `json:"local_only,omitempty"`
+	DelegationGating string            `json:"delegation_gating,omitempty"`
+	PreferSpeed      string            `json:"prefer_speed,omitempty"`
+	ExcludeTools     []string          `json:"exclude_tools,omitempty"`
+	ExtraHints       map[string]string `json:"extra_hints,omitempty"`
+	Instructions     string            `json:"instructions,omitempty"`
+}
+
+// UnmarshalJSON accepts the canonical int form for QualityFloor
+// AND the legacy stringified form for backwards compatibility
+// with persisted overlay specs / config blocks written before
+// the field type changed. A missing or null QualityFloor decodes
+// to 0 ("unset"). An empty string also decodes to 0. Anything
+// else fails fast so a malformed value is loud rather than
+// silently treated as zero.
+func (s *LoopProfile) UnmarshalJSON(data []byte) error {
+	var w loopProfileWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*s = LoopProfile{
+		Model:            w.Model,
+		Mission:          w.Mission,
+		LocalOnly:        w.LocalOnly,
+		DelegationGating: w.DelegationGating,
+		PreferSpeed:      w.PreferSpeed,
+		ExcludeTools:     w.ExcludeTools,
+		ExtraHints:       w.ExtraHints,
+		Instructions:     w.Instructions,
+	}
+	if len(w.QualityFloor) == 0 || string(w.QualityFloor) == "null" {
+		return nil
+	}
+	// Try the canonical int form first — succeeds on plain
+	// integer JSON numbers like `5`. encoding/json rejects
+	// non-integer numbers like `5.0` when targeting int, so we
+	// don't pretend to accept them; if a config source produces
+	// `5.0` we'd rather fail loud than silently truncate.
+	var n int
+	if err := json.Unmarshal(w.QualityFloor, &n); err == nil {
+		s.QualityFloor = n
+		return nil
+	}
+	// Fall back to the legacy stringified form. Empty string is
+	// treated as unset (matches the pre-conversion behavior).
+	var raw string
+	if err := json.Unmarshal(w.QualityFloor, &raw); err != nil {
+		return fmt.Errorf("quality_floor: must be an integer or string-of-integer, got %s", w.QualityFloor)
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fmt.Errorf("quality_floor: %q is not a valid integer", raw)
+	}
+	s.QualityFloor = parsed
+	return nil
+}
+
 // RequestOptions contains the agent request fields derived from a
 // LoopProfile. Callers can merge additional channel- or trigger-specific
 // factors on top of these shared routing defaults.
@@ -66,14 +143,17 @@ type RequestOptions struct {
 	DelegationGating string
 }
 
-// RoutingFactors builds the routing-factor map from the profile's typed
-// fields. Only non-empty fields are included. ExtraHints are merged
-// last and can override typed fields.
+// RoutingFactors builds the routing-factor map from the profile's
+// typed fields. Only non-empty fields are included. ExtraHints
+// are merged last and can override typed fields. QualityFloor is
+// the only typed numeric field today; it's string-ified at this
+// boundary so the wire format (`map[string]string`) the router
+// consumes stays uniform.
 func (s *LoopProfile) RoutingFactors() map[string]string {
 	h := make(map[string]string)
 
-	if s.QualityFloor != "" {
-		h[FactorQualityFloor] = s.QualityFloor
+	if s.QualityFloor > 0 {
+		h[FactorQualityFloor] = strconv.Itoa(s.QualityFloor)
 	}
 	if s.Mission != "" {
 		h[FactorMission] = s.Mission
@@ -118,10 +198,9 @@ var validDelegationGating = map[string]bool{
 // valid values. It does not require any field to be set — an empty
 // LoopProfile is valid. Returns nil on success.
 func (s *LoopProfile) Validate() error {
-	if s.QualityFloor != "" {
-		n, err := strconv.Atoi(s.QualityFloor)
-		if err != nil || n < 1 || n > 10 {
-			return fmt.Errorf("quality_floor must be an integer 1–10, got %q", s.QualityFloor)
+	if s.QualityFloor != 0 {
+		if s.QualityFloor < 1 || s.QualityFloor > 10 {
+			return fmt.Errorf("quality_floor must be an integer 1–10, got %d", s.QualityFloor)
 		}
 	}
 	if s.Mission != "" && !missionPattern.MatchString(s.Mission) {

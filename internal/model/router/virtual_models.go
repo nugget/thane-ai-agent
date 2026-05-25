@@ -21,7 +21,10 @@ const delegateHintPrefix = "delegate_"
 // model expansion. The shape is intentionally small today but is designed to
 // grow as the live model registry contributes more dynamic overlay state.
 type VirtualModelRuntime struct {
-	PremiumQualityFloor string
+	// PremiumQualityFloor is the QualityFloor stamped on premium /
+	// ops virtual models when expanded. Zero means "fall back to
+	// the package default of 10."
+	PremiumQualityFloor int
 }
 
 // VirtualModel describes an end-to-end execution policy exposed through
@@ -176,9 +179,9 @@ func ResolveVirtualModelSelection(rawModel string, baseHints map[string]string, 
 }
 
 func builtinVirtualModels(runtime VirtualModelRuntime) []VirtualModel {
-	premiumFloor := strings.TrimSpace(runtime.PremiumQualityFloor)
-	if premiumFloor == "" {
-		premiumFloor = "10"
+	premiumFloor := runtime.PremiumQualityFloor
+	if premiumFloor <= 0 {
+		premiumFloor = 10
 	}
 
 	return []VirtualModel{
@@ -222,13 +225,13 @@ func builtinVirtualModels(runtime VirtualModelRuntime) []VirtualModel {
 			Aliases:     []string{"thane:command", "thane:homeassistant", "thane:fast"},
 			TopLevel: LoopProfile{
 				Mission:      "device_control",
-				QualityFloor: "4",
+				QualityFloor: 4,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},
 			Delegate: LoopProfile{
 				Mission:      "device_control",
-				QualityFloor: "4",
+				QualityFloor: 4,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},
@@ -238,12 +241,12 @@ func builtinVirtualModels(runtime VirtualModelRuntime) []VirtualModel {
 			Description: "strictly local-only mode",
 			Exposed:     true,
 			TopLevel: LoopProfile{
-				QualityFloor: "1",
+				QualityFloor: 1,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},
 			Delegate: LoopProfile{
-				QualityFloor: "1",
+				QualityFloor: 1,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},
@@ -254,13 +257,13 @@ func builtinVirtualModels(runtime VirtualModelRuntime) []VirtualModel {
 			Aliases:     []string{"thane:trigger"},
 			TopLevel: LoopProfile{
 				Mission:      "automation",
-				QualityFloor: "1",
+				QualityFloor: 1,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},
 			Delegate: LoopProfile{
 				Mission:      "automation",
-				QualityFloor: "1",
+				QualityFloor: 1,
 				LocalOnly:    "true",
 				PreferSpeed:  "true",
 			},

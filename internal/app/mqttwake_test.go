@@ -65,7 +65,7 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	store := newTestWakeStore(t)
 	seed := router.LoopProfile{
 		Mission:          "automation",
-		QualityFloor:     "7",
+		QualityFloor:     7,
 		DelegationGating: "disabled",
 		Instructions:     "handle this",
 	}
@@ -326,7 +326,7 @@ func TestBuildWakeMessage(t *testing.T) {
 func TestApplyLoopProfile(t *testing.T) {
 	seed := router.LoopProfile{
 		Model:            "claude-3-opus",
-		QualityFloor:     "8",
+		QualityFloor:     8,
 		Mission:          "automation",
 		LocalOnly:        "false",
 		DelegationGating: "disabled",

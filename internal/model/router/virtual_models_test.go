@@ -6,7 +6,7 @@ import (
 )
 
 func TestExposedVirtualModels(t *testing.T) {
-	models := ExposedVirtualModels(VirtualModelRuntime{PremiumQualityFloor: "9"})
+	models := ExposedVirtualModels(VirtualModelRuntime{PremiumQualityFloor: 9})
 	var names []string
 	for _, model := range models {
 		names = append(names, model.Name)
@@ -30,7 +30,7 @@ func TestExposedVirtualModels(t *testing.T) {
 
 func TestResolveVirtualModelSelection_PremiumKeepsDelegatePolicyAdaptive(t *testing.T) {
 	selection := ResolveVirtualModelSelection("thane:premium", map[string]string{"channel": "api"}, VirtualModelRuntime{
-		PremiumQualityFloor: "9",
+		PremiumQualityFloor: 9,
 	}, slog.Default())
 
 	if !selection.Known {
@@ -60,7 +60,7 @@ func TestResolveVirtualModelSelection_PremiumKeepsDelegatePolicyAdaptive(t *test
 
 func TestResolveVirtualModelSelection_OpsAddsDelegatePolicy(t *testing.T) {
 	selection := ResolveVirtualModelSelection("thane:ops", map[string]string{"channel": "api"}, VirtualModelRuntime{
-		PremiumQualityFloor: "9",
+		PremiumQualityFloor: 9,
 	}, slog.Default())
 
 	if !selection.Known {

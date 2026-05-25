@@ -513,7 +513,7 @@ talents_dir: ./talents
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
-#         quality_floor: ""
+#         quality_floor: 0
 #         mission: ""
 #         local_only: ""
 #         delegation_gating: ""
@@ -534,7 +534,7 @@ talents_dir: ./talents
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
-#         quality_floor: ""
+#         quality_floor: 0
 #         mission: ""
 #         local_only: ""
 #         delegation_gating: ""
@@ -555,7 +555,7 @@ talents_dir: ./talents
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
-#         quality_floor: "7"
+#         quality_floor: 7
 #         mission: automation
 #         local_only: "false"
 #         delegation_gating: disabled
@@ -925,7 +925,7 @@ ego:
 #       task: Watch the office and report noteworthy changes or trends.
 #       profile:
 #         model: ""
-#         quality_floor: ""
+#         quality_floor: 0
 #         mission: background
 #         local_only: ""
 #         delegation_gating: disabled
@@ -962,7 +962,7 @@ ego:
 #       supervisor_prob: 0.0
 #       supervisor_profile:
 #         model: ""
-#         quality_floor: ""
+#         quality_floor: 0
 #         mission: ""
 #         local_only: ""
 #         delegation_gating: ""

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -34,7 +35,7 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 		Topic        string `json:"topic"`
 		Source       string `json:"source"`
 		Mission      string `json:"mission,omitempty"`
-		QualityFloor string `json:"quality_floor,omitempty"`
+		QualityFloor int    `json:"quality_floor,omitempty"`
 		Model        string `json:"model,omitempty"`
 		Instructions string `json:"instructions,omitempty"`
 	}
@@ -70,7 +71,7 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 
 	profile := router.LoopProfile{
 		Model:            stringArg(args, "model"),
-		QualityFloor:     stringArg(args, "quality_floor"),
+		QualityFloor:     intArg(args, "quality_floor"),
 		Mission:          stringArg(args, "mission"),
 		LocalOnly:        stringArg(args, "local_only"),
 		DelegationGating: stringArg(args, "delegation_gating"),
@@ -122,6 +123,32 @@ func (t *Tools) HandleRemoveWakeSubscription(_ context.Context, args map[string]
 func stringArg(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
+}
+
+// intArg extracts an int from an args map, accepting both numeric
+// (int, float64 from JSON) and string-of-int forms. Returns 0 when
+// the arg is absent or unparseable — matches the
+// [router.LoopProfile.QualityFloor] "zero means unset" convention.
+func intArg(args map[string]any, key string) int {
+	v, ok := args[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0
+		}
+		return parsed
+	}
+	return 0
 }
 
 // toStringSlice converts an any value to []string. Handles both

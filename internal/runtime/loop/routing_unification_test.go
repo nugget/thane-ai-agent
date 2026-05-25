@@ -33,8 +33,8 @@ func TestUnmarshalJSONMigratesLegacyQualityFloor(t *testing.T) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if s.Profile.QualityFloor != "7" {
-		t.Errorf("Profile.QualityFloor = %q, want %q (legacy migration)", s.Profile.QualityFloor, "7")
+	if s.Profile.QualityFloor != 7 {
+		t.Errorf("Profile.QualityFloor = %d, want 7 (legacy migration)", s.Profile.QualityFloor)
 	}
 }
 
@@ -67,8 +67,8 @@ func TestUnmarshalJSONMigratesLegacySupervisorFields(t *testing.T) {
 		if s.SupervisorProfile == nil {
 			t.Fatal("SupervisorProfile is nil; expected allocation when legacy supervisor fields are present")
 		}
-		if s.SupervisorProfile.QualityFloor != "9" {
-			t.Errorf("SupervisorProfile.QualityFloor = %q, want %q", s.SupervisorProfile.QualityFloor, "9")
+		if s.SupervisorProfile.QualityFloor != 9 {
+			t.Errorf("SupervisorProfile.QualityFloor = %d, want 9", s.SupervisorProfile.QualityFloor)
 		}
 		if !strings.Contains(s.SupervisorProfile.Instructions, "Review this turn") {
 			t.Errorf("SupervisorProfile.Instructions = %q, want the legacy supervisor_context content", s.SupervisorProfile.Instructions)
@@ -119,11 +119,11 @@ func TestUnmarshalJSONPrefersNewShapeOverLegacy(t *testing.T) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if s.Profile.QualityFloor != "8" {
-		t.Errorf("Profile.QualityFloor = %q, want %q (new shape should win)", s.Profile.QualityFloor, "8")
+	if s.Profile.QualityFloor != 8 {
+		t.Errorf("Profile.QualityFloor = %d, want 8 (new shape should win)", s.Profile.QualityFloor)
 	}
-	if s.SupervisorProfile == nil || s.SupervisorProfile.QualityFloor != "10" {
-		t.Errorf("SupervisorProfile.QualityFloor = %v, want %q (new shape should win)", s.SupervisorProfile, "10")
+	if s.SupervisorProfile == nil || s.SupervisorProfile.QualityFloor != 10 {
+		t.Errorf("SupervisorProfile.QualityFloor = %+v, want 10 (new shape should win)", s.SupervisorProfile)
 	}
 }
 
@@ -142,10 +142,10 @@ func TestMarshalJSONOmitsLegacyFields(t *testing.T) {
 		SleepMax:     time.Minute,
 		SleepDefault: time.Minute,
 		Profile: router.LoopProfile{
-			QualityFloor: "4",
+			QualityFloor: 4,
 		},
 		SupervisorProfile: &router.LoopProfile{
-			QualityFloor: "9",
+			QualityFloor: 9,
 			Instructions: "Periodic review.",
 		},
 	}
@@ -154,23 +154,28 @@ func TestMarshalJSONOmitsLegacyFields(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	js := string(out)
+	// The retired top-level fields must not appear on the wire.
+	// Note: `quality_floor` IS the canonical Profile field name,
+	// so we can't just grep for the key — we check that it never
+	// appears at the spec root, only nested inside profile and
+	// supervisor_profile objects.
 	for _, legacy := range []string{
-		`"quality_floor":4`,
-		`"quality_floor":9`,
 		`"supervisor_quality_floor"`,
 		`"supervisor_context"`,
 	} {
 		if strings.Contains(js, legacy) {
-			t.Errorf("Marshal emitted legacy field %q in: %s", legacy, js)
+			t.Errorf("Marshal emitted retired field %q in: %s", legacy, js)
 		}
 	}
-	// The canonical fields must appear so a downstream consumer
-	// sees the real configuration.
-	if !strings.Contains(js, `"quality_floor":"4"`) {
-		t.Errorf("Marshal didn't emit Profile.quality_floor as %q: %s", "4", js)
+	// The canonical Profile / SupervisorProfile blocks must
+	// carry quality_floor as an int (not the legacy string
+	// form). A pre-PR-Q1 marshal would have emitted "4" /
+	// "9"; the int wire format pins the conversion.
+	if !strings.Contains(js, `"profile":{"quality_floor":4}`) {
+		t.Errorf("Marshal didn't emit profile.quality_floor as int 4: %s", js)
 	}
-	if !strings.Contains(js, `"supervisor_profile"`) {
-		t.Errorf("Marshal didn't emit supervisor_profile block: %s", js)
+	if !strings.Contains(js, `"supervisor_profile":{"quality_floor":9`) {
+		t.Errorf("Marshal didn't emit supervisor_profile.quality_floor as int 9: %s", js)
 	}
 }
 
@@ -237,7 +242,7 @@ func TestEffectiveSupervisorRoutingFactorsCascadesFromContainers(t *testing.T) {
 		Name:      "research",
 		Operation: OperationContainer,
 		SupervisorProfile: &router.LoopProfile{
-			QualityFloor: "9",
+			QualityFloor: 9,
 			LocalOnly:    "false",
 		},
 	}, Deps{})
@@ -255,7 +260,7 @@ func TestEffectiveSupervisorRoutingFactorsCascadesFromContainers(t *testing.T) {
 		Task:     "research things",
 		ParentID: parent.ID(),
 		SupervisorProfile: &router.LoopProfile{
-			QualityFloor: "10",
+			QualityFloor: 10,
 		},
 	}, Deps{Runner: &noopRunner{}})
 	if err != nil {

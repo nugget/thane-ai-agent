@@ -104,8 +104,8 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 	if launcher.launch.Spec.Profile.LocalOnly != "true" {
 		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "true")
 	}
-	if launcher.launch.Spec.Profile.QualityFloor != "1" {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "1")
+	if launcher.launch.Spec.Profile.QualityFloor != 1 {
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 1)
 	}
 	if launcher.launch.Spec.Profile.Mission != "automation" {
 		t.Errorf("hint mission = %q, want %q", launcher.launch.Spec.Profile.Mission, "automation")
@@ -280,8 +280,8 @@ func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
 	if launcher.launch.Spec.Profile.LocalOnly != "false" {
 		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "false")
 	}
-	if launcher.launch.Spec.Profile.QualityFloor != "7" {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "7")
+	if launcher.launch.Spec.Profile.QualityFloor != 7 {
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 7)
 	}
 }
 
@@ -322,8 +322,8 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "true")
 	}
 	// quality_floor should use the override.
-	if launcher.launch.Spec.Profile.QualityFloor != "5" {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "5")
+	if launcher.launch.Spec.Profile.QualityFloor != 5 {
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 5)
 	}
 }
 
@@ -380,7 +380,7 @@ func TestBuildScheduledTaskLoopProfile(t *testing.T) {
 			},
 			want: router.LoopProfile{
 				LocalOnly:        "true",
-				QualityFloor:     "1",
+				QualityFloor:     1,
 				Mission:          "automation",
 				DelegationGating: "disabled",
 				ExtraHints: map[string]string{
@@ -405,7 +405,7 @@ func TestBuildScheduledTaskLoopProfile(t *testing.T) {
 			want: router.LoopProfile{
 				Model:            "claude-sonnet-4-20250514",
 				LocalOnly:        "false",
-				QualityFloor:     "7",
+				QualityFloor:     7,
 				Mission:          "automation",
 				DelegationGating: "disabled",
 				ExtraHints: map[string]string{

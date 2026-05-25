@@ -1410,7 +1410,7 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 			Instructions: "stay concise",
 			PreferSpeed:  "true",
 			LocalOnly:    "false",
-			QualityFloor: "7",
+			QualityFloor: 7,
 			ExtraHints:   map[string]string{"source": "profile"},
 		},
 		ExcludeTools: []string{"dangerous_tool"},

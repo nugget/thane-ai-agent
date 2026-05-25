@@ -55,7 +55,7 @@ func TestSpecValidate(t *testing.T) {
 			Name: "bad-profile",
 			Task: "Do something.",
 			Profile: router.LoopProfile{
-				QualityFloor: "99",
+				QualityFloor: 99,
 			},
 		}
 		err := spec.Validate()

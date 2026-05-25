@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -126,9 +128,20 @@ func buildScheduledTaskLoopProfile(task *scheduler.Task) router.LoopProfile {
 		localOnly = lo
 	}
 
-	qualityFloor := "1"
-	if qf, ok := task.Payload.Data["quality_floor"].(string); ok {
-		qualityFloor = qf
+	qualityFloor := 1
+	if raw, ok := task.Payload.Data["quality_floor"]; ok {
+		switch v := raw.(type) {
+		case int:
+			qualityFloor = v
+		case int64:
+			qualityFloor = int(v)
+		case float64:
+			qualityFloor = int(v)
+		case string:
+			if parsed, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				qualityFloor = parsed
+			}
+		}
 	}
 
 	return router.LoopProfile{
