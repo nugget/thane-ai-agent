@@ -180,6 +180,14 @@ func (a *App) mutateLoopSubscriptions(ctx context.Context, loopName string, muta
 	newSpec := existing.Spec
 	newSpec.Subscriptions = next
 	updatedAt := time.Now().UTC()
+	// Persist BEFORE patching live state. The dual-walker model
+	// (live [Registry.effectiveState] vs persisted
+	// [EvaluateEffectiveConditions]) only agrees as long as the
+	// persisted store is at-or-ahead of the live snapshot — if a
+	// process crashes between the live patch and the persist, the
+	// next startup hydrates the loop without the change and the
+	// live and persisted views diverge. This ordering is
+	// load-bearing for any future mutator on this path.
 	if err := a.persistLoopDefinition(newSpec, updatedAt); err != nil {
 		return nil, fmt.Errorf("persist loop definition: %w", err)
 	}
@@ -190,6 +198,17 @@ func (a *App) mutateLoopSubscriptions(ctx context.Context, loopName string, muta
 		if live := a.loopRegistry.GetByName(loopName); live != nil {
 			live.SetSubscriptions(next)
 		}
+	}
+	// Signal the schedule watcher so the invariant "any spec write
+	// refires the schedule watcher" survives this mutator. Today
+	// Subscriptions don't affect schedules, so the signal is
+	// strictly conservative — but the architectural property
+	// matters: a future mutator on this path (Conditions, sleep
+	// envelope) that forgot to signal would silently break wake-up
+	// timing. Fanning out from every spec-mutation point keeps the
+	// reconciler's reactive model honest.
+	if a.loopDefinitionRuntime != nil {
+		a.loopDefinitionRuntime.signalScheduleChange()
 	}
 	_ = ctx
 	return next, nil

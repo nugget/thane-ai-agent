@@ -298,7 +298,10 @@ func TestDefinitionRegistryEvaluateConditionsCascades(t *testing.T) {
 		t.Fatalf("upsert leaf: %v", err)
 	}
 
-	status, evals := reg.EvaluateConditions("leaf", now)
+	status, evals, found := reg.EvaluateConditions("leaf", now)
+	if !found {
+		t.Fatal("EvaluateConditions reported leaf as not found")
+	}
 	if status.Eligible {
 		t.Errorf("leaf should be ineligible due to ancestor schedule, got %+v", status)
 	}

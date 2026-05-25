@@ -89,6 +89,16 @@ type EffectiveConditionEvaluation struct {
 // gating the loop. The per-level evaluations are returned alongside
 // so the effective surface can show provenance.
 //
+// This is the PERSISTED walker (chain comes from
+// [DefinitionRegistry.AncestorSpecs] — spec-level reads). Its
+// live counterpart is [Registry.effectiveState]. The two walkers
+// only agree as long as mutators persist BEFORE patching live
+// state — see the load-bearing ordering at
+// [app.App.mutateLoopSubscriptions]. A future mutator that
+// patches live state without persisting first would let the
+// persisted walker stay stale while the live walker shows the
+// new value, until reconcile catches up.
+//
 // Only the leaf itself (chain[0]) and container ancestors
 // contribute. Non-container ancestors are walked past silently —
 // matches the inheritance contract established in PR-A/B/C, where

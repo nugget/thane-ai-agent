@@ -462,6 +462,18 @@ func (r *Registry) ancestorContainerTags(loopID string) []string {
 // would arise from reading l.config.* directly while holding only
 // r.mu.
 //
+// This is the LIVE walker. Its persisted-side counterpart is
+// [EvaluateEffectiveConditions] (and the per-field
+// [DefinitionRegistry.AncestorSpecs] consumers). The two walkers
+// agree only as long as mutators persist BEFORE patching live
+// state — see the load-bearing ordering at
+// [app.App.mutateLoopSubscriptions]. A mutator that updates live
+// state without persisting (or persists after patching) would let
+// the dual-walk model silently disagree: ConfigureLoop callers
+// reading the live snapshot would see the change, while
+// definition-snapshot consumers (the API surface, eligibility
+// checks, view rendering) would not, until the next persist.
+//
 // Each cascading field uses its own merge semantics:
 //
 //   - Subscriptions / Tags / ExcludeTools — union, first-wins on

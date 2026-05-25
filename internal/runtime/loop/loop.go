@@ -226,6 +226,23 @@ type Loop struct {
 	// requestInstructions is extra guidance derived from a [Spec]'s
 	// [router.LoopProfile]. It is prepended to each iteration task
 	// when present.
+	//
+	// SCOPE: self-only — does NOT cascade through container
+	// ancestors, unlike the five fields handled by
+	// [Registry.effectiveState] (Subscriptions, Tags, ExcludeTools,
+	// RoutingFactors, DelegationGating) and Conditions. The
+	// reasoning: Instructions describe what THIS loop's task is —
+	// it's task-shape guidance ("always emit JSON", "be terse",
+	// "follow this output template"), not capability-shape. A
+	// parent container with task-specific instructions doesn't
+	// naturally apply to a child whose own task is different.
+	// If a future use case wants inherited instructions
+	// (e.g., a research container demanding all descendant
+	// researchers append citations), promote it to a new
+	// EffectiveState field with explicit merge semantics —
+	// silent cascade through this field would break loops that
+	// declared their own instructions and didn't expect parent
+	// noise prepended.
 	requestInstructions string
 
 	// lastResponse is the most recent successful runner response for
