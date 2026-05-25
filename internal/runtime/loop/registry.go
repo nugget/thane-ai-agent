@@ -405,7 +405,9 @@ func (r *Registry) EffectiveExcludeTools(loopID string) []EffectiveExcludeTool {
 }
 
 // EffectiveRoutingFactors returns the resolved routing-factor map
-// for loopID, walked parent-first with child-wins on key collision.
+// for loopID. The cascade walks leaf-first up through container
+// ancestors with first-seen-wins dedup, so the closest declaration
+// to the leaf wins on key collision (equivalent to "child wins").
 // Each entry carries the origin loop name; collisions silently keep
 // the closest declaration. Returns nil when nothing in the chain
 // declares any factors.
@@ -415,9 +417,9 @@ func (r *Registry) EffectiveRoutingFactors(loopID string) []EffectiveRoutingFact
 
 // EffectiveSupervisorRoutingFactors returns the per-turn-mode
 // override cascade derived from [Spec.SupervisorProfile] across
-// the loop and its container ancestors. Walked parent-first with
-// child-wins on key collision, identical to
-// [EffectiveRoutingFactors] but sourced from SupervisorProfile
+// the loop and its container ancestors. Same leaf-first walk and
+// closest-declaration-wins dedup semantics as
+// [EffectiveRoutingFactors], but sourced from SupervisorProfile
 // rather than Profile. The loop runtime overlays these on top of
 // the normal-turn routing factors only when the iteration is a
 // supervisor turn; normal turns ignore this surface entirely.

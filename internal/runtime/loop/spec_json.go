@@ -190,8 +190,18 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 	// supervisor_context fields into the canonical Profile /
 	// SupervisorProfile shape. New fields win on collision —
 	// callers writing the new shape don't get clobbered by
-	// stragglers left in the JSON. Log once per migrated spec at
-	// WARN so operators can audit what's being upgraded.
+	// stragglers left in the JSON.
+	//
+	// Logs at WARN every time a legacy-shaped spec is unmarshaled,
+	// not just once per upgrade — the function has no
+	// process-level memory of which specs have been migrated
+	// before. In practice the noise self-limits: once the
+	// definition registry persists the spec back to disk in the
+	// new shape (which happens on the next mutation or
+	// reconcile), subsequent loads find no legacy fields and the
+	// warn stops firing. Operators upgrading a deployment with
+	// many legacy overlay specs will see one burst of warns at
+	// startup and then quiet.
 	migrateLegacyRoutingFields(s, wire, slog.Default())
 	return nil
 }
