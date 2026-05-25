@@ -8,9 +8,9 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// registerLoopUpdateEntitySubscriptions wires the external CRUD tool
-// for adjusting a named loop's entity-subscription watch set
-// post-launch. Loop creation already accepts an entities parameter via
+// registerUpdateEntitySubscriptions wires the external CRUD tool for
+// adjusting a named loop's entity-subscription watch set post-launch.
+// Loop creation already accepts an entities parameter via
 // thane_curate; this tool is for the model managing an existing,
 // running loop without re-launching it.
 //
@@ -19,16 +19,16 @@ import (
 // internal/app/loop_focus_tools.go. That surface targets the model
 // running an iteration and has no name parameter (the scope tag is
 // baked in at hydration). Two surfaces, two cognitive frames.
-func (r *Registry) registerLoopUpdateEntitySubscriptions() {
+func (r *Registry) registerUpdateEntitySubscriptions() {
 	r.Register(&Tool{
-		Name: "loop_update_entity_subscriptions",
-		Description: "Adjust an existing loop's entity-subscription watch set by name. " +
-			"Use this from outside a loop (a conversation, a supervisor, a peer loop) when the model already has a target loop in mind. " +
-			"From inside a running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list — those don't require the loop name. " +
-			"Both add and remove are optional and may be combined in one call; at least one must contain entries. " +
-			"Add items use the same shape as the entities parameter on thane_curate (entity_id with optional history, forecast, ttl_seconds). " +
-			"Remove items are bare entity_id strings. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
-			"Returns the loop's scope_tag and the counts of added and removed subscriptions.",
+		Name: "update_entity_subscriptions",
+		Description: "Add or remove Home Assistant entities from a running loop's watch set. " +
+			"Use this when you want a peer loop or conversation to start (or stop) seeing specific entities in its context every iteration — for example, when the core loop learns that a curate loop should also watch a newly-relevant sensor. " +
+			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because the scope is baked in. " +
+			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
+			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
+			"To see what a loop currently watches, call list_context_entities with the loop's scope_tag (visible on loop_definition_get and on thane_curate's launch response). " +
+			"Returns the loop's scope_tag plus counts of added and removed subscriptions.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
 		Parameters: map[string]any{
 			"type": "object",
@@ -73,14 +73,14 @@ func (r *Registry) registerLoopUpdateEntitySubscriptions() {
 			},
 			"required": []string{"name"},
 		},
-		Handler: r.handleLoopUpdateEntitySubscriptions,
+		Handler: r.handleUpdateEntitySubscriptions,
 	})
 }
 
-func (r *Registry) handleLoopUpdateEntitySubscriptions(_ context.Context, args map[string]any) (string, error) {
+func (r *Registry) handleUpdateEntitySubscriptions(_ context.Context, args map[string]any) (string, error) {
 	deps := r.loopIntentDeps
 	if deps.Registry == nil || deps.WatchlistStore == nil {
-		return "", fmt.Errorf("loop_update_entity_subscriptions not configured: requires loop registry and watchlist store")
+		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop registry and watchlist store")
 	}
 
 	name := strings.TrimSpace(ldStringArg(args, "name"))

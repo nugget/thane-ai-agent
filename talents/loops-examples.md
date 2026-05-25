@@ -36,7 +36,7 @@ like?"
 Treat the registry as a library of worked examples. A loop that has
 run hundreds of healthy iterations is a better template than anything
 in this file. If a peer loop already owns the topic, prefer extending
-it (via `loop_update_entity_subscriptions`) over launching a parallel
+it (via `update_entity_subscriptions`) over launching a parallel
 watcher.
 
 ## The default path: curate, self-pace, two-way signal
@@ -56,7 +56,7 @@ awareness:
    `request_core_attention` with a concern and a priority.
 4. **Core pushes new focus down when it matters.** When the core
    wants the watcher to track something new, it calls
-   `loop_update_entity_subscriptions` to add or remove entities from
+   `update_entity_subscriptions` to add or remove entities from
    the watcher's set.
 
 The watcher never speaks to the operator directly. It speaks to the
@@ -138,7 +138,7 @@ When the core decides the watcher should track something new:
 }
 ```
 
-`loop_update_entity_subscriptions` modifies the running loop's watch
+`update_entity_subscriptions` modifies the running loop's watch
 set in place. The watcher sees the new entities on its next wake. Use
 `remove: ["entity_id", ...]` to retire watches the core no longer
 cares about.
