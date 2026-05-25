@@ -20,7 +20,7 @@ type Launch struct {
 	Metadata       map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 	ConversationID string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
 	ChannelBinding *memory.ChannelBinding                 `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
-	Hints          map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	RoutingFactors map[string]string                      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 	AllowedTools   []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
 	ExcludeTools   []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 	InitialTags    []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
@@ -61,7 +61,7 @@ type launchJSON struct {
 	Metadata                 map[string]string        `json:"metadata,omitempty"`
 	ConversationID           string                   `json:"conversation_id,omitempty"`
 	ChannelBinding           *memory.ChannelBinding   `json:"channel_binding,omitempty"`
-	Hints                    map[string]string        `json:"hints,omitempty"`
+	RoutingFactors           map[string]string        `json:"routing_factors,omitempty"`
 	AllowedTools             []string                 `json:"allowed_tools,omitempty"`
 	ExcludeTools             []string                 `json:"exclude_tools,omitempty"`
 	InitialTags              []string                 `json:"initial_tags,omitempty"`
@@ -89,7 +89,7 @@ func (l Launch) MarshalJSON() ([]byte, error) {
 		Metadata:                 cloneStringMap(l.Metadata),
 		ConversationID:           l.ConversationID,
 		ChannelBinding:           l.ChannelBinding.Clone(),
-		Hints:                    cloneStringMap(l.Hints),
+		RoutingFactors:           cloneStringMap(l.RoutingFactors),
 		AllowedTools:             append([]string(nil), l.AllowedTools...),
 		ExcludeTools:             append([]string(nil), l.ExcludeTools...),
 		InitialTags:              append([]string(nil), l.InitialTags...),
@@ -134,7 +134,7 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		Metadata:                 cloneStringMap(wire.Metadata),
 		ConversationID:           wire.ConversationID,
 		ChannelBinding:           wire.ChannelBinding.Clone(),
-		Hints:                    cloneStringMap(wire.Hints),
+		RoutingFactors:           cloneStringMap(wire.RoutingFactors),
 		AllowedTools:             append([]string(nil), wire.AllowedTools...),
 		ExcludeTools:             append([]string(nil), wire.ExcludeTools...),
 		InitialTags:              append([]string(nil), wire.InitialTags...),
@@ -202,7 +202,7 @@ func (l *Launch) HasOverrides() bool {
 		return true
 	}
 	if len(l.Metadata) > 0 ||
-		len(l.Hints) > 0 ||
+		len(l.RoutingFactors) > 0 ||
 		len(l.AllowedTools) > 0 ||
 		len(l.ExcludeTools) > 0 ||
 		len(l.InitialTags) > 0 {
@@ -248,7 +248,7 @@ func (l *Launch) requestOverride() Request {
 		AllowedTools:          append([]string(nil), l.AllowedTools...),
 		ExcludeTools:          append([]string(nil), l.ExcludeTools...),
 		SkipTagFilter:         l.SkipTagFilter,
-		Hints:                 cloneStringMap(l.Hints),
+		RoutingFactors:        cloneStringMap(l.RoutingFactors),
 		InitialTags:           append([]string(nil), l.InitialTags...),
 		OnProgress:            l.OnProgress,
 		FallbackContent:       l.FallbackContent,

@@ -219,10 +219,10 @@ func loopLaunchOverrideProperties() map[string]any {
 			"items":       map[string]any{"type": "string"},
 			"description": "Preload these capability tags so the child loop starts with them active.",
 		},
-		"hints": map[string]any{
+		"routing_factors": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{"type": "string"},
-			"description":          "Free-form string/string routing or context hints. Use named top-level fields (allowed_tools, max_iterations, etc.) for well-known behavior overrides; hints are for softer signals. To pin a model, set spec.profile.model on the stored definition or in the spec passed to spawn_loop — not via hints.",
+			"description":          "Open-ended routing factors the model router consumes as scoring inputs. Well-known keys live in `internal/model/router` (quality_floor, mission, local_only, prefer_speed, model_preference, channel). Use named top-level launch fields (allowed_tools, max_iterations, etc.) for well-known overrides; routing_factors is for the router's softer signals. To pin a model, set spec.profile.model on the stored definition or in the spec passed to spawn_loop — not via routing_factors.",
 		},
 		"max_iterations": map[string]any{
 			"type":        "integer",

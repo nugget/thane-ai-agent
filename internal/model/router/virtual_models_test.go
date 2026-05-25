@@ -42,18 +42,18 @@ func TestResolveVirtualModelSelection_PremiumKeepsDelegatePolicyAdaptive(t *test
 	if selection.Model != "" {
 		t.Fatalf("Model = %q, want empty", selection.Model)
 	}
-	if selection.Hints[HintQualityFloor] != "9" {
-		t.Fatalf("quality_floor = %q, want 9", selection.Hints[HintQualityFloor])
+	if selection.RoutingFactors[FactorQualityFloor] != "9" {
+		t.Fatalf("quality_floor = %q, want 9", selection.RoutingFactors[FactorQualityFloor])
 	}
-	if selection.Hints[HintVirtualModel] != "thane:premium" {
-		t.Fatalf("virtual_model = %q, want thane:premium", selection.Hints[HintVirtualModel])
+	if selection.RoutingFactors[HintVirtualModel] != "thane:premium" {
+		t.Fatalf("virtual_model = %q, want thane:premium", selection.RoutingFactors[HintVirtualModel])
 	}
-	for _, hint := range []string{HintQualityFloor, HintLocalOnly, HintPreferSpeed, HintMission} {
-		if got := selection.Hints[DelegateHintKey(hint)]; got != "" {
+	for _, hint := range []string{FactorQualityFloor, FactorLocalOnly, FactorPreferSpeed, FactorMission} {
+		if got := selection.RoutingFactors[DelegateHintKey(hint)]; got != "" {
 			t.Fatalf("delegate %s = %q, want empty", hint, got)
 		}
 	}
-	if got := selection.Hints[HintDelegateModel]; got != "" {
+	if got := selection.RoutingFactors[HintDelegateModel]; got != "" {
 		t.Fatalf("delegate model = %q, want empty", got)
 	}
 }
@@ -69,49 +69,49 @@ func TestResolveVirtualModelSelection_OpsAddsDelegatePolicy(t *testing.T) {
 	if selection.CanonicalName != "thane:ops" {
 		t.Fatalf("CanonicalName = %q, want thane:ops", selection.CanonicalName)
 	}
-	if selection.Hints[HintVirtualModel] != "thane:ops" {
-		t.Fatalf("virtual_model = %q, want thane:ops", selection.Hints[HintVirtualModel])
+	if selection.RoutingFactors[HintVirtualModel] != "thane:ops" {
+		t.Fatalf("virtual_model = %q, want thane:ops", selection.RoutingFactors[HintVirtualModel])
 	}
-	if selection.Hints[DelegateHintKey(HintQualityFloor)] != "9" {
-		t.Fatalf("delegate quality_floor = %q, want 9", selection.Hints[DelegateHintKey(HintQualityFloor)])
+	if selection.RoutingFactors[DelegateHintKey(FactorQualityFloor)] != "9" {
+		t.Fatalf("delegate quality_floor = %q, want 9", selection.RoutingFactors[DelegateHintKey(FactorQualityFloor)])
 	}
-	if selection.Hints[DelegateHintKey(HintLocalOnly)] != "false" {
-		t.Fatalf("delegate local_only = %q, want false", selection.Hints[DelegateHintKey(HintLocalOnly)])
+	if selection.RoutingFactors[DelegateHintKey(FactorLocalOnly)] != "false" {
+		t.Fatalf("delegate local_only = %q, want false", selection.RoutingFactors[DelegateHintKey(FactorLocalOnly)])
 	}
-	if selection.Hints[DelegateHintKey(HintPreferSpeed)] != "false" {
-		t.Fatalf("delegate prefer_speed = %q, want false", selection.Hints[DelegateHintKey(HintPreferSpeed)])
+	if selection.RoutingFactors[DelegateHintKey(FactorPreferSpeed)] != "false" {
+		t.Fatalf("delegate prefer_speed = %q, want false", selection.RoutingFactors[DelegateHintKey(FactorPreferSpeed)])
 	}
 }
 
 func TestOverlayDelegateHints(t *testing.T) {
 	explicitModel, merged := OverlayDelegateHints(map[string]string{
-		HintLocalOnly:   "true",
-		HintPreferSpeed: "true",
+		FactorLocalOnly:   "true",
+		FactorPreferSpeed: "true",
 	}, map[string]string{
-		HintDelegateModel:                    "claude-opus-4-20250514",
-		DelegateHintKey(HintQualityFloor):    "10",
-		DelegateHintKey(HintLocalOnly):       "false",
-		DelegateHintKey(HintPreferSpeed):     "false",
-		DelegateHintKey(HintMission):         "device_control",
-		DelegateHintKey(HintModelPreference): "spark/gpt-oss:120b",
+		HintDelegateModel:                      "claude-opus-4-20250514",
+		DelegateHintKey(FactorQualityFloor):    "10",
+		DelegateHintKey(FactorLocalOnly):       "false",
+		DelegateHintKey(FactorPreferSpeed):     "false",
+		DelegateHintKey(FactorMission):         "device_control",
+		DelegateHintKey(FactorModelPreference): "spark/gpt-oss:120b",
 	})
 
 	if explicitModel != "claude-opus-4-20250514" {
 		t.Fatalf("explicitModel = %q, want claude-opus-4-20250514", explicitModel)
 	}
-	if merged[HintQualityFloor] != "10" {
-		t.Fatalf("quality_floor = %q, want 10", merged[HintQualityFloor])
+	if merged[FactorQualityFloor] != "10" {
+		t.Fatalf("quality_floor = %q, want 10", merged[FactorQualityFloor])
 	}
-	if merged[HintLocalOnly] != "false" {
-		t.Fatalf("local_only = %q, want false", merged[HintLocalOnly])
+	if merged[FactorLocalOnly] != "false" {
+		t.Fatalf("local_only = %q, want false", merged[FactorLocalOnly])
 	}
-	if merged[HintPreferSpeed] != "false" {
-		t.Fatalf("prefer_speed = %q, want false", merged[HintPreferSpeed])
+	if merged[FactorPreferSpeed] != "false" {
+		t.Fatalf("prefer_speed = %q, want false", merged[FactorPreferSpeed])
 	}
-	if merged[HintMission] != "device_control" {
-		t.Fatalf("mission = %q, want device_control", merged[HintMission])
+	if merged[FactorMission] != "device_control" {
+		t.Fatalf("mission = %q, want device_control", merged[FactorMission])
 	}
-	if merged[HintModelPreference] != "spark/gpt-oss:120b" {
-		t.Fatalf("model_preference = %q, want spark/gpt-oss:120b", merged[HintModelPreference])
+	if merged[FactorModelPreference] != "spark/gpt-oss:120b" {
+		t.Fatalf("model_preference = %q, want spark/gpt-oss:120b", merged[FactorModelPreference])
 	}
 }

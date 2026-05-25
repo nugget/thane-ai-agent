@@ -230,14 +230,17 @@ func BuildSpec(cfg Config, opts Opts) loop.Spec {
 func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 	spec := BuildSpec(cfg, opts)
 	out := spec.ToConfig()
-	profileHints := spec.Profile.Hints()
+	profileHints := spec.Profile.RoutingFactors()
 	if len(profileHints) > 0 {
-		if out.Hints == nil {
-			out.Hints = make(map[string]string, len(profileHints))
+		if out.RoutingFactors == nil {
+			out.RoutingFactors = make(map[string]string, len(profileHints))
 		}
 		for k, v := range profileHints {
-			out.Hints[k] = v
+			out.RoutingFactors[k] = v
 		}
+	}
+	if spec.Profile.DelegationGating != "" {
+		out.DelegationGating = spec.Profile.DelegationGating
 	}
 	return out
 }

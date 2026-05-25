@@ -17,8 +17,8 @@ import (
 // The internal counterpart — watch_entity / unwatch_entity hydrated
 // as runtime tools alongside the loop's scoped output tools — lives in
 // internal/app/loop_focus_tools.go. That surface targets the model
-// running an iteration and has no name parameter (focus_tag is baked
-// in at hydration). Two surfaces, two cognitive frames.
+// running an iteration and has no name parameter (the scope tag is
+// baked in at hydration). Two surfaces, two cognitive frames.
 func (r *Registry) registerLoopUpdateEntitySubscriptions() {
 	r.Register(&Tool{
 		Name: "loop_update_entity_subscriptions",
@@ -28,14 +28,14 @@ func (r *Registry) registerLoopUpdateEntitySubscriptions() {
 			"Both add and remove are optional and may be combined in one call; at least one must contain entries. " +
 			"Add items use the same shape as the entities parameter on thane_curate (entity_id with optional history, forecast, ttl_seconds). " +
 			"Remove items are bare entity_id strings. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
-			"Returns the loop's focus_tag and the counts of added and removed subscriptions.",
+			"Returns the loop's scope_tag and the counts of added and removed subscriptions.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a focus_tag in Spec.Metadata).",
+					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a scope_tag in Spec.Metadata; legacy persisted definitions with the older focus_tag key are accepted during the rename fallback window).",
 				},
 				"add": map[string]any{
 					"type":        "array",
@@ -68,7 +68,7 @@ func (r *Registry) registerLoopUpdateEntitySubscriptions() {
 				"remove": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Entity IDs to unsubscribe from this loop. Removes only the row scoped to this loop's focus_tag; other scopes for the same entity are left alone.",
+					"description": "Entity IDs to unsubscribe from this loop. Removes only the row scoped to this loop's scope_tag; other scopes for the same entity are left alone.",
 				},
 			},
 			"required": []string{"name"},
@@ -93,9 +93,9 @@ func (r *Registry) handleLoopUpdateEntitySubscriptions(_ context.Context, args m
 	if !ok {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
-	focusTag := strings.TrimSpace(existing.Spec.Metadata["focus_tag"])
-	if focusTag == "" {
-		return "", fmt.Errorf("loop %q has no focus_tag; only loops created with thane_curate (or another tool that mints a focus_tag) support entity subscriptions", name)
+	scopeTag := looppkg.SpecScopeTag(existing.Spec)
+	if scopeTag == "" {
+		return "", fmt.Errorf("loop %q has no scope_tag; only loops created with thane_curate (or another tool that mints a scope_tag) support entity subscriptions", name)
 	}
 
 	addList, err := parseEntityList("add", args["add"])
@@ -114,12 +114,12 @@ func (r *Registry) handleLoopUpdateEntitySubscriptions(_ context.Context, args m
 	// (e.g. swap history windows) is a single round-trip and lands as
 	// an insert rather than a no-op upsert with stale state.
 	for _, eid := range removeList {
-		if err := deps.WatchlistStore.RemoveWithScopes(eid, []string{focusTag}); err != nil {
+		if err := deps.WatchlistStore.RemoveWithScopes(eid, []string{scopeTag}); err != nil {
 			return "", fmt.Errorf("remove %q: %w", eid, err)
 		}
 	}
 	for _, e := range addList {
-		if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{focusTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
+		if err := deps.WatchlistStore.AddWithOptions(e.EntityID, []string{scopeTag}, e.History, e.TTLSeconds, e.Forecast); err != nil {
 			return "", fmt.Errorf("add %q: %w", e.EntityID, err)
 		}
 	}
@@ -127,7 +127,7 @@ func (r *Registry) handleLoopUpdateEntitySubscriptions(_ context.Context, args m
 	return ldMarshalToolJSON(map[string]any{
 		"status":               "ok",
 		"loop_definition_name": name,
-		"focus_tag":            focusTag,
+		"scope_tag":            scopeTag,
 		"added":                len(addList),
 		"removed":              len(removeList),
 	})

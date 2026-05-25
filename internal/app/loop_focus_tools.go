@@ -10,24 +10,26 @@ import (
 
 // hydrateLoopFocusTools generates the in-loop entity-subscription
 // mutation tools — watch_entity and unwatch_entity — whenever a spec
-// carries Metadata["focus_tag"]. The focus tag is captured in the
+// carries a scope_tag in Metadata. The scope tag is captured in the
 // closure at hydration time, so the model running an iteration never
 // sees or types it; the tool surface is the inside-the-loop cognitive
 // frame ("watch this entity") rather than the outside-the-loop one
 // ("update loop X's subscriptions").
 //
-// No-op when the spec has no focus_tag or when the watchlist store is
+// No-op when the spec has no scope tag or when the watchlist store is
 // not configured. Errors only when the store is missing AND the spec
-// declares a focus_tag (a misconfiguration worth surfacing).
+// declares a scope tag (a misconfiguration worth surfacing).
+// [looppkg.SpecScopeTag] handles the read fallback to the legacy
+// "focus_tag" key for specs persisted before the rename.
 func (a *App) hydrateLoopFocusTools(spec looppkg.Spec) (looppkg.Spec, error) {
-	focusTag := strings.TrimSpace(spec.Metadata["focus_tag"])
-	if focusTag == "" {
+	scopeTag := looppkg.SpecScopeTag(spec)
+	if scopeTag == "" {
 		return spec, nil
 	}
 	if a == nil || a.watchlistStore == nil {
-		return looppkg.Spec{}, fmt.Errorf("loop %q declares focus_tag %q but the entity watchlist store is not configured", spec.Name, focusTag)
+		return looppkg.Spec{}, fmt.Errorf("loop %q declares scope_tag %q but the entity watchlist store is not configured", spec.Name, scopeTag)
 	}
-	spec.RuntimeTools = append(spec.RuntimeTools, buildLoopFocusTools(a.watchlistStore, focusTag)...)
+	spec.RuntimeTools = append(spec.RuntimeTools, buildLoopFocusTools(a.watchlistStore, scopeTag)...)
 	return spec, nil
 }
 
@@ -38,8 +40,8 @@ type loopFocusWatchStore interface {
 	RemoveWithScopes(entityID string, scopes []string) error
 }
 
-func buildLoopFocusTools(store loopFocusWatchStore, focusTag string) []looppkg.RuntimeTool {
-	if store == nil || focusTag == "" {
+func buildLoopFocusTools(store loopFocusWatchStore, scopeTag string) []looppkg.RuntimeTool {
+	if store == nil || scopeTag == "" {
 		return nil
 	}
 	return []looppkg.RuntimeTool{
@@ -88,7 +90,7 @@ func buildLoopFocusTools(store loopFocusWatchStore, focusTag string) []looppkg.R
 					return "", fmt.Errorf("ttl_seconds must be >= 0")
 				}
 				forecast := strings.TrimSpace(stringMapValue(args, "forecast"))
-				if err := store.AddWithOptions(entityID, []string{focusTag}, history, ttlSeconds, forecast); err != nil {
+				if err := store.AddWithOptions(entityID, []string{scopeTag}, history, ttlSeconds, forecast); err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","entity_id":%q}`, entityID), nil
@@ -113,7 +115,7 @@ func buildLoopFocusTools(store loopFocusWatchStore, focusTag string) []looppkg.R
 				if entityID == "" {
 					return "", fmt.Errorf("entity_id is required")
 				}
-				if err := store.RemoveWithScopes(entityID, []string{focusTag}); err != nil {
+				if err := store.RemoveWithScopes(entityID, []string{scopeTag}); err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","entity_id":%q}`, entityID), nil

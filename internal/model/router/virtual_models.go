@@ -43,12 +43,13 @@ type VirtualModel struct {
 // VirtualModelSelection is the resolved effect of a caller-supplied model
 // string after virtual model expansion.
 type VirtualModelSelection struct {
-	RequestedName string
-	CanonicalName string
-	Description   string
-	Known         bool
-	Model         string
-	Hints         map[string]string
+	RequestedName    string
+	CanonicalName    string
+	Description      string
+	Known            bool
+	Model            string
+	RoutingFactors   map[string]string
+	DelegationGating string // Typed feature switch carried separately from RoutingFactors.
 }
 
 // DelegateHintKey returns the request-hint key used to carry a delegate-time
@@ -72,18 +73,20 @@ func OverlayDelegateHints(base map[string]string, inherited map[string]string) (
 	}
 
 	explicitModel = strings.TrimSpace(inherited[HintDelegateModel])
-	for _, hint := range []string{
-		HintQualityFloor,
-		HintMission,
-		HintLocalOnly,
-		HintDelegationGating,
-		HintPreferSpeed,
-		HintModelPreference,
+	for _, factor := range []string{
+		FactorQualityFloor,
+		FactorMission,
+		FactorLocalOnly,
+		FactorPreferSpeed,
+		FactorModelPreference,
 	} {
-		if v, ok := inherited[DelegateHintKey(hint)]; ok {
-			merged[hint] = strings.TrimSpace(v)
+		if v, ok := inherited[DelegateHintKey(factor)]; ok {
+			merged[factor] = strings.TrimSpace(v)
 		}
 	}
+	// delegation_gating is no longer a routing factor (typed feature
+	// switch on Request); inheritance for it would need a separate
+	// mechanism if a use case arises.
 
 	return explicitModel, merged
 }
@@ -132,17 +135,17 @@ func ResolveVirtualModelSelection(rawModel string, baseHints map[string]string, 
 		if strings.HasPrefix(modelName, "thane:") {
 			logger.Warn("unknown thane profile, using default routing", "profile", modelName)
 			return VirtualModelSelection{
-				RequestedName: rawModel,
-				Known:         false,
-				Model:         "",
-				Hints:         outHints,
+				RequestedName:  rawModel,
+				Known:          false,
+				Model:          "",
+				RoutingFactors: outHints,
 			}
 		}
 		return VirtualModelSelection{
-			RequestedName: rawModel,
-			Known:         false,
-			Model:         modelName,
-			Hints:         outHints,
+			RequestedName:  rawModel,
+			Known:          false,
+			Model:          modelName,
+			RoutingFactors: outHints,
 		}
 	}
 
@@ -150,10 +153,10 @@ func ResolveVirtualModelSelection(rawModel string, baseHints map[string]string, 
 		logger.Warn("virtual model alias used", "alias", modelName, "canonical", spec.Name)
 	}
 
-	for k, v := range spec.TopLevel.Hints() {
+	for k, v := range spec.TopLevel.RoutingFactors() {
 		outHints[k] = v
 	}
-	for k, v := range spec.Delegate.Hints() {
+	for k, v := range spec.Delegate.RoutingFactors() {
 		outHints[DelegateHintKey(k)] = v
 	}
 	if spec.Delegate.Model != "" {
@@ -162,12 +165,13 @@ func ResolveVirtualModelSelection(rawModel string, baseHints map[string]string, 
 	outHints[HintVirtualModel] = spec.Name
 
 	return VirtualModelSelection{
-		RequestedName: rawModel,
-		CanonicalName: spec.Name,
-		Description:   spec.Description,
-		Known:         true,
-		Model:         spec.TopLevel.Model,
-		Hints:         outHints,
+		RequestedName:    rawModel,
+		CanonicalName:    spec.Name,
+		Description:      spec.Description,
+		Known:            true,
+		Model:            spec.TopLevel.Model,
+		RoutingFactors:   outHints,
+		DelegationGating: spec.TopLevel.DelegationGating,
 	}
 }
 

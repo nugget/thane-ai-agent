@@ -13,7 +13,7 @@ import (
 // TestLoopUpdateEntitySubscriptions_AddRemove exercises the happy
 // path: a loop created by thane_curate has its watch set adjusted
 // via the external tool, and both add and remove arrive at the
-// underlying store with the resolved focus_tag baked in.
+// underlying store with the resolved scope_tag baked in.
 func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
@@ -35,9 +35,9 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 		t.Fatalf("thane_curate seed: %v", err)
 	}
 	spec := rig.findCurateSpec(t, "watcher")
-	focusTag := spec.Metadata["focus_tag"]
-	if focusTag == "" {
-		t.Fatal("focus_tag missing after seed")
+	scopeTag := spec.Metadata[looppkg.MetadataScopeTag]
+	if scopeTag == "" {
+		t.Fatal("scope_tag missing after seed")
 	}
 
 	// Reset captures so we isolate the update call.
@@ -69,8 +69,8 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	if resp["status"] != "ok" {
 		t.Errorf("status = %v, want ok", resp["status"])
 	}
-	if resp["focus_tag"] != focusTag {
-		t.Errorf("response focus_tag = %v, want %q", resp["focus_tag"], focusTag)
+	if resp[looppkg.MetadataScopeTag] != scopeTag {
+		t.Errorf("response scope_tag = %v, want %q", resp[looppkg.MetadataScopeTag], scopeTag)
 	}
 	if resp["added"] != float64(2) || resp["removed"] != float64(1) {
 		t.Errorf("counts wrong: added=%v removed=%v", resp["added"], resp["removed"])
@@ -84,16 +84,16 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	if rig.subStore.removed[0].EntityID != "sensor.old" {
 		t.Errorf("removed[0].EntityID = %q, want sensor.old", rig.subStore.removed[0].EntityID)
 	}
-	if len(rig.subStore.removed[0].Scopes) != 1 || rig.subStore.removed[0].Scopes[0] != focusTag {
-		t.Errorf("removed[0].Scopes = %v, want [%q]", rig.subStore.removed[0].Scopes, focusTag)
+	if len(rig.subStore.removed[0].Scopes) != 1 || rig.subStore.removed[0].Scopes[0] != scopeTag {
+		t.Errorf("removed[0].Scopes = %v, want [%q]", rig.subStore.removed[0].Scopes, scopeTag)
 	}
 
 	if len(rig.subStore.added) != 2 {
 		t.Fatalf("added len = %d, want 2", len(rig.subStore.added))
 	}
 	for i, sub := range rig.subStore.added {
-		if len(sub.Tags) != 1 || sub.Tags[0] != focusTag {
-			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, focusTag)
+		if len(sub.Tags) != 1 || sub.Tags[0] != scopeTag {
+			t.Errorf("added[%d].Tags = %v, want [%q]", i, sub.Tags, scopeTag)
 		}
 	}
 	if rig.subStore.added[1].Forecast != "hourly" {
@@ -123,17 +123,17 @@ func TestLoopUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	}
 }
 
-// TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutFocusTag covers
-// the case where the named loop exists but predates the focus_tag
+// TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag covers
+// the case where the named loop exists but predates the scope_tag
 // machinery (e.g. an older loop_definition_set spec without the
 // metadata key). The model should learn the loop doesn't support
 // entity subscriptions rather than have the update silently apply
 // to scope="".
-func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutFocusTag(t *testing.T) {
+func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
-	// Hand-seed a definition with no focus_tag in Metadata.
+	// Hand-seed a definition with no scope_tag in Metadata.
 	bareSpec := looppkg.Spec{
 		Name:         "tagless",
 		Enabled:      true,
@@ -156,10 +156,10 @@ func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutFocusTag(t *testing.T) 
 		"add":  []any{map[string]any{"entity_id": "sensor.foo"}},
 	})
 	if err == nil {
-		t.Fatal("expected error for loop without focus_tag")
+		t.Fatal("expected error for loop without scope_tag")
 	}
-	if !strings.Contains(err.Error(), "focus_tag") {
-		t.Errorf("error %q should mention focus_tag", err)
+	if !strings.Contains(err.Error(), "scope_tag") {
+		t.Errorf("error %q should mention scope_tag", err)
 	}
 }
 

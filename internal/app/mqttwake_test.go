@@ -106,17 +106,17 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	}
 
 	req := reqs[0]
-	if req.Hints["source"] != "mqtt_wake" {
-		t.Errorf("source hint = %q, want %q", req.Hints["source"], "mqtt_wake")
+	if req.RoutingFactors["source"] != "mqtt_wake" {
+		t.Errorf("source hint = %q, want %q", req.RoutingFactors["source"], "mqtt_wake")
 	}
-	if req.Hints["mqtt_topic"] != "test/foo/wake" {
-		t.Errorf("mqtt_topic hint = %q, want %q", req.Hints["mqtt_topic"], "test/foo/wake")
+	if req.RoutingFactors["mqtt_topic"] != "test/foo/wake" {
+		t.Errorf("mqtt_topic hint = %q, want %q", req.RoutingFactors["mqtt_topic"], "test/foo/wake")
 	}
-	if req.Hints[router.HintMission] != "automation" {
-		t.Errorf("mission hint = %q, want %q", req.Hints[router.HintMission], "automation")
+	if req.RoutingFactors[router.FactorMission] != "automation" {
+		t.Errorf("mission hint = %q, want %q", req.RoutingFactors[router.FactorMission], "automation")
 	}
-	if req.Hints[router.HintQualityFloor] != "7" {
-		t.Errorf("quality_floor hint = %q, want %q", req.Hints[router.HintQualityFloor], "7")
+	if req.RoutingFactors[router.FactorQualityFloor] != "7" {
+		t.Errorf("quality_floor hint = %q, want %q", req.RoutingFactors[router.FactorQualityFloor], "7")
 	}
 
 	// Verify message contains instructions and payload.
@@ -193,14 +193,14 @@ func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	}
 
 	req := reqs[0]
-	if req.Hints["source"] != "mqtt_wake" {
-		t.Errorf("source hint = %q, want %q", req.Hints["source"], "mqtt_wake")
+	if req.RoutingFactors["source"] != "mqtt_wake" {
+		t.Errorf("source hint = %q, want %q", req.RoutingFactors["source"], "mqtt_wake")
 	}
-	if req.Hints["loop_id"] == "" {
+	if req.RoutingFactors["loop_id"] == "" {
 		t.Error("loop_id hint is empty; request did not traverse loop turn preparation")
 	}
-	if req.Hints["loop_name"] != "mqtt/wake" {
-		t.Errorf("loop_name hint = %q, want %q", req.Hints["loop_name"], "mqtt/wake")
+	if req.RoutingFactors["loop_name"] != "mqtt/wake" {
+		t.Errorf("loop_name hint = %q, want %q", req.RoutingFactors["loop_name"], "mqtt/wake")
 	}
 }
 
@@ -247,7 +247,7 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 
 	// Both should have the subscription ID hint set.
 	for i, req := range reqs {
-		if req.Hints["mqtt_subscription_id"] == "" {
+		if req.RoutingFactors["mqtt_subscription_id"] == "" {
 			t.Errorf("request %d missing mqtt_subscription_id hint", i)
 		}
 	}
@@ -335,9 +335,9 @@ func TestApplyLoopProfile(t *testing.T) {
 	}
 
 	req := &looppkg.Request{
-		Hints:        map[string]string{"existing": "hint"},
-		ExcludeTools: []string{"files_read"},
-		InitialTags:  []string{"baseline"},
+		RoutingFactors: map[string]string{"existing": "hint"},
+		ExcludeTools:   []string{"files_read"},
+		InitialTags:    []string{"baseline"},
 	}
 
 	applyLoopProfile(&seed, req)
@@ -345,16 +345,16 @@ func TestApplyLoopProfile(t *testing.T) {
 	if req.Model != "claude-3-opus" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-3-opus")
 	}
-	if req.Hints[router.HintQualityFloor] != "8" {
-		t.Errorf("quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "8")
+	if req.RoutingFactors[router.FactorQualityFloor] != "8" {
+		t.Errorf("quality_floor = %q, want %q", req.RoutingFactors[router.FactorQualityFloor], "8")
 	}
-	if req.Hints[router.HintMission] != "automation" {
-		t.Errorf("mission = %q, want %q", req.Hints[router.HintMission], "automation")
+	if req.RoutingFactors[router.FactorMission] != "automation" {
+		t.Errorf("mission = %q, want %q", req.RoutingFactors[router.FactorMission], "automation")
 	}
-	if req.Hints["existing"] != "hint" {
+	if req.RoutingFactors["existing"] != "hint" {
 		t.Errorf("existing hint was overwritten")
 	}
-	if req.Hints["custom"] != "value" {
+	if req.RoutingFactors["custom"] != "value" {
 		t.Errorf("extra hint not applied")
 	}
 	if len(req.ExcludeTools) != 2 || req.ExcludeTools[0] != "files_read" || req.ExcludeTools[1] != "shell_exec" {
