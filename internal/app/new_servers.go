@@ -555,6 +555,13 @@ func (a *App) initServers(s *newState) error {
 			if err := a.migrateLegacyScopeTagSubscriptions(); err != nil {
 				logger.Warn("legacy scope_tag migration encountered errors", "error", err)
 			}
+			// Core is auto-created synchronously during initStores —
+			// before any deferred worker runs — so default-parenting
+			// works for every loop the StartEnabledServices pass
+			// below registers. Idempotent if anyone calls it again.
+			if err := a.ensureCoreLoop(ctx); err != nil {
+				return fmt.Errorf("ensure core loop: %w", err)
+			}
 			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
 			if err != nil {
 				return err

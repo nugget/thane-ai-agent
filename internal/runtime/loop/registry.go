@@ -55,6 +55,20 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	return r
 }
 
+// MultipleCoreError reports an attempt to register a second core
+// loop — a container named [CoreLoopName]. The graph has exactly
+// one structural root; the registry enforces this so callers
+// (auto-create, manual spawn via tools) cannot accidentally
+// produce a second.
+type MultipleCoreError struct {
+	// ExistingID is the loop ID of the core already in the registry.
+	ExistingID string
+}
+
+func (e *MultipleCoreError) Error() string {
+	return fmt.Sprintf("loop: cannot register a second core; existing core (id=%s) is already the singleton root", e.ExistingID)
+}
+
 // Register adds a loop to the registry. Returns an error if the loop's
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
@@ -67,6 +81,35 @@ func (r *Registry) Register(l *Loop) error {
 	}
 	if r.maxLoops > 0 && len(r.loops) >= r.maxLoops {
 		return fmt.Errorf("concurrency limit reached (%d loops)", r.maxLoops)
+	}
+	// Core is a singleton — exactly one structural root in the
+	// graph. Scan for an existing core before accepting a second.
+	// O(n) is fine: this only runs at register time and n is small.
+	if l.IsCore() {
+		for _, existing := range r.loops {
+			if existing.IsCore() {
+				return &MultipleCoreError{ExistingID: existing.id}
+			}
+		}
+	}
+
+	// Default-parent orphan loops to the core so the graph always
+	// has a single root. Only fills in when no parent was declared
+	// at all (both ParentID and ParentName empty): a ParentName
+	// that hasn't yet resolved to a registered loop must stay
+	// unresolved here, otherwise a late reconcile (parent registers
+	// after the child) would have no way to rebind. The core
+	// itself is the exception — it sits above the tree by
+	// definition. Centralizing this in Register means every spawn
+	// path — definition hydration, channel roots via SpawnLoop,
+	// delegate launches, direct tests — gets uniform attachment.
+	if l.config.ParentID == "" && l.config.ParentName == "" && !l.IsCore() {
+		for _, existing := range r.loops {
+			if existing.IsCore() {
+				l.setDefaultParentID(existing.id)
+				break
+			}
+		}
 	}
 
 	r.loops[l.id] = l
@@ -395,8 +438,9 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
-		// ancestors are filtered to container nodes (matches the tag-
-		// inheritance contract from Phase 1A).
+		// ancestors are filtered to container nodes — matches the
+		// tag-inheritance contract from Phase 1A. The core container
+		// participates the same way every other container does.
 		if i > 0 && l.Operation() != OperationContainer {
 			continue
 		}
@@ -465,6 +509,22 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 		}
 	}
 	return result
+}
+
+// Core returns the singleton core loop — the container with the
+// well-known name [CoreLoopName] — or nil if none is currently
+// registered. The app's bootstrap auto-creates one at startup, so
+// a non-nil Core is the steady-state expectation; nil only happens
+// in tests or in the narrow window before bootstrap runs.
+func (r *Registry) Core() *Loop {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, l := range r.loops {
+		if l.IsCore() {
+			return l
+		}
+	}
+	return nil
 }
 
 // FindByName returns all live loops with the exact given name.
@@ -570,7 +630,15 @@ func (r *Registry) startLoop(ctx context.Context, name string, l *Loop, setup fu
 		return fmt.Errorf("start loop %q: %w", name, err)
 	}
 
-	if autoDeregister {
+	// Containers (including the singleton core) close Done()
+	// immediately inside Start because they don't run a goroutine.
+	// The auto-deregister hook below interprets a closed Done as
+	// "loop finished, clean up the registry entry" — which would
+	// instantly delete every container we just registered. Skip
+	// the hook for them; their lifetime in the registry is bounded
+	// by explicit [Deregister]/[StopLoop]/[ShutdownAll] calls, not
+	// by Done signaling.
+	if autoDeregister && l.config.Operation != OperationContainer {
 		go func(id string, done <-chan struct{}) {
 			<-done
 			r.Deregister(id)
@@ -764,10 +832,18 @@ func formatCompletionContent(launch Launch, resp *Response, status Status) strin
 // has exited. Returns an error if the loop is not found. If the
 // goroutine does not exit within 10 seconds (the Stop timeout), the
 // loop remains registered to avoid orphaning a running goroutine.
+//
+// Refuses to stop the singleton core. The graph's structural root
+// has no operator-facing kill switch — the bootstrap manages its
+// lifecycle. [ShutdownAll] still tears it down at process exit
+// because that's the legitimate "everything off" path.
 func (r *Registry) StopLoop(id string) error {
 	l := r.Get(id)
 	if l == nil {
 		return fmt.Errorf("loop %q not found", id)
+	}
+	if l.IsCore() {
+		return fmt.Errorf("loop: cannot stop core %q — the structural root has no operator-facing kill switch", l.config.Name)
 	}
 
 	l.Stop()

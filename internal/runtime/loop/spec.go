@@ -31,8 +31,23 @@ const (
 	// time. Container loops occupy registry entries, take a
 	// parent_id, carry metadata and a scope_tag, but never wake and
 	// never run a Task. See [Spec.Validate] for the shape contract.
+	//
+	// The container with the well-known name [CoreLoopName] is the
+	// graph's structural root — pid-0 equivalent. Core is not a
+	// separate operation kind; it's a container with a few extra
+	// invariants enforced by the registry and bootstrap (singleton,
+	// auto-created on startup, refused for delete, default parent
+	// for orphan loops). See [Loop.IsCore].
 	OperationContainer Operation = "container"
 )
+
+// CoreLoopName is the well-known name reserved for the singleton
+// structural root container. Auto-created at startup if absent;
+// orphan loops default-parent to it; cannot be stopped via the
+// operator-facing kill switch. Operators and tools that want to
+// distinguish the root from other containers compare against this
+// constant rather than re-spelling the string.
+const CoreLoopName = "core"
 
 // Completion describes how a loop's result should be delivered.
 // The zero value is accepted and means "no outward delivery declared".

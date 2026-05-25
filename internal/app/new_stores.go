@@ -60,6 +60,19 @@ func (a *App) initStores(s *newState) error {
 	loopRegistry := a.newLoopRegistry(logger)
 	a.loopRegistry = loopRegistry
 
+	// Auto-create the singleton core loop synchronously, before any
+	// deferred worker (demo loops, loop-definition-services, channel
+	// roots) gets a chance to spawn loops. Every loop that registers
+	// after this point will see a core to default-parent to;
+	// orphans that registered before would silently stay
+	// parentless (there's no late-reconcile path that re-attaches
+	// already-registered loops). Keeping ensureCoreLoop on the
+	// synchronous critical path is the only way to guarantee the
+	// single-root invariant the visualizer relies on.
+	if err := a.ensureCoreLoop(s.ctx); err != nil {
+		return fmt.Errorf("ensure core loop: %w", err)
+	}
+
 	baseDefinitions, err := a.buildLoopDefinitionBaseSpecs()
 	if err != nil {
 		return err

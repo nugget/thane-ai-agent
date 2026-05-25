@@ -323,6 +323,8 @@ func (c *Config) applyDefaults() {
 	if c.Operation == OperationContainer {
 		// Containers never wake; don't synthesize sleep defaults
 		// that would otherwise be inert-but-confusing on the Config.
+		// The well-known core container (see [CoreLoopName]) shares
+		// this contract by being a container.
 		return
 	}
 	if c.SleepMin == 0 {

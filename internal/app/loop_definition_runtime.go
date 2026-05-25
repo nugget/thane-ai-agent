@@ -102,6 +102,12 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 			spec.ParentID = parent.ID()
 		}
 	}
+	// Orphan loops attach to the core at registration time —
+	// [Registry.Register] owns that default-parenting now so every
+	// spawn path (definition hydration, mqtt wake, delegate
+	// launches, direct SpawnLoop callers) gets uniform behavior.
+	// Doing it here would have left non-definition spawns as
+	// additional roots.
 	return spec, nil
 }
 
