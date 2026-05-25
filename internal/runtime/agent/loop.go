@@ -50,21 +50,21 @@ type Request struct {
 	Model           string                 `json:"model,omitempty"`
 	ConversationID  string                 `json:"conversation_id,omitempty"`
 	ChannelBinding  *memory.ChannelBinding `json:"channel_binding,omitempty"`
-	Hints           map[string]string      `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
-	SkipContext     bool                   `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
-	AllowedTools    []string               `json:"-"`               // Optional allowlist of tools visible for this run
-	ExcludeTools    []string               `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter   bool                   `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	InitialTags     []string               `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
-	RuntimeTags     []string               `json:"-"`               // Trusted runtime-asserted tags pinned for this run only
-	RuntimeTools    []*tools.Tool          `json:"-"`               // Request-scoped tools visible only to this run
-	MaxIterations   int                    `json:"-"`               // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int                    `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
-	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
-	UsageRole       string                 `json:"-"`               // Optional usage role override (e.g., "delegate")
-	UsageTaskName   string                 `json:"-"`               // Optional usage task name override
-	FallbackContent string                 `json:"-"`               // Optional static fallback text when the run yields no content
-	PromptMode      agentctx.PromptMode    `json:"-"`               // Optional system-prompt shape override.
+	RoutingFactors  map[string]string      `json:"routing_factors,omitempty"` // Routing hints (channel, mission, etc.)
+	SkipContext     bool                   `json:"-"`                         // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools    []string               `json:"-"`                         // Optional allowlist of tools visible for this run
+	ExcludeTools    []string               `json:"-"`                         // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter   bool                   `json:"-"`                         // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	InitialTags     []string               `json:"-"`                         // Tags to activate at Run start (carried forward from previous loop iterations)
+	RuntimeTags     []string               `json:"-"`                         // Trusted runtime-asserted tags pinned for this run only
+	RuntimeTools    []*tools.Tool          `json:"-"`                         // Request-scoped tools visible only to this run
+	MaxIterations   int                    `json:"-"`                         // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens int                    `json:"-"`                         // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout     time.Duration          `json:"-"`                         // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole       string                 `json:"-"`                         // Optional usage role override (e.g., "delegate")
+	UsageTaskName   string                 `json:"-"`                         // Optional usage task name override
+	FallbackContent string                 `json:"-"`                         // Optional static fallback text when the run yields no content
+	PromptMode      agentctx.PromptMode    `json:"-"`                         // Optional system-prompt shape override.
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -1496,7 +1496,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	log.Info("request start",
 		"kind", events.KindRequestStart,
 		"message_count", len(req.Messages),
-		"mission", req.Hints["mission"],
+		"mission", req.RoutingFactors["mission"],
 		"prompt_mode", req.PromptMode.OrDefault(),
 		"skip_context", req.SkipContext,
 		"max_iterations", req.MaxIterations,
@@ -1569,9 +1569,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		var liteDecision *router.Decision
 		if (liteModel == "" || liteModel == "thane") && l.router != nil {
 			liteModel, liteDecision = l.router.Route(ctx, router.Request{
-				Query:    userMessage,
-				Hints:    req.Hints,
-				Priority: router.PriorityBackground,
+				Query:          userMessage,
+				RoutingFactors: req.RoutingFactors,
+				Priority:       router.PriorityBackground,
 			})
 		}
 		if liteModel == "" {
@@ -1637,7 +1637,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if channelBinding == nil {
 		channelBinding = l.conversationChannelBinding(convID)
 	}
-	origin := newSessionOrigin(req.Hints, channelBinding)
+	origin := newSessionOrigin(req.RoutingFactors, channelBinding)
 	originResult := SessionOriginPolicyResult{Origin: origin}
 	if contactPolicy := l.contactOriginPolicy(origin); contactPolicy != nil {
 		originResult.addApplied(SessionOriginAppliedRule{
@@ -1688,7 +1688,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					"conversation_id", convID, "error", err)
 			}
 		}
-		if source := req.Hints["source"]; source != "" {
+		if source := req.RoutingFactors["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
 				pinnedTags = l.filterOriginPinnedTags(origin, pinnedTags)
 				scope.PinChannelTags(pinnedTags)
@@ -1735,7 +1735,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Propagate request hints so channel-aware providers can adapt.
 	ctx = agentctx.WithPromptMode(ctx, req.PromptMode)
 	promptCtx := tools.WithConversationID(ctx, convID)
-	promptCtx = tools.WithHints(promptCtx, req.Hints)
+	promptCtx = tools.WithHints(promptCtx, req.RoutingFactors)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 	promptCtx = tools.WithSuppressAlwaysContext(promptCtx, req.SuppressAlwaysContext)
 
@@ -1800,7 +1800,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// both router decisions and explicit-model preflight can reason
 	// about the actual tool surface this run will expose.
 	gatingActive := len(l.orchestratorTools) > 0 && (l.tools.Get("thane_now") != nil || l.tools.Get("thane_assign") != nil)
-	if req.Hints[router.HintDelegationGating] == "disabled" {
+	if req.RoutingFactors[router.FactorDelegationGating] == "disabled" {
 		gatingActive = false
 	}
 	if gatingActive {
@@ -1832,7 +1832,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			NeedsImages:    needsImages,
 			ToolCount:      len(visibleTools.List()),
 			Priority:       router.PriorityInteractive,
-			Hints:          req.Hints,
+			RoutingFactors: req.RoutingFactors,
 		}
 
 		selected, decision := l.router.Route(ctx, routerReq)
@@ -2185,7 +2185,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
-			toolCtx = tools.WithHints(toolCtx, req.Hints)
+			toolCtx = tools.WithHints(toolCtx, req.RoutingFactors)
 			if scope != nil {
 				toolCtx = tools.WithInheritableCapabilityTags(toolCtx, scope.InheritableTags())
 			}
@@ -2198,7 +2198,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCtx = tools.WithIterationIndex(toolCtx, i)
 			if lid := loop.LoopIDFromContext(ctx); lid != "" {
 				toolCtx = tools.WithLoopID(toolCtx, lid)
-			} else if lid := req.Hints["loop_id"]; lid != "" {
+			} else if lid := req.RoutingFactors["loop_id"]; lid != "" {
 				toolCtx = tools.WithLoopID(toolCtx, lid)
 			}
 			if req.ToolTimeout > 0 {
@@ -3310,10 +3310,10 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 	if req.SkipContext {
 		role = "auxiliary"
 	}
-	if req.Hints != nil {
-		if req.Hints["source"] == "scheduler" {
+	if req.RoutingFactors != nil {
+		if req.RoutingFactors["source"] == "scheduler" {
 			role = "scheduled"
-			taskName = req.Hints["task"]
+			taskName = req.RoutingFactors["task"]
 		}
 	}
 

@@ -33,7 +33,7 @@ type SummarizerConfig struct {
 	BatchSize int
 
 	// ModelPreference is a soft hint for which model to use.
-	// Passed as HintModelPreference to the router. If empty, the router
+	// Passed as FactorModelPreference to the router. If empty, the router
 	// picks freely based on other hints.
 	ModelPreference string
 
@@ -285,18 +285,18 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 
 	// Route model selection through the router.
 	hints := map[string]string{
-		router.HintMission:      "background",
-		router.HintLocalOnly:    "true",
-		router.HintQualityFloor: "7",
+		router.FactorMission:      "background",
+		router.FactorLocalOnly:    "true",
+		router.FactorQualityFloor: "7",
 	}
 	if w.config.ModelPreference != "" {
-		hints[router.HintModelPreference] = w.config.ModelPreference
+		hints[router.FactorModelPreference] = w.config.ModelPreference
 	}
 
 	model, _ := w.router.Route(ctx, router.Request{
-		Query:    "session metadata generation",
-		Priority: router.PriorityBackground,
-		Hints:    hints,
+		Query:          "session metadata generation",
+		Priority:       router.PriorityBackground,
+		RoutingFactors: hints,
 	})
 
 	// Fetch tool calls (optional — not fatal if unavailable).

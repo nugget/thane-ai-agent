@@ -11,7 +11,7 @@ func normalizeModelSelection(rawModel string, hints map[string]string, premiumFl
 	selection := router.ResolveVirtualModelSelection(rawModel, hints, router.VirtualModelRuntime{
 		PremiumQualityFloor: premiumFloor,
 	}, logger)
-	return selection.Model, selection.Hints, ""
+	return selection.Model, selection.RoutingFactors, ""
 }
 
 func premiumQualityFloor(rtr *router.Router) string {

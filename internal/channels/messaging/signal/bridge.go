@@ -708,7 +708,7 @@ func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, conten
 			ChannelBinding:  binding,
 			Messages:        []loop.Message{{Role: "user", Content: content}},
 			Model:           opts.Model,
-			Hints:           opts.Hints,
+			RoutingFactors:  opts.RoutingFactors,
 			ExcludeTools:    opts.ExcludeTools,
 			InitialTags:     []string{"signal"},
 			RuntimeTags:     []string{"message_channel"},
@@ -732,7 +732,7 @@ func (r signalResponseRunner) Run(ctx context.Context, req loop.Request, stream 
 		return r.runner.Run(ctx, req, stream)
 	}
 
-	sender := req.Hints["sender"]
+	sender := req.RoutingFactors["sender"]
 	log := b.logger.With(
 		"subsystem", logging.SubsystemSignal,
 		"conversation_id", req.ConversationID,
@@ -820,20 +820,20 @@ func (b *Bridge) requestOptions(sender string, extraHints map[string]string) rou
 	seed := b.routing.LoopProfile()
 	opts := seed.RequestOptions()
 	if len(extraHints) > 0 {
-		if opts.Hints == nil {
-			opts.Hints = make(map[string]string, len(extraHints))
+		if opts.RoutingFactors == nil {
+			opts.RoutingFactors = make(map[string]string, len(extraHints))
 		}
 		for k, v := range extraHints {
-			opts.Hints[k] = v
+			opts.RoutingFactors[k] = v
 		}
 	}
 
 	if b.resolver != nil {
 		if binding := b.resolveBinding(sender); binding != nil && binding.ContactName != "" {
-			if opts.Hints == nil {
-				opts.Hints = make(map[string]string, 1)
+			if opts.RoutingFactors == nil {
+				opts.RoutingFactors = make(map[string]string, 1)
 			}
-			opts.Hints["sender_name"] = binding.ContactName
+			opts.RoutingFactors["sender_name"] = binding.ContactName
 		}
 	}
 

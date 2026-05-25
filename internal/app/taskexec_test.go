@@ -22,7 +22,7 @@ type mockTaskLauncher struct {
 func (m *mockTaskLauncher) Launch(_ context.Context, launch looppkg.Launch, deps looppkg.Deps) (looppkg.LaunchResult, error) {
 	capturedLaunch := launch
 	capturedLaunch.Metadata = cloneTestStringMap(launch.Metadata)
-	capturedLaunch.Hints = cloneTestStringMap(launch.Hints)
+	capturedLaunch.RoutingFactors = cloneTestStringMap(launch.RoutingFactors)
 	capturedLaunch.ExcludeTools = append([]string(nil), launch.ExcludeTools...)
 	capturedLaunch.InitialTags = append([]string(nil), launch.InitialTags...)
 	capturedLaunch.Spec.Metadata = cloneTestStringMap(launch.Spec.Metadata)

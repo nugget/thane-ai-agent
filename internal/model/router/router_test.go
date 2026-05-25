@@ -109,8 +109,8 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  3,
 		Priority:   PriorityBackground,
-		Hints: map[string]string{
-			HintLocalOnly: "true",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly: "true",
 		},
 	})
 
@@ -175,10 +175,10 @@ func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  3,
 		Priority:   PriorityBackground,
-		Hints: map[string]string{
-			HintLocalOnly:    "false",
-			HintQualityFloor: "8",
-			HintMission:      "metacognitive",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly:    "false",
+			FactorQualityFloor: "8",
+			FactorMission:      "metacognitive",
 		},
 	})
 
@@ -377,8 +377,8 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  3,
 		Priority:   PriorityBackground,
-		Hints: map[string]string{
-			HintLocalOnly: "true",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly: "true",
 		},
 	})
 
@@ -392,9 +392,9 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  3,
 		Priority:   PriorityBackground,
-		Hints: map[string]string{
-			HintLocalOnly:   "true",
-			HintPreferSpeed: "true",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly:   "true",
+			FactorPreferSpeed: "true",
 		},
 	})
 
@@ -502,10 +502,10 @@ func TestRoute_PreferSpeedWithQualityFloor(t *testing.T) {
 		Query:      "summarize the conversation",
 		NeedsTools: false,
 		Priority:   PriorityBackground,
-		Hints: map[string]string{
-			HintLocalOnly:    "true",
-			HintPreferSpeed:  "true",
-			HintQualityFloor: "6",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly:    "true",
+			FactorPreferSpeed:  "true",
+			FactorQualityFloor: "6",
 		},
 	})
 
@@ -567,8 +567,8 @@ func TestRouteAndStatsTrackDeploymentMetadata(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  2,
 		Priority:   PriorityInteractive,
-		Hints: map[string]string{
-			HintLocalOnly: "true",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly: "true",
 		},
 	})
 
@@ -670,8 +670,8 @@ func TestRecordFailureTimeoutCoolsResourceAndShiftsRouting(t *testing.T) {
 		NeedsTools: true,
 		ToolCount:  2,
 		Priority:   PriorityInteractive,
-		Hints: map[string]string{
-			HintLocalOnly: "true",
+		RoutingFactors: map[string]string{
+			FactorLocalOnly: "true",
 		},
 	}
 

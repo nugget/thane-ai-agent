@@ -66,8 +66,8 @@ func TestLoopNotifyWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 
 	select {
 	case req := <-reqs:
-		if req.Hints["supervisor"] != "true" {
-			t.Fatalf("supervisor hint = %q, want true", req.Hints["supervisor"])
+		if req.RoutingFactors["supervisor"] != "true" {
+			t.Fatalf("supervisor hint = %q, want true", req.RoutingFactors["supervisor"])
 		}
 		content := req.Messages[0].Content
 		if !strings.Contains(content, "Loop notifications for this run:") {

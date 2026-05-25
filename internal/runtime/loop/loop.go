@@ -39,7 +39,7 @@ type Request struct {
 	AllowedTools   []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
 	ExcludeTools   []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 	SkipTagFilter  bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
-	Hints          map[string]string      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	RoutingFactors map[string]string      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
@@ -488,10 +488,10 @@ func (l *Loop) Status() Status {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
 	}
-	if l.config.Hints != nil {
-		cfgCopy.Hints = make(map[string]string, len(l.config.Hints))
-		for k, v := range l.config.Hints {
-			cfgCopy.Hints[k] = v
+	if l.config.RoutingFactors != nil {
+		cfgCopy.RoutingFactors = make(map[string]string, len(l.config.RoutingFactors))
+		for k, v := range l.config.RoutingFactors {
+			cfgCopy.RoutingFactors[k] = v
 		}
 	}
 	if l.config.Metadata != nil {
@@ -1424,16 +1424,16 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 		}
 		hints["local_only"] = "true"
 	}
-	for k, v := range l.requestBase.Hints {
+	for k, v := range l.requestBase.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range l.config.Hints {
+	for k, v := range l.config.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range req.Hints {
+	for k, v := range req.RoutingFactors {
 		hints[k] = v
 	}
-	for k, v := range l.requestOverride.Hints {
+	for k, v := range l.requestOverride.RoutingFactors {
 		hints[k] = v
 	}
 
@@ -1449,7 +1449,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	req.AllowedTools = allowedTools
 	req.ExcludeTools = mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, req.ExcludeTools, l.requestOverride.ExcludeTools)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
-	req.Hints = hints
+	req.RoutingFactors = hints
 	req.OnProgress = composeProgressFuncs(l.makeProgressFunc(), req.OnProgress, l.requestOverride.OnProgress)
 	req.InitialTags = mergeUniqueStrings(configuredInitialTags, l.activatedTags)
 	req.RuntimeTools = mergeRuntimeTools(l.config.RuntimeTools, req.RuntimeTools)

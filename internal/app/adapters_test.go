@@ -44,7 +44,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		AllowedTools:    []string{"alpha", "beta"},
 		ExcludeTools:    []string{"gamma"},
 		SkipTagFilter:   true,
-		Hints:           map[string]string{"mission": "automation"},
+		RoutingFactors:  map[string]string{"mission": "automation"},
 		InitialTags:     []string{"monitoring"},
 		RuntimeTags:     []string{"message_channel"},
 		MaxIterations:   7,
@@ -97,7 +97,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 
 	got.AllowedTools[0] = "changed"
 	got.ExcludeTools[0] = "changed"
-	got.Hints["mission"] = "changed"
+	got.RoutingFactors["mission"] = "changed"
 	got.InitialTags[0] = "changed"
 	got.RuntimeTags[0] = "changed"
 	got.Messages[0].Images[0].MediaType = "changed"
@@ -109,8 +109,8 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if req.ExcludeTools[0] != "gamma" {
 		t.Fatalf("ExcludeTools mutated = %#v", req.ExcludeTools)
 	}
-	if req.Hints["mission"] != "automation" {
-		t.Fatalf("Hints mutated = %#v", req.Hints)
+	if req.RoutingFactors["mission"] != "automation" {
+		t.Fatalf("Hints mutated = %#v", req.RoutingFactors)
 	}
 	if req.InitialTags[0] != "monitoring" {
 		t.Fatalf("InitialTags mutated = %#v", req.InitialTags)

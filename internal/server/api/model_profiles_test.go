@@ -30,7 +30,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
 			wantModel:     "",
-			wantHintKey:   router.HintQualityFloor,
+			wantHintKey:   router.FactorQualityFloor,
 			wantHintValue: "8",
 		},
 		{
@@ -39,7 +39,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
 			wantModel:     "",
-			wantHintKey:   router.HintMission,
+			wantHintKey:   router.FactorMission,
 			wantHintValue: "device_control",
 		},
 		{
@@ -48,7 +48,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
 			wantModel:     "",
-			wantHintKey:   router.HintDelegationGating,
+			wantHintKey:   router.FactorDelegationGating,
 			wantHintValue: "disabled",
 		},
 		{
@@ -80,10 +80,10 @@ func TestNormalizeModelSelection(t *testing.T) {
 				if hints[router.HintVirtualModel] != "thane:premium" {
 					t.Fatalf("virtual model hint = %q, want thane:premium", hints[router.HintVirtualModel])
 				}
-				if got := hints[router.DelegateHintKey(router.HintQualityFloor)]; got != "" {
+				if got := hints[router.DelegateHintKey(router.FactorQualityFloor)]; got != "" {
 					t.Fatalf("delegate quality floor = %q, want empty", got)
 				}
-				if got := hints[router.DelegateHintKey(router.HintLocalOnly)]; got != "" {
+				if got := hints[router.DelegateHintKey(router.FactorLocalOnly)]; got != "" {
 					t.Fatalf("delegate local_only = %q, want empty", got)
 				}
 			}
@@ -91,8 +91,8 @@ func TestNormalizeModelSelection(t *testing.T) {
 				if hints[router.HintVirtualModel] != "thane:ops" {
 					t.Fatalf("virtual model hint = %q, want thane:ops", hints[router.HintVirtualModel])
 				}
-				if hints[router.DelegateHintKey(router.HintQualityFloor)] != "8" {
-					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.HintQualityFloor)])
+				if hints[router.DelegateHintKey(router.FactorQualityFloor)] != "8" {
+					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.FactorQualityFloor)])
 				}
 			}
 			if tt.wantHintKey != "" && hints[tt.wantHintKey] != tt.wantHintValue {

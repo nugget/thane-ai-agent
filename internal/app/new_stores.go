@@ -323,10 +323,10 @@ func (a *App) initStores(s *newState) error {
 		model, _ := rtr.Route(ctx, router.Request{
 			Query:    "conversation compaction",
 			Priority: router.PriorityBackground,
-			Hints: map[string]string{
-				router.HintMission:      "background",
-				router.HintLocalOnly:    "true",
-				router.HintQualityFloor: "7",
+			RoutingFactors: map[string]string{
+				router.FactorMission:      "background",
+				router.FactorLocalOnly:    "true",
+				router.FactorQualityFloor: "7",
 			},
 		})
 		msgs := []llm.Message{{Role: "user", Content: prompt}}

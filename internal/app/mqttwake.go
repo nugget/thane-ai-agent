@@ -88,12 +88,12 @@ func mqttWakeHandler(
 
 				// Always tag the source so tools and logging can identify
 				// MQTT-triggered conversations.
-				if req.Hints == nil {
-					req.Hints = make(map[string]string)
+				if req.RoutingFactors == nil {
+					req.RoutingFactors = make(map[string]string)
 				}
-				req.Hints["source"] = "mqtt_wake"
-				req.Hints["mqtt_topic"] = topic
-				req.Hints["mqtt_subscription_id"] = ws.ID
+				req.RoutingFactors["source"] = "mqtt_wake"
+				req.RoutingFactors["mqtt_topic"] = topic
+				req.RoutingFactors["mqtt_subscription_id"] = ws.ID
 
 				logger.Info("mqtt wake dispatching agent",
 					"conv_id", convID,
@@ -266,12 +266,12 @@ func applyLoopProfile(profile *router.LoopProfile, req *looppkg.Request) {
 		req.Model = opts.Model
 	}
 
-	if len(opts.Hints) > 0 {
-		if req.Hints == nil {
-			req.Hints = make(map[string]string, len(opts.Hints))
+	if len(opts.RoutingFactors) > 0 {
+		if req.RoutingFactors == nil {
+			req.RoutingFactors = make(map[string]string, len(opts.RoutingFactors))
 		}
-		for k, v := range opts.Hints {
-			req.Hints[k] = v
+		for k, v := range opts.RoutingFactors {
+			req.RoutingFactors[k] = v
 		}
 	}
 
@@ -289,7 +289,7 @@ func cloneLoopRequest(req looppkg.Request) looppkg.Request {
 	req.ChannelBinding = req.ChannelBinding.Clone()
 	req.AllowedTools = append([]string(nil), req.AllowedTools...)
 	req.ExcludeTools = append([]string(nil), req.ExcludeTools...)
-	req.Hints = cloneStringMap(req.Hints)
+	req.RoutingFactors = cloneStringMap(req.RoutingFactors)
 	req.InitialTags = append([]string(nil), req.InitialTags...)
 	req.RuntimeTags = append([]string(nil), req.RuntimeTags...)
 	req.RuntimeTools = append([]looppkg.RuntimeTool(nil), req.RuntimeTools...)

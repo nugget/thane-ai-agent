@@ -86,7 +86,7 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 		ExcludeTools:    []string{"shell_exec"},
 		Jitter:          &jitter,
 		FallbackContent: "please try again",
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"source": "loop",
 		},
 		Metadata: map[string]string{
@@ -97,7 +97,7 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	cfg := spec.ToConfig()
 	cfg.Tags[0] = "changed"
 	cfg.ExcludeTools[0] = "other"
-	cfg.Hints["source"] = "changed"
+	cfg.RoutingFactors["source"] = "changed"
 	cfg.Metadata["room"] = "changed"
 	*cfg.Jitter = 0.9
 
@@ -107,8 +107,8 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	if spec.ExcludeTools[0] != "shell_exec" {
 		t.Fatalf("spec.ExcludeTools mutated = %q", spec.ExcludeTools[0])
 	}
-	if spec.Hints["source"] != "loop" {
-		t.Fatalf("spec.Hints mutated = %q", spec.Hints["source"])
+	if spec.RoutingFactors["source"] != "loop" {
+		t.Fatalf("spec.RoutingFactors mutated = %q", spec.RoutingFactors["source"])
 	}
 	if spec.Metadata["room"] != "office" {
 		t.Fatalf("spec.Metadata mutated = %q", spec.Metadata["room"])

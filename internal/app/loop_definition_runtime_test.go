@@ -584,7 +584,7 @@ func TestLoopDefinitionRuntimeLaunchDefinitionRunningServiceRejectsOverrides(t *
 		name   string
 		launch looppkg.Launch
 	}{
-		{"hints", looppkg.Launch{Hints: map[string]string{"quality_floor": "7"}}},
+		{"routing_factors", looppkg.Launch{RoutingFactors: map[string]string{"quality_floor": "7"}}},
 		{"allowed_tools", looppkg.Launch{AllowedTools: []string{"get_state"}}},
 		{"max_iterations", looppkg.Launch{MaxIterations: 5}},
 		{"metadata", looppkg.Launch{Metadata: map[string]string{"reason": "experiment"}}},

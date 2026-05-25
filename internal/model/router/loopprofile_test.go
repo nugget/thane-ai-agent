@@ -26,11 +26,11 @@ func TestLoopProfileHints(t *testing.T) {
 				PreferSpeed:      "true",
 			},
 			want: map[string]string{
-				HintQualityFloor:     "7",
-				HintMission:          "automation",
-				HintLocalOnly:        "false",
-				HintDelegationGating: "disabled",
-				HintPreferSpeed:      "true",
+				FactorQualityFloor:     "7",
+				FactorMission:          "automation",
+				FactorLocalOnly:        "false",
+				FactorDelegationGating: "disabled",
+				FactorPreferSpeed:      "true",
 			},
 		},
 		{
@@ -40,8 +40,8 @@ func TestLoopProfileHints(t *testing.T) {
 				Mission:      "conversation",
 			},
 			want: map[string]string{
-				HintQualityFloor: "5",
-				HintMission:      "conversation",
+				FactorQualityFloor: "5",
+				FactorMission:      "conversation",
 			},
 		},
 		{
@@ -54,9 +54,9 @@ func TestLoopProfileHints(t *testing.T) {
 				},
 			},
 			want: map[string]string{
-				HintMission: "automation",
-				"source":    "frigate",
-				"custom":    "value",
+				FactorMission: "automation",
+				"source":      "frigate",
+				"custom":      "value",
 			},
 		},
 		{
@@ -64,11 +64,11 @@ func TestLoopProfileHints(t *testing.T) {
 			seed: LoopProfile{
 				Mission: "automation",
 				ExtraHints: map[string]string{
-					HintMission: "device_control",
+					FactorMission: "device_control",
 				},
 			},
 			want: map[string]string{
-				HintMission: "device_control",
+				FactorMission: "device_control",
 			},
 		},
 		{
@@ -78,16 +78,16 @@ func TestLoopProfileHints(t *testing.T) {
 				QualityFloor: "10",
 			},
 			want: map[string]string{
-				HintQualityFloor: "10",
+				FactorQualityFloor: "10",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.seed.Hints()
+			got := tt.seed.RoutingFactors()
 			if len(got) != len(tt.want) {
-				t.Fatalf("len(Hints()) = %d, want %d\n  got:  %v\n  want: %v", len(got), len(tt.want), got, tt.want)
+				t.Fatalf("len(RoutingFactors()) = %d, want %d\n  got:  %v\n  want: %v", len(got), len(tt.want), got, tt.want)
 			}
 			for k, wv := range tt.want {
 				if gv, ok := got[k]; !ok {
@@ -164,11 +164,11 @@ func TestLoopProfileRequestOptions(t *testing.T) {
 	if opts.Model != seed.Model {
 		t.Fatalf("Model = %q, want %q", opts.Model, seed.Model)
 	}
-	if opts.Hints[HintMission] != seed.Mission {
-		t.Fatalf("Hints[%q] = %q, want %q", HintMission, opts.Hints[HintMission], seed.Mission)
+	if opts.RoutingFactors[FactorMission] != seed.Mission {
+		t.Fatalf("Hints[%q] = %q, want %q", FactorMission, opts.RoutingFactors[FactorMission], seed.Mission)
 	}
-	if opts.Hints["source"] != "scheduler" {
-		t.Fatalf("Hints[source] = %q, want %q", opts.Hints["source"], "scheduler")
+	if opts.RoutingFactors["source"] != "scheduler" {
+		t.Fatalf("Hints[source] = %q, want %q", opts.RoutingFactors["source"], "scheduler")
 	}
 	if len(opts.ExcludeTools) != len(seed.ExcludeTools) {
 		t.Fatalf("ExcludeTools len = %d, want %d", len(opts.ExcludeTools), len(seed.ExcludeTools))

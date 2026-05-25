@@ -43,7 +43,7 @@ func loopRequestFromAgent(req *agent.Request) loop.Request {
 		AllowedTools:          append([]string(nil), req.AllowedTools...),
 		ExcludeTools:          append([]string(nil), req.ExcludeTools...),
 		SkipTagFilter:         req.SkipTagFilter,
-		Hints:                 cloneStringMap(req.Hints),
+		RoutingFactors:        cloneStringMap(req.RoutingFactors),
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          runtimeTools,
@@ -70,7 +70,7 @@ func cloneLoopRequest(req loop.Request) loop.Request {
 	}
 	cloned.AllowedTools = append([]string(nil), req.AllowedTools...)
 	cloned.ExcludeTools = append([]string(nil), req.ExcludeTools...)
-	cloned.Hints = cloneStringMap(req.Hints)
+	cloned.RoutingFactors = cloneStringMap(req.RoutingFactors)
 	cloned.InitialTags = append([]string(nil), req.InitialTags...)
 	cloned.RuntimeTags = append([]string(nil), req.RuntimeTags...)
 	cloned.RuntimeTools = append([]loop.RuntimeTool(nil), req.RuntimeTools...)

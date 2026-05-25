@@ -561,7 +561,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		hints[k] = v
 	}
 	hints["source"] = "delegate"
-	hints[router.HintDelegationGating] = "disabled"
+	hints[router.FactorDelegationGating] = "disabled"
 
 	return looppkg.Launch{
 		Spec: looppkg.Spec{
@@ -587,7 +587,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ParentID:                 prep.parentLoopID,
 		ConversationID:           prep.conversationID,
 		ChannelBinding:           prep.channelBinding.Clone(),
-		Hints:                    hints,
+		RoutingFactors:           hints,
 		ExcludeTools:             append([]string(nil), prep.excludeTools...),
 		SkipTagFilter:            !prep.tagFilterActive,
 		InitialTags:              append([]string(nil), prep.effectiveTags...),
@@ -895,7 +895,7 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 			NeedsStreaming: needsStreaming,
 			ToolCount:      toolCount,
 			Priority:       router.PriorityBackground,
-			Hints:          hints,
+			RoutingFactors: hints,
 		})
 		if model != "" {
 			log.Debug("delegate model selected by router",

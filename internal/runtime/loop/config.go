@@ -251,7 +251,7 @@ type Config struct {
 	// Hints are merged into Request hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
 	// "source" to "metacognitive" instead of "loop").
-	Hints map[string]string
+	RoutingFactors map[string]string
 
 	// FallbackContent is static text used when the loop's nested agent run
 	// or direct request/reply execution finishes without any user-visible

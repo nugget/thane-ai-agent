@@ -165,7 +165,7 @@ type Spec struct {
 	Handler func(ctx context.Context, event any) error `yaml:"-" json:"-"`
 
 	// Hints are merged into Request hints for each iteration.
-	Hints map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
+	RoutingFactors map[string]string `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 
 	// FallbackContent is static text used when the loop completes a
 	// request/reply run without any user-visible content. Interactive
@@ -293,7 +293,7 @@ func (s *Spec) ToConfig() Config {
 		PostIterate:            ns.PostIterate,
 		WaitFunc:               ns.WaitFunc,
 		Handler:                ns.Handler,
-		Hints:                  cloneStringMap(ns.Hints),
+		RoutingFactors:         cloneStringMap(ns.RoutingFactors),
 		FallbackContent:        ns.FallbackContent,
 		Setup:                  ns.Setup,
 		RuntimeTools:           cloneRuntimeTools(ns.RuntimeTools),
@@ -319,11 +319,11 @@ func (s *Spec) profileRequest() Request {
 	}
 	opts := s.Profile.RequestOptions()
 	return Request{
-		Model:        opts.Model,
-		Hints:        opts.Hints,
-		ExcludeTools: opts.ExcludeTools,
-		InitialTags:  append([]string(nil), s.Tags...),
-		RuntimeTools: cloneRuntimeTools(s.RuntimeTools),
+		Model:          opts.Model,
+		RoutingFactors: opts.RoutingFactors,
+		ExcludeTools:   opts.ExcludeTools,
+		InitialTags:    append([]string(nil), s.Tags...),
+		RuntimeTools:   cloneRuntimeTools(s.RuntimeTools),
 	}
 }
 

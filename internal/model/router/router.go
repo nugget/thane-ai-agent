@@ -20,32 +20,32 @@ type Request struct {
 	NeedsImages    bool              // Whether image/multimodal input is required
 	ToolCount      int               // Number of tools available
 	Priority       Priority          // Latency requirements
-	Hints          map[string]string // Caller-supplied routing hints (see HintXxx constants)
+	RoutingFactors map[string]string // Caller-supplied routing hints (see HintXxx constants)
 }
 
 // Hint keys for routing decisions. Callers set these to influence model selection.
 const (
-	// HintChannel identifies the request source: "ollama", "homeassistant", "voice", "api"
-	HintChannel = "channel"
-	// HintQualityFloor is the minimum quality rating (1-10) the caller requires.
-	HintQualityFloor = "quality_floor"
-	// HintModelPreference suggests a specific model (soft preference, not override).
-	HintModelPreference = "model_preference"
-	// HintMission describes the task context: "conversation", "device_control", "background", "automation", "metacognitive"
-	HintMission = "mission"
-	// HintLocalOnly restricts routing to free/local models when set to "true".
-	HintLocalOnly = "local_only"
-	// HintDelegationGating controls whether delegation-first tool gating is
+	// FactorChannel identifies the request source: "ollama", "homeassistant", "voice", "api"
+	FactorChannel = "channel"
+	// FactorQualityFloor is the minimum quality rating (1-10) the caller requires.
+	FactorQualityFloor = "quality_floor"
+	// FactorModelPreference suggests a specific model (soft preference, not override).
+	FactorModelPreference = "model_preference"
+	// FactorMission describes the task context: "conversation", "device_control", "background", "automation", "metacognitive"
+	FactorMission = "mission"
+	// FactorLocalOnly restricts routing to free/local models when set to "true".
+	FactorLocalOnly = "local_only"
+	// FactorDelegationGating controls whether delegation-first tool gating is
 	// active. Set to "disabled" to give the model direct access to all tools
 	// on every iteration (used by thane:ops).
-	HintDelegationGating = "delegation_gating"
-	// HintPreferSpeed indicates the caller benefits from faster response
+	FactorDelegationGating = "delegation_gating"
+	// FactorPreferSpeed indicates the caller benefits from faster response
 	// times over higher quality. When "true", any model with Speed >= 7
 	// receives a scoring bonus regardless of cost tier or provider. Can be
 	// decisive among similarly priced options. Use for background/delegation
 	// tasks where latency and resource efficiency matter more than maximum
 	// output quality.
-	HintPreferSpeed = "prefer_speed"
+	FactorPreferSpeed = "prefer_speed"
 )
 
 // Priority indicates latency requirements.
@@ -473,7 +473,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 	// bonuses so quality-based scoring can dominate. Supervisor
 	// iterations in the metacognitive loop depend on this to reach
 	// frontier models.
-	explicitlyNotLocal := req.Hints != nil && req.Hints[HintLocalOnly] == "false"
+	explicitlyNotLocal := req.RoutingFactors != nil && req.RoutingFactors[FactorLocalOnly] == "false"
 
 	scores := make(map[string]int)
 	for _, m := range candidates {
@@ -553,12 +553,12 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 		}
 
 		// --- Hint-based adjustments ---
-		if req.Hints != nil {
+		if req.RoutingFactors != nil {
 			// Channel hint: HA/voice channels prefer cheap+fast.
 			// Note: openwebui channel no longer gets a quality bonus — the routing
 			// profile (thane:thinking vs thane:latest) is the correct signal for
 			// quality preference. See issue #107.
-			switch req.Hints[HintChannel] {
+			switch req.RoutingFactors[FactorChannel] {
 			case "homeassistant", "voice":
 				// HA/voice: strongly prefer fast and cheap
 				if m.CostTier == 0 {
@@ -572,7 +572,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			}
 
 			// Quality floor: disqualify models below the requested minimum
-			if floor, ok := req.Hints[HintQualityFloor]; ok {
+			if floor, ok := req.RoutingFactors[FactorQualityFloor]; ok {
 				if floorInt, err := strconv.Atoi(floor); err == nil && m.Quality < floorInt {
 					score -= 100 // effectively disqualify
 					rulesMatched = append(rulesMatched, "below_quality_floor_"+m.Name)
@@ -583,7 +583,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			// (unless caller explicitly opted out of local preference).
 			// Note: "conversation" mission no longer gets a quality bonus —
 			// thane:thinking sets quality_floor for that purpose. See issue #107.
-			if mission := req.Hints[HintMission]; (mission == "background" || mission == "metacognitive") && !explicitlyNotLocal {
+			if mission := req.RoutingFactors[FactorMission]; (mission == "background" || mission == "metacognitive") && !explicitlyNotLocal {
 				if m.CostTier == 0 {
 					score += 20
 					rulesMatched = append(rulesMatched, "mission_background_bonus_"+m.Name)
@@ -591,13 +591,13 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			}
 
 			// Model preference: soft boost for suggested model
-			if pref, ok := req.Hints[HintModelPreference]; ok && pref == m.Name {
+			if pref, ok := req.RoutingFactors[FactorModelPreference]; ok && pref == m.Name {
 				score += 25
 				rulesMatched = append(rulesMatched, "model_preference_"+m.Name)
 			}
 
 			// Local only: heavily penalize paid models
-			if req.Hints[HintLocalOnly] == "true" && m.CostTier > 0 {
+			if req.RoutingFactors[FactorLocalOnly] == "true" && m.CostTier > 0 {
 				score -= 200
 				rulesMatched = append(rulesMatched, "local_only_penalty_"+m.Name)
 			}
@@ -605,7 +605,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			// Speed preference: bonus for fast models when caller values
 			// latency over maximum quality. Can be decisive among similarly
 			// priced options.
-			if req.Hints[HintPreferSpeed] == "true" && m.Speed >= 7 {
+			if req.RoutingFactors[FactorPreferSpeed] == "true" && m.Speed >= 7 {
 				score += 15
 				rulesMatched = append(rulesMatched, "prefer_speed_bonus_"+m.Name)
 			}
@@ -979,7 +979,7 @@ func experienceScore(meta DeploymentStats, req Request) (int, []string) {
 		}
 	}
 
-	if meta.AvgLatencyMs > 0 && (req.Priority == PriorityInteractive || req.Hints[HintPreferSpeed] == "true") {
+	if meta.AvgLatencyMs > 0 && (req.Priority == PriorityInteractive || req.RoutingFactors[FactorPreferSpeed] == "true") {
 		switch {
 		case meta.AvgLatencyMs <= 4000:
 			score += 4
