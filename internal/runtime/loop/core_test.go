@@ -180,6 +180,135 @@ func TestRegistryStopLoopRefusesCore(t *testing.T) {
 	}
 }
 
+// TestRegisterDefaultParentsOrphansToCore covers the orphan
+// attachment contract: a freshly registered loop with neither
+// ParentID nor ParentName picks up the core's loop ID as its
+// parent automatically — every spawn path (definition hydration,
+// channel roots via SpawnLoop, delegate launches) goes through
+// Register, so the graph always has a single root.
+func TestRegisterDefaultParentsOrphansToCore(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	core, err := New(Config{Name: CoreLoopName, Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if err := r.Register(core); err != nil {
+		t.Fatalf("register core: %v", err)
+	}
+
+	orphan, err := New(Config{Name: "orphan", Task: "t"}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new orphan: %v", err)
+	}
+	if err := r.Register(orphan); err != nil {
+		t.Fatalf("register orphan: %v", err)
+	}
+
+	if got := orphan.ParentID(); got != core.ID() {
+		t.Errorf("orphan ParentID = %q, want %q (core)", got, core.ID())
+	}
+}
+
+// TestRegisterPreservesExplicitParentID guards against the
+// "default-parent overrides explicit parent" bug: if the loop
+// already has ParentID set, Register must not touch it.
+func TestRegisterPreservesExplicitParentID(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	core, err := New(Config{Name: CoreLoopName, Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if err := r.Register(core); err != nil {
+		t.Fatalf("register core: %v", err)
+	}
+	parent, err := New(Config{Name: "explicit_parent", Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new explicit_parent: %v", err)
+	}
+	if err := r.Register(parent); err != nil {
+		t.Fatalf("register explicit_parent: %v", err)
+	}
+
+	child, err := New(Config{
+		Name:     "child",
+		Task:     "t",
+		ParentID: parent.ID(),
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new child: %v", err)
+	}
+	if err := r.Register(child); err != nil {
+		t.Fatalf("register child: %v", err)
+	}
+
+	if got := child.ParentID(); got != parent.ID() {
+		t.Errorf("child ParentID = %q, want %q (explicit parent, not core)", got, parent.ID())
+	}
+}
+
+// TestRegisterLeavesUnresolvedParentNameAlone guards the
+// late-reconcile path: a loop with ParentName set but no live
+// parent yet should NOT default-parent to core, because doing so
+// would lose the intent ("attach to outer when it comes up").
+// Leaving ParentID empty lets a later reconcile bind it
+// correctly. This is the regression test for the Copilot finding.
+func TestRegisterLeavesUnresolvedParentNameAlone(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	core, err := New(Config{Name: CoreLoopName, Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if err := r.Register(core); err != nil {
+		t.Fatalf("register core: %v", err)
+	}
+
+	// "outer" isn't registered yet — this loop declares intent to
+	// be parented by it but Register can't resolve.
+	pending, err := New(Config{
+		Name:       "child",
+		Task:       "t",
+		ParentName: "outer",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new pending: %v", err)
+	}
+	if err := r.Register(pending); err != nil {
+		t.Fatalf("register pending: %v", err)
+	}
+
+	if got := pending.ParentID(); got != "" {
+		t.Errorf("pending ParentID = %q, want empty (unresolved ParentName should not fall back to core)", got)
+	}
+}
+
+// TestRegisterOrphanWithoutCoreLeavesParentEmpty covers the
+// narrow startup window before [App.ensureCoreLoop] runs: orphan
+// loops registered with no core present stay parentless rather
+// than crashing or attaching to some accidental "first" loop.
+// They'll reattach on the next reconcile once core is up.
+func TestRegisterOrphanWithoutCoreLeavesParentEmpty(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	// No core registered.
+	orphan, err := New(Config{Name: "orphan", Task: "t"}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new orphan: %v", err)
+	}
+	if err := r.Register(orphan); err != nil {
+		t.Fatalf("register orphan: %v", err)
+	}
+	if got := orphan.ParentID(); got != "" {
+		t.Errorf("orphan ParentID = %q, want empty when no core is registered", got)
+	}
+}
+
 // TestCoreInheritanceContributesToDescendants verifies core
 // participates in the cascade exactly like any container — its
 // tags / subscriptions flow down to descendants through the same

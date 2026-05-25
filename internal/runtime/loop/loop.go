@@ -419,6 +419,18 @@ func (l *Loop) IsCore() bool {
 	return l.config.Operation == OperationContainer && l.config.Name == CoreLoopName
 }
 
+// setDefaultParentID is the package-private hook
+// [Registry.Register] uses to attach an orphan loop to the core at
+// register time. The mutation runs under r.mu and before Start has
+// been called, so no goroutine reads the field concurrently; the
+// lock-and-set shape mirrors other config mutators for
+// race-detector cleanliness.
+func (l *Loop) setDefaultParentID(parentID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.config.ParentID = parentID
+}
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")

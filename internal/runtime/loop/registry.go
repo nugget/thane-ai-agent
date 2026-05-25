@@ -93,6 +93,25 @@ func (r *Registry) Register(l *Loop) error {
 		}
 	}
 
+	// Default-parent orphan loops to the core so the graph always
+	// has a single root. Only fills in when no parent was declared
+	// at all (both ParentID and ParentName empty): a ParentName
+	// that hasn't yet resolved to a registered loop must stay
+	// unresolved here, otherwise a late reconcile (parent registers
+	// after the child) would have no way to rebind. The core
+	// itself is the exception — it sits above the tree by
+	// definition. Centralizing this in Register means every spawn
+	// path — definition hydration, channel roots via SpawnLoop,
+	// delegate launches, direct tests — gets uniform attachment.
+	if l.config.ParentID == "" && l.config.ParentName == "" && !l.IsCore() {
+		for _, existing := range r.loops {
+			if existing.IsCore() {
+				l.setDefaultParentID(existing.id)
+				break
+			}
+		}
+	}
+
 	r.loops[l.id] = l
 	// Containers inherit nothing themselves (they exist precisely to
 	// provide tags to descendants). Wiring the function uniformly is

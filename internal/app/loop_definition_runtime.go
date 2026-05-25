@@ -102,19 +102,12 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 			spec.ParentID = parent.ID()
 		}
 	}
-	// Orphan loops (no parent declared anywhere) attach to the core
-	// so the graph always has a single root. The core itself is the
-	// exception — it sits above the tree by definition. Resolution
-	// happens after parent_name lookup so an explicit parent never
-	// gets overridden, and only when a core is actually registered
-	// (the narrow startup window before [App.ensureCoreLoop] runs
-	// leaves orphans truly parentless, which is fine — they'll
-	// reattach on the next reconcile or restart once core is up).
-	if r.loops != nil && spec.ParentID == "" && spec.Name != looppkg.CoreLoopName {
-		if core := r.loops.Core(); core != nil {
-			spec.ParentID = core.ID()
-		}
-	}
+	// Orphan loops attach to the core at registration time —
+	// [Registry.Register] owns that default-parenting now so every
+	// spawn path (definition hydration, mqtt wake, delegate
+	// launches, direct SpawnLoop callers) gets uniform behavior.
+	// Doing it here would have left non-definition spawns as
+	// additional roots.
 	return spec, nil
 }
 
