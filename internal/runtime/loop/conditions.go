@@ -64,6 +64,94 @@ type DefinitionEligibilityStatus struct {
 	NextTransitionAt time.Time `yaml:"next_transition_at,omitempty" json:"next_transition_at,omitempty"`
 }
 
+// EffectiveConditionEvaluation pairs one definition's eligibility
+// status with the loop that owns it, used by the effective-
+// eligibility surface to attribute which ancestor blocks the chain.
+// "self" is the owning definition; otherwise the ancestor's name.
+type EffectiveConditionEvaluation struct {
+	// From is [EffectiveOriginSelf] for the loop's own conditions,
+	// or the ancestor's name when the entry came from a container
+	// ancestor.
+	From string `yaml:"from" json:"from"`
+	// Status is the result of [Conditions.Evaluate] for the owning
+	// loop, computed at the evaluation time supplied to
+	// [EvaluateEffectiveConditions].
+	Status DefinitionEligibilityStatus `yaml:"status" json:"status"`
+}
+
+// EvaluateEffectiveConditions aggregates one definition's
+// eligibility with its container ancestors' eligibility. Every
+// ancestor must independently report eligible for the result to be
+// eligible — AND across the chain. When ineligible, the returned
+// status's Reason names the closest blocking ancestor so the
+// operator (or model) sees which level of the tree is gating the
+// loop. The per-level evaluations are returned alongside so the
+// effective surface can show provenance.
+//
+// chain is expected to be parent-first (own definition at index 0,
+// immediate parent at 1, etc.) — the shape
+// [DefinitionRegistry.AncestorSpecs] returns when called with the
+// loop's name prepended. now is the evaluation time, threaded
+// through so callers can substitute a fixed clock in tests.
+func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation) {
+	if len(chain) == 0 {
+		return DefinitionEligibilityStatus{Eligible: true}, nil
+	}
+
+	evaluations := make([]EffectiveConditionEvaluation, 0, len(chain))
+	aggregate := DefinitionEligibilityStatus{Eligible: true}
+	var blockingFrom string
+
+	for i, spec := range chain {
+		status := spec.Conditions.Evaluate(now)
+		from := EffectiveOriginSelf
+		if i > 0 {
+			from = spec.Name
+		}
+		evaluations = append(evaluations, EffectiveConditionEvaluation{
+			From:   from,
+			Status: status,
+		})
+
+		if !status.Eligible {
+			if aggregate.Eligible {
+				// First ineligible we encounter wins attribution.
+				// Walking parent-first means this is the closest
+				// blocking ancestor (or self), which is the most
+				// actionable thing to surface.
+				aggregate.Eligible = false
+				aggregate.Reason = status.Reason
+				blockingFrom = from
+			}
+		}
+
+		// NextTransitionAt rolls up to the earliest transition across
+		// the chain — eligibility could change because this level's
+		// schedule advances OR because some ancestor's schedule
+		// advances. The earliest wins as the meaningful "watch this
+		// time" value for schedulers.
+		if !status.NextTransitionAt.IsZero() {
+			if aggregate.NextTransitionAt.IsZero() || status.NextTransitionAt.Before(aggregate.NextTransitionAt) {
+				aggregate.NextTransitionAt = status.NextTransitionAt
+			}
+		}
+	}
+
+	if !aggregate.Eligible && blockingFrom != "" && blockingFrom != EffectiveOriginSelf {
+		// Suffix the attribution to the reason so callers reading
+		// just the reason string still see which ancestor blocked
+		// them. Keep the underlying reason in place so existing
+		// matchers (tests, log greps) still work.
+		if strings.TrimSpace(aggregate.Reason) == "" {
+			aggregate.Reason = fmt.Sprintf("blocked by container %q", blockingFrom)
+		} else {
+			aggregate.Reason = fmt.Sprintf("%s (blocked by container %q)", aggregate.Reason, blockingFrom)
+		}
+	}
+
+	return aggregate, evaluations
+}
+
 // IneligibleDefinitionError reports that a loop definition exists and
 // is active by policy, but its runtime conditions do not currently
 // permit launch.

@@ -104,6 +104,90 @@ func NewDefinitionRegistry(base []Spec) (*DefinitionRegistry, error) {
 	}, nil
 }
 
+// AncestorSpecs walks the parent_name chain from the named
+// definition up to the topmost reachable ancestor and returns the
+// chain in walk order: index 0 is the loop's own spec, index 1 is
+// its immediate parent, and so on. Returns nil when the loop is
+// not found. The walk terminates when parent_name is empty or no
+// longer resolvable; short-circuits at [definitionAncestorWalkLimit]
+// to bound work against malformed graphs.
+//
+// Mirror of [Registry.Ancestors] but operating on the persisted
+// spec graph rather than the live loop graph. Used by
+// [EvaluateEffectiveConditions] and other definition-eligibility-
+// time surfaces that need to consult ancestor specs without
+// requiring the loop to be running.
+func (r *DefinitionRegistry) AncestorSpecs(name string) []Spec {
+	if r == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	first, ok := r.specByName(name)
+	if !ok {
+		return nil
+	}
+
+	chain := []Spec{cloneSpec(first)}
+	seen := map[string]struct{}{name: {}}
+	current := first
+	for i := 0; i < definitionAncestorWalkLimit; i++ {
+		parentName := strings.TrimSpace(current.ParentName)
+		if parentName == "" {
+			break
+		}
+		if _, dup := seen[parentName]; dup {
+			break
+		}
+		parent, ok := r.specByName(parentName)
+		if !ok {
+			break
+		}
+		chain = append(chain, cloneSpec(parent))
+		seen[parentName] = struct{}{}
+		current = parent
+	}
+	return chain
+}
+
+// definitionAncestorWalkLimit caps the depth of [AncestorSpecs] in
+// the same spirit as [ancestorWalkLimit] for the live registry —
+// well above realistic graph depth but tight enough that a
+// malformed parent_name cycle terminates fast.
+const definitionAncestorWalkLimit = 64
+
+// EvaluateConditions walks the parent_name chain for the named
+// definition and evaluates Conditions across every ancestor with
+// AND semantics. Convenience wrapper around [AncestorSpecs] +
+// [EvaluateEffectiveConditions] for the common eligibility-check
+// surfaces. Returns (eligible=true, nil) when the definition is
+// not found — letting check sites stick with their existing
+// not-found handling rather than conflate "missing" with
+// "ineligible."
+func (r *DefinitionRegistry) EvaluateConditions(name string, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation) {
+	chain := r.AncestorSpecs(name)
+	if len(chain) == 0 {
+		return DefinitionEligibilityStatus{Eligible: true}, nil
+	}
+	return EvaluateEffectiveConditions(chain, now)
+}
+
+// specByName reads the effective spec by name (overlay first, base
+// fallback). Caller must hold r.mu.RLock.
+func (r *DefinitionRegistry) specByName(name string) (Spec, bool) {
+	if record, ok := r.overlay[name]; ok {
+		return record.Spec, true
+	}
+	spec, ok := r.base[name]
+	return spec, ok
+}
+
 // Get returns the effective definition with the given name.
 func (r *DefinitionRegistry) Get(name string) (Spec, bool) {
 	if r == nil {

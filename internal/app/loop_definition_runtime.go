@@ -169,6 +169,19 @@ func (r *loopDefinitionRuntime) serviceContext() context.Context {
 	return context.Background()
 }
 
+// evaluateConditions runs the cascade-aware eligibility check for
+// loopName at the runtime's current clock. Falls back to a
+// permanently-eligible status when the definitions registry is
+// unwired (test paths) so the check sites that gate on Eligible
+// don't accidentally block when the registry is mocked away.
+func (r *loopDefinitionRuntime) evaluateConditions(loopName string) looppkg.DefinitionEligibilityStatus {
+	if r == nil || r.definitions == nil {
+		return looppkg.DefinitionEligibilityStatus{Eligible: true}
+	}
+	status, _ := r.definitions.EvaluateConditions(loopName, r.nowTime())
+	return status
+}
+
 func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time {
 	if r == nil || r.definitions == nil {
 		return time.Time{}
@@ -182,7 +195,7 @@ func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time 
 		if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
 			continue
 		}
-		eligibility := def.Spec.Conditions.Evaluate(now)
+		eligibility, _ := r.definitions.EvaluateConditions(def.Name, now)
 		if eligibility.NextTransitionAt.IsZero() {
 			continue
 		}
@@ -331,7 +344,7 @@ func (r *loopDefinitionRuntime) bootstrapDefinitionSpawn(ctx context.Context, de
 	case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
 		result.SkippedPaused++
 		return nil
-	case !def.Spec.Conditions.Evaluate(r.nowTime()).Eligible:
+	case !r.evaluateConditions(def.Name).Eligible:
 		result.SkippedIneligible++
 		return nil
 	case r.loops.GetByName(spec.Name) != nil:
@@ -425,7 +438,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		}
 		return nil
 	}
-	eligibility := def.Spec.Conditions.Evaluate(r.nowTime())
+	eligibility := r.evaluateConditions(def.Name)
 	durable := def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer
 	if !durable || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
@@ -491,7 +504,7 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	case looppkg.DefinitionPolicyStatePaused:
 		return looppkg.LaunchResult{}, &looppkg.PausedDefinitionError{Name: name}
 	}
-	if eligibility := def.Spec.Conditions.Evaluate(r.nowTime()); !eligibility.Eligible {
+	if eligibility := r.evaluateConditions(name); !eligibility.Eligible {
 		return looppkg.LaunchResult{}, &looppkg.IneligibleDefinitionError{Name: name, Reason: eligibility.Reason}
 	}
 	if def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer {
