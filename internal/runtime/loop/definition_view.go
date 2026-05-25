@@ -38,8 +38,12 @@ type DefinitionView struct {
 	Runtime            DefinitionRuntimeStatus     `yaml:"runtime,omitempty" json:"runtime"`
 	Warnings           []DefinitionWarning         `yaml:"warnings,omitempty" json:"warnings,omitempty"`
 	// Effective surfaces the post-ancestor-merge state for inheritable
-	// loop fields. Nil for definitions whose loop isn't currently
-	// running (effective state is computed against the live registry).
+	// loop fields. Nil when there is nothing meaningful to report —
+	// the loop isn't running, the view was built without a live
+	// registry (e.g. CLI snapshots), or the loop is running but has
+	// no effective tags and no effective subscriptions. Readers should
+	// not treat nil as a definitive "not running"; pair it with
+	// [DefinitionRuntimeStatus.Running] when that distinction matters.
 	// Sits alongside Spec rather than inside Runtime so the
 	// declared-vs-effective contrast is at the top of the view and
 	// extends naturally as more fields become inheritable.
@@ -157,8 +161,10 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 			Warnings:           warnings,
 		}
 		if options.loops != nil && status.Running && status.LoopID != "" {
-			tags := options.loops.EffectiveTags(status.LoopID)
-			subs := options.loops.EffectiveSubscriptions(status.LoopID)
+			// One walk per definition: EffectiveTags + EffectiveSubscriptions
+			// would do two ancestor traversals that could observe different
+			// snapshots if SetSubscriptions ran between them.
+			subs, tags := options.loops.effectiveState(status.LoopID)
 			if len(tags) > 0 || len(subs) > 0 {
 				dv.Effective = &DefinitionEffectiveState{
 					Tags:          tags,

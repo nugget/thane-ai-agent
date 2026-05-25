@@ -80,7 +80,12 @@ func (r *Registry) Register(l *Loop) error {
 		return r.ancestorContainerTags(loopID)
 	})
 	l.setEffectiveStateFunc(func() ([]EffectiveTag, []EffectiveSubscription) {
-		return r.EffectiveTags(loopID), r.EffectiveSubscriptions(loopID)
+		// One walk, atomic snapshot: a second walk could observe a
+		// SetSubscriptions between the two calls and yield tags +
+		// subscriptions from different points in time. Status callers
+		// would have no way to tell.
+		subs, tags := r.effectiveState(loopID)
+		return tags, subs
 	})
 	r.logger.Debug("loop registered",
 		"loop_id", l.id,
