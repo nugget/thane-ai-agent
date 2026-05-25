@@ -546,7 +546,7 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	// --- Loop definition services ---
-	// Durable loops-ng service definitions are bootstrapped from the
+	// Durable loop service definitions are bootstrapped from the
 	// immutable+overlay definition registry. Built-in services like
 	// metacognitive, pollers, watchers, and MQTT publishers participate
 	// as first-class definitions via runtime spec hydration.

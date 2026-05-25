@@ -341,7 +341,7 @@ func (e *Executor) SetLensProvider(fn func() []string) {
 
 // ConfigureLoopExecution configures loop-backed delegate execution. When both
 // runner and registry are set, Execute launches a one-shot child loop through
-// the shared loops-ng path, giving delegates the same telemetry path as other
+// the shared loops path, giving delegates the same telemetry path as other
 // loop-driven work.
 func (e *Executor) ConfigureLoopExecution(runner looppkg.Runner, registry *looppkg.Registry) {
 	e.loopRunner = runner
@@ -382,7 +382,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 func (e *Executor) execute(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (*Result, error) {
 	if e.loopRunner == nil || e.loopRegistry == nil {
-		return nil, fmt.Errorf("delegate execution requires loops-ng wiring; call ConfigureLoopExecution before Execute")
+		return nil, fmt.Errorf("delegate execution requires loops wiring; call ConfigureLoopExecution before Execute")
 	}
 	return e.executeViaLoop(ctx, task, profileName, guidance, tags, opts)
 }
@@ -396,7 +396,7 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 
 func (e *Executor) startBackground(ctx context.Context, task, profileName, guidance string, tags []string, opts executionOptions) (string, string, error) {
 	if e.loopRunner == nil || e.loopRegistry == nil {
-		return "", "", fmt.Errorf("background delegation requires loops-ng execution")
+		return "", "", fmt.Errorf("background delegation requires loops execution")
 	}
 	if e.completionSink == nil {
 		return "", "", fmt.Errorf("background delegation requires a completion sink")
@@ -571,6 +571,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			MaxDuration: loopMaxDuration,
 			Tags:        append([]string(nil), prep.filterTags...),
 			Profile: router.LoopProfile{
+				Model:        prep.model,
 				Instructions: prompts.DelegateRunInstructions,
 			},
 			Metadata: map[string]string{
@@ -586,7 +587,6 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ParentID:                 prep.parentLoopID,
 		ConversationID:           prep.conversationID,
 		ChannelBinding:           prep.channelBinding.Clone(),
-		Model:                    prep.model,
 		Hints:                    hints,
 		ExcludeTools:             append([]string(nil), prep.excludeTools...),
 		SkipTagFilter:            !prep.tagFilterActive,

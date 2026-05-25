@@ -586,7 +586,7 @@ func renderScaffoldBody(outputMode, title, intent string) string {
 }
 
 // cadence captures the sleep_min/max/default/jitter triple derived from
-// a human-facing cadence string. The loops-ng spec already has these
+// a human-facing cadence string. The loop spec already has these
 // fields; this helper centralizes the input parsing so the intent
 // tools share one parser.
 type cadence struct {

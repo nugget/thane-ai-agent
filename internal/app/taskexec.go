@@ -24,7 +24,7 @@ type taskExecDeps struct {
 }
 
 // runScheduledTask handles execution of a scheduled task by compiling it
-// into a transient loops-ng launch. Unsupported payload kinds are logged
+// into a transient loop launch. Unsupported payload kinds are logged
 // and silently ignored (returning nil, not an error).
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
 	log := deps.logger.With(
@@ -72,7 +72,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 }
 
 // buildScheduledTaskLaunch compiles a persisted scheduler task and one
-// execution record into a loops-ng launch with scheduler-specific
+// execution record into a loop launch with scheduler-specific
 // routing, metadata, and timeout inheritance.
 func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) looppkg.Launch {
 	msg, _ := task.Payload.Data["message"].(string)

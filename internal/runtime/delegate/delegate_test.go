@@ -777,7 +777,7 @@ func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
 
 	_, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
 	if err == nil {
-		t.Fatal("Execute() without loops-ng wiring should return error")
+		t.Fatal("Execute() without loops wiring should return error")
 	}
 	if !strings.Contains(err.Error(), "ConfigureLoopExecution") {
 		t.Errorf("error %q should mention ConfigureLoopExecution", err)
@@ -786,17 +786,17 @@ func TestExecute_RequiresLoopExecutionWiring(t *testing.T) {
 
 // TestStartBackground_RequiresLoopExecutionWiring is the StartBackground
 // counterpart to TestExecute_RequiresLoopExecutionWiring. Same rationale:
-// the contract is that loops-ng wiring is mandatory and the failure mode
+// the contract is that loops wiring is mandatory and the failure mode
 // must be actionable.
 func TestStartBackground_RequiresLoopExecutionWiring(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
 
 	_, err := exec.StartBackground(context.Background(), "Check the office light", "general", "", nil)
 	if err == nil {
-		t.Fatal("StartBackground() without loops-ng wiring should return error")
+		t.Fatal("StartBackground() without loops wiring should return error")
 	}
-	if !strings.Contains(err.Error(), "loops-ng") {
-		t.Errorf("error %q should mention loops-ng wiring", err)
+	if !strings.Contains(err.Error(), "loops") {
+		t.Errorf("error %q should mention loops wiring", err)
 	}
 }
 
@@ -931,7 +931,7 @@ func TestExecute_LoopBackedDelegateRequiresStreamingCapableModel(t *testing.T) {
 	}
 }
 
-// delegateCompletionSink is a test stub for the loops-ng completion
+// delegateCompletionSink is a test stub for the loop completion
 // delivery interface used by background delegate tests.
 type delegateCompletionSink struct {
 	deliveries chan looppkg.CompletionDelivery

@@ -610,7 +610,7 @@ func resolveContactByChannelLink(store *contacts.Store, channel, address string)
 
 // conversationSystemInjector is the shared app-side bridge for writing
 // detached messages back into live conversations. Both notification
-// callbacks and loops-ng detached completions use this adapter so
+// callbacks and detached loop completions use this adapter so
 // completion routing converges on one app-level seam.
 type conversationSystemInjector struct {
 	mem      memory.MemoryStore

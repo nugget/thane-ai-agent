@@ -165,7 +165,7 @@ type App struct {
 	// Media
 	mediaStore *media.MediaStore
 
-	// Service loop runtimes hydrated into built-in loops-ng definitions.
+	// Service loop runtimes hydrated into built-in loop definitions.
 	unifiPoller        *unifi.Poller
 	haStateWatcher     *homeassistant.StateWatcher
 	emailPoller        *email.Poller

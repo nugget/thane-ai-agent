@@ -35,7 +35,7 @@ type specJSON struct {
 	ParentID               string            `json:"parent_id,omitempty"`
 }
 
-// MarshalJSON renders a loops-ng spec in a human-facing contract shape
+// MarshalJSON renders a loop spec in a human-facing contract shape
 // suitable for APIs and tools: durations are strings and retrigger mode is
 // named instead of using the engine's integer form.
 func (s Spec) MarshalJSON() ([]byte, error) {

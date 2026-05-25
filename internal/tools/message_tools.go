@@ -30,6 +30,7 @@ func (r *Registry) registerMessageTools() {
 	r.Register(&Tool{
 		Name: "request_core_attention",
 		Description: "Ask the designated core/owner loop to review a concern. Use this from delegate, service, or subsystem loops when a human-facing alert, message, or strategic decision may be needed. " +
+			"This call forces the core loop's next iteration into a supervisor turn — costlier than a normal wake — so reserve it for concerns that genuinely warrant the extra capacity, not as a routine notification channel. " +
 			"Do not include recipients, phone numbers, delivery channels, or instructions to send immediately; the core loop decides whether to deliver, defer, or ignore the concern.",
 		Parameters:      coreAttentionToolParameters(),
 		Handler:         r.handleRequestCoreAttention,

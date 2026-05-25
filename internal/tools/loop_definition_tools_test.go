@@ -406,19 +406,87 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 }
 
-func TestLoopDefinitionLaunchRoutesTopLevelModelOverride(t *testing.T) {
+func TestLoopDefinitionLaunchRejectsTopLevelModelOverride(t *testing.T) {
 	deps := newTestLoopDefinitionDeps(t)
 
-	if _, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
 		"name": "metacog_like",
 		"launch": map[string]any{
 			"model": "claude-sonnet-4-5",
 		},
-	}); err != nil {
-		t.Fatalf("loop_definition_launch: %v", err)
+	})
+	if err == nil {
+		t.Fatal("expected error for launch.model override, got nil")
 	}
-	if deps.lastLaunch.Model != "claude-sonnet-4-5" {
-		t.Fatalf("lastLaunch.Model = %q, want claude-sonnet-4-5", deps.lastLaunch.Model)
+	if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+		t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
+	}
+	if deps.lastLaunch.Task != "" || len(deps.lastLaunch.Metadata) > 0 {
+		t.Fatalf("lastLaunch = %#v, want zero value (launch should not have been dispatched)", deps.lastLaunch)
+	}
+}
+
+func TestLoopDefinitionLaunchRejectsNonStringModel(t *testing.T) {
+	// Non-string model values (numbers, objects, arrays) would slip past
+	// a string-only check and be silently dropped by the unmarshaller
+	// (since looppkg.Launch has no Model field). The pre-check must
+	// reject any non-null value.
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{"number", 5},
+		{"object", map[string]any{"name": "claude"}},
+		{"array", []any{"claude"}},
+		{"bool", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newTestLoopDefinitionDeps(t)
+			_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+				"name": "metacog_like",
+				"launch": map[string]any{
+					"model": tc.value,
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected error for launch.model=%v (%T), got nil", tc.value, tc.value)
+			}
+			if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+				t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoopDefinitionLaunchAcceptsExplicitNullModel(t *testing.T) {
+	// Explicit JSON null on launch.model is harmless — same shape as
+	// "key absent." Don't reject; the unmarshaller would already see
+	// no value to bind.
+	deps := newTestLoopDefinitionDeps(t)
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"model": nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("explicit null model should be tolerated, got %v", err)
+	}
+}
+
+func TestLoopDefinitionLaunchSchemaOmitsModel(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	tool := deps.reg.Get("loop_definition_launch")
+	if tool == nil {
+		t.Fatal("loop_definition_launch tool not registered")
+	}
+	launchSchema := schemaObjectProperty(t, tool.Parameters, "launch")
+	props := schemaProperties(t, launchSchema)
+	if _, ok := props["model"]; ok {
+		t.Fatal("launch schema must not expose \"model\"; persistent model selection lives on spec.profile.model")
 	}
 }
 
@@ -475,11 +543,11 @@ func TestLoopDefinitionLaunchRejectsModelInsideMetadata(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for metadata.model override, got nil")
 	}
-	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "launch.model") {
-		t.Fatalf("error = %q, want guidance pointing from metadata.model to launch.model", err.Error())
+	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+		t.Fatalf("error = %q, want guidance pointing from metadata.model to spec.profile.model", err.Error())
 	}
-	if deps.lastLaunch.Model != "" {
-		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
+	if deps.lastLaunch.Task != "" || len(deps.lastLaunch.Metadata) > 0 {
+		t.Fatalf("lastLaunch = %#v, want zero value (launch should not have been dispatched)", deps.lastLaunch)
 	}
 }
 

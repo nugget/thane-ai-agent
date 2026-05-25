@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -10,8 +11,8 @@ import (
 )
 
 // Operation describes the runtime pattern a loop is expected to
-// follow. The zero value is accepted while loops-ng adoption is
-// incremental.
+// follow. The zero value is accepted and defaults to
+// [OperationRequestReply].
 type Operation string
 
 const (
@@ -27,7 +28,7 @@ const (
 )
 
 // Completion describes how a loop's result should be delivered.
-// The zero value is accepted while loops-ng adoption is incremental.
+// The zero value is accepted and means "no outward delivery declared".
 type Completion string
 
 const (
@@ -63,12 +64,9 @@ func effectiveOperation(op Operation) Operation {
 	return op
 }
 
-// Spec is the loops-ng contract for describing a loop. It carries
-// both the current engine-facing config fields and the forward-looking
-// loops-ng semantics. Today it compiles to [Config], while [Profile]
-// already shapes requests for loops created via [NewFromSpec].
-// [Operation] and [Completion] are retained for the upcoming RunV2
-// work.
+// Spec is the contract for describing a loop. It compiles to
+// [Config] for the runtime, and [Profile] shapes requests for loops
+// created via [NewFromSpec].
 type Spec struct {
 	// Name is the unique identifier for the loop. Required.
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
@@ -136,10 +134,10 @@ type Spec struct {
 	// QualityFloor is the minimum model quality rating for normal
 	// iterations.
 	QualityFloor int `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
-	// SupervisorContext is prepended during supervisor iterations.
+	// SupervisorContext is prepended during supervisor turns.
 	SupervisorContext string `yaml:"supervisor_context,omitempty" json:"supervisor_context,omitempty"`
 	// SupervisorQualityFloor is the quality floor for supervisor
-	// iterations.
+	// turns.
 	SupervisorQualityFloor int `yaml:"supervisor_quality_floor,omitempty" json:"supervisor_quality_floor,omitempty"`
 
 	// OnRetrigger determines behavior when the loop is triggered again
@@ -191,8 +189,16 @@ type Spec struct {
 	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
 }
 
-// Validate checks that the loops-ng-facing fields and the current
-// engine-facing configuration are internally consistent.
+// IsZero reports whether the spec is the zero value (no fields set).
+// Used by guards that need to detect "did the caller send a spec at
+// all" without enumerating every field. Uses [reflect.DeepEqual]
+// against the zero value so new fields are covered automatically.
+func (s Spec) IsZero() bool {
+	return reflect.DeepEqual(s, Spec{})
+}
+
+// Validate checks that the spec fields and derived engine-facing
+// configuration are internally consistent.
 func (s *Spec) Validate() error {
 	if s == nil {
 		return fmt.Errorf("loop: spec is nil")

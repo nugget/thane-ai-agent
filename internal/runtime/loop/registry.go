@@ -290,8 +290,8 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 }
 
 // SpawnSpec creates, registers, and starts a loop from a [Spec]. It is
-// the additive loops-ng entrypoint while existing call sites continue to
-// use [Registry.SpawnLoop] with [Config].
+// the spec-based entrypoint; [Registry.SpawnLoop] with [Config] remains
+// available for callers that build a Config directly.
 func (r *Registry) SpawnSpec(ctx context.Context, spec Spec, deps Deps) (string, error) {
 	l, err := NewFromSpec(spec, deps)
 	if err != nil {
@@ -304,7 +304,7 @@ func (r *Registry) SpawnSpec(ctx context.Context, spec Spec, deps Deps) (string,
 	return l.id, nil
 }
 
-// Launch starts a loops-ng [Launch]. Request/reply launches wait for
+// Launch starts a loop from a [Launch]. Request/reply launches wait for
 // completion and return a final status snapshot; background and service
 // launches detach immediately and leave the loop running in the
 // registry.

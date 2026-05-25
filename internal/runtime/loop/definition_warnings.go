@@ -6,7 +6,7 @@ import (
 )
 
 // DefinitionWarning is a non-fatal authoring concern discovered while
-// inspecting a persistable loops-ng definition. Warnings are surfaced
+// inspecting a persistable loop definition. Warnings are surfaced
 // through definition views and lint tooling so the model can correct
 // likely mistakes before they become noisy runtime behavior.
 type DefinitionWarning struct {
