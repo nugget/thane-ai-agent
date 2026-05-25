@@ -442,6 +442,16 @@ func (l *Loop) ParentID() string {
 // construction; safe to read without the loop lock.
 func (l *Loop) Operation() Operation { return l.config.Operation }
 
+// isEventDriven reports whether the loop's run shape is event-driven —
+// either via a [Config.WaitFunc] channel reader (the legacy runtime-only
+// form) or via [OperationEventDriven] (the persistable form added in
+// PR-T2a). Status, logs, iteration snapshots, and stop telemetry use
+// this to surface a single truthful flag instead of forking on
+// WaitFunc != nil at every site.
+func (l *Loop) isEventDriven() bool {
+	return l.config.WaitFunc != nil || l.config.Operation == OperationEventDriven
+}
+
 // shouldRunSupervisor decides whether the next iteration runs as
 // a supervisor turn and reports the cause. Forced is the boolean
 // from [consumePendingNotifies] — true when at least one pending
@@ -691,7 +701,7 @@ func (l *Loop) Status() Status {
 		LastSupervisorIter:    l.lastSupervisorIter,
 		LastSupervisorTrigger: l.lastSupervisorTrigger,
 		HandlerOnly:           l.config.Handler != nil,
-		EventDriven:           l.config.WaitFunc != nil,
+		EventDriven:           l.isEventDriven(),
 		Config:                cfgCopy,
 	}
 	l.mu.Unlock()
@@ -1027,7 +1037,7 @@ func (l *Loop) run(ctx context.Context) {
 		"max_iter", l.config.MaxIter,
 		"supervisor", l.config.Supervisor,
 		"handler_only", l.config.Handler != nil,
-		"event_driven", l.config.WaitFunc != nil,
+		"event_driven", l.isEventDriven(),
 	)
 
 	// Apply max duration as a context deadline if configured.
@@ -1150,6 +1160,17 @@ func (l *Loop) run(ctx context.Context) {
 					},
 				})
 				backoff := l.computeSleep()
+				// Event-driven loops (OperationEventDriven, or any spec
+				// that left the sleep envelope at zero) would tight-loop
+				// here on a chronically failing WaitFunc — computeSleep
+				// returns 0, sleep returns immediately, the error fires
+				// again. Floor the wait-error backoff at
+				// eventDrivenErrorBackoff so the upstream source has
+				// breathing room without forcing operators to declare a
+				// sleep envelope they otherwise don't need.
+				if backoff <= 0 {
+					backoff = eventDrivenErrorBackoff
+				}
 				logger.Warn("loop wait failed",
 					"error", waitErr,
 					"consecutive_errors", consecutiveErrors,
@@ -1561,7 +1582,7 @@ func (l *Loop) run(ctx context.Context) {
 			sleep = l.computeSleep()
 
 			// Record sleep/wait info on the snapshot before buffering.
-			if l.config.WaitFunc != nil {
+			if l.isEventDriven() {
 				snap.WaitAfter = true
 			} else {
 				snap.SleepAfterMs = sleep.Milliseconds()
@@ -1643,7 +1664,7 @@ func (l *Loop) emitStopped() {
 	consecutiveErrors := l.consecutiveErrors
 	startedAt := l.startedAt
 	handlerOnly := l.config.Handler != nil
-	eventDriven := l.config.WaitFunc != nil
+	eventDriven := l.isEventDriven()
 	l.mu.Unlock()
 
 	logger := l.deps.Logger

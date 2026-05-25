@@ -39,6 +39,11 @@ func LoopWakeTargetSchema(description string) map[string]any {
 				"type":        "string",
 				"description": "Compact source-specific instructions included with the wake event.",
 			},
+			"tags": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Iteration-scoped capability tags activated when the target loop processes this wake. Use this to route source-side classification outcomes (contacts → \"owner\" / \"untrusted\", MQTT topic patterns → \"security\" / \"device_control\") into the target loop's per-iteration tool surface. Tags fade after the iteration unless the model explicitly activates them via tool.",
+			},
 		},
 	}
 }

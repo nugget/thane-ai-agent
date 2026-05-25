@@ -266,6 +266,135 @@ func TestLoopNotifyQueueBounded(t *testing.T) {
 	}
 }
 
+// TestOperationEventDrivenReportsEventDrivenStatus pins the P2 fix:
+// status, logs, and snapshots all key off [Loop.isEventDriven], which
+// returns true for both WaitFunc-based loops AND OperationEventDriven
+// specs. Pre-fix, a persisted operation: event_driven loop showed up
+// as timed/non-event-driven in /api/loops and the dashboard.
+func TestOperationEventDrivenReportsEventDrivenStatus(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:      "declared-event-driven",
+		Task:      "watch",
+		Operation: OperationEventDriven,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	status := l.Status()
+	if !status.EventDriven {
+		t.Errorf("Status.EventDriven = false, want true for OperationEventDriven")
+	}
+}
+
+// TestLoopNotifyPokesWakeChWhileProcessing pins the P1 fix: a
+// notification arriving while an event-driven loop is in StateProcessing
+// must still poke wakeCh so the next waitForWake doesn't strand the
+// pendingNotify. Pre-fix, enqueueNotify skipped the channel signal when
+// state != Sleeping/Waiting, leaving the queued item until some later
+// unrelated wake repoked the channel.
+func TestLoopNotifyPokesWakeChWhileProcessing(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "busy-event-driven",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	env, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   l.Name(),
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	receipt, err := l.enqueueNotify(env)
+	if err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+	if receipt.WokeImmediately {
+		t.Errorf("WokeImmediately = true, want false (state was Processing)")
+	}
+	if !receipt.QueuedForNextWake {
+		t.Errorf("QueuedForNextWake = false, want true")
+	}
+	// The channel must be non-empty so the next waitForWake returns
+	// instead of blocking.
+	select {
+	case <-l.wakeCh:
+	default:
+		t.Fatal("wakeCh was not signaled while loop in StateProcessing — next waitForWake would block and strand the queued notification")
+	}
+}
+
+// TestConsumePendingNotifiesDecodesPointerAndMapPayloads exercises the
+// P2/Copilot tag-aggregation fix: tags arriving on *LoopNotifyPayload
+// and map[string]any payloads now contribute to the iteration's
+// returned tag set. Pre-fix, only the concrete LoopNotifyPayload type
+// assertion fired, silently dropping the others.
+func TestConsumePendingNotifiesDecodesPointerAndMapPayloads(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "tag-decode",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	dest := messages.Destination{Kind: messages.DestinationLoop, Target: l.Name(), Selector: messages.SelectorName}
+
+	pointerEnv, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore}, To: dest, Type: messages.TypeSignal,
+		Payload: &messages.LoopNotifyPayload{Tags: []string{"pointer_tag"}},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize pointer: %v", err)
+	}
+	mapEnv, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore}, To: dest, Type: messages.TypeSignal,
+		Payload: map[string]any{"tags": []any{"map_tag", "pointer_tag"}},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize map: %v", err)
+	}
+	for _, env := range []messages.Envelope{pointerEnv, mapEnv} {
+		if _, err := l.enqueueNotify(env); err != nil {
+			t.Fatalf("enqueueNotify: %v", err)
+		}
+	}
+
+	_, _, tags := l.consumePendingNotifies()
+	got := map[string]bool{}
+	for _, tag := range tags {
+		got[tag] = true
+	}
+	if !got["pointer_tag"] || !got["map_tag"] {
+		t.Fatalf("tags = %v, want both pointer_tag and map_tag", tags)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("tags = %v, want exactly 2 unique", tags)
+	}
+}
+
 func TestLoopNotifyTagsFlowIntoInitialTags(t *testing.T) {
 	t.Parallel()
 

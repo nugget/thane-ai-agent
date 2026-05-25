@@ -380,6 +380,44 @@ func TestCheckFeeds_WakeLoopDeliveryFailureKeepsHighWater(t *testing.T) {
 	}
 }
 
+// TestStoreFeedWakeTargetRoundTripsTags pins the P3 fix: Tags on a
+// feed's wake target persist alongside the other fields and round-trip
+// through loadFeedWakeTarget. Pre-fix, feed_wake.go's storage helpers
+// ignored target.Tags entirely.
+func TestStoreFeedWakeTargetRoundTripsTags(t *testing.T) {
+	store := newTestStore(t)
+
+	target := messages.LoopWakeTarget{
+		Name: "feed_curator",
+		Tags: []string{"owner", "research"},
+	}
+	if err := storeFeedWakeTarget(store, "cf1", target, true); err != nil {
+		t.Fatalf("storeFeedWakeTarget: %v", err)
+	}
+	got, ok, err := loadFeedWakeTarget(store, "cf1")
+	if err != nil || !ok {
+		t.Fatalf("loadFeedWakeTarget ok=%v err=%v", ok, err)
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "owner" || got.Tags[1] != "research" {
+		t.Fatalf("round-tripped Tags = %v, want [owner research]", got.Tags)
+	}
+
+	// JSON projection also surfaces Tags so list-style tool responses
+	// show what the operator configured.
+	jsonProj := feedWakeTargetJSON(got, true)
+	tagsRaw, ok := jsonProj["tags"]
+	if !ok {
+		t.Fatal("feedWakeTargetJSON dropped tags")
+	}
+	tags, ok := tagsRaw.([]string)
+	if !ok {
+		t.Fatalf("feedWakeTargetJSON tags type = %T, want []string", tagsRaw)
+	}
+	if len(tags) != 2 || tags[0] != "owner" || tags[1] != "research" {
+		t.Fatalf("feedWakeTargetJSON tags = %v, want [owner research]", tags)
+	}
+}
+
 func TestStoreFeedWakeTargetClearsWhenOmitted(t *testing.T) {
 	store := newTestStore(t)
 

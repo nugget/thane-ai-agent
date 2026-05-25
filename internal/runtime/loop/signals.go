@@ -43,6 +43,7 @@ const maxNotifyEventsInSummary = messages.MaxLoopEventsPerWake
 type pendingNotify struct {
 	Envelope        messages.Envelope
 	ForceSupervisor bool
+	Tags            []string
 }
 
 // NotifyReceipt summarizes the effect of notifying a live loop.
@@ -248,9 +249,11 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 		return NotifyReceipt{}, fmt.Errorf("loop %q notify queue full (%d pending)", l.config.Name, len(l.pendingNotifies))
 	}
 
+	tags := cleanNotifyTags(payload.Tags)
 	l.pendingNotifies = append(l.pendingNotifies, pendingNotify{
 		Envelope:        env,
 		ForceSupervisor: payload.ForceSupervisor,
+		Tags:            tags,
 	})
 	receipt := NotifyReceipt{
 		LoopID:               l.id,
@@ -259,16 +262,52 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 		ForceSupervisor:      payload.ForceSupervisor,
 		PendingNotifications: len(l.pendingNotifies),
 	}
+	// Signal wakeCh unconditionally. A notification arriving while the
+	// loop is in StateProcessing must still poke the channel so the
+	// next waitForWake (event-driven loops with no periodic timer) or
+	// next sleep (timer-driven loops, which become 0-duration on
+	// signal) sees it and drains pendingNotifies. Without this, an
+	// event-driven loop that is busy when a notification arrives can
+	// strand the message until some later unrelated wake repokes the
+	// channel. Spurious wakes are absorbed harmlessly:
+	// consumePendingNotifies drains wakeCh when no items are queued.
+	select {
+	case l.wakeCh <- struct{}{}:
+	default:
+	}
 	if l.state == StateSleeping || l.state == StateWaiting {
-		select {
-		case l.wakeCh <- struct{}{}:
-		default:
-		}
 		receipt.WokeImmediately = true
 	} else {
 		receipt.QueuedForNextWake = true
 	}
 	return receipt, nil
+}
+
+// cleanNotifyTags returns a deduplicated, whitespace-trimmed copy of
+// the tag slice, dropping empties. The caller hands ownership of the
+// returned slice to pendingNotify; mutation of the source after the
+// call does not affect the stored tags.
+func cleanNotifyTags(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, tag := range in {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // consumePendingNotifies drains the loop's pending notification
@@ -309,17 +348,17 @@ func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool, []string) {
 	for _, sig := range l.pendingNotifies {
 		envs = append(envs, sig.Envelope)
 		forceSupervisor = forceSupervisor || sig.ForceSupervisor
-		if payload, ok := sig.Envelope.Payload.(messages.LoopNotifyPayload); ok {
-			for _, tag := range payload.Tags {
-				if tag == "" {
-					continue
-				}
-				if _, dup := seenTags[tag]; dup {
-					continue
-				}
-				seenTags[tag] = struct{}{}
-				tags = append(tags, tag)
+		// Tags are pre-decoded at enqueue time, so all valid payload
+		// shapes (LoopNotifyPayload value, *LoopNotifyPayload pointer,
+		// map[string]any from a JSON-decoded bus envelope) contribute
+		// uniformly. The previous Envelope.Payload type-assert would
+		// silently drop tags from the pointer and map forms.
+		for _, tag := range sig.Tags {
+			if _, dup := seenTags[tag]; dup {
+				continue
 			}
+			seenTags[tag] = struct{}{}
+			tags = append(tags, tag)
 		}
 	}
 	l.pendingNotifies = nil
