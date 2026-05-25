@@ -360,6 +360,13 @@ func (c *Config) applyDefaults() {
 		// this contract by being a container.
 		return
 	}
+	if c.Operation == OperationEventDriven {
+		// Event-driven loops wake only on notifications or
+		// [Config.WaitFunc] channel reads — they have no periodic
+		// timer. Synthesizing sleep defaults would just write
+		// inert-but-misleading values on the Config.
+		return
+	}
 	if c.SleepMin == 0 {
 		c.SleepMin = DefaultSleepMin
 	}
@@ -398,11 +405,17 @@ func (c *Config) validate() error {
 	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil && c.TurnBuilder == nil {
 		return fmt.Errorf("loop: Task, TaskBuilder, TurnBuilder, or Handler is required")
 	}
-	if c.SleepMin <= 0 {
-		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
-	}
-	if c.SleepMax < c.SleepMin {
-		return fmt.Errorf("loop: SleepMax (%v) must be >= SleepMin (%v)", c.SleepMax, c.SleepMin)
+	if c.Operation != OperationEventDriven {
+		// Timer-driven loops require a positive sleep envelope.
+		// Event-driven loops are deliberately timer-less (sleep is
+		// zero) — they wake only on notifications or WaitFunc, so
+		// these checks would be incorrect for them.
+		if c.SleepMin <= 0 {
+			return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
+		}
+		if c.SleepMax < c.SleepMin {
+			return fmt.Errorf("loop: SleepMax (%v) must be >= SleepMin (%v)", c.SleepMax, c.SleepMin)
+		}
 	}
 	if c.Jitter != nil && (*c.Jitter < 0 || *c.Jitter > 1) {
 		return fmt.Errorf("loop: Jitter must be in [0, 1], got %v", *c.Jitter)
