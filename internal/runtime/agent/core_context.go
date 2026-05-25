@@ -303,8 +303,8 @@ func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *p
 func (p *CoreContextProvider) readInjectFiles(ctx context.Context, injectFiles []string, verifier func(context.Context, string, string) error, logger *slog.Logger) string {
 	var ctxBuf strings.Builder
 	for _, path := range injectFiles {
-		content := p.readInjectFile(ctx, path, verifier,
-			fmt.Sprintf("\n\n[%s truncated — exceeded 16 KB limit]", filepath.Base(path)), logger)
+		marker := fmt.Sprintf("\n\n[%s truncated — exceeded 16 KB limit]", filepath.Base(path))
+		content := p.readPlainCoreFile(ctx, path, verifier, "inject_files", maxInjectFileBytes, marker, logger)
 		if content == "" {
 			continue
 		}
@@ -317,19 +317,6 @@ func (p *CoreContextProvider) readInjectFiles(ctx context.Context, injectFiles [
 		return ""
 	}
 	return ctxBuf.String()
-}
-
-func (p *CoreContextProvider) readInjectFile(ctx context.Context, path string, verifier func(context.Context, string, string) error, marker string, logger *slog.Logger) string {
-	content := p.readPlainCoreFile(ctx, path, verifier, "inject_files", 0, marker, logger)
-	if content == "" {
-		return ""
-	}
-	_, body := talents.ParseFrontmatterMetadata(content)
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return ""
-	}
-	return truncateCoreContext(body, maxInjectFileBytes, marker)
 }
 
 func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string, verifier func(context.Context, string, string) error, consumer string, maxBytes int, marker string, logger *slog.Logger) string {
