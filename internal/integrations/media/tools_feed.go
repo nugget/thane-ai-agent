@@ -79,11 +79,6 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		if err != nil {
 			return "", fmt.Errorf("media_follow: %w", err)
 		}
-		if wakeConfigured {
-			if err := messages.VerifyLoopWakeTarget(wakeTarget, ft.loopResolver); err != nil {
-				return "", fmt.Errorf("media_follow: %w", err)
-			}
-		}
 
 		notify := true
 		if n, ok := args["notify"].(bool); ok {
@@ -96,6 +91,18 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		if notify && !wakeConfigured {
 			wakeTarget = messages.LoopWakeTarget{Name: DefaultHandlerLoopName}
 			wakeConfigured = true
+		}
+		// Verify whichever target we landed on — the operator's pick or
+		// the auto-default. Without this, persisting against a missing
+		// default handler (e.g. media polling left unconfigured but the
+		// tool was reachable through another path) would silently drop
+		// every future wake at delivery time. A nil resolver short-
+		// circuits to nil in VerifyLoopWakeTarget, so test wiring
+		// without a registry still works.
+		if wakeConfigured {
+			if err := messages.VerifyLoopWakeTarget(wakeTarget, ft.loopResolver); err != nil {
+				return "", fmt.Errorf("media_follow: %w", err)
+			}
 		}
 
 		// Check feed limit.

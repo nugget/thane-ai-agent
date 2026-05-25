@@ -578,6 +578,54 @@ func TestCheckFeeds_ReseedOnMissingHighWaterMark(t *testing.T) {
 	}
 }
 
+// TestCheckFeeds_NotifyFalseSuppressesEvenWithWakeLoop pins the
+// Copilot fix: a feed with a custom wake_loop AND notify=false must
+// not dispatch — the quiet-feed semantics on the notify field apply
+// regardless of whether a wake_loop is stored. High-water still
+// advances so re-enabling later doesn't backfill.
+func TestCheckFeeds_NotifyFalseSuppressesEvenWithWakeLoop(t *testing.T) {
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Quiet Wake-Loop Feed</title>
+	<entry><id>e-2</id><title>New</title>
+	<link href="https://example.com/2"/>
+	<published>2026-02-22T12:00:00Z</published></entry>
+	<entry><id>e-1</id><title>Old</title>
+	<link href="https://example.com/1"/>
+	<published>2026-02-20T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"qw1"})
+	store.Set(feedNamespace, feedKeyURL("qw1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("qw1"), "Quiet Wake-Loop Feed")
+	store.Set(feedNamespace, feedKeyLastEntryID("qw1"), "e-1")
+	store.Set(feedNamespace, feedKeyNotify("qw1"), "false")
+	if err := storeFeedWakeTarget(store, "qw1", messages.LoopWakeTarget{Name: "custom_handler"}, true); err != nil {
+		t.Fatalf("storeFeedWakeTarget: %v", err)
+	}
+
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	got, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("notify=false should suppress dispatch even with wake_loop, got %d wakes", got)
+	}
+	if envs := delivered(); len(envs) != 0 {
+		t.Errorf("notify=false with wake_loop should not deliver envelopes, got %d", len(envs))
+	}
+	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("qw1"))
+	if hwm != "e-2" {
+		t.Errorf("high-water mark = %q, want e-2", hwm)
+	}
+}
+
 func TestCheckFeeds_NotifyFalseSuppressesDispatch(t *testing.T) {
 	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 	<title>Quiet Feed</title>

@@ -138,7 +138,14 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (int, error) {
 		if update == nil || n == 0 {
 			continue
 		}
-		if update.WakeConfigured {
+		// Dispatch only when the operator opted in (notify=true). A
+		// feed with a custom wake_loop but notify=false is the "quiet
+		// feed" shape — observe new entries, advance the high-water
+		// mark, but don't fire wakes. Without this gate, setting
+		// notify=false on a feed that already has a wake_loop stored
+		// would still deliver every new entry, contradicting the
+		// notify field's documented semantics.
+		if update.WakeConfigured && update.Notify {
 			dispatched, err := p.dispatchFeedEventBatches(ctx, update)
 			eventWakeCount += dispatched
 			if err != nil {
@@ -150,9 +157,9 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		// notify=false feeds advance their high-water mark silently so
-		// the operator's followed-but-quiet subscription still keeps
-		// the "no backfill on next enable" invariant.
+		// notify=false (or no wake target) feeds advance silently so a
+		// later re-enable doesn't backfill the entries observed while
+		// quiet.
 		if err := p.advanceFeedHighWater(update); err != nil {
 			p.logger.Warn("failed to update high-water mark",
 				"feed_id", id,

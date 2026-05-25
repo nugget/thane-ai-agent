@@ -34,8 +34,9 @@ func TestFollowHandler_TrustZoneDefault(t *testing.T) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	if out["trust_zone"] != any("unknown") {
-		t.Errorf("trust_zone = %q, want %q (default)", out["trust_zone"], "unknown")
+	tz, _ := out["trust_zone"].(string)
+	if tz != "unknown" {
+		t.Errorf("trust_zone = %q, want %q (default)", tz, "unknown")
 	}
 
 	// Verify stored in opstate.
@@ -75,8 +76,9 @@ func TestFollowHandler_TrustZoneExplicit(t *testing.T) {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	if out["trust_zone"] != any("trusted") {
-		t.Errorf("trust_zone = %q, want %q", out["trust_zone"], "trusted")
+	tz, _ := out["trust_zone"].(string)
+	if tz != "trusted" {
+		t.Errorf("trust_zone = %q, want %q", tz, "trusted")
 	}
 
 	// Verify stored in opstate.
@@ -129,8 +131,9 @@ func TestFollowHandler_TrustZoneKnown(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if out["trust_zone"] != any("known") {
-		t.Errorf("trust_zone = %q, want %q", out["trust_zone"], "known")
+	tz, _ := out["trust_zone"].(string)
+	if tz != "known" {
+		t.Errorf("trust_zone = %q, want %q", tz, "known")
 	}
 }
 
@@ -249,10 +252,12 @@ func TestFollowHandler_FeedDiscovery(t *testing.T) {
 	}
 
 	// The discovered feed URL should be the resolved /feed.xml path.
-	if out["url"] != srv.URL+"/feed.xml" {
-		t.Errorf("url = %q, want %q", out["url"], srv.URL+"/feed.xml")
+	gotURL, _ := out["url"].(string)
+	gotName, _ := out["name"].(string)
+	if gotURL != srv.URL+"/feed.xml" {
+		t.Errorf("url = %q, want %q", gotURL, srv.URL+"/feed.xml")
 	}
-	if out["name"] != any("Blog Feed") {
-		t.Errorf("name = %q, want %q", out["name"], "Blog Feed")
+	if gotName != "Blog Feed" {
+		t.Errorf("name = %q, want %q", gotName, "Blog Feed")
 	}
 }
