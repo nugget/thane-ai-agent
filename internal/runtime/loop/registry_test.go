@@ -469,7 +469,6 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 		ParentID:        "parent-loop",
 		Metadata:        map[string]string{"origin": "launch"},
 		ConversationID:  "conv-123",
-		Model:           "deepslate/google/gemma-3-4b",
 		Hints:           map[string]string{"source": "launch", "custom": "1"},
 		AllowedTools:    []string{"get_state"},
 		ExcludeTools:    []string{"launch_block"},
@@ -516,8 +515,11 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 	if result.FinalStatus.Config.Metadata["origin"] != "launch" {
 		t.Fatalf("Metadata origin = %q, want launch", result.FinalStatus.Config.Metadata["origin"])
 	}
-	if captured.Model != "deepslate/google/gemma-3-4b" {
-		t.Fatalf("Model = %q, want deepslate/google/gemma-3-4b", captured.Model)
+	// Persistent model selection lives on Spec.Profile.Model — Launch
+	// no longer carries a Model override. The captured request should
+	// reflect the spec profile's model.
+	if captured.Model != "spark/base" {
+		t.Fatalf("Model = %q, want spark/base", captured.Model)
 	}
 	if captured.ConversationID != "conv-123" {
 		t.Fatalf("ConversationID = %q, want conv-123", captured.ConversationID)

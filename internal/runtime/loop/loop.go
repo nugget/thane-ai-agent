@@ -1437,7 +1437,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	}
 
 	configuredInitialTags := mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, req.InitialTags, l.requestOverride.InitialTags)
-	req.Model = firstNonEmpty(l.requestOverride.Model, req.Model, l.requestBase.Model)
+	req.Model = firstNonEmpty(req.Model, l.requestBase.Model)
 	req.ConversationID = firstNonEmpty(l.requestOverride.ConversationID, req.ConversationID, convID)
 	req.ChannelBinding = firstNonNilChannelBinding(l.requestOverride.ChannelBinding, req.ChannelBinding, l.requestBase.ChannelBinding)
 	req.SkipContext = l.requestOverride.SkipContext || req.SkipContext

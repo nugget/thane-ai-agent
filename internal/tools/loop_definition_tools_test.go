@@ -112,15 +112,6 @@ func sharedLoopLaunchSchemaKeys() []string {
 		switch name {
 		case "", "-", "spec":
 			continue
-		case "model":
-			// Intentionally not exposed on the agent-facing schema.
-			// Persistent model selection lives on spec.profile.model;
-			// per-launch overrides are silently dropped for service
-			// loops that are already running and lost on restart when
-			// they are not. The Go field stays in place for internal
-			// callers (delegates, scheduled tasks) that build one-shot
-			// Launches with throwaway Specs.
-			continue
 		default:
 			keys = append(keys, name)
 		}
@@ -430,8 +421,8 @@ func TestLoopDefinitionLaunchRejectsTopLevelModelOverride(t *testing.T) {
 	if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
 		t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
 	}
-	if deps.lastLaunch.Model != "" {
-		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
+	if deps.lastLaunch.Task != "" || len(deps.lastLaunch.Metadata) > 0 {
+		t.Fatalf("lastLaunch = %#v, want zero value (launch should not have been dispatched)", deps.lastLaunch)
 	}
 }
 
@@ -505,8 +496,8 @@ func TestLoopDefinitionLaunchRejectsModelInsideMetadata(t *testing.T) {
 	if !strings.Contains(err.Error(), "metadata.model") || !strings.Contains(err.Error(), "spec.profile.model") {
 		t.Fatalf("error = %q, want guidance pointing from metadata.model to spec.profile.model", err.Error())
 	}
-	if deps.lastLaunch.Model != "" {
-		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
+	if deps.lastLaunch.Task != "" || len(deps.lastLaunch.Metadata) > 0 {
+		t.Fatalf("lastLaunch = %#v, want zero value (launch should not have been dispatched)", deps.lastLaunch)
 	}
 }
 

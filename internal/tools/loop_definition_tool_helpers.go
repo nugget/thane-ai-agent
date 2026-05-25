@@ -54,6 +54,9 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 	if !ok {
 		return looppkg.Launch{}, nil
 	}
+	if err := rejectLaunchModelKeys(raw); err != nil {
+		return looppkg.Launch{}, err
+	}
 	data, err := json.Marshal(raw)
 	if err != nil {
 		return looppkg.Launch{}, err
@@ -62,43 +65,46 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 	if err := json.Unmarshal(data, &launch); err != nil {
 		return looppkg.Launch{}, err
 	}
-	if err := validateLoopLaunchOverrides(launch); err != nil {
-		return looppkg.Launch{}, err
-	}
 	return launch, nil
 }
 
-// validateLoopLaunchOverrides rejects tool-facing launch payloads that
-// attempt to set the model. The router's persistent baseline lives on
-// the stored spec (`spec.profile.model`) and is the only durable place
-// to pin a model. `launch.model` is intentionally not exposed on the
-// agent-facing schema: for service-mode loops, calling
-// loop_definition_launch on an already-running definition silently
-// drops every launch field (the runtime returns the existing loop ID
-// without re-applying overrides), and even on a fresh service launch
-// the per-launch model is lost on restart because Launch is not
-// persisted. The Go-level field stays for internal callers (delegates,
-// scheduled tasks) that legitimately construct one-shot Launches with
-// throwaway Specs; the rejection here only guards the JSON tool path.
-func validateLoopLaunchOverrides(launch looppkg.Launch) error {
-	if model := strings.TrimSpace(launch.Model); model != "" {
-		return fmt.Errorf(
-			"launch.model=%q is no longer accepted from tool input; "+
-				"to pin a model, set spec.profile.model "+
-				"(via loop_definition_set for persisted definitions, "+
-				"or inside the spec passed to spawn_loop for ad-hoc loops)",
-			model)
-	}
-	if len(launch.Metadata) == 0 {
+// rejectLaunchModelKeys catches tool-facing launch payloads that try to
+// set the model. The router's persistent baseline lives on the stored
+// spec (`spec.profile.model`) and is the only durable place to pin a
+// model. The Go [looppkg.Launch] type no longer carries a Model field —
+// so unmarshalling alone would silently drop a `"model"` key. This
+// raw-map pre-check preserves a useful error pointing callers at
+// `spec.profile.model`.
+//
+// Both top-level `launch.model` and `launch.metadata.model` are
+// rejected. Other tool-facing layers (the JSON schema for
+// [loop_definition_launch] and [spawn_loop]) already omit `model`; this
+// is the runtime backstop.
+func rejectLaunchModelKeys(raw any) error {
+	launch, ok := raw.(map[string]any)
+	if !ok {
 		return nil
 	}
-	if model, ok := launch.Metadata["model"]; ok && strings.TrimSpace(model) != "" {
-		return fmt.Errorf(
-			"launch.metadata.model=%q is opaque tagging and does not override the model; "+
-				"set spec.profile.model instead "+
-				"(via loop_definition_set for persisted definitions, "+
-				"or inside the spec passed to spawn_loop for ad-hoc loops)",
-			model)
+	if v, present := launch["model"]; present {
+		if model, _ := v.(string); strings.TrimSpace(model) != "" {
+			return fmt.Errorf(
+				"launch.model=%q is not accepted from tool input; "+
+					"to pin a model, set spec.profile.model "+
+					"(via loop_definition_set for persisted definitions, "+
+					"or inside the spec passed to spawn_loop for ad-hoc loops)",
+				model)
+		}
+	}
+	metadata, _ := launch["metadata"].(map[string]any)
+	if v, present := metadata["model"]; present {
+		if model, _ := v.(string); strings.TrimSpace(model) != "" {
+			return fmt.Errorf(
+				"launch.metadata.model=%q is opaque tagging and does not override the model; "+
+					"set spec.profile.model instead "+
+					"(via loop_definition_set for persisted definitions, "+
+					"or inside the spec passed to spawn_loop for ad-hoc loops)",
+				model)
+		}
 	}
 	return nil
 }
@@ -167,12 +173,11 @@ func loopChannelBindingProperty() map[string]any {
 // Exposing a typed schema lets the model see the real field names and
 // their behavior rather than guessing at an opaque object.
 //
-// `model` is deliberately omitted: the persistent model selection lives
-// on `spec.profile.model`, and per-launch model overrides are silently
-// dropped when a service definition is already running. Callers that
-// reach for a model override should mutate the stored spec via
-// loop_definition_set, or set profile.model inside the spec passed to
-// spawn_loop. See [validateLoopLaunchOverrides] for the rejection path.
+// `model` is not a field. Persistent model selection lives on
+// `spec.profile.model`; mutate the stored spec via loop_definition_set,
+// or set profile.model inside the spec passed to spawn_loop. See
+// [rejectLaunchModelKeys] for the runtime backstop that surfaces a
+// useful error if a caller sends `launch.model` anyway.
 func loopLaunchOverrideProperties() map[string]any {
 	return map[string]any{
 		"task": map[string]any{

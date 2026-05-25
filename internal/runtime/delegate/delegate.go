@@ -571,6 +571,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			MaxDuration: loopMaxDuration,
 			Tags:        append([]string(nil), prep.filterTags...),
 			Profile: router.LoopProfile{
+				Model:        prep.model,
 				Instructions: prompts.DelegateRunInstructions,
 			},
 			Metadata: map[string]string{
@@ -586,7 +587,6 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ParentID:                 prep.parentLoopID,
 		ConversationID:           prep.conversationID,
 		ChannelBinding:           prep.channelBinding.Clone(),
-		Model:                    prep.model,
 		Hints:                    hints,
 		ExcludeTools:             append([]string(nil), prep.excludeTools...),
 		SkipTagFilter:            !prep.tagFilterActive,

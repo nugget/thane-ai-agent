@@ -125,7 +125,6 @@ func TestLaunchHasOverrides(t *testing.T) {
 		mut   func(*Launch)
 		field string
 	}{
-		{"model", func(l *Launch) { l.Model = "x" }, "Model"},
 		{"task", func(l *Launch) { l.Task = "x" }, "Task"},
 		{"hints", func(l *Launch) { l.Hints = map[string]string{"k": "v"} }, "Hints"},
 		{"metadata", func(l *Launch) { l.Metadata = map[string]string{"k": "v"} }, "Metadata"},

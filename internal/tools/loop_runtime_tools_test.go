@@ -125,8 +125,8 @@ func TestSpawnLoopRejectsTopLevelModelOverride(t *testing.T) {
 	if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
 		t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
 	}
-	if deps.lastLaunch.Model != "" {
-		t.Fatalf("lastLaunch.Model = %q, want empty (launch should not have been dispatched)", deps.lastLaunch.Model)
+	if deps.lastLaunch.Spec.Name != "" || deps.lastLaunch.Task != "" {
+		t.Fatalf("lastLaunch = %#v, want zero value (launch should not have been dispatched)", deps.lastLaunch)
 	}
 }
 
