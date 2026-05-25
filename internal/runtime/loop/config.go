@@ -307,6 +307,11 @@ func Float64Ptr(v float64) *float64 { return &v }
 // SupervisorProb is intentionally left as-is so that zero means
 // "disabled" — callers opt in explicitly.
 func (c *Config) applyDefaults() {
+	if c.Operation == OperationContainer {
+		// Containers never wake; don't synthesize sleep defaults
+		// that would otherwise be inert-but-confusing on the Config.
+		return
+	}
 	if c.SleepMin == 0 {
 		c.SleepMin = DefaultSleepMin
 	}
@@ -324,6 +329,17 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
+	if c.Operation == OperationContainer {
+		// Containers are inert nodes — no execution hook, no wake
+		// timer. Spec-level validation already rejects authoring
+		// mistakes that would set those fields; this branch keeps
+		// the engine-level validator honest when a Config is built
+		// directly (e.g. by [New] from caller-supplied data).
+		if err := validateOutputs(c.Outputs); err != nil {
+			return fmt.Errorf("loop: %w", err)
+		}
+		return nil
+	}
 	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil && c.TurnBuilder == nil {
 		return fmt.Errorf("loop: Task, TaskBuilder, TurnBuilder, or Handler is required")
 	}

@@ -25,6 +25,13 @@ const (
 	// OperationService is a persistent loop such as metacognition,
 	// ego, or a long-running watcher.
 	OperationService Operation = "service"
+	// OperationContainer is a non-executing node in the loop graph
+	// used to group related loops and hold inheritable state (tags,
+	// entity subscriptions) that descendants pick up at iteration
+	// time. Container loops occupy registry entries, take a
+	// parent_id, carry metadata and a scope_tag, but never wake and
+	// never run a Task. See [Spec.Validate] for the shape contract.
+	OperationContainer Operation = "container"
 )
 
 // Completion describes how a loop's result should be delivered.
@@ -47,6 +54,7 @@ var validOperations = map[Operation]bool{
 	OperationRequestReply:   true,
 	OperationBackgroundTask: true,
 	OperationService:        true,
+	OperationContainer:      true,
 }
 
 var validCompletions = map[Completion]bool{
@@ -228,10 +236,66 @@ func (s *Spec) Validate() error {
 	if err := validateOutputs(s.Outputs); err != nil {
 		return fmt.Errorf("loop: %w", err)
 	}
+	if s.Operation == OperationContainer {
+		// Containers are inert nodes — they hold inheritable state
+		// (tags, entity subscriptions, metadata) but never wake and
+		// never execute. Reject any field that would imply
+		// execution; the validation here catches authoring mistakes
+		// before the runtime has to refuse the spec at start time.
+		return validateContainerShape(s)
+	}
 	cfg := s.ToConfig()
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateContainerShape rejects execution-shaped fields on a
+// container spec. Containers are structural nodes; setting Task,
+// sleep envelope, or any execution hook is a category error rather
+// than an unused field, so the failure mode here is loud rather
+// than silently ignored.
+func validateContainerShape(s *Spec) error {
+	if strings.TrimSpace(s.Task) != "" {
+		return fmt.Errorf("loop: container %q cannot set task", s.Name)
+	}
+	if s.TaskBuilder != nil {
+		return fmt.Errorf("loop: container %q cannot set TaskBuilder", s.Name)
+	}
+	if s.TurnBuilder != nil {
+		return fmt.Errorf("loop: container %q cannot set TurnBuilder", s.Name)
+	}
+	if s.Handler != nil {
+		return fmt.Errorf("loop: container %q cannot set Handler", s.Name)
+	}
+	if s.WaitFunc != nil {
+		return fmt.Errorf("loop: container %q cannot set WaitFunc", s.Name)
+	}
+	if s.PostIterate != nil {
+		return fmt.Errorf("loop: container %q cannot set PostIterate", s.Name)
+	}
+	if s.SleepMin != 0 || s.SleepMax != 0 || s.SleepDefault != 0 {
+		return fmt.Errorf("loop: container %q cannot set sleep envelope (containers never wake)", s.Name)
+	}
+	if s.Jitter != nil {
+		return fmt.Errorf("loop: container %q cannot set jitter", s.Name)
+	}
+	if s.MaxDuration != 0 {
+		return fmt.Errorf("loop: container %q cannot set max_duration", s.Name)
+	}
+	if s.MaxIter != 0 {
+		return fmt.Errorf("loop: container %q cannot set max_iter", s.Name)
+	}
+	if s.Supervisor || s.SupervisorProb != 0 || strings.TrimSpace(s.SupervisorContext) != "" {
+		return fmt.Errorf("loop: container %q cannot set supervisor fields", s.Name)
+	}
+	if len(s.Outputs) > 0 {
+		return fmt.Errorf("loop: container %q cannot declare outputs", s.Name)
+	}
+	if s.Completion != "" && s.Completion != CompletionNone {
+		return fmt.Errorf("loop: container %q cannot set completion (containers never produce a result)", s.Name)
 	}
 	return nil
 }

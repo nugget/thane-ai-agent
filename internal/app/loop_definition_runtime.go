@@ -266,7 +266,7 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 	for _, def := range snap.Definitions {
 		spec := def.Spec
 		switch {
-		case spec.Operation != looppkg.OperationService:
+		case spec.Operation != looppkg.OperationService && spec.Operation != looppkg.OperationContainer:
 			result.SkippedNonService++
 			continue
 		case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
@@ -324,12 +324,13 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		return nil
 	}
 	eligibility := def.Spec.Conditions.Evaluate(r.nowTime())
-	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
+	durable := def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer
+	if !durable || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
-			reason := "not_service"
+			reason := "not_durable"
 			switch {
-			case def.Spec.Operation != looppkg.OperationService:
-				reason = "non_service_definition"
+			case !durable:
+				reason = "non_durable_definition"
 			case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
 				reason = "policy_inactive"
 			case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
@@ -391,29 +392,30 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	if eligibility := def.Spec.Conditions.Evaluate(r.nowTime()); !eligibility.Eligible {
 		return looppkg.LaunchResult{}, &looppkg.IneligibleDefinitionError{Name: name, Reason: eligibility.Reason}
 	}
-	if def.Spec.Operation == looppkg.OperationService {
+	if def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer {
 		if existing := r.loops.GetByName(name); existing != nil {
-			// Loud-fail on caller payload for already-running service
-			// loops. The runtime captures requestOverride at launch
-			// time and never re-applies it, and the spec-overwrite
-			// further down doesn't run on this early-return path —
-			// silently returning the existing loop ID would hide both
-			// drops from the caller. HasOverrides covers per-launch
-			// override fields and inline launch.spec alike.
+			// Loud-fail on caller payload for already-running durable
+			// loops (services and containers). The runtime captures
+			// requestOverride at launch time and never re-applies it,
+			// and the spec-overwrite further down doesn't run on this
+			// early-return path — silently returning the existing loop
+			// ID would hide both drops from the caller. HasOverrides
+			// covers per-launch override fields and inline launch.spec
+			// alike.
 			if launch.HasOverrides() {
-				log.Warn("rejecting launch overrides for running service definition",
+				log.Warn("rejecting launch overrides for running durable definition",
 					"loop_id", existing.ID(),
-					"operation", looppkg.OperationService,
+					"operation", def.Spec.Operation,
 				)
 				return looppkg.LaunchResult{}, &looppkg.RunningServiceOverridesError{Name: name}
 			}
-			log.Info("using existing running loop definition service",
+			log.Info("using existing running loop definition",
 				"loop_id", existing.ID(),
-				"operation", looppkg.OperationService,
+				"operation", def.Spec.Operation,
 			)
 			return looppkg.LaunchResult{
 				LoopID:    existing.ID(),
-				Operation: looppkg.OperationService,
+				Operation: def.Spec.Operation,
 				Detached:  true,
 			}, nil
 		}

@@ -70,6 +70,15 @@ func (r *Registry) Register(l *Loop) error {
 	}
 
 	r.loops[l.id] = l
+	// Containers inherit nothing themselves (they exist precisely to
+	// provide tags to descendants). Wiring the function uniformly is
+	// still fine — the resolver simply returns nil for a container with
+	// no container ancestors, and any ancestor-of-container case is
+	// handled by walk skipping non-containers.
+	loopID := l.id
+	l.setAncestorTagsFunc(func() []string {
+		return r.ancestorContainerTags(loopID)
+	})
 	r.logger.Debug("loop registered",
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
@@ -159,6 +168,93 @@ func (r *Registry) MaxLoops() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.maxLoops
+}
+
+// ancestorWalkLimit caps the depth of [Registry.Ancestors] walks to
+// prevent unbounded recursion if a parent_id cycle ever slips past the
+// definition-time guards. The graph is operator-curated and typically
+// only a few levels deep, so any walk that exceeds this depth signals
+// either a bug or a maliciously crafted spec.
+const ancestorWalkLimit = 64
+
+// Ancestors returns the chain of registered parent loops for loopID,
+// beginning with the immediate parent and ending with the topmost
+// reachable ancestor. The walk terminates when ParentID is empty or
+// no longer registered; it never re-enters the starting loop and
+// short-circuits at [ancestorWalkLimit] to bound work.
+func (r *Registry) Ancestors(loopID string) []*Loop {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	current := r.loops[loopID]
+	if current == nil {
+		return nil
+	}
+
+	var ancestors []*Loop
+	seen := map[string]struct{}{loopID: {}}
+	for i := 0; i < ancestorWalkLimit; i++ {
+		parentID := current.config.ParentID
+		if parentID == "" {
+			break
+		}
+		if _, looped := seen[parentID]; looped {
+			break
+		}
+		parent, ok := r.loops[parentID]
+		if !ok {
+			break
+		}
+		ancestors = append(ancestors, parent)
+		seen[parentID] = struct{}{}
+		current = parent
+	}
+	return ancestors
+}
+
+// Children returns loops whose ParentID equals loopID, sorted by name.
+// Used to refuse deletion of containers that still have descendants and
+// to surface child counts in container introspection.
+func (r *Registry) Children(loopID string) []*Loop {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var children []*Loop
+	for _, l := range r.loops {
+		if l.config.ParentID == loopID {
+			children = append(children, l)
+		}
+	}
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].config.Name < children[j].config.Name
+	})
+	return children
+}
+
+// ancestorContainerTags collects deduplicated capability tags from each
+// container ancestor of loopID, in walk order (immediate parent first).
+// Non-container ancestors contribute nothing — only container loops are
+// declared as state-inheritance nodes. Used by [Loop] tag preparation to
+// merge inherited tags onto each iteration's request.
+func (r *Registry) ancestorContainerTags(loopID string) []string {
+	ancestors := r.Ancestors(loopID)
+	if len(ancestors) == 0 {
+		return nil
+	}
+	parts := make([][]string, 0, len(ancestors))
+	for _, a := range ancestors {
+		if a.config.Operation != OperationContainer {
+			continue
+		}
+		if len(a.config.Tags) == 0 {
+			continue
+		}
+		parts = append(parts, a.config.Tags)
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return mergeUniqueStrings(parts...)
 }
 
 // FindByName returns all live loops with the exact given name.
