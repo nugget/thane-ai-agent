@@ -402,9 +402,16 @@ func (l *Loop) ID() string { return l.id }
 func (l *Loop) Name() string { return l.config.Name }
 
 // ParentID returns the loop ID of this loop's parent in the registry,
-// or empty for top-level loops. Reads the config snapshot taken at
-// construction time, so callers don't need the registry lock.
-func (l *Loop) ParentID() string { return l.config.ParentID }
+// or empty for top-level loops. Acquires the loop lock to mirror the
+// other snapshot accessors — [setDefaultParentID] mutates this
+// field at Register time, so a lockless read would race the
+// race-detector even though the mutation happens before any
+// goroutine has started reading.
+func (l *Loop) ParentID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.config.ParentID
+}
 
 // Operation returns the loop's runtime operation kind. Set once at
 // construction; safe to read without the loop lock.

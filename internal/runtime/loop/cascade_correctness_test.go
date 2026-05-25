@@ -183,6 +183,23 @@ func TestStopLoopRefusesContainerWithChildren(t *testing.T) {
 	if err == nil {
 		t.Fatal("StopLoop accepted parent with live child; want refusal")
 	}
+	// Reconciler / callers depend on the typed error so they can
+	// detect this specific refusal and skip cleanly (see
+	// app.loopDefinitionRuntime.stopLoopForReconcile). Assert the
+	// type rather than the message text so wording can evolve.
+	var childErr *ContainerHasChildrenError
+	if !errors.As(err, &childErr) {
+		t.Fatalf("err = %v (%T), want *ContainerHasChildrenError", err, err)
+	}
+	if childErr.ContainerID != parent.ID() {
+		t.Errorf("ContainerID = %q, want %q", childErr.ContainerID, parent.ID())
+	}
+	if childErr.ContainerName != "research" {
+		t.Errorf("ContainerName = %q, want %q", childErr.ContainerName, "research")
+	}
+	if len(childErr.ChildNames) != 1 || childErr.ChildNames[0] != "child" {
+		t.Errorf("ChildNames = %v, want [child]", childErr.ChildNames)
+	}
 	if !strings.Contains(err.Error(), "child") {
 		t.Errorf("err = %v, should name the child loop", err)
 	}

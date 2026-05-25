@@ -35,6 +35,16 @@ func LoopIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// WithLoopIDForTest exposes [withLoopID] for tests in other
+// packages that need to drive a context through a function which
+// reads the loop ID (e.g. context-provider tests asserting
+// behavior at iteration time). Production code outside this
+// package should not need this; the loop's own run goroutine
+// stamps the ID before any downstream code runs.
+func WithLoopIDForTest(ctx context.Context, id string) context.Context {
+	return withLoopID(ctx, id)
+}
+
 // FallbackContent returns the loop-configured response fallback from a
 // handler context. Handler-backed interactive loops can pass this through
 // to nested agent.Run calls and use it as a last-resort post-run reply.

@@ -169,6 +169,14 @@ func mergeLegacySubscriptions(existing []looppkg.EntitySubscription, rows []awar
 			continue
 		}
 		seen[sub.EntityID] = struct{}{}
+		// If a partially-upgraded spec carried entries with TTL>0
+		// but missing AddedAt (the documented footgun on the spec
+		// shape), stamp them so the migration doesn't preserve a
+		// permanent watcher. Same boundary invariant the
+		// UnmarshalJSON sweep enforces.
+		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
+			sub.AddedAt = addedAt
+		}
 		out = append(out, sub)
 	}
 	for _, row := range rows {

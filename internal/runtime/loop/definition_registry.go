@@ -287,6 +287,23 @@ func (r *DefinitionRegistry) Upsert(spec Spec, updatedAt time.Time) error {
 	if _, exists := r.base[spec.Name]; exists {
 		return &ImmutableDefinitionError{Name: spec.Name}
 	}
+
+	// Cross-spec invariant: a container's parent_name must point at
+	// another container. Inheritance walks only flow through
+	// container ancestors (PR-A/B/C/C2 contract), so a container
+	// pointing at a service would silently lose the inheritance
+	// chain and produce a confusing graph. Catch it here at
+	// write-time rather than waiting for someone to wonder why
+	// their descendants don't see the expected tags.
+	if spec.Operation == OperationContainer {
+		parentName := strings.TrimSpace(spec.ParentName)
+		if parentName != "" {
+			if parentSpec, ok := r.specByName(parentName); ok && parentSpec.Operation != OperationContainer {
+				return fmt.Errorf("loop: container %q cannot have parent_name %q (operation %q) — container parents must themselves be containers so the inheritance chain stays intact", spec.Name, parentName, parentSpec.Operation)
+			}
+		}
+	}
+
 	r.overlay[spec.Name] = DefinitionRecord{
 		Spec:      spec,
 		UpdatedAt: updatedAt.UTC(),

@@ -89,6 +89,29 @@ func (e *UnresolvedParentNameError) Error() string {
 	return fmt.Sprintf("loop: cannot register %q — parent_name %q is not currently registered; spawn the parent first or drop parent_name to default to core", e.LoopName, e.ParentName)
 }
 
+// ContainerHasChildrenError reports a [Registry.StopLoop] attempt
+// against a container that still has live descendants. The
+// registry refuses rather than orphaning the children (their
+// ParentID would point at a deregistered loop and ancestor walks
+// would silently lose inherited tags/subscriptions). Callers can
+// inspect [Children] for the names and either stop or re-parent
+// them first; the definition reconciler uses this signal to log
+// loudly and skip rather than fail-loop on a removed container
+// that still has live workers underneath.
+type ContainerHasChildrenError struct {
+	// ContainerID is the loop being asked to stop.
+	ContainerID string
+	// ContainerName is the human-facing name from the loop's config.
+	ContainerName string
+	// ChildNames lists the live descendants by name, sorted for
+	// stable diagnostics.
+	ChildNames []string
+}
+
+func (e *ContainerHasChildrenError) Error() string {
+	return fmt.Sprintf("loop: cannot stop container %q — it has %d live child loop(s): %v; stop or re-parent them first", e.ContainerName, len(e.ChildNames), e.ChildNames)
+}
+
 // Register adds a loop to the registry. Returns an error if the loop's
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
@@ -902,7 +925,12 @@ func (r *Registry) StopLoop(id string) error {
 			for _, child := range children {
 				names = append(names, child.config.Name)
 			}
-			return fmt.Errorf("loop: cannot stop container %q — it has %d live child loop(s): %v; stop or re-parent them first", l.config.Name, len(children), names)
+			sort.Strings(names)
+			return &ContainerHasChildrenError{
+				ContainerID:   id,
+				ContainerName: l.config.Name,
+				ChildNames:    names,
+			}
 		}
 	}
 

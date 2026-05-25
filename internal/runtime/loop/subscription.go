@@ -1,6 +1,10 @@
 package loop
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // EntitySubscription is one entity that a loop wants to see in context
 // every iteration. It carries everything the awareness renderer needs to
@@ -82,6 +86,63 @@ func cloneEntitySubscriptions(src []EntitySubscription) []EntitySubscription {
 // directly. A constant prevents callers from accidentally comparing
 // against a freshly-typed string literal in user-facing surfaces.
 const EffectiveOriginSelf = "self"
+
+// NormalizeSubscriptionForecast returns the canonical forecast
+// value for persisted subscriptions. "none" and empty collapse to
+// "" (meaning "no forecast fetch"); the three real HA forecast
+// types pass through unchanged; anything else is an actionable
+// error. Lives in the loop package because the forecast string is
+// a property of [EntitySubscription], and centralizing it here
+// lets [Spec.UnmarshalJSON] guard hydration without depending on
+// the tools or awareness packages.
+//
+// Tool-boundary callers (thane_curate, update_entity_subscriptions,
+// watch_entity) and the awareness watchlist store have their own
+// normalizers that match this contract; consolidation is a
+// follow-up.
+func NormalizeSubscriptionForecast(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	switch v {
+	case "", "none":
+		return "", nil
+	case "daily", "hourly", "twice_daily":
+		return v, nil
+	default:
+		return "", fmt.Errorf("forecast must be one of [daily, hourly, twice_daily, none], got %q", raw)
+	}
+}
+
+// normalizeSubscriptionsOnLoad sweeps a freshly-hydrated
+// subscription list and applies the boundary invariants the
+// write-side tool handlers enforce: forecast values are
+// canonicalized (or rejected), and TTL-bearing entries that lack
+// an AddedAt stamp get one. The latter closes the documented
+// footgun where `ttl_seconds > 0 && AddedAt.IsZero()` causes
+// [EntitySubscription.IsExpired] to return false forever —
+// hand-edited YAML or externally-pushed specs would otherwise
+// produce "immortal" watchers that ignore their declared TTL.
+//
+// now is threaded through so callers (notably tests) can pin a
+// clock value. The default real-world callsite is
+// [Spec.UnmarshalJSON] which passes time.Now().
+func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]EntitySubscription, error) {
+	if len(subs) == 0 {
+		return subs, nil
+	}
+	out := make([]EntitySubscription, len(subs))
+	for i, sub := range subs {
+		forecast, err := NormalizeSubscriptionForecast(sub.Forecast)
+		if err != nil {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): %w", i, sub.EntityID, err)
+		}
+		sub.Forecast = forecast
+		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
+			sub.AddedAt = now
+		}
+		out[i] = sub
+	}
+	return out, nil
+}
 
 // EffectiveSubscription is an entity subscription annotated with its
 // origin in the loop graph. Embeds [EntitySubscription] so JSON

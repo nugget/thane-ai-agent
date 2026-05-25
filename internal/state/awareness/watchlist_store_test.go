@@ -240,3 +240,60 @@ func TestStore_ListSubscriptionsSkipsExpiredAndCleansUp(t *testing.T) {
 		t.Fatalf("subscriptionCount() = %d, want 0 after cleanup", count)
 	}
 }
+
+// TestStore_UntaggedEntityIDSet covers the narrow dedup lookup
+// used by [LoopSubscriptionProvider]: it must return only the
+// candidates present in the always-visible (scope=”) set,
+// ignore tagged subscriptions for the same entity_id, and skip
+// the TTL cleanup side effect that [ListUntaggedSubscriptions]
+// performs.
+func TestStore_UntaggedEntityIDSet(t *testing.T) {
+	store := setupTestStore(t)
+
+	// Untagged → in the always-visible set.
+	if err := store.Add("sensor.always_on"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Tagged → NOT in the always-visible set even though the
+	// entity_id matches a candidate.
+	if err := store.AddWithOptions("sensor.tagged_only", []string{"focus"}, nil, 0, ""); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+
+	set, err := store.UntaggedEntityIDSet([]string{
+		"sensor.always_on",
+		"sensor.tagged_only",
+		"sensor.unknown",
+	})
+	if err != nil {
+		t.Fatalf("UntaggedEntityIDSet: %v", err)
+	}
+	if _, ok := set["sensor.always_on"]; !ok {
+		t.Errorf("missing sensor.always_on in result: %v", set)
+	}
+	if _, ok := set["sensor.tagged_only"]; ok {
+		t.Errorf("sensor.tagged_only leaked through despite tagged scope: %v", set)
+	}
+	if _, ok := set["sensor.unknown"]; ok {
+		t.Errorf("sensor.unknown leaked through despite not being subscribed: %v", set)
+	}
+
+	// Empty candidate list returns an empty (non-nil) map.
+	empty, err := store.UntaggedEntityIDSet(nil)
+	if err != nil {
+		t.Fatalf("UntaggedEntityIDSet(nil): %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Errorf("want empty non-nil map, got %#v", empty)
+	}
+
+	// Duplicates and empty strings in the candidate list are
+	// tolerated (deduped + filtered before the SQL IN clause).
+	set2, err := store.UntaggedEntityIDSet([]string{"sensor.always_on", "sensor.always_on", ""})
+	if err != nil {
+		t.Fatalf("UntaggedEntityIDSet dedup: %v", err)
+	}
+	if len(set2) != 1 {
+		t.Errorf("want exactly 1 entry after dedup, got %v", set2)
+	}
+}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -92,14 +93,30 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 	// Resolve parent_name → live ParentID late, after every other
 	// hydration has had its say. ParentID survives only as long as the
 	// parent's current launch, so the runtime — not the stored spec —
-	// is the source of truth here. If the named parent isn't yet
-	// registered, ParentID stays empty and the loop lands at the root;
-	// container tag inheritance walks the live registry, so the link
-	// re-establishes naturally if the parent comes up later in the
-	// same startup pass.
+	// is the source of truth here.
+	//
+	// If the named parent isn't yet registered, drop the ParentName
+	// from the spec we hand to [Registry.Register]: post-PR-E1 it
+	// rejects a set ParentName whose ParentID is empty (so direct
+	// API callers can't silently misroute), and aborting the spawn
+	// here would block whole-batch reconciliation on definitions
+	// the operator merely ordered awkwardly. We log instead and let
+	// [Registry.Register] default-parent the loop to the core; if
+	// the operator wants the structural link, fixing the parent
+	// definition and re-reconciling re-establishes it.
 	if r.loops != nil && spec.ParentName != "" && spec.ParentID == "" {
 		if parent := r.loops.GetByName(spec.ParentName); parent != nil {
 			spec.ParentID = parent.ID()
+		} else {
+			logger := r.logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Warn("dropping unresolved parent_name during definition hydration; loop will default-parent to core",
+				"loop_name", spec.Name,
+				"parent_name", spec.ParentName,
+			)
+			spec.ParentName = ""
 		}
 	}
 	// Orphan loops attach to the core at registration time —
@@ -391,10 +408,13 @@ func splitContainerSpecs(defs []looppkg.DefinitionSnapshot, _ func() time.Time) 
 		}
 	}
 	// Stable topo sort: containers with no parent first, then those
-	// whose parent has already been emitted. Anything left over (orphan
-	// parent_name) falls back to the original definition order so we
-	// still spawn the container — its tag inheritance will simply
-	// resolve to nil until the operator fixes the missing parent.
+	// whose parent has already been emitted. Anything left over
+	// (orphan parent_name, cycles) falls back to the original
+	// definition order so we still spawn the container — runtimeSpec
+	// drops the unresolved parent_name with a warning, so the
+	// container default-parents to core rather than blocking
+	// reconciliation. Fix the parent definition and re-reconcile to
+	// reattach the structural link.
 	emitted := make(map[string]bool, len(containers))
 	ordered := make([]looppkg.DefinitionSnapshot, 0, len(containers))
 	progressed := true
@@ -440,7 +460,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 				"reason", "definition_removed",
 				"loop_id", existing.ID(),
 			)
-			return r.loops.StopLoop(existing.ID())
+			return r.stopLoopForReconcile(log, existing.ID(), "definition_removed")
 		}
 		return nil
 	}
@@ -466,7 +486,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 				"eligibility_reason", eligibility.Reason,
 				"loop_id", existing.ID(),
 			)
-			return r.loops.StopLoop(existing.ID())
+			return r.stopLoopForReconcile(log, existing.ID(), reason)
 		}
 		return nil
 	}
@@ -483,6 +503,36 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		"completion", def.Spec.Completion,
 	)
 	_, err = r.loops.SpawnSpec(r.serviceContext(), runtimeSpec, r.deps())
+	return err
+}
+
+// stopLoopForReconcile wraps [Registry.StopLoop] with handling for
+// the post-PR-E1 [looppkg.ContainerHasChildrenError]. The
+// reconciler is a converging background process; if a container
+// definition is removed but its descendants are still alive,
+// returning the error would make the reconciler retry endlessly
+// and pollute logs. We instead log loudly once (so the operator
+// sees the constraint) and return nil so reconciliation marks the
+// definition handled. The container stays live until its
+// descendants reconcile away on their own passes — at which point
+// the next ReconcileDefinition call lands cleanly. reason mirrors
+// the reason already logged at the caller; we pass it through for
+// correlation rather than re-deriving it here.
+func (r *loopDefinitionRuntime) stopLoopForReconcile(log *slog.Logger, loopID, reason string) error {
+	err := r.loops.StopLoop(loopID)
+	if err == nil {
+		return nil
+	}
+	var childErr *looppkg.ContainerHasChildrenError
+	if errors.As(err, &childErr) {
+		log.Warn("deferring container stop — live descendants remain",
+			"reason", reason,
+			"loop_id", loopID,
+			"container_name", childErr.ContainerName,
+			"children", childErr.ChildNames,
+		)
+		return nil
+	}
 	return err
 }
 

@@ -170,6 +170,61 @@ func (s *WatchlistStore) ListUntaggedSubscriptions() ([]WatchedSubscription, err
 	return s.listScopedSubscriptions("")
 }
 
+// UntaggedEntityIDSet returns the subset of candidates that are
+// present in the always-visible watchlist (scope=”). It performs a
+// single bounded IN-clause query and skips the TTL cleanup writes
+// that [ListUntaggedSubscriptions] does — this method is meant to
+// be called by sibling providers (e.g.
+// [LoopSubscriptionProvider]) that only need a dedup check against
+// the always-visible set on every iteration; the cleanup is left
+// to the always-visible [WatchlistProvider]'s own pass so we don't
+// double-write deletes. Returns an empty (non-nil) map when
+// candidates is empty.
+func (s *WatchlistStore) UntaggedEntityIDSet(candidates []string) (map[string]struct{}, error) {
+	out := make(map[string]struct{}, len(candidates))
+	if len(candidates) == 0 {
+		return out, nil
+	}
+	// Deduplicate candidates so the IN list and the param vector
+	// don't bloat for a loop that lists the same entity twice
+	// across cascade levels.
+	seen := make(map[string]struct{}, len(candidates))
+	args := make([]any, 0, len(candidates))
+	for _, id := range candidates {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		args = append(args, id)
+	}
+	if len(args) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(args))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := `SELECT entity_id FROM watched_entity_subscriptions
+		 WHERE scope = '' AND entity_id IN (` + placeholders + `)`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListByTag returns watched entity subscriptions for the given capability
 // tag. Used by the tag context assembler to inject entity context only when a
 // tag is active.
