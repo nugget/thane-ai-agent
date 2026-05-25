@@ -166,16 +166,39 @@ const definitionAncestorWalkLimit = 64
 // definition and evaluates Conditions across every ancestor with
 // AND semantics. Convenience wrapper around [AncestorSpecs] +
 // [EvaluateEffectiveConditions] for the common eligibility-check
-// surfaces. Returns (eligible=true, nil) when the definition is
-// not found — letting check sites stick with their existing
-// not-found handling rather than conflate "missing" with
-// "ineligible."
-func (r *DefinitionRegistry) EvaluateConditions(name string, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation) {
+// surfaces.
+//
+// Returns (status, evals, found). When the definition is not in
+// the registry the returned status is the zero
+// [DefinitionEligibilityStatus] (NOT eligible=true) and found is
+// false — callers MUST check found before treating Eligible as
+// "safe to spawn." Previously the missing case collapsed into
+// eligible=true; a stale snapshot lookup that happened to
+// observe a registry gap would have let the gated check sites
+// (bootstrap, LaunchDefinition, ReconcileDefinition) spawn the
+// loop as eligible. Distinguishing the cases here pushes the
+// not-found handling back where it belongs — the call site that
+// looked the definition up in the first place.
+//
+// Input is trimmed before lookup so " leaf " resolves the same
+// definition as "leaf" — matches the trim that [AncestorSpecs]
+// and [Upsert] already apply elsewhere.
+func (r *DefinitionRegistry) EvaluateConditions(name string, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation, bool) {
+	if r == nil {
+		return DefinitionEligibilityStatus{}, nil, false
+	}
+	// AncestorSpecs trims internally and returns an empty chain
+	// when the leaf isn't in the registry — that's our found
+	// signal. No separate specByName precheck needed (and the
+	// precheck would have used the raw, un-trimmed name and
+	// reported false for " leaf " when AncestorSpecs would have
+	// resolved it normally).
 	chain := r.AncestorSpecs(name)
 	if len(chain) == 0 {
-		return DefinitionEligibilityStatus{Eligible: true}, nil
+		return DefinitionEligibilityStatus{}, nil, false
 	}
-	return EvaluateEffectiveConditions(chain, now)
+	status, evals := EvaluateEffectiveConditions(chain, now)
+	return status, evals, true
 }
 
 // specByName reads the effective spec by name (overlay first, base

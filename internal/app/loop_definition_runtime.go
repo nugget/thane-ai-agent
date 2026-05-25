@@ -197,11 +197,23 @@ func (r *loopDefinitionRuntime) serviceContext() context.Context {
 // permanently-eligible status when the definitions registry is
 // unwired (test paths) so the check sites that gate on Eligible
 // don't accidentally block when the registry is mocked away.
+//
+// When the definition is not found in the registry — e.g., a
+// reconcile racing with a delete — the returned status reports
+// ineligible with a "definition_not_found" reason rather than the
+// pre-#896 silent eligible=true fallback. Spawn-time gate sites
+// shouldn't treat a missing-from-registry as "safe to spawn."
 func (r *loopDefinitionRuntime) evaluateConditions(loopName string) looppkg.DefinitionEligibilityStatus {
 	if r == nil || r.definitions == nil {
 		return looppkg.DefinitionEligibilityStatus{Eligible: true}
 	}
-	status, _ := r.definitions.EvaluateConditions(loopName, r.nowTime())
+	status, _, found := r.definitions.EvaluateConditions(loopName, r.nowTime())
+	if !found {
+		return looppkg.DefinitionEligibilityStatus{
+			Eligible: false,
+			Reason:   "definition_not_found",
+		}
+	}
 	return status
 }
 
@@ -218,7 +230,13 @@ func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time 
 		if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
 			continue
 		}
-		eligibility, _ := r.definitions.EvaluateConditions(def.Name, now)
+		eligibility, _, found := r.definitions.EvaluateConditions(def.Name, now)
+		if !found {
+			// Concurrent delete between Snapshot() and the
+			// per-name lookup. Skip — the next iteration will
+			// see the same (now-fully-removed) state.
+			continue
+		}
 		if eligibility.NextTransitionAt.IsZero() {
 			continue
 		}
