@@ -101,17 +101,19 @@ func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
 	}
 }
 
-func TestMetacognitivePrompt_TimestampConversionGuidance(t *testing.T) {
+func TestMetacognitivePrompt_AvoidsRawTimestampPersistence(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "relative deltas") {
-		t.Error("prompt should explain that context timestamps are relative deltas")
+	if !strings.Contains(result, "how recently metacognitive.md was") {
+		t.Error("prompt should point to generated freshness context")
 	}
-	if !strings.Contains(result, "absolute format (RFC3339") {
-		t.Error("prompt should instruct conversion to absolute RFC3339 format")
+	if !strings.Contains(result, "Do not copy raw sensor timestamps") {
+		t.Error("prompt should discourage raw timestamp persistence")
 	}
-	if !strings.Contains(result, "Deltas become meaningless") {
-		t.Error("prompt should explain why deltas must not be persisted")
+	for _, unwanted := range []string{"absolute format (RFC3339", "Deltas become meaningless"} {
+		if strings.Contains(result, unwanted) {
+			t.Fatalf("prompt should not preserve old timestamp guidance %q", unwanted)
+		}
 	}
 }
 

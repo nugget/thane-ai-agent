@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
@@ -289,6 +290,11 @@ func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *p
 	} else if err != nil {
 		logger.Debug("failed to read ego.md provenance history", "error", err)
 	}
+	_, content = talents.ParseFrontmatterMetadata(content)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
 	sb.WriteString("\n")
 	sb.WriteString(truncateCoreContext(content, maxEgoBytes, "\n\n[ego.md truncated — exceeded 16 KB limit]"))
 	return strings.TrimSpace(sb.String())
@@ -297,8 +303,8 @@ func (p *CoreContextProvider) readEgoFromProvenance(ctx context.Context, prov *p
 func (p *CoreContextProvider) readInjectFiles(ctx context.Context, injectFiles []string, verifier func(context.Context, string, string) error, logger *slog.Logger) string {
 	var ctxBuf strings.Builder
 	for _, path := range injectFiles {
-		content := p.readPlainCoreFile(ctx, path, verifier, "inject_files", maxInjectFileBytes,
-			fmt.Sprintf("\n\n[%s truncated — exceeded 16 KB limit]", filepath.Base(path)), logger)
+		marker := fmt.Sprintf("\n\n[%s truncated — exceeded 16 KB limit]", filepath.Base(path))
+		content := p.readPlainCoreFile(ctx, path, verifier, "inject_files", maxInjectFileBytes, marker, logger)
 		if content == "" {
 			continue
 		}
@@ -336,7 +342,12 @@ func (p *CoreContextProvider) readPlainCoreFile(ctx context.Context, path string
 	if len(data) == 0 {
 		return ""
 	}
-	return truncateCoreContext(string(data), maxBytes, marker)
+	_, body := talents.ParseFrontmatterMetadata(string(data))
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	return truncateCoreContext(body, maxBytes, marker)
 }
 
 func truncateCoreContext(s string, maxBytes int, marker string) string {
