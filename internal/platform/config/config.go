@@ -1731,7 +1731,7 @@ type MetacognitiveConfig struct {
 
 	// SupervisorProbability is the chance (0.0–1.0) that each wake
 	// uses a frontier model with supervisor-augmented prompt.
-	// Default: 0.1. Set to 0.0 to disable supervisor iterations.
+	// Default: 0.1. Set to 0.0 to disable supervisor turns.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
@@ -1739,7 +1739,7 @@ type MetacognitiveConfig struct {
 	Router MetacognitiveRouterConfig `yaml:"router"`
 
 	// SupervisorRouter configures model routing for supervisor
-	// iterations (frontier model with augmented prompt).
+	// turns (frontier model with augmented prompt).
 	SupervisorRouter MetacognitiveRouterConfig `yaml:"supervisor_router"`
 }
 
@@ -1776,14 +1776,14 @@ type EgoConfig struct {
 
 	// SupervisorProbability is the chance (0.0–1.0) that each wake
 	// uses a frontier model with supervisor-augmented prompt.
-	// Default: 0.2. Set to 0.0 to disable supervisor iterations.
+	// Default: 0.2. Set to 0.0 to disable supervisor turns.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal iterations.
 	Router EgoRouterConfig `yaml:"router"`
 
 	// SupervisorRouter configures model routing for supervisor
-	// iterations (frontier model with augmented prompt).
+	// turns (frontier model with augmented prompt).
 	SupervisorRouter EgoRouterConfig `yaml:"supervisor_router"`
 }
 

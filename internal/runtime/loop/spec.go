@@ -133,10 +133,10 @@ type Spec struct {
 	// QualityFloor is the minimum model quality rating for normal
 	// iterations.
 	QualityFloor int `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
-	// SupervisorContext is prepended during supervisor iterations.
+	// SupervisorContext is prepended during supervisor turns.
 	SupervisorContext string `yaml:"supervisor_context,omitempty" json:"supervisor_context,omitempty"`
 	// SupervisorQualityFloor is the quality floor for supervisor
-	// iterations.
+	// turns.
 	SupervisorQualityFloor int `yaml:"supervisor_quality_floor,omitempty" json:"supervisor_quality_floor,omitempty"`
 
 	// OnRetrigger determines behavior when the loop is triggered again

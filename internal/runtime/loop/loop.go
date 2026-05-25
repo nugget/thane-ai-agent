@@ -253,7 +253,8 @@ type Loop struct {
 	recentIterations []IterationSnapshot
 
 	// lastSupervisorIter is the iteration number of the most recent
-	// successful supervisor iteration. Zero means none yet.
+	// iteration that ran a successful supervisor turn. Zero means
+	// none yet.
 	lastSupervisorIter int
 
 	// llmContext holds enrichment data from the most recent
@@ -845,7 +846,7 @@ func (l *Loop) run(ctx context.Context) {
 		l.currentConvID = convID
 		l.mu.Unlock()
 
-		// Determine if this is a supervisor iteration.
+		// Determine if this iteration runs a supervisor turn.
 		isSupervisor := forceSupervisor || (l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb)
 
 		iterLog := logger.With(
@@ -1345,9 +1346,10 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 	}
 }
 
-// buildAgentTurn chooses the loop's turn construction strategy. Custom
-// TurnBuilder hooks get the wake first; otherwise Task and TaskBuilder
-// are adapted into the same AgentTurn shape.
+// buildAgentTurn chooses the loop's turn construction strategy. A
+// custom TurnBuilder hook gets first refusal on this iteration's turn;
+// otherwise Task and TaskBuilder are adapted into the same AgentTurn
+// shape.
 func (l *Loop) buildAgentTurn(ctx context.Context, input TurnInput) (*AgentTurn, error) {
 	if l.config.TurnBuilder != nil {
 		return l.config.TurnBuilder(ctx, input)

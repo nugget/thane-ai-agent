@@ -40,8 +40,8 @@ core can push new focus down by adding entities to a running loop's
 watch set with `loop_update_entity_subscriptions`, or by pointing a
 producer's `wake_loop` target at the loop. Inspect what is already
 running with `loop_status` and `loop_definition_get` before launching
-a parallel watcher — a thriving loop is its own data-dense
-documentation and is usually the right thing to extend.
+a parallel loop — a thriving loop is its own data-dense documentation
+and is usually the right thing to extend.
 
 **`request_core_attention` forces a supervisor turn** on the core
 loop's next iteration — costlier than a normal wake. Reserve it for

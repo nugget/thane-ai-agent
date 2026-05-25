@@ -118,6 +118,26 @@ A persistent global behavioral mode that modifies context across all
 conversations. Unlike capability tags (which activate tools), lenses
 shape *how* the agent behaves. Activated and deactivated via tools.
 
+### Loop Definition
+
+A named, persistable description of a loop. Three names appear for
+related-but-distinct shapes; they refer to the same underlying thing
+at different layers:
+
+- **Definition** — the model-facing and API-facing term. What
+  `loop_definition_*` tools operate on. A snapshot includes the
+  current spec, policy state, and live runtime status. This is the
+  word to use in tool descriptions, talents, and prose.
+- **Spec** — the Go type (`loop.Spec`) that holds the durable shape:
+  task, tags, outputs, sleep envelope, profile, supervisor settings,
+  conditions, metadata. Internal vocabulary.
+- **Config** — the engine-facing runtime form (`loop.Config`) derived
+  from a Spec via `Spec.ToConfig()`. Used by the loop runner; not
+  exposed to the model.
+
+When in doubt, say "definition" externally and use `Spec`/`Config`
+only in Go contexts where the type matters.
+
 ### MCP (Model Context Protocol)
 
 A standard protocol for extending LLM capabilities via external tool

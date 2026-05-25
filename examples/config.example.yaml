@@ -854,7 +854,7 @@ talents_dir: ./talents
 #   jitter: 0.2
 #   SupervisorProbability is the chance (0.0–1.0) that each wake
 #   uses a frontier model with supervisor-augmented prompt.
-#   Default: 0.1. Set to 0.0 to disable supervisor iterations.
+#   Default: 0.1. Set to 0.0 to disable supervisor turns.
 #   supervisor_probability: 0.1
 #   Router configures model routing for normal (non-supervisor)
 #   iterations.
@@ -863,7 +863,7 @@ talents_dir: ./talents
 #     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 3
 #   SupervisorRouter configures model routing for supervisor
-#   iterations (frontier model with augmented prompt).
+#   turns (frontier model with augmented prompt).
 #   supervisor_router:
 #     QualityFloor is the minimum quality rating (1–10) for model
 #     selection. Default: 3 for normal iterations, 8 for supervisor.
@@ -889,7 +889,7 @@ ego:
   jitter: 0.2
   # SupervisorProbability is the chance (0.0–1.0) that each wake
   # uses a frontier model with supervisor-augmented prompt.
-  # Default: 0.2. Set to 0.0 to disable supervisor iterations.
+  # Default: 0.2. Set to 0.0 to disable supervisor turns.
   supervisor_probability: 0.2
   # Router configures model routing for normal iterations.
   router:
@@ -897,7 +897,7 @@ ego:
     # selection. Default: 5 for normal iterations, 8 for supervisor.
     quality_floor: 5
   # SupervisorRouter configures model routing for supervisor
-  # iterations (frontier model with augmented prompt).
+  # turns (frontier model with augmented prompt).
   supervisor_router:
     # QualityFloor is the minimum quality rating (1–10) for model
     # selection. Default: 5 for normal iterations, 8 for supervisor.

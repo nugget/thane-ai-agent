@@ -69,8 +69,7 @@ If it reads like something you'd put in a ticket, it doesn't belong here.
 - Quality of thought matters more than coverage. Quiet observation and
   a long sleep beats a manufactured update.`
 
-// egoSupervisorAugmentation is appended for frontier/supervisor
-// iterations.
+// egoSupervisorAugmentation is appended for frontier/supervisor turns.
 const egoSupervisorAugmentation = `
 
 ## Supervisor Review (Frontier Iteration)

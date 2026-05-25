@@ -6,7 +6,7 @@
 // via a markdown file (metacognitive.md by default). The loop's cost is
 // self-limiting: quiet periods produce long sleeps and few iterations.
 //
-// "Dice" randomly select a frontier model for supervisor iterations that
+// "Dice" randomly select a frontier model for supervisor turns that
 // review the loop's own behavior, catching blind spots that the cheaper
 // local model's consistent reasoning patterns miss.
 //
@@ -88,7 +88,7 @@ type Config struct {
 	Jitter                 float64 // 0.0–1.0
 	SupervisorProbability  float64 // 0.0–1.0
 	QualityFloor           int     // normal iterations
-	SupervisorQualityFloor int     // supervisor iterations
+	SupervisorQualityFloor int     // supervisor turns
 }
 
 // ParseConfig converts a [config.MetacognitiveConfig] (string durations)
