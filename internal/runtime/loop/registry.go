@@ -79,6 +79,9 @@ func (r *Registry) Register(l *Loop) error {
 	l.setAncestorTagsFunc(func() []string {
 		return r.ancestorContainerTags(loopID)
 	})
+	l.setEffectiveStateFunc(func() ([]EffectiveTag, []EffectiveSubscription) {
+		return r.EffectiveTags(loopID), r.EffectiveSubscriptions(loopID)
+	})
 	r.logger.Debug("loop registered",
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
@@ -231,28 +234,83 @@ func (r *Registry) Children(loopID string) []*Loop {
 	return children
 }
 
-// AncestorSubscriptions returns the deduplicated effective entity
-// subscriptions for loopID: the union of the loop's own Subscriptions
-// and every container ancestor's, walked parent-first. Dedup is
-// first-wins by EntityID — the loop's own declaration takes precedence
-// over an inherited one, so a child can override a container's default
-// history/forecast settings by listing the same entity locally with
-// different options. Returns nil when the loop is not registered or
+// EffectiveSubscriptions returns the deduplicated effective entity
+// subscriptions for loopID with provenance: the union of the loop's
+// own Subscriptions and every container ancestor's, walked parent-
+// first. Dedup is first-wins by EntityID — the loop's own declaration
+// takes precedence over an inherited one, so a child can override a
+// container's default history/forecast settings by listing the same
+// entity locally with different options.
+//
+// Each [EffectiveSubscription.From] is [EffectiveOriginSelf] for the
+// loop's own declarations or the ancestor container's name for an
+// inherited entry. Returns nil when the loop is not registered or
 // nothing in the chain subscribes to anything.
 //
-// Today only container ancestors contribute; service-loop ancestors
-// (rare, since the loop graph is mostly tree-shaped under containers)
-// are skipped to match the tag-inheritance contract from Phase 1A.
+// Only container ancestors contribute inheritance; service-loop
+// ancestors are skipped to match the tag-inheritance contract from
+// Phase 1A.
+func (r *Registry) EffectiveSubscriptions(loopID string) []EffectiveSubscription {
+	subs, _ := r.effectiveState(loopID)
+	return subs
+}
+
+// EffectiveTags returns the deduplicated effective capability tags
+// for loopID with provenance. Same walk and dedup semantics as
+// [EffectiveSubscriptions]; own declarations carry
+// [EffectiveOriginSelf] in From, inherited tags carry the ancestor
+// container's name.
+func (r *Registry) EffectiveTags(loopID string) []EffectiveTag {
+	_, tags := r.effectiveState(loopID)
+	return tags
+}
+
+// AncestorSubscriptions returns the same union [EffectiveSubscriptions]
+// produces, but stripped of provenance. Kept as the convenient
+// rendering-side projection that the awareness loop subscription
+// provider consumes; the renderer doesn't need to attribute entries.
 func (r *Registry) AncestorSubscriptions(loopID string) []EntitySubscription {
-	// Snapshot the walk under the registry lock — we only need the
-	// parent chain and operation bits, both of which are config-shape
-	// invariants that don't move after construction. ParentID is set
-	// once at construction; Operation is too. The per-loop
-	// Subscriptions slice is the one mutable field [SetSubscriptions]
-	// can change concurrently, so we pull it from each loop via
-	// [Loop.Subscriptions], which clones under l.mu — avoiding the
-	// data race that would arise from reading l.config.Subscriptions
-	// while holding only r.mu.
+	subs := r.EffectiveSubscriptions(loopID)
+	if len(subs) == 0 {
+		return nil
+	}
+	out := make([]EntitySubscription, len(subs))
+	for i, sub := range subs {
+		out[i] = sub.EntitySubscription
+	}
+	return out
+}
+
+// ancestorContainerTags returns the deduplicated capability tags
+// inherited from container ancestors only (excludes the loop's own
+// tags) and drops provenance. Used by [Loop] tag preparation, which
+// already pulls own tags from config separately.
+func (r *Registry) ancestorContainerTags(loopID string) []string {
+	tags := r.EffectiveTags(loopID)
+	if len(tags) == 0 {
+		return nil
+	}
+	var inherited []string
+	for _, t := range tags {
+		if t.From == EffectiveOriginSelf {
+			continue
+		}
+		inherited = append(inherited, t.Tag)
+	}
+	if len(inherited) == 0 {
+		return nil
+	}
+	return inherited
+}
+
+// effectiveState is the shared single-pass walker behind
+// [EffectiveSubscriptions] and [EffectiveTags]. It snapshots the
+// parent chain under the registry lock (parent_id and operation are
+// construction-set invariants), then pulls each loop's subscriptions
+// via [Loop.Subscriptions], which clones under l.mu — preventing the
+// data race that would arise from reading l.config.Subscriptions
+// while holding only r.mu.
+func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []EffectiveTag) {
 	r.mu.RLock()
 	walk := make([]*Loop, 0, 4)
 	current := r.loops[loopID]
@@ -274,11 +332,15 @@ func (r *Registry) AncestorSubscriptions(loopID string) []EntitySubscription {
 	r.mu.RUnlock()
 
 	if len(walk) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	var collected []EntitySubscription
-	seen := make(map[string]struct{})
+	var (
+		subs     []EffectiveSubscription
+		tags     []EffectiveTag
+		seenSubs = make(map[string]struct{})
+		seenTags = make(map[string]struct{})
+	)
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
 		// ancestors are filtered to container nodes (matches the tag-
@@ -286,44 +348,35 @@ func (r *Registry) AncestorSubscriptions(loopID string) []EntitySubscription {
 		if i > 0 && l.Operation() != OperationContainer {
 			continue
 		}
+		origin := EffectiveOriginSelf
+		if i > 0 {
+			origin = l.Name()
+		}
 		for _, sub := range l.Subscriptions() {
 			if sub.EntityID == "" {
 				continue
 			}
-			if _, dup := seen[sub.EntityID]; dup {
+			if _, dup := seenSubs[sub.EntityID]; dup {
 				continue
 			}
-			seen[sub.EntityID] = struct{}{}
-			collected = append(collected, sub)
+			seenSubs[sub.EntityID] = struct{}{}
+			subs = append(subs, EffectiveSubscription{
+				EntitySubscription: sub,
+				From:               origin,
+			})
+		}
+		for _, tag := range l.tagsSnapshot() {
+			if tag == "" {
+				continue
+			}
+			if _, dup := seenTags[tag]; dup {
+				continue
+			}
+			seenTags[tag] = struct{}{}
+			tags = append(tags, EffectiveTag{Tag: tag, From: origin})
 		}
 	}
-	return collected
-}
-
-// ancestorContainerTags collects deduplicated capability tags from each
-// container ancestor of loopID, in walk order (immediate parent first).
-// Non-container ancestors contribute nothing — only container loops are
-// declared as state-inheritance nodes. Used by [Loop] tag preparation to
-// merge inherited tags onto each iteration's request.
-func (r *Registry) ancestorContainerTags(loopID string) []string {
-	ancestors := r.Ancestors(loopID)
-	if len(ancestors) == 0 {
-		return nil
-	}
-	parts := make([][]string, 0, len(ancestors))
-	for _, a := range ancestors {
-		if a.config.Operation != OperationContainer {
-			continue
-		}
-		if len(a.config.Tags) == 0 {
-			continue
-		}
-		parts = append(parts, a.config.Tags)
-	}
-	if len(parts) == 0 {
-		return nil
-	}
-	return mergeUniqueStrings(parts...)
+	return subs, tags
 }
 
 // FindByName returns all live loops with the exact given name.

@@ -76,3 +76,38 @@ func cloneEntitySubscriptions(src []EntitySubscription) []EntitySubscription {
 	}
 	return out
 }
+
+// EffectiveOriginSelf is the [EffectiveSubscription.From] /
+// [EffectiveTag.From] value used for entries the loop declared
+// directly. A constant prevents callers from accidentally comparing
+// against a freshly-typed string literal in user-facing surfaces.
+const EffectiveOriginSelf = "self"
+
+// EffectiveSubscription is an entity subscription annotated with its
+// origin in the loop graph. Embeds [EntitySubscription] so JSON
+// encoding stays flat — every field appears alongside `from`.
+// Returned by [Registry.EffectiveSubscriptions] for surfaces that
+// need to render effective state with provenance
+// (loop_definition_get, loop_status).
+type EffectiveSubscription struct {
+	EntitySubscription
+
+	// From is [EffectiveOriginSelf] when this loop declared the
+	// subscription, or the ancestor loop's name when it was
+	// inherited. Operators editing a loop's subscriptions read this
+	// to see which entries are local vs. inherited from a container.
+	From string `yaml:"from" json:"from"`
+}
+
+// EffectiveTag is a capability tag annotated with its origin in the
+// loop graph. Mirror of [EffectiveSubscription] for tags. Returned
+// by [Registry.EffectiveTags].
+type EffectiveTag struct {
+	// Tag is the capability tag name.
+	Tag string `yaml:"tag" json:"tag"`
+
+	// From follows the same contract as
+	// [EffectiveSubscription.From]: [EffectiveOriginSelf] for
+	// directly-declared tags, ancestor loop name otherwise.
+	From string `yaml:"from" json:"from"`
+}
