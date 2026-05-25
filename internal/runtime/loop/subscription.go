@@ -34,10 +34,12 @@ type EntitySubscription struct {
 	// Combined with AddedAt at render time to decide whether to drop.
 	TTLSeconds int `yaml:"ttl_seconds,omitempty" json:"ttl_seconds,omitempty"`
 
-	// AddedAt is when the subscription first landed on the spec. Set
-	// by the runtime when a write-side helper adds the subscription;
-	// callers building a Spec by hand can leave it zero, in which case
-	// the persistence layer fills it in.
+	// AddedAt is when the subscription first landed on the spec. Every
+	// write-side helper (thane_curate creation, watch_entity,
+	// update_entity_subscriptions add, the legacy-rows migration)
+	// stamps a real timestamp; the field exists to make TTL countdown
+	// meaningful. Hand-authored Specs that leave it zero will not
+	// expire — [IsExpired] treats zero as "never set, never ages."
 	AddedAt time.Time `yaml:"added_at,omitempty" json:"added_at,omitempty"`
 
 	// Tags carry lens-style classifiers (visibility, lens routing,

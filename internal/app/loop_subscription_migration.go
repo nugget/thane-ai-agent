@@ -51,24 +51,50 @@ func (a *App) migrateLegacyScopeTagSubscriptions() error {
 			errs = append(errs, fmt.Errorf("read legacy subscriptions for %q (scope=%q): %w", def.Name, legacyTag, err))
 			continue
 		}
-		newSpec := def.Spec
-		newSpec.Subscriptions = mergeLegacySubscriptions(def.Spec.Subscriptions, rows, time.Now().UTC())
-		newSpec.Metadata = stripLegacyScopeKeys(newSpec.Metadata)
-		newSpec.Tags = stripLegacyScopeTagValue(newSpec.Tags, legacyTag)
 
-		updatedAt := time.Now().UTC()
-		if err := a.persistLoopDefinition(newSpec, updatedAt); err != nil {
-			errs = append(errs, fmt.Errorf("persist migrated spec %q: %w", def.Name, err))
+		// Two-step persist so a wipe failure is retryable.
+		//
+		// Step 1 writes spec.Subscriptions but KEEPS the legacy
+		// scope_tag/focus_tag metadata in place. If the wipe fails on
+		// step 3, the next startup still sees the legacy tag, reads
+		// the same rows again, and re-attempts the wipe — the
+		// in-memory subscriptions already line up so the redundant
+		// write is idempotent. Stripping the metadata before the
+		// wipe would orphan rows on failure with no retry path.
+		stagingSpec := def.Spec
+		stagingSpec.Subscriptions = mergeLegacySubscriptions(def.Spec.Subscriptions, rows, time.Now().UTC())
+		stagingAt := time.Now().UTC()
+		if err := a.persistLoopDefinition(stagingSpec, stagingAt); err != nil {
+			errs = append(errs, fmt.Errorf("persist migrated spec %q (step 1): %w", def.Name, err))
 			continue
 		}
-		if err := a.loopDefinitionRegistry.Upsert(newSpec, updatedAt); err != nil {
-			errs = append(errs, fmt.Errorf("upsert migrated spec %q: %w", def.Name, err))
+		if err := a.loopDefinitionRegistry.Upsert(stagingSpec, stagingAt); err != nil {
+			errs = append(errs, fmt.Errorf("upsert migrated spec %q (step 1): %w", def.Name, err))
 			continue
 		}
+
+		// Step 2: wipe the watchlist rows. On failure leave the
+		// metadata in place so the next run resumes from step 1.
 		if err := a.watchlistStore.RemoveAllForScope(legacyTag); err != nil {
 			errs = append(errs, fmt.Errorf("wipe legacy rows for %q (scope=%q): %w", def.Name, legacyTag, err))
 			continue
 		}
+
+		// Step 3: now safe to strip the legacy metadata; the rows
+		// it pointed at are gone.
+		finalSpec := stagingSpec
+		finalSpec.Metadata = stripLegacyScopeKeys(finalSpec.Metadata)
+		finalSpec.Tags = stripLegacyScopeTagValue(finalSpec.Tags, legacyTag)
+		finalAt := time.Now().UTC()
+		if err := a.persistLoopDefinition(finalSpec, finalAt); err != nil {
+			errs = append(errs, fmt.Errorf("persist migrated spec %q (step 3): %w", def.Name, err))
+			continue
+		}
+		if err := a.loopDefinitionRegistry.Upsert(finalSpec, finalAt); err != nil {
+			errs = append(errs, fmt.Errorf("upsert migrated spec %q (step 3): %w", def.Name, err))
+			continue
+		}
+
 		migrated++
 		a.logger.Info("migrated legacy scope_tag subscriptions to spec.Subscriptions",
 			"name", def.Name, "scope_tag", legacyTag, "row_count", len(rows))

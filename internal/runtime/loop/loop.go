@@ -396,6 +396,10 @@ func (l *Loop) Name() string { return l.config.Name }
 // construction time, so callers don't need the registry lock.
 func (l *Loop) ParentID() string { return l.config.ParentID }
 
+// Operation returns the loop's runtime operation kind. Set once at
+// construction; safe to read without the loop lock.
+func (l *Loop) Operation() Operation { return l.config.Operation }
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")

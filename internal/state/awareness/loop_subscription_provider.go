@@ -73,15 +73,24 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	now := time.Now()
 	registries := newRenderRegistries(ctx, p.registries)
 
-	var sb strings.Builder
-	sb.WriteString("### Watched Entities (loop)\n\n")
+	// Render the body first so an all-expired list yields no header.
+	// Otherwise a quiescent loop whose TTLs all elapsed would still
+	// add a "### Watched Entities (loop)" line with no entries, which
+	// is prompt noise.
+	var body strings.Builder
 	for _, sub := range subs {
 		if sub.IsExpired(now) {
 			continue
 		}
-		sb.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
-		sb.WriteByte('\n')
+		body.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
+		body.WriteByte('\n')
 	}
+	if body.Len() == 0 {
+		return "", nil
+	}
+	var sb strings.Builder
+	sb.WriteString("### Watched Entities (loop)\n\n")
+	sb.WriteString(body.String())
 	return sb.String(), nil
 }
 

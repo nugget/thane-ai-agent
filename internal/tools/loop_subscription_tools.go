@@ -10,33 +10,34 @@ import (
 )
 
 // registerUpdateEntitySubscriptions wires the external CRUD tool for
-// adjusting a named loop's entity-subscription watch set post-launch.
-// Loop creation already accepts an entities parameter via
-// thane_curate; this tool is for the model managing an existing,
-// running loop without re-launching it.
+// adjusting a named loop's entity-subscription set post-launch. Loop
+// creation already accepts an entities parameter via thane_curate;
+// this tool is for the model managing an existing loop without
+// re-launching it. Changes write through to the persisted spec and
+// land on the live loop on the next iteration.
 //
 // The internal counterpart — watch_entity / unwatch_entity hydrated
-// as runtime tools alongside the loop's scoped output tools — lives in
+// as runtime tools on every running loop — lives in
 // internal/app/loop_focus_tools.go. That surface targets the model
-// running an iteration and has no name parameter (the scope tag is
+// running an iteration and has no name parameter (the loop name is
 // baked in at hydration). Two surfaces, two cognitive frames.
 func (r *Registry) registerUpdateEntitySubscriptions() {
 	r.Register(&Tool{
 		Name: "update_entity_subscriptions",
-		Description: "Add or remove Home Assistant entities from a running loop's watch set. " +
+		Description: "Add or remove Home Assistant entities from a running loop's subscription set. " +
 			"Use this when you want a peer loop or conversation to start (or stop) seeing specific entities in its context every iteration — for example, when the core loop learns that a curate loop should also watch a newly-relevant sensor. " +
-			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because the scope is baked in. " +
+			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because it is baked in. " +
 			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
 			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
-			"To see what a loop currently watches, call list_entity_subscriptions with the loop's scope_tag (visible on loop_definition_get and on thane_curate's launch response). " +
-			"Returns the loop's scope_tag plus counts of added and removed subscriptions.",
+			"To inspect what a loop currently watches, call loop_definition_get on its name — Spec.Subscriptions is the source of truth, plus any inherited entries from container ancestors. " +
+			"Returns counts of added and removed entries and the resulting subscription_count.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Loop definition name to operate on. The loop must have been created with thane_curate (or otherwise carry a scope_tag in Spec.Metadata; legacy persisted definitions with the older focus_tag key are accepted during the rename fallback window).",
+					"description": "Loop definition name to operate on. Any overlay-source loop is eligible — the structural Spec.Subscriptions list is updated directly.",
 				},
 				"add": map[string]any{
 					"type":        "array",
@@ -69,7 +70,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 				"remove": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Entity IDs to unsubscribe from this loop. Removes only the row scoped to this loop's scope_tag; other scopes for the same entity are left alone.",
+					"description": "Entity IDs to unsubscribe from this loop. Removes only the loop's own entries; inherited subscriptions from container ancestors are left alone (override locally by re-declaring with new options if needed).",
 				},
 			},
 			"required": []string{"name"},

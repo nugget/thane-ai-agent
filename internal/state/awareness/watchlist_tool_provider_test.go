@@ -26,9 +26,10 @@ func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]
 		t.Fatalf("new store: %v", err)
 	}
 
-	// TagRegistrar is gone post-migration; the third return is kept as a
-	// nil pointer for now so test helpers don't change their tuple shape.
-	// Callers that still consult it just see no registrations recorded.
+	// TagRegistrar is gone post-migration; the third return is kept
+	// so the tuple shape doesn't churn across all existing callers,
+	// but it points at an always-empty slice. New tests should not
+	// assert on it.
 	p := NewWatchlistTools(WatchlistToolsConfig{
 		Store: store,
 	})

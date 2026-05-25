@@ -397,6 +397,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 
 	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
 
+	now := time.Now().UTC()
 	jitterRatio := envelope.jitter
 	spec := looppkg.Spec{
 		Name:          name,
@@ -409,7 +410,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		Jitter:        &jitterRatio,
 		Tags:          tags,
 		Outputs:       []looppkg.OutputSpec{outputSpec},
-		Subscriptions: curateEntitiesToSubscriptions(entities),
+		Subscriptions: curateEntitiesToSubscriptions(entities, now),
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 			Instructions:     strings.TrimSpace(instructions),
@@ -438,7 +439,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"output_mode":          {outputMode},
 		"sleep_min":            {envelope.sleepMin.String()},
 		"sleep_max":            {envelope.sleepMax.String()},
-		"created":              {time.Now().UTC().Format(time.RFC3339)},
+		"created":              {now.Format(time.RFC3339)},
 	}
 	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
 		Ref:         documentRef,
@@ -454,7 +455,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	// Persist + reconcile + launch. Mirrors handleLoopDefinitionSet +
 	// handleLoopDefinitionLaunch; collapsed here so the model only sees
 	// one round-trip for the intent.
-	updatedAt := time.Now().UTC()
+	updatedAt := now
 	if deps.PersistSpec != nil {
 		if err := deps.PersistSpec(spec, updatedAt); err != nil {
 			return "", fmt.Errorf("persist loop definition: %w", err)
@@ -545,11 +546,13 @@ func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string,
 
 // curateEntitiesToSubscriptions converts the parsed thane_curate
 // entity input into the typed [looppkg.EntitySubscription] form
-// persisted on Spec.Subscriptions. AddedAt is left zero; the spec
-// mutator path fills it in when subscriptions are added later via
-// runtime tools. Returns nil for an empty input so the spec field
-// stays empty rather than carrying an allocated zero-length slice.
-func curateEntitiesToSubscriptions(entities []curateEntity) []looppkg.EntitySubscription {
+// persisted on Spec.Subscriptions. AddedAt is stamped at creation
+// so TTL countdown is meaningful from the moment the loop is
+// launched; without it [EntitySubscription.IsExpired] treats the
+// row as immortal regardless of TTL. Returns nil for an empty
+// input so the spec field stays empty rather than carrying an
+// allocated zero-length slice.
+func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) []looppkg.EntitySubscription {
 	if len(entities) == 0 {
 		return nil
 	}
@@ -560,6 +563,7 @@ func curateEntitiesToSubscriptions(entities []curateEntity) []looppkg.EntitySubs
 			History:    append([]int(nil), e.History...),
 			Forecast:   e.Forecast,
 			TTLSeconds: e.TTLSeconds,
+			AddedAt:    addedAt,
 		})
 	}
 	return out
@@ -622,8 +626,16 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				ent.History = append(ent.History, n)
 			}
 		}
-		if forecast, ok := obj["forecast"].(string); ok {
-			ent.Forecast = strings.TrimSpace(forecast)
+		if rawForecast, present := obj["forecast"]; present && rawForecast != nil {
+			forecast, ok := rawForecast.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].forecast: must be a string, got %T", fieldName, i, rawForecast)
+			}
+			normalized, err := normalizeForecast(forecast)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].forecast: %w", fieldName, i, err)
+			}
+			ent.Forecast = normalized
 		}
 		if rawTTL, present := obj["ttl_seconds"]; present {
 			ttl, err := coerceInt(rawTTL)
@@ -638,6 +650,33 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		out = append(out, ent)
 	}
 	return out, nil
+}
+
+// normalizeForecast validates a forecast value at the tool boundary
+// so invalid strings can't reach the renderer. "none" and empty
+// collapse to "" (no forecast fetch); the three real types pass
+// through unchanged; anything else is an actionable error. Exposed
+// for the app-side watch_entity handler too, since both surfaces
+// land in Spec.Subscriptions.Forecast and downstream rendering
+// treats any non-empty value as a real HA forecast type.
+func normalizeForecast(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	switch v {
+	case "", "none":
+		return "", nil
+	case "daily", "hourly", "twice_daily":
+		return v, nil
+	default:
+		return "", fmt.Errorf("must be one of [daily, hourly, twice_daily, none], got %q", raw)
+	}
+}
+
+// NormalizeForecast is the exported form of [normalizeForecast] used
+// by the app-side runtime tools that also persist subscriptions.
+// Kept thin so the two surfaces share one source of truth for what
+// is and isn't a valid forecast value.
+func NormalizeForecast(raw string) (string, error) {
+	return normalizeForecast(raw)
 }
 
 func coerceInt(v any) (int, error) {

@@ -244,50 +244,58 @@ func (r *Registry) Children(loopID string) []*Loop {
 // (rare, since the loop graph is mostly tree-shaped under containers)
 // are skipped to match the tag-inheritance contract from Phase 1A.
 func (r *Registry) AncestorSubscriptions(loopID string) []EntitySubscription {
+	// Snapshot the walk under the registry lock — we only need the
+	// parent chain and operation bits, both of which are config-shape
+	// invariants that don't move after construction. ParentID is set
+	// once at construction; Operation is too. The per-loop
+	// Subscriptions slice is the one mutable field [SetSubscriptions]
+	// can change concurrently, so we pull it from each loop via
+	// [Loop.Subscriptions], which clones under l.mu — avoiding the
+	// data race that would arise from reading l.config.Subscriptions
+	// while holding only r.mu.
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	walk := make([]*Loop, 0, 4)
 	current := r.loops[loopID]
-	if current == nil {
+	if current != nil {
+		walk = append(walk, current)
+		for i := 0; i < ancestorWalkLimit; i++ {
+			parentID := current.config.ParentID
+			if parentID == "" {
+				break
+			}
+			parent, ok := r.loops[parentID]
+			if !ok {
+				break
+			}
+			walk = append(walk, parent)
+			current = parent
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(walk) == 0 {
 		return nil
 	}
 
 	var collected []EntitySubscription
 	seen := make(map[string]struct{})
-	// Own subscriptions first so they win on dedup.
-	for _, sub := range current.config.Subscriptions {
-		if sub.EntityID == "" {
+	for i, l := range walk {
+		// The starting loop contributes regardless of operation; only
+		// ancestors are filtered to container nodes (matches the tag-
+		// inheritance contract from Phase 1A).
+		if i > 0 && l.Operation() != OperationContainer {
 			continue
 		}
-		if _, ok := seen[sub.EntityID]; ok {
-			continue
-		}
-		seen[sub.EntityID] = struct{}{}
-		collected = append(collected, sub)
-	}
-	// Then each ancestor container, immediate parent first.
-	for i := 0; i < ancestorWalkLimit; i++ {
-		parentID := current.config.ParentID
-		if parentID == "" {
-			break
-		}
-		parent, ok := r.loops[parentID]
-		if !ok {
-			break
-		}
-		if parent.config.Operation == OperationContainer {
-			for _, sub := range parent.config.Subscriptions {
-				if sub.EntityID == "" {
-					continue
-				}
-				if _, ok := seen[sub.EntityID]; ok {
-					continue
-				}
-				seen[sub.EntityID] = struct{}{}
-				collected = append(collected, sub)
+		for _, sub := range l.Subscriptions() {
+			if sub.EntityID == "" {
+				continue
 			}
+			if _, dup := seen[sub.EntityID]; dup {
+				continue
+			}
+			seen[sub.EntityID] = struct{}{}
+			collected = append(collected, sub)
 		}
-		current = parent
 	}
 	return collected
 }

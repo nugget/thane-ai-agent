@@ -7,6 +7,7 @@ import (
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // hydrateLoopFocusTools generates the in-loop entity-subscription
@@ -89,7 +90,10 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if ttlSeconds < 0 {
 					return "", fmt.Errorf("ttl_seconds must be >= 0")
 				}
-				forecast := strings.TrimSpace(stringMapValue(args, "forecast"))
+				forecast, err := tools.NormalizeForecast(stringMapValue(args, "forecast"))
+				if err != nil {
+					return "", fmt.Errorf("forecast: %w", err)
+				}
 				now := time.Now().UTC()
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
 					return upsertSubscription(current, looppkg.EntitySubscription{
