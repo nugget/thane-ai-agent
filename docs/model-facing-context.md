@@ -128,8 +128,8 @@ possible.
 
 Good:
 
-- `execute_shell_command`
-- `list_home_assistant_entities_by_domain`
+- `ha_registry_search`
+- `archive_session_transcript`
 - `default_owner`
 - `recent_operations`
 

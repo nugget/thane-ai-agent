@@ -61,6 +61,8 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
+	"activate_capability":         {CanonicalID: "native:activate_capability", Source: NativeToolSource},
+	"activate_lens":               {CanonicalID: "native:activate_lens", Source: NativeToolSource},
 	"archive_range":               {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_session_transcript":  {CanonicalID: "native:archive_session_transcript", Source: NativeToolSource, Tags: []string{"archive"}},
@@ -74,6 +76,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
+	"deactivate_capability":       {CanonicalID: "native:deactivate_capability", Source: NativeToolSource},
+	"deactivate_lens":             {CanonicalID: "native:deactivate_lens", Source: NativeToolSource},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_copy":                    {CanonicalID: "native:doc_copy", Source: NativeToolSource, Tags: []string{"documents"}},
@@ -148,6 +152,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"import_vcf":                  {CanonicalID: "native:import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
 	"list_loaded_capabilities":    {CanonicalID: "native:list_loaded_capabilities", Source: NativeToolSource},
 	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
 	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
@@ -168,6 +173,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"spawn_loop":                  {CanonicalID: "native:spawn_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"stop_loop":                   {CanonicalID: "native:stop_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"thane_assign":                {CanonicalID: "native:thane_assign", Source: NativeToolSource},
+	"thane_create_container":      {CanonicalID: "native:thane_create_container", Source: NativeToolSource, Tags: []string{"loops"}},
 	"thane_curate":                {CanonicalID: "native:thane_curate", Source: NativeToolSource, Tags: []string{"loops"}},
 	"thane_now":                   {CanonicalID: "native:thane_now", Source: NativeToolSource},
 	"update_entity_subscriptions": {CanonicalID: "native:update_entity_subscriptions", Source: NativeToolSource, Tags: []string{"loops"}},

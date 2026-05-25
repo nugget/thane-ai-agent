@@ -139,7 +139,7 @@ target content is not cleanly covered by trusted signed git history:
 - Document store reads (`Read`, indexed browse and search surfaces)
 - Loop-declared output context
 - Tagged context articles
-- The model's `read_file` tool when the resolved path lies inside a
+- The model's `file_read` tool when the resolved path lies inside a
   managed root
 - Inject-files each time they are read into the prompt, with startup
   fail-fast verification for initially configured files
@@ -149,19 +149,20 @@ target content is not cleanly covered by trusted signed git history:
 When verification is `warn`, Thane records and logs verification
 failures but still lets the content load.
 
-The raw `write_file` and `edit_file` tools are stricter than read
+The raw `file_write` and `file_edit` tools are stricter than read
 verification. They cannot mutate read-only/restricted roots, and they
 cannot mutate roots with signed git provenance; those changes must go
 through managed document tools so root writers can preserve authoring
 policy, git history, and signatures.
 
-Directory-walk surfaces (`list_files`, `tree`, `stat`, `search_files`,
-`grep`) intentionally do not consult the verifier. `list_files`,
-`tree`, `stat`, and `search_files` return only paths and metadata.
-**`grep` is different**: it returns short content excerpts that are
+Directory-walk surfaces (`file_list`, `file_tree`, `file_stat`,
+`file_search`, `file_grep`) intentionally do not consult the verifier.
+`file_list`, `file_tree`, `file_stat`, and `file_search` return only
+paths and metadata. **`file_grep` is different**: it returns short
+content excerpts that are
 *not* verified, so under `verify_signatures: required` it can surface
-snippets from files that would be blocked by `read_file`. If a result
-matters to you, re-read it through `read_file` — that path is gated
+snippets from files that would be blocked by `file_read`. If a result
+matters to you, re-read it through `file_read` — that path is gated
 and will fail if the underlying content is not covered by trusted
 signed history.
 

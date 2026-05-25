@@ -1,6 +1,6 @@
 # Tools Reference
 
-Thane provides ~130 native tools organized by capability tag. A tool is
+Thane provides ~150 native tools organized by capability tag. A tool is
 available to a given turn only when one of its default tags is active —
 see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
 on and off, and [Prompt Caching](../prompt-caching.md) for how tag
@@ -33,36 +33,34 @@ These tools load on every turn regardless of active tags.
 |------|-------------|
 | `activate_capability` | Activate a capability tag for the current conversation. |
 | `deactivate_capability` | Deactivate a capability tag for the current conversation. |
+| `reset_capabilities` | Return the current conversation to its baseline capability state. |
+| `list_loaded_capabilities` | List capability tags currently loaded in this conversation. |
+| `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
 | `activate_lens` | Activate a persistent global behavioural lens. |
 | `deactivate_lens` | Deactivate a global behavioural lens. |
 | `list_lenses` | List currently active behavioural lenses. |
 | `thane_now` | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | Assign a task to a sub-agent that runs in the background and reports back when complete. |
+| `request_core_attention` | From a loop, force a supervisor/core attention turn for a decision-worthy concern. |
+| `logs_query` | Query the structured log index with attribute filters. |
+
+## `archive` — conversation archive retrieval
+
+| Tool | Description |
+|------|-------------|
 | `archive_search` | Full-text search across conversation archives. |
 | `archive_sessions` | Browse session archive metadata. |
 | `archive_session_transcript` | Retrieve a full session transcript. |
+| `archive_range` | Retrieve archived messages by time range or message-count floor. |
+
+## `session` — conversation lifecycle
+
+| Tool | Description |
+|------|-------------|
+| `conversation_reset` | Reset the current conversation's message history. |
 | `session_checkpoint` | Save current session state as a checkpoint. |
 | `session_close` | Close the current session with carry-forward context. |
 | `session_split` | Fork the current session. |
-| `conversation_reset` | Reset the current conversation's message history. |
-| `send_notification` | Provider-agnostic fire-and-forget notification. |
-
-The delegate family (`thane_now`, `thane_assign`) uses capability tags as
-its primary tool and context scope. Delegates inherit elective caller tags
-by default so child work keeps the same task context; explicit `tags`
-override profile default tags.
-When the resulting scope includes `ha` or `ha_admin`, the executor uses
-HA-oriented budget and routing hints automatically; otherwise it uses the
-general delegate defaults.
-Use root entry-point tags such as `development`, `home`, `operations`,
-`knowledge`, `media`, `interactive`, or `people` when the delegate should
-read the menu guidance and choose a narrower branch. Use leaf tags such
-as `ha`, `files`, `forge`, `web`, `loops`, `documents`, or `diagnostics`
-when the caller already knows the needed toolset.
-Runtime and channel affordance tags such as `owner` and `message_channel`
-are re-asserted only from trusted runtime context; they are not inherited
-as model-requested tags. Use `inherit_caller_tags: false` when a delegate
-needs a strict fresh tool scope.
 
 ## `awareness` — live-context entity management
 
@@ -102,6 +100,7 @@ clear forecast fetching for that subscription.
 | Tool | Description |
 |------|-------------|
 | `ha_notify` | HA companion-app push notification. |
+| `send_notification` | Provider-agnostic fire-and-forget notification. |
 | `request_human_decision` | Actionable notification with a human-in-the-loop callback. |
 | `request_human_escalation` | Escalate to a human with a synchronous response wait. |
 | `request_ai_escalation` | Escalate to another agent/model with a synchronous response wait. |
@@ -273,6 +272,7 @@ Attachment list and search results report arrival recency as
 | `forge_pr_diff` | Retrieve a PR's diff. |
 | `forge_pr_files` | List changed files in a PR. |
 | `forge_pr_commits` | List commits in a PR. |
+| `forge_pr_checks` | List current check-run/check-suite status for a pull request. |
 | `forge_pr_reviews` | List reviews on a PR. |
 | `forge_pr_review` | Submit a review. |
 | `forge_pr_review_comment` | Comment on a specific line in a PR. |
@@ -301,7 +301,8 @@ Task next-run values include a model-facing delta.
 ## `thane_*` family — intent-shaped front door for "do work"
 
 Always-available (`thane_now`, `thane_assign`) plus loops-tagged
-(`thane_curate`). Pick by lifecycle. External wakes to live loops are
+(`thane_curate`, `thane_create_container`). Pick by lifecycle.
+External wakes to live loops are
 infrastructural rather than tool-shaped — producer subsystems dispatch
 structured envelopes over the message bus directly, and
 `request_core_attention` covers loop → core/owner attention escalation.
@@ -311,6 +312,7 @@ structured envelopes over the message bus directly, and
 | `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
 | `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
+| `thane_create_container` | durable container | Create a non-executing loop container that groups descendant loops and provides inheritable tags. |
 
 `thane_now` and `thane_assign` accept `context_mode`. The default,
 `task`, gives the child run a compact
@@ -319,6 +321,23 @@ conditions, but without full Thane identity files, inject files,
 always-on talents, or conversation-history dressing. Use
 `context_mode=full` only when the delegated work genuinely needs that
 continuity.
+
+The delegate family (`thane_now`, `thane_assign`) uses capability tags as
+its primary tool and context scope. Delegates inherit elective caller tags
+by default so child work keeps the same task context; explicit `tags`
+override profile default tags.
+When the resulting scope includes `ha` or `ha_admin`, the executor uses
+HA-oriented budget and routing hints automatically; otherwise it uses the
+general delegate defaults.
+Use root entry-point tags such as `development`, `home`, `operations`,
+`knowledge`, `media`, `interactive`, or `people` when the delegate should
+read the menu guidance and choose a narrower branch. Use leaf tags such
+as `ha`, `files`, `forge`, `web`, `loops`, `documents`, or `diagnostics`
+when the caller already knows the needed toolset.
+Runtime and channel affordance tags such as `owner` and `message_channel`
+are re-asserted only from trusted runtime context; they are not inherited
+as model-requested tags. Use `inherit_caller_tags: false` when a delegate
+needs a strict fresh tool scope.
 
 ## `loops` — lower-level loop control and inspection
 
@@ -340,6 +359,7 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 | `loop_definition_launch` | Launch a persistent loop from a definition. |
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
+| `update_entity_subscriptions` | Add or remove Home Assistant entity subscriptions on a running loop. |
 
 ## `mqtt` — wake subscriptions
 
