@@ -79,15 +79,30 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		if err != nil {
 			return "", fmt.Errorf("media_follow: %w", err)
 		}
-		if wakeConfigured {
-			if err := messages.VerifyLoopWakeTarget(wakeTarget, ft.loopResolver); err != nil {
-				return "", fmt.Errorf("media_follow: %w", err)
-			}
-		}
 
 		notify := true
 		if n, ok := args["notify"].(bool); ok {
 			notify = n
+		}
+
+		// Default landing zone when the caller wants notifications but
+		// didn't pick a target loop. The built-in media-default-handler
+		// is auto-started at boot whenever feed polling is configured.
+		if notify && !wakeConfigured {
+			wakeTarget = messages.LoopWakeTarget{Name: DefaultHandlerLoopName}
+			wakeConfigured = true
+		}
+		// Verify whichever target we landed on — the operator's pick or
+		// the auto-default. Without this, persisting against a missing
+		// default handler (e.g. media polling left unconfigured but the
+		// tool was reachable through another path) would silently drop
+		// every future wake at delivery time. A nil resolver short-
+		// circuits to nil in VerifyLoopWakeTarget, so test wiring
+		// without a registry still works.
+		if wakeConfigured {
+			if err := messages.VerifyLoopWakeTarget(wakeTarget, ft.loopResolver); err != nil {
+				return "", fmt.Errorf("media_follow: %w", err)
+			}
 		}
 
 		// Check feed limit.
@@ -389,7 +404,7 @@ func FollowDefinition() map[string]any {
 			},
 			"notify": map[string]any{
 				"type":        "boolean",
-				"description": "Whether to start the default media-analysis conversation when new content is detected and wake_loop is omitted. Default: true.",
+				"description": "Whether new feed entries deliver an event-source wake. When true and wake_loop is omitted, wakes route to the built-in media-default-handler loop; when wake_loop is set, wakes route there. Set false to quiet the feed (high-water mark still advances so re-enabling later doesn't backfill old entries). Default: true.",
 			},
 			"wake_loop": feedWakeTargetDefinition(),
 		},

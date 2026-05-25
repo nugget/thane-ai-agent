@@ -107,7 +107,16 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 		if a.mediaFeedPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires media feed poller runtime", mediaFeedPollerDefinitionName)
 		}
-		spec.TurnBuilder = mediaFeedTurnBuilder(a.mediaFeedPoller, a.logger)
+		spec.Handler = func(ctx context.Context, _ any) error {
+			wakes, err := a.mediaFeedPoller.CheckFeeds(ctx)
+			if err != nil {
+				return err
+			}
+			if wakes == 0 {
+				return looppkg.ErrNoOp
+			}
+			return nil
+		}
 		return a.hydrateLoopOutputs(spec)
 	case mqttPublisherDefinitionName:
 		if a.mqttPub == nil {

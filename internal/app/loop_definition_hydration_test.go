@@ -11,6 +11,7 @@ import (
 	emailcfg "github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -106,6 +107,38 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsConfiguredBuiltIns(t *testing.T) {
 		if !found {
 			t.Fatalf("definition %q missing from built-in base specs", name)
 		}
+	}
+}
+
+// TestMediaDefaultHandlerSpecIsCloudEligible pins the routing
+// regression fix: when PR-T2c retired mediaFeedTurnBuilder it dropped
+// the LocalOnly=false / QualityFloor=5 stamping the TurnBuilder did
+// on every feed turn. Without those, the agent runtime defaults
+// local_only=true on non-supervisor turns and feed triage routes to
+// local-only models — a real behavior regression for transcript
+// summarization. The default handler's Profile must carry both.
+func TestMediaDefaultHandlerSpecIsCloudEligible(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Media: config.MediaConfig{FeedCheckInterval: 600},
+	}
+	specs := builtInServiceDefinitionSpecs(cfg)
+	var got *looppkg.Spec
+	for i := range specs {
+		if specs[i].Name == media.DefaultHandlerLoopName {
+			got = &specs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("%s definition missing from built-in specs", media.DefaultHandlerLoopName)
+	}
+	if got.Profile.LocalOnly != "false" {
+		t.Errorf("Profile.LocalOnly = %q, want \"false\" (cloud-eligible)", got.Profile.LocalOnly)
+	}
+	if got.Profile.QualityFloor < 1 {
+		t.Errorf("Profile.QualityFloor = %d, want non-zero (was 5 on the retired TurnBuilder)", got.Profile.QualityFloor)
 	}
 }
 
