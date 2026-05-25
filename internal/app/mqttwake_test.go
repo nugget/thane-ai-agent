@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -272,6 +273,149 @@ func TestMQTTWakeHandlerNoRegistryDropsMessage(t *testing.T) {
 
 	if reqs := runner.requests(); len(reqs) != 0 {
 		t.Fatalf("expected 0 requests without registry, got %d", len(reqs))
+	}
+}
+
+// TestMQTTWakeHandlerDispatchesViaWakeTarget pins the post-PR-T1
+// trigger-unification contract: a subscription with a WakeTarget
+// configured delivers matching messages as event-source envelopes
+// to the target loop, instead of spawning a fresh one-shot loop.
+// The bus audit hook captures the envelope so we can verify shape.
+func TestMQTTWakeHandlerDispatchesViaWakeTarget(t *testing.T) {
+	store := newTestWakeStore(t)
+
+	// Operator declares "messages on frigate/+/events go to the
+	// home_security loop." No spawn-profile fields: the target
+	// loop owns routing.
+	target := messages.LoopWakeTarget{Name: "home_security", Priority: messages.PriorityNormal}
+	if err := store.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "frigate/+/events", WakeLoop: &target},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	bus := messages.NewBus(nil)
+	// Capture the envelope the dispatcher sends.
+	var captured []messages.Envelope
+	var capturedMu sync.Mutex
+	bus.AddAuditFunc(func(_ context.Context, env messages.Envelope, _ *messages.DeliveryResult, _ error) {
+		capturedMu.Lock()
+		defer capturedMu.Unlock()
+		captured = append(captured, env)
+	})
+	// Stub the loop destination handler so Send doesn't fail on
+	// the unrouted loop — we don't have a live registry here.
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		return messages.DeliveryResult{Envelope: env, Status: messages.DeliveryDelivered}, nil
+	})
+
+	runner := &mqttMockRunner{}
+	registry := looppkg.NewRegistry()
+	deps := mqttWakeDeps{
+		registry:   registry,
+		messageBus: bus,
+		eventBus:   events.New(),
+	}
+
+	handler := mqttWakeHandler(store, runner, nil, nil, deps)
+	handler("frigate/front/events", []byte(`{"event":"motion"}`))
+
+	// Give the dispatcher goroutine time to run.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		capturedMu.Lock()
+		if len(captured) > 0 {
+			capturedMu.Unlock()
+			break
+		}
+		capturedMu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	capturedMu.Lock()
+	defer capturedMu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 envelope delivered, got %d", len(captured))
+	}
+	env := captured[0]
+	if env.To.Target != "home_security" {
+		t.Errorf("envelope target = %q, want %q", env.To.Target, "home_security")
+	}
+	if env.Type != messages.TypeSignal {
+		t.Errorf("envelope type = %q, want %q", env.Type, messages.TypeSignal)
+	}
+	payload, ok := env.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want messages.LoopNotifyPayload", env.Payload)
+	}
+	if payload.Kind != "event_source" {
+		t.Errorf("payload.Kind = %q, want %q", payload.Kind, "event_source")
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("payload.Events len = %d, want 1", len(payload.Events))
+	}
+	event := payload.Events[0]
+	if event.Source != "mqtt_wake" {
+		t.Errorf("event.Source = %q, want %q", event.Source, "mqtt_wake")
+	}
+	if event.Title != "frigate/front/events" {
+		t.Errorf("event.Title = %q, want the topic", event.Title)
+	}
+
+	// And critically: no agent run happened. The whole point of
+	// the wake-target path is that the existing target loop sees
+	// the event on its next iteration; no new conversation
+	// spawns.
+	if reqs := runner.requests(); len(reqs) != 0 {
+		t.Errorf("expected 0 spawned agent runs, got %d (wake-target dispatch should not spawn)", len(reqs))
+	}
+}
+
+// TestMQTTWakeHandlerFallsBackToSpawnWithoutWakeTarget guards the
+// backwards-compat path: a subscription with no WakeTarget but a
+// legacy Profile still uses the spawn-per-message dispatch.
+func TestMQTTWakeHandlerFallsBackToSpawnWithoutWakeTarget(t *testing.T) {
+	store := newTestWakeStore(t)
+	seed := router.LoopProfile{Mission: "automation"}
+	if err := store.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "legacy/topic", Wake: &seed},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	bus := messages.NewBus(nil)
+	var capturedMu sync.Mutex
+	var captured []messages.Envelope
+	bus.AddAuditFunc(func(_ context.Context, env messages.Envelope, _ *messages.DeliveryResult, _ error) {
+		capturedMu.Lock()
+		defer capturedMu.Unlock()
+		captured = append(captured, env)
+	})
+
+	runner := &mqttMockRunner{}
+	registry := looppkg.NewRegistry()
+	var parentID atomic.Value
+	parentID.Store("test-parent")
+	deps := mqttWakeDeps{
+		registry:   registry,
+		messageBus: bus,
+		eventBus:   events.New(),
+		parentID:   &parentID,
+	}
+
+	handler := mqttWakeHandler(store, runner, nil, nil, deps)
+	handler("legacy/topic", []byte("data"))
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Spawn path uses SpawnLoop, which won't find the fake
+	// parent_id in the registry — but the important assertion is
+	// that no envelope went through the bus (that's the
+	// wake-target path).
+	capturedMu.Lock()
+	defer capturedMu.Unlock()
+	if len(captured) != 0 {
+		t.Errorf("expected 0 bus envelopes for legacy spawn path, got %d", len(captured))
 	}
 }
 

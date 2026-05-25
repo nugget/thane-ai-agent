@@ -507,10 +507,20 @@ talents_dir: ./talents
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: homeassistant/+/+/state
-#       Wake, when non-nil, enables agent wake on this topic. Messages
-#       arriving on the topic trigger an agent conversation using the
-#       profile's routing configuration. When nil, messages are received
-#       for ambient awareness only (debug-logged, not acted upon).
+#       WakeLoop identifies an existing loop to receive matching MQTT
+#       messages as event-source notifications. Preferred dispatch
+#       route — the target loop's [Spec.Profile] governs routing.
+#       wake_loop:
+#         loopid: ""
+#         name: ""
+#         forcesupervisor: false
+#         priority: ""
+#         instructions: ""
+#       Wake is the legacy dispatch-via-spawn path: when non-nil and
+#       WakeLoop is unset, messages on this topic spawn a one-shot
+#       agent run using this routing profile. New subscriptions
+#       should use WakeLoop and let the target loop's own Profile
+#       govern routing instead.
 #       wake:
 #         model: ""
 #         quality_floor: 0
@@ -522,16 +532,26 @@ talents_dir: ./talents
 #         extra_hints: {}
 #         instructions: ""
 #       InitialTags lists capability tags activated at the start of the
-#       agent run dispatched for matching messages. Only meaningful when
-#       Wake is non-nil.
+#       spawn-dispatch agent run (legacy path). Only meaningful when
+#       Wake is non-nil and WakeLoop is unset.
 #       initial_tags: []
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: frigate/events
-#       Wake, when non-nil, enables agent wake on this topic. Messages
-#       arriving on the topic trigger an agent conversation using the
-#       profile's routing configuration. When nil, messages are received
-#       for ambient awareness only (debug-logged, not acted upon).
+#       WakeLoop identifies an existing loop to receive matching MQTT
+#       messages as event-source notifications. Preferred dispatch
+#       route — the target loop's [Spec.Profile] governs routing.
+#       wake_loop:
+#         loopid: ""
+#         name: ""
+#         forcesupervisor: false
+#         priority: ""
+#         instructions: ""
+#       Wake is the legacy dispatch-via-spawn path: when non-nil and
+#       WakeLoop is unset, messages on this topic spawn a one-shot
+#       agent run using this routing profile. New subscriptions
+#       should use WakeLoop and let the target loop's own Profile
+#       govern routing instead.
 #       wake:
 #         model: ""
 #         quality_floor: 0
@@ -543,16 +563,26 @@ talents_dir: ./talents
 #         extra_hints: {}
 #         instructions: ""
 #       InitialTags lists capability tags activated at the start of the
-#       agent run dispatched for matching messages. Only meaningful when
-#       Wake is non-nil.
+#       spawn-dispatch agent run (legacy path). Only meaningful when
+#       Wake is non-nil and WakeLoop is unset.
 #       initial_tags: []
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: automation/wake/security
-#       Wake, when non-nil, enables agent wake on this topic. Messages
-#       arriving on the topic trigger an agent conversation using the
-#       profile's routing configuration. When nil, messages are received
-#       for ambient awareness only (debug-logged, not acted upon).
+#       WakeLoop identifies an existing loop to receive matching MQTT
+#       messages as event-source notifications. Preferred dispatch
+#       route — the target loop's [Spec.Profile] governs routing.
+#       wake_loop:
+#         loopid: ""
+#         name: ""
+#         forcesupervisor: false
+#         priority: ""
+#         instructions: ""
+#       Wake is the legacy dispatch-via-spawn path: when non-nil and
+#       WakeLoop is unset, messages on this topic spawn a one-shot
+#       agent run using this routing profile. New subscriptions
+#       should use WakeLoop and let the target loop's own Profile
+#       govern routing instead.
 #       wake:
 #         model: ""
 #         quality_floor: 7
@@ -564,8 +594,8 @@ talents_dir: ./talents
 #         extra_hints: {}
 #         instructions: Evaluate the security event and decide if action is needed.
 #       InitialTags lists capability tags activated at the start of the
-#       agent run dispatched for matching messages. Only meaningful when
-#       Wake is non-nil.
+#       spawn-dispatch agent run (legacy path). Only meaningful when
+#       Wake is non-nil and WakeLoop is unset.
 #       initial_tags:
 #         - homeassistant
 #   Telemetry configures operational metric publishing. When enabled,
