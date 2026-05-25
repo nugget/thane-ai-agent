@@ -206,7 +206,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"web_fetch":                   {CanonicalID: "native:web_fetch", Source: NativeToolSource, Tags: []string{"web"}},
 	"web_search":                  {CanonicalID: "native:web_search", Source: NativeToolSource, Tags: []string{"web"}},
 	"add_entity_subscription":     {CanonicalID: "native:add_entity_subscription", Source: NativeToolSource, Tags: []string{"awareness"}},
-	"list_entity_subscriptions":   {CanonicalID: "native:list_entity_subscriptions", Source: NativeToolSource, Tags: []string{"awareness"}},
+	"list_entity_subscriptions":   {CanonicalID: "native:list_entity_subscriptions", Source: NativeToolSource, Tags: []string{"awareness", "loops"}},
 	"remove_entity_subscription":  {CanonicalID: "native:remove_entity_subscription", Source: NativeToolSource, Tags: []string{"awareness"}},
 }
 

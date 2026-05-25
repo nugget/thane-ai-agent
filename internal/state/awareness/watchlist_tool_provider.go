@@ -202,7 +202,7 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 	}
 	msg += "."
 
-	w.logger.Info("context entity added",
+	w.logger.Info("entity subscription added",
 		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "ttl_seconds", ttlSeconds)
 	if w.tagRegistrar != nil {
 		for _, tag := range tags {
@@ -274,7 +274,7 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(_ context.Context, args 
 		return "", fmt.Errorf("remove from watchlist: %w", err)
 	}
 
-	w.logger.Info("context entity removed", "entity_id", entityID, "tags", tags)
+	w.logger.Info("entity subscription removed", "entity_id", entityID, "tags", tags)
 	if len(tags) > 0 {
 		return fmt.Sprintf("Stopped watching %s in scopes %v.", entityID, tags), nil
 	}
