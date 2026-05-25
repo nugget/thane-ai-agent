@@ -36,9 +36,9 @@ These tools load on every turn regardless of active tags.
 | `reset_capabilities` | Return the current conversation to its baseline capability state. |
 | `list_loaded_capabilities` | List capability tags currently loaded in this conversation. |
 | `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
-| `activate_lens` | Activate a persistent global behavioural lens. |
-| `deactivate_lens` | Deactivate a global behavioural lens. |
-| `list_lenses` | List currently active behavioural lenses. |
+| `activate_lens` | Activate a persistent global behavioral lens. |
+| `deactivate_lens` | Deactivate a global behavioral lens. |
+| `list_lenses` | List currently active behavioral lenses. |
 | `thane_now` | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | Assign a task to a sub-agent that runs in the background and reports back when complete. |
 | `request_core_attention` | From a loop, force a supervisor/core attention turn for a decision-worthy concern. |
