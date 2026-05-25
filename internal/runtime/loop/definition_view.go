@@ -1,6 +1,9 @@
 package loop
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const definitionRuntimeStateNotRunning = "not_running"
 
@@ -37,6 +40,13 @@ type DefinitionView struct {
 	Eligibility        DefinitionEligibilityStatus `yaml:"eligibility,omitempty" json:"eligibility"`
 	Runtime            DefinitionRuntimeStatus     `yaml:"runtime,omitempty" json:"runtime"`
 	Warnings           []DefinitionWarning         `yaml:"warnings,omitempty" json:"warnings,omitempty"`
+	// EffectiveConditions lists each ancestor's Conditions
+	// evaluation with provenance. Surfaces the cascade behind
+	// [Eligibility]: a leaf reading [Eligibility].Eligible=false
+	// can see *which* ancestor blocked it without re-walking the
+	// graph. Empty when the leaf has no container ancestors —
+	// [Eligibility] already carries the single-level result.
+	EffectiveConditions []EffectiveConditionEvaluation `yaml:"effective_conditions,omitempty" json:"effective_conditions,omitempty"`
 	// Effective surfaces the post-ancestor-merge state for inheritable
 	// loop fields. Nil when there is nothing meaningful to report —
 	// the loop isn't running, the view was built without a live
@@ -140,8 +150,19 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 		Definitions:        make([]DefinitionView, 0, len(snapshot.Definitions)),
 	}
 
+	// Index the snapshot by name once so the eligibility cascade
+	// walks parent_name through the same snapshot we're rendering —
+	// avoids both per-definition registry lock acquisition and the
+	// risk of observing a different definition state between
+	// snapshot and ancestor lookup.
+	byName := make(map[string]Spec, len(snapshot.Definitions))
 	for _, def := range snapshot.Definitions {
-		eligibility := def.Spec.Conditions.Evaluate(now)
+		byName[def.Name] = def.Spec
+	}
+
+	for _, def := range snapshot.Definitions {
+		chain := ancestorChainFromSnapshot(byName, def.Name)
+		eligibility, conditionEvals := EvaluateEffectiveConditions(chain, now)
 		warnings := BuildDefinitionWarnings(def.Spec)
 		status, ok := runtime[def.Name]
 		if ok && status.Running {
@@ -171,6 +192,14 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 			Runtime:            status,
 			Warnings:           warnings,
 		}
+		// Surface the per-ancestor evaluations only when the cascade
+		// actually went through more than one level — for a leaf with
+		// no container parent, the single self-evaluation is already
+		// what [Eligibility] reports and adding a single-entry list
+		// would be noise.
+		if len(conditionEvals) > 1 {
+			dv.EffectiveConditions = conditionEvals
+		}
 		if options.loops != nil && status.Running && status.LoopID != "" {
 			// One walk per definition: per-field Effective* calls
 			// would do separate ancestor traversals that could observe
@@ -192,4 +221,37 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 	}
 
 	return view
+}
+
+// ancestorChainFromSnapshot walks parent_name through a name-indexed
+// snapshot map and returns the chain in parent-first walk order
+// (index 0 is the leaf). Pure function over the snapshot — no
+// registry lock required — so the view builder can compute one
+// chain per definition without re-acquiring locks. Bounded by
+// [definitionAncestorWalkLimit] like [DefinitionRegistry.AncestorSpecs].
+func ancestorChainFromSnapshot(byName map[string]Spec, name string) []Spec {
+	spec, ok := byName[name]
+	if !ok {
+		return nil
+	}
+	chain := []Spec{spec}
+	seen := map[string]struct{}{name: {}}
+	current := spec
+	for i := 0; i < definitionAncestorWalkLimit; i++ {
+		parentName := strings.TrimSpace(current.ParentName)
+		if parentName == "" {
+			break
+		}
+		if _, dup := seen[parentName]; dup {
+			break
+		}
+		parent, ok := byName[parentName]
+		if !ok {
+			break
+		}
+		chain = append(chain, parent)
+		seen[parentName] = struct{}{}
+		current = parent
+	}
+	return chain
 }

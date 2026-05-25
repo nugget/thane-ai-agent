@@ -64,6 +64,110 @@ type DefinitionEligibilityStatus struct {
 	NextTransitionAt time.Time `yaml:"next_transition_at,omitempty" json:"next_transition_at,omitempty"`
 }
 
+// EffectiveConditionEvaluation pairs one definition's eligibility
+// status with the loop that owns it, used by the effective-
+// eligibility surface to attribute which ancestor blocks the chain.
+// Only the leaf and its container ancestors appear here — non-
+// container ancestors don't contribute and are silently walked past
+// (see [EvaluateEffectiveConditions]).
+type EffectiveConditionEvaluation struct {
+	// From is [EffectiveOriginSelf] for the loop's own conditions,
+	// or the container ancestor's name when inherited.
+	From string `yaml:"from" json:"from"`
+	// Status is the result of [Conditions.Evaluate] for the owning
+	// loop, computed at the evaluation time supplied to
+	// [EvaluateEffectiveConditions].
+	Status DefinitionEligibilityStatus `yaml:"status" json:"status"`
+}
+
+// EvaluateEffectiveConditions aggregates one definition's
+// eligibility with its container ancestors' eligibility. Every
+// container ancestor must independently report eligible for the
+// result to be eligible — AND across the chain. When ineligible,
+// the returned status's Reason names the closest blocking ancestor
+// so the operator (or model) sees which level of the tree is
+// gating the loop. The per-level evaluations are returned alongside
+// so the effective surface can show provenance.
+//
+// Only the leaf itself (chain[0]) and container ancestors
+// contribute. Non-container ancestors are walked past silently —
+// matches the inheritance contract established in PR-A/B/C, where
+// only [OperationContainer] nodes pass scope down to descendants.
+// A service-loop ancestor with ineligible Conditions does not
+// block its descendant.
+//
+// chain is leaf-first: index 0 is the loop's own spec, index 1 is
+// its immediate parent, and so on — the shape
+// [DefinitionRegistry.AncestorSpecs] returns. now is the
+// evaluation time, threaded through so callers can substitute a
+// fixed clock in tests.
+func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation) {
+	if len(chain) == 0 {
+		return DefinitionEligibilityStatus{Eligible: true}, nil
+	}
+
+	evaluations := make([]EffectiveConditionEvaluation, 0, len(chain))
+	aggregate := DefinitionEligibilityStatus{Eligible: true}
+	var blockingFrom string
+
+	for i, spec := range chain {
+		// Leaf contributes regardless of operation; ancestors must be
+		// containers to participate in the cascade. Skip silently —
+		// non-container nodes don't appear in the per-level
+		// evaluations because they didn't contribute.
+		if i > 0 && spec.Operation != OperationContainer {
+			continue
+		}
+
+		status := spec.Conditions.Evaluate(now)
+		from := EffectiveOriginSelf
+		if i > 0 {
+			from = spec.Name
+		}
+		evaluations = append(evaluations, EffectiveConditionEvaluation{
+			From:   from,
+			Status: status,
+		})
+
+		if !status.Eligible {
+			if aggregate.Eligible {
+				// First ineligible we encounter wins attribution.
+				// Walking leaf-first means this is the closest
+				// blocking ancestor (or self), which is the most
+				// actionable thing to surface.
+				aggregate.Eligible = false
+				aggregate.Reason = status.Reason
+				blockingFrom = from
+			}
+		}
+
+		// NextTransitionAt rolls up to the earliest transition across
+		// the chain — eligibility could change because this level's
+		// schedule advances OR because some ancestor's schedule
+		// advances. The earliest wins as the meaningful "watch this
+		// time" value for schedulers.
+		if !status.NextTransitionAt.IsZero() {
+			if aggregate.NextTransitionAt.IsZero() || status.NextTransitionAt.Before(aggregate.NextTransitionAt) {
+				aggregate.NextTransitionAt = status.NextTransitionAt
+			}
+		}
+	}
+
+	if !aggregate.Eligible && blockingFrom != "" && blockingFrom != EffectiveOriginSelf {
+		// Suffix the attribution to the reason so callers reading
+		// just the reason string still see which ancestor blocked
+		// them. Keep the underlying reason in place so existing
+		// matchers (tests, log greps) still work.
+		if strings.TrimSpace(aggregate.Reason) == "" {
+			aggregate.Reason = fmt.Sprintf("blocked by container %q", blockingFrom)
+		} else {
+			aggregate.Reason = fmt.Sprintf("%s (blocked by container %q)", aggregate.Reason, blockingFrom)
+		}
+	}
+
+	return aggregate, evaluations
+}
+
 // IneligibleDefinitionError reports that a loop definition exists and
 // is active by policy, but its runtime conditions do not currently
 // permit launch.
