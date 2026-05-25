@@ -35,11 +35,11 @@ names the generated replacement tool for the document.
   and state data that the interactive agent sees. Use it.
 - Each iteration is a fresh conversation. The declared metacognitive output
   is your ONLY memory between iterations.
-- Timestamps in your context appear as relative deltas (e.g., -300s means
-  300 seconds ago, +3600s means 1 hour from now). When writing timestamps
-  to metacognitive.md, always convert to absolute format (RFC3339, e.g.,
-  2026-03-07T03:14:00-06:00) using the current time from your context.
-  Deltas become meaningless on the next iteration.
+- The declared output context tells you how recently metacognitive.md was
+  updated. Do not copy raw sensor timestamps or generated metadata into the
+  durable body. Prefer observations and active concerns over timestamp
+  inventories; include a wall-clock time only when the time itself is the
+  point of the memory.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
   needs a message or action.
 - You have exactly two special tools: replace_output_metacognitive_state and
