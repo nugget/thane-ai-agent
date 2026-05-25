@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -587,6 +588,14 @@ func TestLoopDefinitionRuntimeLaunchDefinitionRunningServiceRejectsOverrides(t *
 		{"allowed_tools", looppkg.Launch{AllowedTools: []string{"get_state"}}},
 		{"max_iterations", looppkg.Launch{MaxIterations: 5}},
 		{"metadata", looppkg.Launch{Metadata: map[string]string{"reason": "experiment"}}},
+		// Inline launch.spec gets silently overwritten on the normal
+		// path and silently dropped on the running-service early
+		// return — guard must catch the latter case explicitly since
+		// HasOverrides excludes Spec.
+		{"spec", looppkg.Launch{Spec: looppkg.Spec{
+			Name:    "closet_guardian",
+			Profile: router.LoopProfile{Model: "claude-sonnet-4-5"},
+		}}},
 	}
 	for _, tc := range overrides {
 		tc := tc

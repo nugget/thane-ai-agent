@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -186,6 +187,14 @@ type Spec struct {
 
 	// ParentID is the parent loop ID, if any.
 	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
+}
+
+// IsZero reports whether the spec is the zero value (no fields set).
+// Used by guards that need to detect "did the caller send a spec at
+// all" without enumerating every field. Uses [reflect.DeepEqual]
+// against the zero value so new fields are covered automatically.
+func (s Spec) IsZero() bool {
+	return reflect.DeepEqual(s, Spec{})
 }
 
 // Validate checks that the spec fields and derived engine-facing

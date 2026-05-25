@@ -327,3 +327,29 @@ func TestSpecJSONMarshalRejectsUnsupportedRetriggerMode(t *testing.T) {
 		t.Fatalf("error = %v, want unsupported retrigger mode", err)
 	}
 }
+
+func TestSpecIsZero(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero value", func(t *testing.T) {
+		if !(Spec{}).IsZero() {
+			t.Fatal("Spec{}.IsZero() = false, want true")
+		}
+	})
+	t.Run("name set", func(t *testing.T) {
+		if (Spec{Name: "x"}).IsZero() {
+			t.Fatal("Spec with Name set reported IsZero")
+		}
+	})
+	t.Run("nested profile set", func(t *testing.T) {
+		s := Spec{Profile: router.LoopProfile{Model: "x"}}
+		if s.IsZero() {
+			t.Fatal("Spec with Profile.Model set reported IsZero")
+		}
+	})
+	t.Run("metadata set", func(t *testing.T) {
+		if (Spec{Metadata: map[string]string{"k": "v"}}).IsZero() {
+			t.Fatal("Spec with Metadata set reported IsZero")
+		}
+	})
+}

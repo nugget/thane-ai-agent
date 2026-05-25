@@ -397,7 +397,19 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 			// The runtime captures requestOverride at launch time and
 			// never re-applies it; returning the existing loop ID
 			// silently would hide that fact from the caller.
-			if launch.HasOverrides() {
+			//
+			// Two failure modes to catch:
+			//   1. Per-launch overrides (model, hints, allowed_tools,
+			//      etc.) — Launch.HasOverrides covers these.
+			//   2. An inline launch.spec — normally overwritten by the
+			//      runtime spec further down, but on the
+			//      already-running early return below the overwrite
+			//      never runs and the caller's spec would silently
+			//      vanish. HasOverrides intentionally excludes Spec
+			//      (it would otherwise flag the non-running path too,
+			//      where the overwrite makes it benign); check Spec
+			//      separately here so the guard is complete.
+			if launch.HasOverrides() || !launch.Spec.IsZero() {
 				log.Warn("rejecting launch overrides for running service definition",
 					"loop_id", existing.ID(),
 					"operation", looppkg.OperationService,
