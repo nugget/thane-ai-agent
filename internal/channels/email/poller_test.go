@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -106,14 +107,15 @@ func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
 		WithContactResolver(contacts),
 	)
 
+	// Order: newest-first, matching what fetchEnvelopes returns from IMAP.
 	new := []Envelope{
-		{UID: 101, From: "boss@example.com", Subject: "Urgent"},
-		{UID: 102, From: "friend@example.com", Subject: "Hi"},
 		{UID: 103, From: "spammer@example.com", Subject: "Buy now"},
+		{UID: 102, From: "friend@example.com", Subject: "Hi"},
+		{UID: 101, From: "boss@example.com", Subject: "Urgent"},
 	}
-	sent, err := p.dispatchAccountMessages(context.Background(), "personal", new)
+	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 100, new)
 	if err != nil {
-		t.Fatalf("dispatchAccountMessages: %v", err)
+		t.Fatalf("dispatchAccountBatches: %v", err)
 	}
 	if sent != 3 {
 		t.Fatalf("delivered events = %d, want 3", sent)
@@ -166,14 +168,110 @@ func TestPollerNoBusAdvancesQuietly(t *testing.T) {
 	mgr := NewManager(cfg, slog.Default())
 	p := NewPoller(mgr, state, slog.Default())
 
-	sent, err := p.dispatchAccountMessages(context.Background(), "readonly", []Envelope{
+	sent, err := p.dispatchAccountBatches(context.Background(), "readonly", "readonly:INBOX", 0, []Envelope{
 		{UID: 200, From: "x@example.com"},
 	})
 	if err != nil {
-		t.Fatalf("dispatchAccountMessages without bus: %v", err)
+		t.Fatalf("dispatchAccountBatches without bus: %v", err)
 	}
 	if sent != 0 {
 		t.Errorf("delivered = %d, want 0 when bus is nil", sent)
+	}
+}
+
+// TestPollerBatchesAtMaxLoopEventsPerWake pins the Codex/Copilot fix:
+// a window with more than MaxLoopEventsPerWake new messages is split
+// into multiple envelopes, and per-batch high-water advance means a
+// late-batch failure preserves all earlier progress.
+func TestPollerBatchesAtMaxLoopEventsPerWake(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name: "personal",
+		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+	}}}
+	mgr := NewManager(cfg, slog.Default())
+	bus, delivered := recordingBus()
+	p := NewPoller(mgr, state, slog.Default(), WithMessageBus(bus))
+
+	total := messages.MaxLoopEventsPerWake + 2
+	newMessages := make([]Envelope, total)
+	for i := 0; i < total; i++ {
+		// Newest-first: highest UID at index 0.
+		newMessages[i] = Envelope{
+			UID:     uint32(1000 - i),
+			From:    "sender@example.com",
+			Subject: "msg",
+		}
+	}
+
+	sent, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 0, newMessages)
+	if err != nil {
+		t.Fatalf("dispatchAccountBatches: %v", err)
+	}
+	if sent != total {
+		t.Fatalf("delivered = %d, want %d", sent, total)
+	}
+	envs := delivered()
+	if len(envs) != 2 {
+		t.Fatalf("envelope count = %d, want 2 (one for each batch)", len(envs))
+	}
+	// First batch contains the oldest 50 (ordered oldest-first), second
+	// batch contains the newest 2. High-water mark should be the newest
+	// UID delivered.
+	hwm, _ := state.Get(pollNamespace, "personal:INBOX")
+	if hwm != "1000" {
+		t.Errorf("high-water mark = %q, want 1000 (newest UID after success)", hwm)
+	}
+}
+
+// TestPollerBatchFailurePreservesPartialProgress pins the retry safety:
+// when a later batch's Send fails, the high-water mark reflects the
+// last successful batch's max UID — not the pre-poll value, and not
+// the never-delivered batch's UIDs.
+func TestPollerBatchFailurePreservesPartialProgress(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name: "personal",
+		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+	}}}
+	mgr := NewManager(cfg, slog.Default())
+
+	// Custom bus where the second batch's Send fails.
+	bus := messages.NewBus(nil)
+	sendCount := 0
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		sendCount++
+		if sendCount == 1 {
+			return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+		}
+		return messages.DeliveryResult{}, errors.New("synthetic second-batch failure")
+	})
+
+	p := NewPoller(mgr, state, slog.Default(), WithMessageBus(bus))
+
+	total := messages.MaxLoopEventsPerWake + 2
+	newMessages := make([]Envelope, total)
+	for i := 0; i < total; i++ {
+		newMessages[i] = Envelope{UID: uint32(1000 - i), From: "sender@example.com"}
+	}
+
+	delivered, err := p.dispatchAccountBatches(context.Background(), "personal", "personal:INBOX", 0, newMessages)
+	if err == nil {
+		t.Fatal("expected error from failing second batch")
+	}
+	if delivered != messages.MaxLoopEventsPerWake {
+		t.Fatalf("delivered = %d, want %d (first batch only)", delivered, messages.MaxLoopEventsPerWake)
+	}
+
+	// First batch contained the oldest 50 UIDs (after the oldest-first
+	// reorder): UIDs 951..1000-(50-1)=951..1000? Actually with the
+	// reorder applied to a newest-first list of 52 (UIDs 1000..949),
+	// the first batch oldest-first holds UIDs 949..998 (50 messages),
+	// so the high-water should land at 998 — not 1000 (the never-sent
+	// second batch) and not 0 (the starting mark).
+	hwm, _ := state.Get(pollNamespace, "personal:INBOX")
+	if hwm != "998" {
+		t.Errorf("high-water mark = %q, want 998 (last successful batch's max UID)", hwm)
 	}
 }
 

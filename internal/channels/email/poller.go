@@ -108,9 +108,14 @@ func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger, opts
 // is recorded silently without reporting it as new — this prevents
 // flooding the agent with the entire inbox on initial deployment.
 //
+// Per-account dispatch batches at [messages.MaxLoopEventsPerWake] and
+// the high-water mark advances per successful batch, so a bus failure
+// mid-stream preserves prior progress without losing later messages.
+//
 // Network errors are logged and skipped per-account; a failure on one
-// account does not prevent checking others. Returns the number of
-// wake envelopes successfully delivered.
+// account does not prevent checking others. Returns the total number
+// of event-wake notifications delivered (one per inbound message that
+// reached the bus), matching forge/media-poller accounting.
 func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 	accounts := p.manager.AccountNames()
 	p.logger.Debug("email poll starting", "accounts", len(accounts))
@@ -138,7 +143,7 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 	p.logger.Debug("email poll complete",
 		"accounts", len(accounts),
 		"new_messages", totalNew,
-		"delivered_envelopes", delivered,
+		"delivered_events", delivered,
 		"failed", failed,
 	)
 
@@ -157,11 +162,13 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (int, error) {
 }
 
 // checkAccount checks a single account's INBOX for new messages and
-// dispatches one envelope per account-poll-cycle containing all new
-// messages as structured events. Returns (newMessageCount, envelopesSent, err).
-// envelopesSent is 0 when nothing new arrived OR the message bus is not
-// configured; in the latter case the high-water mark still advances so
-// re-enabling a bus later doesn't backfill historical mail.
+// dispatches them in [messages.MaxLoopEventsPerWake]-sized batches.
+// Returns (newMessageCount, eventsDelivered, err). eventsDelivered is
+// the total LoopEventPayloads sent across all successful batches;
+// returns 0 (without error) when the message bus is not configured.
+// On dispatch failure the high-water mark reflects whatever batches
+// did succeed, so the next poll picks up from the last delivered UID
+// instead of replaying or losing the whole window.
 func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int, error) {
 	client, err := p.manager.Account(accountName)
 	if err != nil {
@@ -239,12 +246,15 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 		return 0, 0, nil
 	}
 
-	// Advance the high-water mark BEFORE filtering self-sent so they
-	// don't reappear on the next poll. The mark reflects the IMAP
-	// truth (what UIDs we've already seen), not what we chose to
-	// dispatch.
-	if err := p.advanceHighWaterMark(accountName, stateKey, storedUID, newMessages); err != nil {
-		return 0, 0, err
+	// Record the highest UID across ALL fetched messages (pre-filter)
+	// so a successful run can advance the high-water mark past any
+	// self-sent UIDs above the last delivered batch. The advance is
+	// NOT applied here — that would lose mail on dispatch failure.
+	var overallMaxUID uint64
+	for _, env := range newMessages {
+		if uint64(env.UID) > overallMaxUID {
+			overallMaxUID = uint64(env.UID)
+		}
 	}
 
 	preFilterCount := len(newMessages)
@@ -256,29 +266,47 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (int, int
 			"after", len(newMessages),
 		)
 	}
-	if len(newMessages) == 0 {
-		return 0, 0, nil
+
+	delivered, err := p.dispatchAccountBatches(ctx, accountName, stateKey, storedUID, newMessages)
+	if err != nil {
+		// Partial progress is already persisted by dispatchAccountBatches
+		// (per-batch high-water advance on success). The next poll picks
+		// up from the last-successful UID.
+		return preFilterCount, delivered, err
 	}
 
-	delivered, err := p.dispatchAccountMessages(ctx, accountName, newMessages)
-	if err != nil {
-		return len(newMessages), 0, err
+	// All filtered messages delivered. Bump the high-water mark past
+	// any self-sent UIDs above the final batch so the next poll
+	// doesn't re-observe them. No-op when the dispatched batches
+	// already covered overallMaxUID (the common case).
+	if overallMaxUID > 0 {
+		if err := p.setHighWaterMark(stateKey, overallMaxUID); err != nil {
+			return preFilterCount, delivered, err
+		}
 	}
-	return len(newMessages), delivered, nil
+	return preFilterCount, delivered, nil
 }
 
-// dispatchAccountMessages converts a per-account batch of new IMAP
-// messages into a single event-source envelope addressed at the
-// configured wake_loop target. Each message becomes one
-// [messages.LoopEventPayload] with sender, subject, and the trust-zone
-// classification used to derive the envelope's wake_loop.tags.
+// dispatchAccountBatches splits the account's filtered new-message
+// list into [messages.MaxLoopEventsPerWake]-sized batches, dispatches
+// each as a single event-source envelope, and advances the high-water
+// mark after each successful batch. Per-batch advancement is the
+// retry-safety lever: a bus failure mid-stream loses the failing
+// batch's progress but preserves all prior batches; the next poll
+// picks up from the last successful UID instead of replaying every
+// previously-delivered message or losing the whole window.
 //
-// Returns 0 (without error) when the message bus is unconfigured — the
-// high-water mark has already advanced, so re-enabling the bus later
-// won't backfill these messages. The poller's loop hydration calls
-// CheckNewMessages on every wake, so a transient bus-missing window
-// just produces no-op iterations.
-func (p *Poller) dispatchAccountMessages(ctx context.Context, accountName string, newMessages []Envelope) (int, error) {
+// Batches are ordered oldest-first so partial progress always advances
+// monotonically. Each batch's wake envelope carries the deduplicated
+// union of sender-trust tags for the messages in that batch — a
+// stranger-heavy batch followed by an owner batch gets distinct tags
+// on each iteration, instead of always seeing the union across all
+// senders.
+//
+// Returns the total number of events delivered across all successful
+// batches. A nil message bus is a no-op (logs and returns 0) so a
+// transient bus-missing window doesn't error.
+func (p *Poller) dispatchAccountBatches(ctx context.Context, accountName, stateKey string, currentMark uint64, newMessages []Envelope) (int, error) {
 	if p.bus == nil {
 		p.logger.Warn("email message bus not configured; new mail observed but not dispatched",
 			"account", accountName,
@@ -286,16 +314,75 @@ func (p *Poller) dispatchAccountMessages(ctx context.Context, accountName string
 		)
 		return 0, nil
 	}
+	if len(newMessages) == 0 {
+		return 0, nil
+	}
 
-	events := make([]messages.LoopEventPayload, 0, len(newMessages))
+	// IMAP returns newest-first; flip to oldest-first so per-batch
+	// progress always advances the high-water mark monotonically.
+	ordered := make([]Envelope, len(newMessages))
+	for i, env := range newMessages {
+		ordered[len(newMessages)-1-i] = env
+	}
+
+	const batchSize = messages.MaxLoopEventsPerWake
+	delivered := 0
+	currentHigh := currentMark
+	for start := 0; start < len(ordered); start += batchSize {
+		end := start + batchSize
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunk := ordered[start:end]
+		events, tags, batchMaxUID := p.buildBatchEvents(accountName, chunk)
+
+		target := p.wakeLoop
+		target.Tags = mergeUniqueStrings(target.Tags, tags)
+		env, err := messages.NewEventSourceEnvelope(
+			messages.Identity{Kind: messages.IdentitySystem, Name: "email_poller"},
+			target,
+			"email_poll",
+			events,
+		)
+		if err != nil {
+			return delivered, fmt.Errorf("build email wake envelope (batch %d-%d of %d): %w", start, end, len(ordered), err)
+		}
+		if _, err := p.bus.Send(ctx, env); err != nil {
+			return delivered, fmt.Errorf("deliver email wake envelope (batch %d-%d of %d): %w", start, end, len(ordered), err)
+		}
+		delivered += len(events)
+
+		// Persist per-batch progress only when this batch's max UID
+		// actually exceeds the running mark — guards against
+		// non-monotonic advancement if the slice ever arrives
+		// reordered.
+		if batchMaxUID > currentHigh {
+			if err := p.setHighWaterMark(stateKey, batchMaxUID); err != nil {
+				return delivered, err
+			}
+			currentHigh = batchMaxUID
+		}
+	}
+	return delivered, nil
+}
+
+// buildBatchEvents converts a chunk of envelopes into structured
+// LoopEventPayloads, returning the events, the deduplicated sender-tag
+// set for the batch, and the highest UID observed in the chunk.
+func (p *Poller) buildBatchEvents(accountName string, chunk []Envelope) ([]messages.LoopEventPayload, []string, uint64) {
+	events := make([]messages.LoopEventPayload, 0, len(chunk))
 	tagsSeen := make(map[string]struct{})
 	var tags []string
-	for _, env := range newMessages {
+	var maxUID uint64
+	for _, env := range chunk {
 		zone, _ := p.lookupTrustZone(env.From)
 		tag := senderTag(zone)
 		if _, dup := tagsSeen[tag]; !dup {
 			tagsSeen[tag] = struct{}{}
 			tags = append(tags, tag)
+		}
+		if uint64(env.UID) > maxUID {
+			maxUID = uint64(env.UID)
 		}
 		events = append(events, messages.LoopEventPayload{
 			Source:     "email_poll",
@@ -314,27 +401,18 @@ func (p *Poller) dispatchAccountMessages(ctx context.Context, accountName string
 			},
 		})
 	}
+	return events, tags, maxUID
+}
 
-	// Sender-trust tags ride alongside any operator-configured tags on
-	// the wake target. Operator intent (set via WithDefaultWakeLoop)
-	// wins on dedup, so a custom handler that already asks for
-	// "inbox_triage" still gets it.
-	target := p.wakeLoop
-	target.Tags = mergeUniqueStrings(target.Tags, tags)
-
-	env, err := messages.NewEventSourceEnvelope(
-		messages.Identity{Kind: messages.IdentitySystem, Name: "email_poller"},
-		target,
-		"email_poll",
-		events,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("build email wake envelope: %w", err)
+// setHighWaterMark persists a UID to the per-account high-water key
+// without consulting prior state. The caller is responsible for
+// monotonicity; dispatchAccountBatches enforces that by tracking the
+// running mark across batches.
+func (p *Poller) setHighWaterMark(stateKey string, uid uint64) error {
+	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uid, 10)); err != nil {
+		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
 	}
-	if _, err := p.bus.Send(ctx, env); err != nil {
-		return 0, fmt.Errorf("deliver email wake envelope: %w", err)
-	}
-	return len(events), nil
+	return nil
 }
 
 // lookupTrustZone returns the contact's trust zone for a sender. An

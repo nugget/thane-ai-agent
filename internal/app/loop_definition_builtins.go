@@ -81,9 +81,17 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:       email.DefaultHandlerLoopName,
 			Enabled:    true,
-			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when worth a deeper look, file or reply via email_compose when appropriate, and notify the owner about anything that genuinely needs attention.",
+			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when a message warrants a deeper look, reply via email_reply or send a fresh message via email_send, file or trash with email_move when handled, and notify the owner about anything that genuinely needs attention.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
+			// "email" stays in the loop's permanent tag set so the
+			// email_* tools are loadable regardless of which
+			// per-wake sender-trust tag (owner/trusted/etc.) is
+			// active. Without this, the per-wake tags become a
+			// non-empty InitialTags set that enables tag filtering,
+			// and the email-tagged tools the handler is told to use
+			// get filtered out.
+			Tags: []string{"email"},
 			Profile: router.LoopProfile{
 				Mission:      "email_triage",
 				LocalOnly:    "false",
