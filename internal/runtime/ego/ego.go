@@ -112,16 +112,29 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		Profile: router.LoopProfile{
 			Mission:          "ego",
 			DelegationGating: "disabled",
+			QualityFloor:     fmt.Sprintf("%d", cfg.QualityFloor),
 			ExtraHints:       map[string]string{"source": "ego"},
 		},
-		Supervisor:             cfg.SupervisorProbability > 0,
-		SupervisorProb:         cfg.SupervisorProbability,
-		QualityFloor:           cfg.QualityFloor,
-		SupervisorQualityFloor: cfg.SupervisorQualityFloor,
+		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
+		Supervisor:        cfg.SupervisorProbability > 0,
+		SupervisorProb:    cfg.SupervisorProbability,
 		Metadata: map[string]string{
 			"subsystem": "ego",
 			"category":  "service",
 		},
+	}
+}
+
+// supervisorProfile builds the ego service's per-turn-mode
+// overrides from the supervisor router config. Returns nil when
+// no overrides are declared, signaling the loop runtime to reuse
+// the normal Profile during supervisor turns.
+func supervisorProfile(qualityFloor int) *router.LoopProfile {
+	if qualityFloor <= 0 {
+		return nil
+	}
+	return &router.LoopProfile{
+		QualityFloor: fmt.Sprintf("%d", qualityFloor),
 	}
 }
 
@@ -139,11 +152,11 @@ func HydrateSpec(spec loop.Spec, cfg Config) loop.Spec {
 
 // BuildSpec returns a [loop.Spec] that implements the ego loop as a
 // service loop. The returned spec declares the durable output document
-// and uses runtime hooks to build prompts.
+// and uses runtime hooks to build prompts. The supervisor prompt prefix
+// is produced by [prompts.EgoPrompt] inside the TaskBuilder, not via
+// the spec-level [SupervisorProfile.Instructions] hook.
 func BuildSpec(cfg Config) loop.Spec {
-	spec := DefinitionSpec(cfg)
-	spec.SupervisorContext = ""
-	return HydrateSpec(spec, cfg)
+	return HydrateSpec(DefinitionSpec(cfg), cfg)
 }
 
 // BuildLoopConfig returns the engine-facing [loop.Config] view of the

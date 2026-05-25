@@ -813,6 +813,22 @@ func (l *Loop) routingFactorsSnapshot() map[string]string {
 	return out
 }
 
+// supervisorRoutingFactorsSnapshot returns the loop's leaf-level
+// SupervisorProfile-derived routing factors under the loop lock,
+// for use by the cascade walker. Mirrors [routingFactorsSnapshot]
+// but reads from [Config.SupervisorProfile] and contributes only
+// to the SupervisorRoutingFactors cascade — the normal-turn
+// cascade is unaffected. Returns nil when no SupervisorProfile is
+// declared on this loop.
+func (l *Loop) supervisorRoutingFactorsSnapshot() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.config.SupervisorProfile == nil {
+		return nil
+	}
+	return l.config.SupervisorProfile.RoutingFactors()
+}
+
 // delegationGatingSnapshot returns the loop's effective delegation-
 // gating value under the loop lock. Spec.DelegationGating wins
 // when set; otherwise the Profile-side value contributes. Same
@@ -869,9 +885,10 @@ func (l *Loop) inheritedTags() []string {
 // [prepareAgentTurnRequest] to fold inherited values into the
 // existing merge chain without double-counting the loop's own.
 type inheritedCascade struct {
-	ExcludeTools     []string
-	RoutingFactors   map[string]string
-	DelegationGating string
+	ExcludeTools             []string
+	RoutingFactors           map[string]string
+	SupervisorRoutingFactors map[string]string
+	DelegationGating         string
 }
 
 func (l *Loop) inheritedCascade() inheritedCascade {
@@ -903,6 +920,18 @@ func (l *Loop) inheritedCascade() inheritedCascade {
 			continue
 		}
 		out.RoutingFactors[f.Key] = f.Value
+	}
+	for _, f := range eff.SupervisorRoutingFactors {
+		if f.From == EffectiveOriginSelf {
+			continue
+		}
+		if out.SupervisorRoutingFactors == nil {
+			out.SupervisorRoutingFactors = make(map[string]string)
+		}
+		if _, dup := out.SupervisorRoutingFactors[f.Key]; dup {
+			continue
+		}
+		out.SupervisorRoutingFactors[f.Key] = f.Value
 	}
 	if eff.DelegationGating != nil && eff.DelegationGating.From != EffectiveOriginSelf {
 		out.DelegationGating = eff.DelegationGating.Value
@@ -1643,8 +1672,14 @@ func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, 
 		}
 	} else {
 		task = l.config.Task
-		if input.Supervisor && l.config.SupervisorContext != "" {
-			task = l.config.SupervisorContext + "\n\n" + task
+		// SupervisorProfile.Instructions is the post-PR-R1 home
+		// for the prompt-prefix that used to live in SupervisorContext.
+		// Self-only by design (matches Profile.Instructions cascade
+		// semantics from PR-E3) — supervisor instructions describe
+		// what to do on this loop's review turn, not "all my
+		// descendants get this prefix."
+		if input.Supervisor && l.config.SupervisorProfile != nil && l.config.SupervisorProfile.Instructions != "" {
+			task = l.config.SupervisorProfile.Instructions + "\n\n" + task
 		}
 	}
 	if l.taskOverride != "" {
@@ -1686,14 +1721,12 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	}
 	if isSupervisor {
 		hints["supervisor"] = "true"
-		if l.config.SupervisorQualityFloor > 0 {
-			hints["quality_floor"] = fmt.Sprintf("%d", l.config.SupervisorQualityFloor)
-		}
+		// Default a supervisor turn to cloud-eligible and let the
+		// SupervisorProfile overlay refine. Operators or containers
+		// can flip local_only back to "true" via SupervisorProfile if
+		// they really want a local-only supervisor pass.
 		hints["local_only"] = "false"
 	} else {
-		if l.config.QualityFloor > 0 {
-			hints["quality_floor"] = fmt.Sprintf("%d", l.config.QualityFloor)
-		}
 		hints["local_only"] = "true"
 	}
 	// Container ancestors fold into the merge chain alongside
@@ -1715,6 +1748,28 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	}
 	for k, v := range req.RoutingFactors {
 		hints[k] = v
+	}
+	// SupervisorProfile overlay: when this is a supervisor turn,
+	// merge the loop's leaf-level SupervisorProfile routing factors
+	// AND any cascaded supervisor-profile factors from container
+	// ancestors. Higher priority than the normal Profile-derived
+	// factors above (supervisor overrides win over leaf Profile),
+	// lower than per-launch overrides (operator intent still wins
+	// last). Field-by-field merge; an empty key falls back to the
+	// pre-overlay value already in hints.
+	if isSupervisor {
+		for k, v := range cascade.SupervisorRoutingFactors {
+			if v != "" {
+				hints[k] = v
+			}
+		}
+		if l.config.SupervisorProfile != nil {
+			for k, v := range l.config.SupervisorProfile.RoutingFactors() {
+				if v != "" {
+					hints[k] = v
+				}
+			}
+		}
 	}
 	for k, v := range l.requestOverride.RoutingFactors {
 		hints[k] = v

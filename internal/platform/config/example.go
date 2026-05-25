@@ -381,8 +381,8 @@ func ExampleConfig() *Config {
 			DefaultSleep:          "10m",
 			Jitter:                floatPtr(0.2),
 			SupervisorProbability: floatPtr(0.1),
-			Router:                MetacognitiveRouterConfig{QualityFloor: 3},
-			SupervisorRouter:      MetacognitiveRouterConfig{QualityFloor: 8},
+			Router:                RouterConfig{QualityFloor: 3},
+			SupervisorRouter:      RouterConfig{QualityFloor: 8},
 		},
 
 		Ego: EgoConfig{
@@ -392,8 +392,8 @@ func ExampleConfig() *Config {
 			DefaultSleep:          "6h",
 			Jitter:                floatPtr(0.2),
 			SupervisorProbability: floatPtr(0.2),
-			Router:                EgoRouterConfig{QualityFloor: 5},
-			SupervisorRouter:      EgoRouterConfig{QualityFloor: 8},
+			Router:                RouterConfig{QualityFloor: 5},
+			SupervisorRouter:      RouterConfig{QualityFloor: 8},
 		},
 
 		Agent: AgentConfig{

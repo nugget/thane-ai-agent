@@ -6,9 +6,12 @@
 // via a markdown file (metacognitive.md by default). The loop's cost is
 // self-limiting: quiet periods produce long sleeps and few iterations.
 //
-// "Dice" randomly select a frontier model for supervisor turns that
-// review the loop's own behavior, catching blind spots that the cheaper
-// local model's consistent reasoning patterns miss.
+// Supervisor turns randomly select a frontier model to review the
+// loop's own behavior, catching blind spots that the cheaper local
+// model's consistent reasoning patterns miss. The per-wake
+// probability is driven by [Config.SupervisorProbability]; when a
+// supervisor turn fires, the loop overlays
+// [Spec.SupervisorProfile] on its normal routing.
 //
 // The loop lifecycle is managed by the [loop] package. This package
 // provides [BuildLoopConfig] to assemble a [loop.Config] with the
@@ -180,17 +183,30 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		Profile: router.LoopProfile{
 			Mission:          "metacognitive",
 			DelegationGating: "disabled",
+			QualityFloor:     fmt.Sprintf("%d", cfg.QualityFloor),
 			ExtraHints:       map[string]string{"source": "metacognitive"},
 		},
+		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
 
-		Supervisor:             cfg.SupervisorProbability > 0,
-		SupervisorProb:         cfg.SupervisorProbability,
-		QualityFloor:           cfg.QualityFloor,
-		SupervisorQualityFloor: cfg.SupervisorQualityFloor,
+		Supervisor:     cfg.SupervisorProbability > 0,
+		SupervisorProb: cfg.SupervisorProbability,
 		Metadata: map[string]string{
 			"subsystem": "metacognitive",
 			"category":  "service",
 		},
+	}
+}
+
+// supervisorProfile builds the metacognitive service's per-turn-
+// mode overrides from the supervisor router config. Returns nil
+// when no overrides are declared, signaling the loop runtime to
+// reuse the normal Profile during supervisor turns.
+func supervisorProfile(qualityFloor int) *router.LoopProfile {
+	if qualityFloor <= 0 {
+		return nil
+	}
+	return &router.LoopProfile{
+		QualityFloor: fmt.Sprintf("%d", qualityFloor),
 	}
 }
 
@@ -217,11 +233,11 @@ func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 // output document and uses runtime hooks to build prompts and
 // append iteration logs.
 func BuildSpec(cfg Config, opts Opts) loop.Spec {
-	spec := DefinitionSpec(cfg)
 	// TaskBuilder handles supervisor augmentation itself via
-	// prompts.MetacognitivePrompt, so SupervisorContext is empty.
-	spec.SupervisorContext = ""
-	return HydrateSpec(spec, cfg, opts)
+	// prompts.MetacognitivePrompt, so SupervisorProfile.Instructions
+	// is left unset; the per-turn prompt prefix comes from the
+	// prompts package rather than the spec-level overlay.
+	return HydrateSpec(DefinitionSpec(cfg), cfg, opts)
 }
 
 // BuildLoopConfig returns the engine-facing [loop.Config] view of the

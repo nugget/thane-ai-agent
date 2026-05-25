@@ -160,18 +160,27 @@ type Spec struct {
 	// may make.
 	MaxIter int `yaml:"max_iter,omitempty" json:"max_iter,omitempty"`
 
-	// Supervisor enables frontier model dice rolls.
+	// Supervisor enables periodic supervisor turns: a Bernoulli trial
+	// at each wake decides whether this iteration uses the more
+	// capable model and the SupervisorProfile overrides defined below.
 	Supervisor bool `yaml:"supervisor,omitempty" json:"supervisor,omitempty"`
-	// SupervisorProb is the probability of using the supervisor model.
+	// SupervisorProb is the per-wake probability [0.0, 1.0] of a
+	// supervisor turn when Supervisor is true.
 	SupervisorProb float64 `yaml:"supervisor_prob,omitempty" json:"supervisor_prob,omitempty"`
-	// QualityFloor is the minimum model quality rating for normal
-	// iterations.
-	QualityFloor int `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
-	// SupervisorContext is prepended during supervisor turns.
-	SupervisorContext string `yaml:"supervisor_context,omitempty" json:"supervisor_context,omitempty"`
-	// SupervisorQualityFloor is the quality floor for supervisor
-	// turns.
-	SupervisorQualityFloor int `yaml:"supervisor_quality_floor,omitempty" json:"supervisor_quality_floor,omitempty"`
+	// SupervisorProfile carries the per-turn-mode overrides applied
+	// during supervisor turns. It is an OVERLAY on Profile: any field
+	// set here wins, any field left empty falls back to Profile.
+	// Notably, SupervisorProfile.QualityFloor lets a loop demand a
+	// higher rating during review turns, and
+	// SupervisorProfile.Instructions replaces the (now-retired)
+	// SupervisorContext as the prompt-prefix path. Like
+	// [Profile.Instructions], SupervisorProfile.Instructions is
+	// self-only — it does not cascade through container ancestors.
+	//
+	// Nil means "supervisor turns use Profile as-is" — i.e. the
+	// supervisor flag still flips on the iteration record but no
+	// routing-shape overrides apply.
+	SupervisorProfile *router.LoopProfile `yaml:"supervisor_profile,omitempty" json:"supervisor_profile,omitempty"`
 
 	// OnRetrigger determines behavior when the loop is triggered again
 	// while already running.
@@ -308,12 +317,18 @@ func (s *Spec) Validate() error {
 // than an unused field, so the failure mode here is loud rather
 // than silently ignored.
 func validateContainerShape(s *Spec) error {
+	// Containers can declare a SupervisorProfile for cascade to
+	// descendants, but the supervisor-turn Bernoulli trial itself
+	// never fires on a container (containers don't execute), so
+	// Supervisor and SupervisorProb must remain off.
+	// SupervisorProfile-only is OK — that's the inheritance vector
+	// the cascade walker uses.
 	return containerShape(
 		s.Name, s.Task,
 		s.TaskBuilder != nil, s.TurnBuilder != nil, s.Handler != nil, s.WaitFunc != nil, s.PostIterate != nil,
 		s.SleepMin, s.SleepMax, s.SleepDefault, s.MaxDuration,
 		s.Jitter, s.MaxIter,
-		s.Supervisor, s.SupervisorProb, s.SupervisorContext,
+		s.Supervisor, s.SupervisorProb,
 		len(s.Outputs), s.Completion,
 	)
 }
@@ -358,40 +373,38 @@ func (s *Spec) ToConfig() Config {
 	}
 	ns := s.normalized()
 	return Config{
-		Name:                   ns.Name,
-		Task:                   ns.Task,
-		Operation:              ns.Operation,
-		Completion:             ns.Completion,
-		Outputs:                cloneOutputs(ns.Outputs),
-		Subscriptions:          cloneEntitySubscriptions(ns.Subscriptions),
-		Tags:                   append([]string(nil), ns.Tags...),
-		ExcludeTools:           append([]string(nil), ns.ExcludeTools...),
-		SleepMin:               ns.SleepMin,
-		SleepMax:               ns.SleepMax,
-		SleepDefault:           ns.SleepDefault,
-		Jitter:                 cloneFloat64Ptr(ns.Jitter),
-		MaxDuration:            ns.MaxDuration,
-		MaxIter:                ns.MaxIter,
-		Supervisor:             ns.Supervisor,
-		SupervisorProb:         ns.SupervisorProb,
-		QualityFloor:           ns.QualityFloor,
-		SupervisorContext:      ns.SupervisorContext,
-		SupervisorQualityFloor: ns.SupervisorQualityFloor,
-		OnRetrigger:            ns.OnRetrigger,
-		TaskBuilder:            ns.TaskBuilder,
-		TurnBuilder:            ns.TurnBuilder,
-		PostIterate:            ns.PostIterate,
-		WaitFunc:               ns.WaitFunc,
-		Handler:                ns.Handler,
-		RoutingFactors:         cloneStringMap(ns.RoutingFactors),
-		DelegationGating:       ns.DelegationGating,
-		FallbackContent:        ns.FallbackContent,
-		Setup:                  ns.Setup,
-		RuntimeTools:           cloneRuntimeTools(ns.RuntimeTools),
-		OutputContextBuilder:   ns.OutputContextBuilder,
-		Metadata:               cloneStringMap(ns.Metadata),
-		ParentID:               ns.ParentID,
-		ParentName:             ns.ParentName,
+		Name:                 ns.Name,
+		Task:                 ns.Task,
+		Operation:            ns.Operation,
+		Completion:           ns.Completion,
+		Outputs:              cloneOutputs(ns.Outputs),
+		Subscriptions:        cloneEntitySubscriptions(ns.Subscriptions),
+		Tags:                 append([]string(nil), ns.Tags...),
+		ExcludeTools:         append([]string(nil), ns.ExcludeTools...),
+		SleepMin:             ns.SleepMin,
+		SleepMax:             ns.SleepMax,
+		SleepDefault:         ns.SleepDefault,
+		Jitter:               cloneFloat64Ptr(ns.Jitter),
+		MaxDuration:          ns.MaxDuration,
+		MaxIter:              ns.MaxIter,
+		Supervisor:           ns.Supervisor,
+		SupervisorProb:       ns.SupervisorProb,
+		SupervisorProfile:    cloneLoopProfilePtr(ns.SupervisorProfile),
+		OnRetrigger:          ns.OnRetrigger,
+		TaskBuilder:          ns.TaskBuilder,
+		TurnBuilder:          ns.TurnBuilder,
+		PostIterate:          ns.PostIterate,
+		WaitFunc:             ns.WaitFunc,
+		Handler:              ns.Handler,
+		RoutingFactors:       cloneStringMap(ns.RoutingFactors),
+		DelegationGating:     ns.DelegationGating,
+		FallbackContent:      ns.FallbackContent,
+		Setup:                ns.Setup,
+		RuntimeTools:         cloneRuntimeTools(ns.RuntimeTools),
+		OutputContextBuilder: ns.OutputContextBuilder,
+		Metadata:             cloneStringMap(ns.Metadata),
+		ParentID:             ns.ParentID,
+		ParentName:           ns.ParentName,
 	}
 }
 
@@ -399,7 +412,7 @@ func (s *Spec) ToConfig() Config {
 // rejects every execution-related field, returning a category-error for
 // authoring mistakes (Spec layer) or programmer mistakes (Config layer)
 // rather than silently ignoring the value at runtime.
-func containerShape(name, task string, hasTaskBuilder, hasTurnBuilder, hasHandler, hasWaitFunc, hasPostIterate bool, sleepMin, sleepMax, sleepDefault, maxDuration time.Duration, jitter *float64, maxIter int, supervisor bool, supervisorProb float64, supervisorContext string, outputCount int, completion Completion) error {
+func containerShape(name, task string, hasTaskBuilder, hasTurnBuilder, hasHandler, hasWaitFunc, hasPostIterate bool, sleepMin, sleepMax, sleepDefault, maxDuration time.Duration, jitter *float64, maxIter int, supervisor bool, supervisorProb float64, outputCount int, completion Completion) error {
 	if strings.TrimSpace(task) != "" {
 		return fmt.Errorf("loop: container %q cannot set task", name)
 	}
@@ -430,7 +443,7 @@ func containerShape(name, task string, hasTaskBuilder, hasTurnBuilder, hasHandle
 	if maxIter != 0 {
 		return fmt.Errorf("loop: container %q cannot set max_iter", name)
 	}
-	if supervisor || supervisorProb != 0 || strings.TrimSpace(supervisorContext) != "" {
+	if supervisor || supervisorProb != 0 {
 		return fmt.Errorf("loop: container %q cannot set supervisor fields", name)
 	}
 	if outputCount > 0 {
@@ -512,4 +525,22 @@ func cloneFloat64Ptr(src *float64) *float64 {
 	}
 	v := *src
 	return &v
+}
+
+// cloneLoopProfilePtr deep-copies an optional [router.LoopProfile]
+// pointer so callers can mutate the result without affecting the
+// underlying spec. Used to thread SupervisorProfile through
+// [Spec.ToConfig] without aliasing the spec's overlay struct.
+func cloneLoopProfilePtr(src *router.LoopProfile) *router.LoopProfile {
+	if src == nil {
+		return nil
+	}
+	c := *src
+	if len(src.ExcludeTools) > 0 {
+		c.ExcludeTools = append([]string(nil), src.ExcludeTools...)
+	}
+	if len(src.ExtraHints) > 0 {
+		c.ExtraHints = cloneStringMap(src.ExtraHints)
+	}
+	return &c
 }

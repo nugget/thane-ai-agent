@@ -111,7 +111,7 @@ func feedWakeTargetDefinition() map[string]any {
 			},
 			"force_supervisor": map[string]any{
 				"type":        "boolean",
-				"description": "When true, force the target loop's next iteration to use supervisor routing.",
+				"description": "When true, force the target loop's next iteration to run as a supervisor turn (the more capable model with the augmented prompt). Costlier than a normal wake — reserve for signals that genuinely warrant the extra capacity.",
 			},
 			"priority": map[string]any{
 				"type":        "string",

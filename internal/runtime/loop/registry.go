@@ -357,6 +357,13 @@ type effectiveStateResult struct {
 	ExcludeTools     []EffectiveExcludeTool
 	RoutingFactors   []EffectiveRoutingFactor
 	DelegationGating *EffectiveDelegationGating
+	// SupervisorRoutingFactors is the parallel cascade for the
+	// per-turn-mode overrides declared on [Spec.SupervisorProfile].
+	// Same closest-wins semantics as RoutingFactors, walked over the
+	// same container ancestor chain — but populated from each loop's
+	// SupervisorProfile rather than Profile. Loop runtime consumes
+	// this only during supervisor turns; normal turns ignore it.
+	SupervisorRoutingFactors []EffectiveRoutingFactor
 }
 
 // EffectiveSubscriptions returns the deduplicated effective entity
@@ -404,6 +411,18 @@ func (r *Registry) EffectiveExcludeTools(loopID string) []EffectiveExcludeTool {
 // declares any factors.
 func (r *Registry) EffectiveRoutingFactors(loopID string) []EffectiveRoutingFactor {
 	return r.effectiveState(loopID).RoutingFactors
+}
+
+// EffectiveSupervisorRoutingFactors returns the per-turn-mode
+// override cascade derived from [Spec.SupervisorProfile] across
+// the loop and its container ancestors. Walked parent-first with
+// child-wins on key collision, identical to
+// [EffectiveRoutingFactors] but sourced from SupervisorProfile
+// rather than Profile. The loop runtime overlays these on top of
+// the normal-turn routing factors only when the iteration is a
+// supervisor turn; normal turns ignore this surface entirely.
+func (r *Registry) EffectiveSupervisorRoutingFactors(loopID string) []EffectiveRoutingFactor {
+	return r.effectiveState(loopID).SupervisorRoutingFactors
 }
 
 // EffectiveDelegationGating returns the resolved delegation-gating
@@ -513,6 +532,7 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 	seenTags := make(map[string]struct{})
 	seenExcludes := make(map[string]struct{})
 	seenFactors := make(map[string]struct{})
+	seenSupervisorFactors := make(map[string]struct{})
 
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
@@ -572,6 +592,24 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 			}
 			seenFactors[key] = struct{}{}
 			result.RoutingFactors = append(result.RoutingFactors, EffectiveRoutingFactor{
+				Key:   key,
+				Value: value,
+				From:  origin,
+			})
+		}
+		// SupervisorRoutingFactors: parallel cascade fed by each
+		// loop's SupervisorProfile. Same closest-wins semantics —
+		// the leaf's SupervisorProfile beats ancestors', and once a
+		// key is set it sticks for the rest of the walk.
+		for key, value := range l.supervisorRoutingFactorsSnapshot() {
+			if key == "" {
+				continue
+			}
+			if _, dup := seenSupervisorFactors[key]; dup {
+				continue
+			}
+			seenSupervisorFactors[key] = struct{}{}
+			result.SupervisorRoutingFactors = append(result.SupervisorRoutingFactors, EffectiveRoutingFactor{
 				Key:   key,
 				Value: value,
 				From:  origin,
