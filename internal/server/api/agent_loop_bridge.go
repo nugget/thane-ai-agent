@@ -44,6 +44,7 @@ func loopRequestFromAgent(req *agent.Request) loop.Request {
 		ExcludeTools:          append([]string(nil), req.ExcludeTools...),
 		SkipTagFilter:         req.SkipTagFilter,
 		RoutingFactors:        cloneStringMap(req.RoutingFactors),
+		DelegationGating:      req.DelegationGating,
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          runtimeTools,

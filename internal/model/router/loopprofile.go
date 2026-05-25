@@ -33,7 +33,10 @@ type LoopProfile struct {
 	LocalOnly string `yaml:"local_only,omitempty" json:"local_only,omitempty"`
 
 	// DelegationGating controls delegation-first tool gating. Set to
-	// "disabled" for direct tool access. Maps to [FactorDelegationGating].
+	// "disabled" for direct tool access. Typed field promoted out of
+	// the routing factors map — it's a feature switch, not an input the
+	// router scores on. Threaded through [RequestOptions.DelegationGating]
+	// into the loop and agent request boundaries.
 	DelegationGating string `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"`
 
 	// PreferSpeed favours faster models when "true". Maps to

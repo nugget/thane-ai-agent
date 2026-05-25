@@ -265,11 +265,13 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 				}},
 			},
 		},
-		SleepMin:     5 * time.Minute,
-		SleepMax:     30 * time.Minute,
-		SleepDefault: 10 * time.Minute,
-		MaxDuration:  time.Hour,
-		OnRetrigger:  RetriggerRestart,
+		SleepMin:         5 * time.Minute,
+		SleepMax:         30 * time.Minute,
+		SleepDefault:     10 * time.Minute,
+		MaxDuration:      time.Hour,
+		OnRetrigger:      RetriggerRestart,
+		DelegationGating: "disabled",
+		RoutingFactors:   map[string]string{router.FactorPreferSpeed: "true"},
 	}
 
 	data, err := json.Marshal(spec)
@@ -277,7 +279,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	gotJSON := string(data)
-	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`} {
+	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`, `"delegation_gating":"disabled"`, `"routing_factors":{"prefer_speed":"true"}`} {
 		if !strings.Contains(gotJSON, want) {
 			t.Fatalf("json = %s, want substring %s", gotJSON, want)
 		}
@@ -298,6 +300,12 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	}
 	if roundTrip.Conditions.Schedule == nil || roundTrip.Conditions.Schedule.Timezone != "America/Chicago" {
 		t.Fatalf("Conditions = %+v, want America/Chicago schedule", roundTrip.Conditions)
+	}
+	if roundTrip.DelegationGating != "disabled" {
+		t.Fatalf("DelegationGating = %q, want disabled", roundTrip.DelegationGating)
+	}
+	if got := roundTrip.RoutingFactors[router.FactorPreferSpeed]; got != "true" {
+		t.Fatalf("RoutingFactors[prefer_speed] = %q, want true", got)
 	}
 }
 
