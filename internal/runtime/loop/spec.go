@@ -260,6 +260,20 @@ func (s *Spec) Validate() error {
 	if !validOperations[s.Operation] {
 		return fmt.Errorf("loop: unsupported operation %q", s.Operation)
 	}
+	// The name "core" is reserved for the singleton structural root.
+	// Anything else with that name would shadow [Registry.Core]'s
+	// lookup and produce a confusing graph. Containers may use it
+	// (they ARE the core when so named); services / request-reply /
+	// background-task definitions may not. A non-empty ParentName on
+	// the core also makes no sense — the core sits above the tree.
+	if s.Name == CoreLoopName {
+		if s.Operation != OperationContainer {
+			return fmt.Errorf("loop: name %q is reserved for the singleton root container; refuse operation=%q", CoreLoopName, s.Operation)
+		}
+		if strings.TrimSpace(s.ParentName) != "" || strings.TrimSpace(s.ParentID) != "" {
+			return fmt.Errorf("loop: core container %q cannot declare a parent — it is the structural root by definition", CoreLoopName)
+		}
+	}
 	if !validCompletions[s.Completion] {
 		return fmt.Errorf("loop: unsupported completion %q", s.Completion)
 	}
