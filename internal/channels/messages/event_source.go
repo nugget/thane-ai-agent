@@ -37,6 +37,18 @@ type LoopWakeTarget struct {
 	ForceSupervisor bool     `json:"force_supervisor,omitempty"`
 	Priority        Priority `json:"priority,omitempty"`
 	Instructions    string   `json:"instructions,omitempty"`
+	// Tags are iteration-scoped capability tags activated when the
+	// target loop processes this wake. They merge into the
+	// iteration's Request.InitialTags via the loop runtime's
+	// notification drain, then fade unless the model explicitly
+	// activates them via tool. Use this to route source-side
+	// classification outcomes (contacts → "owner" / "untrusted",
+	// MQTT topic patterns → "security" / "device_control") into
+	// the target loop's per-iteration tool surface and context
+	// providers without spawning a separate handler loop per
+	// classification. See the trigger-unification design in
+	// issue #902.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // Empty reports whether the target has no loop selector.
@@ -81,6 +93,7 @@ func ParseLoopWakeTarget(raw any) (LoopWakeTarget, bool, error) {
 			Name:            stringMapValue(v, "name"),
 			ForceSupervisor: boolMapValue(v, "force_supervisor"),
 			Instructions:    stringMapValue(v, "instructions"),
+			Tags:            stringSliceMapValue(v, "tags"),
 		}
 		if priority := stringMapValue(v, "priority"); priority != "" {
 			target.Priority = Priority(priority)
@@ -165,6 +178,7 @@ func NewEventSourceEnvelope(from Identity, target LoopWakeTarget, source string,
 		Context:         strings.TrimSpace(target.Instructions),
 		ForceSupervisor: target.ForceSupervisor,
 		Events:          payloadEvents,
+		Tags:            append([]string(nil), target.Tags...),
 	}
 	scope := []string{"event_source"}
 	if source != "event_source" {
@@ -236,6 +250,45 @@ func stringMapValue(values map[string]any, key string) string {
 func boolMapValue(values map[string]any, key string) bool {
 	v, _ := values[key].(bool)
 	return v
+}
+
+// stringSliceMapValue extracts a []string from an args map,
+// accepting both []string (passed through Go-side) and []any
+// (tool-call args after JSON decode). Non-string elements are
+// silently filtered. Empty / missing returns nil so the field
+// stays omitempty-friendly.
+func stringSliceMapValue(values map[string]any, key string) []string {
+	v, ok := values[key]
+	if !ok {
+		return nil
+	}
+	switch s := v.(type) {
+	case []string:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if t := strings.TrimSpace(item); t != "" {
+				out = append(out, t)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				if t := strings.TrimSpace(str); t != "" {
+					out = append(out, t)
+				}
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	return nil
 }
 
 func cloneLoopEventPayloads(events []LoopEventPayload) []LoopEventPayload {

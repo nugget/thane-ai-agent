@@ -5,11 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 )
+
+// priorityRank maps a message priority to a sort key. Higher rank
+// renders first in summarizeNotifyEnvelopes, so urgent notifications
+// lead the prompt and the model sees the most important wake content
+// before any normal- or low-priority companions.
+func priorityRank(p messages.Priority) int {
+	switch p {
+	case messages.PriorityUrgent:
+		return 2
+	case messages.PriorityLow:
+		return 0
+	default:
+		return 1
+	}
+}
 
 // maxPendingNotifications bounds how many one-shot inter-loop notifications a
 // live loop may queue while it is busy or sleeping. enqueueNotify rejects new
@@ -27,6 +43,7 @@ const maxNotifyEventsInSummary = messages.MaxLoopEventsPerWake
 type pendingNotify struct {
 	Envelope        messages.Envelope
 	ForceSupervisor bool
+	Tags            []string
 }
 
 // NotifyReceipt summarizes the effect of notifying a live loop.
@@ -42,6 +59,8 @@ type NotifyReceipt struct {
 
 type notifyContextKey struct{}
 
+type wakeTagsContextKey struct{}
+
 // NotifyEnvelopesFromContext returns one-shot message envelopes delivered to
 // the current loop iteration, if any.
 func NotifyEnvelopesFromContext(ctx context.Context) []messages.Envelope {
@@ -54,6 +73,22 @@ func NotifyEnvelopesFromContext(ctx context.Context) []messages.Envelope {
 	return out
 }
 
+// WakeTagsFromContext returns the iteration-scoped capability tags
+// carried on the envelopes that woke the current loop iteration, if any.
+// Handler-based loops can use this to observe source-classified tags
+// (for example contacts → "owner", MQTT topic → "security") that the
+// loop runtime has already folded into the iteration's Request.InitialTags
+// for task-built turns.
+func WakeTagsFromContext(ctx context.Context) []string {
+	tags, _ := ctx.Value(wakeTagsContextKey{}).([]string)
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, len(tags))
+	copy(out, tags)
+	return out
+}
+
 func withNotifyEnvelopes(ctx context.Context, envs []messages.Envelope) context.Context {
 	if len(envs) == 0 {
 		return ctx
@@ -61,6 +96,15 @@ func withNotifyEnvelopes(ctx context.Context, envs []messages.Envelope) context.
 	cp := make([]messages.Envelope, len(envs))
 	copy(cp, envs)
 	return context.WithValue(ctx, notifyContextKey{}, cp)
+}
+
+func withWakeTags(ctx context.Context, tags []string) context.Context {
+	if len(tags) == 0 {
+		return ctx
+	}
+	cp := make([]string, len(tags))
+	copy(cp, tags)
+	return context.WithValue(ctx, wakeTagsContextKey{}, cp)
 }
 
 func decodeLoopNotifyPayload(raw any) (messages.LoopNotifyPayload, error) {
@@ -94,6 +138,16 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 	if len(envs) == 0 {
 		return ""
 	}
+	// Sort by priority descending so urgent wake notifications lead the
+	// prompt. Use a stable sort so envelopes that share a priority keep
+	// their arrival order, preserving the producer's intent for batches
+	// from the same source (e.g. ordered event-source events delivered
+	// together).
+	ordered := make([]messages.Envelope, len(envs))
+	copy(ordered, envs)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return priorityRank(ordered[i].Priority) > priorityRank(ordered[j].Priority)
+	})
 	type notifyView struct {
 		ID       string            `json:"id"`
 		From     messages.Identity `json:"from"`
@@ -101,8 +155,8 @@ func summarizeNotifyEnvelopes(envs []messages.Envelope) string {
 		Scope    []string          `json:"scope,omitempty"`
 		Payload  map[string]any    `json:"payload,omitempty"`
 	}
-	views := make([]notifyView, 0, len(envs))
-	for _, env := range envs {
+	views := make([]notifyView, 0, len(ordered))
+	for _, env := range ordered {
 		payload, _ := decodeLoopNotifyPayload(env.Payload)
 		view := notifyView{
 			ID:       env.ID,
@@ -195,9 +249,11 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 		return NotifyReceipt{}, fmt.Errorf("loop %q notify queue full (%d pending)", l.config.Name, len(l.pendingNotifies))
 	}
 
+	tags := cleanNotifyTags(payload.Tags)
 	l.pendingNotifies = append(l.pendingNotifies, pendingNotify{
 		Envelope:        env,
 		ForceSupervisor: payload.ForceSupervisor,
+		Tags:            tags,
 	})
 	receipt := NotifyReceipt{
 		LoopID:               l.id,
@@ -206,11 +262,20 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 		ForceSupervisor:      payload.ForceSupervisor,
 		PendingNotifications: len(l.pendingNotifies),
 	}
+	// Signal wakeCh unconditionally. A notification arriving while the
+	// loop is in StateProcessing must still poke the channel so the
+	// next waitForWake (event-driven loops with no periodic timer) or
+	// next sleep (timer-driven loops, which become 0-duration on
+	// signal) sees it and drains pendingNotifies. Without this, an
+	// event-driven loop that is busy when a notification arrives can
+	// strand the message until some later unrelated wake repokes the
+	// channel. Spurious wakes are absorbed harmlessly:
+	// consumePendingNotifies drains wakeCh when no items are queued.
+	select {
+	case l.wakeCh <- struct{}{}:
+	default:
+	}
 	if l.state == StateSleeping || l.state == StateWaiting {
-		select {
-		case l.wakeCh <- struct{}{}:
-		default:
-		}
 		receipt.WokeImmediately = true
 	} else {
 		receipt.QueuedForNextWake = true
@@ -218,7 +283,52 @@ func (l *Loop) enqueueNotify(env messages.Envelope) (NotifyReceipt, error) {
 	return receipt, nil
 }
 
-func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool) {
+// cleanNotifyTags returns a deduplicated, whitespace-trimmed copy of
+// the tag slice, dropping empties. The caller hands ownership of the
+// returned slice to pendingNotify; mutation of the source after the
+// call does not affect the stored tags.
+func cleanNotifyTags(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, tag := range in {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// consumePendingNotifies drains the loop's pending notification
+// queue and returns the envelopes alongside the aggregated
+// per-iteration directives derived from them:
+//
+//   - forceSupervisor — true when ANY envelope carried
+//     [LoopNotifyPayload.ForceSupervisor]. The supervisor-turn
+//     decision OR's across all draining notifications.
+//   - tags — the deduplicated union of
+//     [LoopNotifyPayload.Tags] across all envelopes. These are
+//     iteration-scoped capability tags that the trigger source
+//     (forge, MQTT, contacts classifier in email, etc.) wants
+//     activated for the upcoming iteration's tool surface and
+//     context providers. Empty slice when no envelopes carry tags.
+//
+// Tags are returned as a separate value (not embedded in the
+// envelope return) so callers can merge them into
+// [Request.InitialTags] before [prepareAgentTurnRequest] runs the
+// final tag aggregation.
+func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool, []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.pendingNotifies) == 0 {
@@ -229,20 +339,34 @@ func (l *Loop) consumePendingNotifies() ([]messages.Envelope, bool) {
 		case <-l.wakeCh:
 		default:
 		}
-		return nil, false
+		return nil, false, nil
 	}
 	envs := make([]messages.Envelope, 0, len(l.pendingNotifies))
 	forceSupervisor := false
+	seenTags := make(map[string]struct{})
+	var tags []string
 	for _, sig := range l.pendingNotifies {
 		envs = append(envs, sig.Envelope)
 		forceSupervisor = forceSupervisor || sig.ForceSupervisor
+		// Tags are pre-decoded at enqueue time, so all valid payload
+		// shapes (LoopNotifyPayload value, *LoopNotifyPayload pointer,
+		// map[string]any from a JSON-decoded bus envelope) contribute
+		// uniformly. The previous Envelope.Payload type-assert would
+		// silently drop tags from the pointer and map forms.
+		for _, tag := range sig.Tags {
+			if _, dup := seenTags[tag]; dup {
+				continue
+			}
+			seenTags[tag] = struct{}{}
+			tags = append(tags, tag)
+		}
 	}
 	l.pendingNotifies = nil
 	select {
 	case <-l.wakeCh:
 	default:
 	}
-	return envs, forceSupervisor
+	return envs, forceSupervisor, tags
 }
 
 func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
@@ -282,6 +406,25 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	case <-l.wakeCh:
+		return true
+	}
+}
+
+// waitForWake blocks until a notification arrives or the context is
+// cancelled. The notification path used by event-driven loops
+// (operation=event_driven without a [Config.WaitFunc]) — these loops
+// have no periodic timer to wake on, so they wait indefinitely on
+// the notification channel that [Loop.Notify] writes into.
+//
+// Returns true on wake (a notification arrived; the caller should
+// continue to the iteration phase, where consumePendingNotifies
+// drains the envelopes), false on context cancellation (the loop
+// should exit).
+func (l *Loop) waitForWake(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
 	case <-l.wakeCh:
 		return true
 	}

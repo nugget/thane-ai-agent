@@ -516,6 +516,7 @@ talents_dir: ./talents
 #         forcesupervisor: false
 #         priority: ""
 #         instructions: ""
+#         tags: []
 #       Wake is the legacy dispatch-via-spawn path: when non-nil and
 #       WakeLoop is unset, messages on this topic spawn a one-shot
 #       agent run using this routing profile. New subscriptions
@@ -547,6 +548,7 @@ talents_dir: ./talents
 #         forcesupervisor: false
 #         priority: ""
 #         instructions: ""
+#         tags: []
 #       Wake is the legacy dispatch-via-spawn path: when non-nil and
 #       WakeLoop is unset, messages on this topic spawn a one-shot
 #       agent run using this routing profile. New subscriptions
@@ -578,6 +580,7 @@ talents_dir: ./talents
 #         forcesupervisor: false
 #         priority: ""
 #         instructions: ""
+#         tags: []
 #       Wake is the legacy dispatch-via-spawn path: when non-nil and
 #       WakeLoop is unset, messages on this topic spawn a one-shot
 #       agent run using this routing profile. New subscriptions

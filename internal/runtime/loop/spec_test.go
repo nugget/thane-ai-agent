@@ -75,6 +75,44 @@ func TestSpecValidate(t *testing.T) {
 			t.Fatalf("Validate() error = %v, want missing name rejection", err)
 		}
 	})
+
+	t.Run("event_driven spec without timer fields is valid", func(t *testing.T) {
+		spec := &Spec{
+			Name:      "event-driven-ok",
+			Task:      "Process events.",
+			Operation: OperationEventDriven,
+		}
+		if err := spec.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("event_driven rejects sleep envelope", func(t *testing.T) {
+		spec := &Spec{
+			Name:         "event-driven-bad-sleep",
+			Task:         "Process events.",
+			Operation:    OperationEventDriven,
+			SleepDefault: time.Minute,
+		}
+		err := spec.Validate()
+		if err == nil || !strings.Contains(err.Error(), "sleep envelope") {
+			t.Fatalf("Validate() error = %v, want sleep-envelope rejection", err)
+		}
+	})
+
+	t.Run("event_driven rejects jitter", func(t *testing.T) {
+		jitter := 0.1
+		spec := &Spec{
+			Name:      "event-driven-bad-jitter",
+			Task:      "Process events.",
+			Operation: OperationEventDriven,
+			Jitter:    &jitter,
+		}
+		err := spec.Validate()
+		if err == nil || !strings.Contains(err.Error(), "jitter") {
+			t.Fatalf("Validate() error = %v, want jitter rejection", err)
+		}
+	})
 }
 
 func TestSpecToConfigCopiesMutableFields(t *testing.T) {

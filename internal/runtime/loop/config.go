@@ -337,6 +337,14 @@ const (
 	DefaultSleepDefault   = 1 * time.Minute
 	DefaultJitter         = 0.2
 	DefaultSupervisorProb = 0.1
+
+	// eventDrivenErrorBackoff is the floor applied to wait-error
+	// backoffs on event-driven loops. Event-driven specs intentionally
+	// carry no sleep envelope, so [Loop.computeSleep] returns zero and
+	// a chronically failing WaitFunc would otherwise tight-loop. Keep
+	// this short enough that healthy upstream recovery is observed
+	// quickly and long enough that the broken case doesn't burn CPU.
+	eventDrivenErrorBackoff = 5 * time.Second
 )
 
 // Float64Ptr returns a pointer to v. Use it to set optional *float64
@@ -358,6 +366,13 @@ func (c *Config) applyDefaults() {
 		// that would otherwise be inert-but-confusing on the Config.
 		// The well-known core container (see [CoreLoopName]) shares
 		// this contract by being a container.
+		return
+	}
+	if c.Operation == OperationEventDriven {
+		// Event-driven loops wake only on notifications or
+		// [Config.WaitFunc] channel reads — they have no periodic
+		// timer. Synthesizing sleep defaults would just write
+		// inert-but-misleading values on the Config.
 		return
 	}
 	if c.SleepMin == 0 {
@@ -398,11 +413,17 @@ func (c *Config) validate() error {
 	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil && c.TurnBuilder == nil {
 		return fmt.Errorf("loop: Task, TaskBuilder, TurnBuilder, or Handler is required")
 	}
-	if c.SleepMin <= 0 {
-		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
-	}
-	if c.SleepMax < c.SleepMin {
-		return fmt.Errorf("loop: SleepMax (%v) must be >= SleepMin (%v)", c.SleepMax, c.SleepMin)
+	if c.Operation != OperationEventDriven {
+		// Timer-driven loops require a positive sleep envelope.
+		// Event-driven loops are deliberately timer-less (sleep is
+		// zero) — they wake only on notifications or WaitFunc, so
+		// these checks would be incorrect for them.
+		if c.SleepMin <= 0 {
+			return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
+		}
+		if c.SleepMax < c.SleepMin {
+			return fmt.Errorf("loop: SleepMax (%v) must be >= SleepMin (%v)", c.SleepMax, c.SleepMin)
+		}
 	}
 	if c.Jitter != nil && (*c.Jitter < 0 || *c.Jitter > 1) {
 		return fmt.Errorf("loop: Jitter must be in [0, 1], got %v", *c.Jitter)
@@ -560,8 +581,11 @@ type Status struct {
 	// HandlerOnly is true when the loop uses a Handler instead of LLM
 	// iterations. Handler-only loops have no token metrics.
 	HandlerOnly bool `json:"handler_only,omitempty"`
-	// EventDriven is true when the loop uses a WaitFunc instead of
-	// timer-based sleeping.
+	// EventDriven is true when the loop's run shape is event-driven
+	// rather than timer-based — either it has a [Config.WaitFunc]
+	// channel reader, or its operation kind is [OperationEventDriven]
+	// (the persistable form that blocks on notification arrivals
+	// instead of a periodic sleep).
 	EventDriven bool `json:"event_driven,omitempty"`
 	// RecentIterations holds up to 10 completed iteration snapshots
 	// (newest first), used by the dashboard timeline.

@@ -205,4 +205,10 @@ type LoopNotifyPayload struct {
 	Context         string             `json:"context,omitempty"`
 	ForceSupervisor bool               `json:"force_supervisor,omitempty"`
 	Events          []LoopEventPayload `json:"events,omitempty"`
+	// Tags are iteration-scoped capability tags activated when the
+	// receiving loop processes this wake. They merge into the
+	// iteration's Request.InitialTags during pendingNotifies drain
+	// and fade unless the model explicitly activates them via tool.
+	// Sourced from [LoopWakeTarget.Tags] on the wake target.
+	Tags []string `json:"tags,omitempty"`
 }

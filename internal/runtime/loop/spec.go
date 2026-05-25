@@ -39,6 +39,34 @@ const (
 	// auto-created on startup, refused for delete, default parent
 	// for orphan loops). See [Loop.IsCore].
 	OperationContainer Operation = "container"
+	// OperationEventDriven is a persistent loop that wakes only on
+	// external triggers — inter-loop notifications (the message bus
+	// + pendingNotifies machinery) or a runtime [Config.WaitFunc]
+	// channel. Unlike [OperationService], it carries no periodic
+	// sleep envelope; it sits quiescent until something asks it to
+	// run.
+	//
+	// Use it for trigger handlers: a loop that does nothing until
+	// an MQTT message / feed entry / event-source envelope arrives,
+	// then handles the event, then returns to quiescent. Validation
+	// rejects [Spec.SleepMin] / [Spec.SleepMax] / [Spec.SleepDefault]
+	// on this operation — those fields only make sense for
+	// timer-driven service loops.
+	//
+	// Otherwise event-driven loops participate fully in the
+	// Spec/cascade/SupervisorProfile system. Profile, Tags,
+	// Subscriptions, ParentName, Conditions all apply. Per-iteration
+	// behavior is identical to service loops: each wake gets a
+	// fresh conversation ID and runs one iteration of the Task /
+	// TaskBuilder / TurnBuilder.
+	//
+	// The runtime substrate already exists — [Config.WaitFunc] +
+	// [Config.Handler] service loops (ha-state-watcher, etc.) have
+	// done this shape for ages. OperationEventDriven exposes it
+	// declaratively so persisted overlay specs and YAML-defined
+	// loops can opt into the "no timer, wake only on notification"
+	// shape without needing runtime hooks.
+	OperationEventDriven Operation = "event_driven"
 )
 
 // CoreLoopName is the well-known name reserved for the singleton
@@ -70,6 +98,7 @@ var validOperations = map[Operation]bool{
 	OperationBackgroundTask: true,
 	OperationService:        true,
 	OperationContainer:      true,
+	OperationEventDriven:    true,
 }
 
 var validCompletions = map[Completion]bool{
@@ -316,10 +345,37 @@ func (s *Spec) Validate() error {
 		// before the runtime has to refuse the spec at start time.
 		return validateContainerShape(s)
 	}
+	if s.Operation == OperationEventDriven {
+		if err := validateEventDrivenShape(s); err != nil {
+			return err
+		}
+	}
 	cfg := s.ToConfig()
 	cfg.applyDefaults()
 	if err := cfg.validate(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateEventDrivenShape rejects timer-shaped fields on
+// event-driven specs. These loops have no periodic wake — the only
+// reasons they iterate are notification arrivals and explicit
+// runtime [Config.WaitFunc] channel reads. A sleep envelope would
+// just be dead config; catching it at spec-validation time keeps
+// authoring mistakes loud rather than silently ignored at start.
+//
+// What IS legal on an event-driven spec: Task / TaskBuilder /
+// TurnBuilder / Handler, all of which still describe what to do on
+// each wake. Profile, Tags, Subscriptions, ParentName, Conditions,
+// Outputs, Supervisor + SupervisorProfile — all participate
+// normally. The only constraint is "no periodic timer."
+func validateEventDrivenShape(s *Spec) error {
+	if s.SleepMin != 0 || s.SleepMax != 0 || s.SleepDefault != 0 {
+		return fmt.Errorf("loop: event-driven %q cannot set sleep envelope (event-driven loops have no periodic timer; remove sleep_min / sleep_max / sleep_default)", s.Name)
+	}
+	if s.Jitter != nil {
+		return fmt.Errorf("loop: event-driven %q cannot set jitter (no periodic timer to randomize)", s.Name)
 	}
 	return nil
 }

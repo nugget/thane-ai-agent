@@ -23,6 +23,15 @@ type TurnInput struct {
 	// this wake. Task-based turns render them into the prompt; custom
 	// builders may inspect or ignore them.
 	NotifyEnvelopes []messages.Envelope
+
+	// WakeTags are iteration-scoped capability tags carried on the
+	// envelopes that woke this iteration (see [messages.LoopWakeTarget.Tags]).
+	// They fade after this iteration unless the model explicitly
+	// activates them via tool. The loop runtime folds them into the
+	// final Request.InitialTags merge automatically for task-built
+	// turns; custom builders can inspect them when shaping their own
+	// request.
+	WakeTags []string
 }
 
 // AgentTurn is an agent request prepared by loop-adjacent code for the

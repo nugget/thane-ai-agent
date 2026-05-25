@@ -442,6 +442,16 @@ func (l *Loop) ParentID() string {
 // construction; safe to read without the loop lock.
 func (l *Loop) Operation() Operation { return l.config.Operation }
 
+// isEventDriven reports whether the loop's run shape is event-driven —
+// either via a [Config.WaitFunc] channel reader (the legacy runtime-only
+// form) or via [OperationEventDriven] (the persistable form added in
+// PR-T2a). Status, logs, iteration snapshots, and stop telemetry use
+// this to surface a single truthful flag instead of forking on
+// WaitFunc != nil at every site.
+func (l *Loop) isEventDriven() bool {
+	return l.config.WaitFunc != nil || l.config.Operation == OperationEventDriven
+}
+
 // shouldRunSupervisor decides whether the next iteration runs as
 // a supervisor turn and reports the cause. Forced is the boolean
 // from [consumePendingNotifies] — true when at least one pending
@@ -691,7 +701,7 @@ func (l *Loop) Status() Status {
 		LastSupervisorIter:    l.lastSupervisorIter,
 		LastSupervisorTrigger: l.lastSupervisorTrigger,
 		HandlerOnly:           l.config.Handler != nil,
-		EventDriven:           l.config.WaitFunc != nil,
+		EventDriven:           l.isEventDriven(),
 		Config:                cfgCopy,
 	}
 	l.mu.Unlock()
@@ -1027,7 +1037,7 @@ func (l *Loop) run(ctx context.Context) {
 		"max_iter", l.config.MaxIter,
 		"supervisor", l.config.Supervisor,
 		"handler_only", l.config.Handler != nil,
-		"event_driven", l.config.WaitFunc != nil,
+		"event_driven", l.isEventDriven(),
 	)
 
 	// Apply max duration as a context deadline if configured.
@@ -1042,7 +1052,11 @@ func (l *Loop) run(ctx context.Context) {
 	// iteration instead of firing immediately. The delay is jittered
 	// from SleepDefault to stagger loop starts and avoid a thundering
 	// herd of simultaneous iterations after a restart.
-	if l.config.WaitFunc == nil {
+	//
+	// Event-driven loops (WaitFunc-based or OperationEventDriven)
+	// have no periodic timer; they skip initial sleep and proceed
+	// directly to the wait phase at the top of the iteration loop.
+	if l.config.WaitFunc == nil && l.config.Operation != OperationEventDriven {
 		initialSleep := l.applyJitter(l.config.SleepDefault)
 		initialSleep = l.clamp(initialSleep)
 
@@ -1086,10 +1100,22 @@ func (l *Loop) run(ctx context.Context) {
 			break
 		}
 
-		// --- WAIT PHASE (top of loop, WaitFunc loops only) ---
-		// Event-driven loops block here until an external event
-		// arrives. This runs before the first iteration — no event
-		// has occurred yet, so there is nothing to process.
+		// --- WAIT PHASE (top of loop, event-driven loops only) ---
+		// Loops that don't iterate on a timer block here until the
+		// next wake. Two flavors:
+		//
+		//   - WaitFunc-based (legacy, runtime-only): reads from a
+		//     caller-supplied channel via [Config.WaitFunc]. The
+		//     payload becomes the iteration's `event` input.
+		//
+		//   - OperationEventDriven (modern, persistable): blocks
+		//     on the loop's notification channel via
+		//     [Loop.waitForWake]. The next iteration drains
+		//     pendingNotifies for the events; there's no separate
+		//     `event` payload from a user channel.
+		//
+		// This runs before the first iteration — no event has
+		// occurred yet, so there is nothing to process.
 		if l.config.WaitFunc != nil {
 			l.setState(StateWaiting)
 			l.publishEvent(events.Event{
@@ -1134,6 +1160,17 @@ func (l *Loop) run(ctx context.Context) {
 					},
 				})
 				backoff := l.computeSleep()
+				// Event-driven loops (OperationEventDriven, or any spec
+				// that left the sleep envelope at zero) would tight-loop
+				// here on a chronically failing WaitFunc — computeSleep
+				// returns 0, sleep returns immediately, the error fires
+				// again. Floor the wait-error backoff at
+				// eventDrivenErrorBackoff so the upstream source has
+				// breathing room without forcing operators to declare a
+				// sleep envelope they otherwise don't need.
+				if backoff <= 0 {
+					backoff = eventDrivenErrorBackoff
+				}
 				logger.Warn("loop wait failed",
 					"error", waitErr,
 					"consecutive_errors", consecutiveErrors,
@@ -1164,9 +1201,34 @@ func (l *Loop) run(ctx context.Context) {
 			if event == nil {
 				continue
 			}
+		} else if l.config.Operation == OperationEventDriven {
+			// OperationEventDriven without a WaitFunc: block on
+			// the notification channel until something asks this
+			// loop to run. The wake-source (forge poller, MQTT
+			// dispatcher, request_core_attention, etc.) pushes
+			// envelopes via [Loop.Notify], which signals wakeCh.
+			// The next iteration drains pendingNotifies for the
+			// actual event content.
+			l.setState(StateWaiting)
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopWaitStart,
+				Data: map[string]any{
+					"loop_id":   l.id,
+					"loop_name": l.config.Name,
+				},
+			})
+			logger.Debug("event-driven loop waiting for notification")
+			if !l.waitForWake(ctx) {
+				logger.Debug("loop stopped while waiting for notification",
+					"phase", "wait",
+				)
+				break
+			}
 		}
 
-		signals, forceSupervisor := l.consumePendingNotifies()
+		signals, forceSupervisor, wakeTags := l.consumePendingNotifies()
 
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
@@ -1224,6 +1286,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
+			handlerCtx = withWakeTags(handlerCtx, wakeTags)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
 					noOp = true
@@ -1307,10 +1370,12 @@ func (l *Loop) run(ctx context.Context) {
 			turnCtx := withLoopID(iterCtx, l.id)
 			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
 			turnCtx = withNotifyEnvelopes(turnCtx, signals)
+			turnCtx = withWakeTags(turnCtx, wakeTags)
 			turn, buildErr := l.buildAgentTurn(turnCtx, TurnInput{
 				Event:           event,
 				Supervisor:      isSupervisor,
 				NotifyEnvelopes: signals,
+				WakeTags:        wakeTags,
 			})
 			if buildErr != nil {
 				if errors.Is(buildErr, ErrNoOp) {
@@ -1517,7 +1582,7 @@ func (l *Loop) run(ctx context.Context) {
 			sleep = l.computeSleep()
 
 			// Record sleep/wait info on the snapshot before buffering.
-			if l.config.WaitFunc != nil {
+			if l.isEventDriven() {
 				snap.WaitAfter = true
 			} else {
 				snap.SleepAfterMs = sleep.Milliseconds()
@@ -1559,9 +1624,10 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		// --- SLEEP PHASE (bottom of loop, timer-driven loops only) ---
-		// WaitFunc loops skip sleep and flow back to the top to wait
-		// for the next event.
-		if l.config.WaitFunc == nil {
+		// Event-driven loops (WaitFunc-based and OperationEventDriven)
+		// skip the sleep phase and flow back to the top to wait for
+		// the next event/notification.
+		if l.config.WaitFunc == nil && l.config.Operation != OperationEventDriven {
 			l.setState(StateSleeping)
 			l.publishEvent(events.Event{
 				Timestamp: time.Now(),
@@ -1598,7 +1664,7 @@ func (l *Loop) emitStopped() {
 	consecutiveErrors := l.consecutiveErrors
 	startedAt := l.startedAt
 	handlerOnly := l.config.Handler != nil
-	eventDriven := l.config.WaitFunc != nil
+	eventDriven := l.isEventDriven()
 	l.mu.Unlock()
 
 	logger := l.deps.Logger
@@ -1740,7 +1806,8 @@ func (l *Loop) buildTaskTurn(ctx context.Context, input TurnInput) (*AgentTurn, 
 
 	return &AgentTurn{
 		Request: Request{
-			Messages: []Message{{Role: "user", Content: task}},
+			Messages:    []Message{{Role: "user", Content: task}},
+			InitialTags: append([]string(nil), input.WakeTags...),
 		},
 	}, nil
 }

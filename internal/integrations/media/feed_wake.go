@@ -1,6 +1,7 @@
 package media
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -12,6 +13,7 @@ func feedKeyWakeLoopName(id string) string        { return "feed:" + id + ":wake
 func feedKeyWakeForceSupervisor(id string) string { return "feed:" + id + ":wake_force_supervisor" }
 func feedKeyWakePriority(id string) string        { return "feed:" + id + ":wake_priority" }
 func feedKeyWakeInstructions(id string) string    { return "feed:" + id + ":wake_instructions" }
+func feedKeyWakeTags(id string) string            { return "feed:" + id + ":wake_tags" }
 
 func feedWakeKeys(id string) []string {
 	return []string{
@@ -20,6 +22,7 @@ func feedWakeKeys(id string) []string {
 		feedKeyWakeForceSupervisor(id),
 		feedKeyWakePriority(id),
 		feedKeyWakeInstructions(id),
+		feedKeyWakeTags(id),
 	}
 }
 
@@ -46,12 +49,21 @@ func storeFeedWakeTarget(state *opstate.Store, feedID string, target messages.Lo
 	if !configured {
 		return nil
 	}
+	tagsJSON := ""
+	if len(target.Tags) > 0 {
+		blob, err := json.Marshal(target.Tags)
+		if err != nil {
+			return fmt.Errorf("marshal wake tags: %w", err)
+		}
+		tagsJSON = string(blob)
+	}
 	values := map[string]string{
 		feedKeyWakeLoopID(feedID):          target.LoopID,
 		feedKeyWakeLoopName(feedID):        target.Name,
 		feedKeyWakeForceSupervisor(feedID): fmt.Sprintf("%t", target.ForceSupervisor),
 		feedKeyWakePriority(feedID):        string(target.Priority),
 		feedKeyWakeInstructions(feedID):    target.Instructions,
+		feedKeyWakeTags(feedID):            tagsJSON,
 	}
 	for key, value := range values {
 		if err := state.Set(feedNamespace, key, value); err != nil {
@@ -85,6 +97,16 @@ func loadFeedWakeTarget(state *opstate.Store, feedID string) (messages.LoopWakeT
 	if err != nil {
 		return messages.LoopWakeTarget{}, false, err
 	}
+	tagsRaw, err := state.Get(feedNamespace, feedKeyWakeTags(feedID))
+	if err != nil {
+		return messages.LoopWakeTarget{}, false, err
+	}
+	var tags []string
+	if tagsRaw != "" {
+		if err := json.Unmarshal([]byte(tagsRaw), &tags); err != nil {
+			return messages.LoopWakeTarget{}, false, fmt.Errorf("decode wake tags: %w", err)
+		}
+	}
 
 	target, ok, err := messages.ParseLoopWakeTarget(map[string]any{
 		"loop_id":          loopID,
@@ -92,6 +114,7 @@ func loadFeedWakeTarget(state *opstate.Store, feedID string) (messages.LoopWakeT
 		"force_supervisor": forceRaw == "true",
 		"priority":         priorityRaw,
 		"instructions":     instructions,
+		"tags":             tags,
 	})
 	return target, ok, err
 }
@@ -116,6 +139,9 @@ func feedWakeTargetJSON(target messages.LoopWakeTarget, ok bool) map[string]any 
 	}
 	if target.Instructions != "" {
 		out["instructions"] = target.Instructions
+	}
+	if len(target.Tags) > 0 {
+		out["tags"] = append([]string(nil), target.Tags...)
 	}
 	return out
 }

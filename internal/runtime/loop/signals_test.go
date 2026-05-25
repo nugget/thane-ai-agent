@@ -266,6 +266,312 @@ func TestLoopNotifyQueueBounded(t *testing.T) {
 	}
 }
 
+// TestOperationEventDrivenReportsEventDrivenStatus pins the P2 fix:
+// status, logs, and snapshots all key off [Loop.isEventDriven], which
+// returns true for both WaitFunc-based loops AND OperationEventDriven
+// specs. Pre-fix, a persisted operation: event_driven loop showed up
+// as timed/non-event-driven in /api/loops and the dashboard.
+func TestOperationEventDrivenReportsEventDrivenStatus(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:      "declared-event-driven",
+		Task:      "watch",
+		Operation: OperationEventDriven,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	status := l.Status()
+	if !status.EventDriven {
+		t.Errorf("Status.EventDriven = false, want true for OperationEventDriven")
+	}
+}
+
+// TestLoopNotifyPokesWakeChWhileProcessing pins the P1 fix: a
+// notification arriving while an event-driven loop is in StateProcessing
+// must still poke wakeCh so the next waitForWake doesn't strand the
+// pendingNotify. Pre-fix, enqueueNotify skipped the channel signal when
+// state != Sleeping/Waiting, leaving the queued item until some later
+// unrelated wake repoked the channel.
+func TestLoopNotifyPokesWakeChWhileProcessing(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "busy-event-driven",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	env, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   l.Name(),
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	receipt, err := l.enqueueNotify(env)
+	if err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+	if receipt.WokeImmediately {
+		t.Errorf("WokeImmediately = true, want false (state was Processing)")
+	}
+	if !receipt.QueuedForNextWake {
+		t.Errorf("QueuedForNextWake = false, want true")
+	}
+	// The channel must be non-empty so the next waitForWake returns
+	// instead of blocking.
+	select {
+	case <-l.wakeCh:
+	default:
+		t.Fatal("wakeCh was not signaled while loop in StateProcessing — next waitForWake would block and strand the queued notification")
+	}
+}
+
+// TestConsumePendingNotifiesDecodesPointerAndMapPayloads exercises the
+// P2/Copilot tag-aggregation fix: tags arriving on *LoopNotifyPayload
+// and map[string]any payloads now contribute to the iteration's
+// returned tag set. Pre-fix, only the concrete LoopNotifyPayload type
+// assertion fired, silently dropping the others.
+func TestConsumePendingNotifiesDecodesPointerAndMapPayloads(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "tag-decode",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	dest := messages.Destination{Kind: messages.DestinationLoop, Target: l.Name(), Selector: messages.SelectorName}
+
+	pointerEnv, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore}, To: dest, Type: messages.TypeSignal,
+		Payload: &messages.LoopNotifyPayload{Tags: []string{"pointer_tag"}},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize pointer: %v", err)
+	}
+	mapEnv, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore}, To: dest, Type: messages.TypeSignal,
+		Payload: map[string]any{"tags": []any{"map_tag", "pointer_tag"}},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize map: %v", err)
+	}
+	for _, env := range []messages.Envelope{pointerEnv, mapEnv} {
+		if _, err := l.enqueueNotify(env); err != nil {
+			t.Fatalf("enqueueNotify: %v", err)
+		}
+	}
+
+	_, _, tags := l.consumePendingNotifies()
+	got := map[string]bool{}
+	for _, tag := range tags {
+		got[tag] = true
+	}
+	if !got["pointer_tag"] || !got["map_tag"] {
+		t.Fatalf("tags = %v, want both pointer_tag and map_tag", tags)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("tags = %v, want exactly 2 unique", tags)
+	}
+}
+
+func TestLoopNotifyTagsFlowIntoInitialTags(t *testing.T) {
+	t.Parallel()
+
+	reqs := make(chan RunRequest, 1)
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			reqs <- req
+		},
+	}
+	l, err := New(Config{
+		Name:         "tag-wake",
+		Task:         "Triage incoming notifications.",
+		SleepMin:     time.Hour,
+		SleepMax:     time.Hour,
+		SleepDefault: time.Hour,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{Runner: runner, Rand: fixedRand{0}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	waitForLoopState(t, l, StateSleeping)
+
+	env, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore, Name: "core"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   l.Name(),
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+		Payload: messages.LoopNotifyPayload{
+			Message: "Triage triggered by classifier.",
+			Tags:    []string{"owner", "untrusted"},
+		},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if _, err := l.enqueueNotify(env); err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+
+	select {
+	case req := <-reqs:
+		got := map[string]bool{}
+		for _, tag := range req.InitialTags {
+			got[tag] = true
+		}
+		if !got["owner"] || !got["untrusted"] {
+			t.Fatalf("InitialTags = %v, want owner+untrusted", req.InitialTags)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not wake after tag-carrying signal")
+	}
+	l.Stop()
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+}
+
+func TestConsumePendingNotifiesAggregatesWakeTags(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name: "tag-aggregator",
+		Task: "watch",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	l.mu.Lock()
+	l.started = true
+	l.state = StateProcessing
+	l.mu.Unlock()
+
+	mkEnv := func(tags []string) messages.Envelope {
+		env, err := (messages.Envelope{
+			From: messages.Identity{Kind: messages.IdentityCore},
+			To: messages.Destination{
+				Kind:     messages.DestinationLoop,
+				Target:   l.Name(),
+				Selector: messages.SelectorName,
+			},
+			Type: messages.TypeSignal,
+			Payload: messages.LoopNotifyPayload{
+				Tags: tags,
+			},
+		}).Normalize(time.Now())
+		if err != nil {
+			t.Fatalf("Normalize: %v", err)
+		}
+		return env
+	}
+
+	if _, err := l.enqueueNotify(mkEnv([]string{"owner", "security"})); err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+	if _, err := l.enqueueNotify(mkEnv([]string{"owner", "device_control", ""})); err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+	if _, err := l.enqueueNotify(mkEnv(nil)); err != nil {
+		t.Fatalf("enqueueNotify: %v", err)
+	}
+
+	envs, force, tags := l.consumePendingNotifies()
+	if len(envs) != 3 {
+		t.Fatalf("envelopes len = %d, want 3", len(envs))
+	}
+	if force {
+		t.Fatalf("forceSupervisor = true, want false")
+	}
+	wantTags := map[string]bool{"owner": true, "security": true, "device_control": true}
+	if len(tags) != len(wantTags) {
+		t.Fatalf("tags = %v, want %d unique", tags, len(wantTags))
+	}
+	for _, tag := range tags {
+		if !wantTags[tag] {
+			t.Fatalf("unexpected tag %q in %v", tag, tags)
+		}
+	}
+}
+
+func TestSummarizeNotifyEnvelopesOrdersUrgentFirst(t *testing.T) {
+	t.Parallel()
+
+	mkEnv := func(id string, priority messages.Priority, message string) messages.Envelope {
+		return messages.Envelope{
+			ID:       id,
+			From:     messages.Identity{Kind: messages.IdentitySystem, Name: "tester"},
+			Priority: priority,
+			Payload: messages.LoopNotifyPayload{
+				Kind:    "test",
+				Message: message,
+			},
+		}
+	}
+
+	envs := []messages.Envelope{
+		mkEnv("low-1", messages.PriorityLow, "low signal"),
+		mkEnv("normal-1", messages.PriorityNormal, "normal one"),
+		mkEnv("urgent-1", messages.PriorityUrgent, "urgent one"),
+		mkEnv("normal-2", messages.PriorityNormal, "normal two"),
+		mkEnv("urgent-2", messages.PriorityUrgent, "urgent two"),
+	}
+
+	summary := summarizeNotifyEnvelopes(envs)
+	idxUrgent1 := strings.Index(summary, `"urgent-1"`)
+	idxUrgent2 := strings.Index(summary, `"urgent-2"`)
+	idxNormal1 := strings.Index(summary, `"normal-1"`)
+	idxNormal2 := strings.Index(summary, `"normal-2"`)
+	idxLow := strings.Index(summary, `"low-1"`)
+	if idxUrgent1 < 0 || idxUrgent2 < 0 || idxNormal1 < 0 || idxNormal2 < 0 || idxLow < 0 {
+		t.Fatalf("missing id in summary: %s", summary)
+	}
+	// Urgent must precede normal which must precede low.
+	if idxUrgent1 >= idxNormal1 || idxUrgent2 >= idxNormal1 {
+		t.Fatalf("urgent envelopes not rendered before normal: %s", summary)
+	}
+	if idxNormal1 >= idxLow || idxNormal2 >= idxLow {
+		t.Fatalf("normal envelopes not rendered before low: %s", summary)
+	}
+	// Within urgent bucket, arrival order is preserved.
+	if idxUrgent1 >= idxUrgent2 {
+		t.Fatalf("urgent ordering not stable: %s", summary)
+	}
+	if idxNormal1 >= idxNormal2 {
+		t.Fatalf("normal ordering not stable: %s", summary)
+	}
+}
+
 func waitForLoopState(t *testing.T, l *Loop, want State) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
