@@ -207,8 +207,8 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if captured.RoutingFactors["source"] != "delegate" {
 		t.Fatalf("source hint = %q, want delegate", captured.RoutingFactors["source"])
 	}
-	if captured.RoutingFactors[router.FactorDelegationGating] != "disabled" {
-		t.Fatalf("delegation gating hint = %q, want disabled", captured.RoutingFactors[router.FactorDelegationGating])
+	if captured.DelegationGating != "disabled" {
+		t.Fatalf("captured.DelegationGating = %q, want disabled", captured.DelegationGating)
 	}
 	if captured.SkipTagFilter {
 		t.Fatal("SkipTagFilter = true, want false for ha profile default tag")

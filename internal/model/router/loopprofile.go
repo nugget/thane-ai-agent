@@ -55,11 +55,12 @@ type LoopProfile struct {
 
 // RequestOptions contains the agent request fields derived from a
 // LoopProfile. Callers can merge additional channel- or trigger-specific
-// hints on top of these shared routing defaults.
+// factors on top of these shared routing defaults.
 type RequestOptions struct {
-	Model          string
-	RoutingFactors map[string]string
-	ExcludeTools   []string
+	Model            string
+	RoutingFactors   map[string]string
+	ExcludeTools     []string
+	DelegationGating string
 }
 
 // RoutingFactors builds the routing-factor map from the profile's typed
@@ -76,9 +77,6 @@ func (s *LoopProfile) RoutingFactors() map[string]string {
 	}
 	if s.LocalOnly != "" {
 		h[FactorLocalOnly] = s.LocalOnly
-	}
-	if s.DelegationGating != "" {
-		h[FactorDelegationGating] = s.DelegationGating
 	}
 	if s.PreferSpeed != "" {
 		h[FactorPreferSpeed] = s.PreferSpeed
@@ -174,8 +172,9 @@ func ValidateTopicFilter(filter string) error {
 // the underlying LoopProfile.
 func (s *LoopProfile) RequestOptions() RequestOptions {
 	opts := RequestOptions{
-		Model:          s.Model,
-		RoutingFactors: s.RoutingFactors(),
+		Model:            s.Model,
+		RoutingFactors:   s.RoutingFactors(),
+		DelegationGating: s.DelegationGating,
 	}
 
 	if len(s.ExcludeTools) > 0 {

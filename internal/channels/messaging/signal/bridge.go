@@ -704,15 +704,16 @@ func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, conten
 	fallbackContent := prompts.InteractiveEmptyResponseFallback
 	return &loop.AgentTurn{
 		Request: loop.Request{
-			ConversationID:  convID,
-			ChannelBinding:  binding,
-			Messages:        []loop.Message{{Role: "user", Content: content}},
-			Model:           opts.Model,
-			RoutingFactors:  opts.RoutingFactors,
-			ExcludeTools:    opts.ExcludeTools,
-			InitialTags:     []string{"signal"},
-			RuntimeTags:     []string{"message_channel"},
-			FallbackContent: fallbackContent,
+			ConversationID:   convID,
+			ChannelBinding:   binding,
+			Messages:         []loop.Message{{Role: "user", Content: content}},
+			Model:            opts.Model,
+			RoutingFactors:   opts.RoutingFactors,
+			DelegationGating: opts.DelegationGating,
+			ExcludeTools:     opts.ExcludeTools,
+			InitialTags:      []string{"signal"},
+			RuntimeTags:      []string{"message_channel"},
+			FallbackContent:  fallbackContent,
 		},
 		Summary: summary,
 	}

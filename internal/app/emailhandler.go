@@ -35,14 +35,14 @@ func emailPollTurnBuilder(poller *email.Poller, logger *slog.Logger) looppkg.Tur
 
 		return &looppkg.AgentTurn{
 			Request: looppkg.Request{
-				ConversationID: convID,
-				Messages:       []looppkg.Message{{Role: "user", Content: msg}},
+				ConversationID:   convID,
+				Messages:         []looppkg.Message{{Role: "user", Content: msg}},
+				DelegationGating: "disabled",
 				RoutingFactors: map[string]string{
-					"source":                      "email_poll",
-					router.FactorLocalOnly:        "false",
-					router.FactorQualityFloor:     "5",
-					router.FactorMission:          "automation",
-					router.FactorDelegationGating: "disabled",
+					"source":                  "email_poll",
+					router.FactorLocalOnly:    "false",
+					router.FactorQualityFloor: "5",
+					router.FactorMission:      "automation",
 				},
 			},
 			Summary: map[string]any{

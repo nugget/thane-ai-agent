@@ -324,8 +324,8 @@ func TestSignalRoutingConfigLoopProfile(t *testing.T) {
 	if opts.RoutingFactors[router.FactorMission] != "conversation" {
 		t.Errorf("mission = %q, want %q", opts.RoutingFactors[router.FactorMission], "conversation")
 	}
-	if opts.RoutingFactors[router.FactorDelegationGating] != "disabled" {
-		t.Errorf("delegation_gating = %q, want %q", opts.RoutingFactors[router.FactorDelegationGating], "disabled")
+	if opts.DelegationGating != "disabled" {
+		t.Errorf("DelegationGating = %q, want %q", opts.DelegationGating, "disabled")
 	}
 }
 
@@ -926,8 +926,8 @@ func TestBridge_ReactionWakesAgent(t *testing.T) {
 	if req.RoutingFactors[router.FactorMission] != "conversation" {
 		t.Errorf("mission = %q, want %q", req.RoutingFactors[router.FactorMission], "conversation")
 	}
-	if req.RoutingFactors[router.FactorDelegationGating] != "disabled" {
-		t.Errorf("delegation_gating = %q, want %q", req.RoutingFactors[router.FactorDelegationGating], "disabled")
+	if req.DelegationGating != "disabled" {
+		t.Errorf("DelegationGating = %q, want %q", req.DelegationGating, "disabled")
 	}
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")

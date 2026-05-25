@@ -35,14 +35,14 @@ func mediaFeedTurnBuilder(poller *media.FeedPoller, logger *slog.Logger) looppkg
 
 		return &looppkg.AgentTurn{
 			Request: looppkg.Request{
-				ConversationID: convID,
-				Messages:       []looppkg.Message{{Role: "user", Content: msg}},
+				ConversationID:   convID,
+				Messages:         []looppkg.Message{{Role: "user", Content: msg}},
+				DelegationGating: "disabled",
 				RoutingFactors: map[string]string{
-					"source":                      "media_feed_poll",
-					router.FactorLocalOnly:        "false",
-					router.FactorQualityFloor:     "5",
-					router.FactorMission:          "automation",
-					router.FactorDelegationGating: "disabled",
+					"source":                  "media_feed_poll",
+					router.FactorLocalOnly:    "false",
+					router.FactorQualityFloor: "5",
+					router.FactorMission:      "automation",
 				},
 			},
 			Summary: map[string]any{

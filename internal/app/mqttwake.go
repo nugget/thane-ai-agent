@@ -278,6 +278,10 @@ func applyLoopProfile(profile *router.LoopProfile, req *looppkg.Request) {
 	if len(opts.ExcludeTools) > 0 {
 		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
 	}
+
+	if opts.DelegationGating != "" {
+		req.DelegationGating = opts.DelegationGating
+	}
 }
 
 // cloneLoopRequest returns an independent copy of a loop request before

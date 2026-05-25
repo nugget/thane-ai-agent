@@ -431,8 +431,8 @@ func TestBuildLoopConfig(t *testing.T) {
 	if lc.RoutingFactors["mission"] != "metacognitive" {
 		t.Errorf("Hints[mission] = %q, want metacognitive", lc.RoutingFactors["mission"])
 	}
-	if lc.RoutingFactors["delegation_gating"] != "disabled" {
-		t.Errorf("Hints[delegation_gating] = %q, want disabled", lc.RoutingFactors["delegation_gating"])
+	if lc.DelegationGating != "disabled" {
+		t.Errorf("Config.DelegationGating = %q, want disabled", lc.DelegationGating)
 	}
 
 	// Verify ExcludeTools contains key entries.

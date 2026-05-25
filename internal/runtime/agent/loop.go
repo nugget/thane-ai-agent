@@ -46,25 +46,26 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages        []Message              `json:"messages"`
-	Model           string                 `json:"model,omitempty"`
-	ConversationID  string                 `json:"conversation_id,omitempty"`
-	ChannelBinding  *memory.ChannelBinding `json:"channel_binding,omitempty"`
-	RoutingFactors  map[string]string      `json:"routing_factors,omitempty"` // Routing hints (channel, mission, etc.)
-	SkipContext     bool                   `json:"-"`                         // Skip memory, tools, and context injection (for lightweight completions)
-	AllowedTools    []string               `json:"-"`                         // Optional allowlist of tools visible for this run
-	ExcludeTools    []string               `json:"-"`                         // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter   bool                   `json:"-"`                         // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	InitialTags     []string               `json:"-"`                         // Tags to activate at Run start (carried forward from previous loop iterations)
-	RuntimeTags     []string               `json:"-"`                         // Trusted runtime-asserted tags pinned for this run only
-	RuntimeTools    []*tools.Tool          `json:"-"`                         // Request-scoped tools visible only to this run
-	MaxIterations   int                    `json:"-"`                         // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int                    `json:"-"`                         // Optional output-token budget across all iterations (0 = unlimited)
-	ToolTimeout     time.Duration          `json:"-"`                         // Optional per-tool timeout (0 = no extra timeout)
-	UsageRole       string                 `json:"-"`                         // Optional usage role override (e.g., "delegate")
-	UsageTaskName   string                 `json:"-"`                         // Optional usage task name override
-	FallbackContent string                 `json:"-"`                         // Optional static fallback text when the run yields no content
-	PromptMode      agentctx.PromptMode    `json:"-"`                         // Optional system-prompt shape override.
+	Messages         []Message              `json:"messages"`
+	Model            string                 `json:"model,omitempty"`
+	ConversationID   string                 `json:"conversation_id,omitempty"`
+	ChannelBinding   *memory.ChannelBinding `json:"channel_binding,omitempty"`
+	RoutingFactors   map[string]string      `json:"routing_factors,omitempty"`   // Caller-supplied routing factors the router weights (see router.Factor* constants)
+	DelegationGating string                 `json:"delegation_gating,omitempty"` // Typed feature switch: "disabled" gives the model direct access to all tools instead of the orchestrator-and-delegate gating pattern
+	SkipContext      bool                   `json:"-"`                           // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools     []string               `json:"-"`                           // Optional allowlist of tools visible for this run
+	ExcludeTools     []string               `json:"-"`                           // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter    bool                   `json:"-"`                           // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	InitialTags      []string               `json:"-"`                           // Tags to activate at Run start (carried forward from previous loop iterations)
+	RuntimeTags      []string               `json:"-"`                           // Trusted runtime-asserted tags pinned for this run only
+	RuntimeTools     []*tools.Tool          `json:"-"`                           // Request-scoped tools visible only to this run
+	MaxIterations    int                    `json:"-"`                           // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens  int                    `json:"-"`                           // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout      time.Duration          `json:"-"`                           // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole        string                 `json:"-"`                           // Optional usage role override (e.g., "delegate")
+	UsageTaskName    string                 `json:"-"`                           // Optional usage task name override
+	FallbackContent  string                 `json:"-"`                           // Optional static fallback text when the run yields no content
+	PromptMode       agentctx.PromptMode    `json:"-"`                           // Optional system-prompt shape override.
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -1800,7 +1801,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// both router decisions and explicit-model preflight can reason
 	// about the actual tool surface this run will expose.
 	gatingActive := len(l.orchestratorTools) > 0 && (l.tools.Get("thane_now") != nil || l.tools.Get("thane_assign") != nil)
-	if req.RoutingFactors[router.FactorDelegationGating] == "disabled" {
+	if req.DelegationGating == "disabled" {
 		gatingActive = false
 	}
 	if gatingActive {

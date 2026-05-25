@@ -403,8 +403,8 @@ func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 	loop.SetOrchestratorTools([]string{"thane_now", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages:       []Message{{Role: "user", Content: "deploy the update"}},
-		RoutingFactors: map[string]string{"delegation_gating": "disabled"},
+		Messages:         []Message{{Role: "user", Content: "deploy the update"}},
+		DelegationGating: "disabled",
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)

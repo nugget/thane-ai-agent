@@ -956,6 +956,7 @@ ego:
 #       supervisor_quality_floor: 0
 #       on_retrigger: 0
 #       routing_factors: {}
+#       delegation_gating: ""
 #       fallback_content: ""
 #       metadata:
 #         category: observer

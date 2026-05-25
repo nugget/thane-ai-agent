@@ -8,14 +8,15 @@ import (
 
 func TestNormalizeModelSelection(t *testing.T) {
 	tests := []struct {
-		name             string
-		rawModel         string
-		hints            map[string]string
-		premiumFloor     string
-		wantModel        string
-		wantSystemPrompt bool
-		wantHintKey      string
-		wantHintValue    string
+		name                 string
+		rawModel             string
+		hints                map[string]string
+		premiumFloor         string
+		wantModel            string
+		wantSystemPrompt     bool
+		wantHintKey          string
+		wantHintValue        string
+		wantDelegationGating string
 	}{
 		{
 			name:         "default latest profile",
@@ -43,13 +44,12 @@ func TestNormalizeModelSelection(t *testing.T) {
 			wantHintValue: "device_control",
 		},
 		{
-			name:          "ops profile",
-			rawModel:      "thane:ops",
-			hints:         map[string]string{"channel": "api"},
-			premiumFloor:  "8",
-			wantModel:     "",
-			wantHintKey:   router.FactorDelegationGating,
-			wantHintValue: "disabled",
+			name:                 "ops profile",
+			rawModel:             "thane:ops",
+			hints:                map[string]string{"channel": "api"},
+			premiumFloor:         "8",
+			wantModel:            "",
+			wantDelegationGating: "disabled",
 		},
 		{
 			name:         "explicit deployment preserved",
@@ -69,9 +69,12 @@ func TestNormalizeModelSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model, hints, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, testAPILogger())
+			model, hints, delegationGating, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, testAPILogger())
 			if model != tt.wantModel {
 				t.Fatalf("model = %q, want %q", model, tt.wantModel)
+			}
+			if delegationGating != tt.wantDelegationGating {
+				t.Fatalf("delegation_gating = %q, want %q", delegationGating, tt.wantDelegationGating)
 			}
 			if hints["channel"] != "api" {
 				t.Fatalf("channel hint = %q, want api", hints["channel"])

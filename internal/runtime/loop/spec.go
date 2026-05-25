@@ -164,8 +164,15 @@ type Spec struct {
 	// Handler processes an iteration directly without an LLM call.
 	Handler func(ctx context.Context, event any) error `yaml:"-" json:"-"`
 
-	// Hints are merged into Request hints for each iteration.
+	// RoutingFactors are merged into each iteration's Request routing
+	// factors.
 	RoutingFactors map[string]string `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
+
+	// DelegationGating sets the typed feature switch on each
+	// iteration's Request. "disabled" gives the model direct tool
+	// access. Most loops leave this empty (default gating) and rely on
+	// Profile.DelegationGating for spec-level configuration.
+	DelegationGating string `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"`
 
 	// FallbackContent is static text used when the loop completes a
 	// request/reply run without any user-visible content. Interactive
@@ -294,6 +301,7 @@ func (s *Spec) ToConfig() Config {
 		WaitFunc:               ns.WaitFunc,
 		Handler:                ns.Handler,
 		RoutingFactors:         cloneStringMap(ns.RoutingFactors),
+		DelegationGating:       ns.DelegationGating,
 		FallbackContent:        ns.FallbackContent,
 		Setup:                  ns.Setup,
 		RuntimeTools:           cloneRuntimeTools(ns.RuntimeTools),
@@ -319,11 +327,12 @@ func (s *Spec) profileRequest() Request {
 	}
 	opts := s.Profile.RequestOptions()
 	return Request{
-		Model:          opts.Model,
-		RoutingFactors: opts.RoutingFactors,
-		ExcludeTools:   opts.ExcludeTools,
-		InitialTags:    append([]string(nil), s.Tags...),
-		RuntimeTools:   cloneRuntimeTools(s.RuntimeTools),
+		Model:            opts.Model,
+		RoutingFactors:   opts.RoutingFactors,
+		DelegationGating: opts.DelegationGating,
+		ExcludeTools:     opts.ExcludeTools,
+		InitialTags:      append([]string(nil), s.Tags...),
+		RuntimeTools:     cloneRuntimeTools(s.RuntimeTools),
 	}
 }
 

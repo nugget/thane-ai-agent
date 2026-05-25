@@ -161,6 +161,9 @@ func BuildLoopConfig(cfg Config) loop.Config {
 			out.RoutingFactors[k] = v
 		}
 	}
+	if spec.Profile.DelegationGating != "" {
+		out.DelegationGating = spec.Profile.DelegationGating
+	}
 	return out
 }
 

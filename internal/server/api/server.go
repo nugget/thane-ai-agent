@@ -690,13 +690,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	hints := map[string]string{
 		"channel": "api", // Native OpenAI-compatible API
 	}
-	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), log)
+	model, hints, delegationGating, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), log)
 
 	agentReq := &agent.Request{
-		Messages:       messages,
-		Model:          model,
-		RoutingFactors: hints,
-		SystemPrompt:   systemPrompt,
+		Messages:         messages,
+		Model:            model,
+		RoutingFactors:   hints,
+		DelegationGating: delegationGating,
+		SystemPrompt:     systemPrompt,
 	}
 
 	if req.Stream {

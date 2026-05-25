@@ -200,7 +200,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	if !auxiliary {
 		hints["source"] = "owu"
 	}
-	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), logger)
+	model, hints, delegationGating, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), logger)
 
 	// Derive a conversation ID from the message history.
 	// Open WebUI sends full history with each request, so hashing the first
@@ -220,13 +220,14 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	}
 
 	agentReq := &agent.Request{
-		Messages:       messages,
-		Model:          model,
-		RoutingFactors: hints,
-		ConversationID: conversationID,
-		ChannelBinding: channelBinding,
-		SkipContext:    auxiliary,
-		SystemPrompt:   ocSystemPrompt,
+		Messages:         messages,
+		Model:            model,
+		RoutingFactors:   hints,
+		DelegationGating: delegationGating,
+		ConversationID:   conversationID,
+		ChannelBinding:   channelBinding,
+		SkipContext:      auxiliary,
+		SystemPrompt:     ocSystemPrompt,
 	}
 
 	// Derive a short display name for the conversation's dashboard node.

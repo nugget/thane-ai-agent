@@ -43,12 +43,13 @@ type VirtualModel struct {
 // VirtualModelSelection is the resolved effect of a caller-supplied model
 // string after virtual model expansion.
 type VirtualModelSelection struct {
-	RequestedName  string
-	CanonicalName  string
-	Description    string
-	Known          bool
-	Model          string
-	RoutingFactors map[string]string
+	RequestedName    string
+	CanonicalName    string
+	Description      string
+	Known            bool
+	Model            string
+	RoutingFactors   map[string]string
+	DelegationGating string // Typed feature switch carried separately from RoutingFactors.
 }
 
 // DelegateHintKey returns the request-hint key used to carry a delegate-time
@@ -72,18 +73,20 @@ func OverlayDelegateHints(base map[string]string, inherited map[string]string) (
 	}
 
 	explicitModel = strings.TrimSpace(inherited[HintDelegateModel])
-	for _, hint := range []string{
+	for _, factor := range []string{
 		FactorQualityFloor,
 		FactorMission,
 		FactorLocalOnly,
-		FactorDelegationGating,
 		FactorPreferSpeed,
 		FactorModelPreference,
 	} {
-		if v, ok := inherited[DelegateHintKey(hint)]; ok {
-			merged[hint] = strings.TrimSpace(v)
+		if v, ok := inherited[DelegateHintKey(factor)]; ok {
+			merged[factor] = strings.TrimSpace(v)
 		}
 	}
+	// delegation_gating is no longer a routing factor (typed feature
+	// switch on Request); inheritance for it would need a separate
+	// mechanism if a use case arises.
 
 	return explicitModel, merged
 }
@@ -162,12 +165,13 @@ func ResolveVirtualModelSelection(rawModel string, baseHints map[string]string, 
 	outHints[HintVirtualModel] = spec.Name
 
 	return VirtualModelSelection{
-		RequestedName:  rawModel,
-		CanonicalName:  spec.Name,
-		Description:    spec.Description,
-		Known:          true,
-		Model:          spec.TopLevel.Model,
-		RoutingFactors: outHints,
+		RequestedName:    rawModel,
+		CanonicalName:    spec.Name,
+		Description:      spec.Description,
+		Known:            true,
+		Model:            spec.TopLevel.Model,
+		RoutingFactors:   outHints,
+		DelegationGating: spec.TopLevel.DelegationGating,
 	}
 }
 

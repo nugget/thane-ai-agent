@@ -13,14 +13,15 @@ import (
 
 // Request contains the information needed for routing decisions.
 type Request struct {
-	Query          string            // The user's input
-	ContextSize    int               // Estimated tokens of context (talents, history)
-	NeedsTools     bool              // Whether tool calling is required
-	NeedsStreaming bool              // Whether a streaming response is required
-	NeedsImages    bool              // Whether image/multimodal input is required
-	ToolCount      int               // Number of tools available
-	Priority       Priority          // Latency requirements
-	RoutingFactors map[string]string // Caller-supplied routing hints (see HintXxx constants)
+	Query            string            // The user's input
+	ContextSize      int               // Estimated tokens of context (talents, history)
+	NeedsTools       bool              // Whether tool calling is required
+	NeedsStreaming   bool              // Whether a streaming response is required
+	NeedsImages      bool              // Whether image/multimodal input is required
+	ToolCount        int               // Number of tools available
+	Priority         Priority          // Latency requirements
+	RoutingFactors   map[string]string // Caller-supplied routing factors the router weights (see Factor* constants)
+	DelegationGating string            // "enabled" or "disabled" — typed feature switch, not a routing factor. Set to "disabled" to give the model direct access to all tools on every iteration.
 }
 
 // Hint keys for routing decisions. Callers set these to influence model selection.
@@ -35,10 +36,6 @@ const (
 	FactorMission = "mission"
 	// FactorLocalOnly restricts routing to free/local models when set to "true".
 	FactorLocalOnly = "local_only"
-	// FactorDelegationGating controls whether delegation-first tool gating is
-	// active. Set to "disabled" to give the model direct access to all tools
-	// on every iteration (used by thane:ops).
-	FactorDelegationGating = "delegation_gating"
 	// FactorPreferSpeed indicates the caller benefits from faster response
 	// times over higher quality. When "true", any model with Speed >= 7
 	// receives a scoring bonus regardless of cost tier or provider. Can be

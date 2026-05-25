@@ -26,11 +26,10 @@ func TestLoopProfileHints(t *testing.T) {
 				PreferSpeed:      "true",
 			},
 			want: map[string]string{
-				FactorQualityFloor:     "7",
-				FactorMission:          "automation",
-				FactorLocalOnly:        "false",
-				FactorDelegationGating: "disabled",
-				FactorPreferSpeed:      "true",
+				FactorQualityFloor: "7",
+				FactorMission:      "automation",
+				FactorLocalOnly:    "false",
+				FactorPreferSpeed:  "true",
 			},
 		},
 		{
