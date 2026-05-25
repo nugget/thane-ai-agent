@@ -344,7 +344,6 @@ func (a *App) initServers(s *newState) error {
 		// base handler above.
 		mqttPub.SetMessageHandler(mqttWakeHandler(
 			subStore,
-			&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
 			baseMsgHandler,
 			logger,
 			wakeDeps,

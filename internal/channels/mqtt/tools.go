@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
 // Tools provides MQTT subscription management tool handlers for the
@@ -28,19 +26,14 @@ func NewTools(store *SubscriptionStore, loopResolver messages.LoopResolver) *Too
 }
 
 // listEntry is the JSON shape emitted by HandleListWakeSubscriptions.
-// One entry per subscription; the WakeLoop field is populated for
-// trigger-style subscriptions, the Profile fields for legacy
-// spawn-style subscriptions, so the model can tell at a glance which
-// dispatch shape each entry uses.
+// One entry per subscription; every active subscription routes through
+// a wake_loop target after the trigger-unification work, so WakeLoop is
+// always populated.
 type listEntry struct {
-	SubscriptionID string                   `json:"subscription_id"`
-	Topic          string                   `json:"topic"`
-	Source         string                   `json:"source"`
-	WakeLoop       *messages.LoopWakeTarget `json:"wake_loop,omitempty"`
-	Mission        string                   `json:"mission,omitempty"`
-	QualityFloor   int                      `json:"quality_floor,omitempty"`
-	Model          string                   `json:"model,omitempty"`
-	Instructions   string                   `json:"instructions,omitempty"`
+	SubscriptionID string                  `json:"subscription_id"`
+	Topic          string                  `json:"topic"`
+	Source         string                  `json:"source"`
+	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
 }
 
 // HandleListWakeSubscriptions returns a JSON list of all wake
@@ -49,21 +42,12 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 	subs := t.store.List()
 	entries := make([]listEntry, 0, len(subs))
 	for _, ws := range subs {
-		entry := listEntry{
+		entries = append(entries, listEntry{
 			SubscriptionID: ws.ID,
 			Topic:          ws.Topic,
 			Source:         ws.Source,
-		}
-		if ws.HasWakeTarget() {
-			target := ws.WakeTarget
-			entry.WakeLoop = &target
-		} else {
-			entry.Mission = ws.Profile.Mission
-			entry.QualityFloor = ws.Profile.QualityFloor
-			entry.Model = ws.Profile.Model
-			entry.Instructions = ws.Profile.Instructions
-		}
-		entries = append(entries, entry)
+			WakeLoop:       ws.WakeTarget,
+		})
 	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
@@ -76,17 +60,18 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 // Uniform success-payload pattern matches forge_repo_follow /
 // media_follow.
 type addResponse struct {
-	Status         string                   `json:"status"`
-	SubscriptionID string                   `json:"subscription_id"`
-	Topic          string                   `json:"topic"`
-	WakeLoop       *messages.LoopWakeTarget `json:"wake_loop,omitempty"`
-	Note           string                   `json:"note,omitempty"`
+	Status         string                  `json:"status"`
+	SubscriptionID string                  `json:"subscription_id"`
+	Topic          string                  `json:"topic"`
+	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
+	Note           string                  `json:"note,omitempty"`
 }
 
 // HandleAddWakeSubscription creates a new runtime wake subscription.
-// Required args: "topic" plus one of (a) "wake_loop" naming an
-// existing target loop or (b) any of the legacy spawn-profile fields
-// (mission, model, quality_floor, etc.).
+// Required args: "topic" and "wake_loop" (naming an existing target
+// loop). The legacy inline-Profile spawn path was retired in the
+// trigger-unification work; operators who want bespoke handling
+// create their own event-driven loop and point wake_loop at it.
 func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any) (string, error) {
 	topic, _ := args["topic"].(string)
 	topic = strings.TrimSpace(topic)
@@ -98,47 +83,16 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 	if err != nil {
 		return "", err
 	}
-	if wakeConfigured {
-		if err := messages.VerifyLoopWakeTarget(wakeTarget, t.loopResolver); err != nil {
-			return "", err
-		}
-	}
-
-	profile := router.LoopProfile{
-		Model:            stringArg(args, "model"),
-		QualityFloor:     intArg(args, "quality_floor"),
-		Mission:          stringArg(args, "mission"),
-		LocalOnly:        stringArg(args, "local_only"),
-		DelegationGating: stringArg(args, "delegation_gating"),
-		PreferSpeed:      stringArg(args, "prefer_speed"),
-		Instructions:     stringArg(args, "instructions"),
-	}
-
-	if raw, ok := args["exclude_tools"]; ok {
-		profile.ExcludeTools = toStringSlice(raw)
-	}
-
-	var initialTags []string
-	if raw, ok := args["initial_tags"]; ok {
-		initialTags = toStringSlice(raw)
-	}
-
-	// Validate the profile only when we'll actually use it (no
-	// WakeTarget set). With wake_loop dispatch the legacy spawn-
-	// profile fields are documented as ignored — so a stray
-	// invalid quality_floor=99 left over from copy-paste
-	// shouldn't block adding a valid wake_loop subscription.
 	if !wakeConfigured {
-		if err := profile.Validate(); err != nil {
-			return "", fmt.Errorf("invalid profile: %w", err)
-		}
+		return "", fmt.Errorf("wake_loop is required (provide loop_id or name)")
+	}
+	if err := messages.VerifyLoopWakeTarget(wakeTarget, t.loopResolver); err != nil {
+		return "", err
 	}
 
 	ws, err := t.store.Add(AddRequest{
-		Topic:       topic,
-		WakeTarget:  wakeTarget,
-		Profile:     profile,
-		InitialTags: initialTags,
+		Topic:      topic,
+		WakeTarget: wakeTarget,
 	})
 	if err != nil {
 		return "", err
@@ -148,11 +102,8 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		Status:         "ok",
 		SubscriptionID: ws.ID,
 		Topic:          ws.Topic,
+		WakeLoop:       ws.WakeTarget,
 		Note:           "Live subscribe attempted; activates on next reconnect if broker is not currently connected.",
-	}
-	if ws.HasWakeTarget() {
-		target := ws.WakeTarget
-		resp.WakeLoop = &target
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -189,48 +140,4 @@ func (t *Tools) HandleRemoveWakeSubscription(_ context.Context, args map[string]
 func stringArg(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
-}
-
-// intArg extracts an int from an args map, accepting both numeric
-// (int, float64 from JSON) and string-of-int forms. Returns 0 when
-// the arg is absent or unparseable — matches the
-// [router.LoopProfile.QualityFloor] "zero means unset" convention.
-func intArg(args map[string]any, key string) int {
-	v, ok := args[key]
-	if !ok {
-		return 0
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(n))
-		if err != nil {
-			return 0
-		}
-		return parsed
-	}
-	return 0
-}
-
-// toStringSlice converts an any value to []string. Handles both
-// []any (from JSON tool args) and []string.
-func toStringSlice(v any) []string {
-	switch val := v.(type) {
-	case []string:
-		return val
-	case []any:
-		result := make([]string, 0, len(val))
-		for _, item := range val {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	}
-	return nil
 }
