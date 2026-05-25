@@ -115,10 +115,12 @@ When the watcher sees something the core should consider:
 }
 ```
 
-`request_core_attention` does not deliver a message to a human. It
-queues a supervisor turn on the core loop. The core decides whether
-to notify, defer, or absorb. State the concern as a decision or risk,
-not as a delivery command.
+`request_core_attention` does not deliver a message to a human, and
+it is not free: every call forces the core's next iteration into a
+supervisor turn (costlier than a normal wake). Use it for concerns
+that genuinely warrant the extra capacity. State the concern as a
+decision or risk, not as a delivery command — the core decides
+whether to notify, defer, or absorb.
 
 ### Step 4: Push new focus down
 

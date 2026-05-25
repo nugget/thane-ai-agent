@@ -34,6 +34,20 @@ Choose stream wiring by attention cost:
   immediate iteration. Producer tools such as `forge_repo_follow` and
   `media_follow` own those subscriptions.
 
+Treat running loops as bi-directional. A curate loop can pull the core
+in via `request_core_attention` when something deserves a decision; the
+core can push new focus down by adding entities to a running loop's
+watch set with `loop_update_entity_subscriptions`, or by pointing a
+producer's `wake_loop` target at the loop. Inspect what is already
+running with `loop_status` and `loop_definition_get` before launching
+a parallel watcher — a thriving loop is its own data-dense
+documentation and is usually the right thing to extend.
+
+**`request_core_attention` forces a supervisor turn** on the core
+loop's next iteration — costlier than a normal wake. Reserve it for
+concerns that genuinely warrant the extra capacity, not as a routine
+notification channel.
+
 Natural-language timing inside a task does not schedule a service loop.
 Use `thane_curate.cadence` or explicit service-loop sleep fields. Lint
 hand-authored durable definitions before saving them, especially when
