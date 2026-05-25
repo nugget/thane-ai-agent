@@ -67,11 +67,12 @@ type DefinitionEligibilityStatus struct {
 // EffectiveConditionEvaluation pairs one definition's eligibility
 // status with the loop that owns it, used by the effective-
 // eligibility surface to attribute which ancestor blocks the chain.
-// "self" is the owning definition; otherwise the ancestor's name.
+// Only the leaf and its container ancestors appear here — non-
+// container ancestors don't contribute and are silently walked past
+// (see [EvaluateEffectiveConditions]).
 type EffectiveConditionEvaluation struct {
 	// From is [EffectiveOriginSelf] for the loop's own conditions,
-	// or the ancestor's name when the entry came from a container
-	// ancestor.
+	// or the container ancestor's name when inherited.
 	From string `yaml:"from" json:"from"`
 	// Status is the result of [Conditions.Evaluate] for the owning
 	// loop, computed at the evaluation time supplied to
@@ -81,18 +82,25 @@ type EffectiveConditionEvaluation struct {
 
 // EvaluateEffectiveConditions aggregates one definition's
 // eligibility with its container ancestors' eligibility. Every
-// ancestor must independently report eligible for the result to be
-// eligible — AND across the chain. When ineligible, the returned
-// status's Reason names the closest blocking ancestor so the
-// operator (or model) sees which level of the tree is gating the
-// loop. The per-level evaluations are returned alongside so the
-// effective surface can show provenance.
+// container ancestor must independently report eligible for the
+// result to be eligible — AND across the chain. When ineligible,
+// the returned status's Reason names the closest blocking ancestor
+// so the operator (or model) sees which level of the tree is
+// gating the loop. The per-level evaluations are returned alongside
+// so the effective surface can show provenance.
 //
-// chain is expected to be parent-first (own definition at index 0,
-// immediate parent at 1, etc.) — the shape
-// [DefinitionRegistry.AncestorSpecs] returns when called with the
-// loop's name prepended. now is the evaluation time, threaded
-// through so callers can substitute a fixed clock in tests.
+// Only the leaf itself (chain[0]) and container ancestors
+// contribute. Non-container ancestors are walked past silently —
+// matches the inheritance contract established in PR-A/B/C, where
+// only [OperationContainer] nodes pass scope down to descendants.
+// A service-loop ancestor with ineligible Conditions does not
+// block its descendant.
+//
+// chain is leaf-first: index 0 is the loop's own spec, index 1 is
+// its immediate parent, and so on — the shape
+// [DefinitionRegistry.AncestorSpecs] returns. now is the
+// evaluation time, threaded through so callers can substitute a
+// fixed clock in tests.
 func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation) {
 	if len(chain) == 0 {
 		return DefinitionEligibilityStatus{Eligible: true}, nil
@@ -103,6 +111,14 @@ func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibi
 	var blockingFrom string
 
 	for i, spec := range chain {
+		// Leaf contributes regardless of operation; ancestors must be
+		// containers to participate in the cascade. Skip silently —
+		// non-container nodes don't appear in the per-level
+		// evaluations because they didn't contribute.
+		if i > 0 && spec.Operation != OperationContainer {
+			continue
+		}
+
 		status := spec.Conditions.Evaluate(now)
 		from := EffectiveOriginSelf
 		if i > 0 {
@@ -116,7 +132,7 @@ func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibi
 		if !status.Eligible {
 			if aggregate.Eligible {
 				// First ineligible we encounter wins attribution.
-				// Walking parent-first means this is the closest
+				// Walking leaf-first means this is the closest
 				// blocking ancestor (or self), which is the most
 				// actionable thing to surface.
 				aggregate.Eligible = false

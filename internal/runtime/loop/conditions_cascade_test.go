@@ -15,7 +15,7 @@ func TestEvaluateEffectiveConditionsAllEligible(t *testing.T) {
 	now := time.Date(2026, 5, 25, 14, 0, 0, 0, time.UTC) // Monday afternoon
 	chain := []Spec{
 		{Name: "leaf"}, // no conditions = always eligible
-		{Name: "parent"},
+		{Name: "parent", Operation: OperationContainer},
 	}
 
 	agg, evals := EvaluateEffectiveConditions(chain, now)
@@ -33,6 +33,46 @@ func TestEvaluateEffectiveConditionsAllEligible(t *testing.T) {
 	}
 }
 
+// TestEvaluateEffectiveConditionsSkipsNonContainerAncestors guards
+// the inheritance contract: only container ancestors gate
+// descendants. A service-loop ancestor with ineligible Conditions
+// must NOT block its descendant, since service loops don't pass
+// scope down the way containers do. This is the regression test
+// for the bug where the cascade evaluated every ancestor
+// indiscriminately.
+func TestEvaluateEffectiveConditionsSkipsNonContainerAncestors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 14, 0, 0, 0, time.UTC) // Sunday
+	weekdays := &ScheduleCondition{
+		Timezone: "UTC",
+		Windows: []ScheduleWindow{
+			{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "09:00", End: "17:00"},
+		},
+	}
+	chain := []Spec{
+		{Name: "leaf"},
+		{
+			Name:       "service_parent",
+			Operation:  OperationService,
+			Conditions: Conditions{Schedule: weekdays},
+		},
+	}
+
+	agg, evals := EvaluateEffectiveConditions(chain, now)
+	if !agg.Eligible {
+		t.Errorf("aggregate should be eligible; non-container ancestor must not gate descendant, got %+v", agg)
+	}
+	// The non-container ancestor is walked past silently, so the per-
+	// level evaluations include only the leaf.
+	if len(evals) != 1 {
+		t.Fatalf("evals len = %d, want 1 (only self contributes)", len(evals))
+	}
+	if evals[0].From != EffectiveOriginSelf {
+		t.Errorf("evals[0].From = %q, want self", evals[0].From)
+	}
+}
+
 // TestEvaluateEffectiveConditionsAncestorBlocks is the load-bearing
 // test for PR-C2: a leaf with no conditions still becomes ineligible
 // when an ancestor container's schedule is outside its window. The
@@ -46,7 +86,8 @@ func TestEvaluateEffectiveConditionsAncestorBlocks(t *testing.T) {
 	chain := []Spec{
 		{Name: "leaf"},
 		{
-			Name: "work_hours",
+			Name:      "work_hours",
+			Operation: OperationContainer,
 			Conditions: Conditions{
 				Schedule: &ScheduleCondition{
 					Timezone: "UTC",
@@ -91,8 +132,8 @@ func TestEvaluateEffectiveConditionsClosestBlockingWins(t *testing.T) {
 	}
 	chain := []Spec{
 		{Name: "leaf"},
-		{Name: "near_block", Conditions: Conditions{Schedule: schedule}},
-		{Name: "far_block", Conditions: Conditions{Schedule: schedule}},
+		{Name: "near_block", Operation: OperationContainer, Conditions: Conditions{Schedule: schedule}},
+		{Name: "far_block", Operation: OperationContainer, Conditions: Conditions{Schedule: schedule}},
 	}
 
 	agg, _ := EvaluateEffectiveConditions(chain, now)
@@ -160,7 +201,8 @@ func TestEvaluateEffectiveConditionsNextTransitionEarliest(t *testing.T) {
 			}},
 		},
 		{
-			Name: "ancestor",
+			Name:      "ancestor",
+			Operation: OperationContainer,
 			Conditions: Conditions{Schedule: &ScheduleCondition{
 				Timezone: "UTC",
 				Windows: []ScheduleWindow{
