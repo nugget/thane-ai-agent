@@ -68,14 +68,14 @@ needs a strict fresh tool scope.
 
 | Tool | Description |
 |------|-------------|
-| `add_context_entity` | Watch an HA entity so its state is injected into context each turn. |
-| `list_context_entities` | List current watchlist subscriptions (scoped and always-visible). |
-| `remove_context_entity` | Remove a watched entity or a scoped subscription. |
+| `add_entity_subscription` | Watch an HA entity so its state is injected into context each turn. |
+| `list_entity_subscriptions` | List current watchlist subscriptions (scoped and always-visible). |
+| `remove_entity_subscription` | Remove a watched entity or a scoped subscription. |
 
 Subscription expiry is reported as `expires_delta`, not a raw timestamp,
 so the model does not need to do clock arithmetic.
 
-For `weather.*` subscriptions, `add_context_entity` accepts
+For `weather.*` subscriptions, `add_entity_subscription` accepts
 `forecast: daily`, `forecast: hourly`, or `forecast: twice_daily` to
 fetch Home Assistant forecast response data each turn and include a
 compact forecast in the injected entity context. Use `forecast: none` to

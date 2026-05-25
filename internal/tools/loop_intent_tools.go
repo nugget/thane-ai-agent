@@ -74,7 +74,7 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 	r.loopIntentDeps = deps
 	r.registerThaneCurate()
 	if deps.WatchlistStore != nil {
-		r.registerLoopUpdateEntitySubscriptions()
+		r.registerUpdateEntitySubscriptions()
 	}
 }
 
@@ -411,8 +411,8 @@ type curateEntity struct {
 // parseEntityList decodes an entity-subscription array into a typed
 // list. fieldName is the caller-facing name of the parameter
 // (e.g. "entities" for thane_curate, "add" for
-// loop_update_entity_subscriptions) and is woven into every error
-// message so the model can see which argument failed validation.
+// update_entity_subscriptions) and is woven into every error message
+// so the model can see which argument failed validation.
 // Empty/missing returns nil. Invalid shapes return an actionable
 // error per the model-facing-tools doctrine.
 func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
@@ -497,7 +497,7 @@ func coerceInt(v any) (int, error) {
 // prefix is the load-bearing convention: API/UI layers filter for it
 // to find loop-owned subscriptions, capability-tag collisions are
 // impossible (no built-in tag contains a colon), and a human reading
-// list_context_entities knows at a glance which rows belong to a loop.
+// list_entity_subscriptions knows at a glance which rows belong to a loop.
 func newScopeTag() (string, error) {
 	var buf [3]byte
 	if _, err := rand.Read(buf[:]); err != nil {
