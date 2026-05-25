@@ -46,6 +46,36 @@ const (
 	StateStopped State = "stopped"
 )
 
+// SupervisorTrigger names the cause that put an iteration into
+// supervisor-turn mode. Reported on [IterationResult],
+// [IterationSnapshot], and [Status.LastSupervisorTrigger] so
+// retrospection and analytics can distinguish a Bernoulli win
+// from a force_supervisor notification. Future routing-strategy
+// experiments (alternation, cooldowns, slot-based selectors)
+// will widen the value space; consumers should treat unknown
+// values as "this iteration was a supervisor turn for some
+// reason," not as an error.
+type SupervisorTrigger string
+
+const (
+	// SupervisorTriggerNone is the zero value, used when the
+	// iteration ran as a normal turn. Encodes as the empty
+	// string in JSON so it's omitted from the wire format by
+	// the standard `omitempty` tag.
+	SupervisorTriggerNone SupervisorTrigger = ""
+	// SupervisorTriggerRandom indicates the supervisor turn
+	// fired because the per-wake Bernoulli trial (driven by
+	// [Config.SupervisorProb]) won — the steady-state cause for
+	// loops with Supervisor=true.
+	SupervisorTriggerRandom SupervisorTrigger = "random"
+	// SupervisorTriggerForced indicates the supervisor turn
+	// fired because an external signal asked for it via the
+	// `force_supervisor` notification field (mqtt, message_tools,
+	// feed_wake, etc.). Costlier than a normal wake; reserve for
+	// signals that genuinely warrant the extra capacity.
+	SupervisorTriggerForced SupervisorTrigger = "forced"
+)
+
 // RetriggerMode determines what happens when a loop's start condition
 // fires again while the loop is already running.
 type RetriggerMode int
@@ -415,8 +445,17 @@ type IterationResult struct {
 	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
-	// Supervisor indicates whether this iteration ran a supervisor turn.
+	// Supervisor indicates whether this iteration ran a supervisor
+	// turn. Derived from SupervisorTrigger; preserved for
+	// backwards-compatible consumers that just want the bool.
 	Supervisor bool
+	// SupervisorTrigger names why a supervisor turn fired (or
+	// reports the empty string when this iteration ran as a normal
+	// turn). Lets retrospection and routing-strategy experiments
+	// distinguish "the dice came up" from "an external signal asked
+	// for it" without re-deriving the cause from notification
+	// history.
+	SupervisorTrigger SupervisorTrigger
 	// Sleep is the computed sleep duration before the next iteration.
 	Sleep time.Duration
 }
@@ -453,8 +492,16 @@ type IterationSnapshot struct {
 	// value is directly usable by the client without nanosecond
 	// conversion.
 	ElapsedMs int64 `json:"elapsed_ms"`
-	// Supervisor indicates whether this iteration ran a supervisor turn.
+	// Supervisor indicates whether this iteration ran a supervisor
+	// turn. Derived from SupervisorTrigger; the JSON wire format
+	// keeps the bool so existing dashboard clients render correctly.
 	Supervisor bool `json:"supervisor,omitempty"`
+	// SupervisorTrigger names why a supervisor turn fired. Empty
+	// string for normal turns. Emitted alongside the bool so
+	// retrospection and analytics tooling can distinguish
+	// "random" (Bernoulli win) from "forced" (notification-driven)
+	// without re-deriving the cause from event logs.
+	SupervisorTrigger SupervisorTrigger `json:"supervisor_trigger,omitempty"`
 	// Error holds the error message if the iteration failed.
 	Error string `json:"error,omitempty"`
 	// StartedAt is when the iteration began.
@@ -523,6 +570,13 @@ type Status struct {
 	// iteration that ran a successful supervisor turn. Zero means
 	// no supervisor turn has completed yet.
 	LastSupervisorIter int `json:"last_supervisor_iter,omitempty"`
+	// LastSupervisorTrigger is the cause of the most recent
+	// supervisor turn (empty when LastSupervisorIter == 0). Lets
+	// the running loop see "my last review was a random pass 14
+	// turns ago" vs "my last review was forced by mqtt 3 turns
+	// ago" without scanning event logs. Drives self-pacing
+	// decisions.
+	LastSupervisorTrigger SupervisorTrigger `json:"last_supervisor_trigger,omitempty"`
 	// LLMContext holds enrichment data from the most recent
 	// loop_llm_start event (model, est_tokens, messages, tools,
 	// complexity, intent, reasoning). Only populated while the loop
