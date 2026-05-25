@@ -128,7 +128,9 @@ func TestSupervisorTriggerStampedOnIterationRecord(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_ = l.Start(context.Background())
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 	<-l.Done()
 
 	status := l.Status()
