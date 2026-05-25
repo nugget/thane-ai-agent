@@ -7,17 +7,11 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// defaultCoreLoopName is the well-known name the bootstrap uses for
-// the auto-created core. Operators can read it back through the live
-// registry; the UI will hang system-level affordances off this node
-// in PR-D2. Kept as a constant so log lines, tests, and any future
-// "core by name" lookups agree.
-const defaultCoreLoopName = "core"
-
-// ensureCoreLoop spawns the singleton [looppkg.OperationCore] loop
-// into the live registry when one isn't already present. Idempotent:
-// runs once per startup and again is a no-op as long as the existing
-// core stays registered.
+// ensureCoreLoop spawns the singleton core loop — a container with
+// the well-known name [looppkg.CoreLoopName] — into the live
+// registry when one isn't already present. Idempotent: runs once
+// per startup and again is a no-op as long as the existing core
+// stays registered.
 //
 // The core is implicit — it does not live in the definition
 // registry. The bootstrap owns its lifecycle entirely. That keeps
@@ -25,6 +19,12 @@ const defaultCoreLoopName = "core"
 // question that has no satisfying answer (operators don't curate
 // the root) and avoids the "core got out of sync with code
 // expectations" failure mode a persisted spec would introduce.
+//
+// Core is functionally a container with a few extras (singleton
+// enforcement, default-parent target for orphans, refused for
+// delete). The "magic container" mental model lives in code as
+// `Operation == OperationContainer && Name == CoreLoopName`,
+// captured by [looppkg.Loop.IsCore].
 func (a *App) ensureCoreLoop(ctx context.Context) error {
 	if a == nil || a.loopRegistry == nil {
 		return nil
@@ -35,9 +35,9 @@ func (a *App) ensureCoreLoop(ctx context.Context) error {
 	}
 
 	spec := looppkg.Spec{
-		Name:      defaultCoreLoopName,
+		Name:      looppkg.CoreLoopName,
 		Enabled:   true,
-		Operation: looppkg.OperationCore,
+		Operation: looppkg.OperationContainer,
 	}
 	if _, err := a.loopRegistry.SpawnSpec(ctx, spec, looppkg.Deps{
 		Logger: a.logger,
@@ -51,6 +51,6 @@ func (a *App) ensureCoreLoop(ctx context.Context) error {
 		}
 		return err
 	}
-	a.logger.Info("core loop auto-created", "name", defaultCoreLoopName)
+	a.logger.Info("core loop auto-created", "name", looppkg.CoreLoopName)
 	return nil
 }

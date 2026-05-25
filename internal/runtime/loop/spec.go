@@ -31,18 +31,23 @@ const (
 	// time. Container loops occupy registry entries, take a
 	// parent_id, carry metadata and a scope_tag, but never wake and
 	// never run a Task. See [Spec.Validate] for the shape contract.
+	//
+	// The container with the well-known name [CoreLoopName] is the
+	// graph's structural root — pid-0 equivalent. Core is not a
+	// separate operation kind; it's a container with a few extra
+	// invariants enforced by the registry and bootstrap (singleton,
+	// auto-created on startup, refused for delete, default parent
+	// for orphan loops). See [Loop.IsCore].
 	OperationContainer Operation = "container"
-	// OperationCore is the singleton structural root of the loop
-	// graph. Shape-identical to [OperationContainer] (no execution,
-	// no wakes, no outputs) but with two extra invariants enforced
-	// by the registry: at most one core exists at a time, and
-	// every other loop's effective root resolves to the core. The
-	// agent auto-creates one at startup if missing, so the graph
-	// always has a single conceptual root for the visualizer and
-	// for system-level affordances (subsystem health, dynamic
-	// model registry, etc.) to hang off in the UI.
-	OperationCore Operation = "core"
 )
+
+// CoreLoopName is the well-known name reserved for the singleton
+// structural root container. Auto-created at startup if absent;
+// orphan loops default-parent to it; cannot be stopped via the
+// operator-facing kill switch. Operators and tools that want to
+// distinguish the root from other containers compare against this
+// constant rather than re-spelling the string.
+const CoreLoopName = "core"
 
 // Completion describes how a loop's result should be delivered.
 // The zero value is accepted and means "no outward delivery declared".
@@ -65,7 +70,6 @@ var validOperations = map[Operation]bool{
 	OperationBackgroundTask: true,
 	OperationService:        true,
 	OperationContainer:      true,
-	OperationCore:           true,
 }
 
 var validCompletions = map[Completion]bool{
@@ -81,17 +85,6 @@ func effectiveOperation(op Operation) Operation {
 		return OperationRequestReply
 	}
 	return op
-}
-
-// isContainerShaped reports whether op is one of the structural,
-// non-executing operation kinds — [OperationContainer] or
-// [OperationCore]. Both share the same shape contract (no task, no
-// wakes, no outputs) and use the same validation, hydration, and
-// inheritance paths. Use this in switch/branch sites that need to
-// know "this loop never runs a turn" without enumerating both
-// constants every time.
-func isContainerShaped(op Operation) bool {
-	return op == OperationContainer || op == OperationCore
 }
 
 // Spec is the contract for describing a loop. It compiles to
@@ -279,7 +272,7 @@ func (s *Spec) Validate() error {
 	if err := validateOutputs(s.Outputs); err != nil {
 		return fmt.Errorf("loop: %w", err)
 	}
-	if isContainerShaped(s.Operation) {
+	if s.Operation == OperationContainer {
 		// Containers are inert nodes — they hold inheritable state
 		// (tags, entity subscriptions, metadata) but never wake and
 		// never execute. Reject any field that would imply

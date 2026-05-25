@@ -55,19 +55,18 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	return r
 }
 
-// MultipleCoreError reports an attempt to register a second
-// [OperationCore] loop. The graph has exactly one structural root;
-// the registry enforces this so callers (auto-create, manual spawn
-// via tools) cannot accidentally produce a second.
+// MultipleCoreError reports an attempt to register a second core
+// loop — a container named [CoreLoopName]. The graph has exactly
+// one structural root; the registry enforces this so callers
+// (auto-create, manual spawn via tools) cannot accidentally
+// produce a second.
 type MultipleCoreError struct {
 	// ExistingID is the loop ID of the core already in the registry.
 	ExistingID string
-	// ExistingName is the registered core's name for diagnostic logs.
-	ExistingName string
 }
 
 func (e *MultipleCoreError) Error() string {
-	return fmt.Sprintf("loop: cannot register a second core; existing core %q (id=%s) is already the singleton root", e.ExistingName, e.ExistingID)
+	return fmt.Sprintf("loop: cannot register a second core; existing core (id=%s) is already the singleton root", e.ExistingID)
 }
 
 // Register adds a loop to the registry. Returns an error if the loop's
@@ -86,13 +85,10 @@ func (r *Registry) Register(l *Loop) error {
 	// Core is a singleton — exactly one structural root in the
 	// graph. Scan for an existing core before accepting a second.
 	// O(n) is fine: this only runs at register time and n is small.
-	if l.config.Operation == OperationCore {
+	if l.IsCore() {
 		for _, existing := range r.loops {
-			if existing.config.Operation == OperationCore {
-				return &MultipleCoreError{
-					ExistingID:   existing.id,
-					ExistingName: existing.config.Name,
-				}
+			if existing.IsCore() {
+				return &MultipleCoreError{ExistingID: existing.id}
 			}
 		}
 	}
@@ -423,10 +419,10 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
-		// ancestors are filtered to structural nodes (containers and
-		// the core, which shares container's inheritance shape) — the
-		// tag-inheritance contract from Phase 1A.
-		if i > 0 && !isContainerShaped(l.Operation()) {
+		// ancestors are filtered to container nodes — matches the
+		// tag-inheritance contract from Phase 1A. The core container
+		// participates the same way every other container does.
+		if i > 0 && l.Operation() != OperationContainer {
 			continue
 		}
 		origin := EffectiveOriginSelf
@@ -496,16 +492,16 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 	return result
 }
 
-// Core returns the singleton [OperationCore] loop, or nil if none
-// is currently registered. The app's bootstrap auto-creates one at
-// startup, so a non-nil Core is the steady-state expectation; nil
-// only happens in tests or in the narrow window before bootstrap
-// runs.
+// Core returns the singleton core loop — the container with the
+// well-known name [CoreLoopName] — or nil if none is currently
+// registered. The app's bootstrap auto-creates one at startup, so
+// a non-nil Core is the steady-state expectation; nil only happens
+// in tests or in the narrow window before bootstrap runs.
 func (r *Registry) Core() *Loop {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, l := range r.loops {
-		if l.config.Operation == OperationCore {
+		if l.IsCore() {
 			return l
 		}
 	}
@@ -819,7 +815,7 @@ func (r *Registry) StopLoop(id string) error {
 	if l == nil {
 		return fmt.Errorf("loop %q not found", id)
 	}
-	if l.config.Operation == OperationCore {
+	if l.IsCore() {
 		return fmt.Errorf("loop: cannot stop core %q — the structural root has no operator-facing kill switch", l.config.Name)
 	}
 

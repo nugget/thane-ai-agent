@@ -110,7 +110,7 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 	// (the narrow startup window before [App.ensureCoreLoop] runs
 	// leaves orphans truly parentless, which is fine — they'll
 	// reattach on the next reconcile or restart once core is up).
-	if r.loops != nil && spec.ParentID == "" && spec.Operation != looppkg.OperationCore {
+	if r.loops != nil && spec.ParentID == "" && spec.Name != looppkg.CoreLoopName {
 		if core := r.loops.Core(); core != nil {
 			spec.ParentID = core.ID()
 		}

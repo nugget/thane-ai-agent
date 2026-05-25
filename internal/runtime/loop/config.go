@@ -320,10 +320,11 @@ func Float64Ptr(v float64) *float64 { return &v }
 // SupervisorProb is intentionally left as-is so that zero means
 // "disabled" — callers opt in explicitly.
 func (c *Config) applyDefaults() {
-	if isContainerShaped(c.Operation) {
-		// Containers and core never wake; don't synthesize sleep
-		// defaults that would otherwise be inert-but-confusing on
-		// the Config.
+	if c.Operation == OperationContainer {
+		// Containers never wake; don't synthesize sleep defaults
+		// that would otherwise be inert-but-confusing on the Config.
+		// The well-known core container (see [CoreLoopName]) shares
+		// this contract by being a container.
 		return
 	}
 	if c.SleepMin == 0 {
@@ -343,11 +344,11 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
-	if isContainerShaped(c.Operation) {
-		// Containers and core are inert nodes — no execution hook,
-		// no wake timer. Reject execution-shaped fields the same
-		// way [Spec.Validate] does so callers that build a Config
-		// directly (tests, internal adapters) get the same category-error
+	if c.Operation == OperationContainer {
+		// Containers are inert nodes — no execution hook, no wake
+		// timer. Reject execution-shaped fields the same way
+		// [Spec.Validate] does so callers that build a Config directly
+		// (tests, internal adapters) get the same category-error
 		// contract instead of having fields silently ignored at start.
 		if err := containerShape(
 			c.Name, c.Task,

@@ -306,10 +306,11 @@ type Loop struct {
 // Returns an error if required fields are missing or invalid.
 // Call [Loop.Start] to launch the background goroutine.
 func New(cfg Config, deps Deps) (*Loop, error) {
-	// Containers and core never wake and never run a turn, so they
-	// need neither a Runner nor a Handler. Every other operation
-	// type requires at least one execution path.
-	if !isContainerShaped(cfg.Operation) && cfg.Handler == nil && deps.Runner == nil {
+	// Containers never wake and never run a turn, so they need
+	// neither a Runner nor a Handler. Every other operation type
+	// requires at least one execution path. (The well-known core
+	// container shares this path by being a container.)
+	if cfg.Operation != OperationContainer && cfg.Handler == nil && deps.Runner == nil {
 		return nil, ErrNilRunner
 	}
 	if cfg.Name == "" {
@@ -409,6 +410,15 @@ func (l *Loop) ParentID() string { return l.config.ParentID }
 // construction; safe to read without the loop lock.
 func (l *Loop) Operation() Operation { return l.config.Operation }
 
+// IsCore reports whether this loop is the singleton structural root
+// — the container with the well-known name [CoreLoopName]. Core is
+// not a separate operation kind; it's a container with extras
+// (singleton enforcement, stop refusal, default-parent target)
+// expressed through this identity check.
+func (l *Loop) IsCore() bool {
+	return l.config.Operation == OperationContainer && l.config.Name == CoreLoopName
+}
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")
@@ -435,10 +445,11 @@ func (l *Loop) Start(ctx context.Context) error {
 	l.started = true
 	l.startedAt = time.Now()
 
-	if isContainerShaped(l.config.Operation) {
-		// Containers and core are inert: present in the registry
-		// but never dispatched. Skip the goroutine so we don't pay
-		// the cost of an idle wake-timer per structural node.
+	if l.config.Operation == OperationContainer {
+		// Containers are inert: present in the registry but never
+		// dispatched. Skip the goroutine so we don't pay the cost
+		// of an idle wake-timer per structural node. The core
+		// container (see [CoreLoopName]) follows the same path.
 		l.done = make(chan struct{})
 		close(l.done)
 		return nil
