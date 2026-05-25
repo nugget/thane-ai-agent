@@ -157,24 +157,26 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 }
 
 // HasOverrides reports whether the launch carries any caller-supplied
-// per-launch override field. Returns false for the zero value (callers
-// joining an existing loop with no per-run customization).
+// payload. Returns false for the zero value (callers joining an
+// existing loop with no per-run customization).
 //
-// Spec is intentionally excluded: on the normal launch path the runtime
-// overwrites it with the stored runtime spec, so a caller-supplied Spec
-// is benign there. The active-service-loop guard in
-// [loopDefinitionRuntime.LaunchDefinition] returns before that
-// overwrite, so it pairs HasOverrides with a separate [Spec.IsZero]
-// check to catch a caller-supplied Spec that would otherwise vanish
-// silently. OnProgress is excluded because it is an internal-only
-// delivery hook.
+// Includes Spec: a caller-supplied Spec is also caller payload. On the
+// normal launch path the runtime overwrites it with the stored runtime
+// spec so it's benign there, but the active-service-loop guard returns
+// before the overwrite, so flagging it here keeps that guard's check
+// to one expression. OnProgress is excluded because it is an
+// internal-only delivery hook.
 //
-// Used by the active-service-loop guard to surface a loud error when a
-// caller passes overrides that would be silently dropped (the runtime
-// returns the existing loop ID without re-applying any override fields).
+// Used by the active-service-loop guard in
+// [loopDefinitionRuntime.LaunchDefinition] to surface a loud error
+// when a caller passes payload that would be silently dropped (the
+// runtime returns the existing loop ID without re-applying anything).
 func (l *Launch) HasOverrides() bool {
 	if l == nil {
 		return false
+	}
+	if !l.Spec.IsZero() {
+		return true
 	}
 	if l.Task != "" ||
 		l.ParentID != "" ||

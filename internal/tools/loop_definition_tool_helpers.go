@@ -76,6 +76,11 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 // raw-map pre-check preserves a useful error pointing callers at
 // `spec.profile.model`.
 //
+// Rejection fires on any non-null value, not just non-empty strings.
+// A caller sending `{"model": 5}` or `{"model": {...}}` would otherwise
+// slip past a string-only check and have the key silently dropped by
+// the unmarshaller. Same logic applies to `launch.metadata.model`.
+//
 // Both top-level `launch.model` and `launch.metadata.model` are
 // rejected. Other tool-facing layers (the JSON schema for
 // [loop_definition_launch] and [spawn_loop]) already omit `model`; this
@@ -85,28 +90,39 @@ func rejectLaunchModelKeys(raw any) error {
 	if !ok {
 		return nil
 	}
-	if v, present := launch["model"]; present {
-		if model, _ := v.(string); strings.TrimSpace(model) != "" {
-			return fmt.Errorf(
-				"launch.model=%q is not accepted from tool input; "+
-					"to pin a model, set spec.profile.model "+
-					"(via loop_definition_set for persisted definitions, "+
-					"or inside the spec passed to spawn_loop for ad-hoc loops)",
-				model)
-		}
+	if v, present := launch["model"]; present && !isNilOrEmptyString(v) {
+		return fmt.Errorf(
+			"launch.model=%v is not accepted from tool input; "+
+				"to pin a model, set spec.profile.model "+
+				"(via loop_definition_set for persisted definitions, "+
+				"or inside the spec passed to spawn_loop for ad-hoc loops)",
+			v)
 	}
 	metadata, _ := launch["metadata"].(map[string]any)
-	if v, present := metadata["model"]; present {
-		if model, _ := v.(string); strings.TrimSpace(model) != "" {
-			return fmt.Errorf(
-				"launch.metadata.model=%q is opaque tagging and does not override the model; "+
-					"set spec.profile.model instead "+
-					"(via loop_definition_set for persisted definitions, "+
-					"or inside the spec passed to spawn_loop for ad-hoc loops)",
-				model)
-		}
+	if v, present := metadata["model"]; present && !isNilOrEmptyString(v) {
+		return fmt.Errorf(
+			"launch.metadata.model=%v is opaque tagging and does not override the model; "+
+				"set spec.profile.model instead "+
+				"(via loop_definition_set for persisted definitions, "+
+				"or inside the spec passed to spawn_loop for ad-hoc loops)",
+			v)
 	}
 	return nil
+}
+
+// isNilOrEmptyString reports whether v is nil or an empty/whitespace
+// string. Used by [rejectLaunchModelKeys] to treat null and "" as
+// "not set" while still rejecting non-string values like numbers or
+// objects, which would otherwise be silently dropped by JSON unmarshal
+// when the target field is absent.
+func isNilOrEmptyString(v any) bool {
+	if v == nil {
+		return true
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s) == ""
+	}
+	return false
 }
 
 func loopCompletionChannelTargetProperty() map[string]any {

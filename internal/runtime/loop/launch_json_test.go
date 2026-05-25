@@ -114,10 +114,14 @@ func TestLaunchHasOverrides(t *testing.T) {
 		}
 	})
 	t.Run("spec-only", func(t *testing.T) {
-		// Spec is overwritten by LaunchDefinition; not a caller override.
+		// Caller-supplied Spec counts as an override: on the running-
+		// service early-return path the runtime drops it silently, so
+		// HasOverrides has to flag it. The normal launch path
+		// overwrites it; flagging it there is harmless because no
+		// caller of HasOverrides currently runs on that path.
 		l := Launch{Spec: Spec{Name: "x", Task: "y"}}
-		if l.HasOverrides() {
-			t.Fatal("spec-only launch reported overrides")
+		if !l.HasOverrides() {
+			t.Fatal("spec-only launch did not report overrides")
 		}
 	})
 	cases := []struct {
@@ -148,6 +152,7 @@ func TestLaunchHasOverrides(t *testing.T) {
 		{"completion_conversation_id", func(l *Launch) { l.CompletionConversationID = "c" }, "CompletionConversationID"},
 		{"completion_channel", func(l *Launch) { l.CompletionChannel = &CompletionChannelTarget{Channel: "signal"} }, "CompletionChannel"},
 		{"channel_binding", func(l *Launch) { l.ChannelBinding = &memory.ChannelBinding{Channel: "signal"} }, "ChannelBinding"},
+		{"spec", func(l *Launch) { l.Spec = Spec{Name: "x"} }, "Spec"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,7 +179,7 @@ func TestLaunchHasOverrides(t *testing.T) {
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
 			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-			if name == "" || name == "-" || name == "spec" {
+			if name == "" || name == "-" {
 				continue
 			}
 			if !covered[field.Name] {

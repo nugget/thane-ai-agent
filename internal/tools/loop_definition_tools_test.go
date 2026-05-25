@@ -426,6 +426,56 @@ func TestLoopDefinitionLaunchRejectsTopLevelModelOverride(t *testing.T) {
 	}
 }
 
+func TestLoopDefinitionLaunchRejectsNonStringModel(t *testing.T) {
+	// Non-string model values (numbers, objects, arrays) would slip past
+	// a string-only check and be silently dropped by the unmarshaller
+	// (since looppkg.Launch has no Model field). The pre-check must
+	// reject any non-null value.
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{"number", 5},
+		{"object", map[string]any{"name": "claude"}},
+		{"array", []any{"claude"}},
+		{"bool", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newTestLoopDefinitionDeps(t)
+			_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+				"name": "metacog_like",
+				"launch": map[string]any{
+					"model": tc.value,
+				},
+			})
+			if err == nil {
+				t.Fatalf("expected error for launch.model=%v (%T), got nil", tc.value, tc.value)
+			}
+			if !strings.Contains(err.Error(), "launch.model") || !strings.Contains(err.Error(), "spec.profile.model") {
+				t.Fatalf("error = %q, want guidance pointing from launch.model to spec.profile.model", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoopDefinitionLaunchAcceptsExplicitNullModel(t *testing.T) {
+	// Explicit JSON null on launch.model is harmless — same shape as
+	// "key absent." Don't reject; the unmarshaller would already see
+	// no value to bind.
+	deps := newTestLoopDefinitionDeps(t)
+	_, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+		"launch": map[string]any{
+			"model": nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("explicit null model should be tolerated, got %v", err)
+	}
+}
+
 func TestLoopDefinitionLaunchSchemaOmitsModel(t *testing.T) {
 	deps := newTestLoopDefinitionDeps(t)
 
