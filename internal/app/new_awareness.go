@@ -92,7 +92,7 @@ func (a *App) initAwareness(s *newState) error {
 		// for the current loop. Per-tag watchlist providers are gone —
 		// the structural parent/child binding from container loops
 		// replaces the scope_tag indirection.
-		loopSubProvider := awareness.NewLoopSubscriptionProvider(a.loopRegistry, a.ha, logger)
+		loopSubProvider := awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, a.ha, logger)
 		loopSubProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(loopSubProvider)
 

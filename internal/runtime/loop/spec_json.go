@@ -110,6 +110,20 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("loop: on_retrigger: %w", err)
 	}
+	// Apply the same forecast normalization and AddedAt stamping
+	// the tool-boundary write paths use. Without this, a
+	// hand-edited or externally-pushed Spec with `ttl_seconds > 0`
+	// and missing `added_at` would unmarshal into a permanent
+	// watcher (IsExpired returns false forever, the documented
+	// footgun on EntitySubscription.AddedAt). Stamping at load
+	// time turns "this subscription has never had its TTL clock
+	// started" into "TTL counts from when the spec was loaded" —
+	// which matches operator intent better than "ignored
+	// silently."
+	normalizedSubs, err := normalizeSubscriptionsOnLoad(cloneEntitySubscriptions(wire.Subscriptions), time.Now())
+	if err != nil {
+		return fmt.Errorf("loop: %w", err)
+	}
 	*s = Spec{
 		Name:                   wire.Name,
 		Enabled:                wire.Enabled,
@@ -117,7 +131,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Operation:              wire.Operation,
 		Completion:             wire.Completion,
 		Outputs:                cloneOutputs(wire.Outputs),
-		Subscriptions:          cloneEntitySubscriptions(wire.Subscriptions),
+		Subscriptions:          normalizedSubs,
 		Conditions:             cloneConditions(wire.Conditions),
 		Tags:                   append([]string(nil), wire.Tags...),
 		ExcludeTools:           append([]string(nil), wire.ExcludeTools...),
