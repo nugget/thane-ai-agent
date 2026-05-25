@@ -89,7 +89,7 @@ func (r *Registry) registerThaneCurate() {
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
 			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop focus tag and surfaced into the loop's prompt automatically. " +
 			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the resolved sleep envelope.",
-		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "guidance", "output", "entities", "replace"},
+		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -170,9 +170,9 @@ func (r *Registry) registerThaneCurate() {
 						"required": []string{"entity_id"},
 					},
 				},
-				"guidance": map[string]any{
+				"instructions": map[string]any{
 					"type":        "string",
-					"description": "Optional extra steering injected into each iteration's task prompt (output format hints, what to focus on, what to skip).",
+					"description": "Optional steering text prepended to every iteration's task (output format guidance, what to focus on, what to skip). Persists on the spec's Profile and shows up in loop_definition_get.",
 				},
 				"replace": map[string]any{
 					"type":        "boolean",
@@ -230,7 +230,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 			}
 		}
 	}
-	guidance, _ := args["guidance"].(string)
+	instructions, _ := args["instructions"].(string)
 	replace, _ := args["replace"].(bool)
 
 	entities, err := parseEntityList("entities", args["entities"])
@@ -282,7 +282,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
-		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), guidance),
+		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
 		Operation:    looppkg.OperationService,
 		SleepMin:     envelope.sleepMin,
 		SleepMax:     envelope.sleepMax,
@@ -295,6 +295,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		},
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
+			Instructions:     strings.TrimSpace(instructions),
 		},
 	}
 	if err := spec.ValidatePersistable(); err != nil {
@@ -528,10 +529,13 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.Outp
 
 // buildCurateTask renders the per-iteration task prompt for a
 // thane_curate-created loop. The model running each iteration sees the
-// intent, the document target, the output mode, the scoped output tool
-// name, plus any caller guidance. Kept short and shape-clear so the
-// model can act without re-reading the loop's own definition.
-func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string) string {
+// intent, the document target, the output mode, and the scoped output
+// tool name. Caller-supplied steering text lives on
+// [router.LoopProfile.Instructions] and is prepended at iteration time
+// by [loop.Loop.prepareAgentTurnRequest], so it doesn't appear here.
+// Kept short and shape-clear so the model can act without re-reading
+// the loop's own definition.
+func buildCurateTask(intent, docRef, outputMode, outputToolName string) string {
 	var verb string
 	switch outputMode {
 	case "journal":
@@ -564,10 +568,6 @@ func buildCurateTask(intent, docRef, outputMode, outputToolName, guidance string
 		sb.WriteString("The current document body is shown in the Declared Durable Outputs context block above. If that entry is marked `truncated: true`, read the full document with doc_read before replacing — the output tool overwrites the entire body.")
 	default:
 		sb.WriteString("The document's current contents are surfaced in the Declared Durable Outputs context block above.")
-	}
-	if strings.TrimSpace(guidance) != "" {
-		sb.WriteString("\n\nGuidance: ")
-		sb.WriteString(guidance)
 	}
 	return sb.String()
 }
