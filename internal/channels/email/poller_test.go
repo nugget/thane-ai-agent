@@ -1,15 +1,50 @@
 package email
 
 import (
+	"context"
 	"log/slog"
-	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 )
+
+// stubContacts implements ContactResolver from a fixed address→zone map.
+type stubContacts struct {
+	zones map[string]string
+}
+
+func (s stubContacts) ResolveTrustZone(addr string) (string, bool, error) {
+	zone, ok := s.zones[addr]
+	return zone, ok, nil
+}
+
+// recordingBus is a [messages.Bus] wired with a stub loop destination
+// that records every delivered envelope so tests can assert dispatch
+// shape without a live registry.
+func recordingBus() (*messages.Bus, func() []messages.Envelope) {
+	bus := messages.NewBus(nil)
+	var (
+		mu        sync.Mutex
+		delivered []messages.Envelope
+	)
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		delivered = append(delivered, env)
+		return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+	})
+	return bus, func() []messages.Envelope {
+		mu.Lock()
+		defer mu.Unlock()
+		cp := make([]messages.Envelope, len(delivered))
+		copy(cp, delivered)
+		return cp
+	}
+}
 
 func testOpstate(t *testing.T) *opstate.Store {
 	t.Helper()
@@ -26,62 +61,119 @@ func testOpstate(t *testing.T) *opstate.Store {
 	return s
 }
 
-func TestFormatPollSection_Single(t *testing.T) {
-	// Use a date relative to now so the delta assertion is stable.
-	msgDate := time.Now().Add(-2 * time.Hour)
-
-	messages := []Envelope{
-		{
-			UID:     100,
-			From:    "Jane Doe <jane@example.com>",
-			Subject: "Re: Project update",
-			Date:    msgDate,
-		},
+// TestSenderTag pins the contacts-zone → wake-tag mapping documented
+// on senderTag. A new trust zone added to the contacts model defaults
+// to "stranger" instead of silently promoting senders.
+func TestSenderTag(t *testing.T) {
+	cases := []struct {
+		zone string
+		want string
+	}{
+		{"admin", "owner"},
+		{"household", "household"},
+		{"trusted", "trusted"},
+		{"known", "known"},
+		{"", "stranger"},
+		{"newzone", "stranger"},
 	}
-
-	result := formatPollSection("personal", messages)
-
-	if !strings.Contains(result, "Account: personal (INBOX)") {
-		t.Error("should contain account header")
-	}
-	if !strings.Contains(result, "From: Jane Doe <jane@example.com>") {
-		t.Error("should contain sender")
-	}
-	if !strings.Contains(result, "Subject: Re: Project update") {
-		t.Error("should contain subject")
-	}
-	// Date should use delta format: "(-Ns)" for past.
-	if !strings.Contains(result, "(-") {
-		t.Errorf("date should use delta format (past), got:\n%s", result)
+	for _, tc := range cases {
+		if got := senderTag(tc.zone); got != tc.want {
+			t.Errorf("senderTag(%q) = %q, want %q", tc.zone, got, tc.want)
+		}
 	}
 }
 
-func TestFormatPollSection_Multiple(t *testing.T) {
-	messages := []Envelope{
-		{
-			UID:     101,
-			From:    "alice@example.com",
-			Subject: "Hello",
-			Date:    time.Date(2026, 2, 20, 17, 0, 0, 0, time.UTC),
-		},
-		{
-			UID:     100,
-			From:    "bob@example.com",
-			Subject: "Meeting",
-			Date:    time.Date(2026, 2, 20, 16, 0, 0, 0, time.UTC),
-		},
+// TestPollerDispatchesPerMessageEventsWithTags pins the per-message
+// dispatch shape: each new IMAP message becomes one LoopEventPayload,
+// the envelope's wake_loop.Tags is the deduplicated union of
+// trust-zone-derived sender tags, and the envelope is delivered to the
+// configured wake target (default: DefaultHandlerLoopName).
+func TestPollerDispatchesPerMessageEventsWithTags(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name:        "personal",
+		IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+		DefaultFrom: "me@example.com",
+	}}}
+	mgr := NewManager(cfg, slog.Default())
+	bus, delivered := recordingBus()
+	contacts := stubContacts{zones: map[string]string{
+		"boss@example.com":   "admin",
+		"friend@example.com": "trusted",
+	}}
+	p := NewPoller(mgr, state, slog.Default(),
+		WithMessageBus(bus),
+		WithContactResolver(contacts),
+	)
+
+	new := []Envelope{
+		{UID: 101, From: "boss@example.com", Subject: "Urgent"},
+		{UID: 102, From: "friend@example.com", Subject: "Hi"},
+		{UID: 103, From: "spammer@example.com", Subject: "Buy now"},
+	}
+	sent, err := p.dispatchAccountMessages(context.Background(), "personal", new)
+	if err != nil {
+		t.Fatalf("dispatchAccountMessages: %v", err)
+	}
+	if sent != 3 {
+		t.Fatalf("delivered events = %d, want 3", sent)
 	}
 
-	result := formatPollSection("work", messages)
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1 (one per account-poll cycle)", len(envs))
+	}
+	got := envs[0]
+	if got.To.Target != DefaultHandlerLoopName {
+		t.Errorf("envelope target = %q, want %q", got.To.Target, DefaultHandlerLoopName)
+	}
+	payload, ok := got.Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", got.Payload)
+	}
+	if len(payload.Events) != 3 {
+		t.Fatalf("event count in envelope = %d, want 3", len(payload.Events))
+	}
+	tagSet := map[string]bool{}
+	for _, tag := range payload.Tags {
+		tagSet[tag] = true
+	}
+	if !tagSet["owner"] || !tagSet["trusted"] || !tagSet["stranger"] {
+		t.Errorf("payload.Tags = %v, want owner+trusted+stranger", payload.Tags)
+	}
 
-	if !strings.Contains(result, "Account: work (INBOX)") {
-		t.Error("should contain account header")
+	// Per-event metadata should carry the per-sender tag too, so the
+	// receiving loop can correlate each event with its sender's zone.
+	tagsByUID := map[string]string{}
+	for _, ev := range payload.Events {
+		tagsByUID[ev.Metadata["uid"]] = ev.Metadata["tag"]
 	}
-	if !strings.Contains(result, "alice@example.com") {
-		t.Error("should contain first sender")
+	if tagsByUID["101"] != "owner" || tagsByUID["102"] != "trusted" || tagsByUID["103"] != "stranger" {
+		t.Errorf("per-event tags = %v, want 101=owner 102=trusted 103=stranger", tagsByUID)
 	}
-	if !strings.Contains(result, "bob@example.com") {
-		t.Error("should contain second sender")
+}
+
+// TestPollerNoBusAdvancesQuietly verifies the no-op-on-missing-bus
+// behavior: an event observed without a bus configured doesn't error,
+// just logs and continues. The next poll won't re-deliver these
+// messages because the high-water mark already moved.
+func TestPollerNoBusAdvancesQuietly(t *testing.T) {
+	state := testOpstate(t)
+	cfg := Config{Accounts: []AccountConfig{{
+		Name: "readonly",
+		IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "me"},
+	}}}
+	mgr := NewManager(cfg, slog.Default())
+	p := NewPoller(mgr, state, slog.Default())
+
+	sent, err := p.dispatchAccountMessages(context.Background(), "readonly", []Envelope{
+		{UID: 200, From: "x@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("dispatchAccountMessages without bus: %v", err)
+	}
+	if sent != 0 {
+		t.Errorf("delivered = %d, want 0 when bus is nil", sent)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -67,11 +68,39 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	if cfg.Email.Configured() && cfg.Email.PollIntervalSec > 0 {
+		// Default landing zone for new-mail wakes when an operator
+		// hasn't pointed the poller at a custom handler. Event-driven
+		// so the loop sits idle on wakeCh until the poller delivers
+		// an event-source envelope. Profile mirrors the routing the
+		// retired emailPollTurnBuilder used to stamp on every wake —
+		// triage benefits from the cloud-eligible tier with a
+		// non-trivial quality floor; the per-iteration tags carried
+		// on the envelope (owner / trusted / household / known /
+		// stranger) let the model adapt depth without forking the
+		// route.
+		specs = append(specs, looppkg.Spec{
+			Name:       email.DefaultHandlerLoopName,
+			Enabled:    true,
+			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when worth a deeper look, file or reply via email_compose when appropriate, and notify the owner about anything that genuinely needs attention.",
+			Operation:  looppkg.OperationEventDriven,
+			Completion: looppkg.CompletionNone,
+			Profile: router.LoopProfile{
+				Mission:      "email_triage",
+				LocalOnly:    "false",
+				QualityFloor: 5,
+				ExtraHints:   map[string]string{"source": "email_poll"},
+			},
+			Metadata: map[string]string{
+				"subsystem": "email",
+				"category":  "default_handler",
+			},
+		})
+
 		pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         emailPollerDefinitionName,
 			Enabled:      true,
-			Task:         "Poll configured email accounts for new inbound mail and dispatch triage when needed.",
+			Task:         "Poll configured email accounts for new inbound mail and dispatch event-source wakes to the configured handler loop.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
 			SleepMin:     pollInterval,
