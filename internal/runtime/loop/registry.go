@@ -129,15 +129,21 @@ func (r *Registry) Register(l *Loop) error {
 	//   - both empty         → orphan. Attach to core so the graph
 	//                          stays single-rooted.
 	//
+	// Trim ParentName to match the rest of the codebase
+	// ([DefinitionRegistry.AncestorSpecs] and the parent_name
+	// resolution path both trim) so incidental whitespace doesn't
+	// flip a resolvable reference into a loud refusal.
+	//
 	// Core is the exception — it sits above the tree by definition.
 	if !l.IsCore() {
+		parentName := strings.TrimSpace(l.config.ParentName)
 		switch {
 		case l.config.ParentID != "":
 			// Explicit parent; leave it alone.
-		case l.config.ParentName != "":
+		case parentName != "":
 			return &UnresolvedParentNameError{
 				LoopName:   l.config.Name,
-				ParentName: l.config.ParentName,
+				ParentName: parentName,
 			}
 		default:
 			for _, existing := range r.loops {

@@ -102,6 +102,44 @@ func TestEffectiveCascadeReadsProfileDeclarations(t *testing.T) {
 	}
 }
 
+// TestRegisterTrimsParentNameForUnresolvedCheck guards a small
+// consistency gap the audit caught: DefinitionRegistry.
+// AncestorSpecs and the runtimeSpec parent_name resolver both
+// trim ParentName before lookup, but Register's unresolved-name
+// check used the raw value. A spec with incidental whitespace
+// (" outer " from a hand-edited YAML, say) would resolve at one
+// layer and refuse loud at another. Trim everywhere.
+func TestRegisterTrimsParentNameForUnresolvedCheck(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	core, err := New(Config{Name: CoreLoopName, Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if err := r.Register(core); err != nil {
+		t.Fatalf("register core: %v", err)
+	}
+
+	// Whitespace-only ParentName should be treated as empty —
+	// loop registers as an orphan and attaches to core, no
+	// UnresolvedParentNameError.
+	orphan, err := New(Config{
+		Name:       "padded",
+		Task:       "t",
+		ParentName: "   ",
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new orphan: %v", err)
+	}
+	if err := r.Register(orphan); err != nil {
+		t.Fatalf("whitespace-only ParentName treated as set: %v", err)
+	}
+	if got := orphan.ParentID(); got != core.ID() {
+		t.Errorf("ParentID = %q, want core's ID (whitespace ParentName should default-parent)", got)
+	}
+}
+
 // TestStopLoopRefusesContainerWithChildren mirrors the
 // loop_definition_delete refusal pattern. Stopping a container
 // with live descendants would orphan them — their ParentID would
