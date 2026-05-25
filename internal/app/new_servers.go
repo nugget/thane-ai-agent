@@ -555,11 +555,10 @@ func (a *App) initServers(s *newState) error {
 			if err := a.migrateLegacyScopeTagSubscriptions(); err != nil {
 				logger.Warn("legacy scope_tag migration encountered errors", "error", err)
 			}
-			// Core is the singleton structural root every other loop
-			// implicitly attaches under. Auto-create one if the live
-			// registry doesn't already have it so the graph always has
-			// a root for the visualizer and for default-parent
-			// resolution during the StartEnabledServices pass below.
+			// Core is auto-created synchronously during initStores —
+			// before any deferred worker runs — so default-parenting
+			// works for every loop the StartEnabledServices pass
+			// below registers. Idempotent if anyone calls it again.
 			if err := a.ensureCoreLoop(ctx); err != nil {
 				return fmt.Errorf("ensure core loop: %w", err)
 			}

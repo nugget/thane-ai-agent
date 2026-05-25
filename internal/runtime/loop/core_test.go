@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoopIsCore covers the IsCore predicate that captures the
@@ -66,10 +67,12 @@ func TestCoreUsesContainerValidation(t *testing.T) {
 
 // TestRegistryRefusesSecondCore covers the singleton invariant:
 // a second core loop (container named CoreLoopName) registration
-// returns a typed MultipleCoreError. Two containers with the same
-// non-core name would also be flagged by the registry's name
-// uniqueness elsewhere, but the core invariant is enforced
-// explicitly because the bootstrap depends on it.
+// returns a typed MultipleCoreError. The registry does not enforce
+// name uniqueness in general (loops are keyed by ID and multiple
+// loops can share a name — see FindByName / StopLoopByName's
+// ambiguity handling), so the core singleton check is the only
+// barrier against a duplicate root and the bootstrap depends on
+// it firing reliably.
 func TestRegistryRefusesSecondCore(t *testing.T) {
 	t.Parallel()
 
@@ -250,12 +253,15 @@ func TestRegisterPreservesExplicitParentID(t *testing.T) {
 	}
 }
 
-// TestRegisterLeavesUnresolvedParentNameAlone guards the
-// late-reconcile path: a loop with ParentName set but no live
-// parent yet should NOT default-parent to core, because doing so
-// would lose the intent ("attach to outer when it comes up").
-// Leaving ParentID empty lets a later reconcile bind it
-// correctly. This is the regression test for the Copilot finding.
+// TestRegisterLeavesUnresolvedParentNameAlone guards against
+// silently overriding a declared parent reference: a loop with
+// ParentName set but no live parent yet must NOT default-parent
+// to core, because that would lose the intent ("attach to outer
+// when it comes up") permanently. Leaving ParentID empty keeps
+// the option open for a higher-level component to respawn /
+// re-register the loop after the named parent appears — the
+// registry doesn't auto-rebind, but at least the wrong parent
+// hasn't been baked in.
 func TestRegisterLeavesUnresolvedParentNameAlone(t *testing.T) {
 	t.Parallel()
 
@@ -291,7 +297,12 @@ func TestRegisterLeavesUnresolvedParentNameAlone(t *testing.T) {
 // narrow startup window before [App.ensureCoreLoop] runs: orphan
 // loops registered with no core present stay parentless rather
 // than crashing or attaching to some accidental "first" loop.
-// They'll reattach on the next reconcile once core is up.
+// There is no late-reconcile path that rebinds these loops once
+// core comes up; they remain parentless until something
+// higher-level deregisters and respawns them. The app bootstrap
+// avoids this case by creating core synchronously before any
+// other loop registration happens, but the registry's behavior
+// is the safety net.
 func TestRegisterOrphanWithoutCoreLeavesParentEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -306,6 +317,42 @@ func TestRegisterOrphanWithoutCoreLeavesParentEmpty(t *testing.T) {
 	}
 	if got := orphan.ParentID(); got != "" {
 		t.Errorf("orphan ParentID = %q, want empty when no core is registered", got)
+	}
+}
+
+// TestSpawnSpecContainerStaysRegistered is the regression test
+// for the auto-deregister bug: containers (including core) close
+// Done() immediately because they don't run a goroutine, and the
+// registry's startLoop auto-deregister hook used to interpret
+// that as "loop finished, clean it up." Result: a container
+// spawned via SpawnSpec (or Launch) was registered for a
+// microsecond and then silently removed, breaking
+// default-parenting and inheritance.
+func TestSpawnSpecContainerStaysRegistered(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id, err := r.SpawnSpec(ctx, Spec{
+		Name:      "long_lived",
+		Enabled:   true,
+		Operation: OperationContainer,
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("SpawnSpec container: %v", err)
+	}
+
+	// Give the (no-longer-existing) auto-deregister goroutine
+	// a chance to misfire if the bug ever comes back.
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+	}
+
+	if got := r.Get(id); got == nil {
+		t.Fatal("container deregistered immediately after SpawnSpec — auto-deregister bug regression")
 	}
 }
 

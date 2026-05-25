@@ -630,7 +630,15 @@ func (r *Registry) startLoop(ctx context.Context, name string, l *Loop, setup fu
 		return fmt.Errorf("start loop %q: %w", name, err)
 	}
 
-	if autoDeregister {
+	// Containers (including the singleton core) close Done()
+	// immediately inside Start because they don't run a goroutine.
+	// The auto-deregister hook below interprets a closed Done as
+	// "loop finished, clean up the registry entry" — which would
+	// instantly delete every container we just registered. Skip
+	// the hook for them; their lifetime in the registry is bounded
+	// by explicit [Deregister]/[StopLoop]/[ShutdownAll] calls, not
+	// by Done signaling.
+	if autoDeregister && l.config.Operation != OperationContainer {
 		go func(id string, done <-chan struct{}) {
 			<-done
 			r.Deregister(id)
