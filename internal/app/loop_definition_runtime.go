@@ -102,6 +102,19 @@ func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, er
 			spec.ParentID = parent.ID()
 		}
 	}
+	// Orphan loops (no parent declared anywhere) attach to the core
+	// so the graph always has a single root. The core itself is the
+	// exception — it sits above the tree by definition. Resolution
+	// happens after parent_name lookup so an explicit parent never
+	// gets overridden, and only when a core is actually registered
+	// (the narrow startup window before [App.ensureCoreLoop] runs
+	// leaves orphans truly parentless, which is fine — they'll
+	// reattach on the next reconcile or restart once core is up).
+	if r.loops != nil && spec.ParentID == "" && spec.Operation != looppkg.OperationCore {
+		if core := r.loops.Core(); core != nil {
+			spec.ParentID = core.ID()
+		}
+	}
 	return spec, nil
 }
 

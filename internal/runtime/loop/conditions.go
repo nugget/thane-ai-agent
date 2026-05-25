@@ -89,12 +89,12 @@ type EffectiveConditionEvaluation struct {
 // gating the loop. The per-level evaluations are returned alongside
 // so the effective surface can show provenance.
 //
-// Only the leaf itself (chain[0]) and container ancestors
-// contribute. Non-container ancestors are walked past silently —
-// matches the inheritance contract established in PR-A/B/C, where
-// only [OperationContainer] nodes pass scope down to descendants.
-// A service-loop ancestor with ineligible Conditions does not
-// block its descendant.
+// Only the leaf itself (chain[0]) and structural ancestors
+// (containers + the singleton core) contribute. Non-structural
+// ancestors are walked past silently — matches the inheritance
+// contract established in PR-A/B/C, where only structural nodes
+// pass scope down to descendants. A service-loop ancestor with
+// ineligible Conditions does not block its descendant.
 //
 // chain is leaf-first: index 0 is the loop's own spec, index 1 is
 // its immediate parent, and so on — the shape
@@ -111,11 +111,12 @@ func EvaluateEffectiveConditions(chain []Spec, now time.Time) (DefinitionEligibi
 	var blockingFrom string
 
 	for i, spec := range chain {
-		// Leaf contributes regardless of operation; ancestors must be
-		// containers to participate in the cascade. Skip silently —
-		// non-container nodes don't appear in the per-level
-		// evaluations because they didn't contribute.
-		if i > 0 && spec.Operation != OperationContainer {
+		// Leaf contributes regardless of operation; ancestors must
+		// be structural (container or core) to participate in the
+		// cascade. Skip silently — non-structural nodes don't
+		// appear in the per-level evaluations because they didn't
+		// contribute.
+		if i > 0 && !isContainerShaped(spec.Operation) {
 			continue
 		}
 

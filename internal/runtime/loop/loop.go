@@ -306,10 +306,10 @@ type Loop struct {
 // Returns an error if required fields are missing or invalid.
 // Call [Loop.Start] to launch the background goroutine.
 func New(cfg Config, deps Deps) (*Loop, error) {
-	// Containers never wake and never run a turn, so they need
-	// neither a Runner nor a Handler. Every other operation type
-	// requires at least one execution path.
-	if cfg.Operation != OperationContainer && cfg.Handler == nil && deps.Runner == nil {
+	// Containers and core never wake and never run a turn, so they
+	// need neither a Runner nor a Handler. Every other operation
+	// type requires at least one execution path.
+	if !isContainerShaped(cfg.Operation) && cfg.Handler == nil && deps.Runner == nil {
 		return nil, ErrNilRunner
 	}
 	if cfg.Name == "" {
@@ -435,10 +435,10 @@ func (l *Loop) Start(ctx context.Context) error {
 	l.started = true
 	l.startedAt = time.Now()
 
-	if l.config.Operation == OperationContainer {
-		// Containers are inert: present in the registry but never
-		// dispatched. Skip the goroutine so we don't pay the cost of
-		// an idle wake-timer per container.
+	if isContainerShaped(l.config.Operation) {
+		// Containers and core are inert: present in the registry
+		// but never dispatched. Skip the goroutine so we don't pay
+		// the cost of an idle wake-timer per structural node.
 		l.done = make(chan struct{})
 		close(l.done)
 		return nil

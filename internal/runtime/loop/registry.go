@@ -55,6 +55,21 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	return r
 }
 
+// MultipleCoreError reports an attempt to register a second
+// [OperationCore] loop. The graph has exactly one structural root;
+// the registry enforces this so callers (auto-create, manual spawn
+// via tools) cannot accidentally produce a second.
+type MultipleCoreError struct {
+	// ExistingID is the loop ID of the core already in the registry.
+	ExistingID string
+	// ExistingName is the registered core's name for diagnostic logs.
+	ExistingName string
+}
+
+func (e *MultipleCoreError) Error() string {
+	return fmt.Sprintf("loop: cannot register a second core; existing core %q (id=%s) is already the singleton root", e.ExistingName, e.ExistingID)
+}
+
 // Register adds a loop to the registry. Returns an error if the loop's
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
@@ -67,6 +82,19 @@ func (r *Registry) Register(l *Loop) error {
 	}
 	if r.maxLoops > 0 && len(r.loops) >= r.maxLoops {
 		return fmt.Errorf("concurrency limit reached (%d loops)", r.maxLoops)
+	}
+	// Core is a singleton — exactly one structural root in the
+	// graph. Scan for an existing core before accepting a second.
+	// O(n) is fine: this only runs at register time and n is small.
+	if l.config.Operation == OperationCore {
+		for _, existing := range r.loops {
+			if existing.config.Operation == OperationCore {
+				return &MultipleCoreError{
+					ExistingID:   existing.id,
+					ExistingName: existing.config.Name,
+				}
+			}
+		}
 	}
 
 	r.loops[l.id] = l
@@ -395,9 +423,10 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
-		// ancestors are filtered to container nodes (matches the tag-
-		// inheritance contract from Phase 1A).
-		if i > 0 && l.Operation() != OperationContainer {
+		// ancestors are filtered to structural nodes (containers and
+		// the core, which shares container's inheritance shape) — the
+		// tag-inheritance contract from Phase 1A.
+		if i > 0 && !isContainerShaped(l.Operation()) {
 			continue
 		}
 		origin := EffectiveOriginSelf
@@ -465,6 +494,22 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 		}
 	}
 	return result
+}
+
+// Core returns the singleton [OperationCore] loop, or nil if none
+// is currently registered. The app's bootstrap auto-creates one at
+// startup, so a non-nil Core is the steady-state expectation; nil
+// only happens in tests or in the narrow window before bootstrap
+// runs.
+func (r *Registry) Core() *Loop {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, l := range r.loops {
+		if l.config.Operation == OperationCore {
+			return l
+		}
+	}
+	return nil
 }
 
 // FindByName returns all live loops with the exact given name.
@@ -764,10 +809,18 @@ func formatCompletionContent(launch Launch, resp *Response, status Status) strin
 // has exited. Returns an error if the loop is not found. If the
 // goroutine does not exit within 10 seconds (the Stop timeout), the
 // loop remains registered to avoid orphaning a running goroutine.
+//
+// Refuses to stop the singleton core. The graph's structural root
+// has no operator-facing kill switch — the bootstrap manages its
+// lifecycle. [ShutdownAll] still tears it down at process exit
+// because that's the legitimate "everything off" path.
 func (r *Registry) StopLoop(id string) error {
 	l := r.Get(id)
 	if l == nil {
 		return fmt.Errorf("loop %q not found", id)
+	}
+	if l.config.Operation == OperationCore {
+		return fmt.Errorf("loop: cannot stop core %q — the structural root has no operator-facing kill switch", l.config.Name)
 	}
 
 	l.Stop()
