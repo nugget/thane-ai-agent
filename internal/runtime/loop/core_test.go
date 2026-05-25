@@ -253,16 +253,16 @@ func TestRegisterPreservesExplicitParentID(t *testing.T) {
 	}
 }
 
-// TestRegisterLeavesUnresolvedParentNameAlone guards against
-// silently overriding a declared parent reference: a loop with
-// ParentName set but no live parent yet must NOT default-parent
-// to core, because that would lose the intent ("attach to outer
-// when it comes up") permanently. Leaving ParentID empty keeps
-// the option open for a higher-level component to respawn /
-// re-register the loop after the named parent appears — the
-// registry doesn't auto-rebind, but at least the wrong parent
-// hasn't been baked in.
-func TestRegisterLeavesUnresolvedParentNameAlone(t *testing.T) {
+// TestRegisterRejectsUnresolvedParentName guards against silent
+// extra-root creation: a loop with ParentName set but no live
+// parent yet must be REJECTED at Register time. Silent fallback
+// to core would lose the declared intent ("attach to outer when
+// it comes up") permanently because the registry has no late-
+// rebind mechanism; silent parentless (the original PR-D1
+// behavior) would have produced an extra graph root. Loud
+// failure forces the caller to either spawn the parent first or
+// drop the ParentName, both of which are intentional choices.
+func TestRegisterRejectsUnresolvedParentName(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
@@ -284,12 +284,63 @@ func TestRegisterLeavesUnresolvedParentNameAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new pending: %v", err)
 	}
-	if err := r.Register(pending); err != nil {
-		t.Fatalf("register pending: %v", err)
+	err = r.Register(pending)
+	if err == nil {
+		t.Fatal("Register accepted loop with unresolved ParentName; want loud refusal")
+	}
+	var unresolved *UnresolvedParentNameError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("err = %v, want *UnresolvedParentNameError", err)
+	}
+	if unresolved.LoopName != "child" {
+		t.Errorf("LoopName = %q, want child", unresolved.LoopName)
+	}
+	if unresolved.ParentName != "outer" {
+		t.Errorf("ParentName = %q, want outer", unresolved.ParentName)
+	}
+	if r.Get(pending.ID()) != nil {
+		t.Error("pending should not be registered after the refusal")
+	}
+}
+
+// TestRegisterAcceptsResolvedParentName covers the happy path:
+// once the named parent is registered, the child registers
+// successfully and inherits ParentID via the runtimeSpec
+// resolution that runs before Register.
+func TestRegisterAcceptsResolvedParentName(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	core, err := New(Config{Name: CoreLoopName, Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	if err := r.Register(core); err != nil {
+		t.Fatalf("register core: %v", err)
+	}
+	outer, err := New(Config{Name: "outer", Operation: OperationContainer}, Deps{})
+	if err != nil {
+		t.Fatalf("new outer: %v", err)
+	}
+	if err := r.Register(outer); err != nil {
+		t.Fatalf("register outer: %v", err)
 	}
 
-	if got := pending.ParentID(); got != "" {
-		t.Errorf("pending ParentID = %q, want empty (unresolved ParentName should not fall back to core)", got)
+	// Resolved at hydration time (mimicking runtimeSpec): caller
+	// gives Register a Config with ParentID set, ParentName empty.
+	child, err := New(Config{
+		Name:     "child",
+		Task:     "t",
+		ParentID: outer.ID(),
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new child: %v", err)
+	}
+	if err := r.Register(child); err != nil {
+		t.Fatalf("register child: %v", err)
+	}
+	if got := child.ParentID(); got != outer.ID() {
+		t.Errorf("child ParentID = %q, want outer's id", got)
 	}
 }
 

@@ -69,6 +69,26 @@ func (e *MultipleCoreError) Error() string {
 	return fmt.Sprintf("loop: cannot register a second core; existing core (id=%s) is already the singleton root", e.ExistingID)
 }
 
+// UnresolvedParentNameError reports an attempt to register a loop
+// whose ParentName references a parent that is not currently
+// registered. The registry refuses loud rather than silently
+// default-parenting to core — silent fallback would lose the
+// declared intent ("attach to outer when it comes up") permanently
+// because there is no late-rebind path. Callers either need to
+// ensure the named parent registers first (the bootstrap's
+// topological sort handles this for definition-driven specs) or
+// drop the ParentName and accept attachment to core.
+type UnresolvedParentNameError struct {
+	// LoopName is the loop being registered.
+	LoopName string
+	// ParentName is the unresolved parent reference.
+	ParentName string
+}
+
+func (e *UnresolvedParentNameError) Error() string {
+	return fmt.Sprintf("loop: cannot register %q — parent_name %q is not currently registered; spawn the parent first or drop parent_name to default to core", e.LoopName, e.ParentName)
+}
+
 // Register adds a loop to the registry. Returns an error if the loop's
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
@@ -93,21 +113,38 @@ func (r *Registry) Register(l *Loop) error {
 		}
 	}
 
-	// Default-parent orphan loops to the core so the graph always
-	// has a single root. Only fills in when no parent was declared
-	// at all (both ParentID and ParentName empty): a ParentName
-	// that hasn't yet resolved to a registered loop must stay
-	// unresolved here, otherwise a late reconcile (parent registers
-	// after the child) would have no way to rebind. The core
-	// itself is the exception — it sits above the tree by
-	// definition. Centralizing this in Register means every spawn
-	// path — definition hydration, channel roots via SpawnLoop,
-	// delegate launches, direct tests — gets uniform attachment.
-	if l.config.ParentID == "" && l.config.ParentName == "" && !l.IsCore() {
-		for _, existing := range r.loops {
-			if existing.IsCore() {
-				l.setDefaultParentID(existing.id)
-				break
+	// Three parent-shape outcomes at Register:
+	//
+	//   - ParentID set       → caller wired the parent explicitly. Use it.
+	//   - ParentName set     → caller declared a named parent but it
+	//                          wasn't resolved by the time we reached
+	//                          Register. Refuse loud — silently
+	//                          default-parenting to core would lose
+	//                          the declared intent permanently
+	//                          because the registry has no late-
+	//                          rebind path. Callers must spawn the
+	//                          parent first (the bootstrap's
+	//                          topological sort handles this for
+	//                          definition-driven specs).
+	//   - both empty         → orphan. Attach to core so the graph
+	//                          stays single-rooted.
+	//
+	// Core is the exception — it sits above the tree by definition.
+	if !l.IsCore() {
+		switch {
+		case l.config.ParentID != "":
+			// Explicit parent; leave it alone.
+		case l.config.ParentName != "":
+			return &UnresolvedParentNameError{
+				LoopName:   l.config.Name,
+				ParentName: l.config.ParentName,
+			}
+		default:
+			for _, existing := range r.loops {
+				if existing.IsCore() {
+					l.setDefaultParentID(existing.id)
+					break
+				}
 			}
 		}
 	}
@@ -844,6 +881,23 @@ func (r *Registry) StopLoop(id string) error {
 	}
 	if l.IsCore() {
 		return fmt.Errorf("loop: cannot stop core %q — the structural root has no operator-facing kill switch", l.config.Name)
+	}
+	// Stopping a container with live descendants would orphan them
+	// — their ParentID would point at a deregistered loop, ancestor
+	// walks would short-circuit, and inherited tags/subs/excludes
+	// would silently disappear. Refuse with the children named, the
+	// same pattern loop_definition_delete uses for the persisted
+	// side; the model or operator can re-parent or stop the
+	// children first.
+	if l.config.Operation == OperationContainer {
+		children := r.Children(id)
+		if len(children) > 0 {
+			names := make([]string, 0, len(children))
+			for _, child := range children {
+				names = append(names, child.config.Name)
+			}
+			return fmt.Errorf("loop: cannot stop container %q — it has %d live child loop(s): %v; stop or re-parent them first", l.config.Name, len(children), names)
+		}
 	}
 
 	l.Stop()

@@ -749,41 +749,59 @@ func (l *Loop) tagsSnapshot() []string {
 	return append([]string(nil), l.config.Tags...)
 }
 
-// excludeToolsSnapshot returns a copy of the loop's configured tool
-// exclusions under the loop lock. Same forward-compat shape as
-// [tagsSnapshot].
+// excludeToolsSnapshot returns the union of the loop's
+// Spec.ExcludeTools and Spec.Profile.ExcludeTools under the loop
+// lock. Both sources contribute because production specs split
+// declarations between the two — operator YAML and built-in
+// services commonly set [router.LoopProfile.ExcludeTools] rather
+// than the top-level Spec field, and a cascade that only saw the
+// top-level value would silently drop those declarations for
+// descendants.
 func (l *Loop) excludeToolsSnapshot() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.config.ExcludeTools) == 0 {
+	if len(l.config.ExcludeTools) == 0 && len(l.requestBase.ExcludeTools) == 0 {
 		return nil
 	}
-	return append([]string(nil), l.config.ExcludeTools...)
+	return mergeUniqueStrings(l.config.ExcludeTools, l.requestBase.ExcludeTools)
 }
 
-// routingFactorsSnapshot returns a copy of the loop's configured
-// routing factors under the loop lock. Same forward-compat shape as
-// [tagsSnapshot].
+// routingFactorsSnapshot returns the loop's effective routing
+// factors — Spec.RoutingFactors merged with Spec.Profile's routing
+// hints — under the loop lock. Same Profile-vs-Spec-field reason
+// as [excludeToolsSnapshot]: a container declaring its routing
+// posture via Profile must propagate that to descendants. On key
+// collision Spec.RoutingFactors wins because the top-level field
+// is the more specific declaration; requestBase fills in defaults.
 func (l *Loop) routingFactorsSnapshot() map[string]string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.config.RoutingFactors) == 0 {
+	if len(l.config.RoutingFactors) == 0 && len(l.requestBase.RoutingFactors) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(l.config.RoutingFactors))
+	out := make(map[string]string, len(l.config.RoutingFactors)+len(l.requestBase.RoutingFactors))
+	for k, v := range l.requestBase.RoutingFactors {
+		out[k] = v
+	}
 	for k, v := range l.config.RoutingFactors {
 		out[k] = v
 	}
 	return out
 }
 
-// delegationGatingSnapshot returns the loop's configured delegation-
-// gating value under the loop lock. Same forward-compat shape as
-// [tagsSnapshot].
+// delegationGatingSnapshot returns the loop's effective delegation-
+// gating value under the loop lock. Spec.DelegationGating wins
+// when set; otherwise the Profile-side value contributes. Same
+// rationale as [excludeToolsSnapshot] — a container declaring
+// "disabled" via Profile must reach descendants through the
+// cascade.
 func (l *Loop) delegationGatingSnapshot() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.config.DelegationGating
+	if l.config.DelegationGating != "" {
+		return l.config.DelegationGating
+	}
+	return l.requestBase.DelegationGating
 }
 
 // setEffectiveStateFunc installs the provenance-aware walker behind
