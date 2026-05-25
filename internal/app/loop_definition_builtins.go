@@ -116,9 +116,17 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 			Task:       "Triage media feed wake events: inspect each entry's trust_zone metadata, fetch and analyze worthwhile content with media_transcript and media_save_analysis, then notify the owner about anything noteworthy.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
+			// Match the routing the retired mediaFeedTurnBuilder used to
+			// stamp on every feed turn. Without LocalOnly=false the
+			// agent runtime's per-turn default (local_only=true) wins,
+			// which would regress feed analysis to local models —
+			// transcript summarization and triage benefit from the
+			// cloud-eligible tier when it's available.
 			Profile: router.LoopProfile{
-				Mission:    "media_triage",
-				ExtraHints: map[string]string{"source": "media_feed"},
+				Mission:      "media_triage",
+				LocalOnly:    "false",
+				QualityFloor: 5,
+				ExtraHints:   map[string]string{"source": "media_feed"},
 			},
 			Metadata: map[string]string{
 				"subsystem": "media",

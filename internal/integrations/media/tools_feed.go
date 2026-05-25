@@ -397,7 +397,7 @@ func FollowDefinition() map[string]any {
 			},
 			"notify": map[string]any{
 				"type":        "boolean",
-				"description": "Whether to start the default media-analysis conversation when new content is detected and wake_loop is omitted. Default: true.",
+				"description": "Whether new feed entries deliver an event-source wake. When true and wake_loop is omitted, wakes route to the built-in media-default-handler loop; when wake_loop is set, wakes route there. Set false to quiet the feed (high-water mark still advances so re-enabling later doesn't backfill old entries). Default: true.",
 			},
 			"wake_loop": feedWakeTargetDefinition(),
 		},
