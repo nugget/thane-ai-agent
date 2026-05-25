@@ -47,7 +47,7 @@ awareness:
 
 1. **Core launches the watcher** with `thane_curate`. Hand it an
    intent, a watch set, a document to own, and an adaptive sleep
-   envelope (see the cadence section below).
+   envelope (see the envelope section below).
 2. **Watcher runs at its own pace.** It writes findings to the
    document each cycle and tunes its own next wake with
    `set_next_sleep` (clamped to the envelope it was given).
@@ -69,7 +69,8 @@ human.
 {
   "name": "server-closet-guardian",
   "intent": "Watch the server-closet environment and equipment health. Document trends. Surface UPS dropouts, dehumidifier failure, or temperature excursions that need attention.",
-  "cadence": "30m",
+  "sleep_min": "10m",
+  "sleep_max": "30m",
   "entities": [
     {"entity_id": "sensor.server_closet_temperature"},
     {"entity_id": "sensor.server_closet_humidity"},
@@ -86,10 +87,11 @@ human.
 }
 ```
 
-`cadence` sets the default; the runtime derives a sleep envelope
-around it with light jitter. The watcher writes through the generated
-`replace_output_*` tool (for `mode: "maintain"`) or `append_output_*`
-(for `mode: "journal"`).
+`sleep_min` and `sleep_max` define the envelope the loop self-paces
+inside; `sleep_default` defaults to the midpoint and `jitter` defaults
+to 0.1 (pass them explicitly when you want to override). The watcher
+writes through the generated `replace_output_*` tool (for `mode:
+"maintain"`) or `append_output_*` (for `mode: "journal"`).
 
 ### Step 2: Let the watcher self-pace
 
@@ -146,7 +148,7 @@ producer tools like `forge_repo_follow` and `media_follow` take a
 `wake_loop` target so the curate loop wakes on the event rather than
 its timer.
 
-## Adaptive cadence: pick the envelope, not the tick
+## Adaptive sleep envelope: pick the bounds, not the tick
 
 The only real judgment at creation is the sleep envelope. The loop
 self-pacing inside that envelope handles the rest.

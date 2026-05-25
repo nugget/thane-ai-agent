@@ -20,9 +20,10 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 
 	// Seed a curate loop with one entity so we have something to remove.
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "watcher",
-		"intent":  "watch things",
-		"cadence": "hourly",
+		"name":      "watcher",
+		"intent":    "watch things",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:watch/log.md",
@@ -169,9 +170,10 @@ func TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "loop_one",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "loop_one",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:none.md",
@@ -203,9 +205,10 @@ func TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "scope_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "scope_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:scope.md",

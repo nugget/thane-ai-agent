@@ -122,7 +122,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_lint",
-		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted cadence fields or delegation-first gating.",
+		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted sleep envelope fields or delegation-first gating.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

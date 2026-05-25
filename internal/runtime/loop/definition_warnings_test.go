@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestBuildDefinitionWarnings_DefaultCadenceAndDelegation(t *testing.T) {
+func TestBuildDefinitionWarnings_DefaultSleepAndDelegation(t *testing.T) {
 	spec := Spec{
 		Name:      "comal_burn_ban_monitor",
 		Task:      "Check the county burn ban source hourly and update Home Assistant.",
@@ -22,8 +22,8 @@ func TestBuildDefinitionWarnings_DefaultCadenceAndDelegation(t *testing.T) {
 		codes[warning.Code] = true
 	}
 	for _, code := range []string{
-		"service_default_cadence",
-		"task_mentions_cadence_without_explicit_sleep",
+		"service_default_sleep_envelope",
+		"task_mentions_timing_without_explicit_sleep",
 		"service_delegation_gating_enabled",
 	} {
 		if !codes[code] {
@@ -32,7 +32,7 @@ func TestBuildDefinitionWarnings_DefaultCadenceAndDelegation(t *testing.T) {
 	}
 }
 
-func TestBuildDefinitionWarnings_FixedCadenceJitterAndCompletion(t *testing.T) {
+func TestBuildDefinitionWarnings_FixedIntervalJitterAndCompletion(t *testing.T) {
 	spec := Spec{
 		Name:         "battery_watch",
 		Task:         "Watch batteries.",
@@ -51,7 +51,7 @@ func TestBuildDefinitionWarnings_FixedCadenceJitterAndCompletion(t *testing.T) {
 	if !codes["service_completion_not_periodic"] {
 		t.Fatalf("warning codes = %#v, want service_completion_not_periodic", codes)
 	}
-	if !codes["fixed_cadence_with_jitter"] {
-		t.Fatalf("warning codes = %#v, want fixed_cadence_with_jitter", codes)
+	if !codes["fixed_interval_with_jitter"] {
+		t.Fatalf("warning codes = %#v, want fixed_interval_with_jitter", codes)
 	}
 }

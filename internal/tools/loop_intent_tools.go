@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -87,11 +85,11 @@ func (r *Registry) registerThaneCurate() {
 			"Output-first: the target document (kb:, core:, scratchpad:, generated:) is scaffolded with frontmatter recording loop ownership before the loop is registered, so the loop's identity and intent are self-describing on disk. " +
 			"Two output modes today: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
-			"Cadence accepts \"hourly\", \"daily\", \"every 30 minutes\", \"5m\", or \"1h\". Sleep_min/max/jitter are derived automatically. " +
+			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
 			"Tags scope the loop's tools; omit to inherit the always-active set. " +
 			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted under a per-loop focus tag and surfaced into the loop's prompt automatically. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the derived sleep_min/max/default cadence triple.",
-		ContentResolveExempt: []string{"name", "intent", "cadence", "tags", "guidance", "output", "entities", "replace"},
+			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the loop's internal focus_tag, and the resolved sleep envelope.",
+		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "guidance", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -103,9 +101,21 @@ func (r *Registry) registerThaneCurate() {
 					"type":        "string",
 					"description": "One- or two-sentence description of what the loop tracks, why it exists, and what the document should contain. The model running each iteration sees this in its task prompt.",
 				},
-				"cadence": map[string]any{
+				"sleep_min": map[string]any{
 					"type":        "string",
-					"description": "How often the loop wakes. Accepts \"hourly\", \"daily\", \"every 30 minutes\", \"30m\", \"1h\", or any time.Duration string. Below 1 minute is rejected.",
+					"description": "Tightest interval between iterations (Go duration: \"5m\", \"30m\", \"1h\"). Floor at 1 minute. The loop's set_next_sleep can never wake sooner than this.",
+				},
+				"sleep_max": map[string]any{
+					"type":        "string",
+					"description": "Loosest interval between iterations (Go duration: \"30m\", \"6h\"). The loop's set_next_sleep can never sleep longer than this. Must be >= sleep_min; equal values pin a fixed interval.",
+				},
+				"sleep_default": map[string]any{
+					"type":        "string",
+					"description": "Optional initial sleep duration for the first wake. Defaults to the midpoint of sleep_min and sleep_max. Must lie within the envelope.",
+				},
+				"jitter": map[string]any{
+					"type":        "number",
+					"description": "Optional sleep randomization factor in [0, 1]. Defaults to 0.1. Set to 0 for deterministic timing.",
 				},
 				"output": map[string]any{
 					"type":        "object",
@@ -169,7 +179,7 @@ func (r *Registry) registerThaneCurate() {
 					"description": "When true, overwrite an existing definition or document of the same name/ref. Default false; the tool refuses to clobber existing artifacts.",
 				},
 			},
-			"required": []string{"name", "intent", "cadence", "output"},
+			"required": []string{"name", "intent", "sleep_min", "sleep_max", "output"},
 		},
 		Handler: r.handleThaneCurate,
 	})
@@ -183,15 +193,16 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 
 	name, _ := args["name"].(string)
 	intent, _ := args["intent"].(string)
-	cadenceInput, _ := args["cadence"].(string)
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("name is required")
 	}
 	if strings.TrimSpace(intent) == "" {
 		return "", fmt.Errorf("intent is required")
 	}
-	if strings.TrimSpace(cadenceInput) == "" {
-		return "", fmt.Errorf("cadence is required")
+
+	envelope, err := parseSleepEnvelope(args)
+	if err != nil {
+		return "", err
 	}
 
 	output, _ := args["output"].(map[string]any)
@@ -228,11 +239,6 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	if len(entities) > 0 && deps.WatchlistStore == nil {
 		return "", fmt.Errorf("entities provided but watchlist store is not configured")
-	}
-
-	cad, err := parseCadence(cadenceInput)
-	if err != nil {
-		return "", err
 	}
 
 	// Refuse to clobber an existing definition unless replace=true.
@@ -272,15 +278,15 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	// repeat it. Caller-supplied tags follow.
 	finalTags := append([]string{focusTag}, tags...)
 
-	jitterRatio := 0.1
+	jitterRatio := envelope.jitter
 	spec := looppkg.Spec{
 		Name:         name,
 		Enabled:      true,
 		Task:         buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName(), guidance),
 		Operation:    looppkg.OperationService,
-		SleepMin:     cad.sleepMin,
-		SleepMax:     cad.sleepMax,
-		SleepDefault: cad.sleepDefault,
+		SleepMin:     envelope.sleepMin,
+		SleepMax:     envelope.sleepMax,
+		SleepDefault: envelope.sleepDefault,
 		Jitter:       &jitterRatio,
 		Tags:         finalTags,
 		Outputs:      []looppkg.OutputSpec{outputSpec},
@@ -312,7 +318,8 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"loop_definition_name": {name},
 		"loop_intent":          {intent},
 		"output_mode":          {outputMode},
-		"cadence":              {cadenceInput},
+		"sleep_min":            {envelope.sleepMin.String()},
+		"sleep_max":            {envelope.sleepMax.String()},
 		"created":              {time.Now().UTC().Format(time.RFC3339)},
 	}
 	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
@@ -379,11 +386,11 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		"output_tool":          outputSpec.ToolName(),
 		"focus_tag":            focusTag,
 		"entity_subscriptions": len(entities),
-		"cadence": map[string]any{
-			"input":         cadenceInput,
-			"sleep_default": cad.sleepDefault.String(),
-			"sleep_min":     cad.sleepMin.String(),
-			"sleep_max":     cad.sleepMax.String(),
+		"sleep_envelope": map[string]any{
+			"sleep_min":     envelope.sleepMin.String(),
+			"sleep_max":     envelope.sleepMax.String(),
+			"sleep_default": envelope.sleepDefault.String(),
+			"jitter":        envelope.jitter,
 		},
 		"warnings": warnings,
 	})
@@ -585,96 +592,79 @@ func renderScaffoldBody(outputMode, title, intent string) string {
 	return sb.String()
 }
 
-// cadence captures the sleep_min/max/default/jitter triple derived from
-// a human-facing cadence string. The loop spec already has these
-// fields; this helper centralizes the input parsing so the intent
-// tools share one parser.
-type cadence struct {
+// sleepEnvelope captures the sleep_min/max/default/jitter quartet that
+// shapes a service loop's sleep behavior. The fields mirror the
+// corresponding [looppkg.Spec] fields; this struct centralizes the
+// validation/defaulting that turns raw tool input into a known-good
+// envelope.
+type sleepEnvelope struct {
 	sleepMin     time.Duration
 	sleepMax     time.Duration
 	sleepDefault time.Duration
+	jitter       float64
 }
 
-var cadenceUnitPattern = regexp.MustCompile(`(\d+)\s*(minutes?|mins?|m|hours?|hrs?|h|days?|d)\b`)
-
-// parseCadence accepts canonical cadence strings ("hourly", "daily",
-// "5m", "1h") and natural-language equivalents ("every 30 minutes",
-// "every 2 hours"). Returns sleep_min, sleep_max, and a sleep_default
-// derived from a symmetric ~10% jitter window. Floor 1 minute.
-func parseCadence(input string) (cadence, error) {
-	s := strings.ToLower(strings.TrimSpace(input))
-	if s == "" {
-		return cadence{}, fmt.Errorf("cadence is required")
+// parseSleepEnvelope reads sleep_min, sleep_max, sleep_default, and
+// jitter from the tool args and returns a validated envelope. sleep_min
+// and sleep_max are required Go duration strings (>= 1 minute, with
+// sleep_min <= sleep_max). sleep_default defaults to the midpoint of
+// the envelope; jitter defaults to 0.1. Returns a single error per
+// failure, so the caller surfaces the first problem to the model
+// without piling on cascading complaints.
+func parseSleepEnvelope(args map[string]any) (sleepEnvelope, error) {
+	minStr, _ := args["sleep_min"].(string)
+	maxStr, _ := args["sleep_max"].(string)
+	if strings.TrimSpace(minStr) == "" {
+		return sleepEnvelope{}, fmt.Errorf("sleep_min is required (Go duration string, e.g. \"5m\")")
 	}
-
-	switch s {
-	case "hourly":
-		return cadenceFromInterval(time.Hour), nil
-	case "daily":
-		return cadenceFromInterval(24 * time.Hour), nil
+	if strings.TrimSpace(maxStr) == "" {
+		return sleepEnvelope{}, fmt.Errorf("sleep_max is required (Go duration string, e.g. \"30m\")")
 	}
-
-	// Strip leading "every " — "every 30 minutes" reads to "30 minutes".
-	s = strings.TrimPrefix(s, "every ")
-	s = strings.TrimSpace(s)
-
-	// Normalize natural-language units to time.Duration form. "30 minutes"
-	// → "30m", "2 hours" → "2h", "1 day" → "24h".
-	if normalized, ok := normalizeCadenceUnits(s); ok {
-		s = normalized
-	}
-
-	d, err := time.ParseDuration(s)
+	sleepMin, err := time.ParseDuration(strings.TrimSpace(minStr))
 	if err != nil {
-		return cadence{}, fmt.Errorf("unsupported cadence %q: try \"hourly\", \"daily\", \"30m\", or \"1h\"", input)
+		return sleepEnvelope{}, fmt.Errorf("sleep_min %q: %w", minStr, err)
 	}
-	if d < time.Minute {
-		return cadence{}, fmt.Errorf("cadence %q is below the 1 minute floor", input)
+	sleepMax, err := time.ParseDuration(strings.TrimSpace(maxStr))
+	if err != nil {
+		return sleepEnvelope{}, fmt.Errorf("sleep_max %q: %w", maxStr, err)
 	}
-	return cadenceFromInterval(d), nil
-}
-
-func cadenceFromInterval(d time.Duration) cadence {
-	jit := d / 10
-	if jit < 30*time.Second {
-		jit = 30 * time.Second
-	}
-	sleepMin := d - jit
-	// Clamp sleepMin to the same 1-minute floor parseCadence enforces
-	// on the input interval. Without this clamp a 1m cadence with the
-	// 30s minimum jitter would yield sleepMin=30s, breaching the floor.
 	if sleepMin < time.Minute {
-		sleepMin = time.Minute
+		return sleepEnvelope{}, fmt.Errorf("sleep_min %q is below the 1 minute floor", minStr)
 	}
-	return cadence{
-		sleepMin:     sleepMin,
-		sleepMax:     d + jit,
-		sleepDefault: d,
+	if sleepMax < sleepMin {
+		return sleepEnvelope{}, fmt.Errorf("sleep_max %q must be >= sleep_min %q", maxStr, minStr)
 	}
-}
 
-// normalizeCadenceUnits replaces natural-language unit suffixes with
-// time.Duration-compatible single-letter units. Returns (normalized,
-// true) on a successful match anywhere in the input; otherwise
-// (input, false) so the caller can try time.ParseDuration directly.
-func normalizeCadenceUnits(input string) (string, bool) {
-	matched := false
-	out := cadenceUnitPattern.ReplaceAllStringFunc(input, func(match string) string {
-		parts := cadenceUnitPattern.FindStringSubmatch(match)
-		if len(parts) < 3 {
-			return match
+	sleepDefault := (sleepMin + sleepMax) / 2
+	if defStr, ok := args["sleep_default"].(string); ok && strings.TrimSpace(defStr) != "" {
+		sleepDefault, err = time.ParseDuration(strings.TrimSpace(defStr))
+		if err != nil {
+			return sleepEnvelope{}, fmt.Errorf("sleep_default %q: %w", defStr, err)
 		}
-		matched = true
-		n, _ := strconv.Atoi(parts[1])
-		switch parts[2] {
-		case "minute", "minutes", "min", "mins", "m":
-			return fmt.Sprintf("%dm", n)
-		case "hour", "hours", "hr", "hrs", "h":
-			return fmt.Sprintf("%dh", n)
-		case "day", "days", "d":
-			return fmt.Sprintf("%dh", n*24)
+		if sleepDefault < sleepMin || sleepDefault > sleepMax {
+			return sleepEnvelope{}, fmt.Errorf("sleep_default %q must lie in [%s, %s]", defStr, sleepMin, sleepMax)
 		}
-		return match
-	})
-	return strings.ReplaceAll(out, " ", ""), matched
+	}
+
+	jitter := 0.1
+	if v, present := args["jitter"]; present && v != nil {
+		switch j := v.(type) {
+		case float64:
+			jitter = j
+		case int:
+			jitter = float64(j)
+		default:
+			return sleepEnvelope{}, fmt.Errorf("jitter must be a number in [0, 1], got %T", v)
+		}
+		if jitter < 0 || jitter > 1 {
+			return sleepEnvelope{}, fmt.Errorf("jitter %v must be in [0, 1]", jitter)
+		}
+	}
+
+	return sleepEnvelope{
+		sleepMin:     sleepMin,
+		sleepMax:     sleepMax,
+		sleepDefault: sleepDefault,
+		jitter:       jitter,
+	}, nil
 }

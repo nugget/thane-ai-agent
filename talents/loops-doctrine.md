@@ -17,12 +17,12 @@ Choose loop tools by lifecycle:
 - loop definition tools for durable services you need to inspect, edit,
   pause, reactivate, or relaunch.
 
-For recurring document work, prefer `thane_curate`. Its `cadence`
-schedules the service, its `output` declares the state owner, and the
-running loop writes through generated output tools such as
-`replace_output_*` or `append_output_*`. If a maintained output is
-marked `truncated` in Declared Durable Outputs, read the full document
-before replacing it.
+For recurring document work, prefer `thane_curate`. Its `sleep_min`
+and `sleep_max` set the envelope the running loop self-paces inside,
+its `output` declares the state owner, and the running loop writes
+through generated output tools such as `replace_output_*` or
+`append_output_*`. If a maintained output is marked `truncated` in
+Declared Durable Outputs, read the full document before replacing it.
 
 Choose stream wiring by attention cost:
 
@@ -49,10 +49,12 @@ concerns that genuinely warrant the extra capacity, not as a routine
 notification channel.
 
 Natural-language timing inside a task does not schedule a service loop.
-Use `thane_curate.cadence` or explicit service-loop sleep fields. Lint
-hand-authored durable definitions before saving them, especially when
-cadence, jitter, or direct domain-tool access matters. Tagged service
-loops often want `profile.delegation_gating: "disabled"`.
+Pick a sleep envelope (sleep_min, sleep_max) tight enough to catch what
+matters and loose enough to cost nothing when quiet; the running loop
+uses `set_next_sleep` to self-pace inside it. Lint hand-authored
+durable definitions before saving them, especially when the envelope,
+jitter, or direct domain-tool access matters. Tagged service loops
+often want `profile.delegation_gating: "disabled"`.
 
 When you need concrete JSON launch patterns, activate `loops_examples`
 and adapt the closest recipe minimally.
