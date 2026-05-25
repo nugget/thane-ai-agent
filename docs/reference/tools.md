@@ -243,9 +243,12 @@ Owner channel activity recency is reported with delta fields such as
 | `media_unfollow` | Stop following a feed. |
 | `media_feeds` | List followed feeds and their status. |
 
-`media_follow` accepts an optional `wake_loop` target. When present, new feed
-entries are delivered as structured event-source wakes to that loop instead
-of starting the default media-analysis conversation.
+`media_follow` accepts an optional `wake_loop` target. New feed entries are
+always delivered as structured event-source wakes — when `wake_loop` is
+omitted they route to the built-in `media-default-handler` event-driven
+loop; when set, they route to that loop instead (e.g. a
+`thane_curate`-managed document). The retired pre-PR-T2c
+"default media-analysis conversation" spawn path no longer exists.
 
 ## `attachments` — vision pipeline
 
