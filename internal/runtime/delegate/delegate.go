@@ -556,12 +556,11 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 }
 
 func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance string, operation looppkg.Operation, completion looppkg.Completion, completionConversationID string, completionChannel *looppkg.CompletionChannelTarget, loopName string, loopMaxDuration time.Duration, onProgress func(kind string, data map[string]any)) looppkg.Launch {
-	hints := make(map[string]string, len(prep.routeHints)+2)
+	factors := make(map[string]string, len(prep.routeHints)+1)
 	for k, v := range prep.routeHints {
-		hints[k] = v
+		factors[k] = v
 	}
-	hints["source"] = "delegate"
-	hints[router.HintDelegationGating] = "disabled"
+	factors["source"] = "delegate"
 
 	return looppkg.Launch{
 		Spec: looppkg.Spec{
@@ -571,8 +570,9 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 			MaxDuration: loopMaxDuration,
 			Tags:        append([]string(nil), prep.filterTags...),
 			Profile: router.LoopProfile{
-				Model:        prep.model,
-				Instructions: prompts.DelegateRunInstructions,
+				Model:            prep.model,
+				DelegationGating: "disabled",
+				Instructions:     prompts.DelegateRunInstructions,
 			},
 			Metadata: map[string]string{
 				"category":          "delegate",
@@ -587,7 +587,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ParentID:                 prep.parentLoopID,
 		ConversationID:           prep.conversationID,
 		ChannelBinding:           prep.channelBinding.Clone(),
-		Hints:                    hints,
+		RoutingFactors:           factors,
 		ExcludeTools:             append([]string(nil), prep.excludeTools...),
 		SkipTagFilter:            !prep.tagFilterActive,
 		InitialTags:              append([]string(nil), prep.effectiveTags...),
@@ -895,7 +895,7 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 			NeedsStreaming: needsStreaming,
 			ToolCount:      toolCount,
 			Priority:       router.PriorityBackground,
-			Hints:          hints,
+			RoutingFactors: hints,
 		})
 		if model != "" {
 			log.Debug("delegate model selected by router",

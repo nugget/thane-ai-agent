@@ -83,8 +83,8 @@ func TestChannelTags_ActivatedBySource(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "react to this"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "react to this"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -191,8 +191,8 @@ func TestChannelTags_NoBleedBetweenRuns(t *testing.T) {
 
 	// Run 1: Signal source
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "signal message"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "signal message"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run 1 error: %v", err)
@@ -254,8 +254,8 @@ func TestChannelTags_AdditiveWithAlwaysActive(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "test"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "test"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -304,8 +304,8 @@ func TestChannelTags_UnknownChannel(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "test"}},
-		Hints:    map[string]string{"source": "matrix"}, // unknown channel
+		Messages:       []Message{{Role: "user", Content: "test"}},
+		RoutingFactors: map[string]string{"source": "matrix"}, // unknown channel
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -497,8 +497,8 @@ func TestContactOrigin_ActivatedBySignalContact(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "what needs attention?"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "what needs attention?"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 		ChannelBinding: &memory.ChannelBinding{
 			Channel:     "signal",
 			Address:     "+15551234567",
@@ -556,8 +556,8 @@ func TestContactOrigin_MissingIdentityFallsBackToChannelTags(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "check signal updates"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "check signal updates"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
@@ -608,8 +608,8 @@ func TestContactOrigin_ProtectedTagsRequireTrustedBinding(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "check privileged tools"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "check privileged tools"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 		ChannelBinding: &memory.ChannelBinding{
 			Channel:     "signal",
 			ContactName: "David",
@@ -678,8 +678,8 @@ func TestSessionOrigin_RuntimeOnlyTagsRequireTrustedRuntimeSource(t *testing.T) 
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "check available surfaces"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "check available surfaces"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 		ChannelBinding: &memory.ChannelBinding{
 			Channel:     "signal",
 			ContactName: "David",
@@ -772,9 +772,9 @@ func TestSessionOrigin_CombinesRuntimeContactSourceAndOwnerBinding(t *testing.T)
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages:    []Message{{Role: "user", Content: "check all origin layers"}},
-		Hints:       map[string]string{"source": "signal"},
-		RuntimeTags: []string{"message_channel"},
+		Messages:       []Message{{Role: "user", Content: "check all origin layers"}},
+		RoutingFactors: map[string]string{"source": "signal"},
+		RuntimeTags:    []string{"message_channel"},
 		ChannelBinding: &memory.ChannelBinding{
 			Channel:     "signal",
 			ContactID:   "contact-1",
@@ -855,8 +855,8 @@ func TestContactOrigin_InjectsExactContextRefs(t *testing.T) {
 	})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "what do you know?"}},
-		Hints:    map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "what do you know?"}},
+		RoutingFactors: map[string]string{"source": "signal"},
 		ChannelBinding: &memory.ChannelBinding{
 			Channel:     "signal",
 			ContactName: "David",

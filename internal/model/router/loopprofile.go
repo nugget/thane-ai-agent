@@ -20,24 +20,27 @@ type LoopProfile struct {
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 
 	// QualityFloor is the minimum model quality rating (1–10). Maps
-	// to [HintQualityFloor].
+	// to [FactorQualityFloor].
 	QualityFloor string `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
 
 	// Mission describes the task context for routing. Maps to
-	// [HintMission]. Common values: "conversation", "automation",
+	// [FactorMission]. Common values: "conversation", "automation",
 	// "device_control", "background".
 	Mission string `yaml:"mission,omitempty" json:"mission,omitempty"`
 
 	// LocalOnly restricts routing to free/local models when "true".
-	// Maps to [HintLocalOnly].
+	// Maps to [FactorLocalOnly].
 	LocalOnly string `yaml:"local_only,omitempty" json:"local_only,omitempty"`
 
 	// DelegationGating controls delegation-first tool gating. Set to
-	// "disabled" for direct tool access. Maps to [HintDelegationGating].
+	// "disabled" for direct tool access. Typed field promoted out of
+	// the routing factors map — it's a feature switch, not an input the
+	// router scores on. Threaded through [RequestOptions.DelegationGating]
+	// into the loop and agent request boundaries.
 	DelegationGating string `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"`
 
 	// PreferSpeed favours faster models when "true". Maps to
-	// [HintPreferSpeed].
+	// [FactorPreferSpeed].
 	PreferSpeed string `yaml:"prefer_speed,omitempty" json:"prefer_speed,omitempty"`
 
 	// ExcludeTools lists tool names to filter out of the agent run.
@@ -55,33 +58,31 @@ type LoopProfile struct {
 
 // RequestOptions contains the agent request fields derived from a
 // LoopProfile. Callers can merge additional channel- or trigger-specific
-// hints on top of these shared routing defaults.
+// factors on top of these shared routing defaults.
 type RequestOptions struct {
-	Model        string
-	Hints        map[string]string
-	ExcludeTools []string
+	Model            string
+	RoutingFactors   map[string]string
+	ExcludeTools     []string
+	DelegationGating string
 }
 
-// Hints builds a routing hints map from the profile's typed fields.
-// Only non-empty fields are included. ExtraHints are merged last and
-// can override typed fields.
-func (s *LoopProfile) Hints() map[string]string {
+// RoutingFactors builds the routing-factor map from the profile's typed
+// fields. Only non-empty fields are included. ExtraHints are merged
+// last and can override typed fields.
+func (s *LoopProfile) RoutingFactors() map[string]string {
 	h := make(map[string]string)
 
 	if s.QualityFloor != "" {
-		h[HintQualityFloor] = s.QualityFloor
+		h[FactorQualityFloor] = s.QualityFloor
 	}
 	if s.Mission != "" {
-		h[HintMission] = s.Mission
+		h[FactorMission] = s.Mission
 	}
 	if s.LocalOnly != "" {
-		h[HintLocalOnly] = s.LocalOnly
-	}
-	if s.DelegationGating != "" {
-		h[HintDelegationGating] = s.DelegationGating
+		h[FactorLocalOnly] = s.LocalOnly
 	}
 	if s.PreferSpeed != "" {
-		h[HintPreferSpeed] = s.PreferSpeed
+		h[FactorPreferSpeed] = s.PreferSpeed
 	}
 
 	for k, v := range s.ExtraHints {
@@ -174,8 +175,9 @@ func ValidateTopicFilter(filter string) error {
 // the underlying LoopProfile.
 func (s *LoopProfile) RequestOptions() RequestOptions {
 	opts := RequestOptions{
-		Model: s.Model,
-		Hints: s.Hints(),
+		Model:            s.Model,
+		RoutingFactors:   s.RoutingFactors(),
+		DelegationGating: s.DelegationGating,
 	}
 
 	if len(s.ExcludeTools) > 0 {

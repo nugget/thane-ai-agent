@@ -534,18 +534,18 @@ func (a *App) initChannels(s *newState) error {
 		// Uses a local model via router for chunk summarization.
 		mc.SetSummarizer(func(ctx context.Context, prompt string) (string, error) {
 			hints := map[string]string{
-				router.HintMission:      "background",
-				router.HintLocalOnly:    "true",
-				router.HintQualityFloor: "3",
-				router.HintPreferSpeed:  "true",
+				router.FactorMission:      "background",
+				router.FactorLocalOnly:    "true",
+				router.FactorQualityFloor: "3",
+				router.FactorPreferSpeed:  "true",
 			}
 			if a.cfg.Media.SummarizeModel != "" {
-				hints[router.HintModelPreference] = a.cfg.Media.SummarizeModel
+				hints[router.FactorModelPreference] = a.cfg.Media.SummarizeModel
 			}
 			model, _ := a.rtr.Route(ctx, router.Request{
-				Query:    "transcript summarization",
-				Priority: router.PriorityBackground,
-				Hints:    hints,
+				Query:          "transcript summarization",
+				Priority:       router.PriorityBackground,
+				RoutingFactors: hints,
 			})
 			msgs := []llm.Message{{Role: "user", Content: prompt}}
 			resp, err := a.llmClient.Chat(ctx, model, msgs, nil)

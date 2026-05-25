@@ -230,9 +230,9 @@ func TestToolExecutionContext_PropagatesRequestHints(t *testing.T) {
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "inspect"}},
-		Hints: map[string]string{
+		RoutingFactors: map[string]string{
 			"source": "owu",
-			router.DelegateHintKey(router.HintQualityFloor): "10",
+			router.DelegateHintKey(router.FactorQualityFloor): "10",
 		},
 	}, nil)
 	if err != nil {
@@ -241,8 +241,8 @@ func TestToolExecutionContext_PropagatesRequestHints(t *testing.T) {
 	if captured["source"] != "owu" {
 		t.Fatalf("captured source = %q, want owu", captured["source"])
 	}
-	if captured[router.DelegateHintKey(router.HintQualityFloor)] != "10" {
-		t.Fatalf("captured delegate quality floor = %q, want 10", captured[router.DelegateHintKey(router.HintQualityFloor)])
+	if captured[router.DelegateHintKey(router.FactorQualityFloor)] != "10" {
+		t.Fatalf("captured delegate quality floor = %q, want 10", captured[router.DelegateHintKey(router.FactorQualityFloor)])
 	}
 }
 
@@ -403,8 +403,8 @@ func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 	loop.SetOrchestratorTools([]string{"thane_now", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
-		Messages: []Message{{Role: "user", Content: "deploy the update"}},
-		Hints:    map[string]string{"delegation_gating": "disabled"},
+		Messages:         []Message{{Role: "user", Content: "deploy the update"}},
+		DelegationGating: "disabled",
 	}, nil)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)

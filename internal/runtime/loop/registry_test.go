@@ -460,7 +460,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 				ExcludeTools: []string{"profile_block"},
 				Instructions: "profile guidance",
 			},
-			Hints: map[string]string{
+			RoutingFactors: map[string]string{
 				"source": "spec",
 			},
 			ExcludeTools: []string{"config_block"},
@@ -469,7 +469,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 		ParentID:        "parent-loop",
 		Metadata:        map[string]string{"origin": "launch"},
 		ConversationID:  "conv-123",
-		Hints:           map[string]string{"source": "launch", "custom": "1"},
+		RoutingFactors:  map[string]string{"source": "launch", "custom": "1"},
 		AllowedTools:    []string{"get_state"},
 		ExcludeTools:    []string{"launch_block"},
 		InitialTags:     []string{"launch_tag"},
@@ -491,7 +491,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 				AllowedTools:    append([]string(nil), req.AllowedTools...),
 				ExcludeTools:    append([]string(nil), req.ExcludeTools...),
 				SkipTagFilter:   req.SkipTagFilter,
-				Hints:           cloneStringMap(req.Hints),
+				RoutingFactors:  cloneStringMap(req.RoutingFactors),
 				InitialTags:     append([]string(nil), req.InitialTags...),
 				MaxIterations:   req.MaxIterations,
 				MaxOutputTokens: req.MaxOutputTokens,
@@ -543,14 +543,14 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 			t.Fatalf("InitialTags = %#v, missing %q", captured.InitialTags, want)
 		}
 	}
-	if captured.Hints["mission"] != "automation" {
-		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	if captured.RoutingFactors["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.RoutingFactors["mission"])
 	}
-	if captured.Hints["source"] != "launch" {
-		t.Fatalf("source hint = %q, want launch", captured.Hints["source"])
+	if captured.RoutingFactors["source"] != "launch" {
+		t.Fatalf("source hint = %q, want launch", captured.RoutingFactors["source"])
 	}
-	if captured.Hints["custom"] != "1" {
-		t.Fatalf("custom hint = %q, want 1", captured.Hints["custom"])
+	if captured.RoutingFactors["custom"] != "1" {
+		t.Fatalf("custom hint = %q, want 1", captured.RoutingFactors["custom"])
 	}
 	if captured.MaxIterations != 7 || captured.MaxOutputTokens != 321 {
 		t.Fatalf("limits = iterations %d output %d", captured.MaxIterations, captured.MaxOutputTokens)

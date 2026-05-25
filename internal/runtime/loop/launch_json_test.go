@@ -130,7 +130,7 @@ func TestLaunchHasOverrides(t *testing.T) {
 		field string
 	}{
 		{"task", func(l *Launch) { l.Task = "x" }, "Task"},
-		{"hints", func(l *Launch) { l.Hints = map[string]string{"k": "v"} }, "Hints"},
+		{"routing_factors", func(l *Launch) { l.RoutingFactors = map[string]string{"k": "v"} }, "RoutingFactors"},
 		{"metadata", func(l *Launch) { l.Metadata = map[string]string{"k": "v"} }, "Metadata"},
 		{"allowed_tools", func(l *Launch) { l.AllowedTools = []string{"t"} }, "AllowedTools"},
 		{"exclude_tools", func(l *Launch) { l.ExcludeTools = []string{"t"} }, "ExcludeTools"},

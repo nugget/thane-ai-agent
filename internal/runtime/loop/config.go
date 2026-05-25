@@ -248,10 +248,16 @@ type Config struct {
 	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into Request hints for each iteration.
-	// Config hints override loop-generated defaults (e.g., setting
-	// "source" to "metacognitive" instead of "loop").
-	Hints map[string]string
+	// RoutingFactors are merged into the Request's routing factors for
+	// each iteration. Config factors override loop-generated defaults
+	// (e.g., setting "source" to "metacognitive" instead of "loop").
+	RoutingFactors map[string]string
+
+	// DelegationGating sets the typed feature switch on each
+	// iteration's Request. "disabled" gives the model direct tool
+	// access (no orchestrator-and-delegate gating). Empty means no
+	// override — the agent's default gating applies.
+	DelegationGating string
 
 	// FallbackContent is static text used when the loop's nested agent run
 	// or direct request/reply execution finishes without any user-visible
