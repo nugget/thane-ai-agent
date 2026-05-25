@@ -256,10 +256,20 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 			}
 			ws.WakeTarget = *sc.WakeLoop
 		}
-		if sc.Wake != nil {
+		// Profile is the legacy spawn-dispatch shape and is documented
+		// as ignored when WakeLoop is set. Validate it only when
+		// we'll actually use it — an unused-but-invalid Profile
+		// shouldn't fail startup if WakeLoop is the path being
+		// taken. (When neither is set we'd have continued above.)
+		if sc.Wake != nil && sc.WakeLoop == nil {
 			if err := sc.Wake.Validate(); err != nil {
 				return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake profile: %w", i, sc.Topic, err)
 			}
+			ws.Profile = *sc.Wake
+		} else if sc.Wake != nil {
+			// WakeLoop wins, but stash the profile data so it
+			// round-trips on the WakeSubscription — operators who
+			// later remove WakeLoop should still see what they had.
 			ws.Profile = *sc.Wake
 		}
 		s.subs = append(s.subs, ws)
@@ -288,18 +298,28 @@ func (s *SubscriptionStore) Add(req AddRequest) (WakeSubscription, error) {
 	if err := router.ValidateTopicFilter(topic); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
 	}
-	if err := req.Profile.Validate(); err != nil {
-		return WakeSubscription{}, fmt.Errorf("invalid loop profile: %w", err)
-	}
-	// A subscription that points at nothing is almost certainly an
-	// operator/model mistake: matching messages would dispatch
-	// against a zero-value Profile (no model preference, no
-	// instructions) and would still spawn a one-shot loop. Reject
-	// with an actionable error. LoopProfile contains slice/map
-	// fields so we can't `==`-compare against a zero literal;
-	// inspect each field instead.
-	if req.WakeTarget.Empty() && isLoopProfileEmpty(req.Profile) {
-		return WakeSubscription{}, fmt.Errorf("subscription must declare either wake_loop (preferred) or a non-empty profile")
+	// Profile validation is conditional on dispatch mode. When
+	// WakeTarget is set, the legacy Profile fields are documented
+	// as ignored — so an irrelevant invalid value (e.g. an
+	// accidental quality_floor=99 left over from copy-paste)
+	// shouldn't block a perfectly valid wake_loop subscription.
+	// Only when we'll actually USE the Profile (spawn dispatch
+	// path) do we require it to be valid.
+	if req.WakeTarget.Empty() {
+		if err := req.Profile.Validate(); err != nil {
+			return WakeSubscription{}, fmt.Errorf("invalid loop profile: %w", err)
+		}
+		// A subscription that points at nothing is almost certainly
+		// an operator/model mistake: matching messages would
+		// dispatch against a zero-value Profile (no model
+		// preference, no instructions) and would still spawn a
+		// one-shot loop. Reject with an actionable error.
+		// LoopProfile contains slice/map fields so we can't
+		// `==`-compare against a zero literal; inspect each field
+		// instead.
+		if isLoopProfileEmpty(req.Profile) {
+			return WakeSubscription{}, fmt.Errorf("subscription must declare either wake_loop (preferred) or a non-empty profile")
+		}
 	}
 
 	ws := WakeSubscription{

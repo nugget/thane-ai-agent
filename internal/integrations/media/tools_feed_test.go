@@ -39,7 +39,7 @@ func TestFollowHandler_TrustZoneDefault(t *testing.T) {
 	}
 
 	// Verify stored in opstate.
-	id := out["feed_id"]
+	id := out["subscription_id"]
 	stored, _ := store.Get(feedNamespace, feedKeyTrustZone(id))
 	if stored != "unknown" {
 		t.Errorf("stored trust_zone = %q, want %q", stored, "unknown")
@@ -80,7 +80,7 @@ func TestFollowHandler_TrustZoneExplicit(t *testing.T) {
 	}
 
 	// Verify stored in opstate.
-	id := out["feed_id"]
+	id := out["subscription_id"]
 	stored, _ := store.Get(feedNamespace, feedKeyTrustZone(id))
 	if stored != "trusted" {
 		t.Errorf("stored trust_zone = %q, want %q", stored, "trusted")
@@ -148,7 +148,7 @@ func TestUnfollowHandler_CleansTrustZone(t *testing.T) {
 	ft := NewFeedTools(store, nil, 10)
 	handler := ft.UnfollowHandler()
 
-	_, err := handler(context.Background(), map[string]any{"feed_id": id})
+	_, err := handler(context.Background(), map[string]any{"subscription_id": id})
 	if err != nil {
 		t.Fatalf("UnfollowHandler() error: %v", err)
 	}
@@ -183,9 +183,9 @@ func TestFeedsHandler_IncludesTrustZone(t *testing.T) {
 	}
 
 	type feedInfo struct {
-		FeedID    string `json:"feed_id"`
-		Name      string `json:"name"`
-		TrustZone string `json:"trust_zone"`
+		SubscriptionID string `json:"subscription_id"`
+		Name           string `json:"name"`
+		TrustZone      string `json:"trust_zone"`
 	}
 	var feeds []feedInfo
 	if err := json.Unmarshal([]byte(result), &feeds); err != nil {
@@ -199,7 +199,7 @@ func TestFeedsHandler_IncludesTrustZone(t *testing.T) {
 	// Find each feed by ID.
 	zones := map[string]string{}
 	for _, f := range feeds {
-		zones[f.FeedID] = f.TrustZone
+		zones[f.SubscriptionID] = f.TrustZone
 	}
 	if zones["f1"] != "trusted" {
 		t.Errorf("f1 trust_zone = %q, want %q", zones["f1"], "trusted")

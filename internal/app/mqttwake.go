@@ -23,8 +23,17 @@ import (
 const maxWakePayloadBytes = 32 * 1024
 
 // mqttWakeTimeout bounds how long a single MQTT-triggered agent
-// conversation may run before being cancelled.
+// conversation may run before being cancelled. Applies to the
+// legacy spawn-dispatch path (one-shot loop run).
 const mqttWakeTimeout = 5 * time.Minute
+
+// mqttWakeDeliveryTimeout bounds the bus.Send call for the wake-
+// target dispatch path. Each MQTT message arrives in its own
+// goroutine; without this bound, a stuck downstream route handler
+// could leak goroutines under steady MQTT traffic. The actual
+// agent work happens in the target loop's next iteration on its
+// own clock — this only bounds the envelope-handoff hop.
+const mqttWakeDeliveryTimeout = 30 * time.Second
 
 // mqttWakeDeps holds optional dependencies for dashboard integration.
 // When registry is non-nil, each wake conversation is spawned as a
@@ -147,6 +156,11 @@ func mqttWakeHandler(
 // Failures (bus not configured, target loop not resolvable) are
 // logged at WARN and the message is dropped; the next matching
 // message gets the same treatment.
+//
+// Dispatch runs in a fresh goroutine per matching message (see the
+// fan-out in [mqttWakeHandler]). A bounded context bounds bus
+// delivery so a stuck/slow downstream route handler can't leak
+// goroutines indefinitely under a steady stream of MQTT traffic.
 func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic string, payload []byte, logger *slog.Logger) {
 	if deps.messageBus == nil {
 		logger.Warn("mqtt wake target dispatch unavailable, dropping message",
@@ -185,7 +199,9 @@ func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic st
 		return
 	}
 
-	if _, err := deps.messageBus.Send(context.Background(), env); err != nil {
+	deliveryCtx, cancel := context.WithTimeout(context.Background(), mqttWakeDeliveryTimeout)
+	defer cancel()
+	if _, err := deps.messageBus.Send(deliveryCtx, env); err != nil {
 		logger.Warn("mqtt wake envelope delivery failed, dropping message",
 			"subscription_id", ws.ID,
 			"topic", topic,

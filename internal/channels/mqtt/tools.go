@@ -123,10 +123,15 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		initialTags = toStringSlice(raw)
 	}
 
-	// Validate the profile before persisting — fail fast with a clear
-	// error rather than storing an invalid subscription.
-	if err := profile.Validate(); err != nil {
-		return "", fmt.Errorf("invalid profile: %w", err)
+	// Validate the profile only when we'll actually use it (no
+	// WakeTarget set). With wake_loop dispatch the legacy spawn-
+	// profile fields are documented as ignored — so a stray
+	// invalid quality_floor=99 left over from copy-paste
+	// shouldn't block adding a valid wake_loop subscription.
+	if !wakeConfigured {
+		if err := profile.Validate(); err != nil {
+			return "", fmt.Errorf("invalid profile: %w", err)
+		}
 	}
 
 	ws, err := t.store.Add(AddRequest{
@@ -157,14 +162,10 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 }
 
 // HandleRemoveWakeSubscription removes a runtime subscription by ID.
-// Accepts either "subscription_id" (preferred, matching the forge /
-// media tool surface) or the legacy "id" alias for backwards
-// compatibility with operator scripts.
+// `subscription_id` is the cross-family canonical parameter name,
+// matching forge_repo_unfollow and media_unfollow.
 func (t *Tools) HandleRemoveWakeSubscription(_ context.Context, args map[string]any) (string, error) {
 	id := strings.TrimSpace(stringArg(args, "subscription_id"))
-	if id == "" {
-		id = strings.TrimSpace(stringArg(args, "id"))
-	}
 	if id == "" {
 		return "", fmt.Errorf("subscription_id is required")
 	}

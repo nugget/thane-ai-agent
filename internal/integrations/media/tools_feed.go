@@ -194,11 +194,11 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		)
 
 		result := map[string]any{
-			"feed_id":      id,
-			"name":         name,
-			"url":          feedURL,
-			"trust_zone":   trustZone,
-			"latest_entry": latestTitle,
+			"subscription_id": id,
+			"name":            name,
+			"url":             feedURL,
+			"trust_zone":      trustZone,
+			"latest_entry":    latestTitle,
 		}
 		if outputPath != "" {
 			result["output_path"] = outputPath
@@ -212,17 +212,13 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 }
 
 // UnfollowHandler returns the tool handler for media_unfollow.
-// Accepts either subscription_id (cross-family canonical, matches
-// forge_repo_unfollow / mqtt_wake_remove) or the historical feed_id
-// alias.
+// `subscription_id` is the cross-family canonical parameter name,
+// matching forge_repo_unfollow and mqtt_wake_remove.
 func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string]any) (string, error) {
 	return func(_ context.Context, args map[string]any) (string, error) {
 		id, _ := args["subscription_id"].(string)
 		if id == "" {
-			id, _ = args["feed_id"].(string)
-		}
-		if id == "" {
-			return "", fmt.Errorf("media_unfollow: subscription_id (or feed_id) is required")
+			return "", fmt.Errorf("media_unfollow: subscription_id is required")
 		}
 
 		// Verify feed exists.
@@ -303,7 +299,6 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 
 		type feedInfo struct {
 			SubscriptionID string         `json:"subscription_id"`
-			FeedID         string         `json:"feed_id"` // deprecated alias of subscription_id; kept for compat
 			Name           string         `json:"name"`
 			URL            string         `json:"url"`
 			TrustZone      string         `json:"trust_zone"`
@@ -354,7 +349,6 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 
 			feeds = append(feeds, feedInfo{
 				SubscriptionID: id,
-				FeedID:         id,
 				Name:           name,
 				URL:            feedURL,
 				TrustZone:      trustZone,
@@ -412,11 +406,8 @@ func UnfollowDefinition() map[string]any {
 				"type":        "string",
 				"description": "The feed identifier returned by media_follow or media_feeds (the subscription_id field). Cross-family canonical name matching forge_repo_unfollow and mqtt_wake_remove.",
 			},
-			"feed_id": map[string]any{
-				"type":        "string",
-				"description": "Deprecated alias for subscription_id; kept for backwards compatibility with operator scripts.",
-			},
 		},
+		"required": []string{"subscription_id"},
 	}
 }
 
