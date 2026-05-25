@@ -34,7 +34,7 @@ func TestUnmarshalJSONMigratesLegacyQualityFloor(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if s.Profile.QualityFloor != 7 {
-		t.Errorf("Profile.QualityFloor = %q, want %q (legacy migration)", s.Profile.QualityFloor, "7")
+		t.Errorf("Profile.QualityFloor = %d, want 7 (legacy migration)", s.Profile.QualityFloor)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestUnmarshalJSONMigratesLegacySupervisorFields(t *testing.T) {
 			t.Fatal("SupervisorProfile is nil; expected allocation when legacy supervisor fields are present")
 		}
 		if s.SupervisorProfile.QualityFloor != 9 {
-			t.Errorf("SupervisorProfile.QualityFloor = %q, want %q", s.SupervisorProfile.QualityFloor, "9")
+			t.Errorf("SupervisorProfile.QualityFloor = %d, want 9", s.SupervisorProfile.QualityFloor)
 		}
 		if !strings.Contains(s.SupervisorProfile.Instructions, "Review this turn") {
 			t.Errorf("SupervisorProfile.Instructions = %q, want the legacy supervisor_context content", s.SupervisorProfile.Instructions)
@@ -120,10 +120,10 @@ func TestUnmarshalJSONPrefersNewShapeOverLegacy(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if s.Profile.QualityFloor != 8 {
-		t.Errorf("Profile.QualityFloor = %q, want %q (new shape should win)", s.Profile.QualityFloor, "8")
+		t.Errorf("Profile.QualityFloor = %d, want 8 (new shape should win)", s.Profile.QualityFloor)
 	}
 	if s.SupervisorProfile == nil || s.SupervisorProfile.QualityFloor != 10 {
-		t.Errorf("SupervisorProfile.QualityFloor = %v, want %q (new shape should win)", s.SupervisorProfile, "10")
+		t.Errorf("SupervisorProfile.QualityFloor = %+v, want 10 (new shape should win)", s.SupervisorProfile)
 	}
 }
 

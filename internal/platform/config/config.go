@@ -1583,10 +1583,11 @@ func (c SignalRoutingConfig) LoopProfile() router.LoopProfile {
 	// SignalRoutingConfig.QualityFloor stays string-shaped in its
 	// own YAML schema for now — converting it is a separate
 	// operator-config cleanup. Atoi here at the boundary so the
-	// downstream [router.LoopProfile.QualityFloor] (int) is
-	// happy. An unparseable value gets silently dropped to zero
-	// ("unset"); validation belongs at config load time, not at
-	// every conversion call.
+	// downstream [router.LoopProfile.QualityFloor] (int) is happy.
+	// Unparseable values drop to zero ("unset") here;
+	// [Config.validateSignal] enforces parseability at config-load
+	// time so this conversion never sees a "high"-shaped string in
+	// a validated config.
 	floor, _ := strconv.Atoi(strings.TrimSpace(c.QualityFloor))
 	return router.LoopProfile{
 		Model:            c.Model,
@@ -2816,6 +2817,17 @@ func (c *Config) validateSignal() error {
 	}
 	if c.Signal.HandleTimeout < 0 {
 		return fmt.Errorf("signal.handle_timeout %s must be non-negative", c.Signal.HandleTimeout)
+	}
+	// SignalRoutingConfig keeps QualityFloor as a string for now
+	// (its own YAML cleanup is deferred). SignalRoutingConfig.LoopProfile()
+	// silently drops unparseable values to 0, which Profile.Validate()
+	// then accepts as "unset" — so a typo like `quality_floor: "high"`
+	// would slip past Validate entirely. Parse explicitly here so the
+	// operator sees a loud failure at config-load time.
+	if raw := strings.TrimSpace(c.Signal.Routing.QualityFloor); raw != "" {
+		if _, err := strconv.Atoi(raw); err != nil {
+			return fmt.Errorf("signal.routing.quality_floor %q is not a valid integer", c.Signal.Routing.QualityFloor)
+		}
 	}
 	profile := c.Signal.Routing.LoopProfile()
 	if err := profile.Validate(); err != nil {

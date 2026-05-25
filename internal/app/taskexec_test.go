@@ -105,7 +105,7 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "true")
 	}
 	if launcher.launch.Spec.Profile.QualityFloor != 1 {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, 1)
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 1)
 	}
 	if launcher.launch.Spec.Profile.Mission != "automation" {
 		t.Errorf("hint mission = %q, want %q", launcher.launch.Spec.Profile.Mission, "automation")
@@ -281,7 +281,7 @@ func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
 		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "false")
 	}
 	if launcher.launch.Spec.Profile.QualityFloor != 7 {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, 7)
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 7)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 	}
 	// quality_floor should use the override.
 	if launcher.launch.Spec.Profile.QualityFloor != 5 {
-		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, 5)
+		t.Errorf("hint quality_floor = %d, want %d", launcher.launch.Spec.Profile.QualityFloor, 5)
 	}
 }
 

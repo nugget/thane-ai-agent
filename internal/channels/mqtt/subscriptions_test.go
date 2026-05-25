@@ -134,7 +134,7 @@ func TestSubscriptionStoreLoadConfig(t *testing.T) {
 		t.Errorf("source = %q, want %q", subs[0].Source, "config")
 	}
 	if subs[0].Profile.QualityFloor != 7 {
-		t.Errorf("profile.QualityFloor = %q, want %q", subs[0].Profile.QualityFloor, "7")
+		t.Errorf("profile.QualityFloor = %d, want 7", subs[0].Profile.QualityFloor)
 	}
 }
 

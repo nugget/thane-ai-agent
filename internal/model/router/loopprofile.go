@@ -105,8 +105,11 @@ func (s *LoopProfile) UnmarshalJSON(data []byte) error {
 	if len(w.QualityFloor) == 0 || string(w.QualityFloor) == "null" {
 		return nil
 	}
-	// Try the canonical int form first — succeeds on `5`,
-	// `5.0` (json decodes float-to-int truncating), etc.
+	// Try the canonical int form first — succeeds on plain
+	// integer JSON numbers like `5`. encoding/json rejects
+	// non-integer numbers like `5.0` when targeting int, so we
+	// don't pretend to accept them; if a config source produces
+	// `5.0` we'd rather fail loud than silently truncate.
 	var n int
 	if err := json.Unmarshal(w.QualityFloor, &n); err == nil {
 		s.QualityFloor = n
