@@ -668,6 +668,65 @@ curate-specific guidance
 	}
 }
 
+func TestParseFrontmatterBlocks_EmptyBodyBetweenNodes(t *testing.T) {
+	// A node with no body means the next node's frontmatter starts
+	// immediately after the closing "---". The boundary scanner must
+	// detect a boundary at position 0 of the body (no preceding
+	// newline to anchor the search).
+	raw := `---
+name: a
+tags: [x]
+---
+---
+name: b
+tags: [y]
+---
+
+body for b
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2 (empty body between nodes should not collapse them)", len(blocks))
+	}
+	if blocks[0].Frontmatter.Name != "a" || blocks[1].Frontmatter.Name != "b" {
+		t.Fatalf("names = [%q, %q], want [a, b]", blocks[0].Frontmatter.Name, blocks[1].Frontmatter.Name)
+	}
+	if strings.TrimSpace(blocks[0].Content) != "" {
+		t.Errorf("block[0].Content = %q, want empty", blocks[0].Content)
+	}
+	if !strings.Contains(blocks[1].Content, "body for b") {
+		t.Errorf("block[1].Content missing body: %q", blocks[1].Content)
+	}
+}
+
+func TestParseFrontmatterBlocks_HRWithDistantKeyParagraphStaysContent(t *testing.T) {
+	// A "---" line followed by a blank line and then a paragraph that
+	// happens to start with a frontmatter-key word ("name:", "tags:")
+	// must stay as a markdown horizontal rule. Only a "---" whose very
+	// next line is a "key: value" pair counts as a node boundary.
+	raw := `---
+name: only
+tags: [x]
+---
+
+# Heading
+
+paragraph one
+
+---
+
+name: looks like a key but is actually prose
+this paragraph continues
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1 (HR with later key paragraph should not split)", len(blocks))
+	}
+	if !strings.Contains(blocks[0].Content, "name: looks like a key") {
+		t.Errorf("body lost prose after HR: %q", blocks[0].Content)
+	}
+}
+
 func TestParseFrontmatterBlocks_HRInBodyStaysContent(t *testing.T) {
 	// A "---" line followed by prose (not a frontmatter key) is a
 	// markdown horizontal rule and must not split the block.

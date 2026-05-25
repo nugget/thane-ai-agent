@@ -133,8 +133,8 @@ not history. Each cycle rewrites the body; the generated output tool is
 ```
 
 The loop's prompt sees the current document body each turn (truncated
-if oversized — read it with `doc_read` first when so), then the model
-rewrites the body via `replace_output_server_closet_guardian`.
+if oversized — in that case, read it with `doc_read` first), then the
+model rewrites the body via `replace_output_server_closet_guardian`.
 
 ---
 name: loops_examples_curate_journal

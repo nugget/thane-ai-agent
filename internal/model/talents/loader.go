@@ -358,33 +358,36 @@ func parseOneBlock(raw string) (Block, string, bool) {
 // node-boundary marker and the remaining input (starting at "---") for
 // the next iteration. When no boundary is found, returns the entire
 // body and an empty remainder.
+//
+// A boundary is a "---" line whose immediately-following line is a
+// recognized frontmatter key ("name:", "tags:", etc.). The "very next
+// line" rule is strict — a blank line between "---" and a later
+// "key:" paragraph means the "---" is a markdown horizontal rule,
+// not a node boundary. The scan also correctly identifies a boundary
+// at the start of body (empty body between consecutive nodes).
 func splitAtNextNodeBoundary(body string) (content, remainder string) {
-	search := body
+	lines := strings.SplitAfter(body, "\n")
 	offset := 0
-	for {
-		idx := strings.Index(search, "\n---")
-		if idx < 0 {
-			return body, ""
+	for i, line := range lines {
+		stripped := strings.TrimRight(line, "\r\n")
+		if stripped != "---" {
+			offset += len(line)
+			continue
 		}
-		// Look at what's on the line after "---" — if it parses as a
-		// frontmatter key, this is a node boundary; otherwise it's a
-		// markdown HR and we keep scanning.
-		afterDashes := search[idx+4:]
-		afterDashes = strings.TrimLeft(afterDashes, " \t")
-		// Skip the rest of the "---" line and look at the next line.
-		if nl := strings.IndexByte(afterDashes, '\n'); nl >= 0 {
-			nextLine := strings.TrimSpace(afterDashes[nl+1:])
-			if firstKey, _, _ := strings.Cut(nextLine, ":"); isFrontmatterKey(strings.TrimSpace(firstKey)) {
-				absolute := offset + idx
-				// Drop the leading newline before "---" from content so
-				// trailing whitespace on the prior block stays clean.
-				return strings.TrimRight(body[:absolute], "\r\n"), body[absolute+1:]
-			}
+		if i+1 >= len(lines) {
+			// Trailing "---" with no following line — not a boundary.
+			offset += len(line)
+			continue
 		}
-		// Not a node boundary — keep scanning past this "---".
-		offset += idx + 4
-		search = search[idx+4:]
+		nextLine := strings.TrimRight(lines[i+1], "\r\n")
+		firstKey, _, found := strings.Cut(nextLine, ":")
+		if !found || !isFrontmatterKey(strings.TrimSpace(firstKey)) {
+			offset += len(line)
+			continue
+		}
+		return strings.TrimRight(body[:offset], "\r\n"), body[offset:]
 	}
+	return body, ""
 }
 
 // isFrontmatterKey reports whether key is one of the recognized
