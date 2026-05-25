@@ -57,35 +57,50 @@ persona name).
 
 ## Wake Subscriptions
 
-Thane can subscribe to MQTT topics and wake the agent loop when messages
-arrive:
+Thane can subscribe to MQTT topics and deliver matching messages as
+event-source wakes to an existing loop. Each subscription names a
+`wake_loop` target; matching messages become loop notifications that
+the target loop sees on its next iteration. No fresh loop spawns per
+message — the target loop owns routing via its own
+`Spec.Profile`/`SupervisorProfile`.
 
 ```yaml
 mqtt:
-  wake_subscriptions:
+  subscriptions:
     - topic: frigate/events
-      qos: 1
+      wake_loop:
+        name: home_security
     - topic: custom/alerts/#
+      wake_loop:
+        name: mqtt-default-handler
+        tags:
+          - security
 ```
 
-When a message arrives on a subscribed topic, Thane creates an agent request
-with the message payload as context. This enables reactive behavior —
-Frigate detects a person at the door, publishes an event, and Thane reasons
-about whether to notify you.
+When no custom handler is desired, point `wake_loop` at the built-in
+`mqtt-default-handler` event-driven loop, which is registered
+automatically when MQTT is configured.
 
-### Routing Overrides
+`wake_loop` accepts the following fields:
 
-Wake subscriptions can include routing hints to control which model handles
-the resulting agent request:
+| Field | Purpose |
+|---|---|
+| `loop_id` | Exact live loop ID. Preferred when known. |
+| `name` | Loop name when `loop_id` isn't known (mqtt-default-handler if you don't have a bespoke handler). |
+| `force_supervisor` | Force the target's next iteration into supervisor mode. |
+| `priority` | `low` / `normal` / `urgent`; drives prompt-rendering order on the target loop. |
+| `instructions` | Compact text appended to the rendered wake event. |
+| `tags` | Iteration-scoped capability tags activated on the next turn (e.g. `security`, `device_control`). Fade unless the model explicitly activates them. |
 
-```yaml
-mqtt:
-  wake_subscriptions:
-    - topic: frigate/events
-      routing:
-        local_only: true
-        quality_floor: 3
-```
+Subscriptions without `wake_loop` are ambient-awareness only and are
+not delivered to any loop. Legacy inline-Profile entries (the
+pre-PR-T2b `wake:` field with `local_only` / `quality_floor` / etc.)
+are auto-migrated onto `mqtt-default-handler` at config load with a
+WARN log; remove them from the YAML at your convenience.
+
+Config-defined targets are verified against the live loop registry at
+startup — a typo in `wake_loop.name` fails the app launch loud rather
+than silently dropping the first matching message.
 
 ## Auto-Reconnection
 

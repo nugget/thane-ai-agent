@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 
+	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -17,6 +19,11 @@ const (
 	mqttPublisherDefinitionName   = "mqtt"
 	telemetryDefinitionName       = "telemetry"
 )
+
+// mqttDefaultHandlerName is the in-app alias for the mqtt package's
+// built-in default-handler loop name. Aliased here so the builtin
+// spec literal reads cleanly alongside the other naming constants.
+var mqttDefaultHandlerName = mqtt.DefaultHandlerLoopName
 
 func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	if cfg == nil {
@@ -117,6 +124,28 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	if cfg.MQTT.Configured() {
+		// Default landing zone for mqtt_wake subscriptions that don't
+		// declare a custom wake_loop. Event-driven so the loop sits
+		// idle on wakeCh until an MQTT message arrives, then runs one
+		// agent turn against the rendered notification context. The
+		// model decides what to do based on the topic + payload — no
+		// hardcoded routing, no inline-Profile spawn.
+		specs = append(specs, looppkg.Spec{
+			Name:       mqttDefaultHandlerName,
+			Enabled:    true,
+			Task:       "Triage MQTT wake events: inspect topic and payload, then act or escalate.",
+			Operation:  looppkg.OperationEventDriven,
+			Completion: looppkg.CompletionNone,
+			Profile: router.LoopProfile{
+				Mission:    "mqtt_handler",
+				ExtraHints: map[string]string{"source": "mqtt_wake"},
+			},
+			Metadata: map[string]string{
+				"subsystem": "mqtt",
+				"category":  "default_handler",
+			},
+		})
+
 		mqttInterval := time.Duration(cfg.MQTT.PublishIntervalSec) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         mqttPublisherDefinitionName,

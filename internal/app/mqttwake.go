@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -12,55 +11,46 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// maxWakePayloadBytes is the maximum MQTT payload size included in the
-// user message. Payloads exceeding this are truncated on a valid UTF-8
-// boundary with a marker.
+// maxWakePayloadBytes bounds the MQTT payload size included in the
+// event-source envelope summary. Payloads exceeding this are truncated
+// on a valid UTF-8 boundary with a marker so a chatty topic can't
+// blow up downstream prompt rendering.
 const maxWakePayloadBytes = 32 * 1024
 
-// mqttWakeTimeout bounds how long a single MQTT-triggered agent
-// conversation may run before being cancelled. Applies to the
-// legacy spawn-dispatch path (one-shot loop run).
-const mqttWakeTimeout = 5 * time.Minute
-
-// mqttWakeDeliveryTimeout bounds the bus.Send call for the wake-
-// target dispatch path. Each MQTT message arrives in its own
-// goroutine; without this bound, a stuck downstream route handler
-// could leak goroutines under steady MQTT traffic. The actual
-// agent work happens in the target loop's next iteration on its
-// own clock — this only bounds the envelope-handoff hop.
+// mqttWakeDeliveryTimeout bounds the bus.Send call for envelope
+// delivery. Each MQTT message arrives in its own goroutine; without
+// this bound, a stuck downstream route handler could leak goroutines
+// under steady MQTT traffic. The actual agent work happens in the
+// target loop's next iteration on its own clock — this only bounds
+// the envelope-handoff hop.
 const mqttWakeDeliveryTimeout = 30 * time.Second
 
-// mqttWakeDeps holds optional dependencies for dashboard integration.
-// When registry is non-nil, each wake conversation is spawned as a
-// child loop under parentID so it appears on the dashboard.
-//
-// messageBus, when non-nil, enables the wake-target dispatch path
-// for subscriptions that declare a WakeTarget — MQTT messages
-// produce a [messages.LoopEventPayload] delivered as a loop
-// notification to the target loop, instead of spawning a fresh
-// one-shot loop.
+// mqttWakeDeps wires the wake handler to the message bus and event
+// bus. parentID is unused in the post-retirement dispatch shape but
+// retained so the wiring in new_servers.go stays compatible during
+// the transition.
 type mqttWakeDeps struct {
 	registry   *looppkg.Registry
 	messageBus *messages.Bus
 	eventBus   *events.Bus
-	parentID   *atomic.Value // stores string; populated lazily from the mqtt service loop
+	parentID   *atomic.Value
 }
 
-// mqttWakeHandler returns a MessageHandler that dispatches agent
-// conversations when MQTT messages arrive on wake-configured topics.
-// Messages on topics without a wake subscription are passed through
-// to the fallback handler.
+// mqttWakeHandler returns a MessageHandler that delivers MQTT messages
+// to existing event-driven loops via the message bus. Every active
+// subscription routes through a wake_loop target after the trigger-
+// unification work; legacy inline-Profile subscriptions are migrated
+// onto [mqtt.DefaultHandlerLoopName] at config load / DB hydrate time.
 //
-// When deps.registry is non-nil, each wake conversation is registered
-// as a child loop under the MQTT parent so it appears on the dashboard.
+// Messages on topics without a wake subscription are passed through to
+// the fallback handler. When the message bus is nil (operator
+// configuration error) matching messages are logged and dropped.
 func mqttWakeHandler(
 	store *mqtt.SubscriptionStore,
-	runner looppkg.Runner,
 	fallback mqtt.MessageHandler,
 	logger *slog.Logger,
 	deps mqttWakeDeps,
@@ -77,100 +67,34 @@ func mqttWakeHandler(
 			return
 		}
 
-		if deps.registry == nil {
-			logger.Error("mqtt wake has no loop registry, dropping message",
+		if deps.messageBus == nil {
+			logger.Error("mqtt wake has no message bus, dropping message",
 				"topic", topic,
 				"matches", len(matches),
 			)
 			return
 		}
 
-		// Fan-out: dispatch one agent conversation per matching
-		// subscription. Each gets its own goroutine so the MQTT
-		// message handler does not block the inbound message loop.
-		//
-		// Two dispatch shapes are supported per-subscription:
-		//
-		//   - Wake-target dispatch (preferred): subscription declares
-		//     an existing loop via WakeTarget; the MQTT message
-		//     becomes a [messages.LoopEventPayload] delivered via
-		//     [messages.NewEventSourceEnvelope]. No new loop spawned.
-		//
-		//   - Spawn dispatch (legacy): subscription has no WakeTarget;
-		//     each message spawns a fresh one-shot loop with the
-		//     subscription's Profile/InitialTags.
+		// Fan-out: dispatch one envelope per matching subscription so
+		// multiple subscribers (e.g. owner-attention plus security
+		// monitoring) on the same topic each see the same event in
+		// their own loop's iteration context.
 		for _, ws := range matches {
-			ws := ws // capture loop variable
-			go func() {
-				if ws.HasWakeTarget() {
-					dispatchViaWakeTarget(deps, ws, topic, payload, logger)
-					return
-				}
-				convID := fmt.Sprintf("mqtt-wake-%s-%d", ws.ID, time.Now().UnixMilli())
-				msg := buildWakeMessage(topic, payload, ws.Profile.Instructions)
-
-				req := looppkg.Request{
-					ConversationID: convID,
-					Messages:       []looppkg.Message{{Role: "user", Content: msg}},
-				}
-				applyLoopProfile(&ws.Profile, &req)
-				if len(ws.InitialTags) > 0 {
-					req.InitialTags = append(req.InitialTags, ws.InitialTags...)
-				}
-
-				// Always tag the source so tools and logging can identify
-				// MQTT-triggered conversations.
-				if req.RoutingFactors == nil {
-					req.RoutingFactors = make(map[string]string)
-				}
-				req.RoutingFactors["source"] = "mqtt_wake"
-				req.RoutingFactors["mqtt_topic"] = topic
-				req.RoutingFactors["mqtt_subscription_id"] = ws.ID
-
-				logger.Info("mqtt wake dispatching agent",
-					"conv_id", convID,
-					"subscription_id", ws.ID,
-					"topic", topic,
-					"payload_size", len(payload),
-				)
-
-				// Use a short topic suffix for the loop name (last path segment).
-				loopName := "mqtt/" + path.Base(topic)
-
-				dispatchViaLoop(deps, runner, req, loopName, topic, convID, logger)
-			}()
+			ws := ws
+			go dispatchViaWakeTarget(deps, ws, topic, payload, logger)
 		}
 	}
 }
 
-// dispatchViaWakeTarget delivers an MQTT message to an existing loop
-// as an event-source notification. Mirrors the forge/media-feed
-// pattern: build a [messages.LoopEventPayload] describing the
-// message, wrap it in a [messages.NewEventSourceEnvelope] addressed
-// to the subscription's WakeTarget, and publish via the bus. The
-// target loop's next iteration sees the event in its pending
-// notifications and runs under its own Spec.Profile.
-//
-// No new loop is spawned — the registry stays clean and the
-// container cascade that governs the target loop applies naturally.
-// Failures (bus not configured, target loop not resolvable) are
-// logged at WARN and the message is dropped; the next matching
-// message gets the same treatment.
-//
-// Dispatch runs in a fresh goroutine per matching message (see the
-// fan-out in [mqttWakeHandler]). A bounded context bounds bus
-// delivery so a stuck/slow downstream route handler can't leak
-// goroutines indefinitely under a steady stream of MQTT traffic.
+// dispatchViaWakeTarget delivers an MQTT message to the subscription's
+// wake target as an event-source notification. Builds a
+// [messages.LoopEventPayload], wraps it in a
+// [messages.NewEventSourceEnvelope], and publishes via the bus with a
+// bounded delivery context. No new loop is spawned — the target loop
+// (a custom event-driven loop or the built-in default handler) sees
+// the event in its pending notifications and runs under its own
+// Spec.Profile / container cascade.
 func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic string, payload []byte, logger *slog.Logger) {
-	if deps.messageBus == nil {
-		logger.Warn("mqtt wake target dispatch unavailable, dropping message",
-			"subscription_id", ws.ID,
-			"topic", topic,
-			"reason", "message_bus_not_configured",
-		)
-		return
-	}
-
 	event := messages.LoopEventPayload{
 		Source:     "mqtt_wake",
 		Type:       "message",
@@ -221,191 +145,37 @@ func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic st
 	)
 }
 
-// dispatchViaLoop spawns a one-shot child loop under the MQTT parent
-// so the wake conversation appears on the dashboard. The loop manages
-// its own lifecycle via MaxDuration — no external context timeout is
-// needed (SpawnLoop is non-blocking, so the caller must not use a
-// short-lived context that would cancel the child loop).
-func dispatchViaLoop(
-	deps mqttWakeDeps,
-	runner looppkg.Runner,
-	req looppkg.Request,
-	loopName, topic, convID string,
-	logger *slog.Logger,
-) {
-	var parentID string
-	if deps.parentID != nil {
-		if v, ok := deps.parentID.Load().(string); ok {
-			parentID = v
-		}
-	}
-	if parentID == "" && deps.registry != nil {
-		if parent := deps.registry.GetByName(mqttPublisherDefinitionName); parent != nil {
-			parentID = parent.ID()
-			if deps.parentID != nil {
-				deps.parentID.Store(parentID)
-			}
-		}
-	}
-
-	// A wake loop without a parentID would be registered as a top-level
-	// loop, which means it won't be filtered from MQTT telemetry and
-	// could leak conversation content into topic names. Drop the message
-	// rather than create an unparented loop.
-	if parentID == "" {
-		logger.Warn("mqtt wake parent loop not yet registered, dropping message",
-			"conv_id", convID,
-			"topic", topic,
-		)
-		return
-	}
-
-	// Use a background context: SpawnLoop is non-blocking (starts a
-	// goroutine and returns immediately), so a timeout context here
-	// would cancel the child loop as soon as defer fires. The loop's
-	// MaxDuration enforces the wall-clock bound instead.
-	//
-	// Sleep values are set to 1ms so the initial sleep is effectively
-	// zero — this is a one-shot loop that should execute immediately.
-	const immediate = time.Millisecond
-	_, err := deps.registry.SpawnLoop(context.Background(), looppkg.Config{
-		Name:         loopName,
-		MaxIter:      1,
-		MaxDuration:  mqttWakeTimeout,
-		SleepMin:     immediate,
-		SleepMax:     immediate,
-		SleepDefault: immediate,
-		Jitter:       looppkg.Float64Ptr(0),
-		ParentID:     parentID,
-		TurnBuilder: func(context.Context, looppkg.TurnInput) (*looppkg.AgentTurn, error) {
-			return &looppkg.AgentTurn{
-				Request: cloneLoopRequest(req),
-				Summary: map[string]any{
-					"mqtt_topic": topic,
-				},
-			}, nil
-		},
-		PostIterate: func(_ context.Context, result looppkg.IterationResult) error {
-			logger.Info("mqtt wake complete",
-				"conv_id", result.ConvID,
-				"topic", topic,
-				"model", result.Model,
-				"input_tokens", result.InputTokens,
-				"output_tokens", result.OutputTokens,
-			)
-			return nil
-		},
-		Metadata: map[string]string{
-			"subsystem":       "mqtt",
-			"category":        "wake",
-			"mqtt_topic":      topic,
-			"conversation_id": convID,
-		},
-	}, looppkg.Deps{
-		Runner:   runner,
-		Logger:   logger,
-		EventBus: deps.eventBus,
-	})
-	if err != nil {
-		logger.Error("mqtt wake loop spawn failed, message dropped",
-			"conv_id", convID,
-			"topic", topic,
-			"error", err,
-		)
-	}
-}
-
-// buildWakeMessage constructs the user message for an MQTT wake. When
-// instructions are provided, the payload is wrapped with context about
-// the topic and instructions. Otherwise the raw payload is used.
-//
-// Payloads are sanitised to valid UTF-8 and truncated to
-// [maxWakePayloadBytes] to bound prompt size and cost.
-func buildWakeMessage(topic string, payload []byte, instructions string) string {
-	payloadStr := sanitizePayload(payload)
-
-	if instructions == "" {
-		if payloadStr == "" {
-			return fmt.Sprintf("MQTT message received on topic: %s", topic)
-		}
-		return fmt.Sprintf("MQTT message received on topic: %s\n\n%s", topic, payloadStr)
-	}
-
-	if payloadStr == "" {
-		return fmt.Sprintf("Instructions: %s\n\nMQTT topic: %s\n(no payload)", instructions, topic)
-	}
-	return fmt.Sprintf("Instructions: %s\n\nMQTT topic: %s\nPayload:\n%s", instructions, topic, payloadStr)
-}
-
 // sanitizePayload converts raw MQTT bytes to a valid UTF-8 string,
-// replacing invalid sequences and truncating to maxWakePayloadBytes
-// on a rune boundary.
+// replacing invalid sequences and truncating to [maxWakePayloadBytes]
+// on a rune boundary. The byte slice is cropped before any string
+// conversion so a multi-megabyte payload from a chatty topic doesn't
+// force an allocation of the full body just to throw most of it away.
+// A small UTF-8 slack (4 bytes — the maximum encoding length for a
+// single rune) is included in the crop so a multi-byte rune
+// straddling the limit can be discarded cleanly by the rune-boundary
+// trim below.
 func sanitizePayload(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
 	}
-
-	// Ensure valid UTF-8 — replace invalid bytes.
+	totalBytes := len(payload)
+	truncated := totalBytes > maxWakePayloadBytes
+	if truncated {
+		const utf8Slack = utf8.UTFMax
+		payload = payload[:maxWakePayloadBytes+utf8Slack]
+	}
 	s := string(payload)
 	if !utf8.ValidString(s) {
-		s = strings.ToValidUTF8(s, "\uFFFD")
+		s = strings.ToValidUTF8(s, "�")
 	}
-
-	if len(s) <= maxWakePayloadBytes {
+	if !truncated {
 		return s
 	}
-
-	// Truncate on a rune boundary.
-	truncated := s[:maxWakePayloadBytes]
-	for len(truncated) > 0 && !utf8.ValidString(truncated) {
-		truncated = truncated[:len(truncated)-1]
+	if len(s) > maxWakePayloadBytes {
+		s = s[:maxWakePayloadBytes]
 	}
-	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
-}
-
-// applyLoopProfile applies a LoopProfile's routing configuration to a
-// loop request. It sets the model, merges routing hints, and copies tool
-// exclusions. Capability tags are not part of the routing profile and
-// are applied separately by the caller. This function lives in the app
-// package rather than on LoopProfile itself to avoid coupling router
-// profiles to a runtime request type.
-func applyLoopProfile(profile *router.LoopProfile, req *looppkg.Request) {
-	opts := profile.RequestOptions()
-
-	if opts.Model != "" {
-		req.Model = opts.Model
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
 	}
-
-	if len(opts.RoutingFactors) > 0 {
-		if req.RoutingFactors == nil {
-			req.RoutingFactors = make(map[string]string, len(opts.RoutingFactors))
-		}
-		for k, v := range opts.RoutingFactors {
-			req.RoutingFactors[k] = v
-		}
-	}
-
-	if len(opts.ExcludeTools) > 0 {
-		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
-	}
-
-	if opts.DelegationGating != "" {
-		req.DelegationGating = opts.DelegationGating
-	}
-}
-
-// cloneLoopRequest returns an independent copy of a loop request before
-// it is handed to a TurnBuilder. MQTT wake loops are one-shot today, but
-// cloning keeps request preparation isolated from future retries or
-// accidental caller-side mutation.
-func cloneLoopRequest(req looppkg.Request) looppkg.Request {
-	req.Messages = append([]looppkg.Message(nil), req.Messages...)
-	req.ChannelBinding = req.ChannelBinding.Clone()
-	req.AllowedTools = append([]string(nil), req.AllowedTools...)
-	req.ExcludeTools = append([]string(nil), req.ExcludeTools...)
-	req.RoutingFactors = cloneStringMap(req.RoutingFactors)
-	req.InitialTags = append([]string(nil), req.InitialTags...)
-	req.RuntimeTags = append([]string(nil), req.RuntimeTags...)
-	req.RuntimeTools = append([]looppkg.RuntimeTool(nil), req.RuntimeTools...)
-	return req
+	return s + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", totalBytes, maxWakePayloadBytes)
 }

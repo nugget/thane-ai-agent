@@ -3,7 +3,62 @@ package messages
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+// TestLoopWakeTargetYAMLRoundTripSnakeCase pins the Codex P2 fix: the
+// struct's YAML tags match its JSON tags (snake_case) so operator-edited
+// config files can use loop_id / force_supervisor / etc. Pre-fix,
+// only JSON tags were declared and YAML defaulted to lowercase
+// concatenation (loopid / forcesupervisor), silently dropping
+// operator-supplied values that the docs and examples described.
+func TestLoopWakeTargetYAMLRoundTripSnakeCase(t *testing.T) {
+	t.Parallel()
+
+	source := `loop_id: rt-abc
+name: my_handler
+force_supervisor: true
+priority: urgent
+instructions: "act fast"
+tags:
+  - owner
+  - urgent_pickup
+`
+	var got LoopWakeTarget
+	if err := yaml.Unmarshal([]byte(source), &got); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	if got.LoopID != "rt-abc" {
+		t.Errorf("LoopID = %q, want rt-abc (snake_case loop_id not honored)", got.LoopID)
+	}
+	if got.Name != "my_handler" {
+		t.Errorf("Name = %q, want my_handler", got.Name)
+	}
+	if !got.ForceSupervisor {
+		t.Errorf("ForceSupervisor = false, want true (snake_case force_supervisor not honored)")
+	}
+	if got.Priority != PriorityUrgent {
+		t.Errorf("Priority = %q, want urgent", got.Priority)
+	}
+	if got.Instructions != "act fast" {
+		t.Errorf("Instructions = %q, want %q", got.Instructions, "act fast")
+	}
+	if len(got.Tags) != 2 || got.Tags[0] != "owner" || got.Tags[1] != "urgent_pickup" {
+		t.Errorf("Tags = %v, want [owner urgent_pickup]", got.Tags)
+	}
+
+	// Re-emit and confirm snake_case names survive a round-trip.
+	out, err := yaml.Marshal(got)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	for _, key := range []string{"loop_id", "force_supervisor"} {
+		if !strings.Contains(string(out), key+":") {
+			t.Errorf("re-emitted YAML missing %q field: %s", key, out)
+		}
+	}
+}
 
 func TestNewEventSourceEnvelopeRejectsOversizedBatch(t *testing.T) {
 	t.Parallel()

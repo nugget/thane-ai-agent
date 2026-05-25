@@ -31,12 +31,19 @@ type LoopEventPayload struct {
 // LoopWakeTarget identifies an existing loop that should receive an
 // event-source wake. It mirrors thane_wake routing but is embeddable in
 // source-specific subscription records.
+//
+// YAML and JSON tags are kept in lockstep so the same snake_case field
+// names work in operator-edited config files (loaded as YAML by
+// internal/platform/config) and in tool-call JSON arguments from the
+// model. Field names like loop_id and force_supervisor would otherwise
+// silently degrade to lowercase concatenation under default YAML
+// reflection.
 type LoopWakeTarget struct {
-	LoopID          string   `json:"loop_id,omitempty"`
-	Name            string   `json:"name,omitempty"`
-	ForceSupervisor bool     `json:"force_supervisor,omitempty"`
-	Priority        Priority `json:"priority,omitempty"`
-	Instructions    string   `json:"instructions,omitempty"`
+	LoopID          string   `json:"loop_id,omitempty" yaml:"loop_id,omitempty"`
+	Name            string   `json:"name,omitempty" yaml:"name,omitempty"`
+	ForceSupervisor bool     `json:"force_supervisor,omitempty" yaml:"force_supervisor,omitempty"`
+	Priority        Priority `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Instructions    string   `json:"instructions,omitempty" yaml:"instructions,omitempty"`
 	// Tags are iteration-scoped capability tags activated when the
 	// target loop processes this wake. They merge into the
 	// iteration's Request.InitialTags via the loop runtime's
@@ -48,7 +55,7 @@ type LoopWakeTarget struct {
 	// providers without spawning a separate handler loop per
 	// classification. See the trigger-unification design in
 	// issue #902.
-	Tags []string `json:"tags,omitempty"`
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty"`
 }
 
 // Empty reports whether the target has no loop selector.

@@ -23,6 +23,22 @@ type loopDefinitionBootstrapResult struct {
 	SkippedNonService int `json:"skipped_non_service"`
 }
 
+// isDurableDefinitionOperation reports whether a definition's operation
+// kind describes a long-lived loop that the runtime should auto-start
+// at boot and reconcile against eligibility changes. Containers are
+// structural, services run on a periodic timer, and event-driven loops
+// sit idle waiting on notifications — all three are persistent and
+// participate in startup hydration. Request/reply and background-task
+// operations are transient and are explicitly excluded.
+func isDurableDefinitionOperation(op looppkg.Operation) bool {
+	switch op {
+	case looppkg.OperationService, looppkg.OperationContainer, looppkg.OperationEventDriven:
+		return true
+	default:
+		return false
+	}
+}
+
 // loopDefinitionRuntime bridges durable loop definitions into the live
 // loop registry. It intentionally owns only startup/runtime plumbing;
 // the definition registry remains the source of truth for stored specs.
@@ -227,7 +243,7 @@ func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time 
 	}
 	next := time.Time{}
 	for _, def := range snap.Definitions {
-		if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
+		if !isDurableDefinitionOperation(def.Spec.Operation) || def.PolicyState != looppkg.DefinitionPolicyStateActive {
 			continue
 		}
 		eligibility, _, found := r.definitions.EvaluateConditions(def.Name, now)
@@ -354,7 +370,7 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 	// here as SkippedNonService for parity with existing callers and
 	// dashboards.
 	for _, def := range snap.Definitions {
-		if def.Spec.Operation != looppkg.OperationService && def.Spec.Operation != looppkg.OperationContainer {
+		if !isDurableDefinitionOperation(def.Spec.Operation) {
 			result.SkippedNonService++
 		}
 	}
@@ -405,10 +421,12 @@ func (r *loopDefinitionRuntime) bootstrapDefinitionSpawn(ctx context.Context, de
 	return nil
 }
 
-// splitContainerSpecs partitions definitions into container and service
-// hydration order. Containers come first, sorted root-first so a
-// parent_name reference resolves to a live loop by the time the child
-// hydrates. Non-container, non-service operations (request_reply,
+// splitContainerSpecs partitions definitions into container and
+// non-container durable hydration order. Containers come first, sorted
+// root-first so a parent_name reference resolves to a live loop by the
+// time the child hydrates. Services and event-driven loops share the
+// second pass — both are persistent and may sit under containers but
+// never the other way around. Non-durable operations (request_reply,
 // background_task) are dropped — they're transient and shouldn't be
 // hydrated at startup at all. nowTime is unused today but threaded
 // through so future condition-driven ordering doesn't reshape the API.
@@ -421,7 +439,7 @@ func splitContainerSpecs(defs []looppkg.DefinitionSnapshot, _ func() time.Time) 
 		switch def.Spec.Operation {
 		case looppkg.OperationContainer:
 			containers = append(containers, def)
-		case looppkg.OperationService:
+		case looppkg.OperationService, looppkg.OperationEventDriven:
 			services = append(services, def)
 		}
 	}
@@ -483,7 +501,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		return nil
 	}
 	eligibility := r.evaluateConditions(def.Name)
-	durable := def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer
+	durable := isDurableDefinitionOperation(def.Spec.Operation)
 	if !durable || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
 			reason := "not_durable"
@@ -581,7 +599,7 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	if eligibility := r.evaluateConditions(name); !eligibility.Eligible {
 		return looppkg.LaunchResult{}, &looppkg.IneligibleDefinitionError{Name: name, Reason: eligibility.Reason}
 	}
-	if def.Spec.Operation == looppkg.OperationService || def.Spec.Operation == looppkg.OperationContainer {
+	if isDurableDefinitionOperation(def.Spec.Operation) {
 		if existing := r.loops.GetByName(name); existing != nil {
 			// Loud-fail on caller payload for already-running durable
 			// loops (services and containers). The runtime captures

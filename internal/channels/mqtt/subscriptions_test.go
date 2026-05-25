@@ -1,8 +1,10 @@
 package mqtt
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -75,16 +77,18 @@ func newTestStore(t *testing.T) *SubscriptionStore {
 	return s
 }
 
+func wakeTarget(name string) messages.LoopWakeTarget {
+	return messages.LoopWakeTarget{Name: name}
+}
+
 func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	s := newTestStore(t)
 
-	// Initially empty.
 	if subs := s.List(); len(subs) != 0 {
 		t.Fatalf("expected empty list, got %d", len(subs))
 	}
 
-	// Add a subscription.
-	ws, err := s.Add(AddRequest{Topic: "test/topic", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
+	ws, err := s.Add(AddRequest{Topic: "test/topic", WakeTarget: wakeTarget("triage")})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -94,8 +98,10 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	if ws.Source != "runtime" {
 		t.Errorf("source = %q, want %q", ws.Source, "runtime")
 	}
+	if ws.WakeTarget.Name != "triage" {
+		t.Errorf("wake_target name = %q, want triage", ws.WakeTarget.Name)
+	}
 
-	// List shows it.
 	subs := s.List()
 	if len(subs) != 1 {
 		t.Fatalf("list len = %d, want 1", len(subs))
@@ -104,7 +110,6 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 		t.Errorf("list[0].ID = %q, want %q", subs[0].ID, ws.ID)
 	}
 
-	// Remove it.
 	if err := s.Remove(ws.ID); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -113,13 +118,23 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	}
 }
 
-func TestSubscriptionStoreLoadConfig(t *testing.T) {
+func TestSubscriptionStoreAddRequiresWakeTarget(t *testing.T) {
 	s := newTestStore(t)
 
-	profile := router.LoopProfile{QualityFloor: 7, Mission: "automation"}
+	if _, err := s.Add(AddRequest{Topic: "foo"}); err == nil {
+		t.Fatal("expected error for missing wake_loop target")
+	}
+}
+
+func TestSubscriptionStoreLoadConfigWakeLoop(t *testing.T) {
+	s := newTestStore(t)
+
+	target := wakeTarget("custom_handler")
 	cfgSubs := []config.SubscriptionConfig{
-		{Topic: "homeassistant/+/+/state"},        // no wake
-		{Topic: "frigate/events", Wake: &profile}, // wake-enabled
+		{Topic: "homeassistant/+/+/state"},           // ambient-awareness only
+		{Topic: "frigate/events", WakeLoop: &target}, // wake_loop
+		{Topic: "tagged/topic", WakeLoop: &target,
+			InitialTags: []string{"owner", "security"}},
 	}
 
 	if err := s.LoadConfig(cfgSubs); err != nil {
@@ -127,23 +142,80 @@ func TestSubscriptionStoreLoadConfig(t *testing.T) {
 	}
 
 	subs := s.List()
+	if len(subs) != 2 {
+		t.Fatalf("list len = %d, want 2 (only wake-enabled)", len(subs))
+	}
+	for _, ws := range subs {
+		if ws.Source != "config" {
+			t.Errorf("source = %q, want config", ws.Source)
+		}
+		if ws.WakeTarget.Name != "custom_handler" {
+			t.Errorf("wake_target.Name = %q, want custom_handler", ws.WakeTarget.Name)
+		}
+	}
+	// The tagged entry's InitialTags should merge into wake_target.Tags.
+	taggedFound := false
+	for _, ws := range subs {
+		if ws.Topic == "tagged/topic" {
+			taggedFound = true
+			gotTags := map[string]bool{}
+			for _, t := range ws.WakeTarget.Tags {
+				gotTags[t] = true
+			}
+			if !gotTags["owner"] || !gotTags["security"] {
+				t.Errorf("wake_target.Tags = %v, want owner+security", ws.WakeTarget.Tags)
+			}
+		}
+	}
+	if !taggedFound {
+		t.Fatal("tagged subscription not found")
+	}
+}
+
+func TestSubscriptionStoreLoadConfigMigratesLegacyWake(t *testing.T) {
+	s := newTestStore(t)
+
+	legacyProfile := router.LoopProfile{Mission: "automation", Instructions: "watch hard"}
+	cfgSubs := []config.SubscriptionConfig{
+		{Topic: "legacy/topic", Wake: &legacyProfile, InitialTags: []string{"alpha"}},
+	}
+	if err := s.LoadConfig(cfgSubs); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	subs := s.List()
 	if len(subs) != 1 {
-		t.Fatalf("list len = %d, want 1 (only wake-enabled)", len(subs))
+		t.Fatalf("list len = %d, want 1", len(subs))
 	}
-	if subs[0].Source != "config" {
-		t.Errorf("source = %q, want %q", subs[0].Source, "config")
+	got := subs[0]
+	if got.WakeTarget.Name != DefaultHandlerLoopName {
+		t.Errorf("migrated wake_target.Name = %q, want %q", got.WakeTarget.Name, DefaultHandlerLoopName)
 	}
-	if subs[0].Profile.QualityFloor != 7 {
-		t.Errorf("profile.QualityFloor = %d, want 7", subs[0].Profile.QualityFloor)
+	if got.WakeTarget.Instructions != "watch hard" {
+		t.Errorf("migrated instructions = %q, want %q", got.WakeTarget.Instructions, "watch hard")
+	}
+	if len(got.WakeTarget.Tags) != 1 || got.WakeTarget.Tags[0] != "alpha" {
+		t.Errorf("migrated tags = %v, want [alpha]", got.WakeTarget.Tags)
+	}
+}
+
+func TestSubscriptionStoreLoadConfigRejectsEmptyWakeLoop(t *testing.T) {
+	s := newTestStore(t)
+	empty := messages.LoopWakeTarget{}
+	err := s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "broken/topic", WakeLoop: &empty},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty wake_loop selector")
 	}
 }
 
 func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 	s := newTestStore(t)
 
-	profile := router.LoopProfile{Mission: "automation"}
+	target := wakeTarget("handler")
 	if err := s.LoadConfig([]config.SubscriptionConfig{
-		{Topic: "test/topic", Wake: &profile},
+		{Topic: "test/topic", WakeLoop: &target},
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
@@ -153,8 +225,7 @@ func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 		t.Fatalf("expected 1 sub, got %d", len(subs))
 	}
 
-	err := s.Remove(subs[0].ID)
-	if err == nil {
+	if err := s.Remove(subs[0].ID); err == nil {
 		t.Fatal("expected error removing config subscription, got nil")
 	}
 }
@@ -162,14 +233,13 @@ func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 func TestSubscriptionStoreMatches(t *testing.T) {
 	s := newTestStore(t)
 
-	profile := router.LoopProfile{Mission: "automation"}
+	target := wakeTarget("handler")
 	if err := s.LoadConfig([]config.SubscriptionConfig{
-		{Topic: "frigate/+/events", Wake: &profile},
+		{Topic: "frigate/+/events", WakeLoop: &target},
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	// Matching topic.
 	matches := s.Matches("frigate/camera1/events")
 	if len(matches) != 1 {
 		t.Fatalf("expected 1 match, got %d", len(matches))
@@ -178,9 +248,7 @@ func TestSubscriptionStoreMatches(t *testing.T) {
 		t.Errorf("matched topic = %q, want %q", matches[0].Topic, "frigate/+/events")
 	}
 
-	// Non-matching topic.
-	matches = s.Matches("homeassistant/sensor/temperature/state")
-	if len(matches) != 0 {
+	if matches := s.Matches("homeassistant/sensor/temperature/state"); len(matches) != 0 {
 		t.Fatalf("expected 0 matches, got %d", len(matches))
 	}
 }
@@ -188,12 +256,11 @@ func TestSubscriptionStoreMatches(t *testing.T) {
 func TestSubscriptionStoreMatchesFanOut(t *testing.T) {
 	s := newTestStore(t)
 
-	// Two subscriptions on the same topic with different profiles.
-	profileA := router.LoopProfile{Mission: "automation", Instructions: "check temperature"}
-	profileB := router.LoopProfile{Mission: "background", Instructions: "log to database"}
+	targetA := messages.LoopWakeTarget{Name: "handler_a"}
+	targetB := messages.LoopWakeTarget{Name: "handler_b"}
 	if err := s.LoadConfig([]config.SubscriptionConfig{
-		{Topic: "sensors/temperature", Wake: &profileA},
-		{Topic: "sensors/temperature", Wake: &profileB},
+		{Topic: "sensors/temperature", WakeLoop: &targetA},
+		{Topic: "sensors/temperature", WakeLoop: &targetB},
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
@@ -202,20 +269,15 @@ func TestSubscriptionStoreMatchesFanOut(t *testing.T) {
 	if len(matches) != 2 {
 		t.Fatalf("expected 2 matches for fan-out, got %d", len(matches))
 	}
-
-	// Verify they have distinct IDs.
 	if matches[0].ID == matches[1].ID {
 		t.Errorf("fan-out subscriptions have duplicate IDs: %q", matches[0].ID)
 	}
-
-	// Verify distinct profiles carried through.
-	missions := map[string]bool{
-		matches[0].Profile.Mission: true,
-		matches[1].Profile.Mission: true,
+	names := map[string]bool{
+		matches[0].WakeTarget.Name: true,
+		matches[1].WakeTarget.Name: true,
 	}
-	if !missions["automation"] || !missions["background"] {
-		t.Errorf("expected both missions, got %v and %v",
-			matches[0].Profile.Mission, matches[1].Profile.Mission)
+	if !names["handler_a"] || !names["handler_b"] {
+		t.Errorf("expected both handler names, got %v / %v", matches[0].WakeTarget.Name, matches[1].WakeTarget.Name)
 	}
 }
 
@@ -226,113 +288,105 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Create store and add a runtime subscription.
 	s1, err := NewSubscriptionStore(db, nil)
 	if err != nil {
 		t.Fatalf("new store 1: %v", err)
 	}
-
-	_, err = s1.Add(AddRequest{Topic: "persist/test", Profile: router.LoopProfile{Mission: "automation", QualityFloor: 5}, InitialTags: nil})
-	if err != nil {
+	if _, err := s1.Add(AddRequest{
+		Topic:      "persist/test",
+		WakeTarget: messages.LoopWakeTarget{Name: "handler", Tags: []string{"persisted"}},
+	}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
-	// Create a new store from the same DB — simulates restart.
 	s2, err := NewSubscriptionStore(db, nil)
 	if err != nil {
 		t.Fatalf("new store 2: %v", err)
 	}
-
 	subs := s2.List()
 	if len(subs) != 1 {
 		t.Fatalf("after reload, list len = %d, want 1", len(subs))
 	}
-	if subs[0].Topic != "persist/test" {
-		t.Errorf("topic = %q, want %q", subs[0].Topic, "persist/test")
+	got := subs[0]
+	if got.Topic != "persist/test" {
+		t.Errorf("topic = %q, want %q", got.Topic, "persist/test")
 	}
-	if subs[0].Profile.Mission != "automation" {
-		t.Errorf("profile.Mission = %q, want %q", subs[0].Profile.Mission, "automation")
+	if got.WakeTarget.Name != "handler" {
+		t.Errorf("wake_target.Name = %q, want handler", got.WakeTarget.Name)
+	}
+	if len(got.WakeTarget.Tags) != 1 || got.WakeTarget.Tags[0] != "persisted" {
+		t.Errorf("wake_target.Tags = %v, want [persisted]", got.WakeTarget.Tags)
 	}
 }
 
-func TestSubscriptionStoreInitialTagsPersistence(t *testing.T) {
+func TestSubscriptionStoreLoadRuntimeMigratesLegacyRow(t *testing.T) {
 	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("open memory db: %v", err)
 	}
 	defer db.Close()
 
-	s1, err := NewSubscriptionStore(db, nil)
+	// Hydrate the schema first so the legacy columns exist.
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("schema bootstrap: %v", err)
+	}
+
+	// Insert a legacy-shaped row directly: seed_json populated,
+	// wake_target_json defaulted to "{}" by the column default.
+	_, err = db.Exec(
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"rt-legacy-1", "legacy/topic",
+		`{"mission":"automation","instructions":"do the thing"}`,
+		`["alpha","beta"]`,
+		`{}`,
+		"runtime",
+		"2026-01-01T00:00:00Z",
+	)
 	if err != nil {
-		t.Fatalf("new store 1: %v", err)
+		t.Fatalf("insert legacy row: %v", err)
 	}
 
-	ws, err := s1.Add(AddRequest{Topic: "tagged/topic", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: []string{"homeassistant", "security"}})
-	if err != nil {
-		t.Fatalf("add: %v", err)
-	}
-
-	var stored string
-	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID).Scan(&stored); err != nil {
-		t.Fatalf("select persisted tags: %v", err)
-	}
-	if stored != `["homeassistant","security"]` {
-		t.Fatalf("initial_tags_json = %q, want JSON array", stored)
-	}
-
-	s2, err := NewSubscriptionStore(db, nil)
-	if err != nil {
-		t.Fatalf("new store 2: %v", err)
-	}
-	subs := s2.List()
-	if len(subs) != 1 {
-		t.Fatalf("after reload len = %d, want 1", len(subs))
-	}
-	if got := subs[0].InitialTags; len(got) != 2 || got[0] != "homeassistant" || got[1] != "security" {
-		t.Fatalf("reloaded InitialTags = %v, want [homeassistant security]", got)
-	}
-}
-
-// TestSubscriptionStoreAddPersistsEmptyTagsAsArray verifies that a
-// subscription added with no InitialTags writes "[]" rather than
-// "null" — matching the column's default and keeping the on-disk
-// shape consistent.
-func TestSubscriptionStoreAddPersistsEmptyTagsAsArray(t *testing.T) {
-	db, err := database.OpenMemory()
-	if err != nil {
-		t.Fatalf("open memory db: %v", err)
-	}
-	defer db.Close()
-
+	// Reopen — loadRuntime should migrate the row.
 	s, err := NewSubscriptionStore(db, nil)
 	if err != nil {
-		t.Fatalf("new store: %v", err)
+		t.Fatalf("reopen: %v", err)
+	}
+	subs := s.List()
+	if len(subs) != 1 {
+		t.Fatalf("list len = %d, want 1", len(subs))
+	}
+	got := subs[0]
+	if got.WakeTarget.Name != DefaultHandlerLoopName {
+		t.Errorf("migrated wake_target.Name = %q, want %q", got.WakeTarget.Name, DefaultHandlerLoopName)
+	}
+	if got.WakeTarget.Instructions != "do the thing" {
+		t.Errorf("migrated instructions = %q, want %q", got.WakeTarget.Instructions, "do the thing")
+	}
+	if len(got.WakeTarget.Tags) != 2 || got.WakeTarget.Tags[0] != "alpha" || got.WakeTarget.Tags[1] != "beta" {
+		t.Errorf("migrated tags = %v, want [alpha beta]", got.WakeTarget.Tags)
 	}
 
-	ws, err := s.Add(AddRequest{Topic: "empty/tags", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
-	if err != nil {
-		t.Fatalf("add: %v", err)
+	// Verify the row was persisted with the new wake_target_json,
+	// so the next boot doesn't re-migrate.
+	var storedTarget string
+	if err := db.QueryRow(`SELECT wake_target_json FROM mqtt_wake_subscriptions WHERE id = ?`, "rt-legacy-1").Scan(&storedTarget); err != nil {
+		t.Fatalf("select wake_target_json: %v", err)
 	}
-
-	var stored string
-	if err := db.QueryRow(`SELECT initial_tags_json FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID).Scan(&stored); err != nil {
-		t.Fatalf("select: %v", err)
-	}
-	if stored != "[]" {
-		t.Fatalf("initial_tags_json = %q, want %q", stored, "[]")
+	if storedTarget == "{}" || storedTarget == "" {
+		t.Fatalf("wake_target_json was not persisted after migration: %q", storedTarget)
 	}
 }
 
 func TestSubscriptionStoreTopics(t *testing.T) {
 	s := newTestStore(t)
 
-	profile := router.LoopProfile{Mission: "automation"}
+	target := wakeTarget("handler")
 	if err := s.LoadConfig([]config.SubscriptionConfig{
-		{Topic: "topic/a", Wake: &profile},
+		{Topic: "topic/a", WakeLoop: &target},
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if _, err := s.Add(AddRequest{Topic: "topic/b", Profile: profile}); err != nil {
+	if _, err := s.Add(AddRequest{Topic: "topic/b", WakeTarget: target}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -358,8 +412,7 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 		hookedTopics = append(hookedTopics, topics...)
 	})
 
-	_, err := s.Add(AddRequest{Topic: "hook/test", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
-	if err != nil {
+	if _, err := s.Add(AddRequest{Topic: "hook/test", WakeTarget: wakeTarget("handler")}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -368,42 +421,72 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 	}
 }
 
-func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
-	s := newTestStore(t)
+// stubResolver implements messages.LoopResolver for VerifyTargets
+// tests. Names listed at construction time resolve; everything else
+// is treated as unregistered.
+type stubResolver struct {
+	known map[string]bool
+}
 
-	// No hook set — Add should not panic. Supply a non-empty
-	// profile so the post-PR-T1 "wake_loop or non-empty profile"
-	// validation passes; the test isn't exercising that surface.
-	_, err := s.Add(AddRequest{Topic: "no-hook/test", Profile: router.LoopProfile{Mission: "automation"}, InitialTags: nil})
-	if err != nil {
-		t.Fatalf("add: %v", err)
+func (s stubResolver) LoopExistsByID(string) bool        { return false }
+func (s stubResolver) LoopExistsByName(name string) bool { return s.known[name] }
+func (s stubResolver) KnownLoopNames() []string {
+	out := make([]string, 0, len(s.known))
+	for name := range s.known {
+		out = append(out, name)
+	}
+	return out
+}
+
+// TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered pins the
+// Codex P2 fix: config-defined subscriptions referencing a loop that
+// nobody registers now error out at the post-StartEnabledServices
+// verification pass, instead of silently dropping the first matching
+// message at delivery time.
+func TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered(t *testing.T) {
+	s := newTestStore(t)
+	good := wakeTarget("real_handler")
+	bad := wakeTarget("typo_handler")
+	if err := s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "ok/topic", WakeLoop: &good},
+		{Topic: "broken/topic", WakeLoop: &bad},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	resolver := stubResolver{known: map[string]bool{"real_handler": true}}
+	err := s.VerifyTargets(resolver)
+	if err == nil {
+		t.Fatal("expected VerifyTargets to fail on unregistered target")
+	}
+	if !strings.Contains(err.Error(), "typo_handler") {
+		t.Fatalf("error = %v, want mention of typo_handler", err)
+	}
+}
+
+func TestSubscriptionStoreVerifyTargetsNilResolverIsNoop(t *testing.T) {
+	s := newTestStore(t)
+	target := wakeTarget("anything")
+	if err := s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "ok/topic", WakeLoop: &target},
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := s.VerifyTargets(nil); err != nil {
+		t.Fatalf("VerifyTargets(nil) = %v, want nil", err)
 	}
 }
 
 func TestSubscriptionStoreAddValidation(t *testing.T) {
 	s := newTestStore(t)
 
-	// Invalid topic filter.
-	_, err := s.Add(AddRequest{Topic: "", Profile: router.LoopProfile{Mission: "automation"}})
-	if err == nil {
+	target := wakeTarget("handler")
+	if _, err := s.Add(AddRequest{Topic: "", WakeTarget: target}); err == nil {
 		t.Fatal("expected error for empty topic")
 	}
-
-	// Invalid topic with bad wildcard.
-	_, err = s.Add(AddRequest{Topic: "foo/ba#r", Profile: router.LoopProfile{}, InitialTags: nil})
-	if err == nil {
+	if _, err := s.Add(AddRequest{Topic: "foo/ba#r", WakeTarget: target}); err == nil {
 		t.Fatal("expected error for bad wildcard in topic")
 	}
-
-	// Invalid seed.
-	_, err = s.Add(AddRequest{Topic: "valid/topic", Profile: router.LoopProfile{QualityFloor: 99}, InitialTags: nil})
-	if err == nil {
-		t.Fatal("expected error for invalid quality_floor")
-	}
-
-	// Valid — should succeed.
-	_, err = s.Add(AddRequest{Topic: "valid/topic", Profile: router.LoopProfile{Mission: "automation", QualityFloor: 7}, InitialTags: nil})
-	if err != nil {
+	if _, err := s.Add(AddRequest{Topic: "valid/topic", WakeTarget: target}); err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
 }

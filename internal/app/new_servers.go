@@ -291,6 +291,10 @@ func (a *App) initServers(s *newState) error {
 		if err := subStore.LoadConfig(cfg.MQTT.Subscriptions); err != nil {
 			return fmt.Errorf("load mqtt wake subscriptions: %w", err)
 		}
+		// Expose the store so the loop-definition-services deferred
+		// worker can VerifyTargets against the live registry once
+		// every loop has been hydrated.
+		a.mqttSubStore = subStore
 
 		// Wire dynamic topic discovery: on every broker (re-)connect the
 		// publisher merges store topics into the SUBSCRIBE packet.
@@ -344,7 +348,6 @@ func (a *App) initServers(s *newState) error {
 		// base handler above.
 		mqttPub.SetMessageHandler(mqttWakeHandler(
 			subStore,
-			&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurfaceGetter()},
 			baseMsgHandler,
 			logger,
 			wakeDeps,
@@ -596,6 +599,16 @@ func (a *App) initServers(s *newState) error {
 					"skipped_existing", result.SkippedExisting,
 					"skipped_non_service", result.SkippedNonService,
 				)
+			}
+			// Now that the durable definition snapshot is registered,
+			// fail loud on any config-defined MQTT wake subscription
+			// that names a loop nobody actually registered. Runtime
+			// adds already do this at Add() time; this closes the gap
+			// on YAML entries that loaded before any loop existed.
+			if a.mqttSubStore != nil && a.loopRegistry != nil {
+				if err := a.mqttSubStore.VerifyTargets(a.loopRegistry); err != nil {
+					return fmt.Errorf("verify mqtt wake subscription targets: %w", err)
+				}
 			}
 			return nil
 		})

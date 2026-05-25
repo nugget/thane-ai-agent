@@ -1307,42 +1307,41 @@ type MQTTConfig struct {
 // Each entry is subscribed on every broker (re-)connect. Wildcards
 // (+ and #) are supported per the MQTT specification.
 //
-// Two dispatch shapes are supported for matching messages:
+// Every active subscription routes matching messages to a wake_loop
+// target loop, which sees the message in its pending notifications
+// and runs under its own Spec.Profile / SupervisorProfile. No new
+// loop is spawned per message. Subscriptions with neither WakeLoop
+// nor the legacy Wake field are ambient-awareness only.
 //
-//   - **WakeLoop (preferred):** identifies an existing loop to
-//     receive matching MQTT messages as event-source notifications.
-//     The target loop's next iteration sees the message in its
-//     pending notifications and runs under its own Spec.Profile.
-//     No new loop is spawned.
-//
-//   - **Wake (legacy):** matching messages spawn a fresh one-shot
-//     loop using the embedded routing profile. Kept for
-//     backwards compatibility; new subscriptions should declare
-//     WakeLoop instead.
-//
-// When both are set, WakeLoop wins. When neither is set, the
-// subscription is ambient-awareness only (debug-logged, not
-// acted upon).
+// The pre-PR-T2b inline-routing form (Wake + InitialTags) is kept
+// here for backwards compatibility: at config load time entries that
+// declare only Wake are rewritten onto the built-in
+// "mqtt-default-handler" loop with a WARN log, preserving any
+// Instructions and InitialTags as wake target Tags. Remove the
+// legacy fields from your YAML at your convenience.
 type SubscriptionConfig struct {
 	// Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 	// "frigate/events"). Supports MQTT wildcard characters.
 	Topic string `yaml:"topic"`
 
-	// WakeLoop identifies an existing loop to receive matching MQTT
-	// messages as event-source notifications. Preferred dispatch
-	// route — the target loop's [Spec.Profile] governs routing.
+	// WakeLoop identifies the existing loop that should receive
+	// matching MQTT messages as event-source notifications. When
+	// the target name resolves to a registered loop at startup, this
+	// is how every wake delivers; the target's own Spec.Profile
+	// governs routing. Point this at "mqtt-default-handler" for the
+	// built-in triage loop when you don't have a bespoke handler.
 	WakeLoop *messages.LoopWakeTarget `yaml:"wake_loop,omitempty"`
 
-	// Wake is the legacy dispatch-via-spawn path: when non-nil and
-	// WakeLoop is unset, messages on this topic spawn a one-shot
-	// agent run using this routing profile. New subscriptions
-	// should use WakeLoop and let the target loop's own Profile
-	// govern routing instead.
+	// Wake is the deprecated inline-routing form. Entries that use
+	// it are auto-migrated onto the default handler at config load
+	// (a one-shot upgrade). New subscriptions should declare
+	// WakeLoop directly instead.
 	Wake *router.LoopProfile `yaml:"wake,omitempty"`
 
-	// InitialTags lists capability tags activated at the start of the
-	// spawn-dispatch agent run (legacy path). Only meaningful when
-	// Wake is non-nil and WakeLoop is unset.
+	// InitialTags is the deprecated companion to Wake. Migrated
+	// values flow into the resulting wake_loop target's Tags field
+	// at load time, so per-iteration capability tag activation
+	// continues to work even after the inline-routing form retires.
 	InitialTags []string `yaml:"initial_tags,omitempty"`
 }
 
