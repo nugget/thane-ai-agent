@@ -37,6 +37,31 @@ type DefinitionView struct {
 	Eligibility        DefinitionEligibilityStatus `yaml:"eligibility,omitempty" json:"eligibility"`
 	Runtime            DefinitionRuntimeStatus     `yaml:"runtime,omitempty" json:"runtime"`
 	Warnings           []DefinitionWarning         `yaml:"warnings,omitempty" json:"warnings,omitempty"`
+	// Effective surfaces the post-ancestor-merge state for inheritable
+	// loop fields. Nil when there is nothing meaningful to report —
+	// the loop isn't running, the view was built without a live
+	// registry (e.g. CLI snapshots), or the loop is running but has
+	// no effective tags and no effective subscriptions. Readers should
+	// not treat nil as a definitive "not running"; pair it with
+	// [DefinitionRuntimeStatus.Running] when that distinction matters.
+	// Sits alongside Spec rather than inside Runtime so the
+	// declared-vs-effective contrast is at the top of the view and
+	// extends naturally as more fields become inheritable.
+	Effective *DefinitionEffectiveState `yaml:"effective,omitempty" json:"effective,omitempty"`
+}
+
+// DefinitionEffectiveState is the post-ancestor-merge snapshot of
+// inheritable fields for one definition's live loop. Each entry
+// carries provenance so the reader knows which values are this
+// loop's own and which came from a container ancestor.
+type DefinitionEffectiveState struct {
+	// Tags is the deduplicated union of the loop's own Spec.Tags and
+	// every container ancestor's tags, ordered own-first.
+	Tags []EffectiveTag `yaml:"tags,omitempty" json:"tags,omitempty"`
+	// Subscriptions is the deduplicated union of the loop's own
+	// Spec.Subscriptions and every container ancestor's, first-wins
+	// on entity_id (own declarations override inherited options).
+	Subscriptions []EffectiveSubscription `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
 }
 
 // DefinitionRegistryView is the effective combined view of stored loop
@@ -55,16 +80,42 @@ type DefinitionRegistryView struct {
 	Definitions             []DefinitionView `yaml:"definitions,omitempty" json:"definitions,omitempty"`
 }
 
+// DefinitionViewOption tunes [BuildDefinitionRegistryView]. Used today
+// to opt into effective-state population by passing a live registry
+// via [WithLiveRegistry]; older callers that don't supply one continue
+// to get a view without the Effective field, which is the right shape
+// for surfaces that don't have access to a running loop graph.
+type DefinitionViewOption func(*definitionViewOptions)
+
+type definitionViewOptions struct {
+	loops *Registry
+}
+
+// WithLiveRegistry attaches a live loop registry to the view build so
+// each definition's running loop can be inspected for inherited tags
+// and subscriptions. Without it, [DefinitionView.Effective] stays nil
+// — a safe default for snapshots taken outside the running app (e.g.
+// CLI inspection tools or the loop_definition_lint surface).
+func WithLiveRegistry(loops *Registry) DefinitionViewOption {
+	return func(o *definitionViewOptions) {
+		o.loops = loops
+	}
+}
+
 // BuildDefinitionRegistryView combines the durable definition snapshot
 // with an optional runtime-state map to produce the effective loop
 // registry view used by API and tool read surfaces.
-func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus) *DefinitionRegistryView {
-	return buildDefinitionRegistryViewAt(snapshot, runtime, time.Now())
+func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus, opts ...DefinitionViewOption) *DefinitionRegistryView {
+	return buildDefinitionRegistryViewAt(snapshot, runtime, time.Now(), opts...)
 }
 
-func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus, now time.Time) *DefinitionRegistryView {
+func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus, now time.Time, opts ...DefinitionViewOption) *DefinitionRegistryView {
 	if snapshot == nil {
 		return nil
+	}
+	options := definitionViewOptions{}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	view := &DefinitionRegistryView{
@@ -103,12 +154,25 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 			view.DefinitionsWithWarnings++
 			view.WarningCount += len(warnings)
 		}
-		view.Definitions = append(view.Definitions, DefinitionView{
+		dv := DefinitionView{
 			DefinitionSnapshot: def,
 			Eligibility:        eligibility,
 			Runtime:            status,
 			Warnings:           warnings,
-		})
+		}
+		if options.loops != nil && status.Running && status.LoopID != "" {
+			// One walk per definition: EffectiveTags + EffectiveSubscriptions
+			// would do two ancestor traversals that could observe different
+			// snapshots if SetSubscriptions ran between them.
+			subs, tags := options.loops.effectiveState(status.LoopID)
+			if len(tags) > 0 || len(subs) > 0 {
+				dv.Effective = &DefinitionEffectiveState{
+					Tags:          tags,
+					Subscriptions: subs,
+				}
+			}
+		}
+		view.Definitions = append(view.Definitions, dv)
 	}
 
 	return view

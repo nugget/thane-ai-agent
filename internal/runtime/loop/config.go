@@ -529,6 +529,20 @@ type Status struct {
 	ActiveTags []string `json:"active_tags,omitempty"`
 	// Tooling captures the resolved loop-level tool/capability state.
 	Tooling ToolingState `json:"tooling,omitempty"`
+	// EffectiveTags is the post-ancestor-merge view of this loop's
+	// capability tags, with provenance on each entry. Computed via
+	// [Registry.EffectiveTags] when the loop is registered. Nil
+	// when the loop is queried in isolation (tests that build a
+	// Status manually) AND when the loop is registered but has no
+	// effective tags to report — readers can't distinguish the two
+	// from this field alone.
+	EffectiveTags []EffectiveTag `json:"effective_tags,omitempty"`
+	// EffectiveSubscriptions is the post-ancestor-merge view of this
+	// loop's entity subscriptions, with provenance on each entry.
+	// Companion to EffectiveTags with the same nil-conflation: nil
+	// covers both "no registry hook installed" and "registry hook
+	// installed but nothing to report."
+	EffectiveSubscriptions []EffectiveSubscription `json:"effective_subscriptions,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

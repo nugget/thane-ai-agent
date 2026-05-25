@@ -277,6 +277,13 @@ type Loop struct {
 	// (e.g. unit tests on [New] directly).
 	ancestorTagsFunc func() []string
 
+	// effectiveStateFunc returns the full provenance-annotated
+	// effective tags and subscriptions for this loop. Installed by
+	// [Registry.Register] so [Status] can surface the same view that
+	// loop_definition_get exposes for the running loop. Nil for
+	// loops constructed outside a registry.
+	effectiveStateFunc func() ([]EffectiveTag, []EffectiveSubscription)
+
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
@@ -500,6 +507,7 @@ func (l *Loop) Status() Status {
 	// Capture the callback reference under the lock; call it after
 	// releasing to avoid holding l.mu while the agent's tagMu is acquired.
 	atFunc := l.activeTagsFunc
+	effFunc := l.effectiveStateFunc
 
 	// Deep copy Config to prevent callers from mutating internal state
 	// via shared slices/maps. Function fields are cleared — they can't
@@ -651,6 +659,10 @@ func (l *Loop) Status() Status {
 	configuredTags := mergeUniqueStrings(cfgCopy.Tags, requestBaseInitialTags, requestOverrideInitialTags)
 	s.Tooling = BuildToolingState(configuredTags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
 
+	if effFunc != nil {
+		s.EffectiveTags, s.EffectiveSubscriptions = effFunc()
+	}
+
 	return s
 }
 
@@ -691,6 +703,30 @@ func (l *Loop) Subscriptions() []EntitySubscription {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return cloneEntitySubscriptions(l.config.Subscriptions)
+}
+
+// tagsSnapshot returns a copy of the loop's configured tags under the
+// loop lock. Today the underlying field is set once at construction
+// and never changes, but the lock-and-clone shape mirrors
+// [Subscriptions] so future tag mutators can be added without
+// race-detector surprises in the registry walkers.
+func (l *Loop) tagsSnapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.config.Tags) == 0 {
+		return nil
+	}
+	return append([]string(nil), l.config.Tags...)
+}
+
+// setEffectiveStateFunc installs the provenance-aware walker behind
+// [Status.EffectiveTags] and [Status.EffectiveSubscriptions]. Wired by
+// [Registry.Register] so the loop can report its effective state
+// without a direct registry handle; nil-safe in Status.
+func (l *Loop) setEffectiveStateFunc(fn func() ([]EffectiveTag, []EffectiveSubscription)) {
+	l.mu.Lock()
+	l.effectiveStateFunc = fn
+	l.mu.Unlock()
 }
 
 // setAncestorTagsFunc is package-private because only [Registry.Register]

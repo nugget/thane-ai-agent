@@ -138,7 +138,11 @@ func (r *loopDefinitionRuntime) Snapshot() *looppkg.DefinitionRegistryView {
 	if r == nil || r.definitions == nil {
 		return nil
 	}
-	return looppkg.BuildDefinitionRegistryView(r.definitions.Snapshot(), r.runtimeStatusByName())
+	return looppkg.BuildDefinitionRegistryView(
+		r.definitions.Snapshot(),
+		r.runtimeStatusByName(),
+		looppkg.WithLiveRegistry(r.loops),
+	)
 }
 
 func (r *loopDefinitionRuntime) nowTime() time.Time {
@@ -581,5 +585,9 @@ func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
 	if a.loopDefinitionRegistry == nil {
 		return nil
 	}
-	return looppkg.BuildDefinitionRegistryView(a.loopDefinitionRegistry.Snapshot(), nil)
+	return looppkg.BuildDefinitionRegistryView(
+		a.loopDefinitionRegistry.Snapshot(),
+		nil,
+		looppkg.WithLiveRegistry(a.loopRegistry),
+	)
 }
