@@ -90,6 +90,14 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			notify = n
 		}
 
+		// Default landing zone when the caller wants notifications but
+		// didn't pick a target loop. The built-in media-default-handler
+		// is auto-started at boot whenever feed polling is configured.
+		if notify && !wakeConfigured {
+			wakeTarget = messages.LoopWakeTarget{Name: DefaultHandlerLoopName}
+			wakeConfigured = true
+		}
+
 		// Check feed limit.
 		ids, err := loadFeedIndex(ft.state)
 		if err != nil {

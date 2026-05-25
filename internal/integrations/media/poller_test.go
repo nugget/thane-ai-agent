@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -31,20 +32,43 @@ func newTestStore(t *testing.T) *opstate.Store {
 	return store
 }
 
+// recordingBus captures every envelope delivered to a loop destination
+// so tests can assert on dispatch shape without needing a live registry.
+func recordingBus() (*messages.Bus, func() []messages.Envelope) {
+	bus := messages.NewBus(nil)
+	var (
+		mu        sync.Mutex
+		delivered []messages.Envelope
+	)
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		delivered = append(delivered, env)
+		return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
+	})
+	return bus, func() []messages.Envelope {
+		mu.Lock()
+		defer mu.Unlock()
+		cp := make([]messages.Envelope, len(delivered))
+		copy(cp, delivered)
+		return cp
+	}
+}
+
 func TestCheckFeeds_NoFeeds(t *testing.T) {
 	store := newTestStore(t)
 	poller := NewFeedPoller(store, nil)
 
-	msg, err := poller.CheckFeeds(context.Background())
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if msg != "" {
-		t.Errorf("expected empty message, got %q", msg)
+	if got != 0 {
+		t.Errorf("expected 0 event-wakes, got %d", got)
 	}
 }
 
-func TestCheckFeeds_NewEntries(t *testing.T) {
+func TestCheckFeeds_NewEntriesDispatchToDefaultHandler(t *testing.T) {
 	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 	<title>Test Channel</title>
 	<entry>
@@ -65,36 +89,56 @@ func TestCheckFeeds_NewEntries(t *testing.T) {
 
 	store := newTestStore(t)
 
-	// Set up a feed with a high-water mark at vid-2.
+	// notify=true is the default; no wake_loop set. The lazy migration
+	// in checkFeed should point this feed at the default handler.
 	saveFeedIndex(store, []string{"test1"})
 	store.Set(feedNamespace, feedKeyURL("test1"), srv.URL)
 	store.Set(feedNamespace, feedKeyName("test1"), "Test Channel")
 	store.Set(feedNamespace, feedKeyLastEntryID("test1"), "vid-2")
+	store.Set(feedNamespace, feedKeyNotify("test1"), "true")
 
-	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if !strings.Contains(msg, "New Video") {
-		t.Errorf("wake message should mention new video title, got: %q", msg)
-	}
-	if !strings.Contains(msg, "example.com/vid3") {
-		t.Errorf("wake message should contain video URL, got: %q", msg)
-	}
-	if strings.Contains(msg, "Old Video") {
-		t.Errorf("wake message should not contain old video")
-	}
-	// No trust_zone stored → should default to [unknown].
-	if !strings.Contains(msg, "[unknown]") {
-		t.Errorf("wake message should contain default trust zone [unknown], got: %q", msg)
-	}
-	// feed_id should be present for output path resolution.
-	if !strings.Contains(msg, "(feed_id: test1)") {
-		t.Errorf("wake message should contain feed_id, got: %q", msg)
+	if got != 1 {
+		t.Fatalf("event-wakes = %d, want 1", got)
 	}
 
-	// High-water mark should be updated.
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("delivered envelope count = %d, want 1", len(envs))
+	}
+	if envs[0].To.Target != DefaultHandlerLoopName {
+		t.Errorf("target = %q, want %q", envs[0].To.Target, DefaultHandlerLoopName)
+	}
+	payload, ok := envs[0].Payload.(messages.LoopNotifyPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", envs[0].Payload)
+	}
+	if len(payload.Events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(payload.Events))
+	}
+	if payload.Events[0].Title != "New Video" {
+		t.Errorf("event title = %q, want New Video", payload.Events[0].Title)
+	}
+	if payload.Events[0].Metadata["trust_zone"] != "unknown" {
+		t.Errorf("trust_zone metadata = %q, want unknown", payload.Events[0].Metadata["trust_zone"])
+	}
+
+	// Lazy migration should have persisted the default-handler target,
+	// so subsequent polls don't re-migrate.
+	stored, configured, err := loadFeedWakeTarget(store, "test1")
+	if err != nil || !configured {
+		t.Fatalf("loadFeedWakeTarget after migration: configured=%v err=%v", configured, err)
+	}
+	if stored.Name != DefaultHandlerLoopName {
+		t.Errorf("persisted wake target = %q, want %q", stored.Name, DefaultHandlerLoopName)
+	}
+
+	// High-water mark advances on successful dispatch.
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("test1"))
 	if hwm != "vid-3" {
 		t.Errorf("high-water mark = %q, want %q", hwm, "vid-3")
@@ -120,12 +164,12 @@ func TestCheckFeeds_NoNewEntries(t *testing.T) {
 	store.Set(feedNamespace, feedKeyLastEntryID("f1"), "vid-1") // already seen
 
 	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if msg != "" {
-		t.Errorf("expected empty message for no new entries, got %q", msg)
+	if got != 0 {
+		t.Errorf("expected 0 event-wakes for no new entries, got %d", got)
 	}
 }
 
@@ -148,23 +192,21 @@ func TestCheckFeeds_FirstRun(t *testing.T) {
 	// No last_entry_id — first run.
 
 	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if msg != "" {
-		t.Errorf("first run should not report entries, got %q", msg)
+	if got != 0 {
+		t.Errorf("first run should not dispatch, got %d", got)
 	}
 
-	// High-water mark should be set.
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("f1"))
 	if hwm != "vid-1" {
 		t.Errorf("high-water mark = %q, want %q", hwm, "vid-1")
 	}
 }
 
-func TestCheckFeeds_FetchError(t *testing.T) {
-	// Feed 1: broken server. Feed 2: working.
+func TestCheckFeeds_FetchErrorDoesNotStallOtherFeeds(t *testing.T) {
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -193,18 +235,22 @@ func TestCheckFeeds_FetchError(t *testing.T) {
 	store.Set(feedNamespace, feedKeyName("good"), "Good Feed")
 	store.Set(feedNamespace, feedKeyLastEntryID("good"), "old-1")
 
-	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	// Good feed should still be checked despite bad feed failing.
-	if !strings.Contains(msg, "New Entry") {
-		t.Errorf("good feed entries should appear in wake message, got: %q", msg)
+	if got != 1 {
+		t.Fatalf("event-wakes = %d, want 1 (good feed only)", got)
+	}
+	envs := delivered()
+	if len(envs) != 1 || envs[0].To.Target != DefaultHandlerLoopName {
+		t.Fatalf("envelope target = %#v, want one to %q", envs, DefaultHandlerLoopName)
 	}
 }
 
-func TestCheckFeeds_MultipleNewEntries(t *testing.T) {
+func TestCheckFeeds_MultipleNewEntriesCarryAllTitles(t *testing.T) {
 	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 	<title>Ch</title>
 	<entry><id>vid-4</id><title>Fourth</title>
@@ -225,23 +271,30 @@ func TestCheckFeeds_MultipleNewEntries(t *testing.T) {
 	store.Set(feedNamespace, feedKeyName("f1"), "Ch")
 	store.Set(feedNamespace, feedKeyLastEntryID("f1"), "vid-2")
 
-	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
-	if err != nil {
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	if _, err := poller.CheckFeeds(context.Background()); err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if !strings.Contains(msg, "Fourth") {
-		t.Errorf("should contain Fourth, got: %q", msg)
+
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
 	}
-	if !strings.Contains(msg, "Third") {
-		t.Errorf("should contain Third, got: %q", msg)
+	payload := envs[0].Payload.(messages.LoopNotifyPayload)
+	if len(payload.Events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(payload.Events))
 	}
-	if strings.Contains(msg, "Second") {
-		t.Errorf("should not contain Second (already seen)")
+	titles := map[string]bool{payload.Events[0].Title: true, payload.Events[1].Title: true}
+	if !titles["Fourth"] || !titles["Third"] {
+		t.Errorf("titles = %v, want Fourth+Third", titles)
+	}
+	if titles["Second"] {
+		t.Error("Second should not appear (already seen)")
 	}
 }
 
-func TestCheckFeeds_TrustZoneInWakeMessage(t *testing.T) {
+func TestCheckFeeds_TrustZoneInEventMetadata(t *testing.T) {
 	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 	<title>Trusted Source</title>
 	<entry><id>ep-2</id><title>New Episode</title>
@@ -263,20 +316,24 @@ func TestCheckFeeds_TrustZoneInWakeMessage(t *testing.T) {
 	store.Set(feedNamespace, feedKeyLastEntryID("tf1"), "ep-1")
 	store.Set(feedNamespace, feedKeyTrustZone("tf1"), "trusted")
 
-	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
-	if err != nil {
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	if _, err := poller.CheckFeeds(context.Background()); err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if !strings.Contains(msg, "[trusted]") {
-		t.Errorf("wake message should contain [trusted], got: %q", msg)
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
 	}
-	if !strings.Contains(msg, "Trusted Source") {
-		t.Errorf("wake message should contain feed name, got: %q", msg)
+	event := envs[0].Payload.(messages.LoopNotifyPayload).Events[0]
+	if event.Metadata["trust_zone"] != "trusted" {
+		t.Errorf("trust_zone metadata = %q, want trusted", event.Metadata["trust_zone"])
 	}
-	// Verify format: **Name** [zone] (feed_id: ID): Title
-	if !strings.Contains(msg, "**Trusted Source** [trusted] (feed_id: tf1): New Episode") {
-		t.Errorf("wake message format incorrect, got: %q", msg)
+	if event.Metadata["feed_id"] != "tf1" {
+		t.Errorf("feed_id metadata = %q, want tf1", event.Metadata["feed_id"])
+	}
+	if event.Metadata["feed_name"] != "Trusted Source" {
+		t.Errorf("feed_name metadata = %q, want Trusted Source", event.Metadata["feed_name"])
 	}
 }
 
@@ -305,27 +362,21 @@ func TestCheckFeeds_WakeLoopDispatchesStructuredEvents(t *testing.T) {
 		t.Fatalf("storeFeedWakeTarget: %v", err)
 	}
 
-	var delivered messages.Envelope
-	bus := messages.NewBus(nil)
-	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
-		delivered = env
-		return messages.DeliveryResult{Route: "test", Status: messages.DeliveryDelivered}, nil
-	})
-
+	bus, delivered := recordingBus()
 	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
-	msg, err := poller.CheckFeeds(context.Background())
-	if err != nil {
+	if _, err := poller.CheckFeeds(context.Background()); err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if msg != "" {
-		t.Fatalf("legacy wake message = %q, want empty when wake_loop dispatches", msg)
+	envs := delivered()
+	if len(envs) != 1 {
+		t.Fatalf("envelope count = %d, want 1", len(envs))
 	}
-	if delivered.To.Target != "feed_curator" {
-		t.Fatalf("delivered target = %q, want feed_curator", delivered.To.Target)
+	if envs[0].To.Target != "feed_curator" {
+		t.Fatalf("delivered target = %q, want feed_curator", envs[0].To.Target)
 	}
-	payload, ok := delivered.Payload.(messages.LoopNotifyPayload)
+	payload, ok := envs[0].Payload.(messages.LoopNotifyPayload)
 	if !ok {
-		t.Fatalf("payload type = %T, want LoopNotifyPayload", delivered.Payload)
+		t.Fatalf("payload type = %T, want LoopNotifyPayload", envs[0].Payload)
 	}
 	if !payload.ForceSupervisor {
 		t.Fatal("expected force_supervisor payload")
@@ -366,13 +417,10 @@ func TestCheckFeeds_WakeLoopDeliveryFailureKeepsHighWater(t *testing.T) {
 		t.Fatalf("storeFeedWakeTarget: %v", err)
 	}
 
+	// Bus with no route registered for DestinationLoop — Send returns error.
 	poller := NewFeedPoller(store, nil, WithFeedMessageBus(messages.NewBus(nil)))
-	msg, err := poller.CheckFeeds(context.Background())
-	if err != nil {
+	if _, err := poller.CheckFeeds(context.Background()); err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
-	}
-	if msg != "" {
-		t.Fatalf("legacy wake message = %q, want empty when wake_loop dispatch fails", msg)
 	}
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("cf1"))
 	if hwm != "ep-1" {
@@ -472,12 +520,8 @@ func TestCheckFeeds_WakeLoopBatchesAndAdvancesHighWaterPerBatch(t *testing.T) {
 	})
 
 	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
-	msg, err := poller.CheckFeeds(context.Background())
-	if err != nil {
+	if _, err := poller.CheckFeeds(context.Background()); err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
-	}
-	if msg != "" {
-		t.Fatalf("legacy wake message = %q, want empty when wake_loop dispatches", msg)
 	}
 	if sendCount != 2 {
 		t.Fatalf("send count = %d, want 2", sendCount)
@@ -499,8 +543,6 @@ func TestCheckFeeds_WakeLoopBatchesAndAdvancesHighWaterPerBatch(t *testing.T) {
 }
 
 func TestCheckFeeds_ReseedOnMissingHighWaterMark(t *testing.T) {
-	// Feed no longer contains the previous high-water mark entry (feed
-	// dropped old items). The poller should reseed without reporting entries.
 	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
 	<title>Ch</title>
 	<entry><id>vid-10</id><title>Newest</title>
@@ -522,17 +564,57 @@ func TestCheckFeeds_ReseedOnMissingHighWaterMark(t *testing.T) {
 	store.Set(feedNamespace, feedKeyLastEntryID("f1"), "vid-1") // no longer in feed
 
 	poller := NewFeedPoller(store, nil)
-	msg, err := poller.CheckFeeds(context.Background())
+	got, err := poller.CheckFeeds(context.Background())
 	if err != nil {
 		t.Fatalf("CheckFeeds() error: %v", err)
 	}
-	if msg != "" {
-		t.Errorf("reseed should not report entries, got %q", msg)
+	if got != 0 {
+		t.Errorf("reseed should not dispatch, got %d", got)
 	}
 
-	// High-water mark should be reseeded to latest.
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("f1"))
 	if hwm != "vid-10" {
 		t.Errorf("high-water mark = %q, want %q (reseeded)", hwm, "vid-10")
+	}
+}
+
+func TestCheckFeeds_NotifyFalseSuppressesDispatch(t *testing.T) {
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Quiet Feed</title>
+	<entry><id>e-2</id><title>New</title>
+	<link href="https://example.com/2"/>
+	<published>2026-02-22T12:00:00Z</published></entry>
+	<entry><id>e-1</id><title>Old</title>
+	<link href="https://example.com/1"/>
+	<published>2026-02-20T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"qf1"})
+	store.Set(feedNamespace, feedKeyURL("qf1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("qf1"), "Quiet Feed")
+	store.Set(feedNamespace, feedKeyLastEntryID("qf1"), "e-1")
+	store.Set(feedNamespace, feedKeyNotify("qf1"), "false")
+
+	bus, delivered := recordingBus()
+	poller := NewFeedPoller(store, nil, WithFeedMessageBus(bus))
+	got, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("notify=false should suppress dispatch, got %d wakes", got)
+	}
+	if envs := delivered(); len(envs) != 0 {
+		t.Errorf("notify=false should not deliver envelopes, got %d", len(envs))
+	}
+	// High-water mark still advances so the feed doesn't backfill on re-enable.
+	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("qf1"))
+	if hwm != "e-2" {
+		t.Errorf("high-water mark = %q, want e-2", hwm)
 	}
 }

@@ -29,17 +29,17 @@ func TestFollowHandler_TrustZoneDefault(t *testing.T) {
 		t.Fatalf("FollowHandler() error: %v", err)
 	}
 
-	var out map[string]string
+	var out map[string]any
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	if out["trust_zone"] != "unknown" {
+	if out["trust_zone"] != any("unknown") {
 		t.Errorf("trust_zone = %q, want %q (default)", out["trust_zone"], "unknown")
 	}
 
 	// Verify stored in opstate.
-	id := out["subscription_id"]
+	id, _ := out["subscription_id"].(string)
 	stored, _ := store.Get(feedNamespace, feedKeyTrustZone(id))
 	if stored != "unknown" {
 		t.Errorf("stored trust_zone = %q, want %q", stored, "unknown")
@@ -70,17 +70,17 @@ func TestFollowHandler_TrustZoneExplicit(t *testing.T) {
 		t.Fatalf("FollowHandler() error: %v", err)
 	}
 
-	var out map[string]string
+	var out map[string]any
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 
-	if out["trust_zone"] != "trusted" {
+	if out["trust_zone"] != any("trusted") {
 		t.Errorf("trust_zone = %q, want %q", out["trust_zone"], "trusted")
 	}
 
 	// Verify stored in opstate.
-	id := out["subscription_id"]
+	id, _ := out["subscription_id"].(string)
 	stored, _ := store.Get(feedNamespace, feedKeyTrustZone(id))
 	if stored != "trusted" {
 		t.Errorf("stored trust_zone = %q, want %q", stored, "trusted")
@@ -125,11 +125,11 @@ func TestFollowHandler_TrustZoneKnown(t *testing.T) {
 		t.Fatalf("FollowHandler() error: %v", err)
 	}
 
-	var out map[string]string
+	var out map[string]any
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if out["trust_zone"] != "known" {
+	if out["trust_zone"] != any("known") {
 		t.Errorf("trust_zone = %q, want %q", out["trust_zone"], "known")
 	}
 }
@@ -243,7 +243,7 @@ func TestFollowHandler_FeedDiscovery(t *testing.T) {
 		t.Fatalf("FollowHandler() error: %v", err)
 	}
 
-	var out map[string]string
+	var out map[string]any
 	if err := json.Unmarshal([]byte(result), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestFollowHandler_FeedDiscovery(t *testing.T) {
 	if out["url"] != srv.URL+"/feed.xml" {
 		t.Errorf("url = %q, want %q", out["url"], srv.URL+"/feed.xml")
 	}
-	if out["name"] != "Blog Feed" {
+	if out["name"] != any("Blog Feed") {
 		t.Errorf("name = %q, want %q", out["name"], "Blog Feed")
 	}
 }

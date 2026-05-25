@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -20,6 +19,13 @@ const (
 
 	// feedIndexKey stores a JSON array of feed IDs.
 	feedIndexKey = "feeds"
+
+	// DefaultHandlerLoopName is the name of the built-in event-driven
+	// loop that receives media-feed wakes when a feed does not declare
+	// a custom wake_loop target. The loop definition runtime registers
+	// it as a durable built-in whenever the media feed poller is
+	// configured (cfg.Media.FeedCheckInterval > 0).
+	DefaultHandlerLoopName = "media-default-handler"
 )
 
 // opstate key helpers — all under the feedNamespace.
@@ -84,32 +90,37 @@ func NewFeedPoller(state *opstate.Store, logger *slog.Logger, opts ...FeedPoller
 type feedUpdate struct {
 	FeedID         string
 	LastEntryID    string
-	Section        string
 	Events         []messages.LoopEventPayload
 	WakeTarget     messages.LoopWakeTarget
 	WakeConfigured bool
 	Notify         bool
 }
 
-// CheckFeeds checks all followed feeds for new entries. Returns a
-// formatted wake message describing new content, or empty string if
-// nothing new was found. Network errors are logged and skipped
-// per-feed; a failure on one feed does not prevent checking others.
-func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
+// CheckFeeds polls every followed feed for new entries and dispatches
+// each new entry to its wake_loop target via the message bus.
+// Subscriptions that opt into notifications (notify=true) without an
+// explicit wake_loop fall through to the built-in
+// [DefaultHandlerLoopName] event-driven loop — the lazy migration in
+// [FeedPoller.checkFeed] points them at the default and persists the
+// pick so subsequent polls skip the migration branch.
+//
+// Returns the number of event-wake notifications delivered across all
+// feeds in this pass; per-feed errors are logged and the next feed
+// continues so one bad source can't stall the whole poll.
+func (p *FeedPoller) CheckFeeds(ctx context.Context) (int, error) {
 	summary := loop.IterationSummary(ctx)
 
 	ids, err := loadFeedIndex(p.state)
 	if err != nil {
-		return "", fmt.Errorf("load feed index: %w", err)
+		return 0, fmt.Errorf("load feed index: %w", err)
 	}
 	if len(ids) == 0 {
 		if summary != nil {
 			summary["feeds_checked"] = 0
 		}
-		return "", nil
+		return 0, nil
 	}
 
-	var sections []string
 	newEntryCount := 0
 	eventWakeCount := 0
 	suppressedCount := 0
@@ -127,8 +138,7 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 		if update == nil || n == 0 {
 			continue
 		}
-		switch {
-		case update.WakeConfigured:
+		if update.WakeConfigured {
 			dispatched, err := p.dispatchFeedEventBatches(ctx, update)
 			eventWakeCount += dispatched
 			if err != nil {
@@ -137,27 +147,19 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 					"delivered_events", dispatched,
 					"error", err,
 				)
-				continue
 			}
-		case update.Notify:
-			if err := p.advanceFeedHighWater(update); err != nil {
-				p.logger.Warn("failed to update high-water mark",
-					"feed_id", id,
-					"error", err,
-				)
-			}
-			if update.Section != "" {
-				sections = append(sections, update.Section)
-			}
-		default:
-			if err := p.advanceFeedHighWater(update); err != nil {
-				p.logger.Warn("failed to update high-water mark",
-					"feed_id", id,
-					"error", err,
-				)
-			}
-			suppressedCount += n
+			continue
 		}
+		// notify=false feeds advance their high-water mark silently so
+		// the operator's followed-but-quiet subscription still keeps
+		// the "no backfill on next enable" invariant.
+		if err := p.advanceFeedHighWater(update); err != nil {
+			p.logger.Warn("failed to update high-water mark",
+				"feed_id", id,
+				"error", err,
+			)
+		}
+		suppressedCount += n
 	}
 
 	if summary != nil {
@@ -171,17 +173,7 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 		}
 	}
 
-	if len(sections) == 0 {
-		return "", nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("New media content detected:\n")
-	for _, s := range sections {
-		sb.WriteString("\n")
-		sb.WriteString(s)
-	}
-	return sb.String(), nil
+	return eventWakeCount, nil
 }
 
 func (p *FeedPoller) dispatchFeedEventBatches(ctx context.Context, update *feedUpdate) (int, error) {
@@ -268,6 +260,22 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (*feedUpdate,
 	if err != nil {
 		return nil, 0, fmt.Errorf("get wake target: %w", err)
 	}
+	// One-shot migration for legacy feeds: a follow that pre-dates
+	// PR-T2c stored notify=true with no wake_loop and relied on the
+	// hardcoded TurnBuilder. Point it at the default handler and
+	// persist so the next poll skips this branch.
+	if notify && !wakeConfigured {
+		wakeTarget = messages.LoopWakeTarget{Name: DefaultHandlerLoopName}
+		wakeConfigured = true
+		if err := storeFeedWakeTarget(p.state, feedID, wakeTarget, true); err != nil {
+			p.logger.Warn("failed to persist default wake target for legacy feed",
+				"feed_id", feedID, "error", err)
+		} else {
+			p.logger.Warn("migrating legacy media feed onto default handler",
+				"feed_id", feedID, "feed_name", feedName,
+				"default_handler", DefaultHandlerLoopName)
+		}
+	}
 
 	lastEntryID, _ := p.state.Get(feedNamespace, feedKeyLastEntryID(feedID))
 
@@ -342,25 +350,8 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (*feedUpdate,
 		"new_count", len(newEntries),
 	)
 
-	// Events are always built (the wake path consumes them via
-	// dispatchFeedEvents; even non-wake paths benefit from carrying
-	// them in feedUpdate for observability). The legacy formatted
-	// section string is only consumed by the !WakeConfigured && Notify
-	// branch in CheckFeeds, so skip the string-builder work when the
-	// section won't be read — for feeds with many entries this avoids
-	// non-trivial wasted formatting work each poll.
-	buildSection := !wakeConfigured && notify
-	var sb strings.Builder
 	events := make([]messages.LoopEventPayload, 0, len(newEntries))
 	for _, entry := range newEntries {
-		if buildSection {
-			// Format section for wake message. Trust zone is shown in
-			// brackets so the agent can adapt analysis depth per the
-			// wake prompt guidance. The feed_id is included so the
-			// agent can pass it to media_save_analysis for per-feed
-			// output_path resolution.
-			fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
-		}
 		events = append(events, messages.LoopEventPayload{
 			Source:     "media_feed",
 			Type:       "feed_entry",
@@ -380,7 +371,6 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (*feedUpdate,
 	return &feedUpdate{
 		FeedID:         feedID,
 		LastEntryID:    newEntries[0].ID,
-		Section:        sb.String(),
 		Events:         events,
 		WakeTarget:     wakeTarget,
 		WakeConfigured: wakeConfigured,

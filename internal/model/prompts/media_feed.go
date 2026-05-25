@@ -1,13 +1,10 @@
 package prompts
 
-import "fmt"
-
 // TrustZoneGuidance returns analysis guidance text for a given media
-// trust zone. This is shared between the feed polling wake prompt
-// (where the zone comes from the feed subscription) and one-off
-// media_transcript calls (where the caller passes it explicitly).
-// Returns empty string for unrecognized zones — callers should default
-// to "unknown" before calling.
+// trust zone. Shared between the built-in media-default-handler loop's
+// task description and one-off media_transcript calls (where the
+// caller passes it explicitly). Returns empty string for unrecognized
+// zones — callers should default to "unknown" before calling.
 func TrustZoneGuidance(trustZone string) string {
 	switch trustZone {
 	case "trusted":
@@ -19,44 +16,4 @@ func TrustZoneGuidance(trustZone string) string {
 	default:
 		return ""
 	}
-}
-
-// mediaFeedPollWakeTemplate is prepended to the feed poller's wake
-// message to give the agent context on how to handle new feed entries.
-// Format verbs: %s (trust zone guidance bullets), %s (content summary).
-const mediaFeedPollWakeTemplate = `New content detected from followed feeds. Review and act on it.
-
-Each entry shows the feed's trust zone in brackets and feed_id in parentheses.
-Adapt your analysis depth based on the trust zone:
-
-%s
-
-For each new entry:
-1. Check the feed's trust zone shown in brackets after the feed name
-2. If the content looks worthwhile, use media_transcript to fetch and analyze it
-3. Analyze the content with depth appropriate to the trust zone:
-   - [trusted]: Extract key facts with source attribution
-   - [known]: Extract claims requiring corroboration, summarize key points
-   - [unknown]: Topics and high-level insights only
-4. Use media_save_analysis to save your analysis to the knowledge vault
-   - Pass the feed_id from the entry listing for proper output routing
-   - Include relevant topic tags for future discovery
-5. Notify the owner about noteworthy new content with a brief summary
-
-Use your judgment — not every new video or podcast episode needs attention.
-Prioritize content that aligns with known interests and preferences.
-
-%s`
-
-// MediaFeedPollWakePrompt returns the feed poll wake prompt with the
-// poller's content summary injected. The trust-zone guidance bullets
-// are generated from TrustZoneGuidance to keep a single source of truth.
-func MediaFeedPollWakePrompt(contentSummary string) string {
-	guidance := fmt.Sprintf(
-		"- **[trusted]**: %s\n- **[known]**: %s\n- **[unknown]**: %s",
-		TrustZoneGuidance("trusted"),
-		TrustZoneGuidance("known"),
-		TrustZoneGuidance("unknown"),
-	)
-	return fmt.Sprintf(mediaFeedPollWakeTemplate, guidance, contentSummary)
 }

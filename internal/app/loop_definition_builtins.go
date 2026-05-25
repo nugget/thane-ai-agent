@@ -5,6 +5,7 @@ import (
 	"time"
 
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -105,6 +106,26 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	}
 
 	if cfg.Media.FeedCheckInterval > 0 {
+		// Default landing zone for media feed wakes when an operator
+		// hasn't pointed media_follow's wake_loop at a custom handler.
+		// Event-driven so the loop sits idle on wakeCh until the
+		// feed poller delivers an event-source envelope.
+		specs = append(specs, looppkg.Spec{
+			Name:       media.DefaultHandlerLoopName,
+			Enabled:    true,
+			Task:       "Triage media feed wake events: inspect each entry's trust_zone metadata, fetch and analyze worthwhile content with media_transcript and media_save_analysis, then notify the owner about anything noteworthy.",
+			Operation:  looppkg.OperationEventDriven,
+			Completion: looppkg.CompletionNone,
+			Profile: router.LoopProfile{
+				Mission:    "media_triage",
+				ExtraHints: map[string]string{"source": "media_feed"},
+			},
+			Metadata: map[string]string{
+				"subsystem": "media",
+				"category":  "default_handler",
+			},
+		})
+
 		pollInterval := time.Duration(cfg.Media.FeedCheckInterval) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         mediaFeedPollerDefinitionName,
