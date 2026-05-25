@@ -603,3 +603,324 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestParseFrontmatterBlocks_SingleBlock(t *testing.T) {
+	raw := `---
+tags: [forge]
+---
+
+# Forge Entry
+
+content
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1", len(blocks))
+	}
+	if got := blocks[0].Frontmatter.Tags; len(got) != 1 || got[0] != "forge" {
+		t.Errorf("tags = %v, want [forge]", got)
+	}
+	if !strings.Contains(blocks[0].Content, "# Forge Entry") {
+		t.Errorf("content missing heading: %q", blocks[0].Content)
+	}
+}
+
+func TestParseFrontmatterBlocks_MultiBlock(t *testing.T) {
+	raw := `---
+name: root
+tags: [loops_examples]
+kind: entry_point
+next_tags: [loops_examples_curate]
+---
+
+# Root
+
+choose your path
+
+---
+name: curate
+tags: [loops_examples_curate]
+kind: entry_point
+---
+
+# Curate
+
+curate-specific guidance
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2", len(blocks))
+	}
+	if blocks[0].Frontmatter.Name != "root" {
+		t.Errorf("block[0].Name = %q, want root", blocks[0].Frontmatter.Name)
+	}
+	if blocks[1].Frontmatter.Name != "curate" {
+		t.Errorf("block[1].Name = %q, want curate", blocks[1].Frontmatter.Name)
+	}
+	if !strings.Contains(blocks[0].Content, "choose your path") {
+		t.Errorf("block[0] content missing root body: %q", blocks[0].Content)
+	}
+	if !strings.Contains(blocks[1].Content, "curate-specific guidance") {
+		t.Errorf("block[1] content missing curate body: %q", blocks[1].Content)
+	}
+	if strings.Contains(blocks[0].Content, "curate-specific guidance") {
+		t.Error("block[0] content leaked into next block's body")
+	}
+}
+
+func TestParseFrontmatterBlocks_EmptyBodyBetweenNodes(t *testing.T) {
+	// A node with no body means the next node's frontmatter starts
+	// immediately after the closing "---". The boundary scanner must
+	// detect a boundary at position 0 of the body (no preceding
+	// newline to anchor the search).
+	raw := `---
+name: a
+tags: [x]
+---
+---
+name: b
+tags: [y]
+---
+
+body for b
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want 2 (empty body between nodes should not collapse them)", len(blocks))
+	}
+	if blocks[0].Frontmatter.Name != "a" || blocks[1].Frontmatter.Name != "b" {
+		t.Fatalf("names = [%q, %q], want [a, b]", blocks[0].Frontmatter.Name, blocks[1].Frontmatter.Name)
+	}
+	if strings.TrimSpace(blocks[0].Content) != "" {
+		t.Errorf("block[0].Content = %q, want empty", blocks[0].Content)
+	}
+	if !strings.Contains(blocks[1].Content, "body for b") {
+		t.Errorf("block[1].Content missing body: %q", blocks[1].Content)
+	}
+}
+
+func TestParseFrontmatterBlocks_HRWithDistantKeyParagraphStaysContent(t *testing.T) {
+	// A "---" line followed by a blank line and then a paragraph that
+	// happens to start with a frontmatter-key word ("name:", "tags:")
+	// must stay as a markdown horizontal rule. Only a "---" whose very
+	// next line is a "key: value" pair counts as a node boundary.
+	raw := `---
+name: only
+tags: [x]
+---
+
+# Heading
+
+paragraph one
+
+---
+
+name: looks like a key but is actually prose
+this paragraph continues
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1 (HR with later key paragraph should not split)", len(blocks))
+	}
+	if !strings.Contains(blocks[0].Content, "name: looks like a key") {
+		t.Errorf("body lost prose after HR: %q", blocks[0].Content)
+	}
+}
+
+func TestParseFrontmatterBlocks_HRInBodyStaysContent(t *testing.T) {
+	// A "---" line followed by prose (not a frontmatter key) is a
+	// markdown horizontal rule and must not split the block.
+	raw := `---
+name: only
+tags: [x]
+---
+
+# Heading
+
+paragraph one
+
+---
+
+paragraph two
+`
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1 (HR should not split)", len(blocks))
+	}
+	if !strings.Contains(blocks[0].Content, "paragraph one") || !strings.Contains(blocks[0].Content, "paragraph two") {
+		t.Errorf("HR-separated content lost: %q", blocks[0].Content)
+	}
+}
+
+func TestParseFrontmatterMetadata_DelegatesToFirstBlock(t *testing.T) {
+	raw := `---
+name: first
+tags: [a]
+---
+
+first body
+
+---
+name: second
+tags: [b]
+---
+
+second body
+`
+	meta, content := ParseFrontmatterMetadata(raw)
+	if meta.Name != "first" {
+		t.Errorf("meta.Name = %q, want first (multi-node should return first block's meta)", meta.Name)
+	}
+	if !strings.Contains(content, "first body") {
+		t.Errorf("content missing first body: %q", content)
+	}
+	if strings.Contains(content, "second body") {
+		t.Errorf("content leaked second body: %q", content)
+	}
+}
+
+func TestTalents_MultiNodeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tree.md"), []byte(`---
+name: tree_root
+tags: [tree]
+kind: entry_point
+teaser: "root teaser"
+next_tags: [tree_branch_a, tree_branch_b]
+---
+
+# Root
+
+choose
+
+---
+name: tree_branch_a
+tags: [tree_branch_a]
+kind: entry_point
+---
+
+# Branch A
+
+---
+name: tree_branch_b
+tags: [tree_branch_b]
+kind: entry_point
+---
+
+# Branch B
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader := NewLoader(dir)
+	all, err := loader.Talents()
+	if err != nil {
+		t.Fatalf("Talents: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("got %d talents, want 3 from one multi-node file", len(all))
+	}
+	wantNames := []string{"tree_root", "tree_branch_a", "tree_branch_b"}
+	for i, talent := range all {
+		if talent.Name != wantNames[i] {
+			t.Errorf("talent[%d].Name = %q, want %q", i, talent.Name, wantNames[i])
+		}
+		if !strings.HasSuffix(talent.SourcePath, "tree.md") {
+			t.Errorf("talent[%d].SourcePath = %q, want tree.md", i, talent.SourcePath)
+		}
+	}
+}
+
+func TestTalents_MultiNodeRequiresName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte(`---
+tags: [a]
+---
+
+first
+
+---
+tags: [b]
+---
+
+second (missing name)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewLoader(dir).Talents()
+	if err == nil {
+		t.Fatal("expected error for multi-node file with missing name, got nil")
+	}
+	if !strings.Contains(err.Error(), "name:") {
+		t.Errorf("error %q should mention the missing name field", err.Error())
+	}
+}
+
+func TestTalents_DuplicateNameWithinFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "dupe.md"), []byte(`---
+name: same
+tags: [a]
+---
+
+a
+
+---
+name: same
+tags: [b]
+---
+
+b
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewLoader(dir).Talents()
+	if err == nil {
+		t.Fatal("expected error for duplicate node name, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error %q should mention duplicate", err.Error())
+	}
+}
+
+func TestTalents_SingleNodeNameOptional(t *testing.T) {
+	// Single-node file without name: falls back to filename for
+	// backward compatibility.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "legacy.md"), []byte(`---
+tags: [legacy]
+---
+
+# Legacy
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	all, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents: %v", err)
+	}
+	if len(all) != 1 || all[0].Name != "legacy" {
+		t.Fatalf("got %+v, want one talent named legacy (filename fallback)", all)
+	}
+}
+
+func TestTalents_SingleNodeDeclaredNameWinsOverFilename(t *testing.T) {
+	// A single-node file with an explicit name: uses it, not the
+	// filename. Lets authors decouple identity from disk layout.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "filename.md"), []byte(`---
+name: declared_name
+tags: [x]
+---
+
+body
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	all, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents: %v", err)
+	}
+	if len(all) != 1 || all[0].Name != "declared_name" {
+		t.Fatalf("got %+v, want declared_name", all)
+	}
+}
