@@ -186,8 +186,8 @@ func TestLoopDefinitionGetIncludesWarnings(t *testing.T) {
 	if len(got.Definition.Warnings) == 0 {
 		t.Fatal("expected authoring warnings on metacog_like definition")
 	}
-	if got.Definition.Warnings[0].Code != "service_default_cadence" {
-		t.Fatalf("warning code = %q, want service_default_cadence", got.Definition.Warnings[0].Code)
+	if got.Definition.Warnings[0].Code != "service_default_sleep_envelope" {
+		t.Fatalf("warning code = %q, want service_default_sleep_envelope", got.Definition.Warnings[0].Code)
 	}
 }
 
@@ -236,15 +236,15 @@ func TestLoopDefinitionLintReportsServiceWarnings(t *testing.T) {
 		t.Fatalf("effective jitter = %v, want %v", got.Effective.Jitter, looppkg.DefaultJitter)
 	}
 	if len(got.Warnings) < 3 {
-		t.Fatalf("warnings = %#v, want at least cadence/task/delegation warnings", got.Warnings)
+		t.Fatalf("warnings = %#v, want at least sleep/task/delegation warnings", got.Warnings)
 	}
 	codes := make(map[string]bool, len(got.Warnings))
 	for _, warning := range got.Warnings {
 		codes[warning.Code] = true
 	}
 	for _, code := range []string{
-		"service_default_cadence",
-		"task_mentions_cadence_without_explicit_sleep",
+		"service_default_sleep_envelope",
+		"task_mentions_timing_without_explicit_sleep",
 		"service_delegation_gating_enabled",
 	} {
 		if !codes[code] {

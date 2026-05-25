@@ -23,76 +23,111 @@ func mkdirAllForTest(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-func TestParseCadence_AcceptedForms(t *testing.T) {
+func TestParseSleepEnvelope_HappyPath(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		input               string
-		wantSleepDefault    time.Duration
-		wantSleepMinAtMost  time.Duration
-		wantSleepMaxAtLeast time.Duration
+		name             string
+		args             map[string]any
+		wantSleepMin     time.Duration
+		wantSleepMax     time.Duration
+		wantSleepDefault time.Duration
+		wantJitter       float64
 	}{
-		{"hourly", time.Hour, 55 * time.Minute, 65 * time.Minute},
-		{"daily", 24 * time.Hour, 23*time.Hour - time.Second, 25 * time.Hour},
-		{"every 30 minutes", 30 * time.Minute, 28 * time.Minute, 32 * time.Minute},
-		{"30m", 30 * time.Minute, 28 * time.Minute, 32 * time.Minute},
-		{"1h", time.Hour, 55 * time.Minute, 65 * time.Minute},
-		{"every 2 hours", 2 * time.Hour, time.Hour + 50*time.Minute, 2*time.Hour + 10*time.Minute},
-		{"1 day", 24 * time.Hour, 23*time.Hour - time.Second, 25 * time.Hour},
+		{
+			name:             "minimal asymmetric",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m"},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 17*time.Minute + 30*time.Second, // midpoint
+			wantJitter:       0.1,
+		},
+		{
+			name:             "fixed cadence (min == max)",
+			args:             map[string]any{"sleep_min": "30m", "sleep_max": "30m"},
+			wantSleepMin:     30 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 30 * time.Minute,
+			wantJitter:       0.1,
+		},
+		{
+			name:             "explicit default and jitter",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "10m", "jitter": 0.0},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 10 * time.Minute,
+			wantJitter:       0.0,
+		},
+		{
+			name:             "jitter as int",
+			args:             map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": 0},
+			wantSleepMin:     5 * time.Minute,
+			wantSleepMax:     30 * time.Minute,
+			wantSleepDefault: 17*time.Minute + 30*time.Second,
+			wantJitter:       0,
+		},
 	}
 	for _, tc := range cases {
-		t.Run(tc.input, func(t *testing.T) {
-			c, err := parseCadence(tc.input)
+		t.Run(tc.name, func(t *testing.T) {
+			env, err := parseSleepEnvelope(tc.args)
 			if err != nil {
-				t.Fatalf("parseCadence(%q): %v", tc.input, err)
+				t.Fatalf("parseSleepEnvelope: %v", err)
 			}
-			if c.sleepDefault != tc.wantSleepDefault {
-				t.Errorf("sleepDefault = %v, want %v", c.sleepDefault, tc.wantSleepDefault)
+			if env.sleepMin != tc.wantSleepMin {
+				t.Errorf("sleepMin = %v, want %v", env.sleepMin, tc.wantSleepMin)
 			}
-			if c.sleepMin > tc.wantSleepMinAtMost {
-				t.Errorf("sleepMin = %v, want ≤ %v", c.sleepMin, tc.wantSleepMinAtMost)
+			if env.sleepMax != tc.wantSleepMax {
+				t.Errorf("sleepMax = %v, want %v", env.sleepMax, tc.wantSleepMax)
 			}
-			if c.sleepMax < tc.wantSleepMaxAtLeast {
-				t.Errorf("sleepMax = %v, want ≥ %v", c.sleepMax, tc.wantSleepMaxAtLeast)
+			if env.sleepDefault != tc.wantSleepDefault {
+				t.Errorf("sleepDefault = %v, want %v", env.sleepDefault, tc.wantSleepDefault)
+			}
+			if env.jitter != tc.wantJitter {
+				t.Errorf("jitter = %v, want %v", env.jitter, tc.wantJitter)
 			}
 		})
 	}
 }
 
-func TestParseCadence_RejectsTooFast(t *testing.T) {
+func TestParseSleepEnvelope_Rejections(t *testing.T) {
 	t.Parallel()
-	if _, err := parseCadence("30s"); err == nil {
-		t.Fatal("expected error for sub-minute cadence")
-	}
-}
 
-func TestParseCadence_RejectsGarbage(t *testing.T) {
-	t.Parallel()
-	if _, err := parseCadence("when the cows come home"); err == nil {
-		t.Fatal("expected error for unparseable cadence")
+	cases := []struct {
+		name    string
+		args    map[string]any
+		wantMsg string
+	}{
+		{"missing sleep_min", map[string]any{"sleep_max": "30m"}, "sleep_min is required"},
+		{"missing sleep_max", map[string]any{"sleep_min": "5m"}, "sleep_max is required"},
+		{"empty sleep_min", map[string]any{"sleep_min": "  ", "sleep_max": "30m"}, "sleep_min is required"},
+		{"unparseable sleep_min", map[string]any{"sleep_min": "when the cows come home", "sleep_max": "30m"}, "sleep_min"},
+		{"unparseable sleep_max", map[string]any{"sleep_min": "5m", "sleep_max": "garbage"}, "sleep_max"},
+		{"below 1m floor", map[string]any{"sleep_min": "30s", "sleep_max": "30m"}, "below the 1 minute floor"},
+		{"max less than min", map[string]any{"sleep_min": "30m", "sleep_max": "5m"}, "must be >= sleep_min"},
+		{"sleep_default outside envelope", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "1h"}, "must lie in"},
+		{"unparseable sleep_default", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "bad"}, "sleep_default"},
+		// Non-string types for duration args must surface a typed
+		// error, not be silently dropped. The JSON schema isn't
+		// enforced at handler entry, so a caller sending
+		// {sleep_default: 300} would otherwise have the value
+		// ignored and the loop launched with the midpoint instead
+		// of what they requested.
+		{"sleep_default as number", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": 300}, "sleep_default must be a Go duration string"},
+		{"sleep_default as object", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": map[string]any{"x": 1}}, "sleep_default must be a Go duration string"},
+		{"sleep_min as number", map[string]any{"sleep_min": 300, "sleep_max": "30m"}, "sleep_min must be a Go duration string"},
+		{"sleep_max as bool", map[string]any{"sleep_min": "5m", "sleep_max": true}, "sleep_max must be a Go duration string"},
+		{"jitter out of range high", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": 1.5}, "must be in [0, 1]"},
+		{"jitter out of range low", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": -0.1}, "must be in [0, 1]"},
+		{"jitter non-numeric", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": "fast"}, "must be a number"},
 	}
-}
-
-func TestParseCadence_RejectsEmpty(t *testing.T) {
-	t.Parallel()
-	if _, err := parseCadence("   "); err == nil {
-		t.Fatal("expected error for empty cadence")
-	}
-}
-
-// TestParseCadence_SleepMinNeverDropsBelowMinute guards the floor
-// against a regression where the 30s minimum jitter could push
-// sleep_min below the documented 1-minute floor for short cadences.
-func TestParseCadence_SleepMinNeverDropsBelowMinute(t *testing.T) {
-	t.Parallel()
-	for _, input := range []string{"1m", "60s", "every 1 minute"} {
-		t.Run(input, func(t *testing.T) {
-			c, err := parseCadence(input)
-			if err != nil {
-				t.Fatalf("parseCadence(%q): %v", input, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSleepEnvelope(tc.args)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
-			if c.sleepMin < time.Minute {
-				t.Errorf("sleepMin = %v, want >= 1m (floor)", c.sleepMin)
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantMsg)
 			}
 		})
 	}
@@ -155,9 +190,10 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	}
 
 	result, err := tool.Handler(context.Background(), map[string]any{
-		"name":    "test_pr_watchlist",
-		"intent":  "Track v1.0 PR activity for the upcoming release.",
-		"cadence": "hourly",
+		"name":      "test_pr_watchlist",
+		"intent":    "Track v1.0 PR activity for the upcoming release.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "maintain",
 			"document": "kb:dashboards/pr-watchlist.md",
@@ -354,9 +390,10 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	_, err = tool.Handler(context.Background(), map[string]any{
-		"name":    "existing_loop",
-		"intent":  "Replace the prior loop without permission.",
-		"cadence": "hourly",
+		"name":      "existing_loop",
+		"intent":    "Replace the prior loop without permission.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:journal/existing.md",
@@ -424,9 +461,10 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	_, err = tool.Handler(context.Background(), map[string]any{
-		"name":    "fresh_loop",
-		"intent":  "Track something the doc already covers.",
-		"cadence": "hourly",
+		"name":      "fresh_loop",
+		"intent":    "Track something the doc already covers.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "maintain",
 			"document": "kb:notes/existing.md",
@@ -490,9 +528,10 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 
 	tool := reg.Get("thane_curate")
 	if _, err := tool.Handler(context.Background(), map[string]any{
-		"name":    "release_journal",
-		"intent":  "Capture forge releases as a dated log.",
-		"cadence": "hourly",
+		"name":      "release_journal",
+		"intent":    "Capture forge releases as a dated log.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:journal/releases.md",
@@ -675,9 +714,10 @@ func TestThaneCurate_PersistsEntitySubscriptions(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	result, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "thermostat_journal",
-		"intent":  "Daily HVAC summary.",
-		"cadence": "daily",
+		"name":      "thermostat_journal",
+		"intent":    "Daily HVAC summary.",
+		"sleep_min": "21h",
+		"sleep_max": "27h",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:home/hvac.md",
@@ -759,9 +799,10 @@ func TestThaneCurate_ReplacePreservesFocusTag(t *testing.T) {
 
 	create := func(extra map[string]any) string {
 		args := map[string]any{
-			"name":    "hvac_curate",
-			"intent":  "HVAC summary.",
-			"cadence": "daily",
+			"name":      "hvac_curate",
+			"intent":    "HVAC summary.",
+			"sleep_min": "21h",
+			"sleep_max": "27h",
 			"output": map[string]any{
 				"mode":     "journal",
 				"document": "kb:home/hvac.md",
@@ -832,9 +873,10 @@ func TestLoopDefinitionDelete_WipesEntitySubscriptions(t *testing.T) {
 	})
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "curate_to_delete",
-		"intent":  "Short-lived watcher.",
-		"cadence": "hourly",
+		"name":      "curate_to_delete",
+		"intent":    "Short-lived watcher.",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:scratch/short.md",
@@ -875,9 +917,10 @@ func TestThaneCurate_RejectsDuplicateEntityID(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "dup_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "dup_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:dup.md",
@@ -906,9 +949,10 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	rig := newCurateTestRig(t)
 
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "frac_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "frac_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:frac.md",
@@ -930,9 +974,10 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	// Whole-number float (post-JSON-decode shape of an integer literal)
 	// must still pass — coerceInt accepts float64 when n == int64(n).
 	_, err = rig.tool.Handler(context.Background(), map[string]any{
-		"name":    "whole_float_test",
-		"intent":  "x",
-		"cadence": "hourly",
+		"name":      "whole_float_test",
+		"intent":    "x",
+		"sleep_min": "54m",
+		"sleep_max": "66m",
 		"output": map[string]any{
 			"mode":     "journal",
 			"document": "kb:whole.md",
