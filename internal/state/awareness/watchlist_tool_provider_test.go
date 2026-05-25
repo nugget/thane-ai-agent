@@ -53,7 +53,7 @@ func TestWatchlistTools_NameAndToolList(t *testing.T) {
 			t.Errorf("tool %q has nil handler; provider contract requires non-nil", tool.Name)
 		}
 	}
-	want := []string{"add_context_entity", "list_context_entities", "remove_context_entity"}
+	want := []string{"add_entity_subscription", "list_entity_subscriptions", "remove_entity_subscription"}
 	slices.Sort(names)
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
@@ -67,17 +67,17 @@ func TestWatchlistTools_RegisterProviderAddsThreeTools(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 	reg.RegisterProvider(p)
 
-	for _, name := range []string{"add_context_entity", "list_context_entities", "remove_context_entity"} {
+	for _, name := range []string{"add_entity_subscription", "list_entity_subscriptions", "remove_entity_subscription"} {
 		if reg.Get(name) == nil {
 			t.Errorf("%s should be registered", name)
 		}
 	}
 }
 
-func TestAddContextEntity_MissingEntityID(t *testing.T) {
+func TestAddEntitySubscription_MissingEntityID(t *testing.T) {
 	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := p.handleAddContextEntity(context.Background(), map[string]any{})
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing entity_id")
 	}
@@ -86,10 +86,10 @@ func TestAddContextEntity_MissingEntityID(t *testing.T) {
 	}
 }
 
-func TestAddContextEntity_Success(t *testing.T) {
+func TestAddEntitySubscription_Success(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "sensor.temperature",
 	})
 	if err != nil {
@@ -111,10 +111,10 @@ func TestAddContextEntity_Success(t *testing.T) {
 	}
 }
 
-func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
+func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
 	p, store, registered := setupWatchlistProvider(t)
 
-	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id":   "weather.home",
 		"tags":        []any{"battery_focus", "battery_focus"},
 		"history":     []any{60, 3600},
@@ -150,10 +150,10 @@ func TestAddContextEntity_WithScopesTTLAndHistory(t *testing.T) {
 	}
 }
 
-func TestAddContextEntity_InvalidForecast(t *testing.T) {
+func TestAddEntitySubscription_InvalidForecast(t *testing.T) {
 	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "weather.home",
 		"forecast":  "monthly",
 	})
@@ -165,10 +165,10 @@ func TestAddContextEntity_InvalidForecast(t *testing.T) {
 	}
 }
 
-func TestAddContextEntity_ForecastRequiresWeatherEntity(t *testing.T) {
+func TestAddEntitySubscription_ForecastRequiresWeatherEntity(t *testing.T) {
 	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "sensor.outdoor_temperature",
 		"forecast":  "daily",
 	})
@@ -180,16 +180,16 @@ func TestAddContextEntity_ForecastRequiresWeatherEntity(t *testing.T) {
 	}
 }
 
-func TestAddContextEntity_ForecastNoneClearsExistingOption(t *testing.T) {
+func TestAddEntitySubscription_ForecastNoneClearsExistingOption(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	if _, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "weather.home",
 		"forecast":  "daily",
 	}); err != nil {
 		t.Fatalf("add forecast: %v", err)
 	}
-	result, err := p.handleAddContextEntity(context.Background(), map[string]any{
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "weather.home",
 		"forecast":  "none",
 	})
@@ -223,7 +223,7 @@ func TestParseWatchlistTagArgs_IgnoresWhitespaceOnlyTags(t *testing.T) {
 	}
 }
 
-func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
+func TestListEntitySubscriptions_ReturnsScopedSubscriptions(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
 	if err := store.Add("sensor.always_on"); err != nil {
@@ -236,11 +236,11 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 		t.Fatalf("AddWithOptions weather: %v", err)
 	}
 
-	raw, err := p.handleListContextEntities(context.Background(), map[string]any{
+	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{
 		"tag": "weather_focus",
 	})
 	if err != nil {
-		t.Fatalf("handleListContextEntities: %v", err)
+		t.Fatalf("handleListEntitySubscriptions: %v", err)
 	}
 
 	var payload struct {
@@ -269,11 +269,11 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 		t.Fatalf("forecast = %q, want daily", payload.Items[0].Forecast)
 	}
 
-	raw, err = p.handleListContextEntities(context.Background(), map[string]any{
+	raw, err = p.handleListEntitySubscriptions(context.Background(), map[string]any{
 		"tag": "battery_focus",
 	})
 	if err != nil {
-		t.Fatalf("handleListContextEntities battery_focus: %v", err)
+		t.Fatalf("handleListEntitySubscriptions battery_focus: %v", err)
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatalf("unmarshal battery payload: %v", err)
@@ -289,10 +289,10 @@ func TestListContextEntities_ReturnsScopedSubscriptions(t *testing.T) {
 	}
 }
 
-func TestRemoveContextEntity_MissingEntityID(t *testing.T) {
+func TestRemoveEntitySubscription_MissingEntityID(t *testing.T) {
 	p, _, _ := setupWatchlistProvider(t)
 
-	_, err := p.handleRemoveContextEntity(context.Background(), map[string]any{})
+	_, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing entity_id")
 	}
@@ -301,14 +301,14 @@ func TestRemoveContextEntity_MissingEntityID(t *testing.T) {
 	}
 }
 
-func TestRemoveContextEntity_Success(t *testing.T) {
+func TestRemoveEntitySubscription_Success(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
 	if err := store.Add("sensor.temperature"); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
-	result, err := p.handleRemoveContextEntity(context.Background(), map[string]any{
+	result, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "sensor.temperature",
 	})
 	if err != nil {
@@ -327,7 +327,7 @@ func TestRemoveContextEntity_Success(t *testing.T) {
 	}
 }
 
-func TestRemoveContextEntity_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) {
+func TestRemoveEntitySubscription_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
 	if err := store.Add("sensor.battery"); err != nil {
@@ -337,7 +337,7 @@ func TestRemoveContextEntity_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) 
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
-	result, err := p.handleRemoveContextEntity(context.Background(), map[string]any{
+	result, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "sensor.battery",
 		"tags":      []any{"battery_focus"},
 	})

@@ -10,11 +10,11 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// TestLoopUpdateEntitySubscriptions_AddRemove exercises the happy
+// TestUpdateEntitySubscriptions_AddRemove exercises the happy
 // path: a loop created by thane_curate has its watch set adjusted
 // via the external tool, and both add and remove arrive at the
 // underlying store with the resolved scope_tag baked in.
-func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
+func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
@@ -45,9 +45,9 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	rig.subStore.removed = nil
 	rig.subStore.wiped = nil
 
-	updateTool := rig.reg.Get("loop_update_entity_subscriptions")
+	updateTool := rig.reg.Get("update_entity_subscriptions")
 	if updateTool == nil {
-		t.Fatal("loop_update_entity_subscriptions not registered")
+		t.Fatal("update_entity_subscriptions not registered")
 	}
 
 	result, err := updateTool.Handler(context.Background(), map[string]any{
@@ -59,7 +59,7 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 		"remove": []any{"sensor.old"},
 	})
 	if err != nil {
-		t.Fatalf("loop_update_entity_subscriptions: %v", err)
+		t.Fatalf("update_entity_subscriptions: %v", err)
 	}
 
 	var resp map[string]any
@@ -101,15 +101,15 @@ func TestLoopUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	}
 }
 
-// TestLoopUpdateEntitySubscriptions_UnknownLoop covers the actionable-
+// TestUpdateEntitySubscriptions_UnknownLoop covers the actionable-
 // error path when the named loop isn't in the registry.
-func TestLoopUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
+func TestUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
-	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	tool := rig.reg.Get("update_entity_subscriptions")
 	if tool == nil {
-		t.Fatal("loop_update_entity_subscriptions not registered")
+		t.Fatal("update_entity_subscriptions not registered")
 	}
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"name": "no_such_loop",
@@ -123,13 +123,13 @@ func TestLoopUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	}
 }
 
-// TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag covers
+// TestUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag covers
 // the case where the named loop exists but predates the scope_tag
 // machinery (e.g. an older loop_definition_set spec without the
 // metadata key). The model should learn the loop doesn't support
 // entity subscriptions rather than have the update silently apply
 // to scope="".
-func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) {
+func TestUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
@@ -147,9 +147,9 @@ func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) 
 		t.Fatalf("seed bare definition: %v", err)
 	}
 
-	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	tool := rig.reg.Get("update_entity_subscriptions")
 	if tool == nil {
-		t.Fatal("loop_update_entity_subscriptions not registered")
+		t.Fatal("update_entity_subscriptions not registered")
 	}
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"name": "tagless",
@@ -163,9 +163,9 @@ func TestLoopUpdateEntitySubscriptions_RejectsLoopWithoutScopeTag(t *testing.T) 
 	}
 }
 
-// TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove guards against
+// TestUpdateEntitySubscriptions_RequiresAddOrRemove guards against
 // a no-op call where the model passed an empty change-set.
-func TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
+func TestUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
@@ -183,9 +183,9 @@ func TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	tool := rig.reg.Get("update_entity_subscriptions")
 	if tool == nil {
-		t.Fatal("loop_update_entity_subscriptions not registered")
+		t.Fatal("update_entity_subscriptions not registered")
 	}
 	_, err := tool.Handler(context.Background(), map[string]any{"name": "loop_one"})
 	if err == nil {
@@ -196,11 +196,11 @@ func TestLoopUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 	}
 }
 
-// TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly guards
+// TestUpdateEntitySubscriptions_AddErrorsScopedCorrectly guards
 // against the parseCurateEntities → parseEntityList rename: validation
 // errors raised while parsing the `add` parameter must refer to the
 // `add` field, not the curate-side `entities` field name.
-func TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
+func TestUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
 	t.Parallel()
 	rig := newCurateTestRig(t)
 
@@ -218,9 +218,9 @@ func TestLoopUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	tool := rig.reg.Get("loop_update_entity_subscriptions")
+	tool := rig.reg.Get("update_entity_subscriptions")
 	if tool == nil {
-		t.Fatal("loop_update_entity_subscriptions not registered")
+		t.Fatal("update_entity_subscriptions not registered")
 	}
 	// Trigger a missing-entity_id error inside add[0].
 	_, err := tool.Handler(context.Background(), map[string]any{

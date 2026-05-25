@@ -46,7 +46,7 @@ Good:
 - `ha_automation_list`
 - `ha_automation_update`
 - `ha_registry_search`
-- `add_context_entity`
+- `add_entity_subscription`
 
 If platform or source matters, keep it in the name, but do not drop the
 verb to make room for it. Prefer names like

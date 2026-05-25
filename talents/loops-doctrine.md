@@ -28,7 +28,7 @@ Choose stream wiring by attention cost:
 
 - Use entity subscriptions for ambient state the loop should see on its
   normal turns. `thane_curate.entities` creates the initial watch set;
-  `loop_update_entity_subscriptions`, `watch_entity`, and
+  `update_entity_subscriptions`, `watch_entity`, and
   `unwatch_entity` adjust it later.
 - Use event-source `wake_loop` targets when each event deserves an
   immediate iteration. Producer tools such as `forge_repo_follow` and
@@ -37,7 +37,7 @@ Choose stream wiring by attention cost:
 Treat running loops as bi-directional. A curate loop can pull the core
 in via `request_core_attention` when something deserves a decision; the
 core can push new focus down by adding entities to a running loop's
-watch set with `loop_update_entity_subscriptions`, or by pointing a
+watch set with `update_entity_subscriptions`, or by pointing a
 producer's `wake_loop` target at the loop. Inspect what is already
 running with `loop_status` and `loop_definition_get` before launching
 a parallel loop — a thriving loop is its own data-dense documentation
