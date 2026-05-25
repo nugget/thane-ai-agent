@@ -206,16 +206,16 @@ func migrateLegacyRoutingFields(s *Spec, wire specJSON, logger *slog.Logger) {
 		return
 	}
 	migrated := false
-	if wire.LegacyQualityFloor > 0 && s.Profile.QualityFloor == "" {
-		s.Profile.QualityFloor = fmt.Sprintf("%d", wire.LegacyQualityFloor)
+	if wire.LegacyQualityFloor > 0 && s.Profile.QualityFloor == 0 {
+		s.Profile.QualityFloor = wire.LegacyQualityFloor
 		migrated = true
 	}
 	if wire.LegacySupervisorQualityFloor > 0 {
 		if s.SupervisorProfile == nil {
 			s.SupervisorProfile = &router.LoopProfile{}
 		}
-		if s.SupervisorProfile.QualityFloor == "" {
-			s.SupervisorProfile.QualityFloor = fmt.Sprintf("%d", wire.LegacySupervisorQualityFloor)
+		if s.SupervisorProfile.QualityFloor == 0 {
+			s.SupervisorProfile.QualityFloor = wire.LegacySupervisorQualityFloor
 			migrated = true
 		}
 	}

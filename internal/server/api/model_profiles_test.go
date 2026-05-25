@@ -11,7 +11,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 		name                 string
 		rawModel             string
 		hints                map[string]string
-		premiumFloor         string
+		premiumFloor         int
 		wantModel            string
 		wantSystemPrompt     bool
 		wantHintKey          string
@@ -22,14 +22,14 @@ func TestNormalizeModelSelection(t *testing.T) {
 			name:         "default latest profile",
 			rawModel:     "thane:latest",
 			hints:        map[string]string{"channel": "api"},
-			premiumFloor: "8",
+			premiumFloor: 8,
 			wantModel:    "",
 		},
 		{
 			name:          "premium profile",
 			rawModel:      "thane:premium",
 			hints:         map[string]string{"channel": "api"},
-			premiumFloor:  "8",
+			premiumFloor:  8,
 			wantModel:     "",
 			wantHintKey:   router.FactorQualityFloor,
 			wantHintValue: "8",
@@ -38,7 +38,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			name:          "assist alias profile",
 			rawModel:      "thane:command",
 			hints:         map[string]string{"channel": "api"},
-			premiumFloor:  "8",
+			premiumFloor:  8,
 			wantModel:     "",
 			wantHintKey:   router.FactorMission,
 			wantHintValue: "device_control",
@@ -47,7 +47,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			name:                 "ops profile",
 			rawModel:             "thane:ops",
 			hints:                map[string]string{"channel": "api"},
-			premiumFloor:         "8",
+			premiumFloor:         8,
 			wantModel:            "",
 			wantDelegationGating: "disabled",
 		},
@@ -55,14 +55,14 @@ func TestNormalizeModelSelection(t *testing.T) {
 			name:         "explicit deployment preserved",
 			rawModel:     "spark/gpt-oss:20b",
 			hints:        map[string]string{"channel": "api"},
-			premiumFloor: "8",
+			premiumFloor: 8,
 			wantModel:    "spark/gpt-oss:20b",
 		},
 		{
 			name:         "unknown thane profile falls back",
 			rawModel:     "thane:unknown",
 			hints:        map[string]string{"channel": "api"},
-			premiumFloor: "8",
+			premiumFloor: 8,
 			wantModel:    "",
 		},
 	}

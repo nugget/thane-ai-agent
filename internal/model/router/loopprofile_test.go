@@ -19,7 +19,7 @@ func TestLoopProfileHints(t *testing.T) {
 		{
 			name: "all typed fields populated",
 			seed: LoopProfile{
-				QualityFloor:     "7",
+				QualityFloor:     7,
 				Mission:          "automation",
 				LocalOnly:        "false",
 				DelegationGating: "disabled",
@@ -35,7 +35,7 @@ func TestLoopProfileHints(t *testing.T) {
 		{
 			name: "only populated fields appear",
 			seed: LoopProfile{
-				QualityFloor: "5",
+				QualityFloor: 5,
 				Mission:      "conversation",
 			},
 			want: map[string]string{
@@ -74,7 +74,7 @@ func TestLoopProfileHints(t *testing.T) {
 			name: "model not in hints",
 			seed: LoopProfile{
 				Model:        "claude-3-opus",
-				QualityFloor: "10",
+				QualityFloor: 10,
 			},
 			want: map[string]string{
 				FactorQualityFloor: "10",
@@ -107,18 +107,16 @@ func TestLoopProfileValidate(t *testing.T) {
 	}{
 		{name: "empty seed is valid", seed: LoopProfile{}},
 		{name: "fully populated valid seed", seed: LoopProfile{
-			QualityFloor:     "7",
+			QualityFloor:     7,
 			Mission:          "automation",
 			LocalOnly:        "false",
 			DelegationGating: "disabled",
 			PreferSpeed:      "true",
 		}},
-		{name: "quality_floor boundary low", seed: LoopProfile{QualityFloor: "1"}},
-		{name: "quality_floor boundary high", seed: LoopProfile{QualityFloor: "10"}},
-		{name: "quality_floor zero", seed: LoopProfile{QualityFloor: "0"}, wantErr: true},
-		{name: "quality_floor eleven", seed: LoopProfile{QualityFloor: "11"}, wantErr: true},
-		{name: "quality_floor non-numeric", seed: LoopProfile{QualityFloor: "high"}, wantErr: true},
-		{name: "quality_floor negative", seed: LoopProfile{QualityFloor: "-1"}, wantErr: true},
+		{name: "quality_floor boundary low", seed: LoopProfile{QualityFloor: 1}},
+		{name: "quality_floor boundary high", seed: LoopProfile{QualityFloor: 10}},
+		{name: "quality_floor eleven", seed: LoopProfile{QualityFloor: 11}, wantErr: true},
+		{name: "quality_floor negative", seed: LoopProfile{QualityFloor: -1}, wantErr: true},
 		{name: "mission conversation", seed: LoopProfile{Mission: "conversation"}},
 		{name: "mission device_control", seed: LoopProfile{Mission: "device_control"}},
 		{name: "mission background", seed: LoopProfile{Mission: "background"}},
@@ -148,7 +146,7 @@ func TestLoopProfileValidate(t *testing.T) {
 func TestLoopProfileRequestOptions(t *testing.T) {
 	seed := LoopProfile{
 		Model:            "claude-sonnet-4-20250514",
-		QualityFloor:     "7",
+		QualityFloor:     7,
 		Mission:          "automation",
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
@@ -212,7 +210,7 @@ func TestValidateTopicFilter(t *testing.T) {
 func TestLoopProfileJSONRoundTrip(t *testing.T) {
 	original := LoopProfile{
 		Model:            "gpt-4o",
-		QualityFloor:     "8",
+		QualityFloor:     8,
 		Mission:          "automation",
 		LocalOnly:        "false",
 		DelegationGating: "disabled",

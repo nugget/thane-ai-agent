@@ -116,7 +116,7 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 func TestSubscriptionStoreLoadConfig(t *testing.T) {
 	s := newTestStore(t)
 
-	profile := router.LoopProfile{QualityFloor: "7", Mission: "automation"}
+	profile := router.LoopProfile{QualityFloor: 7, Mission: "automation"}
 	cfgSubs := []config.SubscriptionConfig{
 		{Topic: "homeassistant/+/+/state"},        // no wake
 		{Topic: "frigate/events", Wake: &profile}, // wake-enabled
@@ -133,7 +133,7 @@ func TestSubscriptionStoreLoadConfig(t *testing.T) {
 	if subs[0].Source != "config" {
 		t.Errorf("source = %q, want %q", subs[0].Source, "config")
 	}
-	if subs[0].Profile.QualityFloor != "7" {
+	if subs[0].Profile.QualityFloor != 7 {
 		t.Errorf("profile.QualityFloor = %q, want %q", subs[0].Profile.QualityFloor, "7")
 	}
 }
@@ -232,7 +232,7 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 		t.Fatalf("new store 1: %v", err)
 	}
 
-	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: "5"}, nil)
+	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: 5}, nil)
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -394,13 +394,13 @@ func TestSubscriptionStoreAddValidation(t *testing.T) {
 	}
 
 	// Invalid seed.
-	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: "99"}, nil)
+	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: 99}, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid quality_floor")
 	}
 
 	// Valid — should succeed.
-	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: "7"}, nil)
+	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: 7}, nil)
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}

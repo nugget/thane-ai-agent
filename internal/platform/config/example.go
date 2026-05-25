@@ -185,7 +185,7 @@ func ExampleConfig() *Config {
 				{
 					Topic: "automation/wake/security",
 					Wake: &router.LoopProfile{
-						QualityFloor:     "7",
+						QualityFloor:     7,
 						Mission:          "automation",
 						LocalOnly:        "false",
 						DelegationGating: "disabled",

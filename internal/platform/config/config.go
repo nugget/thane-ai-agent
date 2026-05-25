@@ -32,6 +32,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1579,9 +1580,17 @@ type SignalRoutingConfig struct {
 // LoopProfile-only fields such as ExcludeTools are omitted until Signal
 // grows explicit config for them.
 func (c SignalRoutingConfig) LoopProfile() router.LoopProfile {
+	// SignalRoutingConfig.QualityFloor stays string-shaped in its
+	// own YAML schema for now — converting it is a separate
+	// operator-config cleanup. Atoi here at the boundary so the
+	// downstream [router.LoopProfile.QualityFloor] (int) is
+	// happy. An unparseable value gets silently dropped to zero
+	// ("unset"); validation belongs at config load time, not at
+	// every conversion call.
+	floor, _ := strconv.Atoi(strings.TrimSpace(c.QualityFloor))
 	return router.LoopProfile{
 		Model:            c.Model,
-		QualityFloor:     c.QualityFloor,
+		QualityFloor:     floor,
 		Mission:          c.Mission,
 		DelegationGating: c.DelegationGating,
 	}

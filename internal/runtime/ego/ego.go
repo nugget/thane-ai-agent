@@ -112,7 +112,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		Profile: router.LoopProfile{
 			Mission:          "ego",
 			DelegationGating: "disabled",
-			QualityFloor:     fmt.Sprintf("%d", cfg.QualityFloor),
+			QualityFloor:     cfg.QualityFloor,
 			ExtraHints:       map[string]string{"source": "ego"},
 		},
 		SupervisorProfile: supervisorProfile(cfg.SupervisorQualityFloor),
@@ -134,7 +134,7 @@ func supervisorProfile(qualityFloor int) *router.LoopProfile {
 		return nil
 	}
 	return &router.LoopProfile{
-		QualityFloor: fmt.Sprintf("%d", qualityFloor),
+		QualityFloor: qualityFloor,
 	}
 }
 
