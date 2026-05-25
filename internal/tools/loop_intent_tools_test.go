@@ -106,6 +106,16 @@ func TestParseSleepEnvelope_Rejections(t *testing.T) {
 		{"max less than min", map[string]any{"sleep_min": "30m", "sleep_max": "5m"}, "must be >= sleep_min"},
 		{"sleep_default outside envelope", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "1h"}, "must lie in"},
 		{"unparseable sleep_default", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": "bad"}, "sleep_default"},
+		// Non-string types for duration args must surface a typed
+		// error, not be silently dropped. The JSON schema isn't
+		// enforced at handler entry, so a caller sending
+		// {sleep_default: 300} would otherwise have the value
+		// ignored and the loop launched with the midpoint instead
+		// of what they requested.
+		{"sleep_default as number", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": 300}, "sleep_default must be a Go duration string"},
+		{"sleep_default as object", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "sleep_default": map[string]any{"x": 1}}, "sleep_default must be a Go duration string"},
+		{"sleep_min as number", map[string]any{"sleep_min": 300, "sleep_max": "30m"}, "sleep_min must be a Go duration string"},
+		{"sleep_max as bool", map[string]any{"sleep_min": "5m", "sleep_max": true}, "sleep_max must be a Go duration string"},
 		{"jitter out of range high", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": 1.5}, "must be in [0, 1]"},
 		{"jitter out of range low", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": -0.1}, "must be in [0, 1]"},
 		{"jitter non-numeric", map[string]any{"sleep_min": "5m", "sleep_max": "30m", "jitter": "fast"}, "must be a number"},

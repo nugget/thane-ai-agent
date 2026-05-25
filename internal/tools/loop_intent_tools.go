@@ -612,38 +612,35 @@ type sleepEnvelope struct {
 // failure, so the caller surfaces the first problem to the model
 // without piling on cascading complaints.
 func parseSleepEnvelope(args map[string]any) (sleepEnvelope, error) {
-	minStr, _ := args["sleep_min"].(string)
-	maxStr, _ := args["sleep_max"].(string)
-	if strings.TrimSpace(minStr) == "" {
+	sleepMin, presentMin, err := parseDurationArg(args, "sleep_min")
+	if err != nil {
+		return sleepEnvelope{}, err
+	}
+	if !presentMin {
 		return sleepEnvelope{}, fmt.Errorf("sleep_min is required (Go duration string, e.g. \"5m\")")
 	}
-	if strings.TrimSpace(maxStr) == "" {
+	sleepMax, presentMax, err := parseDurationArg(args, "sleep_max")
+	if err != nil {
+		return sleepEnvelope{}, err
+	}
+	if !presentMax {
 		return sleepEnvelope{}, fmt.Errorf("sleep_max is required (Go duration string, e.g. \"30m\")")
 	}
-	sleepMin, err := time.ParseDuration(strings.TrimSpace(minStr))
-	if err != nil {
-		return sleepEnvelope{}, fmt.Errorf("sleep_min %q: %w", minStr, err)
-	}
-	sleepMax, err := time.ParseDuration(strings.TrimSpace(maxStr))
-	if err != nil {
-		return sleepEnvelope{}, fmt.Errorf("sleep_max %q: %w", maxStr, err)
-	}
 	if sleepMin < time.Minute {
-		return sleepEnvelope{}, fmt.Errorf("sleep_min %q is below the 1 minute floor", minStr)
+		return sleepEnvelope{}, fmt.Errorf("sleep_min %s is below the 1 minute floor", sleepMin)
 	}
 	if sleepMax < sleepMin {
-		return sleepEnvelope{}, fmt.Errorf("sleep_max %q must be >= sleep_min %q", maxStr, minStr)
+		return sleepEnvelope{}, fmt.Errorf("sleep_max %s must be >= sleep_min %s", sleepMax, sleepMin)
 	}
 
-	sleepDefault := (sleepMin + sleepMax) / 2
-	if defStr, ok := args["sleep_default"].(string); ok && strings.TrimSpace(defStr) != "" {
-		sleepDefault, err = time.ParseDuration(strings.TrimSpace(defStr))
-		if err != nil {
-			return sleepEnvelope{}, fmt.Errorf("sleep_default %q: %w", defStr, err)
-		}
-		if sleepDefault < sleepMin || sleepDefault > sleepMax {
-			return sleepEnvelope{}, fmt.Errorf("sleep_default %q must lie in [%s, %s]", defStr, sleepMin, sleepMax)
-		}
+	sleepDefault, presentDefault, err := parseDurationArg(args, "sleep_default")
+	if err != nil {
+		return sleepEnvelope{}, err
+	}
+	if !presentDefault {
+		sleepDefault = (sleepMin + sleepMax) / 2
+	} else if sleepDefault < sleepMin || sleepDefault > sleepMax {
+		return sleepEnvelope{}, fmt.Errorf("sleep_default %s must lie in [%s, %s]", sleepDefault, sleepMin, sleepMax)
 	}
 
 	jitter := 0.1
@@ -667,4 +664,33 @@ func parseSleepEnvelope(args map[string]any) (sleepEnvelope, error) {
 		sleepDefault: sleepDefault,
 		jitter:       jitter,
 	}, nil
+}
+
+// parseDurationArg returns the parsed duration from args[key]. present
+// is false when the key is absent, JSON null, or an empty/whitespace
+// string — all "caller didn't set this" shapes. Returns an error when
+// the key is present with a non-string type or a string that does not
+// parse as a Go duration. Distinguishing "wrong type present" from
+// "absent" matters because the JSON schema isn't enforced at handler
+// entry; a caller sending `{"sleep_default": 300}` would otherwise
+// have the value silently ignored and the loop launched with an
+// unexpected default.
+func parseDurationArg(args map[string]any, key string) (d time.Duration, present bool, err error) {
+	v, found := args[key]
+	if !found || v == nil {
+		return 0, false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, true, fmt.Errorf("%s must be a Go duration string (e.g. \"5m\"), got %T", key, v)
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false, nil
+	}
+	d, err = time.ParseDuration(s)
+	if err != nil {
+		return 0, true, fmt.Errorf("%s %q: %w", key, s, err)
+	}
+	return d, true, nil
 }
