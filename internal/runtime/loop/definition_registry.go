@@ -179,19 +179,22 @@ const definitionAncestorWalkLimit = 64
 // loop as eligible. Distinguishing the cases here pushes the
 // not-found handling back where it belongs — the call site that
 // looked the definition up in the first place.
+//
+// Input is trimmed before lookup so " leaf " resolves the same
+// definition as "leaf" — matches the trim that [AncestorSpecs]
+// and [Upsert] already apply elsewhere.
 func (r *DefinitionRegistry) EvaluateConditions(name string, now time.Time) (DefinitionEligibilityStatus, []EffectiveConditionEvaluation, bool) {
-	r.mu.RLock()
-	_, exists := r.specByName(name)
-	r.mu.RUnlock()
-	if !exists {
+	if r == nil {
 		return DefinitionEligibilityStatus{}, nil, false
 	}
+	// AncestorSpecs trims internally and returns an empty chain
+	// when the leaf isn't in the registry — that's our found
+	// signal. No separate specByName precheck needed (and the
+	// precheck would have used the raw, un-trimmed name and
+	// reported false for " leaf " when AncestorSpecs would have
+	// resolved it normally).
 	chain := r.AncestorSpecs(name)
 	if len(chain) == 0 {
-		// specByName saw the definition but AncestorSpecs walked
-		// nothing — would require a concurrent delete between the
-		// two reads. Treat as not-found rather than synthesizing
-		// an eligible status from no chain.
 		return DefinitionEligibilityStatus{}, nil, false
 	}
 	status, evals := EvaluateEffectiveConditions(chain, now)

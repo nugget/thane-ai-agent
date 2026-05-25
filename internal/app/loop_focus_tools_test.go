@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	_ "modernc.org/sqlite"
 )
 
 // fakeMutator is a thin in-memory implementation of subscriptionMutator
@@ -225,25 +228,27 @@ func TestMutateLoopSubscriptionsSignalsScheduleWatcher(t *testing.T) {
 	}
 }
 
-// TestMutateLoopSubscriptionsPersistsBeforeLivePatch is the
+// TestMutateLoopSubscriptionsWritesPersistedAndLive is the
 // regression test for the post-#896 audit's LOW #4: the dual-
 // walker model (live effectiveState vs. persisted
-// EvaluateEffectiveConditions) only agrees as long as mutators
-// persist before patching live state. We can't directly observe
-// "persist before patch" in a single in-process run; instead we
-// pin the post-state both surfaces should see and assert they
-// agree, which proves the call path doesn't drop the persist
-// step.
-func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
+// EvaluateEffectiveConditions) only agrees when both surfaces
+// reflect the mutation. This test wires a real
+// opstate-backed loopDefinitionStore (in-memory SQLite) so the
+// persistLoopDefinition call is exercised and observable —
+// removing or reordering the persist step would leave the
+// store empty, failing the disk-side assertion. The strict
+// "persist BEFORE live patch" ordering can't be observed
+// from a single in-process run (no crash-injection here), but
+// asserting that BOTH writes occurred catches the most likely
+// regression: a future refactor that drops persistence and
+// only patches live state.
+func TestMutateLoopSubscriptionsWritesPersistedAndLive(t *testing.T) {
 	t.Parallel()
 
 	reg, err := looppkg.NewDefinitionRegistry(nil)
 	if err != nil {
 		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
-	// Upsert (not seed via constructor) so the definition lands
-	// as runtime-source — config-source specs are immutable and
-	// mutateLoopSubscriptions rejects them.
 	if err := reg.Upsert(looppkg.Spec{
 		Name:         "leaf",
 		Task:         "t",
@@ -254,6 +259,7 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 	}, time.Now()); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
+
 	loops := looppkg.NewRegistry()
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -275,6 +281,21 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 		t.Fatalf("register leaf: %v", err)
 	}
 
+	// Real opstate-backed store on an in-memory SQLite — so
+	// persistLoopDefinition is not a no-op and a future
+	// refactor that drops the persist call would leave the
+	// disk-side assertion below empty.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	opStore, err := opstate.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("opstate.NewStore: %v", err)
+	}
+	store := newLoopDefinitionStore(opStore)
+
 	runtime := &loopDefinitionRuntime{
 		definitions: reg,
 		scheduleCh:  make(chan struct{}, 1),
@@ -283,6 +304,7 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 		loopDefinitionRegistry: reg,
 		loopDefinitionRuntime:  runtime,
 		loopRegistry:           loops,
+		loopDefinitionStore:    store,
 	}
 
 	_, err = a.mutateLoopSubscriptions(context.Background(), "leaf",
@@ -294,8 +316,24 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 		t.Fatalf("mutateLoopSubscriptions: %v", err)
 	}
 
-	// Persisted view: the definition registry should hold the
-	// new subscription.
+	// Disk-side assertion: read the store directly. Failing here
+	// means persistLoopDefinition was skipped or didn't actually
+	// reach the backing opstate — the in-memory DefinitionRegistry
+	// would still show the change, so the previous version of
+	// this test would have passed and missed the regression.
+	persisted, err := opStore.Get(loopDefinitionRegistryNamespace, "leaf")
+	if err != nil {
+		t.Fatalf("opStore.Get: %v", err)
+	}
+	if persisted == "" {
+		t.Fatal("opStore has no row for leaf — persistLoopDefinition was skipped")
+	}
+	if !strings.Contains(persisted, "sensor.foo") {
+		t.Errorf("persisted payload missing sensor.foo: %s", persisted)
+	}
+
+	// In-memory definition-registry view: same content via the
+	// snapshot path most callers use.
 	snap := reg.Snapshot()
 	if snap == nil {
 		t.Fatal("definition registry Snapshot returned nil")
@@ -307,7 +345,7 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 		}
 		found = true
 		if len(def.Spec.Subscriptions) != 1 || def.Spec.Subscriptions[0].EntityID != "sensor.foo" {
-			t.Errorf("persisted Subscriptions = %v, want [sensor.foo]", def.Spec.Subscriptions)
+			t.Errorf("registry-snapshot Subscriptions = %v, want [sensor.foo]", def.Spec.Subscriptions)
 		}
 	}
 	if !found {
@@ -315,7 +353,9 @@ func TestMutateLoopSubscriptionsPersistsBeforeLivePatch(t *testing.T) {
 	}
 
 	// Live view: same change should be visible on the running
-	// loop. Equivalent state on both walkers is the invariant.
+	// loop. All three surfaces (disk, registry-snapshot, live
+	// loop) agreeing is the invariant the dual-walker model
+	// relies on.
 	liveSubs := live.Subscriptions()
 	if len(liveSubs) != 1 || liveSubs[0].EntityID != "sensor.foo" {
 		t.Errorf("live Subscriptions = %v, want [sensor.foo]", liveSubs)
