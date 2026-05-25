@@ -45,6 +45,54 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	}
 }
 
+func TestBuiltinToolCatalogIncludesAlwaysAvailableTools(t *testing.T) {
+	names := []string{
+		"activate_capability",
+		"deactivate_capability",
+		"reset_capabilities",
+		"list_loaded_capabilities",
+		"inspect_capability",
+		"activate_lens",
+		"deactivate_lens",
+		"list_lenses",
+		"thane_now",
+		"thane_assign",
+		"request_core_attention",
+		"logs_query",
+	}
+	for _, name := range names {
+		spec, ok := LookupBuiltinToolSpec(name)
+		if !ok {
+			t.Fatalf("LookupBuiltinToolSpec(%q) not found", name)
+		}
+		if spec.CanonicalID != "native:"+name {
+			t.Fatalf("LookupBuiltinToolSpec(%q).CanonicalID = %q, want native:%s", name, spec.CanonicalID, name)
+		}
+		if spec.Source != NativeToolSource {
+			t.Fatalf("LookupBuiltinToolSpec(%q).Source = %q, want %q", name, spec.Source, NativeToolSource)
+		}
+	}
+}
+
+func TestBuiltinToolCatalogIncludesLoopIntentFrontDoors(t *testing.T) {
+	spec, ok := LookupBuiltinToolSpec("thane_create_container")
+	if !ok {
+		t.Fatal("thane_create_container missing from builtin tool catalog")
+	}
+	if !containsString(spec.Tags, "loops") {
+		t.Fatalf("thane_create_container tags = %v, want loops", spec.Tags)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRenderLoadedCapabilitySummary_UsesDescriptionsAndFallsBackForUnknownTags(t *testing.T) {
 	summary := RenderLoadedCapabilitySummary([]CapabilitySurface{
 		{

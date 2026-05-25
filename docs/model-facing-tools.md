@@ -49,8 +49,8 @@ Good:
 - `add_entity_subscription`
 
 If platform or source matters, keep it in the name, but do not drop the
-verb to make room for it. Prefer names like
-`macos_calendar_list_events` over names like `macos_calendar_events`.
+verb to make room for it. Current compatibility names such as
+`macos_calendar_events` should not set the precedent for new APIs.
 
 Avoid:
 
@@ -288,8 +288,8 @@ Bad:
 
 Better:
 
-- `read_file(path="/home/thane/config.yaml")`
-- `read_file(path="kb:reference/architecture.md")`
+- `file_read(path="/home/thane/config.yaml")`
+- `file_read(path="kb:reference/architecture.md")`
 - `ha_automation_get(entity_id="automation.low_battery_warning")`
 
 ## Delegate-Specific Guidance

@@ -132,18 +132,18 @@ func (r *Registry) registerEmailTools() {
 
 	r.Register(&Tool{
 		Name:        "email_mark",
-		Description: "Add or remove flags on email messages. Supports marking as read/unread, flagged/unflagged, or answered.",
+		Description: "Add or remove flags on email messages. Supports marking as read/unread, flagged/unflagged, or answered. Provide either `uids` (preferred, an array) or the singular `uid` convenience form — the handler rejects calls with neither.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"uids": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "integer"},
-					"description": "Message UIDs to modify (array of integers)",
+					"description": "Message UIDs to modify (array of integers). Required unless `uid` is provided.",
 				},
 				"uid": map[string]any{
 					"type":        "integer",
-					"description": "Single message UID to modify (convenience alternative to uids)",
+					"description": "Single message UID to modify. Convenience alternative to `uids` — at least one of the two must be set.",
 				},
 				"flag": map[string]any{
 					"type":        "string",
@@ -208,7 +208,7 @@ func (r *Registry) registerEmailTools() {
 
 	r.Register(&Tool{
 		Name:        "email_reply",
-		Description: "Reply to an existing email. Preserves threading headers (In-Reply-To, References) for proper conversation threading. The body is written in markdown. Use reply_all to include all original recipients.",
+		Description: "Reply to an existing email. Preserves threading headers (In-Reply-To, References) for proper conversation threading. The body is written in markdown. Use reply_all to include all original recipients. Reply recipients (original sender plus Cc when reply_all is true) flow through the same recipient trust-zone gating as email_send — all recipients must be in the contact directory with an appropriate trust zone.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -242,33 +242,36 @@ func (r *Registry) registerEmailTools() {
 
 	r.Register(&Tool{
 		Name:        "email_move",
-		Description: "Move email messages between folders. Useful for archiving messages after reading or replying. Pass the target folder as 'destination'. If only 'folder' is provided (without 'destination'), it is treated as the destination.",
+		Description: "Move email messages between folders. Useful for archiving messages after reading or replying. Provide either `uids` (preferred, an array) or the singular `uid` convenience form — the handler rejects calls with neither. Pass the target folder as `destination`; if only `folder` is provided (without `destination`), it is treated as the destination.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"uids": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "integer"},
-					"description": "Message UIDs to move (array of integers)",
+					"description": "Message UIDs to move (array of integers). Required unless `uid` is provided.",
 				},
 				"uid": map[string]any{
 					"type":        "integer",
-					"description": "Single message UID to move (convenience alternative to uids)",
+					"description": "Single message UID to move. Convenience alternative to `uids` — at least one of the two must be set.",
 				},
 				"folder": map[string]any{
 					"type":        "string",
-					"description": "Source folder (default: INBOX). If destination is omitted, folder is treated as the destination instead.",
+					"description": "Source folder (default: INBOX). If `destination` is omitted, `folder` is promoted to the destination instead.",
 				},
 				"destination": map[string]any{
 					"type":        "string",
-					"description": "Target folder to move messages to (e.g., Archive, Trash)",
+					"description": "Target folder to move messages to (e.g., Archive, Trash). Required unless `folder` is supplied as the destination alias described above.",
 				},
 				"account": map[string]any{
 					"type":        "string",
 					"description": "Email account name (default: primary account)",
 				},
 			},
-			// destination is validated by the handler (folder accepted as alias).
+			// One of (uids|uid) and one of (destination|folder) are
+			// validated by the handler; left out of `required` here
+			// so the standard JSON-schema validator doesn't reject
+			// the legitimate `folder`-as-destination alias path.
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.emailTools.HandleMove(ctx, args)

@@ -16,14 +16,14 @@ func (r *Registry) registerMediaFeedTools(ft *media.FeedTools) {
 
 	r.Register(&Tool{
 		Name:        "media_follow",
-		Description: "Follow an RSS/Atom feed or YouTube channel. New entries will be detected during periodic polling and reported to you. Accepts direct RSS/Atom URLs or YouTube channel URLs (e.g., https://www.youtube.com/@ChannelName).",
+		Description: "Follow an RSS/Atom feed or YouTube channel. New entries are detected during periodic polling and dispatched as event-source wakes to the built-in media-default-handler loop. Pass an explicit `wake_loop` to route wakes to a custom handler (e.g. a thane_curate-managed document) instead. Accepts direct RSS/Atom URLs or YouTube channel URLs (e.g., https://www.youtube.com/@ChannelName).",
 		Parameters:  media.FollowDefinition(),
 		Handler:     ft.FollowHandler(),
 	})
 
 	r.Register(&Tool{
 		Name:        "media_unfollow",
-		Description: "Stop following a feed. Use media_feeds to find the feed_id.",
+		Description: "Stop following a feed. Use media_feeds to find the subscription_id.",
 		Parameters:  media.UnfollowDefinition(),
 		Handler:     ft.UnfollowHandler(),
 	})
