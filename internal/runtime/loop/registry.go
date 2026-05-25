@@ -79,13 +79,12 @@ func (r *Registry) Register(l *Loop) error {
 	l.setAncestorTagsFunc(func() []string {
 		return r.ancestorContainerTags(loopID)
 	})
-	l.setEffectiveStateFunc(func() ([]EffectiveTag, []EffectiveSubscription) {
+	l.setEffectiveStateFunc(func() effectiveStateResult {
 		// One walk, atomic snapshot: a second walk could observe a
 		// SetSubscriptions between the two calls and yield tags +
 		// subscriptions from different points in time. Status callers
 		// would have no way to tell.
-		subs, tags := r.effectiveState(loopID)
-		return tags, subs
+		return r.effectiveState(loopID)
 	})
 	r.logger.Debug("loop registered",
 		"loop_id", l.id,
@@ -239,6 +238,18 @@ func (r *Registry) Children(loopID string) []*Loop {
 	return children
 }
 
+// effectiveStateResult is the bundle returned by the shared internal
+// walker. Surfaced through dedicated Effective* methods rather than
+// directly so each public field can carry its own GoDoc and so the
+// internal shape can grow without changing every caller signature.
+type effectiveStateResult struct {
+	Subscriptions    []EffectiveSubscription
+	Tags             []EffectiveTag
+	ExcludeTools     []EffectiveExcludeTool
+	RoutingFactors   []EffectiveRoutingFactor
+	DelegationGating *EffectiveDelegationGating
+}
+
 // EffectiveSubscriptions returns the deduplicated effective entity
 // subscriptions for loopID with provenance: the union of the loop's
 // own Subscriptions and every container ancestor's, walked parent-
@@ -256,8 +267,7 @@ func (r *Registry) Children(loopID string) []*Loop {
 // ancestors are skipped to match the tag-inheritance contract from
 // Phase 1A.
 func (r *Registry) EffectiveSubscriptions(loopID string) []EffectiveSubscription {
-	subs, _ := r.effectiveState(loopID)
-	return subs
+	return r.effectiveState(loopID).Subscriptions
 }
 
 // EffectiveTags returns the deduplicated effective capability tags
@@ -266,8 +276,35 @@ func (r *Registry) EffectiveSubscriptions(loopID string) []EffectiveSubscription
 // [EffectiveOriginSelf] in From, inherited tags carry the ancestor
 // container's name.
 func (r *Registry) EffectiveTags(loopID string) []EffectiveTag {
-	_, tags := r.effectiveState(loopID)
-	return tags
+	return r.effectiveState(loopID).Tags
+}
+
+// EffectiveExcludeTools returns the deduplicated union of the loop's
+// own ExcludeTools and every container ancestor's, walked parent-
+// first. Union semantics mean a descendant cannot un-exclude a tool
+// the ancestor restricted; provenance on each entry tells the
+// operator (or model) where the exclusion came from.
+func (r *Registry) EffectiveExcludeTools(loopID string) []EffectiveExcludeTool {
+	return r.effectiveState(loopID).ExcludeTools
+}
+
+// EffectiveRoutingFactors returns the resolved routing-factor map
+// for loopID, walked parent-first with child-wins on key collision.
+// Each entry carries the origin loop name; collisions silently keep
+// the closest declaration. Returns nil when nothing in the chain
+// declares any factors.
+func (r *Registry) EffectiveRoutingFactors(loopID string) []EffectiveRoutingFactor {
+	return r.effectiveState(loopID).RoutingFactors
+}
+
+// EffectiveDelegationGating returns the resolved delegation-gating
+// value for loopID using closest-non-empty semantics: the loop's
+// own value wins if set; otherwise the nearest ancestor that
+// declares a non-empty value wins. Returns nil when no loop in the
+// chain declared a non-empty value (i.e. the agent default
+// applies).
+func (r *Registry) EffectiveDelegationGating(loopID string) *EffectiveDelegationGating {
+	return r.effectiveState(loopID).DelegationGating
 }
 
 // AncestorSubscriptions returns the same union [EffectiveSubscriptions]
@@ -308,14 +345,24 @@ func (r *Registry) ancestorContainerTags(loopID string) []string {
 	return inherited
 }
 
-// effectiveState is the shared single-pass walker behind
-// [EffectiveSubscriptions] and [EffectiveTags]. It snapshots the
-// parent chain under the registry lock (parent_id and operation are
-// construction-set invariants), then pulls each loop's subscriptions
-// via [Loop.Subscriptions], which clones under l.mu — preventing the
-// data race that would arise from reading l.config.Subscriptions
-// while holding only r.mu.
-func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []EffectiveTag) {
+// effectiveState is the shared single-pass walker behind every
+// Registry.Effective* method. It snapshots the parent chain under
+// the registry lock (parent_id and operation are construction-set
+// invariants), then pulls each loop's mutable state via the locked
+// snapshot accessors on [Loop] — preventing the data races that
+// would arise from reading l.config.* directly while holding only
+// r.mu.
+//
+// Each cascading field uses its own merge semantics:
+//
+//   - Subscriptions / Tags / ExcludeTools — union, first-wins on
+//     key (entity_id / tag / tool name). Closest declaration in
+//     the chain takes priority on collision.
+//   - RoutingFactors — map merge, child-wins on key collision.
+//     Same closest-declaration-wins behavior, just expressed over
+//     map[string]string instead of a slice.
+//   - DelegationGating — single scalar, closest non-empty wins.
+func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 	r.mu.RLock()
 	walk := make([]*Loop, 0, 4)
 	current := r.loops[loopID]
@@ -337,15 +384,15 @@ func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []Eff
 	r.mu.RUnlock()
 
 	if len(walk) == 0 {
-		return nil, nil
+		return effectiveStateResult{}
 	}
 
-	var (
-		subs     []EffectiveSubscription
-		tags     []EffectiveTag
-		seenSubs = make(map[string]struct{})
-		seenTags = make(map[string]struct{})
-	)
+	result := effectiveStateResult{}
+	seenSubs := make(map[string]struct{})
+	seenTags := make(map[string]struct{})
+	seenExcludes := make(map[string]struct{})
+	seenFactors := make(map[string]struct{})
+
 	for i, l := range walk {
 		// The starting loop contributes regardless of operation; only
 		// ancestors are filtered to container nodes (matches the tag-
@@ -357,6 +404,7 @@ func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []Eff
 		if i > 0 {
 			origin = l.Name()
 		}
+
 		for _, sub := range l.Subscriptions() {
 			if sub.EntityID == "" {
 				continue
@@ -365,7 +413,7 @@ func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []Eff
 				continue
 			}
 			seenSubs[sub.EntityID] = struct{}{}
-			subs = append(subs, EffectiveSubscription{
+			result.Subscriptions = append(result.Subscriptions, EffectiveSubscription{
 				EntitySubscription: sub,
 				From:               origin,
 			})
@@ -378,10 +426,45 @@ func (r *Registry) effectiveState(loopID string) ([]EffectiveSubscription, []Eff
 				continue
 			}
 			seenTags[tag] = struct{}{}
-			tags = append(tags, EffectiveTag{Tag: tag, From: origin})
+			result.Tags = append(result.Tags, EffectiveTag{Tag: tag, From: origin})
+		}
+		for _, tool := range l.excludeToolsSnapshot() {
+			if tool == "" {
+				continue
+			}
+			if _, dup := seenExcludes[tool]; dup {
+				continue
+			}
+			seenExcludes[tool] = struct{}{}
+			result.ExcludeTools = append(result.ExcludeTools, EffectiveExcludeTool{
+				Tool: tool,
+				From: origin,
+			})
+		}
+		for key, value := range l.routingFactorsSnapshot() {
+			if key == "" {
+				continue
+			}
+			if _, dup := seenFactors[key]; dup {
+				continue
+			}
+			seenFactors[key] = struct{}{}
+			result.RoutingFactors = append(result.RoutingFactors, EffectiveRoutingFactor{
+				Key:   key,
+				Value: value,
+				From:  origin,
+			})
+		}
+		if result.DelegationGating == nil {
+			if gating := l.delegationGatingSnapshot(); gating != "" {
+				result.DelegationGating = &EffectiveDelegationGating{
+					Value: gating,
+					From:  origin,
+				}
+			}
 		}
 	}
-	return subs, tags
+	return result
 }
 
 // FindByName returns all live loops with the exact given name.

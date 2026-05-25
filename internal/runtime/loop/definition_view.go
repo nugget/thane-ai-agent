@@ -62,6 +62,17 @@ type DefinitionEffectiveState struct {
 	// Spec.Subscriptions and every container ancestor's, first-wins
 	// on entity_id (own declarations override inherited options).
 	Subscriptions []EffectiveSubscription `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
+	// ExcludeTools is the union of the loop's own ExcludeTools and
+	// every container ancestor's. Union semantics — a descendant
+	// cannot un-exclude an ancestor's restriction.
+	ExcludeTools []EffectiveExcludeTool `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	// RoutingFactors is the merged routing-factor map, child-wins on
+	// key collision. Each entry names its origin loop.
+	RoutingFactors []EffectiveRoutingFactor `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
+	// DelegationGating is the resolved gating value plus its origin.
+	// Nil when no loop in the chain declared a non-empty value (the
+	// agent default applies).
+	DelegationGating *EffectiveDelegationGating `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"`
 }
 
 // DefinitionRegistryView is the effective combined view of stored loop
@@ -161,14 +172,19 @@ func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime
 			Warnings:           warnings,
 		}
 		if options.loops != nil && status.Running && status.LoopID != "" {
-			// One walk per definition: EffectiveTags + EffectiveSubscriptions
-			// would do two ancestor traversals that could observe different
-			// snapshots if SetSubscriptions ran between them.
-			subs, tags := options.loops.effectiveState(status.LoopID)
-			if len(tags) > 0 || len(subs) > 0 {
+			// One walk per definition: per-field Effective* calls
+			// would do separate ancestor traversals that could observe
+			// different snapshots if SetSubscriptions ran between them.
+			eff := options.loops.effectiveState(status.LoopID)
+			if len(eff.Tags) > 0 || len(eff.Subscriptions) > 0 ||
+				len(eff.ExcludeTools) > 0 || len(eff.RoutingFactors) > 0 ||
+				eff.DelegationGating != nil {
 				dv.Effective = &DefinitionEffectiveState{
-					Tags:          tags,
-					Subscriptions: subs,
+					Tags:             eff.Tags,
+					Subscriptions:    eff.Subscriptions,
+					ExcludeTools:     eff.ExcludeTools,
+					RoutingFactors:   eff.RoutingFactors,
+					DelegationGating: eff.DelegationGating,
 				}
 			}
 		}

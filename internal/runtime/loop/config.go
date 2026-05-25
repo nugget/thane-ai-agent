@@ -543,6 +543,18 @@ type Status struct {
 	// covers both "no registry hook installed" and "registry hook
 	// installed but nothing to report."
 	EffectiveSubscriptions []EffectiveSubscription `json:"effective_subscriptions,omitempty"`
+	// EffectiveExcludeTools is the post-ancestor-merge view of this
+	// loop's tool exclusions, with provenance on each entry. Same
+	// nil-conflation as EffectiveTags.
+	EffectiveExcludeTools []EffectiveExcludeTool `json:"effective_exclude_tools,omitempty"`
+	// EffectiveRoutingFactors is the post-ancestor-merge view of this
+	// loop's routing factors, child-wins on key collision. Same
+	// nil-conflation as EffectiveTags.
+	EffectiveRoutingFactors []EffectiveRoutingFactor `json:"effective_routing_factors,omitempty"`
+	// EffectiveDelegationGating is the resolved delegation-gating
+	// value plus its origin. Nil when no loop in the chain declared
+	// a non-empty value (the agent default applies).
+	EffectiveDelegationGating *EffectiveDelegationGating `json:"effective_delegation_gating,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }
