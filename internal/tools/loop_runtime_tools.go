@@ -17,27 +17,28 @@ const (
 )
 
 type loopStatusView struct {
-	ID                 string             `json:"id"`
-	Name               string             `json:"name"`
-	State              looppkg.State      `json:"state"`
-	Operation          looppkg.Operation  `json:"operation,omitempty"`
-	Completion         looppkg.Completion `json:"completion,omitempty"`
-	ParentID           string             `json:"parent_id,omitempty"`
-	StartedAt          time.Time          `json:"started_at"`
-	LastWakeAt         time.Time          `json:"last_wake_at,omitempty"`
-	Iterations         int                `json:"iterations"`
-	Attempts           int                `json:"attempts"`
-	TotalInputTokens   int                `json:"total_input_tokens"`
-	TotalOutputTokens  int                `json:"total_output_tokens"`
-	LastInputTokens    int                `json:"last_input_tokens,omitempty"`
-	LastOutputTokens   int                `json:"last_output_tokens,omitempty"`
-	LastError          string             `json:"last_error,omitempty"`
-	ConsecutiveErrors  int                `json:"consecutive_errors,omitempty"`
-	HandlerOnly        bool               `json:"handler_only,omitempty"`
-	EventDriven        bool               `json:"event_driven,omitempty"`
-	LastSupervisorIter int                `json:"last_supervisor_iter,omitempty"`
-	ActiveTags         []string           `json:"active_tags,omitempty"`
-	Metadata           map[string]string  `json:"metadata,omitempty"`
+	ID                    string             `json:"id"`
+	Name                  string             `json:"name"`
+	State                 looppkg.State      `json:"state"`
+	Operation             looppkg.Operation  `json:"operation,omitempty"`
+	Completion            looppkg.Completion `json:"completion,omitempty"`
+	ParentID              string             `json:"parent_id,omitempty"`
+	StartedAt             time.Time          `json:"started_at"`
+	LastWakeAt            time.Time          `json:"last_wake_at,omitempty"`
+	Iterations            int                `json:"iterations"`
+	Attempts              int                `json:"attempts"`
+	TotalInputTokens      int                `json:"total_input_tokens"`
+	TotalOutputTokens     int                `json:"total_output_tokens"`
+	LastInputTokens       int                `json:"last_input_tokens,omitempty"`
+	LastOutputTokens      int                `json:"last_output_tokens,omitempty"`
+	LastError             string             `json:"last_error,omitempty"`
+	ConsecutiveErrors     int                `json:"consecutive_errors,omitempty"`
+	HandlerOnly           bool               `json:"handler_only,omitempty"`
+	EventDriven           bool               `json:"event_driven,omitempty"`
+	LastSupervisorIter    int                `json:"last_supervisor_iter,omitempty"`
+	LastSupervisorTrigger string             `json:"last_supervisor_trigger,omitempty"`
+	ActiveTags            []string           `json:"active_tags,omitempty"`
+	Metadata              map[string]string  `json:"metadata,omitempty"`
 }
 
 // LoopRuntimeToolDeps wires the live loop registry and ad hoc launch path
@@ -398,27 +399,28 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 
 func summarizeLoopStatus(status looppkg.Status) loopStatusView {
 	return loopStatusView{
-		ID:                 status.ID,
-		Name:               status.Name,
-		State:              status.State,
-		Operation:          status.Config.Operation,
-		Completion:         status.Config.Completion,
-		ParentID:           status.ParentID,
-		StartedAt:          status.StartedAt,
-		LastWakeAt:         status.LastWakeAt,
-		Iterations:         status.Iterations,
-		Attempts:           status.Attempts,
-		TotalInputTokens:   status.TotalInputTokens,
-		TotalOutputTokens:  status.TotalOutputTokens,
-		LastInputTokens:    status.LastInputTokens,
-		LastOutputTokens:   status.LastOutputTokens,
-		LastError:          status.LastError,
-		ConsecutiveErrors:  status.ConsecutiveErrors,
-		HandlerOnly:        status.HandlerOnly,
-		EventDriven:        status.EventDriven,
-		LastSupervisorIter: status.LastSupervisorIter,
-		ActiveTags:         append([]string(nil), status.ActiveTags...),
-		Metadata:           cloneLoopMetadata(status.Config.Metadata),
+		ID:                    status.ID,
+		Name:                  status.Name,
+		State:                 status.State,
+		Operation:             status.Config.Operation,
+		Completion:            status.Config.Completion,
+		ParentID:              status.ParentID,
+		StartedAt:             status.StartedAt,
+		LastWakeAt:            status.LastWakeAt,
+		Iterations:            status.Iterations,
+		Attempts:              status.Attempts,
+		TotalInputTokens:      status.TotalInputTokens,
+		TotalOutputTokens:     status.TotalOutputTokens,
+		LastInputTokens:       status.LastInputTokens,
+		LastOutputTokens:      status.LastOutputTokens,
+		LastError:             status.LastError,
+		ConsecutiveErrors:     status.ConsecutiveErrors,
+		HandlerOnly:           status.HandlerOnly,
+		EventDriven:           status.EventDriven,
+		LastSupervisorIter:    status.LastSupervisorIter,
+		LastSupervisorTrigger: string(status.LastSupervisorTrigger),
+		ActiveTags:            append([]string(nil), status.ActiveTags...),
+		Metadata:              cloneLoopMetadata(status.Config.Metadata),
 	}
 }
 

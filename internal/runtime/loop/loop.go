@@ -275,6 +275,14 @@ type Loop struct {
 	// none yet.
 	lastSupervisorIter int
 
+	// lastSupervisorTrigger names the cause of the most recent
+	// successful supervisor turn — empty when lastSupervisorIter
+	// is zero. Surfaced through [Status.LastSupervisorTrigger] so
+	// the loop and dashboard can distinguish "random" Bernoulli
+	// hits from "forced" external signals when interpreting the
+	// recent-supervisor recency value.
+	lastSupervisorTrigger SupervisorTrigger
+
 	// llmContext holds enrichment data from the most recent
 	// loop_llm_start progress event (model, est_tokens, messages,
 	// tools, complexity, intent, reasoning). Set by makeProgressFunc
@@ -433,6 +441,26 @@ func (l *Loop) ParentID() string {
 // Operation returns the loop's runtime operation kind. Set once at
 // construction; safe to read without the loop lock.
 func (l *Loop) Operation() Operation { return l.config.Operation }
+
+// shouldRunSupervisor decides whether the next iteration runs as
+// a supervisor turn and reports the cause. Forced is the boolean
+// from [consumePendingNotifies] — true when at least one pending
+// notification carried `force_supervisor: true`. Random is the
+// per-wake Bernoulli trial driven by [Config.SupervisorProb].
+// Returns the trigger alongside the bool so callers don't have to
+// re-derive the cause when stamping the iteration record / events.
+// Forced wins over random — if both conditions are true, the
+// trigger reports "forced" because the external signal expresses
+// stronger operator intent than the dice.
+func (l *Loop) shouldRunSupervisor(forced bool) (bool, SupervisorTrigger) {
+	if forced {
+		return true, SupervisorTriggerForced
+	}
+	if l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb {
+		return true, SupervisorTriggerRandom
+	}
+	return false, SupervisorTriggerNone
+}
 
 // IsCore reports whether this loop is the singleton structural root
 // — the container with the well-known name [CoreLoopName]. Core is
@@ -642,28 +670,29 @@ func (l *Loop) Status() Status {
 	}
 
 	s := Status{
-		ID:                 l.id,
-		Name:               l.config.Name,
-		State:              l.state,
-		ParentID:           l.config.ParentID,
-		StartedAt:          l.startedAt,
-		LastWakeAt:         l.lastWakeAt,
-		Iterations:         l.iterations,
-		Attempts:           l.attempts,
-		TotalInputTokens:   l.totalInputTokens,
-		TotalOutputTokens:  l.totalOutputTokens,
-		LastInputTokens:    l.lastInputTokens,
-		LastOutputTokens:   l.lastOutputTokens,
-		ContextWindow:      l.contextWindow,
-		LastError:          l.lastError,
-		ConsecutiveErrors:  l.consecutiveErrors,
-		RecentConvIDs:      convIDsCopy,
-		RecentIterations:   iterCopy,
-		LLMContext:         llmCtxCopy,
-		LastSupervisorIter: l.lastSupervisorIter,
-		HandlerOnly:        l.config.Handler != nil,
-		EventDriven:        l.config.WaitFunc != nil,
-		Config:             cfgCopy,
+		ID:                    l.id,
+		Name:                  l.config.Name,
+		State:                 l.state,
+		ParentID:              l.config.ParentID,
+		StartedAt:             l.startedAt,
+		LastWakeAt:            l.lastWakeAt,
+		Iterations:            l.iterations,
+		Attempts:              l.attempts,
+		TotalInputTokens:      l.totalInputTokens,
+		TotalOutputTokens:     l.totalOutputTokens,
+		LastInputTokens:       l.lastInputTokens,
+		LastOutputTokens:      l.lastOutputTokens,
+		ContextWindow:         l.contextWindow,
+		LastError:             l.lastError,
+		ConsecutiveErrors:     l.consecutiveErrors,
+		RecentConvIDs:         convIDsCopy,
+		RecentIterations:      iterCopy,
+		LLMContext:            llmCtxCopy,
+		LastSupervisorIter:    l.lastSupervisorIter,
+		LastSupervisorTrigger: l.lastSupervisorTrigger,
+		HandlerOnly:           l.config.Handler != nil,
+		EventDriven:           l.config.WaitFunc != nil,
+		Config:                cfgCopy,
 	}
 	l.mu.Unlock()
 
@@ -1147,12 +1176,15 @@ func (l *Loop) run(ctx context.Context) {
 		l.currentConvID = convID
 		l.mu.Unlock()
 
-		// Determine if this iteration runs a supervisor turn.
-		isSupervisor := forceSupervisor || (l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb)
+		// Determine if this iteration runs a supervisor turn and
+		// stamp the cause once so downstream surfaces (events,
+		// iteration record, status) all see the same value.
+		isSupervisor, supervisorTrigger := l.shouldRunSupervisor(forceSupervisor)
 
 		iterLog := logger.With(
 			"conversation_id", convID,
 			"supervisor", isSupervisor,
+			"supervisor_trigger", string(supervisorTrigger),
 			"attempt", attemptCount+1,
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
@@ -1173,12 +1205,13 @@ func (l *Loop) run(ctx context.Context) {
 			Source:    events.SourceLoop,
 			Kind:      events.KindLoopIterationStart,
 			Data: map[string]any{
-				"loop_id":          l.id,
-				"loop_name":        l.config.Name,
-				"conversation_id":  convID,
-				"supervisor":       isSupervisor,
-				"attempt":          attemptCount + 1,
-				"signal_envelopes": len(signals),
+				"loop_id":            l.id,
+				"loop_name":          l.config.Name,
+				"conversation_id":    convID,
+				"supervisor":         isSupervisor,
+				"supervisor_trigger": string(supervisorTrigger),
+				"attempt":            attemptCount + 1,
+				"signal_envelopes":   len(signals),
 			},
 		})
 		iterLog.Debug("loop iteration starting")
@@ -1199,9 +1232,10 @@ func (l *Loop) run(ctx context.Context) {
 				}
 			} else {
 				result = &IterationResult{
-					ConvID:     convID,
-					Supervisor: isSupervisor,
-					Elapsed:    time.Since(iterStart),
+					ConvID:            convID,
+					Supervisor:        isSupervisor,
+					SupervisorTrigger: supervisorTrigger,
+					Elapsed:           time.Since(iterStart),
 				}
 			}
 			if model, ok := summary["model"].(string); ok && model != "" && result != nil {
@@ -1301,7 +1335,7 @@ func (l *Loop) run(ctx context.Context) {
 						l.mu.Unlock()
 					}
 					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
-					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor)
+					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor, supervisorTrigger)
 					runCancel()
 					err = turnErr
 					if len(turn.Summary) > 0 {
@@ -1360,6 +1394,7 @@ func (l *Loop) run(ctx context.Context) {
 			snap.ConvID = convID
 			snap.StartedAt = iterStartTime
 			snap.Supervisor = isSupervisor
+			snap.SupervisorTrigger = supervisorTrigger
 
 			if err != nil {
 				if ctx.Err() != nil {
@@ -1406,6 +1441,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.consecutiveErrors = 0
 				if isSupervisor {
 					l.lastSupervisorIter = l.iterations
+					l.lastSupervisorTrigger = supervisorTrigger
 				}
 				snap.Number = l.iterations
 				l.mu.Unlock()
@@ -1815,7 +1851,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 // runAgentTurn is the only loop-owned path that invokes the agent runner.
 // It captures runner response state needed by subsequent iterations and
 // returns the typed iteration result used by snapshots and telemetry.
-func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallback, iterStart time.Time, isSupervisor bool) (*IterationResult, *Response, error) {
+func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallback, iterStart time.Time, isSupervisor bool, supervisorTrigger SupervisorTrigger) (*IterationResult, *Response, error) {
 	resp, err := l.deps.Runner.Run(ctx, req, stream)
 	if err == nil && resp == nil {
 		err = fmt.Errorf("runner returned nil response")
@@ -1847,6 +1883,7 @@ func (l *Loop) runAgentTurn(ctx context.Context, req Request, stream StreamCallb
 		RequestID:          resp.RequestID,
 		Elapsed:            time.Since(iterStart),
 		Supervisor:         isSupervisor,
+		SupervisorTrigger:  supervisorTrigger,
 	}, resp, nil
 }
 

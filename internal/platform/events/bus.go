@@ -97,7 +97,8 @@ const (
 	// Data: loop_id, loop_name, iterations, attempts.
 	KindLoopStopped = "loop_stopped"
 	// KindLoopIterationStart signals the beginning of a loop iteration.
-	// Data: loop_id, loop_name, conversation_id, supervisor, attempt.
+	// Data: loop_id, loop_name, conversation_id, supervisor,
+	// supervisor_trigger, attempt, signal_envelopes.
 	KindLoopIterationStart = "loop_iteration_start"
 	// KindLoopIterationComplete signals the end of a loop iteration.
 	// Data: loop_id, loop_name, model, input_tokens, output_tokens,
