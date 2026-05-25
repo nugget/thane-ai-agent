@@ -614,6 +614,9 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 
 	const steering = "Focus on UPS load trends; ignore brief transients under 5 seconds."
 	tool := reg.Get("thane_curate")
+	if tool == nil {
+		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
+	}
 	if _, err := tool.Handler(context.Background(), map[string]any{
 		"name":         "instructions_test",
 		"intent":       "Watch the rack.",

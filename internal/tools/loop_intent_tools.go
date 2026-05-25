@@ -531,10 +531,10 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.Outp
 // thane_curate-created loop. The model running each iteration sees the
 // intent, the document target, the output mode, and the scoped output
 // tool name. Caller-supplied steering text lives on
-// [router.LoopProfile.Instructions] and is prepended at iteration time
-// by [loop.Loop.prepareAgentTurnRequest], so it doesn't appear here.
-// Kept short and shape-clear so the model can act without re-reading
-// the loop's own definition.
+// [router.LoopProfile.Instructions] and is prepended during task-turn
+// construction (see [loop.Loop.buildTaskTurn]), so it doesn't appear
+// here. Kept short and shape-clear so the model can act without
+// re-reading the loop's own definition.
 func buildCurateTask(intent, docRef, outputMode, outputToolName string) string {
 	var verb string
 	switch outputMode {
