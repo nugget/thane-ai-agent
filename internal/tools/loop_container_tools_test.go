@@ -40,11 +40,23 @@ func newContainerTestRig(t *testing.T) *containerTestRig {
 		if !ok {
 			return looppkg.LaunchResult{}, &looppkg.UnknownDefinitionError{Name: name}
 		}
-		// Mirror the production launch path: build a Loop from the spec
-		// (with parent_id from the launch), register it in the live
-		// registry, and return the resulting loop_id. Container loops
-		// skip the goroutine inside Loop.Start, so no runner is needed.
+		// Idempotency: if the loop is already registered, surface the
+		// existing ID. Mirrors the LaunchDefinition guard in
+		// internal/app so the tool layer can be retried safely.
+		if existing := loops.GetByName(name); existing != nil {
+			return looppkg.LaunchResult{LoopID: existing.ID(), Operation: spec.Operation, Detached: true}, nil
+		}
+		// Mirror the production launch path: build a Loop from the
+		// spec, resolve ParentName → live ParentID, register it in
+		// the live registry, and return the resulting loop_id.
+		// Container loops skip the goroutine inside Loop.Start, so no
+		// runner is needed.
 		cfg := spec.ToConfig()
+		if cfg.ParentName != "" && cfg.ParentID == "" {
+			if parent := loops.GetByName(cfg.ParentName); parent != nil {
+				cfg.ParentID = parent.ID()
+			}
+		}
 		if launch.ParentID != "" {
 			cfg.ParentID = launch.ParentID
 		}
@@ -163,8 +175,8 @@ func TestThaneCreateContainerNestsByName(t *testing.T) {
 	}
 
 	innerSpec := rig.persisted["inner"]
-	if innerSpec.Metadata["parent_name"] != "outer" {
-		t.Errorf("inner metadata parent_name = %q, want outer", innerSpec.Metadata["parent_name"])
+	if innerSpec.ParentName != "outer" {
+		t.Errorf("inner ParentName = %q, want outer", innerSpec.ParentName)
 	}
 
 	inner := rig.loops.GetByName("inner")
@@ -239,6 +251,46 @@ func TestLoopDefinitionDeleteRefusesNonEmptyContainer(t *testing.T) {
 	}
 	if len(rig.deleted) != 0 {
 		t.Errorf("deleted = %v, want untouched because delete refused", rig.deleted)
+	}
+}
+
+// TestThaneCreateContainerIdempotentRetry covers the retry contract:
+// calling thane_create_container a second time against an already-
+// running container (with the same parent) must short-circuit to the
+// existing loop_id instead of tripping
+// RunningDurableLoopOverridesError. This is the regression test for
+// the "ParentID in launch payload trips HasOverrides" bug.
+func TestThaneCreateContainerIdempotentRetry(t *testing.T) {
+	t.Parallel()
+	rig := newContainerTestRig(t)
+
+	if _, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
+		"name":   "outer",
+		"intent": "Outer.",
+	}); err != nil {
+		t.Fatalf("create outer: %v", err)
+	}
+	create := func() string {
+		out, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
+			"name":        "inner",
+			"intent":      "Inner.",
+			"parent_name": "outer",
+			"replace":     true,
+		})
+		if err != nil {
+			t.Fatalf("create inner: %v", err)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal([]byte(out), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return resp["loop_id"].(string)
+	}
+
+	first := create()
+	second := create()
+	if first != second {
+		t.Errorf("loop_id changed on retry: %q → %q (idempotent create should reuse existing)", first, second)
 	}
 }
 

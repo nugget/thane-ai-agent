@@ -79,20 +79,21 @@ func (e *PausedDefinitionError) Error() string {
 	return fmt.Sprintf("loop: definition %q is paused", e.Name)
 }
 
-// RunningServiceOverridesError reports that the caller targeted a
-// service-mode loop that is already running and supplied either
-// per-launch override fields or an inline spec that the runtime would
-// silently drop. The remediation is to mutate the stored spec (e.g.
-// spec.profile.model via loop_definition_set) and stop+relaunch,
-// rather than re-issuing the launch with payload that has no effect.
-type RunningServiceOverridesError struct {
+// RunningDurableLoopOverridesError reports that the caller targeted a
+// durable loop (service or container) that is already running and
+// supplied either per-launch override fields or an inline spec that the
+// runtime would silently drop. The remediation is to mutate the stored
+// spec (e.g. spec.profile.model via loop_definition_set) and
+// stop+relaunch, rather than re-issuing the launch with payload that
+// has no effect.
+type RunningDurableLoopOverridesError struct {
 	Name string
 }
 
-func (e *RunningServiceOverridesError) Error() string {
+func (e *RunningDurableLoopOverridesError) Error() string {
 	return fmt.Sprintf(
-		"loop: service definition %q is already running; "+
-			"both per-launch overrides and inline launch.spec changes are dropped for active service loops. "+
+		"loop: durable definition %q is already running; "+
+			"both per-launch overrides and inline launch.spec changes are dropped for active service and container loops. "+
 			"To apply new settings, update the stored spec via loop_definition_set "+
 			"(e.g. spec.profile.model) and restart with stop_loop + loop_definition_launch. "+
 			"To just retrieve the loop ID, call loop_definition_launch with an empty launch ({}).",

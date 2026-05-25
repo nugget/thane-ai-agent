@@ -391,6 +391,11 @@ func (l *Loop) ID() string { return l.id }
 // Name returns the loop's configured name.
 func (l *Loop) Name() string { return l.config.Name }
 
+// ParentID returns the loop ID of this loop's parent in the registry,
+// or empty for top-level loops. Reads the config snapshot taken at
+// construction time, so callers don't need the registry lock.
+func (l *Loop) ParentID() string { return l.config.ParentID }
+
 // ErrLoopStopped is returned by [Loop.Start] when the loop has already
 // been stopped. A stopped loop cannot be restarted.
 var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")

@@ -34,6 +34,7 @@ type specJSON struct {
 	FallbackContent        string            `json:"fallback_content,omitempty"`
 	Metadata               map[string]string `json:"metadata,omitempty"`
 	ParentID               string            `json:"parent_id,omitempty"`
+	ParentName             string            `json:"parent_name,omitempty"`
 }
 
 // MarshalJSON renders a loop spec in a human-facing contract shape
@@ -67,6 +68,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		FallbackContent:        s.FallbackContent,
 		Metadata:               s.Metadata,
 		ParentID:               s.ParentID,
+		ParentName:             s.ParentName,
 	}
 	onRetrigger, err := s.OnRetrigger.MarshalText()
 	if err != nil {
@@ -133,6 +135,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		FallbackContent:        wire.FallbackContent,
 		Metadata:               cloneStringMap(wire.Metadata),
 		ParentID:               wire.ParentID,
+		ParentName:             wire.ParentName,
 	}
 	profileData, err := json.Marshal(wire.Profile)
 	if err != nil {

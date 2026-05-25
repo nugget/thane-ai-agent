@@ -174,29 +174,24 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 		}
 	}
 
-	var parentID string
 	if parentName != "" {
 		if deps.LiveRegistry == nil {
 			return "", fmt.Errorf("parent_name set but live registry is not configured; tool cannot resolve container ancestry")
 		}
-		parent := deps.LiveRegistry.GetByName(parentName)
-		if parent == nil {
+		if parent := deps.LiveRegistry.GetByName(parentName); parent == nil {
 			return "", fmt.Errorf("parent container %q is not currently registered; create it first or wait for hydration", parentName)
 		}
-		parentID = parent.ID()
 	}
 
 	spec := looppkg.Spec{
-		Name:      name,
-		Enabled:   true,
-		Operation: looppkg.OperationContainer,
-		Tags:      tags,
+		Name:       name,
+		Enabled:    true,
+		Operation:  looppkg.OperationContainer,
+		Tags:       tags,
+		ParentName: parentName,
 		Metadata: map[string]string{
 			"intent": intent,
 		},
-	}
-	if parentName != "" {
-		spec.Metadata["parent_name"] = parentName
 	}
 	if err := spec.ValidatePersistable(); err != nil {
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
@@ -217,9 +212,21 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 		}
 	}
 
-	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{ParentID: parentID})
+	// Launch with an empty Launch so a retry of this tool against an
+	// already-running container short-circuits to the existing loop ID
+	// instead of tripping the running-durable-loop-with-overrides guard.
+	// The parent relationship is on the spec via ParentName and resolved
+	// at hydration time, so the launch payload stays free of overrides.
+	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{})
 	if err != nil {
 		return "", fmt.Errorf("launch container: %w", err)
+	}
+
+	var parentID string
+	if deps.LiveRegistry != nil {
+		if running := deps.LiveRegistry.Get(launchResult.LoopID); running != nil {
+			parentID = running.ParentID()
+		}
 	}
 
 	return ldMarshalToolJSON(map[string]any{

@@ -200,8 +200,19 @@ type Spec struct {
 	// Metadata holds arbitrary key/value pairs for the loop.
 	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 
-	// ParentID is the parent loop ID, if any.
+	// ParentID is the parent loop ID, if any. Set on the runtime spec at
+	// launch time (live loop IDs change per launch, so this field is not
+	// the durable parent reference). Persisted specs leave it empty.
 	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
+
+	// ParentName is the durable name of the parent loop. Survives
+	// restart because names — unlike loop IDs — are stable across
+	// hydration cycles. Hydration resolves [ParentName] to the live
+	// parent's loop ID before launching, so descendants land under the
+	// correct registry node and pick up tag inheritance immediately.
+	// Today only container parents are honored (children of services
+	// have no inheritance semantics).
+	ParentName string `yaml:"parent_name,omitempty" json:"parent_name,omitempty"`
 }
 
 // IsZero reports whether the spec is the zero value (no fields set).
@@ -258,46 +269,14 @@ func (s *Spec) Validate() error {
 // than an unused field, so the failure mode here is loud rather
 // than silently ignored.
 func validateContainerShape(s *Spec) error {
-	if strings.TrimSpace(s.Task) != "" {
-		return fmt.Errorf("loop: container %q cannot set task", s.Name)
-	}
-	if s.TaskBuilder != nil {
-		return fmt.Errorf("loop: container %q cannot set TaskBuilder", s.Name)
-	}
-	if s.TurnBuilder != nil {
-		return fmt.Errorf("loop: container %q cannot set TurnBuilder", s.Name)
-	}
-	if s.Handler != nil {
-		return fmt.Errorf("loop: container %q cannot set Handler", s.Name)
-	}
-	if s.WaitFunc != nil {
-		return fmt.Errorf("loop: container %q cannot set WaitFunc", s.Name)
-	}
-	if s.PostIterate != nil {
-		return fmt.Errorf("loop: container %q cannot set PostIterate", s.Name)
-	}
-	if s.SleepMin != 0 || s.SleepMax != 0 || s.SleepDefault != 0 {
-		return fmt.Errorf("loop: container %q cannot set sleep envelope (containers never wake)", s.Name)
-	}
-	if s.Jitter != nil {
-		return fmt.Errorf("loop: container %q cannot set jitter", s.Name)
-	}
-	if s.MaxDuration != 0 {
-		return fmt.Errorf("loop: container %q cannot set max_duration", s.Name)
-	}
-	if s.MaxIter != 0 {
-		return fmt.Errorf("loop: container %q cannot set max_iter", s.Name)
-	}
-	if s.Supervisor || s.SupervisorProb != 0 || strings.TrimSpace(s.SupervisorContext) != "" {
-		return fmt.Errorf("loop: container %q cannot set supervisor fields", s.Name)
-	}
-	if len(s.Outputs) > 0 {
-		return fmt.Errorf("loop: container %q cannot declare outputs", s.Name)
-	}
-	if s.Completion != "" && s.Completion != CompletionNone {
-		return fmt.Errorf("loop: container %q cannot set completion (containers never produce a result)", s.Name)
-	}
-	return nil
+	return containerShape(
+		s.Name, s.Task,
+		s.TaskBuilder != nil, s.TurnBuilder != nil, s.Handler != nil, s.WaitFunc != nil, s.PostIterate != nil,
+		s.SleepMin, s.SleepMax, s.SleepDefault, s.MaxDuration,
+		s.Jitter, s.MaxIter,
+		s.Supervisor, s.SupervisorProb, s.SupervisorContext,
+		len(s.Outputs), s.Completion,
+	)
 }
 
 // ValidatePersistable checks that the spec is valid and safe to store in
@@ -372,7 +351,55 @@ func (s *Spec) ToConfig() Config {
 		OutputContextBuilder:   ns.OutputContextBuilder,
 		Metadata:               cloneStringMap(ns.Metadata),
 		ParentID:               ns.ParentID,
+		ParentName:             ns.ParentName,
 	}
+}
+
+// containerShape is the shared shape contract for container loops. It
+// rejects every execution-related field, returning a category-error for
+// authoring mistakes (Spec layer) or programmer mistakes (Config layer)
+// rather than silently ignoring the value at runtime.
+func containerShape(name, task string, hasTaskBuilder, hasTurnBuilder, hasHandler, hasWaitFunc, hasPostIterate bool, sleepMin, sleepMax, sleepDefault, maxDuration time.Duration, jitter *float64, maxIter int, supervisor bool, supervisorProb float64, supervisorContext string, outputCount int, completion Completion) error {
+	if strings.TrimSpace(task) != "" {
+		return fmt.Errorf("loop: container %q cannot set task", name)
+	}
+	if hasTaskBuilder {
+		return fmt.Errorf("loop: container %q cannot set TaskBuilder", name)
+	}
+	if hasTurnBuilder {
+		return fmt.Errorf("loop: container %q cannot set TurnBuilder", name)
+	}
+	if hasHandler {
+		return fmt.Errorf("loop: container %q cannot set Handler", name)
+	}
+	if hasWaitFunc {
+		return fmt.Errorf("loop: container %q cannot set WaitFunc", name)
+	}
+	if hasPostIterate {
+		return fmt.Errorf("loop: container %q cannot set PostIterate", name)
+	}
+	if sleepMin != 0 || sleepMax != 0 || sleepDefault != 0 {
+		return fmt.Errorf("loop: container %q cannot set sleep envelope (containers never wake)", name)
+	}
+	if jitter != nil {
+		return fmt.Errorf("loop: container %q cannot set jitter", name)
+	}
+	if maxDuration != 0 {
+		return fmt.Errorf("loop: container %q cannot set max_duration", name)
+	}
+	if maxIter != 0 {
+		return fmt.Errorf("loop: container %q cannot set max_iter", name)
+	}
+	if supervisor || supervisorProb != 0 || strings.TrimSpace(supervisorContext) != "" {
+		return fmt.Errorf("loop: container %q cannot set supervisor fields", name)
+	}
+	if outputCount > 0 {
+		return fmt.Errorf("loop: container %q cannot declare outputs", name)
+	}
+	if completion != "" && completion != CompletionNone {
+		return fmt.Errorf("loop: container %q cannot set completion (containers never produce a result)", name)
+	}
+	return nil
 }
 
 // EffectiveConfig returns the engine-facing configuration for this spec

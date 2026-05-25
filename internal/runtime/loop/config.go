@@ -281,6 +281,13 @@ type Config struct {
 	// ParentID is the loop ID of the parent that spawned this loop,
 	// if any. Empty for top-level loops.
 	ParentID string
+
+	// ParentName is the durable name of the parent loop. Carries
+	// across the spec→config boundary so hydration paths that haven't
+	// resolved a live ParentID yet still know which parent the loop
+	// belongs under. The runtime resolves [ParentName] to [ParentID]
+	// at launch time when a live parent exists.
+	ParentName string
 }
 
 // Default configuration values. Exported so callers can reference them
@@ -331,12 +338,19 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Operation == OperationContainer {
 		// Containers are inert nodes — no execution hook, no wake
-		// timer. Spec-level validation already rejects authoring
-		// mistakes that would set those fields; this branch keeps
-		// the engine-level validator honest when a Config is built
-		// directly (e.g. by [New] from caller-supplied data).
-		if err := validateOutputs(c.Outputs); err != nil {
-			return fmt.Errorf("loop: %w", err)
+		// timer. Reject execution-shaped fields the same way
+		// [Spec.Validate] does so callers that build a Config directly
+		// (tests, internal adapters) get the same category-error
+		// contract instead of having fields silently ignored at start.
+		if err := containerShape(
+			c.Name, c.Task,
+			c.TaskBuilder != nil, c.TurnBuilder != nil, c.Handler != nil, c.WaitFunc != nil, c.PostIterate != nil,
+			c.SleepMin, c.SleepMax, c.SleepDefault, c.MaxDuration,
+			c.Jitter, c.MaxIter,
+			c.Supervisor, c.SupervisorProb, c.SupervisorContext,
+			len(c.Outputs), c.Completion,
+		); err != nil {
+			return err
 		}
 		return nil
 	}
