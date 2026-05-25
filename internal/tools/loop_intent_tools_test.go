@@ -580,6 +580,158 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 	}
 }
 
+// TestThaneCurate_InstructionsFlowToProfile verifies that the
+// `instructions` tool arg lands on Spec.Profile.Instructions (the
+// canonical iteration-prepend surface) and NOT on the Spec.Task via
+// the older "Guidance: ..." fold. Two failure modes to guard against:
+// (1) the arg silently dropped, (2) the arg still being concatenated
+// into Task — both would mean a caller's steering text shows up in
+// the wrong place or twice if anything restores the old code path.
+func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "loop-inst-1"}, nil
+		},
+	})
+
+	const steering = "Focus on UPS load trends; ignore brief transients under 5 seconds."
+	tool := reg.Get("thane_curate")
+	if tool == nil {
+		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
+	}
+	if _, err := tool.Handler(context.Background(), map[string]any{
+		"name":         "instructions_test",
+		"intent":       "Watch the rack.",
+		"sleep_min":    "5m",
+		"sleep_max":    "30m",
+		"instructions": "  " + steering + "  ", // whitespace trimmed
+		"output": map[string]any{
+			"mode":     "maintain",
+			"document": "kb:dashboards/rack.md",
+		},
+	}); err != nil {
+		t.Fatalf("thane_curate handler: %v", err)
+	}
+
+	snap := defRegistry.Snapshot()
+	var found *looppkg.DefinitionSnapshot
+	for i := range snap.Definitions {
+		if snap.Definitions[i].Spec.Name == "instructions_test" {
+			found = &snap.Definitions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("definition not registered")
+	}
+	if found.Spec.Profile.Instructions != steering {
+		t.Errorf("Profile.Instructions = %q, want %q (whitespace trimmed)", found.Spec.Profile.Instructions, steering)
+	}
+	if strings.Contains(found.Spec.Task, "Guidance:") {
+		t.Errorf("Spec.Task should not carry legacy \"Guidance:\" fold, got: %s", found.Spec.Task)
+	}
+	if strings.Contains(found.Spec.Task, steering) {
+		t.Errorf("Spec.Task should not carry the steering text directly; it belongs on Profile.Instructions. Task: %s", found.Spec.Task)
+	}
+}
+
+// TestThaneCurate_InstructionsOmitted verifies that omitting
+// `instructions` results in an empty Profile.Instructions (not nil-vs-
+// empty-string weirdness, not a default value), and the Task text
+// stays minimal.
+func TestThaneCurate_InstructionsOmitted(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	docTools := documents.NewTools(docStore)
+
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:    docTools,
+		Registry:    defRegistry,
+		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
+		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "loop-inst-2"}, nil
+		},
+	})
+
+	tool := reg.Get("thane_curate")
+	if _, err := tool.Handler(context.Background(), map[string]any{
+		"name":      "no_instructions",
+		"intent":    "Watch.",
+		"sleep_min": "5m",
+		"sleep_max": "30m",
+		"output": map[string]any{
+			"mode":     "maintain",
+			"document": "kb:dashboards/no-inst.md",
+		},
+	}); err != nil {
+		t.Fatalf("thane_curate handler: %v", err)
+	}
+
+	snap := defRegistry.Snapshot()
+	var found *looppkg.DefinitionSnapshot
+	for i := range snap.Definitions {
+		if snap.Definitions[i].Spec.Name == "no_instructions" {
+			found = &snap.Definitions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("definition not registered")
+	}
+	if found.Spec.Profile.Instructions != "" {
+		t.Errorf("Profile.Instructions = %q, want empty when omitted", found.Spec.Profile.Instructions)
+	}
+}
+
 // fakeSubscriptionStore captures the interface-method calls so tests
 // can assert on the per-loop watchlist plumbing without standing up
 // a real SQLite database.
