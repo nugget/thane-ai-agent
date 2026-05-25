@@ -47,12 +47,28 @@ type Talent struct {
 // requires the OR check to pass AND the AND check to pass — useful
 // for articles that should fire for several entry-point tags but only
 // when paired with a runtime-asserted gate (e.g., owner + signal).
+//
+// Name is the explicit per-talent identifier. Required for every node
+// in a multi-node talent file (where there's no filename to fall back
+// to). Optional for single-node files — when omitted, the loader uses
+// the filename (without .md) so existing talents keep working without
+// migration.
 type Frontmatter struct {
+	Name     string
 	Tags     []string
 	TagsAll  []string
 	Kind     string
 	Teaser   string
 	NextTags []string
+}
+
+// Block represents a single parsed frontmatter + content pair from a
+// talent file. A single-node file produces one Block; a multi-node file
+// produces N. Block is the low-level shape under [Talent]; consumers
+// usually want [Loader.Talents] or [ParseFrontmatterMetadata] instead.
+type Block struct {
+	Frontmatter Frontmatter
+	Content     string
 }
 
 // listFiles returns a sorted slice of .md filenames in l.dir.
@@ -90,6 +106,12 @@ func (l *Loader) Talents() ([]Talent, error) {
 // passing each file through verifier. Verification runs immediately
 // before the file read so callers that have a document-root verifier can
 // avoid loading untrusted behavioral guidance into memory.
+//
+// Multi-node talent files (more than one frontmatter block) produce
+// one [Talent] per block, all sharing the same SourcePath. Every node
+// in a multi-node file must declare a unique name: in its frontmatter;
+// single-node files may omit name: and fall back to the filename
+// (without .md) for backward compatibility.
 func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, consumer string) ([]Talent, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -110,19 +132,50 @@ func (l *Loader) TalentsVerified(ctx context.Context, verifier VerifyPathFunc, c
 		if err != nil {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
-		name := strings.TrimSuffix(f, ".md")
-		meta, content := ParseFrontmatterMetadata(string(data))
-		ts = append(ts, Talent{
+		filename := strings.TrimSuffix(f, ".md")
+		blocks := ParseFrontmatterBlocks(string(data))
+		fileTalents, err := talentsFromBlocks(blocks, filename, path)
+		if err != nil {
+			return nil, err
+		}
+		ts = append(ts, fileTalents...)
+	}
+	return ts, nil
+}
+
+// talentsFromBlocks materializes parsed Blocks into Talents and enforces
+// the naming contract: multi-node files require declared, unique names;
+// single-node files may fall back to the filename.
+func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) {
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	out := make([]Talent, 0, len(blocks))
+	seen := make(map[string]bool, len(blocks))
+	multi := len(blocks) > 1
+	for i, block := range blocks {
+		name := strings.TrimSpace(block.Frontmatter.Name)
+		if name == "" {
+			if multi {
+				return nil, fmt.Errorf("talent %s: multi-node file requires name: on every node; block %d is missing one", path, i+1)
+			}
+			name = filename
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("talent %s: duplicate node name %q within file", path, name)
+		}
+		seen[name] = true
+		out = append(out, Talent{
 			Name:       name,
-			Tags:       meta.Tags,
-			Kind:       meta.Kind,
-			Teaser:     meta.Teaser,
-			NextTags:   append([]string(nil), meta.NextTags...),
-			Content:    content,
+			Tags:       block.Frontmatter.Tags,
+			Kind:       block.Frontmatter.Kind,
+			Teaser:     block.Frontmatter.Teaser,
+			NextTags:   append([]string(nil), block.Frontmatter.NextTags...),
+			Content:    block.Content,
 			SourcePath: path,
 		})
 	}
-	return ts, nil
+	return out, nil
 }
 
 // FilterByTags returns the combined content of talents matching the
@@ -220,43 +273,147 @@ func ParseFrontmatter(raw string) ([]string, string) {
 
 // ParseFrontmatterMetadata extracts the supported frontmatter fields and
 // returns both the parsed metadata and the stripped body content. Unknown
-// keys are ignored.
+// keys are ignored. For multi-node files, returns only the first block's
+// metadata + content; use [ParseFrontmatterBlocks] when all blocks matter.
 func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
-	if !strings.HasPrefix(raw, "---") {
+	blocks := ParseFrontmatterBlocks(raw)
+	if len(blocks) == 0 {
 		return Frontmatter{}, raw
 	}
+	return blocks[0].Frontmatter, blocks[0].Content
+}
 
-	// Find the closing "---" delimiter.
+// ParseFrontmatterBlocks splits a talent file into one or more
+// [Block]s. Each block starts with a YAML frontmatter delimited by
+// "---" lines and is followed by the body content up to the next
+// node boundary (or EOF). A node boundary is a "---" line followed by
+// a recognized frontmatter key (name, tags, tags_all, kind, teaser,
+// next_tags); a "---" followed by anything else stays as body content
+// (a markdown horizontal rule).
+//
+// Single-node files (the historical shape) return a length-1 slice.
+// Multi-node files return one [Block] per node. Returns a length-1
+// slice with the raw input as content when no frontmatter is found at
+// the file start — same fallback as the legacy single-block parser.
+func ParseFrontmatterBlocks(raw string) []Block {
+	if !strings.HasPrefix(raw, "---") {
+		return []Block{{Content: raw}}
+	}
+	var blocks []Block
+	remaining := raw
+	for {
+		block, rest, ok := parseOneBlock(remaining)
+		if !ok {
+			break
+		}
+		blocks = append(blocks, block)
+		if rest == "" {
+			break
+		}
+		remaining = rest
+	}
+	if len(blocks) == 0 {
+		return []Block{{Content: raw}}
+	}
+	return blocks
+}
+
+// parseOneBlock reads a single frontmatter+content pair from raw,
+// returning the parsed Block, any remaining bytes (for the next
+// iteration), and ok=false when raw doesn't start with a frontmatter.
+// The content ends at the next node boundary or EOF.
+func parseOneBlock(raw string) (Block, string, bool) {
+	if !strings.HasPrefix(raw, "---") {
+		return Block{}, "", false
+	}
 	rest := raw[3:]
 	rest = strings.TrimLeft(rest, " \t")
-	if len(rest) > 0 && rest[0] == '\n' {
+	switch {
+	case len(rest) > 0 && rest[0] == '\n':
 		rest = rest[1:]
-	} else if len(rest) > 1 && rest[0] == '\r' && rest[1] == '\n' {
+	case len(rest) > 1 && rest[0] == '\r' && rest[1] == '\n':
 		rest = rest[2:]
-	} else {
-		return Frontmatter{}, raw // No newline after opening ---
+	default:
+		return Block{}, "", false
 	}
-
 	closeIdx := strings.Index(rest, "\n---")
 	if closeIdx < 0 {
-		return Frontmatter{}, raw // No closing ---
+		return Block{}, "", false
 	}
-
 	frontmatter := rest[:closeIdx]
-	content := rest[closeIdx+4:] // Skip "\n---"
-	content = strings.TrimLeft(content, "\r\n")
+	afterClose := rest[closeIdx+4:] // skip "\n---"
+	afterClose = strings.TrimLeft(afterClose, "\r\n")
 
-	meta := parseFrontmatterLines(frontmatter)
-	return meta, content
+	// Scan the body for the next node boundary: a line that is "---"
+	// followed by a recognized frontmatter key. Bare "---" without a
+	// key beneath it stays as content (markdown horizontal rule).
+	content, remaining := splitAtNextNodeBoundary(afterClose)
+	return Block{
+		Frontmatter: parseFrontmatterLines(frontmatter),
+		Content:     content,
+	}, remaining, true
+}
+
+// splitAtNextNodeBoundary returns the body content up to the next
+// node-boundary marker and the remaining input (starting at "---") for
+// the next iteration. When no boundary is found, returns the entire
+// body and an empty remainder.
+func splitAtNextNodeBoundary(body string) (content, remainder string) {
+	search := body
+	offset := 0
+	for {
+		idx := strings.Index(search, "\n---")
+		if idx < 0 {
+			return body, ""
+		}
+		// Look at what's on the line after "---" — if it parses as a
+		// frontmatter key, this is a node boundary; otherwise it's a
+		// markdown HR and we keep scanning.
+		afterDashes := search[idx+4:]
+		afterDashes = strings.TrimLeft(afterDashes, " \t")
+		// Skip the rest of the "---" line and look at the next line.
+		if nl := strings.IndexByte(afterDashes, '\n'); nl >= 0 {
+			nextLine := strings.TrimSpace(afterDashes[nl+1:])
+			if firstKey, _, _ := strings.Cut(nextLine, ":"); isFrontmatterKey(strings.TrimSpace(firstKey)) {
+				absolute := offset + idx
+				// Drop the leading newline before "---" from content so
+				// trailing whitespace on the prior block stays clean.
+				return strings.TrimRight(body[:absolute], "\r\n"), body[absolute+1:]
+			}
+		}
+		// Not a node boundary — keep scanning past this "---".
+		offset += idx + 4
+		search = search[idx+4:]
+	}
+}
+
+// isFrontmatterKey reports whether key is one of the recognized
+// frontmatter field names. Used by [splitAtNextNodeBoundary] to
+// distinguish a node boundary (followed by a known key) from a
+// markdown horizontal rule (followed by prose or a different key).
+func isFrontmatterKey(key string) bool {
+	switch key {
+	case "name", "tags", "tags_all", "kind", "teaser", "next_tags":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseFrontmatterLines extracts the currently supported metadata keys
-// from frontmatter. Unknown keys are ignored.
+// from frontmatter. Unknown keys are ignored. The recognized key set
+// must stay in sync with [isFrontmatterKey], which the multi-block
+// parser uses to distinguish node boundaries from markdown horizontal
+// rules.
 func parseFrontmatterLines(frontmatter string) Frontmatter {
 	var meta Frontmatter
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case strings.HasPrefix(line, "name:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			value = strings.Trim(value, `"'`)
+			meta.Name = value
 		case strings.HasPrefix(line, "tags_all:"):
 			meta.TagsAll = parseFrontmatterTagList(strings.TrimPrefix(line, "tags_all:"))
 		case strings.HasPrefix(line, "tags:"):
