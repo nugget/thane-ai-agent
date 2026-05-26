@@ -189,8 +189,9 @@ when its scope should shift.
 
 2. **The watcher runs at its own pace** inside the envelope, tuning
    via `set_next_sleep` and adjusting its own watch set via
-   `watch_entity` / `unwatch_entity`. You don't interact during this
-   phase.
+   `update_entity_subscriptions` (same loop-scoped tool the operator
+   uses in step 4 to push focus down, just called by the watcher
+   against its own name). You don't interact during this phase.
 
 3. **The watcher pulls you in when something matters** via
    `request_core_attention`. This forces a supervisor turn on your

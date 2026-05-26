@@ -226,6 +226,20 @@ func LookupBuiltinToolSpec(name string) (BuiltinToolSpec, bool) {
 	return spec, true
 }
 
+// BuiltinToolSpecs returns a deep copy of the compiled-in tool catalog
+// keyed by tool wire name. Parallels [BuiltinTagSpecs] for the
+// tag-catalog half. Used by drift tests that need to iterate every
+// known tool — e.g., the talent corpus regression test that catches
+// hallucinated tool references in talent prose.
+func BuiltinToolSpecs() map[string]BuiltinToolSpec {
+	out := make(map[string]BuiltinToolSpec, len(builtinToolSpecs))
+	for name, spec := range builtinToolSpecs {
+		spec.Tags = append([]string(nil), spec.Tags...)
+		out[name] = spec
+	}
+	return out
+}
+
 // BuiltinTagSpecs returns a copy of the compiled-in tag catalog.
 func BuiltinTagSpecs() map[string]BuiltinTagSpec {
 	return maps.Clone(builtinTagSpecs)
