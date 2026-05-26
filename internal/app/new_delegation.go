@@ -61,7 +61,7 @@ func (a *App) initDelegation(s *newState) error {
 	//
 	// Mechanically: without Core, FilterByTags would drop these
 	// untagged tools when any tag is active (via channel_tags or
-	// model-driven activate_tag), and the model would lose
+	// model-driven tag_activate), and the model would lose
 	// access to the recommended delegation surface mid-conversation.
 	a.loop.Tools().Register(&tools.Tool{
 		Name:        "thane_now",

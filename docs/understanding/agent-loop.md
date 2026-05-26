@@ -71,7 +71,7 @@ talents the agent can see:
   provide core tools like memory, notifications, and session management
 - **Channel-pinned tags** activate automatically based on the request source
   (email requests activate `email`, HA requests activate `ha`)
-- **Agent-requested tags** activate when the agent calls `activate_tag`
+- **Agent-requested tags** activate when the agent calls `tag_activate`
   because it needs tools outside its current set
 
 This creates a dynamic toolset that starts lean and expands on demand.

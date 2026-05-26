@@ -476,7 +476,7 @@ talents_dir: ./talents
 #       Tags lists capability tags assigned to every bridged MCP tool from
 #       this server unless a per-tool override replaces them. Use this to
 #       attach MCP tools to existing capability tags so the model gates
-#       them behind activate_tag the same as native tools.
+#       them behind tag_activate the same as native tools.
 #       tags: []
 #       Tools contains optional metadata overrides keyed by the raw MCP tool
 #       name reported by the server.

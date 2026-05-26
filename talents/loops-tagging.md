@@ -15,8 +15,8 @@ sleep envelope.
 
 Two things load regardless of your `tags` array:
 
-- **Core tools**: `activate_tag`, `deactivate_tag`,
-  `reset_tags`, `inspect_tag`, `lens_activate`,
+- **Core tools**: `tag_activate`, `tag_deactivate`,
+  `tag_reset`, `tag_inspect`, `lens_activate`,
   `lens_deactivate`, `lens_list`, `thane_now`, `thane_assign`,
   `request_core_attention`, `logs_query`. Every loop has these
   regardless of scope.
@@ -96,7 +96,7 @@ flags. No tool call needed — the answer is already in your context.
 Reaching for a tool to retrieve information you already have just
 burns a turn.
 
-**What would adding a new tag pull in?** Call `inspect_tag(tag:
+**What would adding a new tag pull in?** Call `tag_inspect(tag:
 "<tag>")`. Returns the per-tool breakdown with source attribution
 (native, mcp, overlay). Use this before adding an unfamiliar tag —
 the catalog is the source of truth on what's actually behind that

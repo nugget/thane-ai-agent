@@ -17,7 +17,7 @@ import (
 // Configs is the runtime-consumable map (with .Tools populated) used
 // downstream by [agent.Loop.SetCapabilityTags] and the surface
 // builder. ToolEntries and ExcludedTools carry per-tag, per-tool
-// source attribution for the rich view consumed by inspect_tag,
+// source attribution for the rich view consumed by tag_inspect,
 // the CLI, and the /api/capabilities endpoints.
 type resolvedCapabilityTags struct {
 	Configs       map[string]config.CapabilityTagConfig
@@ -300,7 +300,7 @@ func firstNonEmpty(parts ...string) string {
 // buildCapabilitySurface assembles the full capability surface used by
 // the prompt renderer, capability manifest, and dashboard. Per-tool
 // attribution from the resolver is threaded onto each surface entry
-// so consumers (inspect_tag, /api/capabilities) can render
+// so consumers (tag_inspect, /api/capabilities) can render
 // where every tool came from.
 func buildCapabilitySurface(
 	resolved resolvedCapabilityTags,

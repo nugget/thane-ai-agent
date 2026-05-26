@@ -12,7 +12,7 @@ import (
 )
 
 // setupCapabilityLoop builds a Loop with capability tags configured and the
-// activate_tag / deactivate_tag / reset_tags tools
+// tag_activate / tag_deactivate / tag_reset tools
 // registered. This mirrors the
 // production wiring in cmd/thane/main.go.
 func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]config.CapabilityTagConfig) *Loop {
@@ -37,7 +37,7 @@ func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]
 	return loop
 }
 
-// TestCapabilityActivation_MidLoop verifies that activate_tag
+// TestCapabilityActivation_MidLoop verifies that tag_activate
 // activates a tag mid-loop and the newly-available tools can be called
 // on the next iteration. This was broken when effectiveTools was
 // snapshotted once before the loop (issue #507).
@@ -57,7 +57,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "activate_tag",
+							Name:      "tag_activate",
 							Arguments: map[string]any{"tag": "forge"},
 						},
 					}},
@@ -128,7 +128,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 
 	// forge_tool should have been executed successfully.
 	if !forgeToolCalled {
-		t.Error("forge_tool was not called; activate_tag did not activate the tag mid-loop")
+		t.Error("forge_tool was not called; tag_activate did not activate the tag mid-loop")
 	}
 
 	// The response should not contain illegal-tool errors.
@@ -147,7 +147,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 	}
 	iter1Tools := toolNames(mock.calls[1].Tools)
 	if !hasName(iter1Tools, "forge_tool") {
-		t.Error("forge_tool should be in iter 1 tool definitions (activated by activate_tag)")
+		t.Error("forge_tool should be in iter 1 tool definitions (activated by tag_activate)")
 	}
 }
 
@@ -194,7 +194,7 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	// The four capability management tools that survive any tag filter.
 	// list_loaded_capabilities was retired in #918 (its output was a
 	// strict subset of the ## Active Tags prompt section).
-	for _, toolName := range []string{"activate_tag", "deactivate_tag", "reset_tags", "inspect_tag"} {
+	for _, toolName := range []string{"tag_activate", "tag_deactivate", "tag_reset", "tag_inspect"} {
 		if !slices.Contains(resp.EffectiveTools, toolName) {
 			t.Fatalf("EffectiveTools = %#v, missing %q", resp.EffectiveTools, toolName)
 		}
@@ -220,7 +220,7 @@ func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *test
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "activate_tag",
+							Name:      "tag_activate",
 							Arguments: map[string]any{"tag": "forge"},
 						},
 					}},
@@ -373,7 +373,7 @@ func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "activate_tag",
+							Name:      "tag_activate",
 							Arguments: map[string]any{"tag": "forge"},
 						},
 					}},
@@ -445,8 +445,8 @@ func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
 }
 
 // TestIllegalStrikes_NotResetByMetaTool verifies that the illegal strike
-// counter is not reset by capability meta-tools (activate_tag,
-// deactivate_tag), preventing infinite activate→blocked→activate loops.
+// counter is not reset by capability meta-tools (tag_activate,
+// tag_deactivate), preventing infinite activate→blocked→activate loops.
 func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
@@ -469,7 +469,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 				InputTokens:  100,
 				OutputTokens: 20,
 			},
-			// Iter 1: model calls activate_tag (success, but meta-only
+			// Iter 1: model calls tag_activate (success, but meta-only
 			// batch — should NOT reset strikes).
 			{
 				Model: "test-model",
@@ -481,7 +481,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "activate_tag",
+							Name:      "tag_activate",
 							Arguments: map[string]any{"tag": "base"},
 						},
 					}},
@@ -537,7 +537,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 
 	// The loop should have broken after 3 tool iterations (not looped
 	// indefinitely). With the old bug, strikes reset on
-	// activate_tag success, allowing infinite loops.
+	// tag_activate success, allowing infinite loops.
 	if len(mock.calls) > 4 {
 		t.Errorf("expected at most 4 LLM calls (3 tool iters + 1 forced text), got %d", len(mock.calls))
 	}

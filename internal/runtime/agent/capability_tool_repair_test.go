@@ -101,6 +101,6 @@ func TestRepairToolCall_RepairsInventedCapabilityToolName(t *testing.T) {
 		}
 	}
 	if !foundActivationResult {
-		t.Fatalf("recovery call messages = %#v, want repaired activate_tag tool result", mock.calls[1].Messages)
+		t.Fatalf("recovery call messages = %#v, want repaired tag_activate tool result", mock.calls[1].Messages)
 	}
 }

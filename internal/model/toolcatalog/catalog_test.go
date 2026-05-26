@@ -161,10 +161,10 @@ func TestBuiltinToolCatalogIncludesCoreTools(t *testing.T) {
 	// rendered into every prompt (see capability_tools.go's
 	// registerListLoadedCapabilities Godoc for the full rationale).
 	names := []string{
-		"activate_tag",
-		"deactivate_tag",
-		"reset_tags",
-		"inspect_tag",
+		"tag_activate",
+		"tag_deactivate",
+		"tag_reset",
+		"tag_inspect",
 		"lens_activate",
 		"lens_deactivate",
 		"lens_list",
@@ -256,14 +256,14 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"kind\":\"tag_menu\"") {
 		t.Fatalf("manifest = %q, want tag_menu kind", manifest)
 	}
-	if !strings.Contains(manifest, "\"activate\":\"activate_tag\"") {
-		t.Fatalf("manifest = %q, want activate_tag example", manifest)
+	if !strings.Contains(manifest, "\"activate\":\"tag_activate\"") {
+		t.Fatalf("manifest = %q, want tag_activate example", manifest)
 	}
-	if !strings.Contains(manifest, "\"reset\":\"reset_tags\"") {
-		t.Fatalf("manifest = %q, want reset_tags example", manifest)
+	if !strings.Contains(manifest, "\"reset\":\"tag_reset\"") {
+		t.Fatalf("manifest = %q, want tag_reset example", manifest)
 	}
-	if !strings.Contains(manifest, "\"inspect\":\"inspect_tag\"") {
-		t.Fatalf("manifest = %q, want inspect_tag example", manifest)
+	if !strings.Contains(manifest, "\"inspect\":\"tag_inspect\"") {
+		t.Fatalf("manifest = %q, want tag_inspect example", manifest)
 	}
 	if !strings.Contains(manifest, "\"delegate\":\"thane_now\"") {
 		t.Fatalf("manifest = %q, want thane_now example", manifest)
@@ -295,8 +295,8 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	if !strings.Contains(desc, "coarse-to-fine menu") {
 		t.Fatalf("description = %q, want coarse-to-fine guidance", desc)
 	}
-	if !strings.Contains(desc, "`reset_tags`") {
-		t.Fatalf("description = %q, want reset_tags exact tool name", desc)
+	if !strings.Contains(desc, "`tag_reset`") {
+		t.Fatalf("description = %q, want tag_reset exact tool name", desc)
 	}
 	if !strings.Contains(desc, "**development**") {
 		t.Fatalf("description = %q, want development menu bullet", desc)

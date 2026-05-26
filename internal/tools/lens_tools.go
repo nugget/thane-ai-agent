@@ -18,7 +18,7 @@ const (
 
 // LensStore manages persistent behavioral lenses via opstate.
 // Lenses are global — they apply to all conversations and survive
-// restarts. Use activate_tag for per-conversation tool access.
+// restarts. Use tag_activate for per-conversation tool access.
 type LensStore struct {
 	mu    sync.Mutex
 	state *opstate.Store
@@ -121,7 +121,7 @@ func (r *Registry) SetLensTools(store *LensStore) {
 			"and survive restarts. They change how you perceive and respond — like switching between different attentional states. " +
 			"Any KB articles or talents tagged with the lens name will load automatically.\n\n" +
 			"Examples: night_quiet (gentle tone, higher notification thresholds), everyone_away (security focus), storm_watch (weather-focused).\n\n" +
-			"Unlike activate_tag (per-conversation tools), lenses are environmental — they reflect the household's state, not a task.",
+			"Unlike tag_activate (per-conversation tools), lenses are environmental — they reflect the household's state, not a task.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -200,6 +200,6 @@ func TestGptOSSProviderProfile_RecoversCapabilityActivationFromRawText(t *testin
 		}
 	}
 	if !foundActivationResult {
-		t.Fatalf("recovery call messages = %#v, want activate_tag tool result", mock.calls[1].Messages)
+		t.Fatalf("recovery call messages = %#v, want tag_activate tool result", mock.calls[1].Messages)
 	}
 }

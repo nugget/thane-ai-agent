@@ -431,8 +431,8 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Preamble text.
-	if !strings.Contains(talent.Content, "activate_tag") {
-		t.Error("manifest should mention activate_tag in preamble")
+	if !strings.Contains(talent.Content, "tag_activate") {
+		t.Error("manifest should mention tag_activate in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
 		t.Error("manifest should mention delegate in preamble")

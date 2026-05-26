@@ -27,7 +27,7 @@ func selectCapabilityMenuEntries(entries []CapabilitySurface) []CapabilitySurfac
 	return sorted
 }
 
-// RenderCapabilityActivationDescription renders the activate_tag
+// RenderCapabilityActivationDescription renders the tag_activate
 // tool help text from the shared tag surface.
 func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	actionTools := defaultCapabilityActionTools(true)

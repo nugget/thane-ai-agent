@@ -807,7 +807,7 @@ func (l *Loop) SetLensProvider(fn func() []string) {
 }
 
 // SetCapabilityTagStore configures persistent storage for per-conversation
-// capability tags. When set, tags activated via activate_tag are
+// capability tags. When set, tags activated via tag_activate are
 // saved at the end of each Run and restored at the start of the next Run
 // for the same conversation.
 func (l *Loop) SetCapabilityTagStore(store CapabilityTagStore) {
@@ -1299,19 +1299,19 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 	}
 
 	switch name {
-	case "reset_capability", "reset_capabilities", "reset_loaded_capabilities", "reset_capability_state", "restore_capability_baseline", "reset_tag", "reset_tags", "reset_loaded_tags", "reset_tag_state", "restore_tag_baseline":
-		tc.Function.Name = "reset_tags"
+	case "reset_capability", "reset_capabilities", "reset_loaded_capabilities", "reset_capability_state", "restore_capability_baseline", "reset_tag", "tag_reset", "reset_loaded_tags", "reset_tag_state", "restore_tag_baseline":
+		tc.Function.Name = "tag_reset"
 		tc.Function.Arguments = map[string]any{}
 		return tc, true
 	case "request_capability", "load_capability", "request_tag", "load_tag":
 		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
-			tc.Function.Name = "activate_tag"
+			tc.Function.Name = "tag_activate"
 			tc.Function.Arguments = map[string]any{"tag": tag}
 			return tc, true
 		}
 	case "drop_capability", "unload_capability", "drop_tag", "unload_tag":
 		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
-			tc.Function.Name = "deactivate_tag"
+			tc.Function.Name = "tag_deactivate"
 			tc.Function.Arguments = map[string]any{"tag": tag}
 			return tc, true
 		}
@@ -1321,13 +1321,13 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 		Prefix string
 		Tool   string
 	}{
-		{Prefix: "activate_", Tool: "activate_tag"},
-		{Prefix: "request_", Tool: "activate_tag"},
-		{Prefix: "load_", Tool: "activate_tag"},
-		{Prefix: "deactivate_", Tool: "deactivate_tag"},
-		{Prefix: "disable_", Tool: "deactivate_tag"},
-		{Prefix: "drop_", Tool: "deactivate_tag"},
-		{Prefix: "unload_", Tool: "deactivate_tag"},
+		{Prefix: "activate_", Tool: "tag_activate"},
+		{Prefix: "request_", Tool: "tag_activate"},
+		{Prefix: "load_", Tool: "tag_activate"},
+		{Prefix: "deactivate_", Tool: "tag_deactivate"},
+		{Prefix: "disable_", Tool: "tag_deactivate"},
+		{Prefix: "drop_", Tool: "tag_deactivate"},
+		{Prefix: "unload_", Tool: "tag_deactivate"},
 	} {
 		if tail, ok := strings.CutPrefix(name, prefix.Prefix); ok {
 			if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
@@ -1340,14 +1340,14 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 
 	if tail, ok := strings.CutSuffix(name, "_capability"); ok {
 		if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
-			tc.Function.Name = "activate_tag"
+			tc.Function.Name = "tag_activate"
 			tc.Function.Arguments = map[string]any{"tag": tag}
 			return tc, true
 		}
 	}
 	if tail, ok := strings.CutSuffix(name, "_tag"); ok {
 		if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
-			tc.Function.Name = "activate_tag"
+			tc.Function.Name = "tag_activate"
 			tc.Function.Arguments = map[string]any{"tag": tag}
 			return tc, true
 		}
@@ -2045,7 +2045,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
 
 		// Per-iteration tool definitions: recompute effective tools each
-		// iteration so tags activated via activate_tag are reflected.
+		// iteration so tags activated via tag_activate are reflected.
 		ToolDefs: func(i int) []map[string]any {
 			toolsForIter := currentTools()
 			if gatingActive {

@@ -60,7 +60,7 @@ func (k TagKind) IsMenu() bool {
 // time instead of being separately-declared spec entries.
 type BuiltinTagSpec struct {
 	// Description is the short, model-facing summary rendered into
-	// the tag menu and inspect_tag output.
+	// the tag menu and tag_inspect output.
 	Description string
 
 	// Core tags are pinned in every scope by operator configuration.
@@ -76,8 +76,8 @@ type BuiltinTagSpec struct {
 	// Protected.
 	Kind TagKind
 
-	// Protected tags cannot be toggled via activate_tag /
-	// deactivate_tag — they're reserved for runtime trust
+	// Protected tags cannot be toggled via tag_activate /
+	// tag_deactivate — they're reserved for runtime trust
 	// assertions (e.g. owner-authenticated conversations, channel
 	// affordance tags asserted by the integration). Orthogonal to
 	// Kind: a tag can be a protected leaf (`message_channel`,
@@ -96,7 +96,7 @@ type BuiltinTagSpec struct {
 	// tag. Most relevant for backward-compatible renames or
 	// operator-friendly synonyms (e.g. `homeassistant` resolves to
 	// `ha`). Resolution happens at every boundary the tag enters the
-	// system: activate_tag / inspect_tag calls, channel-tag binding,
+	// system: tag_activate / tag_inspect calls, channel-tag binding,
 	// operator YAML. Internally only canonical names exist.
 	Aliases []string
 }
@@ -133,7 +133,7 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
-	"activate_tag":                {CanonicalID: "native:activate_tag", Source: NativeToolSource},
+	"tag_activate":                {CanonicalID: "native:tag_activate", Source: NativeToolSource},
 	"lens_activate":               {CanonicalID: "native:lens_activate", Source: NativeToolSource},
 	"archive_range":               {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, Tags: []string{"archive"}},
@@ -148,7 +148,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
-	"deactivate_tag":              {CanonicalID: "native:deactivate_tag", Source: NativeToolSource},
+	"tag_deactivate":              {CanonicalID: "native:tag_deactivate", Source: NativeToolSource},
 	"lens_deactivate":             {CanonicalID: "native:lens_deactivate", Source: NativeToolSource},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, Tags: []string{"documents"}},
@@ -225,8 +225,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"contact_list":                {CanonicalID: "native:contact_list", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"ha_list_entities":            {CanonicalID: "native:ha_list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"lens_list":                   {CanonicalID: "native:lens_list", Source: NativeToolSource},
-	"inspect_tag":                 {CanonicalID: "native:inspect_tag", Source: NativeToolSource},
-	"reset_tags":                  {CanonicalID: "native:reset_tags", Source: NativeToolSource},
+	"tag_inspect":                 {CanonicalID: "native:tag_inspect", Source: NativeToolSource},
+	"tag_reset":                   {CanonicalID: "native:tag_reset", Source: NativeToolSource},
 	"task_list":                   {CanonicalID: "native:task_list", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"contact_lookup":              {CanonicalID: "native:contact_lookup", Source: NativeToolSource, Tags: []string{"contacts"}},
