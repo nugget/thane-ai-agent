@@ -226,7 +226,7 @@ type Config struct {
 	// Use this for deliberate operator overrides or custom tags. Built-in
 	// tags usually do not need entries here. Tags marked core are
 	// loaded unconditionally. Other tags are activated via
-	// activate_capability/deactivate_capability tools, runtime source
+	// tag_activate/tag_deactivate tools, runtime source
 	// policy, or channel-pinned configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
@@ -685,14 +685,14 @@ func (c CompanionConfig) TokenIndex() map[string]string {
 // self-referencing operations like vCard export.
 type IdentityConfig struct {
 	// ContactName is the formatted name of the agent's own contact
-	// record. When set, export_vcf name="self" resolves to this
+	// record. When set, contact_export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
 
 	// OwnerContactName is the formatted name of the primary human
-	// owner/operator contact record. When set, the owner_contact tool
+	// owner/operator contact record. When set, the contact_owner tool
 	// resolves directly to this contact instead of guessing from trust
-	// zones. When empty, owner_contact falls back to the sole admin
+	// zones. When empty, contact_owner falls back to the sole admin
 	// contact if exactly one exists.
 	OwnerContactName string `yaml:"owner_contact_name"`
 }
@@ -1224,7 +1224,7 @@ type CapabilityTagConfig struct {
 	// Protected tags are reserved for runtime trust and environment
 	// assertions (for example an owner-authenticated conversation).
 	// They are visible to the model when active, but cannot be toggled
-	// via activate_capability or deactivate_capability.
+	// via tag_activate or tag_deactivate.
 	Protected bool `yaml:"protected"`
 
 	// Tools is the resolved tool membership populated by the resolver
@@ -1497,7 +1497,7 @@ type MCPServerConfig struct {
 	// Tags lists capability tags assigned to every bridged MCP tool from
 	// this server unless a per-tool override replaces them. Use this to
 	// attach MCP tools to existing capability tags so the model gates
-	// them behind activate_capability the same as native tools.
+	// them behind tag_activate the same as native tools.
 	Tags []string `yaml:"tags"`
 
 	// Tools contains optional metadata overrides keyed by the raw MCP tool
@@ -2288,9 +2288,9 @@ func (c *Config) applyDefaults() {
 			"thane_assign",
 			"recall_fact",
 			"remember_fact",
-			"save_contact",
-			"lookup_contact",
-			"owner_contact",
+			"contact_save",
+			"contact_lookup",
+			"contact_owner",
 			"session_working_memory",
 			"session_close",
 			"archive_search",

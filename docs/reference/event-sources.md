@@ -77,7 +77,7 @@ Cron-style scheduling stored in SQLite. Each task defines:
 - Optional model and routing overrides
 - Missed execution recovery (fires on next startup if the window was missed)
 
-Custom tasks can be created via the `schedule_task` tool. Built-in
+Custom tasks can be created via the `task_schedule` tool. Built-in
 recurring work runs as service loop definitions instead — for
 example, the `ego` loop maintains `core/ego.md` with bounded voluntary
 sleep and supervisor randomization, and the `email-poller` loop drives

@@ -399,8 +399,8 @@ func TestHandleSystem_Healthy(t *testing.T) {
 		capCatalog: &toolcatalog.CapabilityCatalogView{
 			Kind: "capability_catalog",
 			ActivationTools: toolcatalog.CapabilityActionTools{
-				Activate:   "activate_capability",
-				Deactivate: "deactivate_capability",
+				Activate:   "tag_activate",
+				Deactivate: "tag_deactivate",
 			},
 			Capabilities: []toolcatalog.CapabilityCatalogEntry{
 				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 12},
@@ -829,9 +829,9 @@ func TestHandleCapabilities_ReturnsCatalog(t *testing.T) {
 	sys := &stubSystemStatus{
 		capCatalog: &toolcatalog.CapabilityCatalogView{
 			Kind:            "capability_catalog",
-			ActivationTools: toolcatalog.CapabilityActionTools{Activate: "activate_capability"},
+			ActivationTools: toolcatalog.CapabilityActionTools{Activate: "tag_activate"},
 			Capabilities: []toolcatalog.CapabilityCatalogEntry{
-				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 3, Tools: []string{"call_service", "get_state", "list_entities"}},
+				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 3, Tools: []string{"ha_call_service", "ha_get_state", "ha_list_entities"}},
 				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 1, Tools: []string{"forge_pr_get"}},
 			},
 		},
@@ -868,7 +868,7 @@ func TestHandleCapability_ReturnsSingleEntry(t *testing.T) {
 		capCatalog: &toolcatalog.CapabilityCatalogView{
 			Kind: "capability_catalog",
 			Capabilities: []toolcatalog.CapabilityCatalogEntry{
-				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 1, Tools: []string{"get_state"}},
+				{Tag: "ha", Status: "available", Description: "Home Assistant", ToolCount: 1, Tools: []string{"ha_get_state"}},
 			},
 		},
 	}

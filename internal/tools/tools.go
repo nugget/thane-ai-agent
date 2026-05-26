@@ -268,7 +268,7 @@ func (r *Registry) registerFactTools() {
 
 	r.Register(&Tool{
 		Name:        "remember_fact",
-		Description: "Store a discrete, stable piece of information for later recall. Best for user preferences, home layout, device mappings, routines, or observed patterns. Each fact should be a single, self-contained piece of knowledge — not a project spec or design document. Do NOT store complex/evolving knowledge here — use workspace files instead. Do NOT store person-specific attributes — use save_contact instead.",
+		Description: "Store a discrete, stable piece of information for later recall. Best for user preferences, home layout, device mappings, routines, or observed patterns. Each fact should be a single, self-contained piece of knowledge — not a project spec or design document. Do NOT store complex/evolving knowledge here — use workspace files instead. Do NOT store person-specific attributes — use contact_save instead.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -693,7 +693,7 @@ func (r *Registry) registerShellExec() {
 func (r *Registry) registerBuiltins() {
 	// Get entity state
 	r.Register(&Tool{
-		Name:        "get_state",
+		Name:        "ha_get_state",
 		Description: "Get the current state of a Home Assistant entity. Use this to check if lights are on, doors are open, temperatures, etc.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -710,7 +710,7 @@ func (r *Registry) registerBuiltins() {
 
 	// List entities by domain
 	r.Register(&Tool{
-		Name:        "list_entities",
+		Name:        "ha_list_entities",
 		Description: "List all entities in a domain (e.g., all lights, all sensors). Use this to discover what's available.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -731,7 +731,7 @@ func (r *Registry) registerBuiltins() {
 
 	// Control device - combined find + action (preferred tool for voice control)
 	r.Register(&Tool{
-		Name:        "control_device",
+		Name:        "ha_control_device",
 		Description: "Control a device by description. Finds the device first, then performs the action. USE THIS for voice commands like 'turn on the kitchen light'.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -763,10 +763,10 @@ func (r *Registry) registerBuiltins() {
 		Handler: r.handleControlDevice,
 	})
 
-	// Call service (low-level, use control_device for voice commands)
+	// Call service (low-level, use ha_control_device for voice commands)
 	r.Register(&Tool{
-		Name:        "call_service",
-		Description: "Low-level Home Assistant service call. Only use if you already have the exact entity_id. For voice commands, use control_device instead.",
+		Name:        "ha_call_service",
+		Description: "Low-level Home Assistant service call. Only use if you already have the exact entity_id. For voice commands, use ha_control_device instead.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -794,7 +794,7 @@ func (r *Registry) registerBuiltins() {
 
 	// Schedule task
 	r.Register(&Tool{
-		Name:        "schedule_task",
+		Name:        "task_schedule",
 		Description: "Schedule a future action. Use for reminders, delayed commands, or recurring tasks.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -823,7 +823,7 @@ func (r *Registry) registerBuiltins() {
 
 	// List tasks
 	r.Register(&Tool{
-		Name:        "list_tasks",
+		Name:        "task_list",
 		Description: "List scheduled tasks.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -839,7 +839,7 @@ func (r *Registry) registerBuiltins() {
 
 	// Cancel task
 	r.Register(&Tool{
-		Name:        "cancel_task",
+		Name:        "task_cancel",
 		Description: "Cancel a scheduled task.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -1171,7 +1171,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 }
 
 // FormatEntityState formats a Home Assistant entity state for LLM
-// consumption. Used by get_state, control_device post-action verification,
+// consumption. Used by ha_get_state, ha_control_device post-action verification,
 // and context injection.
 func FormatEntityState(state *homeassistant.State) string {
 	return contextfmt.Format(state, time.Now())
@@ -1301,7 +1301,7 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 		searchStr = area + " " + description
 	}
 
-	// Use the fuzzy matching from find_entity
+	// Use the fuzzy matching from ha_find_entity
 	matches := fuzzyMatchEntityInfos(searchStr, entities)
 	if len(matches) == 0 {
 		return fmt.Sprintf("Could not find a device matching '%s'", description), nil

@@ -70,7 +70,7 @@ func (t *Tools) SetOwnerContactName(name string) {
 }
 
 // SetOwnerActivitySource configures a source of active owner-scoped
-// channel activity for the owner_contact helper.
+// channel activity for the contact_owner helper.
 func (t *Tools) SetOwnerActivitySource(src func() []OwnerChannelActivity) {
 	t.ownerActivity = src
 }
@@ -131,7 +131,7 @@ func (t *Tools) resolveOwnerContact() (*Contact, error) {
 	}
 }
 
-// SaveContactArgs are arguments for the save_contact tool.
+// SaveContactArgs are arguments for the contact_save tool.
 type SaveContactArgs struct {
 	Name              string            `json:"name"`                          // maps to FormattedName
 	Kind              string            `json:"kind,omitempty"`                // individual, group, org, location
@@ -358,7 +358,7 @@ func (t *Tools) saveProperties(contactID uuid.UUID, facts map[string]string) err
 	return nil
 }
 
-// LookupContactArgs are arguments for the lookup_contact tool.
+// LookupContactArgs are arguments for the contact_lookup tool.
 type LookupContactArgs struct {
 	Name  string `json:"name,omitempty"`
 	Query string `json:"query,omitempty"`
@@ -444,7 +444,7 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 	return sb.String(), nil
 }
 
-// ForgetContactArgs are arguments for the forget_contact tool.
+// ForgetContactArgs are arguments for the contact_forget tool.
 type ForgetContactArgs struct {
 	Name string `json:"name"`
 }
@@ -467,7 +467,7 @@ func (t *Tools) ForgetContact(argsJSON string) (string, error) {
 	return fmt.Sprintf("Forgot contact: %s", args.Name), nil
 }
 
-// ListContactsArgs are arguments for the list_contacts tool.
+// ListContactsArgs are arguments for the contact_list tool.
 type ListContactsArgs struct {
 	Kind  string `json:"kind,omitempty"`
 	Limit int    `json:"limit,omitempty"`
@@ -577,7 +577,7 @@ func buildEmbeddingText(c *Contact, props []Property) string {
 	return sb.String()
 }
 
-// ExportVCFArgs are arguments for the export_vcf tool.
+// ExportVCFArgs are arguments for the contact_export_vcf tool.
 type ExportVCFArgs struct {
 	Name               string `json:"name"`
 	RecipientTrustZone string `json:"recipient_trust_zone,omitempty"`
@@ -651,7 +651,7 @@ func (t *Tools) ExportVCF(argsJSON string) (string, error) {
 	return fmt.Sprintf("Exported vCard to %s", f.Name()), nil
 }
 
-// ExportAllVCFArgs are arguments for the export_all_vcf tool.
+// ExportAllVCFArgs are arguments for the contact_export_all_vcf tool.
 type ExportAllVCFArgs struct {
 	Kind      string `json:"kind,omitempty"`
 	TrustZone string `json:"trust_zone,omitempty"`
@@ -724,7 +724,7 @@ func (t *Tools) ExportAllVCF(argsJSON string) (string, error) {
 	return fmt.Sprintf("Exported %d contacts to %s", len(withProps), f.Name()), nil
 }
 
-// ImportVCFArgs are arguments for the import_vcf tool.
+// ImportVCFArgs are arguments for the contact_import_vcf tool.
 type ImportVCFArgs struct {
 	Path   string `json:"path,omitempty"`
 	Text   string `json:"text,omitempty"`
@@ -907,7 +907,7 @@ func (t *Tools) mergeContact(existing, incoming *Contact) {
 	}
 }
 
-// ExportVCFQRArgs are arguments for the export_vcf_qr tool.
+// ExportVCFQRArgs are arguments for the contact_export_vcf_qr tool.
 type ExportVCFQRArgs struct {
 	Name               string `json:"name"`
 	RecipientTrustZone string `json:"recipient_trust_zone,omitempty"`

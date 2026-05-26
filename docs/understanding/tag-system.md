@@ -20,7 +20,7 @@ A capability tag is a string (`ha`, `forge`, `development`,
 tools are in the catalog, which talents are folded into the system
 prompt, which KB articles load, which providers inject context. Tags
 are mutable during a run — the model activates and deactivates them
-through `activate_capability` / `deactivate_capability` — and a
+through `tag_activate` / `tag_deactivate` — and a
 subset persists per conversation through the
 [`CapabilityTagStore`][cap-store]. A tag is *not* a tool, *not* a
 behavioral mode, *not* a routing parameter, and *not* a configuration
@@ -39,15 +39,15 @@ boundaries, that's a smell.
 | Term | What it actually is | Lives in | Distinct because |
 |------|---------------------|----------|------------------|
 | **Tag** / **capability tag** | Mutable runtime gate string. | [`capabilityScope`][scope] active map. | Per-conversation, model-mutable, gates tool/talent/KB visibility. |
-| **Capability** | Linguistic synonym for "tag." No dedicated type. | Tool names (`activate_capability`), docs. | Use "tag" in new code; "capability" remains in tool names for stability. |
+| **Capability** | Legacy synonym for "tag" — fully retired from model-facing surfaces. | Some internal Go type names (`CapabilitySurface`, `CapabilityManager`) pending follow-up rename. | Tool names, JSON payloads, and prompt sections all say "tag" now. Treat "capability" in source as a synonym for "tag" awaiting an internal-only cleanup pass. |
 | **Lens** | Persistent global behavioral mode. | `lens_tools.go`, opstate. | Survives restarts, applies across all conversations, shapes prompt rather than gating tools. |
 | **Talent** | Markdown content gated by tags. | `talents/*.md`, `talents.Loader`. | Static content, not executable; loaded into the system prompt when its declared tags are active. See [Context Layers](context-layers.md). |
 | **Scope** / **capabilityScope** | The runtime tag-set object for one `agent.Run()`. | [`capability_scope.go:51`][scope]. | Lives in context; mutated by tools; not directly persisted. |
-| **Core tool** | A boolean flag on a `Tool`. | [`tools.Tool.Core`][core-tool]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`activate_capability` itself, etc.) and for `RuntimeTools`. |
+| **Core tool** | A boolean flag on a `Tool`. | [`tools.Tool.Core`][core-tool]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`tag_activate` itself, etc.) and for `RuntimeTools`. |
 | **Core tag** | Tags pinned in every scope by config. | [`Executor.SetCoreTags`][exec-core], config `capability_tags.*.core`. | Tag-level, not tool-level. Re-seeded each run. |
 | **Tag kind** | Tag's surface role: leaf (carries tools) vs. menu (coarse trailhead routing to leaves). | [`BuiltinTagSpec.Kind`][tag-spec]. | Orthogonal to Protected. Menus surface as routing entries in the activation prompt; leaves carry tool surface. |
 | **Tag parents** | Menu(s) a leaf appears under in the hierarchical menu. Multi-valued. | [`BuiltinTagSpec.Parents`][tag-spec]. | Data, not prose. Replaces the "usually leads to X, Y, Z" sentences that were the only menu→leaf mapping before PR-G. |
-| **Tag aliases** | Alternate names that resolve to a canonical tag at every system boundary (activate_capability, channel binding, config). | [`BuiltinTagSpec.Aliases`][tag-spec], [`CanonicalTagName`][tag-canonical]. | Internally only canonical names exist; aliases funnel in at boundaries via reverse-lookup map populated at init. `homeassistant` resolves to `ha`. |
+| **Tag aliases** | Alternate names that resolve to a canonical tag at every system boundary (tag_activate, channel binding, config). | [`BuiltinTagSpec.Aliases`][tag-spec], [`CanonicalTagName`][tag-canonical]. | Internally only canonical names exist; aliases funnel in at boundaries via reverse-lookup map populated at init. `homeassistant` resolves to `ha`. |
 | **Protected tag** | Runtime-asserted; can't be model-toggled. | [`BuiltinTagSpec.Protected`][tag-spec]. | Orthogonal to Kind. A leaf can be protected (`message_channel`, `owner`) without being a menu. |
 | **Delegate profile** (`delegate.Profile`) | Operational bundle for a delegated task: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints*. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
@@ -213,9 +213,9 @@ Core tags and pinned tags are re-seeded from config and channel
 binding each run, not from the store.
 
 **The model sees only the tags, not the scope object.** The
-`## Active Capabilities` section rendered into every prompt carries
+`## Active Tags` section rendered into every prompt carries
 the loaded tag set with description, tool_count, and metadata flags;
-`inspect_capability` returns the per-tool breakdown of a single tag.
+`tag_inspect` returns the per-tool breakdown of a single tag.
 The scope object itself is not exposed.
 
 [save-tags]: ../../internal/runtime/agent/capability_scope.go
@@ -297,7 +297,7 @@ code; some are queued as cleanup work.
 | Delegate tool exclusion / recursion guards | This doc, "The two-layer delegate exclusion" |
 | Talents, KB articles, persona, system prompt assembly | [`docs/understanding/context-layers.md`](context-layers.md) and [`docs/model-facing-context.md`](../model-facing-context.md) |
 | Tool descriptions, schemas, model-facing tool surface | [`docs/model-facing-tools.md`](../model-facing-tools.md) |
-| `activate_capability` / `deactivate_capability` semantics | [`internal/tools/capability_tools.go`][cap-tools] and the scope code |
+| `tag_activate` / `tag_deactivate` semantics | [`internal/tools/capability_tools.go`][cap-tools] and the scope code |
 | Lenses (global behavioral modes) | [`internal/tools/lens_tools.go`][lens-tools] and the [glossary entry](glossary.md#lens) |
 | Routing / model selection / quality floor | [`docs/operating/routing-profiles.md`](../operating/routing-profiles.md) |
 

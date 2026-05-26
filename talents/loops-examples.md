@@ -92,7 +92,7 @@ only the envelope does.
 
 ## Tags scope the loop's tools
 
-The `tags` array activates capability tags for the loop's iterations
+The `tags` array activates tags for the loop's iterations
 (things like `home`, `ha`, `awareness`, `documents`). Omit to inherit
 the core tag set. A curate loop watching HA entities needs at least
 `home` or `ha` so it has the tools to interpret its watch set.
