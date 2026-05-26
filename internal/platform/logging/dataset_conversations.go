@@ -32,12 +32,14 @@ func NewConversationsRecorder(writer *DatasetWriter, logger *slog.Logger) Reques
 }
 
 // DatasetRecordFromRequestContent converts a completed LLM request into a
-// conversations dataset record. Content fields are written verbatim
-// (the caller has already applied any [LoggingConfig.ContentMaxLength]
-// trimming when constructing the [RequestContent]). The full Messages
-// slice is intentionally not embedded — message-level fidelity belongs
-// in the interactions corpus (#938); this record captures the request
-// envelope and links back via RequestID.
+// conversations dataset record. Content fields are written verbatim —
+// the conversations dataset is a pristine source of LLM req/resp, so
+// [LoggingConfig.ContentMaxLength] does not apply here. Sinks with a
+// retention budget (ContentWriter, live_requests) truncate locally on
+// their own write path. The full Messages slice is intentionally not
+// embedded — message-level fidelity belongs in the interactions corpus
+// (#938); this record captures the request envelope and links back via
+// RequestID.
 func DatasetRecordFromRequestContent(rc RequestContent, now time.Time) DatasetRecord {
 	payload := map[string]any{
 		"model":             rc.Model,
