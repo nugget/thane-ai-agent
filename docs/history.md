@@ -164,7 +164,7 @@ inventory from providers. LM Studio joined Ollama and Anthropic as a
 first-class local runner.
 
 **Prompt and tool pruning.** The always-on system prompt shrank as
-domain-specific doctrine moved behind capability tags. Entry-point
+domain-specific doctrine moved behind capability tags. Trailhead
 talents route knowledge loading by semantic domain. The agent's context
 window stays lean until it needs depth.
 

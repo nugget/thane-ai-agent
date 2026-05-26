@@ -297,10 +297,10 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 	}
 }
 
-func TestMergeTalentMenuHints_UsesEntryPointFrontmatter(t *testing.T) {
+func TestMergeTalentMenuHints_UsesTrailheadFrontmatter(t *testing.T) {
 	hints := mergeTalentMenuHints(nil, []talents.Talent{
 		{
-			Kind:     "entry_point",
+			Kind:     talents.KindTrailhead,
 			Tags:     []string{"development"},
 			Teaser:   "Open when the work touches code, repos, issues, or PRs.",
 			NextTags: []string{"forge", "files", "web"},
@@ -323,7 +323,7 @@ func TestMergeTalentMenuHints_UsesEntryPointFrontmatter(t *testing.T) {
 		t.Fatalf("next_tags = %#v, want forge/files/web", hint.NextTags)
 	}
 	if _, ok := hints["forge"]; ok {
-		t.Fatalf("non-entry-point forge hint should not be present: %#v", hints["forge"])
+		t.Fatalf("non-trailhead forge hint should not be present: %#v", hints["forge"])
 	}
 }
 
@@ -335,7 +335,7 @@ func TestMergeTalentMenuHints_PreservesExistingKBHint(t *testing.T) {
 		},
 	}, []talents.Talent{
 		{
-			Kind:     "entry_point",
+			Kind:     talents.KindTrailhead,
 			Tags:     []string{"knowledge"},
 			Teaser:   "Talent hint should not replace KB.",
 			NextTags: []string{"files"},

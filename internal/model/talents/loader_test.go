@@ -99,15 +99,15 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 }
 
 func TestParseFrontmatterMetadata(t *testing.T) {
-	raw := "---\nkind: entry_point\ntags: [development, forge]\nteaser: \"Activate when the next move is about repos or code.\"\nnext_tags: [forge, files, web]\nauthor: test\n---\nBody."
+	raw := "---\nkind: trailhead\ntags: [development, forge]\nteaser: \"Activate when the next move is about repos or code.\"\nnext_tags: [forge, files, web]\nauthor: test\n---\nBody."
 
 	meta, body := ParseFrontmatterMetadata(raw)
 
 	if body != "Body." {
 		t.Fatalf("body = %q, want %q", body, "Body.")
 	}
-	if meta.Kind != "entry_point" {
-		t.Fatalf("kind = %q, want entry_point", meta.Kind)
+	if meta.Kind != KindTrailhead {
+		t.Fatalf("kind = %q, want %s", meta.Kind, KindTrailhead)
 	}
 	if got := strings.Join(meta.Tags, ","); got != "development,forge" {
 		t.Fatalf("tags = %q, want development,forge", got)
@@ -199,11 +199,11 @@ func TestFilterByTags_Empty(t *testing.T) {
 	}
 }
 
-func TestFilterByTags_EntryPointsPrecedeTaggedDoctrine(t *testing.T) {
+func TestFilterByTags_TrailheadsPrecedeTaggedDoctrine(t *testing.T) {
 	all := []Talent{
 		{Name: "core", Tags: nil, Content: "CORE"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
-		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY"},
+		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: KindTrailhead, Content: "INTERACTIVE_ENTRY"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
 	}
 
@@ -225,7 +225,7 @@ func TestSplitByTags_PreservesAlwaysOnAndTaggedOrdering(t *testing.T) {
 		{Name: "manifest", Tags: nil, Content: "MANIFEST"},
 		{Name: "core", Tags: nil, Content: "CORE"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
-		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY"},
+		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: KindTrailhead, Content: "INTERACTIVE_ENTRY"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
 	}
 
@@ -245,7 +245,7 @@ func TestSplitByTags_PreservesAlwaysOnAndTaggedOrdering(t *testing.T) {
 		t.Fatalf("tagged missing expected content:\n%s", tagged)
 	}
 	if entryIdx >= commIdx || entryIdx >= doctrineIdx {
-		t.Fatalf("entry point should precede tagged doctrine:\n%s", tagged)
+		t.Fatalf("trailhead should precede tagged doctrine:\n%s", tagged)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestTalents(t *testing.T) {
 
 	// Write talent files with and without frontmatter.
 	writeFile(t, dir, "core.md", "# Core\nAlways loaded.")
-	writeFile(t, dir, "ha-tools.md", "---\nkind: entry_point\ntags: [ha]\nteaser: \"Open when the work touches home state.\"\nnext_tags: [ha_admin, notifications]\n---\n# HA Tools\nHome Assistant guidance.")
+	writeFile(t, dir, "ha-tools.md", "---\nkind: trailhead\ntags: [ha]\nteaser: \"Open when the work touches home state.\"\nnext_tags: [ha_admin, notifications]\n---\n# HA Tools\nHome Assistant guidance.")
 	writeFile(t, dir, "web.md", "---\ntags: [web, remote]\n---\n# Web\nWeb guidance.")
 
 	loader := NewLoader(dir)
@@ -290,8 +290,8 @@ func TestTalents(t *testing.T) {
 	if len(talents[1].Tags) != 1 || talents[1].Tags[0] != "ha" {
 		t.Errorf("talents[1].Tags = %v, want [ha]", talents[1].Tags)
 	}
-	if talents[1].Kind != "entry_point" {
-		t.Errorf("talents[1].Kind = %q, want entry_point", talents[1].Kind)
+	if talents[1].Kind != KindTrailhead {
+		t.Errorf("talents[1].Kind = %q, want %s", talents[1].Kind, KindTrailhead)
 	}
 	if talents[1].Teaser != "Open when the work touches home state." {
 		t.Errorf("talents[1].Teaser = %q, want menu teaser", talents[1].Teaser)
@@ -629,7 +629,7 @@ func TestParseFrontmatterBlocks_MultiBlock(t *testing.T) {
 	raw := `---
 name: root
 tags: [loops_examples]
-kind: entry_point
+kind: trailhead
 next_tags: [loops_examples_curate]
 ---
 
@@ -640,7 +640,7 @@ choose your path
 ---
 name: curate
 tags: [loops_examples_curate]
-kind: entry_point
+kind: trailhead
 ---
 
 # Curate
@@ -784,7 +784,7 @@ func TestTalents_MultiNodeFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tree.md"), []byte(`---
 name: tree_root
 tags: [tree]
-kind: entry_point
+kind: trailhead
 teaser: "root teaser"
 next_tags: [tree_branch_a, tree_branch_b]
 ---
@@ -796,7 +796,7 @@ choose
 ---
 name: tree_branch_a
 tags: [tree_branch_a]
-kind: entry_point
+kind: trailhead
 ---
 
 # Branch A
@@ -804,7 +804,7 @@ kind: entry_point
 ---
 name: tree_branch_b
 tags: [tree_branch_b]
-kind: entry_point
+kind: trailhead
 ---
 
 # Branch B
@@ -922,5 +922,42 @@ body
 	}
 	if len(all) != 1 || all[0].Name != "declared_name" {
 		t.Fatalf("got %+v, want declared_name", all)
+	}
+}
+
+func TestCanonicalKind(t *testing.T) {
+	cases := []struct {
+		raw         string
+		wantKind    string
+		wantAliased bool
+	}{
+		{"trailhead", KindTrailhead, false},
+		{"  trailhead  ", KindTrailhead, false},
+		{"entry_point", KindTrailhead, true},
+		{"  entry_point  ", KindTrailhead, true},
+		{"", "", false},
+		{"article", "article", false},
+	}
+	for _, tc := range cases {
+		got, deprecated := CanonicalKind(tc.raw)
+		if got != tc.wantKind || deprecated != tc.wantAliased {
+			t.Errorf("CanonicalKind(%q) = (%q, %v), want (%q, %v)", tc.raw, got, deprecated, tc.wantKind, tc.wantAliased)
+		}
+	}
+}
+
+func TestTalents_EntryPointAliasNormalizesToTrailhead(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "legacy-trailhead.md", "---\nkind: entry_point\ntags: [legacy]\n---\nbody")
+
+	all, err := NewLoader(dir).Talents()
+	if err != nil {
+		t.Fatalf("Talents: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("len = %d, want 1", len(all))
+	}
+	if all[0].Kind != KindTrailhead {
+		t.Errorf("Kind = %q, want %q (legacy entry_point should normalize)", all[0].Kind, KindTrailhead)
 	}
 }

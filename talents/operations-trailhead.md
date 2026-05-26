@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [operations]
 teaser: "Open for runtime health, logs, models, loops, schedules, or local ops."
 next_tags: [diagnostics, models, loops, scheduler, mqtt]
 ---
 
-# Operations Entry Point
+# Operations Trailhead
 
 Operational work tempts you to open everything. Resist that. The right
 branch usually reveals itself by which surface will collapse uncertainty

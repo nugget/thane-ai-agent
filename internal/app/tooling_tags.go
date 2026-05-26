@@ -57,7 +57,7 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 	builtinTags := toolcatalog.BuiltinTagSpecs()
 
 	// Seed coarse menu/protected tags so they exist as catalog entries
-	// even when no tools self-declare them. These are the entry-point
+	// even when no tools self-declare them. These are the trailhead
 	// tags for delegation menus.
 	for tag, spec := range builtinTags {
 		if !shouldSeedBuiltinTag(tag, spec) {
@@ -358,7 +358,7 @@ func mergeTalentMenuHints(menuHints map[string]agent.KBMenuHint, parsedTalents [
 		menuHints = make(map[string]agent.KBMenuHint)
 	}
 	for _, talent := range parsedTalents {
-		if strings.TrimSpace(talent.Kind) != "entry_point" {
+		if strings.TrimSpace(talent.Kind) != talents.KindTrailhead {
 			continue
 		}
 		if strings.TrimSpace(talent.Teaser) == "" && len(talent.NextTags) == 0 {

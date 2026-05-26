@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [home]
 teaser: "Open for household state, devices, rooms, automations, or attention."
 next_tags: [ha, awareness, notifications]
 ---
 
-# Home Entry Point
+# Home Trailhead
 
 Home work spends trust, not just tokens. The wrong move can wake the
 wrong person, flip the wrong switch, or overreact to noise.

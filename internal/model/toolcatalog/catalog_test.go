@@ -137,7 +137,7 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
+		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
 	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
@@ -174,7 +174,7 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 
 func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	desc := RenderCapabilityActivationDescription([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
+		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 		{Tag: "owner", Description: "Owner guidance.", Menu: true, Protected: true},
 	})

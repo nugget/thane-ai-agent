@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [awareness]
 teaser: "Open when live entities or room context should stay present across turns."
 next_tags: [ha, home, notifications]
 ---
 
-# Awareness Entry Point
+# Awareness Trailhead
 
 Awareness is for sustained attention. Use it when the same entity,
 device, person, room, or live provider will matter across more than one

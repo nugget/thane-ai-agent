@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [development]
 teaser: "Open for code, repos, PRs, issues, releases, or implementation work."
 next_tags: [forge, files, web, shell]
 ---
 
-# Development Entry Point
+# Development Trailhead
 
 Development work sprawls because too many surfaces can plausibly contain
 the truth. Your job is to touch the one that will collapse uncertainty

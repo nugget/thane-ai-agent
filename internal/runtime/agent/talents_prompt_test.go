@@ -60,11 +60,11 @@ func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_EntryPointTalentsPrecedeTaggedDoctrine(t *testing.T) {
+func TestBuildSystemPrompt_TrailheadTalentsPrecedeTaggedDoctrine(t *testing.T) {
 	l := newTagTestLoop()
 	parsed := []talents.Talent{
 		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
-		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY_MARKER"},
+		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: talents.KindTrailhead, Content: "INTERACTIVE_ENTRY_MARKER"},
 		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM_MARKER"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
 	}
@@ -90,7 +90,7 @@ func TestBuildSystemPromptWithProfileSections_SplitsCacheableBehaviorPrefix(t *t
 	l.persona = "PERSONA_MARKER"
 	parsed := []talents.Talent{
 		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
-		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY_MARKER"},
+		{Name: "interactive-trailhead", Tags: []string{"interactive"}, Kind: talents.KindTrailhead, Content: "INTERACTIVE_ENTRY_MARKER"},
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{

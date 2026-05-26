@@ -154,16 +154,16 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_TagContextEntryPointFirst(t *testing.T) {
+func TestBuildSystemPrompt_TagContextTrailheadFirst(t *testing.T) {
 	kbDir := t.TempDir()
 	os.WriteFile(filepath.Join(kbDir, "article.md"),
 		[]byte("---\ntags: [development]\n---\nARTICLE_MARKER"), 0o644)
 	os.WriteFile(filepath.Join(kbDir, "tree.md"),
-		[]byte("---\nkind: entry_point\ntags: [development]\n---\nTREE_MARKER"), 0o644)
+		[]byte("---\nkind: trailhead\ntags: [development]\n---\nTREE_MARKER"), 0o644)
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"development": {
-			Description:  "Development entry point",
+			Description:  "Development trailhead",
 			AlwaysActive: true,
 		},
 	}
@@ -183,7 +183,7 @@ func TestBuildSystemPrompt_TagContextEntryPointFirst(t *testing.T) {
 		t.Fatalf("prompt missing expected markers:\n%s", prompt)
 	}
 	if treeIdx > articleIdx {
-		t.Fatalf("entry-point guidance should precede doctrine article in prompt:\n%s", prompt)
+		t.Fatalf("trailhead guidance should precede doctrine article in prompt:\n%s", prompt)
 	}
 }
 
@@ -770,7 +770,7 @@ func TestTagContextAssembler_KBArticleTags(t *testing.T) {
 
 func TestTagContextAssembler_KBMenuHints(t *testing.T) {
 	kbDir := t.TempDir()
-	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: entry_point\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, web]\n---\nTREE"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: trailhead\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, web]\n---\nTREE"), 0o644)
 	os.WriteFile(filepath.Join(kbDir, "knowledge-article.md"), []byte("---\ntags: [knowledge]\n---\nARTICLE"), 0o644)
 
 	a := NewTagContextAssembler(TagContextAssemblerConfig{
@@ -916,7 +916,7 @@ func TestArticleMatchesTags_AndSemantics(t *testing.T) {
 
 func TestArticleMatchesTags_OrAndCombined(t *testing.T) {
 	// (any of Tags) AND (all of TagsAll). Useful for "fires for several
-	// entry-point tags, but only when paired with a runtime gate."
+	// trailhead tags, but only when paired with a runtime gate."
 	a := kbArticle{
 		Tags:    []string{"forge", "ha"},
 		TagsAll: []string{"owner"},

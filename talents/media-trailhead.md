@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [media]
 teaser: "Open for URLs, transcripts, feeds, uploads, and provenance."
 next_tags: [feeds, attachments, web]
 ---
 
-# Media Entry Point
+# Media Trailhead
 
 Media work is usually about provenance. Did this come from a known media
 URL, a followed feed, an uploaded file, or the wider web?
