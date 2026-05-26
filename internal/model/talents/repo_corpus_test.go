@@ -147,6 +147,14 @@ var nonToolTokens = map[string]struct{}{
 	// tool prefix). Both are person-record fields, not tools.
 	"ai_summary":       {},
 	"ha_companion_app": {},
+
+	// Notification record field name (UUID identifying an outstanding
+	// actionable). Appears as a parameter on resolve_actionable and
+	// as an annotation in conversation history. The matcher flags it
+	// because `request_` is a real tool prefix
+	// (request_human_decision, request_human_escalation, etc.),
+	// but `request_id` is a field name, not a tool.
+	"request_id": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in
