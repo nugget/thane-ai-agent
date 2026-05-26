@@ -162,6 +162,13 @@ var nonToolTokens = map[string]struct{}{
 	// because `loop_` is a real tool prefix (loop_status,
 	// loop_definition_*), but `loop_id` is a field name, not a tool.
 	"loop_id": {},
+
+	// Channel-scoped conversation identifier — appears as a parameter
+	// on attachment_list, on the session-lifecycle tools' resolved
+	// runtime context, and in archive scoping. The matcher flags it
+	// because `conversation_` second segment matches conversation_reset's
+	// shape, but `conversation_id` is a field name, not a tool.
+	"conversation_id": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in

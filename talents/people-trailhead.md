@@ -17,8 +17,10 @@ Choose the next move deliberately:
   save (create/update + the trust-zone decision), and vcf (vCard
   import/export and QR codes). On hosts that override the
   person-record surface, the local overlay may remap this name.
-- If the task is specifically about Signal messaging, activate
-  `signal`.
+- If the task is specifically about Signal messaging — *proactive
+  sends*, reactions, or out-of-band delivery, not the normal reply
+  path inside an inbound conversation (which the Signal bridge
+  handles automatically) — activate `signal`.
 - If the relationship thread lives in inbox history or email
   correspondence rather than chat, activate `email` — it branches
   into triage (read), respond (compose, trust-gated by contacts),
