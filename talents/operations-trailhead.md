@@ -21,8 +21,10 @@ Choose the next move deliberately:
   `scheduler`.
 - If you need loop definitions, loop policy, or loop launches, activate
   `loops`.
-- If the operational question is really about session boundaries,
-  resets, splits, checkpoints, or carry-forward, activate `session`.
+- If the operational question is really about session lifecycle —
+  closing with carry-forward, splitting off old context,
+  checkpointing as a safety net, or (only on explicit user request)
+  resetting — activate `session`.
 - If the work is MQTT plumbing or wake subscriptions, activate `mqtt`.
 - If the operational issue actually lives inside Home Assistant, its
   registries, or automations, activate `ha`.

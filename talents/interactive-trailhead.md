@@ -16,8 +16,10 @@ Choose the next move deliberately:
   `signal`.
 - If the conversation is already happening in Open WebUI, use `owu`
   context instead of imagining a second channel choice.
-- If the turn is really about the session itself—closing, splitting,
-  resetting, checkpointing—activate `session`.
+- If the turn is really about the session itself—closing (with
+  carry-forward), splitting (retroactive trim), checkpointing
+  (non-destructive snapshot), or resetting (only on explicit user
+  request)—activate `session`.
 - If `owner` is already present and identity matters, use it as trusted
   ground truth. Do not try to activate protected owner state manually.
 
