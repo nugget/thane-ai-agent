@@ -127,6 +127,8 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			dir = cmdArgs[0]
 		}
 		return runInit(stdout, dir)
+	case "validate":
+		return runValidate(stdout, configPath, outputFmt)
 	case "ask":
 		if len(cmdArgs) == 0 {
 			return fmt.Errorf("usage: thane ask <question>")
@@ -176,6 +178,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  serve        Start the API server")
 	fmt.Fprintln(w, "  init [dir]   Initialize working directory with defaults (default: .)")
+	fmt.Fprintln(w, "  validate     Parse and validate the config without starting services")
 	fmt.Fprintln(w, "  ask          Ask a single question (for testing)")
 	fmt.Fprintln(w, "  ingest       Import markdown docs into fact store")
 	fmt.Fprintln(w, "  caps         Show resolved capability tags from a running daemon")
