@@ -293,7 +293,7 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	loop := buildTestLoop(mock, []string{"thane_now", "recall_fact", "get_state", "web_search"})
+	loop := buildTestLoop(mock, []string{"thane_now", "recall_fact", "ha_get_state", "web_search"})
 	loop.SetOrchestratorTools([]string{"thane_now"})
 
 	_, err := loop.Run(context.Background(), &Request{
@@ -316,8 +316,8 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 		if !hasName(names, "thane_now") {
 			t.Errorf("call[%d] tools missing thane_now: %v", idx, names)
 		}
-		if hasName(names, "get_state") {
-			t.Errorf("call[%d] tools should NOT contain get_state: %v", idx, names)
+		if hasName(names, "ha_get_state") {
+			t.Errorf("call[%d] tools should NOT contain ha_get_state: %v", idx, names)
 		}
 	}
 }

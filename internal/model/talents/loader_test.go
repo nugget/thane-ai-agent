@@ -413,7 +413,7 @@ func TestTalents_MissingDir(t *testing.T) {
 
 func TestGenerateManifest(t *testing.T) {
 	entries := []ManifestEntry{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, Core: true, KBArticles: 3, LiveContext: true},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"ha_get_state", "ha_call_service"}, Core: true, KBArticles: 3, LiveContext: true},
 		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search", "web_fetch"}, Core: false},
 		{Tag: "hpde", AdHoc: true, KBArticles: 2},
 	}
@@ -501,7 +501,7 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Tool names should NOT appear in the output.
-	if strings.Contains(talent.Content, "get_state") {
+	if strings.Contains(talent.Content, "ha_get_state") {
 		t.Error("manifest should not list individual tool names")
 	}
 }

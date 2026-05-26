@@ -166,14 +166,14 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	capTags := map[string]config.CapabilityTagConfig{
 		"ha": {
 			Description: "Home Assistant tools",
-			Tools:       []string{"get_state"},
+			Tools:       []string{"ha_get_state"},
 			Core:        true,
 		},
 	}
 
-	loop := setupCapabilityLoop(mock, []string{"get_state"}, capTags)
+	loop := setupCapabilityLoop(mock, []string{"ha_get_state"}, capTags)
 	loop.UseCapabilitySurface(tools.BuildCapabilityManifest(
-		map[string][]string{"ha": {"get_state"}},
+		map[string][]string{"ha": {"ha_get_state"}},
 		map[string]string{"ha": "Home Assistant tools"},
 		map[string]bool{"ha": true},
 		nil,
@@ -188,8 +188,8 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if !slices.Contains(resp.EffectiveTools, "get_state") {
-		t.Fatalf("EffectiveTools = %#v, want get_state", resp.EffectiveTools)
+	if !slices.Contains(resp.EffectiveTools, "ha_get_state") {
+		t.Fatalf("EffectiveTools = %#v, want ha_get_state", resp.EffectiveTools)
 	}
 	// The four capability management tools that survive any tag filter.
 	// list_loaded_capabilities was retired in #918 (its output was a
@@ -342,7 +342,7 @@ func TestCapabilityScope_InheritableTagsOnlyElective(t *testing.T) {
 		},
 		"ha": {
 			Description: "Home Assistant",
-			Tools:       []string{"get_state"},
+			Tools:       []string{"ha_get_state"},
 		},
 		"message_channel": {
 			Description: "Current message channel",

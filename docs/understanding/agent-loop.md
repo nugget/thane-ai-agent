@@ -137,7 +137,7 @@ domain.
 capability_tags:
   ha:
     description: "Home Assistant device control and monitoring"
-    tools: [control_device, find_entity, get_state, list_entities, call_service]
+    tools: [ha_control_device, ha_find_entity, ha_get_state, ha_list_entities, ha_call_service]
   email:
     description: "Email reading, sending, and management"
     tools: [email_list, email_read, email_search, email_send, email_reply]

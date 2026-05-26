@@ -16,8 +16,8 @@ sleep envelope.
 Two things load regardless of your `tags` array:
 
 - **Core tools**: `activate_tag`, `deactivate_tag`,
-  `reset_tags`, `inspect_tag`, `activate_lens`,
-  `deactivate_lens`, `list_lenses`, `thane_now`, `thane_assign`,
+  `reset_tags`, `inspect_tag`, `lens_activate`,
+  `lens_deactivate`, `lens_list`, `thane_now`, `thane_assign`,
   `request_core_attention`, `logs_query`. Every loop has these
   regardless of scope.
 

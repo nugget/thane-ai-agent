@@ -685,14 +685,14 @@ func (c CompanionConfig) TokenIndex() map[string]string {
 // self-referencing operations like vCard export.
 type IdentityConfig struct {
 	// ContactName is the formatted name of the agent's own contact
-	// record. When set, export_vcf name="self" resolves to this
+	// record. When set, contact_export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
 
 	// OwnerContactName is the formatted name of the primary human
-	// owner/operator contact record. When set, the owner_contact tool
+	// owner/operator contact record. When set, the contact_owner tool
 	// resolves directly to this contact instead of guessing from trust
-	// zones. When empty, owner_contact falls back to the sole admin
+	// zones. When empty, contact_owner falls back to the sole admin
 	// contact if exactly one exists.
 	OwnerContactName string `yaml:"owner_contact_name"`
 }
@@ -2288,9 +2288,9 @@ func (c *Config) applyDefaults() {
 			"thane_assign",
 			"recall_fact",
 			"remember_fact",
-			"save_contact",
-			"lookup_contact",
-			"owner_contact",
+			"contact_save",
+			"contact_lookup",
+			"contact_owner",
 			"session_working_memory",
 			"session_close",
 			"archive_search",

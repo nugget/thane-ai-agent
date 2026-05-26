@@ -49,7 +49,7 @@ func TestConvertToAnthropicWithToolCalls(t *testing.T) {
 					Name      string         `json:"name"`
 					Arguments map[string]any `json:"arguments"`
 				}{
-					Name:      "control_device",
+					Name:      "ha_control_device",
 					Arguments: map[string]any{"entity": "light.kitchen"},
 				},
 			}},
@@ -100,7 +100,7 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 		{
 			"type": "function",
 			"function": map[string]any{
-				"name":        "get_state",
+				"name":        "ha_get_state",
 				"description": "Get entity state",
 				"parameters": map[string]any{
 					"type": "object",
@@ -120,8 +120,8 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
-	if result[0].Name != "get_state" {
-		t.Errorf("expected tool name get_state, got %s", result[0].Name)
+	if result[0].Name != "ha_get_state" {
+		t.Errorf("expected tool name ha_get_state, got %s", result[0].Name)
 	}
 	if result[0].Description != "Get entity state" {
 		t.Errorf("expected description, got %s", result[0].Description)
@@ -195,7 +195,7 @@ func TestConvertFromAnthropic(t *testing.T) {
 			{
 				Type:  "tool_use",
 				ID:    "toolu_xyz789",
-				Name:  "get_state",
+				Name:  "ha_get_state",
 				Input: map[string]any{"entity_id": "sun.sun"},
 			},
 		},
@@ -213,8 +213,8 @@ func TestConvertFromAnthropic(t *testing.T) {
 	if result.Message.ToolCalls[0].ID != "toolu_xyz789" {
 		t.Errorf("expected tool call ID toolu_xyz789, got %s", result.Message.ToolCalls[0].ID)
 	}
-	if result.Message.ToolCalls[0].Function.Name != "get_state" {
-		t.Errorf("expected get_state, got %s", result.Message.ToolCalls[0].Function.Name)
+	if result.Message.ToolCalls[0].Function.Name != "ha_get_state" {
+		t.Errorf("expected ha_get_state, got %s", result.Message.ToolCalls[0].Function.Name)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestAnthropicPromptCacheControl_NotSuppressedByToolCacheBreakpoints(t *test
 		{
 			"type": "function",
 			"function": map[string]any{
-				"name":        "get_state",
+				"name":        "ha_get_state",
 				"description": "Get entity state",
 				"parameters":  map[string]any{"type": "object"},
 			},
@@ -503,7 +503,7 @@ func TestShouldUseAnthropicPromptCaching(t *testing.T) {
 			name:   "tool loop enables caching",
 			system: "You are a tool-using assistant.",
 			msgs:   []anthropicMessage{{Role: "user", Content: "check the state"}},
-			tools:  []anthropicTool{{Name: "get_state", InputSchema: map[string]any{"type": "object"}}},
+			tools:  []anthropicTool{{Name: "ha_get_state", InputSchema: map[string]any{"type": "object"}}},
 			want:   true,
 		},
 		{
