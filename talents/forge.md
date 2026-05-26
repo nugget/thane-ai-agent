@@ -104,6 +104,24 @@ When the goal is "append a thought to the conversation," use
 `forge_issue_comment` instead — that's almost always what you actually
 want.
 
+## How the next reader will see this
+
+When a future model picks up this issue, it reads the title and the
+description — not the comment thread. That makes the body the
+**living spec**, not just the original framing.
+
+- As scope evolves through discussion, fold the changes back into the
+  body via `forge_issue_update`. A comment that says "actually, let's
+  also handle X" is invisible to the next implementer unless someone
+  edits it into the body.
+- Comments are conversation history, useful for audit and provenance,
+  but they don't drive the work. Plan for the description to carry
+  the full current intent on its own.
+
+The same logic applies in reverse for PRs you authored: keep the PR
+body honest about what actually landed, because the next reviewer
+reads the description, not the running commentary.
+
 ## Lightweight acknowledgement
 
 `forge_react` adds an emoji reaction to the issue itself or to one of
