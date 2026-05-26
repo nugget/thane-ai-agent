@@ -62,7 +62,7 @@ import (
 //     Provider + declared-but-unavailable instead of adding entries here.
 //   - initDelegation no longer takes a capability-tag snapshot; it
 //     creates the delegate executor without tag state and leaves
-//     alwaysActiveTags / SetTagContextFunc to the finalizer.
+//     coreTags / SetTagContextFunc to the finalizer.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*modelproviders.OllamaClient, healthClients map[string]fleet.ResourceHealthClient, modelRuntime *fleet.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")

@@ -68,8 +68,8 @@ func TestRequestCoreAttentionTargetsOwnerChannel(t *testing.T) {
 	if tool == nil {
 		t.Fatal("request_core_attention tool not registered")
 	}
-	if !tool.AlwaysAvailable {
-		t.Fatal("request_core_attention should be always available")
+	if !tool.Core {
+		t.Fatal("request_core_attention should be a core tool")
 	}
 
 	callCtx := WithHints(context.Background(), map[string]string{"source": "delegate"})

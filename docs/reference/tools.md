@@ -6,10 +6,10 @@ see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
 on and off, and [Prompt Caching](../prompt-caching.md) for how tag
 choices interact with prompt caching.
 
-Tools under the `always` heading below are not tag-gated and load on
-every turn. Everything else loads only when a relevant capability is
-activated, either by the model via `activate_capability` or via
-configured always-active tags.
+Tools under the **Core tools** heading below are not tag-gated and
+load on every turn. Everything else loads only when a relevant
+capability is activated, either by the model via `activate_capability`
+or via configured core tags.
 
 The authoritative source for which tool is tagged how is
 [`internal/model/toolcatalog/catalog.go`](../../internal/model/toolcatalog/catalog.go);
@@ -41,7 +41,7 @@ When both a trailhead and ordinary doctrine articles share an active
 tag, trailheads sort first so navigation scaffolding precedes deeper
 guidance.
 
-## Always-active
+## Core tools
 
 These tools load on every turn regardless of active tags.
 
@@ -318,7 +318,7 @@ Task next-run values include a model-facing delta.
 
 ## `thane_*` family — intent-shaped front door for "do work"
 
-Always-available (`thane_now`, `thane_assign`) plus loops-tagged
+Core (`thane_now`, `thane_assign`) plus loops-tagged
 (`thane_curate`, `thane_create_container`). Pick by lifecycle.
 External wakes to live loops are
 infrastructural rather than tool-shaped — producer subsystems dispatch

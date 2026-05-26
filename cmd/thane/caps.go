@@ -147,8 +147,8 @@ func renderCapsEntry(w io.Writer, entry toolcatalog.CapabilityCatalogEntry, incl
 	if entry.Description != "" {
 		fmt.Fprintf(w, "Description: %s\n", entry.Description)
 	}
-	if entry.AlwaysActive {
-		fmt.Fprintln(w, "Always active: yes")
+	if entry.Core {
+		fmt.Fprintln(w, "Core:        yes")
 	}
 	if entry.Protected {
 		fmt.Fprintln(w, "Protected:    yes")

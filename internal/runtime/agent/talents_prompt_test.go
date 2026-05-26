@@ -17,8 +17,8 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 		{Name: "untagged", Tags: nil, Content: "UNTAGGED_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"knowledge": {Description: "Knowledge", AlwaysActive: true},
-		"files":     {Description: "Files", AlwaysActive: false},
+		"knowledge": {Description: "Knowledge", Core: true},
+		"files":     {Description: "Files", Core: false},
 	}, parsed)
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
@@ -42,9 +42,9 @@ func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 		{Name: "development-communication", Tags: []string{"development", "forge"}, Content: "DEVELOPMENT_COMMUNICATION_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"interactive": {Description: "Interactive", AlwaysActive: true},
-		"development": {Description: "Development", AlwaysActive: false},
-		"forge":       {Description: "Forge", AlwaysActive: false},
+		"interactive": {Description: "Interactive", Core: true},
+		"development": {Description: "Development", Core: false},
+		"forge":       {Description: "Forge", Core: false},
 	}, parsed)
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
@@ -69,7 +69,7 @@ func TestBuildSystemPrompt_TrailheadTalentsPrecedeTaggedDoctrine(t *testing.T) {
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"interactive": {Description: "Interactive", AlwaysActive: true},
+		"interactive": {Description: "Interactive", Core: true},
 	}, parsed)
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
@@ -94,7 +94,7 @@ func TestBuildSystemPromptWithProfileSections_SplitsCacheableBehaviorPrefix(t *t
 		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
 	}
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"interactive": {Description: "Interactive", AlwaysActive: true},
+		"interactive": {Description: "Interactive", Core: true},
 	}, parsed)
 
 	prompt, sections := l.buildSystemPromptWithProfileSections(

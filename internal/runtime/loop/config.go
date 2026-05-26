@@ -179,7 +179,7 @@ type Config struct {
 
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
-	// tags (plus always-active tags).
+	// tags (plus core tags).
 	Tags []string
 
 	// ExcludeTools lists tool names to exclude from the loop's

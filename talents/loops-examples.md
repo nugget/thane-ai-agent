@@ -94,8 +94,8 @@ only the envelope does.
 
 The `tags` array activates capability tags for the loop's iterations
 (things like `home`, `ha`, `awareness`, `documents`). Omit to inherit
-the always-active set. A curate loop watching HA entities needs at
-least `home` or `ha` so it has the tools to interpret its watch set.
+the core tag set. A curate loop watching HA entities needs at least
+`home` or `ha` so it has the tools to interpret its watch set.
 
 ---
 name: loops_examples_curate_dashboard

@@ -67,7 +67,7 @@ state, not stale snapshots.
 Determine which capability tags are active. Tags control which tools and
 talents the agent can see:
 
-- **Always-active tags** (configured in `capability_tags` with `always_active: true`)
+- **Core tags** (configured in `capability_tags` with `core: true`)
   provide core tools like memory, notifications, and session management
 - **Channel-pinned tags** activate automatically based on the request source
   (email requests activate `email`, HA requests activate `ha`)
@@ -144,12 +144,12 @@ capability_tags:
   memory:
     description: "Fact storage and recall"
     tools: [remember_fact, recall_fact, forget_fact]
-    always_active: true
+    core: true
 ```
 
 ### Delegation Pressure
 
-When the orchestrator model starts with only ~15-20 tools (the always-active
+When the orchestrator model starts with only ~15-20 tools (the core
 set), it naturally reaches for the delegate family — `thane_now` for a
 synchronous answer it can fold into the current turn, or `thane_assign` for
 an async one-shot that reports back later — when it encounters a request

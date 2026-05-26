@@ -346,7 +346,7 @@ Signal you're co-mingling: you find yourself writing "site-specific,"
 "each deployment's set isn't another's." A model reading those lines
 gets context-heavier without getting decision-clearer. PR #917's
 review cut ~20 lines from `loops-tagging.md` that explained operator
-config and site variation around always-active tags — the model only
+config and site variation around core tags — the model only
 needed "some tags are immutably present; look at `## Active
 Capabilities` for the list."
 

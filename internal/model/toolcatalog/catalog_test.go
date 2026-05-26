@@ -31,8 +31,8 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	if got := []string{surface[0].Tag, surface[1].Tag, surface[2].Tag}; strings.Join(got, ",") != "forge,interactive,web" {
 		t.Fatalf("tags = %v, want [forge interactive web]", got)
 	}
-	if !surface[0].AlwaysActive {
-		t.Fatal("forge should be always active")
+	if !surface[0].Core {
+		t.Fatal("forge should be core")
 	}
 	if !surface[1].Menu {
 		t.Fatal("interactive should be a menu tag")
@@ -45,8 +45,8 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	}
 }
 
-func TestBuiltinToolCatalogIncludesAlwaysAvailableTools(t *testing.T) {
-	// The canonical always-available set: 11 tools that survive
+func TestBuiltinToolCatalogIncludesCoreTools(t *testing.T) {
+	// The canonical core set: 11 tools that survive
 	// capability-tag filtering regardless of scope. list_loaded_capabilities
 	// was previously a 12th member but was demoted because its output is
 	// a strict subset of the "## Active Capabilities" section already

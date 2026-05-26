@@ -38,8 +38,8 @@ func TestSetLogIndexDB_Registration(t *testing.T) {
 	if tool.Name != "logs_query" {
 		t.Errorf("tool.Name = %q, want %q", tool.Name, "logs_query")
 	}
-	if !tool.AlwaysAvailable {
-		t.Error("logs_query should have AlwaysAvailable=true")
+	if !tool.Core {
+		t.Error("logs_query should have Core=true")
 	}
 }
 

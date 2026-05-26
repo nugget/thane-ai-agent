@@ -227,7 +227,7 @@ func (r *Registry) registerThaneCurate() {
 			"Two output modes today: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
-			"Tags scope the loop's tools; omit to inherit the always-active set. " +
+			"Tags scope the loop's tools; omit to inherit the core tag set. " +
 			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted on the loop's own spec and surfaced into the loop's prompt automatically. Container ancestors' subscriptions also cascade in. " +
 			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the count of declared entity subscriptions, and the resolved sleep envelope.",
 		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "output", "entities", "replace"},
@@ -281,7 +281,7 @@ func (r *Registry) registerThaneCurate() {
 				"tags": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Optional capability tags scoping the loop's tool surface. Omit to use only always-active tags.",
+					"description": "Optional capability tags scoping the loop's tool surface. Omit to use only core tags.",
 				},
 				"entities": map[string]any{
 					"type":        "array",

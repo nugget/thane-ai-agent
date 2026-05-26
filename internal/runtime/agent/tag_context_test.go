@@ -38,7 +38,7 @@ func setTagsWithAssembler(l *Loop, capTags map[string]config.CapabilityTagConfig
 }
 
 // testCtxForLoop creates a context containing a capabilityScope seeded
-// from the loop's capTags (always-active tags are activated). This
+// from the loop's capTags (core tags are activated). This
 // mirrors what Run() does before calling buildSystemPrompt.
 func testCtxForLoop(l *Loop) context.Context {
 	if l.capTags == nil {
@@ -58,9 +58,9 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
 		CapTags: map[string]config.CapabilityTagConfig{
 			"forge": {
-				Description:  "Code generation",
-				Tools:        []string{"forge_run"},
-				AlwaysActive: true,
+				Description: "Code generation",
+				Tools:       []string{"forge_run"},
+				Core:        true,
 			},
 		},
 		KBDir:  kbDir,
@@ -68,9 +68,9 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	}))
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Code generation",
-			Tools:        []string{"forge_run"},
-			AlwaysActive: true,
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Core:        true,
 		},
 	}, nil)
 
@@ -94,9 +94,9 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Code generation",
-			Tools:        []string{"forge_run"},
-			AlwaysActive: false, // not always active, so inactive by default
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Core:        false, // not always active, so inactive by default
 		},
 	}
 
@@ -126,14 +126,14 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Code generation",
-			Tools:        []string{"forge_run"},
-			AlwaysActive: true,
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Core:        true,
 		},
 		"review": {
-			Description:  "Code review",
-			Tools:        []string{"review_run"},
-			AlwaysActive: true,
+			Description: "Code review",
+			Tools:       []string{"review_run"},
+			Core:        true,
 		},
 	}
 
@@ -163,8 +163,8 @@ func TestBuildSystemPrompt_TagContextTrailheadFirst(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"development": {
-			Description:  "Development trailhead",
-			AlwaysActive: true,
+			Description: "Development trailhead",
+			Core:        true,
 		},
 	}
 
@@ -241,9 +241,9 @@ func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
-			Description:  "Test tag",
-			Tools:        []string{"test_tool"},
-			AlwaysActive: true,
+			Description: "Test tag",
+			Tools:       []string{"test_tool"},
+			Core:        true,
 		},
 	}
 
@@ -302,9 +302,9 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"pool": {
-			Description:  "Pool management",
-			Tools:        []string{"pool_tool"},
-			AlwaysActive: true,
+			Description: "Pool management",
+			Tools:       []string{"pool_tool"},
+			Core:        true,
 		},
 	}
 
@@ -341,9 +341,9 @@ func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
-			Description:  "Test",
-			Tools:        []string{"test_tool"},
-			AlwaysActive: true,
+			Description: "Test",
+			Tools:       []string{"test_tool"},
+			Core:        true,
 		},
 	}
 
@@ -373,9 +373,9 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
-			Description:  "Test",
-			Tools:        []string{"test_tool"},
-			AlwaysActive: true,
+			Description: "Test",
+			Tools:       []string{"test_tool"},
+			Core:        true,
 		},
 	}
 
@@ -795,9 +795,9 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 	l := newTagTestLoop()
 	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Code generation",
-			Tools:        []string{"forge_run"},
-			AlwaysActive: true,
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Core:        true,
 		},
 	}, nil)
 	l.RegisterTagContextProvider("forge", &mockTagProvider{
@@ -827,9 +827,9 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 		})
 		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 			"forge": {
-				Description:  "Code generation",
-				Tools:        []string{"forge_run"},
-				AlwaysActive: true,
+				Description: "Code generation",
+				Tools:       []string{"forge_run"},
+				Core:        true,
 			},
 		}, nil)
 
@@ -848,7 +848,7 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 		l.RegisterTagContextProvider("forge", &mockTagProvider{content: "first"})
 		l.RegisterTagContextProvider("forge ", &mockTagProvider{content: "second"})
 		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
-			"forge": {Description: "x", Tools: []string{"t"}, AlwaysActive: true},
+			"forge": {Description: "x", Tools: []string{"t"}, Core: true},
 		}, nil)
 
 		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
@@ -869,7 +869,7 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 		// Should not panic and should not create a stray entry.
 		l.RegisterTagContextProvider("   ", &mockTagProvider{content: "leak"})
 		setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
-			"forge": {Description: "x", Tools: []string{"t"}, AlwaysActive: true},
+			"forge": {Description: "x", Tools: []string{"t"}, Core: true},
 		}, nil)
 
 		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)

@@ -33,7 +33,7 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	sb.WriteString("Capability menu:\n")
 
 	for _, entry := range selectCapabilityMenuEntries(entries) {
-		if entry.AlwaysActive {
+		if entry.Core {
 			continue
 		}
 		desc := strings.TrimSpace(entry.Teaser)

@@ -413,8 +413,8 @@ func TestTalents_MissingDir(t *testing.T) {
 
 func TestGenerateManifest(t *testing.T) {
 	entries := []ManifestEntry{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true, KBArticles: 3, LiveContext: true},
-		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search", "web_fetch"}, AlwaysActive: false},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, Core: true, KBArticles: 3, LiveContext: true},
+		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search", "web_fetch"}, Core: false},
 		{Tag: "hpde", AdHoc: true, KBArticles: 2},
 	}
 
@@ -469,8 +469,8 @@ func TestGenerateManifest(t *testing.T) {
 	if !ok {
 		t.Fatal("missing ha capability")
 	}
-	if ha.Status != "always_active" {
-		t.Errorf("ha status = %q, want always_active", ha.Status)
+	if ha.Status != "core" {
+		t.Errorf("ha status = %q, want core", ha.Status)
 	}
 	if ha.ToolCount != 2 {
 		t.Errorf("ha tools = %d, want 2", ha.ToolCount)

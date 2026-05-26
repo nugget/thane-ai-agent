@@ -110,16 +110,16 @@ func summarizeRemovedTools(tags []string, tagManifest map[string]CapabilityManif
 
 // registerActivateCapability registers the activate_capability tool.
 //
-// Always-available rationale: this is the bootstrap primitive for
+// Core-tool rationale: this is the bootstrap primitive for
 // opening capability scopes. If it required a tag to be loaded first,
 // there would be no way to widen the model's surface from any
 // starting state — a chicken-and-egg that would leave a tightly
 // scoped loop unable to ever ask for more.
 func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "activate_capability",
-		AlwaysAvailable: true,
-		Description:     toolcatalog.RenderCapabilityActivationDescription(manifest),
+		Name:        "activate_capability",
+		Core:        true,
+		Description: toolcatalog.RenderCapabilityActivationDescription(manifest),
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -156,15 +156,15 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 
 // registerDeactivateCapability registers the deactivate_capability tool.
 //
-// Always-available rationale: symmetric counterpart to
+// Core-tool rationale: symmetric counterpart to
 // activate_capability. A loop that widened its surface for one phase
 // of work needs to be able to narrow back without keeping a tag
 // loaded just for the release primitive. Locking this behind a tag
 // would create stuck-wide states.
 func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "deactivate_capability",
-		AlwaysAvailable: true,
+		Name: "deactivate_capability",
+		Core: true,
 		Description: "Deactivate a capability to remove its tools and context from YOUR current conversation. " +
 			"Always-active and protected tags cannot be deactivated. Use when you no longer need a capability's tools to keep your context focused.",
 		Parameters: map[string]any{
@@ -207,15 +207,15 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 
 // registerResetCapabilities registers the reset_capabilities tool.
 //
-// Always-available rationale: the emergency hatch for returning to
+// Core-tool rationale: the emergency hatch for returning to
 // baseline when the loop has accumulated voluntary tags it no longer
 // needs. Same bootstrap argument as activate/deactivate — must work
 // from any state, including states where the model intentionally
 // dropped most of its surface.
 func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "reset_capabilities",
-		AlwaysAvailable: true,
+		Name: "reset_capabilities",
+		Core: true,
 		Description: "Reset your current conversation back to baseline capability state by deactivating all voluntary tags at once. " +
 			"Always-active, protected, and channel-pinned tags remain loaded. Use when the loop feels too widened or you want to return to the channel's default stance.",
 		Parameters: map[string]any{
@@ -264,15 +264,15 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 // operator-excluded tools. Use this to audit "where did this tool
 // come from" or "what's actually in the ha tag at this site".
 //
-// Always-available rationale: auditing a tag must work *before* the
+// Core-tool rationale: auditing a tag must work *before* the
 // tag is activated. The whole point of inspection is to decide
 // whether opening the tag is worth the surface cost, which means the
 // answer can't depend on the tag already being in scope.
 func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "inspect_capability",
-		AlwaysAvailable: true,
-		Description:     "Inspect a single capability tag and return a structured breakdown of its tools with source attribution (native, mcp, overlay). Use to audit what a tag exposes and where each tool came from. Pass include_excluded: true to also surface operator-disabled tools.",
+		Name:        "inspect_capability",
+		Core:        true,
+		Description: "Inspect a single capability tag and return a structured breakdown of its tools with source attribution (native, mcp, overlay). Use to audit what a tag exposes and where each tool came from. Pass include_excluded: true to also surface operator-disabled tools.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -312,6 +312,6 @@ func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityMa
 // BuildCapabilityManifest creates a sorted list of capability descriptions
 // from the config map. This is used both for the tool description and for
 // generating the capability manifest talent.
-func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool, protected map[string]bool) []CapabilityManifest {
-	return toolcatalog.BuildCapabilitySurface(tags, descriptions, alwaysActive, protected)
+func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, core map[string]bool, protected map[string]bool) []CapabilityManifest {
+	return toolcatalog.BuildCapabilitySurface(tags, descriptions, core, protected)
 }

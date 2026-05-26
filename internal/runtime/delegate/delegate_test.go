@@ -511,7 +511,7 @@ func TestDelegateToolRegistry_ExcludesDirectHumanEgress(t *testing.T) {
 	}
 }
 
-func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFiltering(t *testing.T) {
+func TestExecute_LoopBackedExplicitEmptyTagsWithCoreTagsDoNotBypassFiltering(t *testing.T) {
 	t.Parallel()
 
 	var captured looppkg.Request
@@ -527,7 +527,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 
 	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
 	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
-	exec.SetAlwaysActiveTags([]string{"web"})
+	exec.SetCoreTags([]string{"web"})
 
 	_, err := exec.execute(context.Background(), "No tools needed", "ha", "", []string{}, executionOptions{
 		inheritCallerTags: false,
@@ -538,17 +538,17 @@ func TestExecute_LoopBackedExplicitEmptyTagsWithAlwaysActiveTagsDoNotBypassFilte
 	}
 
 	if captured.SkipTagFilter {
-		t.Fatal("SkipTagFilter = true, want false for explicit empty tag scope with always-active tags")
+		t.Fatal("SkipTagFilter = true, want false for explicit empty tag scope with core tags")
 	}
 	if !containsString(captured.InitialTags, "web") {
-		t.Fatalf("InitialTags = %#v, want always-active web tag", captured.InitialTags)
+		t.Fatalf("InitialTags = %#v, want core web tag", captured.InitialTags)
 	}
 	if containsString(captured.InitialTags, "ha") {
 		t.Fatalf("InitialTags = %#v, should not include ha profile default for explicit empty tag scope", captured.InitialTags)
 	}
 	assertContainsDelegateFamily(t, captured.ExcludeTools)
 	// ExcludeTools may carry delegate safety exclusions, but must not
-	// include any regular tag-gated tools — the always-active tags should
+	// include any regular tag-gated tools — the core tags should
 	// expand the filter scope so tag-based filtering does the work via
 	// InitialTags, not via wholesale AllToolNames exclusion.
 	allowedExclusions := delegateToolExclusions()

@@ -70,7 +70,7 @@ cannot choose to use a tool it doesn't have.
 **Status: Implemented**
 
 Tools are grouped into semantic tags (`ha`, `email`, `forge`, etc.) that must
-be activated before use. Tags marked `always_active` are available
+be activated before use. Tags marked `core` are available
 unconditionally; others are loaded on demand. The tag registry is
 config-driven and validated at startup.
 

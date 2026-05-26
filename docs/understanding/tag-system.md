@@ -43,8 +43,8 @@ boundaries, that's a smell.
 | **Lens** | Persistent global behavioral mode. | `lens_tools.go`, opstate. | Survives restarts, applies across all conversations, shapes prompt rather than gating tools. |
 | **Talent** | Markdown content gated by tags. | `talents/*.md`, `talents.Loader`. | Static content, not executable; loaded into the system prompt when its declared tags are active. See [Context Layers](context-layers.md). |
 | **Scope** / **capabilityScope** | The runtime tag-set object for one `agent.Run()`. | [`capability_scope.go:51`][scope]. | Lives in context; mutated by tools; not directly persisted. |
-| **AlwaysAvailable** | A boolean flag on a `Tool`. | [`tools.Tool.AlwaysAvailable`][always-available]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`activate_capability` itself, etc.) and for `RuntimeTools`. |
-| **Always-active tags** | Tags pinned in every scope by config. | [`Executor.SetAlwaysActiveTags`][exec-always], config `capability_tags.*.always_active`. | Tag-level, not tool-level. Re-seeded each run. |
+| **Core tool** | A boolean flag on a `Tool`. | [`tools.Tool.Core`][core-tool]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`activate_capability` itself, etc.) and for `RuntimeTools`. |
+| **Core tag** | Tags pinned in every scope by config. | [`Executor.SetCoreTags`][exec-core], config `capability_tags.*.core`. | Tag-level, not tool-level. Re-seeded each run. |
 | **Delegate profile** (`delegate.Profile`) | Operational bundle for a delegated task: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints*. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
 | **Routing profile** | A user-facing model name (`thane:premium`, `thane:ops`). | [Routing Profiles](../operating/routing-profiles.md). | Selected by Ollama-API model name; resolves to a `LoopProfile`. |
@@ -52,8 +52,8 @@ boundaries, that's a smell.
 | **Configured tags** | Read-only snapshot of the configured tag inputs for the run: loop config `Tags` plus request-base/request-override `InitialTags`. | [`loop/tooling.go`][configured-tags] (`ToolingState.ConfiguredTags`). | Read-only telemetry. Distinct from active tags so the dashboard can show "what was configured at launch" vs "what became active." Introduced in [#813][pr-813]. |
 
 [scope]: ../../internal/runtime/agent/capability_scope.go
-[always-available]: ../../internal/tools/tools.go
-[exec-always]: ../../internal/runtime/delegate/delegate.go
+[core-tool]: ../../internal/tools/tools.go
+[exec-core]: ../../internal/runtime/delegate/delegate.go
 [delegate-profile]: ../../internal/runtime/delegate/profile.go
 [loop-profile]: ../../internal/model/router/loopprofile.go
 [configured-tags]: ../../internal/runtime/loop/tooling.go
@@ -88,7 +88,7 @@ where today's bugs keep surfacing. The order of operations:
 ```
 parent registry  ──┐
                    ├─ FilteredCopy(req.AllowedTools)         (allowlist by name, if set)
-                   ├─ WithRuntimeTools(req.RuntimeTools)     (request-scoped tools, marked AlwaysAvailable)
+                   ├─ WithRuntimeTools(req.RuntimeTools)     (request-scoped tools, marked Core)
                    ├─ FilteredCopyExcluding(req.ExcludeTools)(blocklist by name)
                    │
                    ▼
@@ -109,7 +109,7 @@ Code path:
 per-iteration recompute), [`agent/loop.go:1970`][loop-effective] is
 `effectiveToolNames()` (the list emitted to the event log).
 [`tools/tools.go:1038`][filter-by-tags] is `FilterByTags`, which
-explicitly preserves any tool with `AlwaysAvailable == true` even if
+explicitly preserves any tool with `Core == true` even if
 its tag is not active.
 
 [loop-base]: ../../internal/runtime/agent/loop.go
@@ -122,11 +122,11 @@ its tag is not active.
 | Knob | Type | Set by | Effect |
 |------|------|--------|--------|
 | `req.AllowedTools` | allowlist | request | If non-empty, only these tools survive. |
-| `req.RuntimeTools` | layer | request | Adds request-scoped tools, all marked `AlwaysAvailable`. |
+| `req.RuntimeTools` | layer | request | Adds request-scoped tools, all marked `Core`. |
 | `req.ExcludeTools` | blocklist | request | Removes named tools from the catalog. |
 | `req.SkipTagFilter` | bypass | request | Disables the tag-based filter entirely (used by metacognitive). |
 | Tag filter | filter | scope | `FilterByTags(scope.Snapshot())` per iteration. |
-| `Tool.AlwaysAvailable` | preservation | tool definition | Survives the tag filter. |
+| `Tool.Core` | preservation | tool definition | Survives the tag filter. |
 | `delegateFamilyToolNames` | blocklist | delegate executor | Hard-coded recursion guard. Applied at *both* layers (see below). |
 | Orchestrator gating (`orchestratorTools`) | filter | runtime config | When delegation gating is active, restrict the catalog to orchestrator-only meta-tools. |
 
@@ -203,7 +203,7 @@ for the run regardless of model behavior.
 ends, the scope's user-activated tags are saved via
 [`CapabilityTagStore.SaveTags`][save-tags] keyed by conversation ID.
 The next run for that conversation re-seeds them via `LoadTags`.
-Always-active and pinned tags are re-seeded from config and channel
+Core tags and pinned tags are re-seeded from config and channel
 binding each run, not from the store.
 
 **The model sees only the tags, not the scope object.** The
@@ -265,7 +265,7 @@ code; some are queued as cleanup work.
    [`prepareExecution`][prepare-execution] have similar asymmetry —
    worth a sweep.
 
-5. **AlwaysAvailable has no architectural doc.** The flag exists on
+5. **Core has no architectural doc.** The flag exists on
    `Tool`, the docstring says "Survives capability tag filtering,"
    but the *why* (meta-tools must survive the filter so the model can
    navigate, runtime tools join via this mechanism) lives in scattered

@@ -15,17 +15,17 @@ sleep envelope.
 
 Two things load regardless of your `tags` array:
 
-- **A small set of always-on tools**: `activate_capability`,
-  `deactivate_capability`, `reset_capabilities`, `inspect_capability`,
-  `activate_lens`, `deactivate_lens`, `list_lenses`, `thane_now`,
-  `thane_assign`, `request_core_attention`, `logs_query`. Every loop
-  has these regardless of scope.
+- **Core tools**: `activate_capability`, `deactivate_capability`,
+  `reset_capabilities`, `inspect_capability`, `activate_lens`,
+  `deactivate_lens`, `list_lenses`, `thane_now`, `thane_assign`,
+  `request_core_attention`, `logs_query`. Every loop has these
+  regardless of scope.
 
-- **Capability tags that are immutably present.** Some tags load
-  automatically and stay loaded — you can't deactivate them. Your
-  system prompt's `## Active Capabilities` section lists what's
-  loaded with `always_active: true` flagged per entry; trust that as
-  ground truth for "what's already in scope."
+- **Core tags.** Some capability tags load automatically and stay
+  loaded — you can't deactivate them. Your system prompt's `##
+  Active Capabilities` section lists what's loaded with `core: true`
+  flagged per entry; trust that as ground truth for "what's already
+  in scope."
 
 A loop with `tags: []` is unreliable — depending on what's already
 loaded, you may end up with a narrow surface or with the entire tool
@@ -69,7 +69,7 @@ which loop family is doing the launching:
 - **Tag-as-label.** Tags are not free-form metadata. Each tag binds
   to a real tool surface. Adding `tags: ["server-room"]` doesn't
   pull in any scoped tools — `server-room` isn't a registered tag,
-  so the filter resolves to just the always-on primitives (no `ha`,
+  so the filter resolves to just the core tools (no `ha`,
   no `awareness`, no actual server-watching capability). The loop
   still runs, but it runs blind. Use a real tag name; the catalog is
   the source of truth.
@@ -92,10 +92,10 @@ These are two different questions with two different answers.
 
 **What's loaded right now?** Read your own system prompt. The `##
 Active Capabilities` section is rendered into every prompt with each
-loaded tag's `description`, `tool_count`, `always_active`,
-`protected`, and `ad_hoc` flags. No tool call needed — the answer is
-already in your context. Reaching for a tool to retrieve information
-you already have just burns a turn.
+loaded tag's `description`, `tool_count`, `core`, `protected`, and
+`ad_hoc` flags. No tool call needed — the answer is already in your
+context. Reaching for a tool to retrieve information you already have
+just burns a turn.
 
 **What would adding a new tag pull in?** Call `inspect_capability(tag:
 "<tag>")`. Returns the per-tool breakdown with source attribution

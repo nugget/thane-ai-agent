@@ -26,10 +26,10 @@ type BuiltinToolSpec struct {
 
 // BuiltinTagSpec captures compiled-in metadata for a tag/toolset.
 type BuiltinTagSpec struct {
-	Description  string
-	AlwaysActive bool
-	Menu         bool
-	Protected    bool
+	Description string
+	Core        bool
+	Menu        bool
+	Protected   bool
 }
 
 // CapabilitySurface captures the resolved model-facing view of a
@@ -51,7 +51,7 @@ type CapabilitySurface struct {
 	Tools         []string
 	ToolEntries   []CapabilityToolEntry
 	ExcludedTools []CapabilityToolEntry
-	AlwaysActive  bool
+	Core          bool
 	Menu          bool
 	Protected     bool
 	Loaded        bool
@@ -252,19 +252,19 @@ func HasBuiltinTag(name string) bool {
 
 // BuildCapabilitySurface builds a sorted capability surface from
 // tag membership and descriptions.
-func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool, protected map[string]bool) []CapabilitySurface {
+func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]string, core map[string]bool, protected map[string]bool) []CapabilitySurface {
 	surface := make([]CapabilitySurface, 0, len(tags))
 	for tag, toolNames := range tags {
 		copiedTools := append([]string(nil), toolNames...)
 		sort.Strings(copiedTools)
 		spec := builtinTagSpecs[tag]
 		surface = append(surface, CapabilitySurface{
-			Tag:          tag,
-			Description:  descriptions[tag],
-			Tools:        copiedTools,
-			AlwaysActive: alwaysActive[tag],
-			Menu:         spec.Menu,
-			Protected:    protected[tag],
+			Tag:         tag,
+			Description: descriptions[tag],
+			Tools:       copiedTools,
+			Core:        core[tag],
+			Menu:        spec.Menu,
+			Protected:   protected[tag],
 		})
 	}
 	return SortCapabilitySurface(surface)

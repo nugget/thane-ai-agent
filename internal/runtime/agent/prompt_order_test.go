@@ -209,18 +209,18 @@ func newPromptOrderLoop(t *testing.T, kbDir string) *Loop {
 	}
 	capTags := map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Forge and code review tools.",
-			Tools:        []string{"forge_pr_get"},
-			AlwaysActive: true,
+			Description: "Forge and code review tools.",
+			Tools:       []string{"forge_pr_get"},
+			Core:        true,
 		},
 	}
 	l.SetCapabilityTags(capTags, parsed)
 	l.UseCapabilitySurface([]toolcatalog.CapabilitySurface{
 		{
-			Tag:          "forge",
-			Description:  "Forge and code review tools.",
-			Tools:        []string{"forge_pr_get"},
-			AlwaysActive: true,
+			Tag:         "forge",
+			Description: "Forge and code review tools.",
+			Tools:       []string{"forge_pr_get"},
+			Core:        true,
 		},
 	})
 	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{

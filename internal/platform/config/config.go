@@ -224,7 +224,7 @@ type Config struct {
 
 	// CapabilityTags optionally overlays the compiled-in capability-tag catalog.
 	// Use this for deliberate operator overrides or custom tags. Built-in
-	// tags usually do not need entries here. Tags marked always_active are
+	// tags usually do not need entries here. Tags marked core are
 	// loaded unconditionally. Other tags are activated via
 	// activate_capability/deactivate_capability tools, runtime source
 	// policy, or channel-pinned configuration.
@@ -235,7 +235,7 @@ type Config struct {
 	// identity or current message-channel affordances. Runtime-only tags
 	// such as owner and message_channel are skipped here; they must be
 	// asserted by trusted current-run evidence. This is additive to
-	// always-active tags and any tags the agent requests at runtime. Tag
+	// core tags and any tags the agent requests at runtime. Tag
 	// names must reference either compiled-in tags or entries in [CapabilityTags].
 	ChannelTags map[string][]string `yaml:"channel_tags"`
 
@@ -1193,8 +1193,8 @@ type DelegateProfileConfig struct {
 // CapabilityTagConfig is the operator overlay for a capability tag.
 // Membership is computed by the resolver as the union of native catalog
 // declarations, MCP server tag bindings, and operator-supplied Include,
-// minus operator-supplied Exclude. Description, AlwaysActive, and
-// Protected override the compiled-in builtin tag spec when non-zero.
+// minus operator-supplied Exclude. Description, Core, and Protected
+// override the compiled-in builtin tag spec when non-zero.
 //
 // Runtime-only tags such as owner and message_channel should be
 // asserted by the integration or trusted channel binding that has
@@ -1216,9 +1216,10 @@ type CapabilityTagConfig struct {
 	// in this deployment without removing it everywhere.
 	Exclude []string `yaml:"exclude"`
 
-	// AlwaysActive tags cannot be deactivated. They are included in
-	// every session regardless of channel or agent requests.
-	AlwaysActive bool `yaml:"always_active"`
+	// Core tags cannot be deactivated. They are included in every
+	// session regardless of channel or agent requests — operator-pinned
+	// baseline scope.
+	Core bool `yaml:"core"`
 
 	// Protected tags are reserved for runtime trust and environment
 	// assertions (for example an owner-authenticated conversation).

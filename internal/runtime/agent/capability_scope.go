@@ -55,7 +55,7 @@ type capabilityScope struct {
 	capTags map[string]config.CapabilityTagConfig // read-only reference to config
 }
 
-// newCapabilityScope creates a scope seeded with always-active tags and
+// newCapabilityScope creates a scope seeded with core tags and
 // global lenses. The capTags reference is stored read-only for
 // configured-tag checks.
 func newCapabilityScope(capTags map[string]config.CapabilityTagConfig, globalLenses []string) *capabilityScope {
@@ -65,7 +65,7 @@ func newCapabilityScope(capTags map[string]config.CapabilityTagConfig, globalLen
 		capTags: capTags,
 	}
 	for tag, cfg := range capTags {
-		if cfg.AlwaysActive {
+		if cfg.Core {
 			s.active[tag] = true
 		}
 	}
@@ -101,7 +101,7 @@ func (s *capabilityScope) Snapshot() map[string]bool {
 }
 
 // UserActivatedTags returns tags that were activated by the model (not
-// always-active, not pinned by channel or lens). These are the tags
+// core, not pinned by channel or lens). These are the tags
 // that should be persisted per conversation.
 func (s *capabilityScope) UserActivatedTags() []string {
 	return s.electiveTags()
@@ -109,7 +109,7 @@ func (s *capabilityScope) UserActivatedTags() []string {
 
 // InheritableTags returns active elective tags that can be carried into
 // child work such as delegates. Runtime-pinned tags, channel affordance
-// tags, global lenses, and always-active tags are intentionally excluded.
+// tags, global lenses, and core tags are intentionally excluded.
 func (s *capabilityScope) InheritableTags() []string {
 	return s.electiveTags()
 }
@@ -122,7 +122,7 @@ func (s *capabilityScope) electiveTags() []string {
 		if s.pinned[tag] {
 			continue // lenses and channel-pinned
 		}
-		if cfg, ok := s.capTags[tag]; ok && cfg.AlwaysActive {
+		if cfg, ok := s.capTags[tag]; ok && cfg.Core {
 			continue
 		}
 		tags = append(tags, tag)
@@ -153,8 +153,8 @@ func (s *capabilityScope) Request(tag string) error {
 // Drop deactivates a capability tag. Always-active and channel-pinned
 // tags cannot be dropped.
 func (s *capabilityScope) Drop(tag string) error {
-	if cfg, ok := s.capTags[tag]; ok && cfg.AlwaysActive {
-		return fmt.Errorf("cannot drop always-active tag: %q", tag)
+	if cfg, ok := s.capTags[tag]; ok && cfg.Core {
+		return fmt.Errorf("cannot drop core tag: %q", tag)
 	}
 	if cfg, ok := s.capTags[tag]; ok && cfg.Protected {
 		return fmt.Errorf("cannot drop protected tag %q (runtime asserted)", tag)
