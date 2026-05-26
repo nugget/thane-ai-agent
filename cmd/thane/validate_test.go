@@ -132,6 +132,44 @@ func TestRunValidate_JSONHappyPath(t *testing.T) {
 	}
 }
 
+// TestRunValidate_JSONDiscoveryFailure guards the stable-schema
+// promise: even when config discovery fails before a path is
+// resolved, the JSON report still includes the path field (populated
+// from the operator's explicit -config value) so scripts piping into
+// jq don't have to handle two schema shapes.
+func TestRunValidate_JSONDiscoveryFailure(t *testing.T) {
+	const explicit = "/nonexistent/never-going-to-exist.yaml"
+	var buf bytes.Buffer
+
+	err := runValidate(&buf, explicit, "json")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+
+	var got map[string]any
+	if jerr := json.Unmarshal(buf.Bytes(), &got); jerr != nil {
+		t.Fatalf("json output is not valid JSON: %v\nbody:\n%s", jerr, buf.String())
+	}
+	pathField, present := got["path"]
+	if !present {
+		t.Errorf("path field must be present in JSON output even on discovery failure; got keys: %v", keysOf(got))
+	}
+	if got, _ := pathField.(string); got != explicit {
+		t.Errorf("path = %q, want %q (operator's -config value)", got, explicit)
+	}
+	if v, _ := got["valid"].(bool); v {
+		t.Error("valid should be false on discovery failure")
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestRunValidate_JSONFailure(t *testing.T) {
 	body := minimalValidConfig + `
 channel_tags:

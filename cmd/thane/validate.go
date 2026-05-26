@@ -24,6 +24,13 @@ import (
 // piping into jq.
 func runValidate(w io.Writer, configPath, outputFmt string) error {
 	cfg, cfgPath, loadErr := loadConfig(configPath)
+	// When discovery fails before a path is resolved, fall back to
+	// the operator's explicit -config value so the JSON report still
+	// names the file that was at fault. Stays empty when neither
+	// resolution nor an explicit flag was provided.
+	if cfgPath == "" {
+		cfgPath = configPath
+	}
 	if outputFmt == "json" {
 		// Always emit JSON to stdout, even on failure — scripts may
 		// want the structured error. The error is still returned so
@@ -64,8 +71,11 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 // writeValidateJSON emits the structured validation report. cfg may be
 // nil when load failed; loadErr is non-nil when validation failed.
 func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error) error {
+	// Path always emits (no omitempty) so the JSON schema is stable
+	// for scripts piping into jq — even discovery-failure cases get
+	// a path field, possibly empty.
 	result := struct {
-		Path    string         `json:"path,omitempty"`
+		Path    string         `json:"path"`
 		Valid   bool           `json:"valid"`
 		Error   string         `json:"error,omitempty"`
 		Summary map[string]any `json:"summary,omitempty"`
