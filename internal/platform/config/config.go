@@ -1221,13 +1221,6 @@ type CapabilityTagConfig struct {
 	// baseline scope.
 	Core bool `yaml:"core"`
 
-	// AlwaysActiveLegacy is the deprecated YAML alias for Core.
-	// Operators still using `always_active: true` in their config will
-	// have it normalized to Core during validation, with a one-time
-	// deprecation warning. Removal target: after the 2026 Q4 release.
-	// Do not set this field directly from Go code; use Core.
-	AlwaysActiveLegacy bool `yaml:"always_active"`
-
 	// Protected tags are reserved for runtime trust and environment
 	// assertions (for example an owner-authenticated conversation).
 	// They are visible to the model when active, but cannot be toggled
@@ -2461,20 +2454,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	for tagName, tagCfg := range c.CapabilityTags {
-		// Normalize the deprecated `always_active` YAML key to `core`.
-		// Operators upgrading from the old vocabulary keep working; we
-		// emit one warning per migrated tag during validation so the
-		// nudge to update their config is visible without breaking the
-		// load. Removal target: after the 2026 Q4 release.
-		if tagCfg.AlwaysActiveLegacy {
-			if !tagCfg.Core {
-				slog.Warn("config: capability tag uses deprecated YAML key 'always_active'; rename to 'core'",
-					"tag", tagName)
-				tagCfg.Core = true
-			}
-			tagCfg.AlwaysActiveLegacy = false
-			c.CapabilityTags[tagName] = tagCfg
-		}
 		builtin := toolcatalog.HasBuiltinTag(tagName) || allowedTags[tagName]
 		if err := tagCfg.Validate(tagName, builtin); err != nil {
 			return err

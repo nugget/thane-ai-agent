@@ -826,7 +826,7 @@ function normalizeCapabilityCatalogEntry(entry) {
     description,
     toolCount: Number.isFinite(toolCount) ? toolCount : 0,
     tools,
-    core: !!(entry.core || entry.Core || entry.always_active || entry.core),
+    core: !!(entry.core || entry.Core),
     adHoc: !!(entry.ad_hoc || entry.adHoc),
     context: context && typeof context === 'object'
       ? {
@@ -848,7 +848,7 @@ function normalizeLoadedCapabilityEntry(entry) {
     tag,
     description,
     toolCount: Number.isFinite(toolCount) ? toolCount : 0,
-    core: !!(entry.core || entry.Core || entry.always_active || entry.core),
+    core: !!(entry.core || entry.Core),
     adHoc: !!(entry.ad_hoc || entry.adHoc),
     context: context && typeof context === 'object'
       ? {
