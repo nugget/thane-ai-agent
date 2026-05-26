@@ -44,13 +44,18 @@ audiences and trust models are different.
 
 ## Constants across all branches
 
-- **Recipients must be in the contact directory.** Both `email_send`
-  and `email_reply` route through a trust-zone gate: addresses
-  resolved to `admin` / `household` / `trusted` zones go through;
-  `known` zone produces a warning; addresses with no contact record
-  are **blocked**. When composing, confirm contacts exist via
-  `lookup_contact` first — the send blocking after you've drafted the
-  body is annoying and avoidable.
+- **Recipients must be in the contact directory AND at a
+  send-eligible trust zone.** Both `email_send` and `email_reply`
+  route through a trust-zone gate that aborts the send on *any*
+  issue. Addresses resolved to `admin` / `household` / `trusted`
+  zones go through; `known` zone is **rejected** with a
+  "promote-or-authorize" message; addresses with no contact record
+  are **rejected** with a "no contact record" message. The two
+  failure modes are distinguishable in the result so you know
+  whether to promote an existing contact or save a new one, but
+  both leave the message unsent. Confirm contacts exist *and are at
+  a send-eligible zone* via `lookup_contact` before composing — the
+  rejection after you've drafted the body is annoying and avoidable.
 - **Sent mail is irreversible.** There is no "unsend." A draft sent to
   the wrong audience is permanent. When uncertain about the recipient
   list or the body's tone, draft into the conversation first and ask;
@@ -192,21 +197,30 @@ recipient must be in the contact directory.**
 
 The body is markdown; the server converts to both `text/plain` and
 `text/html`. Subject is required. The handler validates each `to` /
-`cc` address against the contact directory before sending:
+`cc` address against the contact directory before sending. **Any
+trust-gate issue aborts the whole send** — there is no "send the
+allowed ones and skip the others." Three result categories:
 
-- **Allowed** — `admin`, `household`, or `trusted` trust zone. Sends
-  through.
-- **Warning** — `known` trust zone. Send proceeds with a warning in the
-  result.
-- **Blocked** — no contact record. The entire send is rejected; the
-  message stays unsent.
+- **Allowed through** — every recipient resolves to `admin`,
+  `household`, or `trusted`. The mail goes out.
+- **Rejected, known-zone recipient** — at least one recipient is at
+  the `known` trust zone. Result names the offender; nothing is
+  sent. Recovery: promote the contact with `save_contact`
+  (deliberately, with user authorization), or remove them from the
+  recipient list.
+- **Rejected, missing contact** — at least one recipient has no
+  contact record. Result names the offender; nothing is sent.
+  Recovery: `save_contact` to add the contact deliberately, or
+  remove them from the recipient list.
 
-When the result reports blocked recipients, the right move is usually
+When the result reports a rejection, the right move is usually
 `lookup_contact` to confirm what's actually in the directory (maybe
-the spelling differs), then `save_contact` to add the missing
-contact deliberately *if the user authorized that contact*. **Don't
-add a contact just to unblock a send** — the trust gate exists
-precisely to make that decision conscious.
+the spelling differs, or an alias resolves elsewhere), then either
+`save_contact` to add or promote, or revise the recipient list.
+**Don't blanket-add contacts just to unblock a send** — the trust
+gate exists precisely to make that decision conscious. A recipient
+who's `known` rather than `trusted` is information about the
+relationship; promoting them is a real trust-policy choice.
 
 ## The threaded reply
 
@@ -224,11 +238,12 @@ threads properly in the recipient's client:
 
 `reply_all: false` (the default) replies only to the original sender.
 `reply_all: true` includes the original `Cc` list. **Both paths still
-go through the trust gate** — every recipient on the resulting
-envelope is checked, including the original CC list when reply_all is
-true. A reply_all to a thread with a `known`-zone recipient produces
-warnings; a reply_all to a thread with an unknown CC is blocked
-entirely.
+go through the trust gate**, and the gate's all-or-nothing behavior
+means a reply_all to a thread where any CC is at `known` zone or has
+no contact record will be **rejected entirely** — the handler doesn't
+selectively drop bad recipients and send to the rest. When reply_all
+matters, do a `lookup_contact` sweep over the visible recipients
+first.
 
 ## reply vs send — the right shape
 
@@ -276,10 +291,13 @@ operate on arrays for bulk work.
 }
 ```
 
-`add: true` (the default) adds the flag; `add: false` removes it.
-Single-message mode accepts `uid` (integer) instead of `uids` (array)
-as a convenience. Pass `add: false` with `flag: "seen"` to mark
-messages back to unread.
+`add: true` adds the flag; `add: false` removes it. **Always pass
+`add` explicitly** — the tool description claims `add` defaults to
+`true`, but the handler treats a missing `add` as `false`. Until
+that's reconciled, explicit is the only way to avoid the
+"I asked to mark seen, it marked unseen" surprise. Single-message
+mode accepts `uid` (integer) instead of `uids` (array) as a
+convenience.
 
 The most common reason to reach for this: marking processed messages
 as read after a triage pass, so the next pass's `email_list(unseen:
