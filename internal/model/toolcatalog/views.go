@@ -90,13 +90,15 @@ type LoadedCapabilityEntry struct {
 }
 
 // CapabilityActionTools lists the tool names the model should use for
-// capability lifecycle actions (activate, deactivate, reset, list,
-// inspect).
+// capability lifecycle actions (activate, deactivate, reset, inspect).
+// There is no "list" tool: the model reads the currently-loaded
+// capabilities from the `## Active Capabilities` section of its
+// system prompt, which carries the same shape on every turn without a
+// tool call.
 type CapabilityActionTools struct {
 	Activate   string `json:"activate"`
 	Deactivate string `json:"deactivate"`
 	Reset      string `json:"reset,omitempty"`
-	List       string `json:"list,omitempty"`
 	Inspect    string `json:"inspect,omitempty"`
 	Delegate   string `json:"delegate,omitempty"`
 }
@@ -137,7 +139,6 @@ func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 		Activate:   "activate_capability",
 		Deactivate: "deactivate_capability",
 		Reset:      "reset_capabilities",
-		List:       "list_loaded_capabilities",
 		Inspect:    "inspect_capability",
 	}
 	if includeDelegate {

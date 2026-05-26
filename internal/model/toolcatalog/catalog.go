@@ -153,7 +153,6 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
-	"list_loaded_capabilities":    {CanonicalID: "native:list_loaded_capabilities", Source: NativeToolSource},
 	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
 	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
 	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, Tags: []string{"scheduler"}},

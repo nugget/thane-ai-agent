@@ -29,9 +29,11 @@ type CapabilityManager interface {
 type CapabilityManifest = toolcatalog.CapabilitySurface
 
 // SetCapabilityTools adds activate_capability, deactivate_capability,
-// reset_capabilities, and list_loaded_capabilities tools to the
-// registry. These tools let the agent inspect and mutate capability
-// tags mid-conversation.
+// reset_capabilities, and inspect_capability tools to the registry.
+// These tools let the agent inspect and mutate capability tags
+// mid-conversation. For "what's currently loaded," the model reads the
+// `## Active Capabilities` section already rendered into every prompt
+// — no tool call needed.
 //
 // These tools are intentionally not assigned to any tag group. They
 // live in the base registry and survive all tag filtering, ensuring the
@@ -46,7 +48,6 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	r.registerActivateCapability(mgr, manifest, tagManifest)
 	r.registerDeactivateCapability(mgr, tagManifest)
 	r.registerResetCapabilities(mgr, tagManifest)
-	r.registerListLoadedCapabilities(mgr, tagManifest)
 	r.registerInspectCapability(tagManifest)
 }
 
@@ -252,76 +253,6 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 				fmt.Fprintf(&result, " Active: %s.", strings.Join(remaining, ", "))
 			}
 			return result.String(), nil
-		},
-	})
-}
-
-// registerListLoadedCapabilities registers the list_loaded_capabilities tool.
-//
-// NOT always-available. This tool returns a strict subset of the data
-// already rendered into every prompt under "## Active Capabilities"
-// (see loop.go:1090 → toolcatalog.RenderLoadedCapabilitySummary). The
-// prompt section carries tag, description, tool_count, always_active,
-// protected, ad_hoc, and context per loaded tag; this tool returns
-// just tag, always_active, protected, ad_hoc — so every call burns a
-// tool turn to retrieve less than the model already has in its
-// context.
-//
-// The five-way repair shim at loop.go:1302 (list_capabilities,
-// loaded_capabilities, active_capabilities, get_loaded_capabilities,
-// list_loaded_capabilities) is the smoking gun: the model has been
-// reaching for this tool repeatedly under different names because it
-// looked like the canonical handle for capability introspection. The
-// fix is the prompt section, not a more findable tool.
-//
-// Demoted out of always-available as a stepping stone toward full
-// removal. Keep the registration in place until the repair shim
-// aliases retire too, so the tool still loads when an unfiltered
-// scope happens to include it. The model-facing answer to "what's
-// loaded?" is the prompt section.
-func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
-	r.Register(&Tool{
-		Name:        "list_loaded_capabilities",
-		Description: "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
-			active := mgr.ActiveTags(ctx)
-			tags := make([]string, 0, len(active))
-			for tag, enabled := range active {
-				if enabled {
-					tags = append(tags, tag)
-				}
-			}
-			sort.Strings(tags)
-
-			type loadedCapability struct {
-				Tag          string `json:"tag"`
-				AlwaysActive bool   `json:"always_active,omitempty"`
-				Protected    bool   `json:"protected,omitempty"`
-				AdHoc        bool   `json:"ad_hoc,omitempty"`
-			}
-			payload := struct {
-				LoadedCapabilities []loadedCapability `json:"loaded_capabilities"`
-			}{
-				LoadedCapabilities: make([]loadedCapability, 0, len(tags)),
-			}
-			for _, tag := range tags {
-				entry := loadedCapability{Tag: tag}
-				if manifest, ok := tagManifest[tag]; ok {
-					entry.AlwaysActive = manifest.AlwaysActive
-					entry.Protected = manifest.Protected
-					entry.AdHoc = manifest.AdHoc
-				}
-				payload.LoadedCapabilities = append(payload.LoadedCapabilities, entry)
-			}
-			out, err := json.Marshal(payload)
-			if err != nil {
-				return "", fmt.Errorf("marshal loaded capabilities: %w", err)
-			}
-			return string(out), nil
 		},
 	})
 }

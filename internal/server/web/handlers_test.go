@@ -401,7 +401,6 @@ func TestHandleSystem_Healthy(t *testing.T) {
 			ActivationTools: toolcatalog.CapabilityActionTools{
 				Activate:   "activate_capability",
 				Deactivate: "deactivate_capability",
-				List:       "list_loaded_capabilities",
 			},
 			Capabilities: []toolcatalog.CapabilityCatalogEntry{
 				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 12},

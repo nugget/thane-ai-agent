@@ -1299,12 +1299,6 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 	}
 
 	switch name {
-	case "list_capabilities", "list_loaded_capabilities", "loaded_capabilities", "active_capabilities", "get_loaded_capabilities":
-		tc.Function.Name = "list_loaded_capabilities"
-		if tc.Function.Arguments == nil {
-			tc.Function.Arguments = map[string]any{}
-		}
-		return tc, true
 	case "reset_capability", "reset_capabilities", "reset_loaded_capabilities", "reset_capability_state", "restore_capability_baseline":
 		tc.Function.Name = "reset_capabilities"
 		tc.Function.Arguments = map[string]any{}
