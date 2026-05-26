@@ -19,8 +19,10 @@ Choose the next move deliberately:
 - If the truth is in the checked-out workspace, activate `files`.
 - If the repo is not enough and you need outside docs or a named web
   source, activate `web`.
-- If the work becomes physical and local, activate `shell` only when
-  command execution is genuinely the next move.
+- If the work becomes physical and local, activate `shell` — but
+  only when nothing in the catalog covers it. `shell` is the escape
+  hatch (arbitrary `exec`), not the default; most "I want to run X"
+  impulses have a focused tool in `files`/`forge`/`web`/`ha`.
 
 Once one surface starts giving you real state, stop menuing and work. If
 you can already feel that this spans repo state, local files, and local
