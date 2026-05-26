@@ -219,7 +219,7 @@ func (t *Tools) GetDefinitions() []map[string]any {
 			"type": "function",
 			"function": map[string]any{
 				"name":        "remember_fact",
-				"description": "Store a discrete, stable piece of information for later recall. Best for user preferences, home layout, device mappings, routines, or observed patterns. Each fact should be a single, self-contained piece of knowledge — not a project spec or design document. Do NOT store complex/evolving knowledge here — use workspace files instead. Do NOT store person-specific attributes — use save_contact instead.",
+				"description": "Store a discrete, stable piece of information for later recall. Best for user preferences, home layout, device mappings, routines, or observed patterns. Each fact should be a single, self-contained piece of knowledge — not a project spec or design document. Do NOT store complex/evolving knowledge here — use workspace files instead. Do NOT store person-specific attributes — use contact_save instead.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

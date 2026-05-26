@@ -9,7 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
-// FindEntityArgs represents the arguments for the find_entity tool.
+// FindEntityArgs represents the arguments for the ha_find_entity tool.
 type FindEntityArgs struct {
 	Description string `json:"description"`      // e.g., "access point LED", "ceiling fan"
 	Area        string `json:"area,omitempty"`   // e.g., "office", "Nugget's Office"
@@ -27,14 +27,14 @@ type FindEntityResult struct {
 	Candidates   []string `json:"candidates,omitempty"` // When ambiguous or not found
 }
 
-// registerFindEntity registers the find_entity tool.
+// registerFindEntity registers the ha_find_entity tool.
 func (r *Registry) registerFindEntity() {
 	if r.ha == nil {
 		return // Skip if no HA client
 	}
 
 	r.Register(&Tool{
-		Name:        "find_entity",
+		Name:        "ha_find_entity",
 		Description: "Find a Home Assistant entity by description and area. Use this when the user refers to a device by description rather than entity_id. Returns the best matching entity or explains what was found.",
 		Parameters: map[string]any{
 			"type": "object",

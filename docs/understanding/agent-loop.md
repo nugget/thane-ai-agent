@@ -71,7 +71,7 @@ talents the agent can see:
   provide core tools like memory, notifications, and session management
 - **Channel-pinned tags** activate automatically based on the request source
   (email requests activate `email`, HA requests activate `ha`)
-- **Agent-requested tags** activate when the agent calls `activate_capability`
+- **Agent-requested tags** activate when the agent calls `tag_activate`
   because it needs tools outside its current set
 
 This creates a dynamic toolset that starts lean and expands on demand.
@@ -137,7 +137,7 @@ domain.
 capability_tags:
   ha:
     description: "Home Assistant device control and monitoring"
-    tools: [control_device, find_entity, get_state, list_entities, call_service]
+    tools: [ha_control_device, ha_find_entity, ha_get_state, ha_list_entities, ha_call_service]
   email:
     description: "Email reading, sending, and management"
     tools: [email_list, email_read, email_search, email_send, email_reply]
