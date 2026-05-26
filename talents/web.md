@@ -2,7 +2,7 @@
 tags: [web]
 ---
 
-# Web For Knowledge Work
+# Web
 
 `web` is the branch for remote sources. Sometimes that means widening
 the world. Sometimes it means simply reading the page already in front

@@ -2,7 +2,7 @@
 tags: [memory]
 ---
 
-# Memory For Knowledge Work
+# Memory
 
 `memory` is not a filing cabinet. It is where documents collapse into
 durable truths.

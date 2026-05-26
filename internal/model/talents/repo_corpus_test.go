@@ -126,6 +126,13 @@ var nonToolTokens = map[string]struct{}{
 	// tools like forge_repo_follow / media_follow / mqtt_wake_add).
 	// Appears in talent prose describing routing, not as a tool call.
 	"wake_loop": {},
+
+	// Talent frontmatter keys. The authoring README documents these
+	// alongside their tool-like siblings (`tags`, `kind`, `teaser`,
+	// `next_tags` — all single-word, not flagged by the matcher);
+	// `tags_all` is the one compound key that happens to look
+	// tool-shaped.
+	"tags_all": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in

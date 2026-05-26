@@ -2,7 +2,7 @@
 tags: [files]
 ---
 
-# Files For Knowledge Work
+# Files
 
 Use `files` to let the document speak before you compress it.
 
