@@ -14,12 +14,14 @@ three ways the model usually asks the question.
 
 ## The single most important disambiguation
 
-**Archive is what was said. `logs_query` is what happened.**
+**The `archive` tag holds the tools for what was *said*. The
+`logs_query` tool (always available, no activation needed) holds
+the system's events.**
 
-| You want... | Use |
+| You want... | Surface |
 |---|---|
-| The literal words of a past conversation | archive |
-| A system event (loop iteration, tool call, error, model response) | `logs_query` (always available) |
+| The literal words of a past conversation | Activate `archive`, then pick a tool below |
+| A system event (loop iteration, tool call, error, model response) | Call `logs_query` directly — it's a core tool |
 
 Both span time. Both have free-text search. Both can be queried by
 attribute. They are not the same surface. A question like "what did
@@ -131,13 +133,14 @@ teaser: "Verbatim messages by time range — crosses session boundaries."
 # Pull by time range
 
 You want messages from a specific window, not a topic search. The
-range tool crosses session boundaries — sessions are an internal
-abstraction here; this tool just gives you the messages.
+range tool — `archive_range` — crosses session boundaries:
+sessions are an internal abstraction here; this tool just gives
+you the messages.
 
 ## A specific window
 
-`min_time` and `max_time` accept RFC3339 timestamps or signed
-deltas:
+`archive_range`'s `min_time` and `max_time` accept RFC3339
+timestamps or signed deltas:
 
 ```json
 {
@@ -231,9 +234,10 @@ search query, or when you remember a session by its title or tag
 ## Read one in full
 
 Once you've identified the session worth examining, pull the
-complete transcript with `archive_session_transcript`. The session
-ID accepts a prefix — the first 8+ characters are enough to
-disambiguate in most cases:
+complete transcript with `archive_session_transcript`. Pass either
+the full session ID, or an 8-character prefix — the handler resolves
+short prefixes (up to 8 chars) by lookup; values longer than 8
+chars are treated as full IDs and won't prefix-match:
 
 ```json
 {
@@ -271,8 +275,9 @@ return the whole thing.
   path when the question is "where did we discuss X."
 - For verbatim messages across a time window regardless of session,
   bounce to `archive_time`.
-- For sessions tagged with operational metadata (tool-call patterns,
-  error sequences) rather than conversational content, the
-  per-session view in `archive_sessions` shows tool counts but the
-  forensic detail lives in `logs_query` (always available) scoped
-  to that session's time window.
+- For forensic detail on what the system *did* during a session
+  (tool calls, loop iterations, errors), `archive_sessions`'s
+  projection covers conversation-level metadata only — start/end
+  times, message count, title, tags, summary. The mechanical event
+  side lives in `logs_query` (always available); scope it to the
+  session's time window for "what happened during this conversation."
