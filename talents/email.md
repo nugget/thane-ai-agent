@@ -54,7 +54,7 @@ audiences and trust models are different.
   failure modes are distinguishable in the result so you know
   whether to promote an existing contact or save a new one, but
   both leave the message unsent. Confirm contacts exist *and are at
-  a send-eligible zone* via `lookup_contact` before composing — the
+  a send-eligible zone* via `contact_lookup` before composing — the
   rejection after you've drafted the body is annoying and avoidable.
 - **Sent mail is irreversible.** There is no "unsend." A draft sent to
   the wrong audience is permanent. When uncertain about the recipient
@@ -72,7 +72,7 @@ audiences and trust models are different.
 ## Cross-references
 
 - For grounding sender and recipient names in real records, bounce to
-  `contacts` (`lookup_contact`). Required reading before `email_send`
+  `contacts` (`contact_lookup`). Required reading before `email_send`
   unless you're certain every recipient is already in the directory.
 - For high-volume triage loops (digest every morning, watch for
   specific senders), the right shape is usually `thane_curate` rather
@@ -205,18 +205,18 @@ allowed ones and skip the others." Three result categories:
   `household`, or `trusted`. The mail goes out.
 - **Rejected, known-zone recipient** — at least one recipient is at
   the `known` trust zone. Result names the offender; nothing is
-  sent. Recovery: promote the contact with `save_contact`
+  sent. Recovery: promote the contact with `contact_save`
   (deliberately, with user authorization), or remove them from the
   recipient list.
 - **Rejected, missing contact** — at least one recipient has no
   contact record. Result names the offender; nothing is sent.
-  Recovery: `save_contact` to add the contact deliberately, or
+  Recovery: `contact_save` to add the contact deliberately, or
   remove them from the recipient list.
 
 When the result reports a rejection, the right move is usually
-`lookup_contact` to confirm what's actually in the directory (maybe
+`contact_lookup` to confirm what's actually in the directory (maybe
 the spelling differs, or an alias resolves elsewhere), then either
-`save_contact` to add or promote, or revise the recipient list.
+`contact_save` to add or promote, or revise the recipient list.
 **Don't blanket-add contacts just to unblock a send** — the trust
 gate exists precisely to make that decision conscious. A recipient
 who's `known` rather than `trusted` is information about the
@@ -242,7 +242,7 @@ go through the trust gate**, and the gate's all-or-nothing behavior
 means a reply_all to a thread where any CC is at `known` zone or has
 no contact record will be **rejected entirely** — the handler doesn't
 selectively drop bad recipients and send to the rest. When reply_all
-matters, do a `lookup_contact` sweep over the visible recipients
+matters, do a `contact_lookup` sweep over the visible recipients
 first.
 
 ## reply vs send — the right shape
@@ -256,7 +256,7 @@ audience-wrong is a real leak.
 ## Cross-references
 
 - For looking up the right address before composing, bounce to
-  `contacts` (`lookup_contact`). The trust gate's "Cannot send to X:
+  `contacts` (`contact_lookup`). The trust gate's "Cannot send to X:
   no contact record" message is recoverable, but it's faster to know
   the directory state going in.
 - For high-stakes outgoing mail (sensitive, legal, ambiguous tone),
