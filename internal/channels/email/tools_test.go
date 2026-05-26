@@ -190,6 +190,50 @@ func TestBoolArg(t *testing.T) {
 	}
 }
 
+// TestBoolArgDefault covers the helper used by tools whose schema
+// documents a true-default (currently email_mark.add). The absent-key
+// case is the one that matters most: the matching test name is the
+// regression guard for #930.
+func TestBoolArgDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     map[string]any
+		key      string
+		fallback bool
+		want     bool
+	}{
+		{"explicit true / default true", map[string]any{"add": true}, "add", true, true},
+		{"explicit false overrides default true", map[string]any{"add": false}, "add", true, false},
+		{"missing key returns default true", map[string]any{}, "add", true, true},
+		{"missing key returns default false", map[string]any{}, "add", false, false},
+		{"wrong type returns default", map[string]any{"add": "yes"}, "add", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := boolArgDefault(tt.args, tt.key, tt.fallback); got != tt.want {
+				t.Errorf("boolArgDefault(%v, %q, %v) = %v, want %v", tt.args, tt.key, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHandleMark_AddDefault_IsTrue locks in the schema/handler contract
+// from #930: when the caller omits `add`, the tool MUST add the flag
+// (matching the schema description "default: true") rather than
+// silently removing it. The talent guidance accordingly stops telling
+// the model to "always pass add explicitly".
+func TestHandleMark_AddDefault_IsTrue(t *testing.T) {
+	args := map[string]any{
+		"uid":  float64(123),
+		"flag": "seen",
+	}
+	add := boolArgDefault(args, "add", true)
+	if !add {
+		t.Errorf("missing `add` must default to true (add the flag) — got %v", add)
+	}
+}
+
 func TestFormatEnvelopeList(t *testing.T) {
 	envelopes := []Envelope{
 		{

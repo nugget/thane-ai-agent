@@ -291,13 +291,11 @@ operate on arrays for bulk work.
 }
 ```
 
-`add: true` adds the flag; `add: false` removes it. **Always pass
-`add` explicitly** — the tool description claims `add` defaults to
-`true`, but the handler treats a missing `add` as `false`. Until
-that's reconciled, explicit is the only way to avoid the
-"I asked to mark seen, it marked unseen" surprise. Single-message
-mode accepts `uid` (integer) instead of `uids` (array) as a
-convenience.
+`add: true` adds the flag; `add: false` removes it. `add` defaults
+to `true` when omitted — the common case is marking seen after a
+triage pass, so the schema and handler now agree on that default.
+Pass `add: false` to remove a flag. Single-message mode accepts
+`uid` (integer) instead of `uids` (array) as a convenience.
 
 The most common reason to reach for this: marking processed messages
 as read after a triage pass, so the next pass's `email_list(unseen:

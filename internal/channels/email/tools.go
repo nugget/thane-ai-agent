@@ -142,9 +142,11 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 // HandleMark modifies flags on specified messages.
 func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, error) {
 	action := MarkAction{
-		Folder:  stringArg(args, "folder"),
-		Flag:    stringArg(args, "flag"),
-		Add:     boolArg(args, "add"),
+		Folder: stringArg(args, "folder"),
+		Flag:   stringArg(args, "flag"),
+		// Default to true so a missing `add` matches the documented
+		// schema and the common case (marking seen after triage).
+		Add:     boolArgDefault(args, "add", true),
 		Account: stringArg(args, "account"),
 	}
 
@@ -515,6 +517,17 @@ func boolArg(args map[string]any, key string) bool {
 		return v
 	}
 	return false
+}
+
+// boolArgDefault is the same as boolArg but returns fallback (rather
+// than false) when key is absent or wrong-typed. Use it when the tool
+// schema documents a true-default; reaching for it is a signal that
+// the docs and code agree on the absent-key behavior.
+func boolArgDefault(args map[string]any, key string, fallback bool) bool {
+	if v, ok := args[key].(bool); ok {
+		return v
+	}
+	return fallback
 }
 
 // uint32SliceArg extracts a slice of uint32 values from args. Handles
