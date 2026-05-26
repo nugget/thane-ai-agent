@@ -316,11 +316,13 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					}
 				} else {
 					iterLog.Debug("tool exec done", "tool", toolName, "result_len", len(result))
-					if toolName != "activate_capability" &&
-						toolName != "deactivate_capability" &&
-						toolName != "activate_lens" &&
-						toolName != "deactivate_lens" &&
-						toolName != "list_lenses" {
+					if toolName != "tag_activate" &&
+						toolName != "tag_deactivate" &&
+						toolName != "tag_reset" &&
+						toolName != "tag_inspect" &&
+						toolName != "lens_activate" &&
+						toolName != "lens_deactivate" &&
+						toolName != "lens_list" {
 						batchHasNonMetaTool = true
 					}
 				}

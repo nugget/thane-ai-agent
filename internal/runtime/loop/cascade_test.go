@@ -29,7 +29,7 @@ func TestEffectiveExcludeToolsUnion(t *testing.T) {
 		Name:         "leaf",
 		Task:         "t",
 		ParentID:     root.ID(),
-		ExcludeTools: []string{"shell_exec", "schedule_task"},
+		ExcludeTools: []string{"shell_exec", "task_schedule"},
 	}, Deps{Runner: &noopRunner{}})
 	if err != nil {
 		t.Fatalf("new leaf: %v", err)
@@ -40,7 +40,7 @@ func TestEffectiveExcludeToolsUnion(t *testing.T) {
 
 	got := r.EffectiveExcludeTools(leaf.ID())
 	if len(got) != 3 {
-		t.Fatalf("len = %d, want 3 (shell_exec, schedule_task, doc_write): %+v", len(got), got)
+		t.Fatalf("len = %d, want 3 (shell_exec, task_schedule, doc_write): %+v", len(got), got)
 	}
 
 	byTool := make(map[string]string, len(got))
@@ -51,8 +51,8 @@ func TestEffectiveExcludeToolsUnion(t *testing.T) {
 	if byTool["shell_exec"] != EffectiveOriginSelf {
 		t.Errorf("shell_exec From = %q, want self (closest wins on collision)", byTool["shell_exec"])
 	}
-	if byTool["schedule_task"] != EffectiveOriginSelf {
-		t.Errorf("schedule_task From = %q, want self", byTool["schedule_task"])
+	if byTool["task_schedule"] != EffectiveOriginSelf {
+		t.Errorf("task_schedule From = %q, want self", byTool["task_schedule"])
 	}
 	if byTool["doc_write"] != "root" {
 		t.Errorf("doc_write From = %q, want root (only the ancestor declared it)", byTool["doc_write"])

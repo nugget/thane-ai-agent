@@ -32,7 +32,7 @@ func TestToOllamaMessages(t *testing.T) {
 				{ID: "call_123", Function: struct {
 					Name      string         `json:"name"`
 					Arguments map[string]any `json:"arguments"`
-				}{Name: "get_state"}},
+				}{Name: "ha_get_state"}},
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestToOllamaMessages(t *testing.T) {
 	}
 
 	// Assistant with tool calls.
-	if len(out[3].ToolCalls) != 1 || out[3].ToolCalls[0].Function.Name != "get_state" {
+	if len(out[3].ToolCalls) != 1 || out[3].ToolCalls[0].Function.Name != "ha_get_state" {
 		t.Errorf("msg[3] tool_calls = %+v", out[3].ToolCalls)
 	}
 }
@@ -94,55 +94,55 @@ func TestParseTextToolCalls(t *testing.T) {
 		},
 		{
 			name:      "single tool call object",
-			content:   `{"name": "get_state", "arguments": {"entity_id": "sun.sun"}}`,
+			content:   `{"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}}`,
 			wantCount: 1,
-			wantName:  "get_state",
+			wantName:  "ha_get_state",
 		},
 		{
 			name:      "single tool call with whitespace",
-			content:   `  {"name": "get_state", "arguments": {"entity_id": "sun.sun"}}  `,
+			content:   `  {"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}}  `,
 			wantCount: 1,
-			wantName:  "get_state",
+			wantName:  "ha_get_state",
 		},
 		{
 			name:      "array of tool calls",
-			content:   `[{"name": "get_state", "arguments": {"entity_id": "sun.sun"}}, {"name": "list_entities", "arguments": {}}]`,
+			content:   `[{"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}}, {"name": "ha_list_entities", "arguments": {}}]`,
 			wantCount: 2,
-			wantName:  "get_state",
+			wantName:  "ha_get_state",
 		},
 		{
 			name:      "tagged tool call",
-			content:   `<tool_call>{"name": "call_service", "arguments": {"domain": "light", "service": "turn_on"}}</tool_call>`,
+			content:   `<tool_call>{"name": "ha_call_service", "arguments": {"domain": "light", "service": "turn_on"}}</tool_call>`,
 			wantCount: 1,
-			wantName:  "call_service",
+			wantName:  "ha_call_service",
 		},
 		{
 			name:      "tagged tool call without closing tag",
-			content:   `<tool_call>{"name": "get_state", "arguments": {"entity_id": "light.kitchen"}}`,
+			content:   `<tool_call>{"name": "ha_get_state", "arguments": {"entity_id": "light.kitchen"}}`,
 			wantCount: 1,
-			wantName:  "get_state",
+			wantName:  "ha_get_state",
 		},
 		{
 			name:      "tagged with preamble",
-			content:   `Let me check that for you. <tool_call>{"name": "get_state", "arguments": {"entity_id": "sun.sun"}}</tool_call>`,
+			content:   `Let me check that for you. <tool_call>{"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}}</tool_call>`,
 			wantCount: 1,
-			wantName:  "get_state",
+			wantName:  "ha_get_state",
 		},
 		{
 			name:      "empty arguments",
-			content:   `{"name": "list_entities", "arguments": {}}`,
+			content:   `{"name": "ha_list_entities", "arguments": {}}`,
 			wantCount: 1,
-			wantName:  "list_entities",
+			wantName:  "ha_list_entities",
 		},
 		{
 			name:      "nested arguments",
-			content:   `{"name": "call_service", "arguments": {"domain": "light", "service": "turn_on", "data": {"brightness": 255}}}`,
+			content:   `{"name": "ha_call_service", "arguments": {"domain": "light", "service": "turn_on", "data": {"brightness": 255}}}`,
 			wantCount: 1,
-			wantName:  "call_service",
+			wantName:  "ha_call_service",
 		},
 		{
 			name:      "malformed JSON",
-			content:   `{"name": "get_state", "arguments": {`,
+			content:   `{"name": "ha_get_state", "arguments": {`,
 			wantCount: 0,
 		},
 		{
@@ -158,23 +158,23 @@ func TestParseTextToolCalls(t *testing.T) {
 		// Validation tests
 		{
 			name:       "valid tool with validation",
-			content:    `{"name": "get_state", "arguments": {"entity_id": "sun.sun"}}`,
-			validTools: []string{"get_state", "call_service"},
+			content:    `{"name": "ha_get_state", "arguments": {"entity_id": "sun.sun"}}`,
+			validTools: []string{"ha_get_state", "ha_call_service"},
 			wantCount:  1,
-			wantName:   "get_state",
+			wantName:   "ha_get_state",
 		},
 		{
 			name:       "invalid tool rejected by validation",
 			content:    `{"name": "hack_the_planet", "arguments": {}}`,
-			validTools: []string{"get_state", "call_service"},
+			validTools: []string{"ha_get_state", "ha_call_service"},
 			wantCount:  0,
 		},
 		{
 			name:       "mixed valid/invalid in array",
-			content:    `[{"name": "get_state", "arguments": {}}, {"name": "invalid_tool", "arguments": {}}]`,
-			validTools: []string{"get_state", "call_service"},
+			content:    `[{"name": "ha_get_state", "arguments": {}}, {"name": "invalid_tool", "arguments": {}}]`,
+			validTools: []string{"ha_get_state", "ha_call_service"},
 			wantCount:  1,
-			wantName:   "get_state",
+			wantName:   "ha_get_state",
 		},
 		{
 			name:       "no validation (nil validTools)",
@@ -227,18 +227,18 @@ func TestExtractToolNames(t *testing.T) {
 		{
 			name: "single tool",
 			tools: []map[string]any{
-				{"function": map[string]any{"name": "get_state", "description": "Gets entity state"}},
+				{"function": map[string]any{"name": "ha_get_state", "description": "Gets entity state"}},
 			},
-			want: []string{"get_state"},
+			want: []string{"ha_get_state"},
 		},
 		{
 			name: "multiple tools",
 			tools: []map[string]any{
-				{"function": map[string]any{"name": "get_state"}},
-				{"function": map[string]any{"name": "call_service"}},
-				{"function": map[string]any{"name": "list_entities"}},
+				{"function": map[string]any{"name": "ha_get_state"}},
+				{"function": map[string]any{"name": "ha_call_service"}},
+				{"function": map[string]any{"name": "ha_list_entities"}},
 			},
-			want: []string{"get_state", "call_service", "list_entities"},
+			want: []string{"ha_get_state", "ha_call_service", "ha_list_entities"},
 		},
 		{
 			name: "malformed tool (no function)",
@@ -344,7 +344,7 @@ func TestOllamaClientListModels_UsesInventoryNames(t *testing.T) {
 }
 
 func TestParseTextToolCalls_Arguments(t *testing.T) {
-	content := `{"name": "call_service", "arguments": {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}}`
+	content := `{"name": "ha_call_service", "arguments": {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}}`
 
 	calls := parseTextToolCalls(content, nil)
 	if len(calls) != 1 {
@@ -408,30 +408,30 @@ func TestParseTextToolCalls_ToolNameSpaceJSON(t *testing.T) {
 		wantArgs   map[string]any
 	}{
 		{
-			name:       "find_entity format",
-			content:    `find_entity {"description": "access point LED", "area": "office", "domain": "light"}`,
-			validTools: []string{"find_entity", "call_service"},
-			wantTool:   "find_entity",
+			name:       "ha_find_entity format",
+			content:    `ha_find_entity {"description": "access point LED", "area": "office", "domain": "light"}`,
+			validTools: []string{"ha_find_entity", "ha_call_service"},
+			wantTool:   "ha_find_entity",
 			wantArgs:   map[string]any{"description": "access point LED", "area": "office", "domain": "light"},
 		},
 		{
-			name:       "call_service format",
-			content:    `call_service {"domain": "light", "service": "turn_on"}`,
-			validTools: []string{"find_entity", "call_service"},
-			wantTool:   "call_service",
+			name:       "ha_call_service format",
+			content:    `ha_call_service {"domain": "light", "service": "turn_on"}`,
+			validTools: []string{"ha_find_entity", "ha_call_service"},
+			wantTool:   "ha_call_service",
 			wantArgs:   map[string]any{"domain": "light", "service": "turn_on"},
 		},
 		{
 			name:       "with trailing text",
-			content:    `find_entity {"description": "office light"} I will turn it on.`,
-			validTools: []string{"find_entity"},
-			wantTool:   "find_entity",
+			content:    `ha_find_entity {"description": "office light"} I will turn it on.`,
+			validTools: []string{"ha_find_entity"},
+			wantTool:   "ha_find_entity",
 			wantArgs:   map[string]any{"description": "office light"},
 		},
 		{
 			name:       "invalid tool ignored",
 			content:    `unknown_tool {"foo": "bar"}`,
-			validTools: []string{"find_entity"},
+			validTools: []string{"ha_find_entity"},
 			wantTool:   "",
 			wantArgs:   nil,
 		},
