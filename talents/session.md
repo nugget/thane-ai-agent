@@ -12,6 +12,25 @@ that the model demonstrably mis-routes between them; the differences
 matter because some are destructive and some aren't, some preserve
 continuity and some sever it.
 
+## The single most important disambiguation
+
+**`session` is about lifecycle ops on the *current* conversation.
+`archive` is about reading *past* conversations.** The two share the
+word "session" (one of archive's tools is `archive_session`), but
+they operate at opposite ends of time:
+
+| You want... | Surface |
+|---|---|
+| Reset, close, checkpoint, or split the conversation you're in | `session` — this leaf |
+| Search or read a past session that's already closed | `archive` (`archive_session_transcript`, `archive_search`) |
+| Carry-forward summary written into the next conversation | `session_close` with `carry_forward` (covered below) |
+| The texture/tone/arc of the current conversation, not its structure | `session_working_memory` (see [`working-memory.md`](working-memory.md)) — that's a memory tool, not a session lifecycle one |
+
+A model that lands here looking for "what did we say earlier in this
+conversation" is on the wrong leaf entirely — the live message
+history is already in your prompt, and older content (when it
+exists) lives in archive.
+
 ## The destructive / non-destructive split
 
 This is the cleanest mental model. Two of the four operations end the
