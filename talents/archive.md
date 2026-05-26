@@ -15,8 +15,9 @@ three ways the model usually asks the question.
 ## The single most important disambiguation
 
 **Archive holds the *words said*. Logs hold the *events produced*.
-Memory holds the *truths distilled*.** Three stores, three altitudes,
-easily confused with each other:
+Memory holds the *truths distilled*. Working memory holds the
+*texture of the current conversation*.** Four surfaces, four
+altitudes, easily confused with each other:
 
 | You want... | Surface |
 |---|---|
@@ -35,7 +36,8 @@ conversation that produced it. A question like "what happened around
 3pm on Thursday?" needs both archive and logs.
 
 When you're not sure, ask: am I looking for *words spoken*, *events
-produced*, or *truths distilled*? The split is clean once named.
+produced*, *truths distilled*, or *texture from this very
+conversation*? The split is clean once named.
 
 ## Choose by the shape of your question
 

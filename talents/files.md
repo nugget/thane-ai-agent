@@ -22,10 +22,13 @@ index hygiene. The two share the word "file" but do different jobs.**
 | Read outside the workspace sandbox (system logs, `/etc/`, temp files from subprocesses) | `shell` (`exec`) — the one case where `exec` is the right tool over a focused one |
 | Store a compact key+value that survives the conversation | `memory` (`remember_fact`) — files are not where short truths belong |
 
-The rule: if the path you're touching has a semantic ref (`kb:foo`,
-`dossiers:alice`), use `documents`. If it has a raw filesystem path
-inside the workspace, use `files`. If it has a path outside the
-workspace, the work routes through `shell`.
+The rule: if the path you're touching has a semantic ref
+(`kb:network/vlans.md`, `dossiers:people/alice.md`), use
+`documents`. If it has a raw filesystem path inside the workspace,
+use `files`. If it has a path outside the workspace, the work
+routes through `shell`. Note the `.md` extension — managed refs are
+canonical *with* the extension; passing `kb:foo` to a `doc_*` tool
+will fail "document not found."
 
 ## Trust these instincts
 
