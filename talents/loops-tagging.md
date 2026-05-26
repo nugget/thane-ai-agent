@@ -45,8 +45,12 @@ job:
 - **Forge curator** (release digest, PR queue dashboard) — `forge`
   plus `documents` for the output doc.
 - **Email triage loop** — `email`. Add `contacts` if the loop should
-  ground claims in person records; `notifications` if it should be
-  able to escalate.
+  ground claims in person records. Escalation is not a tag-add
+  decision: every loop already has `request_core_attention` from the
+  core tool set, and that is the path. The `notifications` tag holds
+  the human-egress tools the core loop calls *after* it decides to
+  escalate; granting it to a non-core service or delegate loop
+  bypasses that boundary, not strengthens it.
 
 Whether omitting `tags:` differs from passing `tags: []` depends on
 which loop family is doing the launching:
