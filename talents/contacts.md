@@ -18,20 +18,23 @@ ripple.
 
 ## The single most important disambiguation
 
-**Person identity and relationship attributes go in contacts. Project
-knowledge, technical insights, and design patterns go in `memory` or
-workspace files.**
+**Contacts hold *person identity*. Memory holds *stable host-level
+facts*. Documents hold *evolving knowledge*. Archive holds *past
+conversation words*.** The four are easily confused because the model
+often reaches for one when the right answer is another:
 
-| You want to store... | Surface |
+| You want to store / find... | Surface |
 |---|---|
-| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (use `save_contact` with `facts` or `note`) |
-| "The VLAN renumber plan landed on 2026-04-22" | `memory` (`remember_fact`) or a workspace file |
-| "How we decided to handle the rate-limit retry" | A document under `kb:` or `core:`, not a contact note |
-| "Who is the owner of this host" | `contacts` via `owner_contact` |
+| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`save_contact` with `facts` or `note`) — this leaf |
+| "Who is the owner of this host" | `contacts` (`owner_contact`) — this leaf |
+| "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
+| "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
+| "What did Frank and I last discuss" | `archive_text` scoped to the conversation — the words live there, not in the contact record |
 
 A contact carries *person* identity. If the same fact would belong on
 *any* person record (e.g., "we use semantic commit messages"), it
-isn't a contact fact.
+isn't a contact fact. If the fact is large, evolving, or
+document-shaped, it isn't a memory fact either — push to documents.
 
 ## Choose by the shape of your question
 
