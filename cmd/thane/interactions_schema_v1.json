@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thane.local/schema/interactions.v1.json",
+  "title": "Thane Interactions Record (v1)",
+  "description": "Canonical normalized record shape for the interactions/ corpus. The interactions normalizer (#938) populates this schema; until then this file is a placeholder declaring the planned shape so future consumers can target it.",
+  "type": "object",
+  "required": ["event_id", "ts", "kind", "schema_version", "source", "source_ref"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "UUIDv7 identifier, unique across all interactions records"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Event timestamp in UTC (RFC 3339 / ISO 8601)"
+    },
+    "kind": {
+      "enum": ["message", "session", "wake"],
+      "description": "message = conversational turn; session = session-level summary; wake = non-conversational trigger that produced a request/response"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source": {
+      "type": "string",
+      "description": "Originating era / corpus, e.g. thane, thane_legacy, openclaw_docker, openclaw_vm"
+    },
+    "source_ref": {
+      "type": "string",
+      "description": "Deterministic back-link to the pristine origin record (typically a path under sources/ plus an event_id anchor)"
+    },
+    "session_id": { "type": "string" },
+    "conversation_id": { "type": "string" },
+    "speaker": {
+      "enum": ["human", "assistant", "tool", "system"],
+      "description": "Who produced this record's content (for kind=message and kind=wake)"
+    },
+    "trigger": {
+      "type": "string",
+      "description": "For kind=wake: the wake source, e.g. mqtt, email_poll, schedule, channel_inbound"
+    },
+    "participants": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "text": {
+      "type": "string",
+      "description": "Searchable content for this record"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free bag for any ranking signal or auxiliary fields"
+    }
+  }
+}

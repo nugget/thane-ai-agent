@@ -17,16 +17,26 @@ import (
 const (
 	// DatasetEvents is the low-volume operator-significant lifecycle stream.
 	DatasetEvents = "events"
-	// DatasetRequests captures request lifecycle and model/tool activity.
+	// DatasetRequests captures LLM agent request lifecycle and model/tool
+	// activity. Lives under sources/thane/requests/.
 	DatasetRequests = "requests"
-	// DatasetAccess captures HTTP access-style request traffic.
-	DatasetAccess = "access"
+	// DatasetAccess captures HTTP access-style request traffic. Lives
+	// under sources/thane/http_access/ — the name disambiguates from
+	// DatasetRequests, which is LLM (not HTTP) request lifecycle.
+	DatasetAccess = "http_access"
 	// DatasetLoops captures loop lifecycle events.
 	DatasetLoops = "loops"
 	// DatasetDelegates captures delegate lifecycle events.
 	DatasetDelegates = "delegates"
 	// DatasetEnvelopes captures message-envelope delivery audit records.
 	DatasetEnvelopes = "envelopes"
+	// DatasetConversations captures every completed LLM request envelope
+	// (model, prompt, response, token counts, tool usage) as pristine
+	// on-disk JSONL. Lives under sources/thane/conversations/ and serves
+	// as the on-disk source-of-truth for what the agent actually said
+	// alongside the sqlite content tables (which retire in #940 once
+	// the interactions normalizer lands in #938).
+	DatasetConversations = "conversations"
 )
 
 // Shared log-attribute keys and values used to route slog records into
@@ -66,8 +76,12 @@ type datasetSegment struct {
 	file *os.File
 }
 
-// DatasetWriter appends structured JSONL records into dataset/date/hour segments.
-// It keeps at most one active segment open per dataset.
+// DatasetWriter appends structured JSONL records into dataset/date/hour
+// segments. It keeps at most one active segment open per dataset. The
+// configured root is the archive root (e.g. /Volumes/Thane/archive);
+// segments land under root/sources/thane/<dataset>/... so pristine
+// primary data lives alongside derived projections (interactions/)
+// and metadata (meta/) under one tree.
 type DatasetWriter struct {
 	root string
 
@@ -75,7 +89,9 @@ type DatasetWriter struct {
 	active map[string]datasetSegment
 }
 
-// OpenDatasetWriter creates a filesystem-backed writer under root.
+// OpenDatasetWriter creates a filesystem-backed writer under the archive
+// root. Segments land at
+// root/sources/thane/<dataset>/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl.
 func OpenDatasetWriter(root string) (*DatasetWriter, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -175,15 +191,25 @@ func (w *DatasetWriter) WriteRecord(record DatasetRecord) error {
 
 // datasetSegmentKeyAndPath returns the partition key and filesystem path
 // for a record at the given timestamp. Partitioning is done in UTC so
-// the directory layout (date/hour folders) matches the ts field inside
-// each record and DST transitions cannot produce overlapping or missing
-// partitions.
+// the directory layout matches the ts field inside each record and DST
+// transitions cannot produce overlapping or missing partitions.
+//
+// The path follows the archive layout established in #937:
+// root/sources/thane/<dataset>/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl.
+// Nested year/month/day directories keep any single directory's entry
+// count small as the archive grows; the dataset-prefixed self-describing
+// filename means a segment file carries its full identity (dataset, date,
+// hour) when copied out of tree.
 func datasetSegmentKeyAndPath(root, dataset string, ts time.Time) (string, string) {
 	segmentTime := ts.UTC()
-	day := segmentTime.Format(time.DateOnly)
+	year := segmentTime.Format("2006")
+	month := segmentTime.Format("01")
+	day := segmentTime.Format("02")
+	date := segmentTime.Format(time.DateOnly)
 	hour := segmentTime.Format("15")
-	return dataset + "/" + day + "/" + hour,
-		filepath.Join(root, dataset, day, hour+".jsonl")
+	key := dataset + "/" + date + "/" + hour
+	filename := dataset + "-" + date + "-" + hour + ".jsonl"
+	return key, filepath.Join(root, "sources", "thane", dataset, year, month, day, filename)
 }
 
 func datasetEventID() string {

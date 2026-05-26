@@ -122,6 +122,86 @@ func TestRunInit_FreshDirectory(t *testing.T) {
 			t.Errorf("%s permissions = %o, want 0600", rel, got)
 		}
 	}
+
+	// Archive skeleton (#937) — every fresh install gets the directory
+	// tree, the orientation README, the per-source README, and a
+	// placeholder schema file.
+	for _, rel := range []string{
+		"archive",
+		"archive/interactions",
+		"archive/sources/thane",
+		"archive/meta/schema",
+	} {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			t.Errorf("archive skeleton: %s missing: %v", rel, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("archive skeleton: %s is not a directory", rel)
+		}
+	}
+	for _, rel := range []string{
+		"archive/README.md",
+		"archive/sources/thane/README.md",
+		"archive/meta/schema/interactions.v1.json",
+	} {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			t.Errorf("archive skeleton: %s missing: %v", rel, err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("archive skeleton: %s is empty", rel)
+		}
+	}
+}
+
+// TestRunInit_ArchiveBootstrapIdempotent verifies that re-running init
+// over an existing archive skeleton leaves every file untouched (same
+// mtime, same content) — the writeIfMissing path uses O_EXCL.
+func TestRunInit_ArchiveBootstrapIdempotent(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	var buf bytes.Buffer
+
+	if err := runInit(&buf, dir); err != nil {
+		t.Fatalf("first runInit: %v", err)
+	}
+
+	readmePath := filepath.Join(dir, "archive", "README.md")
+	origInfo, err := os.Stat(readmePath)
+	if err != nil {
+		t.Fatalf("stat archive/README.md: %v", err)
+	}
+	origContent, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read archive/README.md: %v", err)
+	}
+
+	buf.Reset()
+	if err := runInit(&buf, dir); err != nil {
+		t.Fatalf("second runInit: %v", err)
+	}
+
+	newInfo, err := os.Stat(readmePath)
+	if err != nil {
+		t.Fatalf("stat archive/README.md after second run: %v", err)
+	}
+	newContent, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read archive/README.md after second run: %v", err)
+	}
+	if !origInfo.ModTime().Equal(newInfo.ModTime()) {
+		t.Errorf("archive/README.md mtime changed (%v → %v) — bootstrap should be idempotent",
+			origInfo.ModTime(), newInfo.ModTime())
+	}
+	if string(origContent) != string(newContent) {
+		t.Errorf("archive/README.md content changed across runs")
+	}
+	if !strings.Contains(buf.String(), "archive/README.md (exists, skipping)") {
+		t.Errorf("second run should report skip for existing README, got:\n%s", buf.String())
+	}
 }
 
 func TestRunInit_SkipsExistingFiles(t *testing.T) {

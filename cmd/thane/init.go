@@ -30,6 +30,26 @@ var configExampleYAML []byte
 //go:embed persona.example.md
 var personaExampleMD []byte
 
+// archiveReadmeMD orients a fresh agent or operator landing in the
+// archive/ directory — the three top-level subtrees, the invariants,
+// and where to look for what.
+//
+//go:embed archive_readme.md
+var archiveReadmeMD []byte
+
+// sourcesThaneReadmeMD documents the current-era thane primary-source
+// datasets — their on-disk layout, schema, era, and interpretation
+// notes for future archaeologists.
+//
+//go:embed sources_thane_readme.md
+var sourcesThaneReadmeMD []byte
+
+// interactionsSchemaV1JSON is the placeholder JSON Schema for the
+// interactions/ record shape (#938 will populate it for real).
+//
+//go:embed interactions_schema_v1.json
+var interactionsSchemaV1JSON []byte
+
 // runInit initializes a Thane working directory with bundled defaults.
 // It creates the directory structure and writes default config, persona,
 // and talent files. Existing files are never overwritten.
@@ -88,9 +108,48 @@ func runInit(w io.Writer, dir string) error {
 		fmt.Fprintf(w, "  · %s (core identity exists, skipping)\n", result.CoreDir)
 	}
 
+	if err := bootstrapArchive(w, absDir); err != nil {
+		return fmt.Errorf("bootstrap archive: %w", err)
+	}
+
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Edit config.yaml and persona.md to customize your installation.")
 	fmt.Fprintln(w, "See docs/getting-started.md for guidance on persona vs talents.")
+	return nil
+}
+
+// bootstrapArchive creates the archive directory skeleton — the
+// interactions/, sources/, and meta/ subtrees described in
+// archive/README.md — and writes the top-level orientation README,
+// the current-era source-of-truth README, and a placeholder schema
+// for the future interactions corpus. Idempotent: existing files
+// are left untouched.
+func bootstrapArchive(w io.Writer, absDir string) error {
+	archiveDir := filepath.Join(absDir, "archive")
+	for _, sub := range []string{
+		"interactions",
+		filepath.Join("sources", "thane"),
+		filepath.Join("meta", "schema"),
+	} {
+		p := filepath.Join(archiveDir, sub)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			return fmt.Errorf("create archive/%s: %w", sub, err)
+		}
+	}
+
+	files := []struct {
+		path string
+		data []byte
+	}{
+		{filepath.Join(archiveDir, "README.md"), archiveReadmeMD},
+		{filepath.Join(archiveDir, "sources", "thane", "README.md"), sourcesThaneReadmeMD},
+		{filepath.Join(archiveDir, "meta", "schema", "interactions.v1.json"), interactionsSchemaV1JSON},
+	}
+	for _, f := range files {
+		if err := writeIfMissing(w, f.path, f.data, 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

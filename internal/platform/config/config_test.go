@@ -696,8 +696,8 @@ func TestApplyDefaults_Logging(t *testing.T) {
 	if cfg.Logging.Dir != nil {
 		t.Errorf("Logging.Dir = %v, want nil (defaults via DirPath())", cfg.Logging.Dir)
 	}
-	if got := cfg.Logging.RootPath(); got != "logs" {
-		t.Errorf("Logging.RootPath() = %q, want %q", got, "logs")
+	if got := cfg.Logging.RootPath(); got != "archive" {
+		t.Errorf("Logging.RootPath() = %q, want %q", got, "archive")
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, "info")
@@ -808,7 +808,7 @@ func TestLoggingConfig_RootPath(t *testing.T) {
 		dir  *string
 		want string
 	}{
-		{"nil defaults to logs", nil, nil, "logs"},
+		{"nil defaults to archive", nil, nil, "archive"},
 		{"explicit root empty disables", strPtr(""), strPtr("/var/log/thane"), ""},
 		{"explicit root wins", strPtr("/srv/thane/logs"), strPtr("/var/log/thane"), "/srv/thane/logs"},
 		{"legacy dir used when root unset", nil, strPtr("/var/log/thane"), "/var/log/thane"},

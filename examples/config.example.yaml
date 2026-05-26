@@ -1040,11 +1040,12 @@ ego:
 # Logging configures Thane's filesystem datasets, stdout policy, and
 # queryable request/log retention.
 logging:
-  # Root is the directory where Thane writes category-partitioned JSONL
-  # datasets and logs.db. Relative paths are resolved from the working
-  # directory (typically ~/Thane). Defaults to "logs" when omitted.
-  # Set to an explicit empty string (root: "") to disable filesystem
-  # logging entirely.
+  # Root is the archive root — the top of the layout described in
+  # archive/README.md (interactions/, sources/, meta/). Thane writes
+  # every per-dataset JSONL stream under root/sources/thane/<dataset>/.
+  # Relative paths are resolved from the working directory (typically
+  # ~/Thane). Defaults to "archive" when omitted. Set to an explicit
+  # empty string (root: "") to disable filesystem archiving entirely.
   root: logs
   # Dir is the deprecated alias for Root. It is kept for backwards
   # compatibility with older configs.
@@ -1080,7 +1081,7 @@ logging:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: true
-    access:
+    http_access:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: false
@@ -1096,6 +1097,10 @@ logging:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: true
+    conversations:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: false
   # RetentionDays controls how many days DEBUG and TRACE log index
   # entries are kept. Entries at INFO and above are kept indefinitely.
   # Default: 7. Set to 0 to disable pruning (keep everything).

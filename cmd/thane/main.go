@@ -13,6 +13,9 @@
 //	thane ingest <file.md>   Import a markdown document into the fact store
 //	thane version            Print version and build information
 //	thane -o json version    Output version information as JSON
+//
+// The one-off log layout migration (#937) ships as a separate
+// binary at cmd/archive-migration/.
 package main
 
 import (

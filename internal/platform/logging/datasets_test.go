@@ -345,14 +345,14 @@ func datasetLineCount(t *testing.T, root, dataset string) int {
 	return len(readDatasetLines(t, root, dataset))
 }
 
-// readDatasetLines walks every segment file under root/dataset and
-// returns each JSONL line in file-path order. Tests use this instead
-// of recomputing partition paths from the clock, which would be racy
-// across hour/day boundaries.
+// readDatasetLines walks every segment file under
+// root/sources/thane/<dataset> and returns each JSONL line in file-path
+// order. Tests use this instead of recomputing partition paths from the
+// clock, which would be racy across hour/day boundaries.
 func readDatasetLines(t *testing.T, root, dataset string) []string {
 	t.Helper()
 
-	datasetDir := filepath.Join(root, dataset)
+	datasetDir := filepath.Join(root, "sources", "thane", dataset)
 	if _, err := os.Stat(datasetDir); os.IsNotExist(err) {
 		return nil
 	}
@@ -414,12 +414,13 @@ func TestDatasetWriter_RolloverAcrossHourAndDay(t *testing.T) {
 		}
 	}
 
-	// Expect four distinct segment files, one per (day, hour).
+	// Expect four distinct segment files, one per (day, hour), under
+	// the archive layout: sources/thane/<dataset>/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl.
 	expectedPaths := []string{
-		filepath.Join(dir, DatasetEvents, "2026-04-10", "14.jsonl"),
-		filepath.Join(dir, DatasetEvents, "2026-04-10", "15.jsonl"),
-		filepath.Join(dir, DatasetEvents, "2026-04-10", "23.jsonl"),
-		filepath.Join(dir, DatasetEvents, "2026-04-11", "00.jsonl"),
+		filepath.Join(dir, "sources", "thane", DatasetEvents, "2026", "04", "10", DatasetEvents+"-2026-04-10-14.jsonl"),
+		filepath.Join(dir, "sources", "thane", DatasetEvents, "2026", "04", "10", DatasetEvents+"-2026-04-10-15.jsonl"),
+		filepath.Join(dir, "sources", "thane", DatasetEvents, "2026", "04", "10", DatasetEvents+"-2026-04-10-23.jsonl"),
+		filepath.Join(dir, "sources", "thane", DatasetEvents, "2026", "04", "11", DatasetEvents+"-2026-04-11-00.jsonl"),
 	}
 	for i, path := range expectedPaths {
 		data, err := os.ReadFile(path)
