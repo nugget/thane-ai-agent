@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -113,7 +114,8 @@ func TestRunMigrate_RelocatesEverythingLosslessly(t *testing.T) {
 		t.Errorf("expected sources/thane_legacy/README.md, got %v", err)
 	}
 
-	// Manifest exists and has one line per moved file.
+	// Manifest exists and has one line per moved file, each carrying
+	// the recorded sha256 of the migrated file content.
 	manifest, err := os.ReadFile(filepath.Join(newRoot, "meta", "migration.jsonl"))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -121,6 +123,76 @@ func TestRunMigrate_RelocatesEverythingLosslessly(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(manifest)), "\n")
 	if len(lines) != len(wantDest) {
 		t.Errorf("manifest line count = %d, want %d", len(lines), len(wantDest))
+	}
+	manifestBySrc := make(map[string]map[string]any, len(lines))
+	for _, line := range lines {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("manifest line is not JSON: %v\n%s", err, line)
+		}
+		src, _ := entry["src"].(string)
+		manifestBySrc[src] = entry
+	}
+	for srcRel, sum := range checksums {
+		entry, ok := manifestBySrc[filepath.Join(old, srcRel)]
+		if !ok {
+			t.Errorf("no manifest entry for src %s", srcRel)
+			continue
+		}
+		gotSum, _ := entry["sha256"].(string)
+		if gotSum != sum {
+			t.Errorf("manifest sha256 for %s = %q, want %q", srcRel, gotSum, sum)
+		}
+	}
+}
+
+// TestRunMigrate_RefusesSameSizeDifferentContent guards against the
+// data-loss path Copilot flagged on #952: a size-only idempotency
+// check would silently delete src when a dst happened to have the
+// same byte count but different content. moveAtomic must verify
+// SHA-256 before declaring "already migrated".
+func TestRunMigrate_RefusesSameSizeDifferentContent(t *testing.T) {
+	tmp := t.TempDir()
+	old := filepath.Join(tmp, "old")
+	newRoot := filepath.Join(tmp, "new")
+	if err := os.MkdirAll(filepath.Join(old, "loops", "2026-04-22"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	srcPath := filepath.Join(old, "loops", "2026-04-22", "18.jsonl")
+	srcBody := []byte("aaaaaa")
+	if err := os.WriteFile(srcPath, srcBody, 0o644); err != nil {
+		t.Fatalf("setup src: %v", err)
+	}
+
+	// Pre-place a conflicting destination with same size, different bytes.
+	dst := filepath.Join(newRoot, "sources", "thane", "loops", "2026", "04", "22", "loops-2026-04-22-18.jsonl")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("setup dst dir: %v", err)
+	}
+	dstBody := []byte("bbbbbb")
+	if len(dstBody) != len(srcBody) {
+		t.Fatalf("test invariant: dstBody must equal srcBody in size")
+	}
+	if err := os.WriteFile(dst, dstBody, 0o644); err != nil {
+		t.Fatalf("setup dst: %v", err)
+	}
+
+	var buf bytes.Buffer
+	err := run(&buf, []string{old, newRoot})
+	if err == nil {
+		t.Fatalf("expected error for same-size-different-content collision, got nil\noutput:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "same size but different content") {
+		t.Errorf("expected sha256-mismatch message, got:\n%s", buf.String())
+	}
+	// Critical: src must still exist. A regression to the size-only
+	// check would have deleted it.
+	if _, err := os.Stat(srcPath); err != nil {
+		t.Errorf("src must remain on disk after rejected migration, got %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil || !bytes.Equal(got, dstBody) {
+		t.Errorf("dst must remain untouched, got %q err=%v", got, err)
 	}
 }
 

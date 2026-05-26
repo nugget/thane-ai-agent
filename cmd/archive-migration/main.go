@@ -23,7 +23,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -367,31 +369,49 @@ func (m *mover) migrateLegacyArchiveDir(oldRoot string) error {
 //   - Copy mode: io.Copy with parent mkdirs; src is left untouched.
 //     Required for cross-filesystem migration (e.g. SMB → local).
 //
-// In both modes, an existing dst with the same size is treated as
-// already-migrated and the call short-circuits. A dst with different
-// size refuses rather than overwriting — the operator resolves
-// manually.
+// SHA-256 is computed for every action and recorded in the manifest so
+// the migration is auditable end-to-end. On collision (dst exists with
+// matching size), both files are hashed and the call short-circuits
+// only if they are byte-identical — a same-size-different-content
+// collision is a hard error rather than silent data loss. A dst with
+// different size also refuses rather than overwriting; the operator
+// resolves manually.
 func (m *mover) moveAtomic(src, dst, category string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", src, err)
 	}
 	if dstInfo, err := os.Stat(dst); err == nil {
-		if dstInfo.Size() == srcInfo.Size() {
-			// Idempotent re-run. In move mode, the redundant src is
-			// pruned so the next pass sees only the new layout. In
-			// copy mode the source stays put.
-			if !m.copyMode {
-				if err := os.Remove(src); err != nil {
-					return fmt.Errorf("remove redundant src %s: %w", src, err)
-				}
-			}
-			m.stats.skipped++
-			fmt.Fprintf(m.w, "  · %s (already migrated)\n", m.relDst(dst))
-			m.recordManifest(src, dst, category, srcInfo.Size(), "already_migrated")
-			return nil
+		if dstInfo.Size() != srcInfo.Size() {
+			return fmt.Errorf("destination %s exists with different size (src=%d, dst=%d); resolve manually", dst, srcInfo.Size(), dstInfo.Size())
 		}
-		return fmt.Errorf("destination %s exists with different size (src=%d, dst=%d); resolve manually", dst, srcInfo.Size(), dstInfo.Size())
+		// Sizes match — verify with SHA-256 before declaring
+		// "already migrated", because two different files can share
+		// a size and a size-only check would risk deleting the src
+		// in move mode against a mismatched destination.
+		srcSum, err := sha256File(src)
+		if err != nil {
+			return fmt.Errorf("checksum src %s: %w", src, err)
+		}
+		dstSum, err := sha256File(dst)
+		if err != nil {
+			return fmt.Errorf("checksum dst %s: %w", dst, err)
+		}
+		if srcSum != dstSum {
+			return fmt.Errorf("destination %s exists with same size but different content (src sha256=%s, dst sha256=%s); resolve manually", dst, srcSum, dstSum)
+		}
+		// Idempotent re-run. In move mode, the redundant src is
+		// pruned so the next pass sees only the new layout. In
+		// copy mode the source stays put.
+		if !m.copyMode {
+			if err := os.Remove(src); err != nil {
+				return fmt.Errorf("remove redundant src %s: %w", src, err)
+			}
+		}
+		m.stats.skipped++
+		fmt.Fprintf(m.w, "  · %s (already migrated)\n", m.relDst(dst))
+		m.recordManifest(src, dst, category, srcInfo.Size(), srcSum, "already_migrated")
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %s: %w", dst, err)
 	}
@@ -401,54 +421,84 @@ func (m *mover) moveAtomic(src, dst, category string) error {
 	}
 
 	if m.copyMode {
-		if err := copyFile(src, dst); err != nil {
+		sum, err := copyFile(src, dst)
+		if err != nil {
 			return fmt.Errorf("copy %s → %s: %w", src, dst, err)
 		}
 		m.stats.moved++
 		fmt.Fprintf(m.w, "  ✓ %s\n", m.relDst(dst))
-		m.recordManifest(src, dst, category, srcInfo.Size(), "copied")
+		m.recordManifest(src, dst, category, srcInfo.Size(), sum, "copied")
 		return nil
 	}
 
+	// Hash src before the rename so the manifest captures the
+	// content fingerprint even though the path moves. Rename is
+	// atomic and content-preserving on the same filesystem, so the
+	// pre-rename hash equals the post-rename hash on disk.
+	sum, err := sha256File(src)
+	if err != nil {
+		return fmt.Errorf("checksum src %s: %w", src, err)
+	}
 	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("rename %s → %s: %w", src, dst, err)
 	}
 	m.stats.moved++
 	fmt.Fprintf(m.w, "  ✓ %s\n", m.relDst(dst))
-	m.recordManifest(src, dst, category, srcInfo.Size(), "moved")
+	m.recordManifest(src, dst, category, srcInfo.Size(), sum, "moved")
 	return nil
 }
 
-// copyFile duplicates src to dst with the source's permissions. dst
-// is opened with O_CREATE|O_EXCL so an existing file at the path is
-// never silently overwritten — the caller is responsible for
-// pre-flight existence checks (moveAtomic does this).
-func copyFile(src, dst string) error {
+// copyFile duplicates src to dst with the source's permissions and
+// returns the SHA-256 of the bytes copied. dst is opened with
+// O_CREATE|O_EXCL so an existing file at the path is never silently
+// overwritten — the caller is responsible for pre-flight existence
+// checks (moveAtomic does this). The hash is computed in flight via
+// an [io.MultiWriter] so the copy and the digest are a single pass
+// over the bytes.
+func copyFile(src, dst string) (string, error) {
 	srcF, err := os.Open(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer srcF.Close()
 
 	srcInfo, err := srcF.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	dstF, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode().Perm())
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err := io.Copy(dstF, srcF); err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(dstF, h), srcF); err != nil {
 		dstF.Close()
 		_ = os.Remove(dst)
-		return err
+		return "", err
 	}
 	if err := dstF.Sync(); err != nil {
 		dstF.Close()
-		return err
+		return "", err
 	}
-	return dstF.Close()
+	if err := dstF.Close(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// sha256File returns the hex-encoded SHA-256 of the file at path.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // relDst returns dst relative to the archive root, falling back to dst
@@ -462,14 +512,17 @@ func (m *mover) relDst(dst string) string {
 }
 
 // recordManifest appends one migration action as a JSONL line so the
-// move history is auditable after the fact.
-func (m *mover) recordManifest(src, dst, category string, size int64, status string) {
+// move history is auditable after the fact. sha256 is the hex-encoded
+// SHA-256 of the file content (post-move/copy, or the verified shared
+// hash for an already_migrated entry).
+func (m *mover) recordManifest(src, dst, category string, size int64, sha256 string, status string) {
 	entry := map[string]any{
 		"ts":       time.Now().UTC().Format(time.RFC3339Nano),
 		"src":      src,
 		"dst":      dst,
 		"category": category,
 		"size":     size,
+		"sha256":   sha256,
 		"status":   status,
 	}
 	line, err := json.Marshal(entry)
