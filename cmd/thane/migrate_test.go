@@ -200,3 +200,58 @@ func TestRunMigrate_RefusesConflictingDestination(t *testing.T) {
 		t.Errorf("expected conflict message, got:\n%s", buf.String())
 	}
 }
+
+func TestRunMigrate_CopyModeLeavesSourceIntact(t *testing.T) {
+	tmp := t.TempDir()
+	old := filepath.Join(tmp, "old")
+	newRoot := filepath.Join(tmp, "new")
+
+	checksums := seedOldLayout(t, old)
+
+	var buf bytes.Buffer
+	if err := runMigrate(&buf, []string{"--copy", old, newRoot}); err != nil {
+		t.Fatalf("runMigrate --copy: %v\noutput:\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "mode: copy") {
+		t.Errorf("expected mode banner to say copy, got:\n%s", buf.String())
+	}
+
+	// Every original file still present with its original content.
+	for srcRel, sum := range checksums {
+		assertFileWithChecksum(t, filepath.Join(old, srcRel), sum)
+	}
+	// And the new tree has the same content under the new layout.
+	wantDest := map[string]string{
+		"loops/2026-04-22/18.jsonl":  "sources/thane/loops/2026/04/22/loops-2026-04-22-18.jsonl",
+		"access/2026-05-26/05.jsonl": "sources/thane/http_access/2026/05/26/http_access-2026-05-26-05.jsonl",
+		"thane.log":                  "sources/thane_legacy/thane.log",
+		"logs.db":                    "logs.db",
+	}
+	for srcRel, dstRel := range wantDest {
+		assertFileWithChecksum(t, filepath.Join(newRoot, dstRel), checksums[srcRel])
+	}
+
+	// Empty archive/ dir is preserved in copy mode (source untouched).
+	if _, err := os.Stat(filepath.Join(old, "archive")); err != nil {
+		t.Errorf("empty archive/ should be preserved in copy mode, got %v", err)
+	}
+}
+
+func TestRunMigrate_CopyModeIdempotent(t *testing.T) {
+	tmp := t.TempDir()
+	old := filepath.Join(tmp, "old")
+	newRoot := filepath.Join(tmp, "new")
+	seedOldLayout(t, old)
+
+	var first bytes.Buffer
+	if err := runMigrate(&first, []string{"--copy", old, newRoot}); err != nil {
+		t.Fatalf("first --copy: %v", err)
+	}
+	var second bytes.Buffer
+	if err := runMigrate(&second, []string{"--copy", old, newRoot}); err != nil {
+		t.Fatalf("second --copy: %v\noutput:\n%s", err, second.String())
+	}
+	if !strings.Contains(second.String(), "0 moved") {
+		t.Errorf("second --copy run should report 0 moved, got:\n%s", second.String())
+	}
+}

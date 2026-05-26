@@ -64,29 +64,48 @@ var oldHourPattern = regexp.MustCompile(`^(\d{2})\.jsonl$`)
 // oldDayPattern matches the legacy date-directory name YYYY-MM-DD.
 var oldDayPattern = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
 
-// runMigrate handles `thane migrate <old_root> <new_root>`. It walks
-// the old log root and moves every recognized file into the #937
-// archive layout under new_root. Idempotent: re-running on a
-// partially-migrated tree resumes cleanly.
+// runMigrate handles `thane migrate [--copy] <old_root> <new_root>`.
+// By default it renames files (fast in-place migration on the same
+// filesystem, destructive to the source). With --copy it reads and
+// writes instead, leaving the source intact — useful for staging a
+// working tree on a different filesystem (e.g. SMB → local) before
+// rsyncing the result to its production home.
+//
+// Idempotent in both modes: re-running on an already-migrated tree
+// is a no-op.
 func runMigrate(w io.Writer, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: thane migrate <old_root> <new_root>")
+	copyMode := false
+	positional := args[:0]
+	for _, a := range args {
+		switch a {
+		case "--copy", "-c":
+			copyMode = true
+		default:
+			positional = append(positional, a)
+		}
 	}
-	oldRoot, err := filepath.Abs(args[0])
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: thane migrate [--copy] <old_root> <new_root>")
+	}
+	oldRoot, err := filepath.Abs(positional[0])
 	if err != nil {
 		return fmt.Errorf("resolve old root: %w", err)
 	}
-	newRoot, err := filepath.Abs(args[1])
+	newRoot, err := filepath.Abs(positional[1])
 	if err != nil {
 		return fmt.Errorf("resolve new root: %w", err)
 	}
-	return migrate(w, oldRoot, newRoot)
+	return migrate(w, oldRoot, newRoot, copyMode)
 }
 
 // migrate orchestrates the migration. It ensures the new archive
 // skeleton exists, walks the old root, classifies each top-level
 // entry, and routes each to the appropriate move handler.
-func migrate(w io.Writer, oldRoot, newRoot string) error {
+//
+// When copyMode is true, files are duplicated via io.Copy and the
+// source tree is left untouched; otherwise files are renamed
+// (destructive). Idempotency holds in both modes.
+func migrate(w io.Writer, oldRoot, newRoot string, copyMode bool) error {
 	if _, err := os.Stat(oldRoot); err != nil {
 		return fmt.Errorf("old root %s: %w", oldRoot, err)
 	}
@@ -102,7 +121,11 @@ func migrate(w io.Writer, oldRoot, newRoot string) error {
 		}
 	}
 
-	fmt.Fprintf(w, "Migrating %s → %s\n", oldRoot, newRoot)
+	mode := "move"
+	if copyMode {
+		mode = "copy"
+	}
+	fmt.Fprintf(w, "Migrating %s → %s (mode: %s)\n", oldRoot, newRoot, mode)
 
 	manifestPath := filepath.Join(newRoot, "meta", "migration.jsonl")
 	manifest, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
@@ -116,7 +139,7 @@ func migrate(w io.Writer, oldRoot, newRoot string) error {
 		return fmt.Errorf("read old root: %w", err)
 	}
 
-	mover := &mover{w: w, manifest: manifest, newRoot: newRoot}
+	mover := &mover{w: w, manifest: manifest, newRoot: newRoot, copyMode: copyMode}
 	for _, entry := range entries {
 		if err := mover.classifyAndMove(oldRoot, entry); err != nil {
 			fmt.Fprintf(w, "  ! %s: %v\n", entry.Name(), err)
@@ -150,13 +173,14 @@ type migrationStats struct {
 }
 
 // mover bundles the migration runtime — output writer, manifest, the
-// archive root for relative-path display, and running stats. Methods
-// hang off this so the per-action handlers don't need a long
-// parameter list.
+// archive root for relative-path display, copy/move mode, and running
+// stats. Methods hang off this so the per-action handlers don't need
+// a long parameter list.
 type mover struct {
 	w        io.Writer
 	manifest io.Writer
 	newRoot  string
+	copyMode bool
 	stats    migrationStats
 }
 
@@ -244,13 +268,16 @@ func (m *mover) migrateDataset(oldRoot, oldDataset, newDataset string) error {
 			}
 		}
 
-		// Try to remove the now-empty day dir. Ignore errors — leftover
-		// files are tolerated.
-		_ = os.Remove(filepath.Join(oldDir, day.Name()))
+		// In move mode, prune the now-empty day dir so the next pass
+		// finds a clean source. In copy mode the source stays intact.
+		if !m.copyMode {
+			_ = os.Remove(filepath.Join(oldDir, day.Name()))
+		}
 	}
 
-	// Try to remove the now-empty dataset dir.
-	_ = os.Remove(oldDir)
+	if !m.copyMode {
+		_ = os.Remove(oldDir)
+	}
 	return nil
 }
 
@@ -266,8 +293,12 @@ func (m *mover) migrateLegacyArchiveDir(oldRoot string) error {
 		return fmt.Errorf("read old archive dir: %w", err)
 	}
 	if len(entries) == 0 {
-		_ = os.Remove(oldArchive)
-		fmt.Fprintf(m.w, "  · archive/ (empty, removed)\n")
+		if !m.copyMode {
+			_ = os.Remove(oldArchive)
+			fmt.Fprintf(m.w, "  · archive/ (empty, removed)\n")
+		} else {
+			fmt.Fprintf(m.w, "  · archive/ (empty, source untouched in copy mode)\n")
+		}
 		return nil
 	}
 	dst := filepath.Join(m.newRoot, "sources", "thane_legacy", "content_archive")
@@ -282,14 +313,24 @@ func (m *mover) migrateLegacyArchiveDir(oldRoot string) error {
 		}
 		m.stats.legacyMoved++
 	}
-	_ = os.Remove(oldArchive)
+	if !m.copyMode {
+		_ = os.Remove(oldArchive)
+	}
 	return nil
 }
 
-// moveAtomic renames src to dst if dst does not already exist. If dst
-// exists with the same size as src, treat as idempotent (already
-// migrated) and remove src. If dst exists with a different size,
-// refuse — the operator must resolve manually.
+// moveAtomic relocates src to dst exactly once. The semantics depend
+// on the mover's mode:
+//
+//   - Move mode (default): os.Rename; src is consumed on success.
+//     Fast and atomic when src and dst live on the same filesystem.
+//   - Copy mode: io.Copy with parent mkdirs; src is left untouched.
+//     Required for cross-filesystem migration (e.g. SMB → local).
+//
+// In both modes, an existing dst with the same size is treated as
+// already-migrated and the call short-circuits. A dst with different
+// size refuses rather than overwriting — the operator resolves
+// manually.
 func (m *mover) moveAtomic(src, dst, category string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -297,10 +338,13 @@ func (m *mover) moveAtomic(src, dst, category string) error {
 	}
 	if dstInfo, err := os.Stat(dst); err == nil {
 		if dstInfo.Size() == srcInfo.Size() {
-			// Idempotent re-run — dst already holds what src holds.
-			// Remove src so the next run sees only the new layout.
-			if err := os.Remove(src); err != nil {
-				return fmt.Errorf("remove redundant src %s: %w", src, err)
+			// Idempotent re-run. In move mode, the redundant src is
+			// pruned so the next pass sees only the new layout. In
+			// copy mode the source stays put.
+			if !m.copyMode {
+				if err := os.Remove(src); err != nil {
+					return fmt.Errorf("remove redundant src %s: %w", src, err)
+				}
 			}
 			m.stats.skipped++
 			fmt.Fprintf(m.w, "  · %s (already migrated)\n", m.relDst(dst))
@@ -315,6 +359,17 @@ func (m *mover) moveAtomic(src, dst, category string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("create parent of %s: %w", dst, err)
 	}
+
+	if m.copyMode {
+		if err := copyFile(src, dst); err != nil {
+			return fmt.Errorf("copy %s → %s: %w", src, dst, err)
+		}
+		m.stats.moved++
+		fmt.Fprintf(m.w, "  ✓ %s\n", m.relDst(dst))
+		m.recordManifest(src, dst, category, srcInfo.Size(), "copied")
+		return nil
+	}
+
 	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("rename %s → %s: %w", src, dst, err)
 	}
@@ -322,6 +377,38 @@ func (m *mover) moveAtomic(src, dst, category string) error {
 	fmt.Fprintf(m.w, "  ✓ %s\n", m.relDst(dst))
 	m.recordManifest(src, dst, category, srcInfo.Size(), "moved")
 	return nil
+}
+
+// copyFile duplicates src to dst with the source's permissions. dst
+// is opened with O_CREATE|O_EXCL so an existing file at the path is
+// never silently overwritten — the caller is responsible for
+// pre-flight existence checks (moveAtomic does this).
+func copyFile(src, dst string) error {
+	srcF, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcF.Close()
+
+	srcInfo, err := srcF.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstF, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dstF, srcF); err != nil {
+		dstF.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := dstF.Sync(); err != nil {
+		dstF.Close()
+		return err
+	}
+	return dstF.Close()
 }
 
 // relDst returns dst relative to the archive root, falling back to dst
