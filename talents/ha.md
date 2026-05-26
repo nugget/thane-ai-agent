@@ -363,6 +363,12 @@ config backups but annoying; double-check the ID first.
   multi-step reasoning), bounce to `loops_examples` — `thane_curate`
   is the alternative when HA's automation YAML can't express the
   judgment you need.
+- For HA-event → Thane-loop wake patterns (an automation that
+  needs to *tell a Thane loop something happened* rather than act
+  itself), the bridge is MQTT: the automation publishes via
+  `mqtt.publish`, and the loop registers a wake on the same topic
+  via `mqtt_wake_add` (in the `loops` tag). This pairing — HA
+  emits, Thane reacts — is the canonical cross-system event hook.
 - For inspecting *why* an automation fired or didn't, the activity
   counts on `ha_automation_list` are usually enough; for deeper
   forensics on the events leading up to a trigger, `logs_query`

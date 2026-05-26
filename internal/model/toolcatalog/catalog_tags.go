@@ -111,10 +111,6 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Description: "Model registry inspection, routing, and policy tools.",
 		Parents:     []string{"operations"},
 	},
-	"mqtt": {
-		Description: "MQTT wake subscription management tools.",
-		Parents:     []string{"operations"},
-	},
 	"notifications": {
 		Description: "Notification delivery, escalation, and actionable response tools.",
 		Parents:     []string{"home"},

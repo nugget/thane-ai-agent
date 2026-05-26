@@ -265,9 +265,9 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 // TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools
 // is the other half of the #733 regression: mqtt_wake_* tools are
 // registered in initServers, which runs after initDelegation but
-// before finalizeCapabilityTags. Like the watchlist case, the tools
-// must appear under their default tag ("mqtt") once the snapshot is
-// taken at the right moment.
+// before finalizeCapabilityTags. The tools must appear under their
+// resolved tag ("loops" since the mqtt-tag redistribution) once the
+// snapshot is taken at the right moment.
 //
 // This unit test exercises only the Registry ↔ resolver primitive;
 // the init-phase ordering is enforced by the [finalizeCapabilityTags]
@@ -290,9 +290,9 @@ func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t 
 	resolved := resolveCapabilityTags(reg, nil)
 	wantTools := []string{"mqtt_wake_add", "mqtt_wake_list", "mqtt_wake_remove"}
 	for _, name := range wantTools {
-		if !slices.Contains(resolved.Configs["mqtt"].Tools, name) {
-			t.Errorf("mqtt tag missing %q after SetMQTTSubscriptionTools; got %v",
-				name, resolved.Configs["mqtt"].Tools)
+		if !slices.Contains(resolved.Configs["loops"].Tools, name) {
+			t.Errorf("loops tag missing %q after SetMQTTSubscriptionTools; got %v",
+				name, resolved.Configs["loops"].Tools)
 		}
 	}
 }

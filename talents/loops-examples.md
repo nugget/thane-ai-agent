@@ -233,6 +233,24 @@ producer tools like `forge_repo_follow` and `media_follow` take a
 `wake_loop` target so the curate loop wakes on the event rather than
 its timer.
 
+For wakes triggered by *arbitrary external events* — most commonly
+an HA automation publishing an MQTT message — register the loop
+with `mqtt_wake_add`:
+
+```json
+{
+  "topic": "thane/wake/laundry_done",
+  "loop": "laundry_curator"
+}
+```
+
+The companion shape on the HA side is an automation whose action
+publishes to the same topic (`mqtt.publish` service call). The
+pairing is the canonical "let HA tell Thane something happened"
+pattern — see the HA automation leaf for the publish side. List
+current subscriptions with `mqtt_wake_list`; retire one with
+`mqtt_wake_remove`.
+
 ---
 name: loops_examples_now
 tags: [loops_examples_now]
