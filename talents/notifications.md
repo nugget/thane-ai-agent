@@ -1,5 +1,9 @@
 ---
+name: notifications
 tags: [notifications]
+kind: trailhead
+teaser: "Open for outbound alerts — fire-and-forget, async actionable, sync escalation, or resolving an incoming response."
+next_tags: [notifications_send, notifications_ask, notifications_resolve]
 ---
 
 # Notifications
@@ -34,3 +38,304 @@ purpose.
 
 Be brief. One to two sentences. Lead with what happened, then why it
 matters, then any action they need to take.
+
+## Choose by the shape of the interaction
+
+The judgment above settles *whether* to notify. The branches below
+settle *how*:
+
+- **You're informing, not asking** — activate `notifications_send`.
+  Fire-and-forget delivery. The recipient sees the message; you
+  continue your turn with no callback.
+
+- **You need a response** — activate `notifications_ask`. The
+  critical fork is async (you continue, callback arrives later) vs
+  sync (your turn blocks until they respond or timeout). Choosing
+  wrong is the most common mis-route at this leaf.
+
+- **A user just replied to an outstanding actionable** — activate
+  `notifications_resolve`. This is a callback site, not a
+  notification site; you're closing a loop the system already
+  opened.
+
+## Constants across all branches
+
+- **Recipients resolve through the contact directory.** Every tool
+  takes a `recipient` (contact name) and the system looks up the
+  channel from contact facts. Get the contact lookup right and the
+  delivery routing is automatic; pass a name that doesn't resolve
+  and the send fails before reaching the channel.
+- **Priority is `low` / `normal` / `urgent`.** Low is passive/FYI
+  (won't break through Do Not Disturb on most channels). Normal is
+  the default. Urgent bypasses quiet hours. Match priority to the
+  judgment doctrine above, not to your enthusiasm about the event.
+- **Conversational channels deliver responses asynchronously.** When
+  a user replies "yes" in Signal to an outstanding actionable, the
+  conversation history annotates the message with `[request_id:
+  ...]`. That's the hook for `notifications_resolve`.
+
+## Cross-references
+
+- For recipient resolution, bounce to `contacts` (`lookup_contact`)
+  when the contact name isn't certain. Sends to unknown recipients
+  fail at the routing layer, not at compose time — the lookup is
+  the catch.
+- For the loop-side "I need supervisor attention right now" path
+  inside a service loop, `request_core_attention` (always available,
+  no tag activation needed) is the right tool. It's distinct from
+  human escalation: it asks the *agent's* supervisor to take a turn,
+  not a human.
+- For raising the notification threshold during quiet hours, the
+  lens system (`night_quiet`, `everyone_away`) shapes the
+  judgment doctrine above without changing the tools. Lenses are
+  global posture; notifications are per-event delivery.
+- For sustained watching of HA entities that *might* warrant a
+  notification later, `awareness` is the right subscription
+  surface; this leaf is the egress point once the awareness layer
+  decides something deserves attention.
+
+---
+name: notifications_send
+tags: [notifications_send]
+kind: trailhead
+teaser: "Fire-and-forget delivery — message goes out, no response tracking."
+---
+
+# Send (fire-and-forget)
+
+You're informing, not asking. The recipient sees the message; you
+move on without waiting for or expecting a reply.
+
+## Prefer the channel-agnostic tool
+
+`send_notification` is the right default. The system picks the
+delivery channel from the recipient's contact facts (currently HA
+push; more channels later):
+
+```json
+{
+  "recipient": "nugget",
+  "title": "Sump pump cycled",
+  "message": "Sump ran 4 times in the last hour. No alarm yet, but worth a glance after the rain stops.",
+  "priority": "low"
+}
+```
+
+`title` is optional but improves the channel rendering when present.
+`priority` defaults to `normal`; use `low` for FYI material, `urgent`
+only when quiet-hours bypass is actually warranted by the judgment
+doctrine in the parent.
+
+## The HA-specific path
+
+`ha_notify` is the lower-level variant — it specifically targets the
+Home Assistant companion app, bypassing the channel selector:
+
+```json
+{
+  "recipient": "nugget",
+  "message": "Garage door has been open for 30 minutes.",
+  "priority": "normal"
+}
+```
+
+Reach for it when:
+- You explicitly want the HA push channel (e.g., a critical
+  HA-originated alert where Signal would be the wrong feel)
+- The recipient's contact facts don't yet route through
+  `send_notification` (rare; usually a config gap worth fixing)
+
+When the channel doesn't matter, prefer `send_notification` — it
+keeps the routing decision in the system, not in your prose.
+
+## Don't reach for actions here
+
+Both tools above are *fire-and-forget* when you omit `actions`.
+`ha_notify` will *also* accept an `actions` array, at which point it
+becomes an actionable notification with callback routing — but that
+crosses a behavior line. If you're adding actions, you're asking, not
+informing; bounce to `notifications_ask` so the doctrine for response
+tracking and timeout policy loads.
+
+## Cross-references
+
+- For decision-shaped notifications (actions + callback), bounce to
+  `notifications_ask`.
+- For "where's the user reading this?", that's a contact-fact
+  question — `contacts` (`lookup_contact`) shows the configured
+  channels.
+
+---
+name: notifications_ask
+tags: [notifications_ask]
+kind: trailhead
+teaser: "Get a decision back — async (callback later) or sync (blocks until they answer)."
+---
+
+# Ask (decision-shaped)
+
+You need a response, not just to inform. The single most important
+fork at this leaf:
+
+| You need... | Tool | Behavior |
+|---|---|---|
+| A decision eventually; you can keep working | `request_human_decision` | **Async.** Returns a `request_id`. Callback dispatched to your originating conversation when they answer. |
+| A decision *now*; you cannot proceed without it | `request_human_escalation` | **Sync.** Blocks the current turn until they respond or timeout. |
+| AI judgment beyond your capability | `request_ai_escalation` | **Currently a stub.** Returns an error pointing at human escalation or a higher routing profile. |
+
+Picking wrong is the most consequential mis-route at this leaf.
+Async-when-you-should-have-been-sync leaves the turn proceeding with
+no decision; sync-when-you-should-have-been-async wastes a turn-long
+blocking wait on something you could have continued past.
+
+## The async path
+
+`request_human_decision` posts an actionable notification and returns
+immediately with a `request_id`:
+
+```json
+{
+  "recipient": "nugget",
+  "message": "The cron PR is ready to merge. Tests pass; one Copilot comment is unresolved (about edge-case wording). Merge anyway?",
+  "actions": [
+    {"id": "merge", "label": "Merge"},
+    {"id": "wait", "label": "Wait — let me look"},
+    {"id": "cancel", "label": "Don't merge"}
+  ],
+  "timeout": "2h",
+  "context": "PR #934, last commit a83f12d"
+}
+```
+
+The `context` field is stored with the record and surfaced to the
+callback handler so the future-self picking up the response knows
+what it was about. `timeout` defaults to 30m; `timeout_action` can
+auto-execute an action ID on timeout, "escalate" to re-send urgent,
+or "cancel" (the default).
+
+When the user answers (in HA push or by replying conversationally in
+Signal/another channel), the callback dispatches to your originating
+conversation. You don't have to do anything to wait — the system
+brings the response back to you.
+
+## The sync path
+
+`request_human_escalation` posts the same kind of question but
+**blocks the current turn** until the human responds or the timeout
+expires:
+
+```json
+{
+  "recipient": "nugget",
+  "question": "Production DB migration is staged. Confirm to run, or hold for review?",
+  "context": "Affects 50M rows. Tested in staging; rollback plan in kb:db/2026-05-migration.md.",
+  "actions": [
+    {"id": "run", "label": "Run it"},
+    {"id": "hold", "label": "Hold"}
+  ],
+  "timeout": "10m",
+  "urgency": "urgent"
+}
+```
+
+Default timeout is 10m (shorter than the 30m on async decisions
+because *something* is waiting on the answer). On timeout, the tool
+returns a "did not respond" indicator and your turn continues — but
+having burned that 10m on hold.
+
+The synchronous behavior is what makes this distinct from
+`request_human_decision`. **Only use sync when the next step in your
+turn genuinely depends on the answer** and there's no useful work to
+do in parallel. If you could send the question async, keep working,
+and pick up the response next turn, async is the right move.
+
+## The AI escalation stub
+
+`request_ai_escalation` is registered but **not yet implemented**.
+Calling it returns an error pointing at two workarounds:
+
+- Use `request_human_escalation` if a human can answer
+- Escalate by selecting a higher-capability routing profile (e.g.
+  `thane:premium`) at the orchestrator side — that brings a frontier
+  model into the loop for the next turn
+
+Don't include `request_ai_escalation` in workflow shapes that assume
+it works. When (if) it lands, the tool description here will say so.
+
+## Cross-references
+
+- For closing the loop after an async actionable gets answered in a
+  conversational channel, bounce to `notifications_resolve`.
+- For "the user already responded; how does that flow back to me" —
+  the callback dispatches automatically into your originating
+  conversation; no explicit fetch needed.
+- For grounding the recipient in real contact data, bounce to
+  `contacts` (`lookup_contact`) — sending to an unknown name fails
+  at routing time.
+
+---
+name: notifications_resolve
+tags: [notifications_resolve]
+kind: trailhead
+teaser: "Handle an incoming user reply to an outstanding actionable — callback site, not a notification site."
+---
+
+# Resolve (handle an incoming response)
+
+This leaf is the shape-inverse of `notifications_ask` — instead of
+sending a question and waiting, you're receiving a reply that
+answers one. It's a callback site, and it only makes sense when
+there's an outstanding actionable notification waiting to be
+resolved.
+
+## When this fires
+
+A user replies in a conversational channel (Signal is the canonical
+case) to an outstanding actionable. The conversation history shows
+the prior outbound notification annotated with `[request_id: ...]`,
+and the user's reply names the action they want.
+
+The model's job is to extract the `request_id` from the prior
+annotation and the `action_id` from the user's reply, then call
+`resolve_actionable`:
+
+```json
+{
+  "request_id": "01964ea7-7c2e-7d12-9a4b-1b2c3d4e5f6a",
+  "action_id": "merge"
+}
+```
+
+The `action_id` **must match** one of the actions originally
+attached to the notification. Resolving with an invalid action ID
+fails with a list of valid IDs in the error.
+
+## Race-safe with timeout watchers
+
+The notification record's response field is atomically updated. If
+the timeout watcher beat you (the user took too long and the
+configured `timeout_action` already fired), this returns
+"Notification X already resolved" cleanly — you don't have to check
+first. The atomicity is in the data layer.
+
+## What this leaf is NOT
+
+- Not for inbound notifications you authored. The action_id callback
+  for an actionable *you* sent dispatches automatically to your
+  originating conversation; you don't call `resolve_actionable`
+  yourself in that case.
+- Not for arbitrary "the user said yes" interpretation. This tool
+  closes a specific tracked notification by request_id; without that
+  ID, there's nothing to resolve.
+- Not for synchronous escalations — `request_human_escalation`
+  blocks until response, so by the time the reply arrives, the
+  waiter has already dispatched. `resolve_actionable` is the
+  async-actionable closer.
+
+## Cross-references
+
+- For the upstream side (sending the actionable that's now coming
+  back), `notifications_ask` is where that originated.
+- For "where was the request_id annotation in the conversation
+  history" — that's part of the message metadata the conversation
+  rendering surfaces automatically; no extra fetch needed.
