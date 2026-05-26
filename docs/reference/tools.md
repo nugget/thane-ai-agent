@@ -1,15 +1,15 @@
 # Tools Reference
 
-Thane provides ~150 native tools organized by capability tag. A tool is
-available to a given turn only when one of its default tags is active —
-see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
-on and off, and [Prompt Caching](../prompt-caching.md) for how tag
-choices interact with prompt caching.
+Thane provides ~150 native tools organized by tag. A tool is available
+to a given turn only when one of its default tags is active — see
+[The Agent Loop](../understanding/agent-loop.md) for how tags flip on
+and off, and [Prompt Caching](../prompt-caching.md) for how tag choices
+interact with prompt caching.
 
 Tools under the **Core tools** heading below are not tag-gated and
-load on every turn. Everything else loads only when a relevant
-capability is activated, either by the model via `activate_capability`
-or via configured core tags.
+load on every turn. Everything else loads only when a relevant tag is
+activated, either by the model via `tag_activate` or via configured
+core tags.
 
 The authoritative source for which tool is tagged how is
 [`internal/model/toolcatalog/catalog.go`](../../internal/model/toolcatalog/catalog.go);
@@ -47,13 +47,13 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `activate_capability` | Activate a capability tag for the current conversation. |
-| `deactivate_capability` | Deactivate a capability tag for the current conversation. |
-| `reset_capabilities` | Return the current conversation to its baseline capability state. |
-| `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
-| `activate_lens` | Activate a persistent global behavioral lens. |
-| `deactivate_lens` | Deactivate a global behavioral lens. |
-| `list_lenses` | List currently active behavioral lenses. |
+| `tag_activate` | Activate a tag for the current conversation. |
+| `tag_deactivate` | Deactivate a tag for the current conversation. |
+| `tag_reset` | Return the current conversation to its baseline tag state. |
+| `tag_inspect` | Inspect one tag's active and excluded tool surface. |
+| `lens_activate` | Activate a persistent global behavioral lens. |
+| `lens_deactivate` | Deactivate a global behavioral lens. |
+| `lens_list` | List currently active behavioral lenses. |
 | `thane_now` | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | Assign a task to a sub-agent that runs in the background and reports back when complete. |
 | `request_core_attention` | From a loop, force a supervisor/core attention turn for a decision-worthy concern. |
@@ -97,17 +97,17 @@ clear forecast fetching for that subscription.
 ## `ha` — Home Assistant state and control
 
 `homeassistant` is an alias that resolves to `ha`. Either name works at
-`activate_capability`; the canonical name `ha` is what flows through the
+`tag_activate`; the canonical name `ha` is what flows through the
 scope and prompt rendering.
 
 
 | Tool | Description |
 |------|-------------|
-| `control_device` | Natural-language device control with fuzzy entity matching. |
-| `find_entity` | Smart entity discovery across HA domains. |
-| `get_state` | Current state of any entity. |
-| `list_entities` | Browse entities by domain or glob pattern. |
-| `call_service` | Direct HA service invocation. |
+| `ha_control_device` | Natural-language device control with fuzzy entity matching. |
+| `ha_find_entity` | Smart entity discovery across HA domains. |
+| `ha_get_state` | Current state of any entity. |
+| `ha_list_entities` | Browse entities by domain or glob pattern. |
+| `ha_call_service` | Direct HA service invocation. |
 | `ha_registry_search` | Search the entity/device/area registry. |
 | `ha_automation_list` | List automations with recent activation counts. |
 | `ha_automation_get` | Retrieve one automation's configuration. |
@@ -201,20 +201,20 @@ being reimplemented in each loop prompt.
 
 | Tool | Description |
 |------|-------------|
-| `save_contact` | Create or update a contact with vCard properties. |
-| `lookup_contact` | Search by name, query, kind, or property. |
-| `forget_contact` | Delete a contact. |
-| `list_contacts` | List and filter contacts. |
-| `export_vcf` | Export one contact as a vCard. |
-| `export_vcf_qr` | Export one contact as a vCard QR code. |
-| `export_all_vcf` | Bulk vCard export. |
-| `import_vcf` | Import one or more vCards. |
+| `contact_save` | Create or update a contact with vCard properties. |
+| `contact_lookup` | Search by name, query, kind, or property. |
+| `contact_forget` | Delete a contact. |
+| `contact_list` | List and filter contacts. |
+| `contact_export_vcf` | Export one contact as a vCard. |
+| `contact_export_vcf_qr` | Export one contact as a vCard QR code. |
+| `contact_export_all_vcf` | Bulk vCard export. |
+| `contact_import_vcf` | Import one or more vCards. |
 
 ## `owner` — trusted operator context
 
 | Tool | Description |
 |------|-------------|
-| `owner_contact` | Return the runtime owner identity. Protected tag. |
+| `contact_owner` | Return the runtime owner identity. Protected tag. |
 
 Owner channel activity recency is reported with delta fields such as
 `last_active_delta`.
@@ -315,9 +315,9 @@ managed document.
 
 | Tool | Description |
 |------|-------------|
-| `schedule_task` | Schedule a future task. |
-| `list_tasks` | List scheduled tasks. |
-| `cancel_task` | Cancel a scheduled task. |
+| `task_schedule` | Schedule a future task. |
+| `task_list` | List scheduled tasks. |
+| `task_cancel` | Cancel a scheduled task. |
 
 Task next-run values include a model-facing delta.
 

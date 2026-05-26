@@ -31,7 +31,7 @@ func TestToolCallRecording(t *testing.T) {
 	}
 
 	// Record a tool call with empty message_id (should work - nullable)
-	err = store.RecordToolCall("test-conv", "", "call-001", "get_state", `{"entity_id":"light.test"}`)
+	err = store.RecordToolCall("test-conv", "", "call-001", "ha_get_state", `{"entity_id":"light.test"}`)
 	if err != nil {
 		t.Fatalf("RecordToolCall failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestToolCallRecording(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMessage failed: %v", err)
 	}
-	err = store.RecordToolCall("test-conv", "", "call-002", "call_service", `{"domain":"light"}`)
+	err = store.RecordToolCall("test-conv", "", "call-002", "ha_call_service", `{"domain":"light"}`)
 	if err != nil {
 		t.Fatalf("RecordToolCall with message_id failed: %v", err)
 	}
@@ -65,16 +65,16 @@ func TestToolCallRecording(t *testing.T) {
 	}
 
 	// Verify first call (most recent first due to ORDER BY DESC)
-	if calls[0].ToolName != "call_service" {
-		t.Errorf("expected tool name 'call_service', got %q", calls[0].ToolName)
+	if calls[0].ToolName != "ha_call_service" {
+		t.Errorf("expected tool name 'ha_call_service', got %q", calls[0].ToolName)
 	}
 	if calls[0].Error != "service not found" {
 		t.Errorf("expected error 'service not found', got %q", calls[0].Error)
 	}
 
 	// Verify second call
-	if calls[1].ToolName != "get_state" {
-		t.Errorf("expected tool name 'get_state', got %q", calls[1].ToolName)
+	if calls[1].ToolName != "ha_get_state" {
+		t.Errorf("expected tool name 'ha_get_state', got %q", calls[1].ToolName)
 	}
 	if calls[1].Result != "on" {
 		t.Errorf("expected result 'on', got %q", calls[1].Result)
@@ -102,20 +102,20 @@ func TestToolCallsByName(t *testing.T) {
 	store.GetOrCreateConversation("test-conv")
 
 	// Record multiple tool calls
-	store.RecordToolCall("test-conv", "", "call-1", "get_state", "{}")
-	store.RecordToolCall("test-conv", "", "call-2", "get_state", "{}")
-	store.RecordToolCall("test-conv", "", "call-3", "call_service", "{}")
-	store.RecordToolCall("test-conv", "", "call-4", "get_state", "{}")
+	store.RecordToolCall("test-conv", "", "call-1", "ha_get_state", "{}")
+	store.RecordToolCall("test-conv", "", "call-2", "ha_get_state", "{}")
+	store.RecordToolCall("test-conv", "", "call-3", "ha_call_service", "{}")
+	store.RecordToolCall("test-conv", "", "call-4", "ha_get_state", "{}")
 
 	// Filter by name
-	getCalls := store.GetToolCallsByName("get_state", 10)
+	getCalls := store.GetToolCallsByName("ha_get_state", 10)
 	if len(getCalls) != 3 {
-		t.Errorf("expected 3 get_state calls, got %d", len(getCalls))
+		t.Errorf("expected 3 ha_get_state calls, got %d", len(getCalls))
 	}
 
-	serviceCalls := store.GetToolCallsByName("call_service", 10)
+	serviceCalls := store.GetToolCallsByName("ha_call_service", 10)
 	if len(serviceCalls) != 1 {
-		t.Errorf("expected 1 call_service call, got %d", len(serviceCalls))
+		t.Errorf("expected 1 ha_call_service call, got %d", len(serviceCalls))
 	}
 }
 
@@ -171,9 +171,9 @@ func TestToolCallStats(t *testing.T) {
 	store.GetOrCreateConversation("test")
 
 	// Record and complete some calls
-	store.RecordToolCall("test", "", "c1", "get_state", "{}")
-	store.RecordToolCall("test", "", "c2", "get_state", "{}")
-	store.RecordToolCall("test", "", "c3", "call_service", "{}")
+	store.RecordToolCall("test", "", "c1", "ha_get_state", "{}")
+	store.RecordToolCall("test", "", "c2", "ha_get_state", "{}")
+	store.RecordToolCall("test", "", "c3", "ha_call_service", "{}")
 
 	time.Sleep(10 * time.Millisecond) // Ensure measurable duration
 
@@ -192,11 +192,11 @@ func TestToolCallStats(t *testing.T) {
 	if !ok {
 		t.Fatalf("by_tool not a map")
 	}
-	if byTool["get_state"] != 2 {
-		t.Errorf("expected get_state=2, got %d", byTool["get_state"])
+	if byTool["ha_get_state"] != 2 {
+		t.Errorf("expected ha_get_state=2, got %d", byTool["ha_get_state"])
 	}
-	if byTool["call_service"] != 1 {
-		t.Errorf("expected call_service=1, got %d", byTool["call_service"])
+	if byTool["ha_call_service"] != 1 {
+		t.Errorf("expected ha_call_service=1, got %d", byTool["ha_call_service"])
 	}
 
 	errorRate, ok := stats["error_rate"].(float64)

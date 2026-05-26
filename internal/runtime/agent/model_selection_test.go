@@ -829,7 +829,7 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	if err != nil {
 		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
-	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"ha_get_state"})
 	loop.UseModelRegistry(runtime.Registry())
 	loop.UseModelRuntime(runtime)
 
@@ -992,7 +992,7 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterRegistryRefresh(t *tes
 	if err != nil {
 		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
-	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"ha_get_state"})
 	loop.UseModelRegistry(runtime.Registry())
 	loop.UseModelRuntime(runtime)
 
@@ -1129,7 +1129,7 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 	if err != nil {
 		t.Fatalf("fleet.NewRuntime: %v", err)
 	}
-	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"ha_get_state"})
 	loop.UseModelRegistry(runtime.Registry())
 	loop.UseModelRuntime(runtime)
 

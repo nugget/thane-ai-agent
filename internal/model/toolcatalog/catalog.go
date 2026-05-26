@@ -60,7 +60,7 @@ func (k TagKind) IsMenu() bool {
 // time instead of being separately-declared spec entries.
 type BuiltinTagSpec struct {
 	// Description is the short, model-facing summary rendered into
-	// the capability menu and inspect_capability output.
+	// the tag menu and tag_inspect output.
 	Description string
 
 	// Core tags are pinned in every scope by operator configuration.
@@ -76,8 +76,8 @@ type BuiltinTagSpec struct {
 	// Protected.
 	Kind TagKind
 
-	// Protected tags cannot be toggled via activate_capability /
-	// deactivate_capability — they're reserved for runtime trust
+	// Protected tags cannot be toggled via tag_activate /
+	// tag_deactivate — they're reserved for runtime trust
 	// assertions (e.g. owner-authenticated conversations, channel
 	// affordance tags asserted by the integration). Orthogonal to
 	// Kind: a tag can be a protected leaf (`message_channel`,
@@ -96,9 +96,8 @@ type BuiltinTagSpec struct {
 	// tag. Most relevant for backward-compatible renames or
 	// operator-friendly synonyms (e.g. `homeassistant` resolves to
 	// `ha`). Resolution happens at every boundary the tag enters the
-	// system: activate_capability / inspect_capability calls,
-	// channel-tag binding, operator YAML. Internally only canonical
-	// names exist.
+	// system: tag_activate / tag_inspect calls, channel-tag binding,
+	// operator YAML. Internally only canonical names exist.
 	Aliases []string
 }
 
@@ -134,8 +133,8 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
-	"activate_capability":         {CanonicalID: "native:activate_capability", Source: NativeToolSource},
-	"activate_lens":               {CanonicalID: "native:activate_lens", Source: NativeToolSource},
+	"tag_activate":                {CanonicalID: "native:tag_activate", Source: NativeToolSource},
+	"lens_activate":               {CanonicalID: "native:lens_activate", Source: NativeToolSource},
 	"archive_range":               {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_session_transcript":  {CanonicalID: "native:archive_session_transcript", Source: NativeToolSource, Tags: []string{"archive"}},
@@ -143,14 +142,14 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"attachment_describe":         {CanonicalID: "native:attachment_describe", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_list":             {CanonicalID: "native:attachment_list", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_search":           {CanonicalID: "native:attachment_search", Source: NativeToolSource, Tags: []string{"attachments"}},
-	"call_service":                {CanonicalID: "native:call_service", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"cancel_task":                 {CanonicalID: "native:cancel_task", Source: NativeToolSource, Tags: []string{"scheduler"}},
-	"control_device":              {CanonicalID: "native:control_device", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_call_service":             {CanonicalID: "native:ha_call_service", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"task_cancel":                 {CanonicalID: "native:task_cancel", Source: NativeToolSource, Tags: []string{"scheduler"}},
+	"ha_control_device":           {CanonicalID: "native:ha_control_device", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
-	"deactivate_capability":       {CanonicalID: "native:deactivate_capability", Source: NativeToolSource},
-	"deactivate_lens":             {CanonicalID: "native:deactivate_lens", Source: NativeToolSource},
+	"tag_deactivate":              {CanonicalID: "native:tag_deactivate", Source: NativeToolSource},
+	"lens_deactivate":             {CanonicalID: "native:lens_deactivate", Source: NativeToolSource},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_copy":                    {CanonicalID: "native:doc_copy", Source: NativeToolSource, Tags: []string{"documents"}},
@@ -178,9 +177,9 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"email_search":                {CanonicalID: "native:email_search", Source: NativeToolSource, Tags: []string{"email"}},
 	"email_send":                  {CanonicalID: "native:email_send", Source: NativeToolSource, Tags: []string{"email"}},
 	"exec":                        {CanonicalID: "native:exec", Source: NativeToolSource, Tags: []string{"shell"}},
-	"export_all_vcf":              {CanonicalID: "native:export_all_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"export_vcf":                  {CanonicalID: "native:export_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"export_vcf_qr":               {CanonicalID: "native:export_vcf_qr", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_export_all_vcf":      {CanonicalID: "native:contact_export_all_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_export_vcf":          {CanonicalID: "native:contact_export_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_export_vcf_qr":       {CanonicalID: "native:contact_export_vcf_qr", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"file_edit":                   {CanonicalID: "native:file_edit", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_grep":                   {CanonicalID: "native:file_grep", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_list":                   {CanonicalID: "native:file_list", Source: NativeToolSource, Tags: []string{"files"}},
@@ -189,8 +188,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"file_stat":                   {CanonicalID: "native:file_stat", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_tree":                   {CanonicalID: "native:file_tree", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_write":                  {CanonicalID: "native:file_write", Source: NativeToolSource, Tags: []string{"files"}},
-	"find_entity":                 {CanonicalID: "native:find_entity", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"forget_contact":              {CanonicalID: "native:forget_contact", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"ha_find_entity":              {CanonicalID: "native:ha_find_entity", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"contact_forget":              {CanonicalID: "native:contact_forget", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"forget_fact":                 {CanonicalID: "native:forget_fact", Source: NativeToolSource, Tags: []string{"memory"}},
 	"forge_issue_comment":         {CanonicalID: "native:forge_issue_comment", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_issue_create":          {CanonicalID: "native:forge_issue_create", Source: NativeToolSource, Tags: []string{"forge"}},
@@ -213,7 +212,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"forge_repo_subscriptions":    {CanonicalID: "native:forge_repo_subscriptions", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_repo_unfollow":         {CanonicalID: "native:forge_repo_unfollow", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_search":                {CanonicalID: "native:forge_search", Source: NativeToolSource, Tags: []string{"forge"}},
-	"get_state":                   {CanonicalID: "native:get_state", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_get_state":                {CanonicalID: "native:ha_get_state", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"get_version":                 {CanonicalID: "native:get_version", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"ha_automation_create":        {CanonicalID: "native:ha_automation_create", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"ha_automation_delete":        {CanonicalID: "native:ha_automation_delete", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
@@ -222,16 +221,16 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"ha_automation_update":        {CanonicalID: "native:ha_automation_update", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"ha_notify":                   {CanonicalID: "native:ha_notify", Source: NativeToolSource, Tags: []string{"notifications"}},
 	"ha_registry_search":          {CanonicalID: "native:ha_registry_search", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"import_vcf":                  {CanonicalID: "native:import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
-	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
-	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
-	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, Tags: []string{"scheduler"}},
+	"contact_import_vcf":          {CanonicalID: "native:contact_import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_list":                {CanonicalID: "native:contact_list", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"ha_list_entities":            {CanonicalID: "native:ha_list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"lens_list":                   {CanonicalID: "native:lens_list", Source: NativeToolSource},
+	"tag_inspect":                 {CanonicalID: "native:tag_inspect", Source: NativeToolSource},
+	"tag_reset":                   {CanonicalID: "native:tag_reset", Source: NativeToolSource},
+	"task_list":                   {CanonicalID: "native:task_list", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, Tags: []string{"diagnostics"}},
-	"lookup_contact":              {CanonicalID: "native:lookup_contact", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"owner_contact":               {CanonicalID: "native:owner_contact", Source: NativeToolSource, Tags: []string{"owner"}},
+	"contact_lookup":              {CanonicalID: "native:contact_lookup", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"contact_owner":               {CanonicalID: "native:contact_owner", Source: NativeToolSource, Tags: []string{"owner"}},
 	"set_next_sleep":              {CanonicalID: "native:set_next_sleep", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_status":                 {CanonicalID: "native:loop_status", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_delete":      {CanonicalID: "native:loop_definition_delete", Source: NativeToolSource, Tags: []string{"loops"}},
@@ -271,8 +270,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"request_human_decision":      {CanonicalID: "native:request_human_decision", Source: NativeToolSource, Tags: []string{"notifications"}},
 	"request_human_escalation":    {CanonicalID: "native:request_human_escalation", Source: NativeToolSource, Tags: []string{"notifications"}},
 	"resolve_actionable":          {CanonicalID: "native:resolve_actionable", Source: NativeToolSource, Tags: []string{"notifications"}},
-	"save_contact":                {CanonicalID: "native:save_contact", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"schedule_task":               {CanonicalID: "native:schedule_task", Source: NativeToolSource, Tags: []string{"scheduler"}},
+	"contact_save":                {CanonicalID: "native:contact_save", Source: NativeToolSource, Tags: []string{"contacts"}},
+	"task_schedule":               {CanonicalID: "native:task_schedule", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"send_reaction":               {CanonicalID: "native:send_reaction", Source: NativeToolSource, Tags: []string{"message_channel"}},
 	"session_checkpoint":          {CanonicalID: "native:session_checkpoint", Source: NativeToolSource, Tags: []string{"session"}},
 	"session_close":               {CanonicalID: "native:session_close", Source: NativeToolSource, Tags: []string{"session"}},
