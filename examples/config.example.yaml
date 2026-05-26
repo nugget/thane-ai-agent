@@ -1080,7 +1080,7 @@ logging:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: true
-    access:
+    http_access:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: false

@@ -55,15 +55,20 @@ document-shaped, it isn't a memory fact either — push to documents.
 - **Trust zones gate downstream tools.** Every contact carries a zone:
   `admin` (full access), `household` (family-level), `trusted`
   (established relationship), `known` (default; lower-privilege gated
-  access). The zone is what `email_send`'s recipient gate reads, what
-  shapes which fields appear in an exported vCard, and what determines
-  which contacts get owner-scoped privileges. Assigning a zone is a
-  policy decision, not a metadata field.
+  access). The zone is what `email_send`'s recipient gate reads and
+  what determines which contacts get owner-scoped privileges. Field
+  filtering on vCard exports is a separate axis — it uses the
+  *recipient*'s trust zone passed at export time, and only when
+  exporting the agent's own card via `name: "self"`. Assigning a
+  zone is a policy decision, not a metadata field.
 
-- **save merges; forget destroys.** `contact_save` with an existing
-  name merges into the current record — non-empty scalar fields
-  overwrite, facts are additive, origin arrays replace. There's no
-  "update" tool separate from save; the save IS the update. By
+- **save merges; forget soft-deletes.** `contact_save` with an
+  existing name merges into the current record — non-empty scalar
+  fields overwrite, facts are additive *including* across duplicate
+  keys (saving `email: a@x` then `email: b@x` keeps both as separate
+  property values; only exact-duplicate (property, value) triples
+  no-op), and origin arrays replace. There's no "update" tool
+  separate from save; the save IS the update. By
   contrast, `contact_forget` removes the record entirely with no
   tombstone. Lookup before forgetting; the cost of removing the wrong
   record is real.
@@ -114,15 +119,20 @@ also matches `nickname`:
 }
 ```
 
-Returns the contact record if found, including all facts, trust zone,
-origin policy, and metadata. Missing returns a not-found result with
-search hints — that's your signal to either re-query with `query` or
-decide to `contact_save` deliberately.
+Returns the contact record if found, including all facts, trust
+zone, origin policy, and metadata. Missing returns a simple
+not-found message — there are no structured search hints in the
+result, so on a miss the next move is yours: re-query with `query`
+or a `key`/`value` filter, or decide to `contact_save` deliberately.
 
 ## You have partial information
 
-`contact_lookup` with `query` searches across name, nickname, org, and
-facts:
+`contact_lookup` with `query` runs a full-text/LIKE search across
+the contact's text fields — `formatted_name`, `nickname`, `note`,
+`ai_summary`, `org`. **It does not search properties/facts** —
+the property store is keyed and queried separately. To match on a
+specific property value (e.g., "find the contact with this email"),
+use the `key` + `value` filter below instead of `query`:
 
 ```json
 {
@@ -222,8 +232,7 @@ tool access. The four zones:
   but not vetted. The contact record exists (so signal/email can
   recognize incoming traffic from them), but outbound mail to a
   `known` recipient is **rejected** by the trust gate until
-  explicitly promoted or authorized. Sensitive fields are also
-  stripped from vCard exports targeting `known` recipients.
+  explicitly promoted or authorized.
 
 When uncertain, **`known` is the safe default**: the record exists,
 the contact is recognized inbound, but no outbound action goes through
@@ -253,9 +262,16 @@ attributes; the merge semantics let you add details incrementally:
 ```
 
 Update semantics: when the record exists, **non-empty scalar fields
-overwrite**, **facts are additive** (new keys add, existing keys
-update), and **origin arrays are replaced** when provided (pass `[]`
-to clear). To leave a field alone, omit it.
+overwrite**, **facts are additive even across duplicate keys** (a
+new value for an existing key is added as another property value
+rather than replacing the prior one — the contact ends up with
+multiple `email` / `phone` / etc. entries; only exact-duplicate
+(property, value) triples no-op), and **origin arrays are
+replaced** when provided (pass `[]` to clear). To leave a field
+alone, omit it. To genuinely *replace* a multi-valued property —
+not just add to it — read the record first, decide what should
+remain, and the appropriate cleanup happens through the contact
+store's CardDAV-style overwrite path (not via `contact_save`).
 
 ## Standard keys map to vCard properties automatically
 
@@ -302,7 +318,7 @@ contact would shadow the trustworthy assertion).
 
 ## Remove a contact
 
-`contact_forget` deletes the record entirely:
+`contact_forget` removes the record from the directory:
 
 ```json
 {
@@ -310,11 +326,16 @@ contact would shadow the trustworthy assertion).
 }
 ```
 
-There's no tombstone, no soft-delete, no undo. Past references in
-archive transcripts and email threads still mention the person by
-name, but the contact record itself is gone — and any tool that
-resolved against it (email send policy, signal sender recognition)
-will treat that person as unknown on the next encounter.
+The store implements this as a **soft delete** (sets `deleted_at`),
+so the row physically remains in the database for audit/recovery,
+but **there is no undo path through the model-facing tools** — once
+forgotten, the contact is gone from every query and gate the model
+can reach. Recovery requires direct database intervention, not a
+tool call. Past references in archive transcripts and email
+threads still mention the person by name, but any tool that
+resolves against the directory (email send policy, signal sender
+recognition) will treat that person as unknown on the next
+encounter.
 
 **Lookup before forgetting.** Confirm you have the right record. The
 cost of removing the wrong contact is real and unrecoverable from
@@ -372,15 +393,11 @@ import.
 
 ## Export one contact as a vCard
 
-`contact_export_vcf` produces a vCard for one contact. The `recipient_trust_zone`
-parameter is the trust *of the person you're sharing the card with* —
-it filters which fields are included so you don't leak sensitive
-attributes:
+`contact_export_vcf` produces a vCard for one contact:
 
 ```json
 {
   "name": "Frank Smith",
-  "recipient_trust_zone": "known",
   "format": "file"
 }
 ```
@@ -388,10 +405,25 @@ attributes:
 `format: "file"` writes to a temp file (default); `format: "text"`
 returns the vCard inline for direct inclusion in a message body.
 
-**`name: "self"` is special** — it exports the agent's own contact
-card with `recipient_trust_zone`-aware field filtering. Right tool for
-"send the recipient your contact info." Lower zones get fewer fields
-(e.g., a `known` recipient won't see your home address).
+**`name: "self"` is the special case for field filtering.** When
+exporting the agent's own card via `name: "self"`,
+`recipient_trust_zone` controls which fields are included so you
+don't leak sensitive attributes to a lower-trust recipient:
+
+```json
+{
+  "name": "self",
+  "recipient_trust_zone": "known",
+  "format": "text"
+}
+```
+
+Lower zones get fewer fields (e.g., a `known` recipient won't see
+your home address). **For exporting any other contact**,
+`recipient_trust_zone` is currently ignored — the export carries
+the contact's full data regardless. If you need a redacted vCard
+for a third party, the workaround is to copy the contact into your
+own self-card representation first, or hand-redact before sending.
 
 ## Export all contacts (backup or bulk transfer)
 
