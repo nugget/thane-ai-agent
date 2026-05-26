@@ -1096,6 +1096,10 @@ logging:
       # Enabled controls whether the dataset is written. When omitted, each
       # dataset uses its built-in default.
       enabled: true
+    conversations:
+      # Enabled controls whether the dataset is written. When omitted, each
+      # dataset uses its built-in default.
+      enabled: false
   # RetentionDays controls how many days DEBUG and TRACE log index
   # entries are kept. Entries at INFO and above are kept indefinitely.
   # Default: 7. Set to 0 to disable pruning (keep everything).

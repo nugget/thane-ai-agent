@@ -427,12 +427,13 @@ type LoggingStdoutConfig struct {
 // LoggingDatasetsConfig configures the initial structured JSONL datasets
 // written under logging.root.
 type LoggingDatasetsConfig struct {
-	Events    LoggingDatasetConfig `yaml:"events"`
-	Requests  LoggingDatasetConfig `yaml:"requests"`
-	Access    LoggingDatasetConfig `yaml:"http_access"`
-	Loops     LoggingDatasetConfig `yaml:"loops"`
-	Delegates LoggingDatasetConfig `yaml:"delegates"`
-	Envelopes LoggingDatasetConfig `yaml:"envelopes"`
+	Events        LoggingDatasetConfig `yaml:"events"`
+	Requests      LoggingDatasetConfig `yaml:"requests"`
+	Access        LoggingDatasetConfig `yaml:"http_access"`
+	Loops         LoggingDatasetConfig `yaml:"loops"`
+	Delegates     LoggingDatasetConfig `yaml:"delegates"`
+	Envelopes     LoggingDatasetConfig `yaml:"envelopes"`
+	Conversations LoggingDatasetConfig `yaml:"conversations"`
 }
 
 // LoggingDatasetConfig controls one structured JSONL dataset.
@@ -557,6 +558,8 @@ func (l LoggingConfig) DatasetEnabled(dataset string) bool {
 		return datasetEnabled(l.Datasets.Delegates, true)
 	case "envelopes":
 		return datasetEnabled(l.Datasets.Envelopes, true)
+	case "conversations":
+		return datasetEnabled(l.Datasets.Conversations, true)
 	default:
 		return false
 	}

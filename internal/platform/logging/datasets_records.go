@@ -30,6 +30,13 @@ const (
 	DatasetDelegates = "delegates"
 	// DatasetEnvelopes captures message-envelope delivery audit records.
 	DatasetEnvelopes = "envelopes"
+	// DatasetConversations captures every completed LLM request envelope
+	// (model, prompt, response, token counts, tool usage) as pristine
+	// on-disk JSONL. Lives under sources/thane/conversations/ and serves
+	// as the on-disk source-of-truth for what the agent actually said
+	// alongside the sqlite content tables (which retire in #940 once
+	// the interactions normalizer lands in #938).
+	DatasetConversations = "conversations"
 )
 
 // Shared log-attribute keys and values used to route slog records into

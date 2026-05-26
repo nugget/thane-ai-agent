@@ -95,19 +95,34 @@ func (a *App) initLogging(augmentedDirs []string) error {
 
 	// Persistent content retention — create after the final logger so
 	// warnings go through the configured handler.
+	var sqliteContentRecorder logging.RequestRecordFunc
 	if cfg.Logging.RetainContent && a.indexDB != nil {
 		cw, cwErr := logging.NewContentWriter(a.indexDB, cfg.Logging.ContentMaxLength(), logger)
 		if cwErr != nil {
 			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
 		} else {
 			a.contentWriter = cw
-			a.requestRecorder = logging.CombineRequestRecorders(a.liveRequestRecorder, cw.WriteRequest)
+			sqliteContentRecorder = cw.WriteRequest
 			a.onCloseErr("content-writer", cw.Close)
 			logger.Info("content retention enabled",
 				"max_content_length", cfg.Logging.ContentMaxLength(),
 			)
 		}
 	}
+
+	// Pristine conversations dataset — JSONL on disk under
+	// sources/thane/conversations/. Co-exists with the sqlite content
+	// path until #938's normalizer + #940's retirement land.
+	var conversationsRecorder logging.RequestRecordFunc
+	if datasetWriter != nil && cfg.Logging.DatasetEnabled(logging.DatasetConversations) {
+		conversationsRecorder = logging.NewConversationsRecorder(datasetWriter, logger)
+	}
+
+	a.requestRecorder = logging.CombineRequestRecorders(
+		a.liveRequestRecorder,
+		sqliteContentRecorder,
+		conversationsRecorder,
+	)
 
 	// Log PATH augmentation now that the final logger is configured.
 	if len(augmentedDirs) > 0 {
