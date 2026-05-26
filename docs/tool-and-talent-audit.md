@@ -112,7 +112,7 @@ The recurring anti-patterns:
 | **Wrong-data-store** | Talent points at a real tool that mutates a different store than the reader expects | `add_entity_subscription` (conversation-wide) vs `update_entity_subscriptions` (loop-scoped) — caught in PR-A |
 | **Buried safety doctrine** | Action-shaped leaf with safety pattern present but at the bottom rather than as a featured root-level invariant | `ha-trailhead.md`'s find_entity → call_service → get_state pattern lived under a "Verifying device control" section at the file's end; `ha.md` elevated it to the root's "constants across all branches" section |
 | **Cross-reference gap** | Leaf carries internal routing but no "and here's when to bounce" section | Most pre-grammar leaves |
-| **Missing border doctrine** | Each leaf is internally clean, but the *boundaries* between leaves aren't featured at the model's actual entry points. A model that lands on the wrong leaf reads through the whole talent before any cross-reference disambiguates — by which point it has already burned the turn picking a tool. Disambiguation tables belong **on both sides of the border**, at the top, not only in the cross-references list at the bottom. | `archive.md` features the archive-vs-logs_query split prominently but only mentions memory in the cross-references list at the bottom; `memory.md` has one row for archive but not the side-by-side that would actually interrupt the mis-route. Same pattern for files-vs-documents, notifications-vs-email, contacts-vs-memory. |
+| **Missing border doctrine** | Each leaf is internally clean, but the *boundaries* between leaves aren't featured at the model's actual entry points. A model that lands on the wrong leaf reads through the whole talent before any cross-reference disambiguates — by which point it has already burned the turn picking a tool. Disambiguation tables belong **on both sides of the border**, at the top, not only in the cross-references list at the bottom. | `archive.md` features the archive-vs-logs_query split prominently but doesn't disambiguate against memory at all; the pre-refresh `memory.md` carries no disambiguation table. The two stores share lookup-shaped framing yet point at neither each other's surface. Same gap pattern for files-vs-documents, notifications-vs-email, contacts-vs-memory. The follow-up border-audit PR sweeps these (#936 for the on-main pairs; the in-flight leaf PRs cover the rest). |
 | **Architecture-stale advice** | Talent captures how the system used to work, routes the model around a current boundary | `loops-tagging.md`'s pre-#696 escalation advice — caught in PR-F review |
 | **Developer-doc co-mingling** | Prose explains config / deployment / mechanism that the model doesn't need to decide | site-specific operator config explanations in early `loops-tagging.md` |
 
@@ -273,14 +273,18 @@ that no individual leaf could catch:
 - **Borders matter as much as bodies.** Per-leaf audits clean up
   the inside of each leaf but don't address the *boundaries*
   between leaves. A model that lands in `archive` looking for
-  "what we know about X" doesn't get pushed toward `memory` until
-  it has read through the whole archive talent — by which point
-  the turn is already burning. **Missing border doctrine** added
-  to the diagnose-mismatches table; a cross-leaf border audit
-  pass added as a sequencing step in step 4. The remedy:
-  disambiguation tables on *both sides* of every confusable pair,
-  featured at the top of the talent rather than in the
-  cross-references list at the bottom.
+  "what we know about X" has no in-talent redirection toward
+  `memory` at all — the archive↔memory border is missing entirely
+  in the current corpus, despite the two stores being a natural
+  confusable. The mis-route burns a turn before any cross-leaf
+  signal could intervene. **Missing border doctrine** added to
+  the diagnose-mismatches table; a cross-leaf border audit pass
+  added as a sequencing step in step 4. The remedy: disambiguation
+  tables on *both sides* of every confusable pair, featured at
+  the top of the talent rather than in the cross-references list
+  at the bottom. The follow-up sweeps (#936 for on-main pairs;
+  edits inside the in-flight leaf PRs for the rest) apply this
+  remedy across the corpus.
 - **Not every queue entry deserves a leaf.** The instinct to
   "build a talent for every tag in the catalog" misses the
   implementation-shaped-tag anti-pattern: some tags exist because
