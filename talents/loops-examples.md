@@ -278,7 +278,7 @@ semantics, which is what the briefing wants:
       {
         "service": "mqtt.publish",
         "data": {
-          "topic": "thane/wake/alice_arrived_office",
+          "topic": "thane/deepslate/wake/alice_arrived_office",
           "payload": "{\"source\": \"ha\", \"trigger\": \"alice_arrived_office\", \"timestamp_iso\": \"{{ now().isoformat() }}\"}"
         }
       }
@@ -309,19 +309,36 @@ A few choices that matter:
   for routing. The future-proofing is cheap, and the timestamp
   helps the loop notice when it's reacting to a stale message
   (network flap, broker replay).
+- **Topic convention `thane/{device_name}/wake/{purpose}`** is
+  the documented shape for instance-directed wakes — multiple
+  Thane installations can share a broker without crosstalk,
+  because each installation listens only under its own
+  device-name segment.
 
-**The Thane-side registration** ties a loop to that topic:
+**The Thane-side registration** ties a loop to that topic. The
+`wake_loop` field carries a `LoopWakeTarget` — name the loop by
+its `name` (or `loop_id` if you have it from `loop_status`):
 
 ```json
 {
-  "topic": "thane/wake/alice_arrived_office",
-  "loop": "alice_morning_briefing"
+  "topic": "thane/deepslate/wake/alice_arrived_office",
+  "wake_loop": {
+    "name": "alice_morning_briefing"
+  }
 }
 ```
 
-The `loop` parameter names a curate or service loop already
-defined elsewhere (via `loop_definition_set` or `thane_curate`).
-That loop's `Task` is where the briefing's intent lives:
+`wake_loop` also accepts `force_supervisor` (run the loop's next
+iteration as a supervisor turn — costlier; reserve for genuinely
+high-stakes wakes), `priority` (`low` / `normal` / `urgent`), and
+`instructions` (extra prose the wake-handler can inject into the
+loop's pending-notification context). Most cases just need
+`name`. Verify the target exists via `loop_status` before
+persisting — `mqtt_wake_add` resolves the target at
+message-arrival time, not at registration, so a typo here fails
+silently the first time the event fires.
+
+The named loop's `Task` is where the briefing's intent lives:
 
 ```text
 Alice just arrived at the office. Surface the small set of things
@@ -360,23 +377,28 @@ A few framing choices worth naming:
 {}
 ```
 
-`mqtt_wake_list` returns currently registered topic→loop bindings.
-Useful before adding a new one to confirm you're not accidentally
-creating a duplicate, or after re-running the registration in a
-test cycle.
+`mqtt_wake_list` returns currently registered subscriptions —
+each entry includes a `subscription_id`, the topic filter, the
+source (`config` for site-pinned subs, `runtime` for ones added
+via `mqtt_wake_add`), and the `wake_loop` target. Useful before
+adding a new one to confirm you're not accidentally creating a
+duplicate, and **required first** when retiring one, since
+removal is by ID:
 
 ```json
 {
-  "topic": "thane/wake/alice_arrived_office"
+  "subscription_id": "01964fa3-7c2e-7d12-9a4b-1b2c3d4e5f6a"
 }
 ```
 
-`mqtt_wake_remove` retires a binding when the loop is being
-decommissioned. The HA automation can stay registered if other
-consumers need the topic; conversely, removing the HA automation
-without removing the wake subscription leaves the loop quietly
-waiting for a message that never comes. Both sides are
-independent — manage them as a pair when you can.
+`mqtt_wake_remove` retires a runtime binding by its subscription
+ID (read from `mqtt_wake_list`). **Config-defined subscriptions
+cannot be removed via this tool** — those live in the operator's
+config file and have to be retired there. The HA automation can
+stay registered if other consumers need the topic; conversely,
+removing the HA automation without removing the wake subscription
+leaves the loop quietly waiting for a message that never comes.
+Both sides are independent — manage them as a pair when you can.
 
 **Why this shape is the canonical event-bridge:**
 

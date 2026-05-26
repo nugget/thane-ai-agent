@@ -37,7 +37,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Kind:        TagKindMenu,
 	},
 	"operations": {
-		Description: "Coarse trailhead for routing, scheduling, logs, runtime state, and operational debugging. Usually leads to diagnostics, models, scheduler, loops, mqtt, session, or companion.",
+		Description: "Coarse trailhead for routing, scheduling, logs, runtime state, and operational debugging. Usually leads to diagnostics, models, scheduler, loops, session, or companion.",
 		Kind:        TagKindMenu,
 	},
 	"people": {

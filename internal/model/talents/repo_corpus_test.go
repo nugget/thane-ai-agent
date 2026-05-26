@@ -155,6 +155,13 @@ var nonToolTokens = map[string]struct{}{
 	// (request_human_decision, request_human_escalation, etc.),
 	// but `request_id` is a field name, not a tool.
 	"request_id": {},
+
+	// LoopWakeTarget field name (exact live loop ID to signal,
+	// preferred when known from loop_status). Appears in talent prose
+	// describing the wake_loop target shape. The matcher flags it
+	// because `loop_` is a real tool prefix (loop_status,
+	// loop_definition_*), but `loop_id` is a field name, not a tool.
+	"loop_id": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in
