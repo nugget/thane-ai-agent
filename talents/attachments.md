@@ -29,7 +29,7 @@ different arguments and answers different questions.
 
 ```json
 {
-  "conversation_id": "signal:+15551234567",
+  "conversation_id": "signal-15551234567",
   "content_type": "image/",
   "limit": 20
 }
@@ -44,9 +44,20 @@ cached vision description if any). All filters are optional:
 - `content_type` filters by MIME prefix — `image/` for all images,
   `application/pdf` for PDFs, `image/png` for one format
 
+`conversation_id` uses the `channel-address` shape with a hyphen
+separator: `signal-15551234567` (no plus sign, bare digits),
+`email-someone@example.com`. The plus-and-colon shape (`signal:+1...`)
+is *not* what the store uses.
+
 `limit` defaults to 20 and caps at 50. The result is metadata,
 not content — to *see* what's in an image, follow with
 `attachment_describe` using the returned UUID.
+
+**`attachment_list` does not support time-range filtering.** If
+you need attachments from a specific window, the right path is
+either: (a) scope by `conversation_id` if the window aligns with
+a conversation, or (b) list and post-filter on the returned
+timestamps. The tool exposes no `since`/`before` arguments.
 
 ## Find — `attachment_search`
 
@@ -66,8 +77,7 @@ room sensor" finds the image even when the file name is
 `IMG_4827.jpg`.
 
 When search returns nothing useful, fall back to `attachment_list`
-with filters — date range via `conversation_id`, or a content-
-type filter to narrow.
+with filters — by conversation, sender, or content type.
 
 ## Describe — `attachment_describe`
 
@@ -110,10 +120,12 @@ The catalog has no attachment-side outbound tool. Outbound
 attachments are the sending channel's responsibility — Signal
 doesn't currently support outbound attachments via tool, and
 email's send path inlines the body without an attachment
-parameter. If the request is "send Alice a photo I took," the
-right answer is usually "describe the photo in prose, point at
-the file path, ask the human to attach it through their normal
-client" — not a tool call here.
+parameter. The attachment tools also don't expose a filesystem
+path in their output; the stored bytes aren't reachable through
+this surface for re-attaching. If the request is "send Alice a
+photo I took," the right answer is to describe the photo in
+prose and ask the human to attach it through their normal
+client — not a tool call here.
 
 ## Cross-references
 

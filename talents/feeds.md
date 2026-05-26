@@ -7,10 +7,13 @@ teaser: "Open for following RSS/Atom feeds and YouTube channels — subscription
 
 Feeds is the subscription surface for RSS/Atom and YouTube channels.
 Following a feed registers it for periodic polling; new entries are
-detected and dispatched as event-source wakes to a loop (the
-built-in `media-default-handler` by default, or a named curate
-loop you pass via `wake_loop`). Three tools cover the lifecycle:
-follow, unfollow, list.
+detected and — when `notify: true` (the default) — dispatched as
+event-source wakes to a loop (the built-in `media-default-handler`
+by default, or a named curate loop you pass via `wake_loop`). With
+`notify: false` the polling still happens and the entries still
+land in the feed state, but no wake fires; the subscription
+becomes a silent record of "we've seen these." Three tools cover
+the lifecycle: follow, unfollow, list.
 
 ## The shape of this surface
 
@@ -44,6 +47,14 @@ to a custom handler loop. Omit `wake_loop` entirely to use the
 built-in `media-default-handler` — that handler exists for the
 "just notice this feed; I'll figure out what to do with entries
 later" case.
+
+`notify: false` is the third configuration mode: still poll,
+still record entries in the feed state, but do not dispatch
+wakes. Useful when you want a passive audit trail (e.g., "we
+saw these YouTube uploads this week" available via `media_feeds`
+state) without spawning loop attention on each one. The
+`media-default-handler` (or your custom `wake_loop` target) is
+still registered; it just doesn't fire while `notify: false`.
 
 When the right handler is a curate loop maintaining a digest
 document, point `wake_loop` at it directly so each new entry

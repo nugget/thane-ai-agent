@@ -8,34 +8,35 @@ teaser: "Open for proactive Signal sends — out-of-band messages or reactions, 
 Signal is a real-time channel: messages land fast, recipients see them
 without needing to check anything, and the social register is more
 conversational than email or notifications. The two tools here are
-narrow on purpose — most "send a Signal message" impulses inside an
-*inbound* Signal conversation route through the Signal bridge
-automatically (the model's final response IS the outbound message;
-no tool call needed). These tools cover the cases where the bridge
-isn't the right shape.
+narrow on purpose — the Signal bridge handles the *normal* reply
+path automatically, and these tools cover the cases where the
+bridge isn't the right shape.
 
 ## The single most important disambiguation
 
-**Inside a Signal conversation the model is already having: don't
-call `signal_send_message`.** The Signal bridge takes the model's
-final response text and sends it as the reply automatically. Using
-`signal_send_message` mid-conversation produces a *second* outbound
-message in addition to the reply — duplicate sends, confused
-recipient.
+**When the model is inside an inbound Signal conversation, the
+bridge takes the model's final response text and sends it as the
+reply automatically — no tool call needed.** That's the default
+path. The bridge also tracks tool calls: when `signal_send_message`
+is invoked during the loop, the bridge sees that and *suppresses*
+the automatic reply (no double-send). So the rule isn't "calling
+the tool causes a duplicate" — it's "the tool replaces the bridge
+reply, so be deliberate about what you actually want to send."
 
-| You want to... | Surface |
+| Situation | Right move |
 |---|---|
-| Reply to a Signal message the user just sent | Just respond — the Signal bridge sends your text as the reply |
-| Send a *proactive* Signal message (initiate outbound to someone not currently in this conversation) | `signal_send_message` |
-| React to a specific Signal message with an emoji | `signal_send_reaction` |
+| Reply to the Signal message the user just sent | Just respond as your final text — the bridge sends it |
+| Send a *proactive* message that isn't a reply (initiate outbound, follow up after the conversation ended) | `signal_send_message` |
+| Send a *second* message in addition to your reply (e.g., a long reply split for readability) | First `signal_send_message`, then either let the bridge reply or call again |
+| React to a specific message with an emoji | `signal_send_reaction` |
 | Alert-shaped notification (button responses, escalation) | `notifications` — not signal |
 | Threaded correspondence with attachments and history | `email` — not signal |
 
-The cleanest test: *am I in a Signal conversation right now, and is
-this my reply to what was just said?* If yes, just answer. If no
-(proactive send, sending to someone other than the current
-correspondent, follow-up after the conversation ended), the tool is
-the right path.
+The cleanest test: *if I do nothing extra, will the bridge send the
+right thing?* If yes, just answer and let the bridge handle it. If
+no — the message goes to a different recipient, or you need to send
+multiple things, or you want to send *before* the final reply text
+— `signal_send_message` is the right path.
 
 ## Constants
 
