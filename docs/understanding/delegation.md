@@ -21,12 +21,12 @@ User: "Set the office Hue Go to teal"
 
 Orchestrator (Opus):
   -> "Delegate with the ha capability tag: search for 'hue go' entities in office,
-     call light.turn_on with rgb_color [0,200,180], verify with get_state"
+     call light.turn_on with rgb_color [0,200,180], verify with ha_get_state"
 
 Delegate (local 20B model):
   -> search_entities("hue go") -> found light.office_hue_go
-  -> call_service(light.turn_on, light.office_hue_go, rgb=[0,200,180])
-  -> get_state(light.office_hue_go) -> confirmed ON, correct color
+  -> ha_call_service(light.turn_on, light.office_hue_go, rgb=[0,200,180])
+  -> ha_get_state(light.office_hue_go) -> confirmed ON, correct color
   -> return result to orchestrator
 
 Orchestrator: "Done - your Hue Go is now teal at full brightness."
@@ -69,8 +69,8 @@ delegation prompts.
 `delegate-hints.md` contains:
 - Which capability tags and tool families exist
 - Patterns to follow (search, act, verify for HA)
-- Anti-patterns to avoid (multi-entity delegations, `list_entities` abuse)
-- Known quirks (ha-mcp `return_response` errors, silent `call_service` failures)
+- Anti-patterns to avoid (multi-entity delegations, `ha_list_entities` abuse)
+- Known quirks (ha-mcp `return_response` errors, silent `ha_call_service` failures)
 
 The frontier model writes precise delegation instructions without ever seeing
 the tool schemas — it knows the tools exist from the talent, and it knows the
@@ -163,9 +163,9 @@ the normal execution path.
 Delegates are literal executors, not creative problem-solvers. The more
 specific the prompt, the fewer iterations wasted:
 
-**Good:** "Use `find_entity('office hue go')` to get the entity_id, then
-`call_service('light.turn_on', entity_id, rgb_color=[0,200,180])`, then
-`get_state(entity_id)` to verify."
+**Good:** "Use `ha_find_entity('office hue go')` to get the entity_id, then
+`ha_call_service('light.turn_on', entity_id, rgb_color=[0,200,180])`, then
+`ha_get_state(entity_id)` to verify."
 
 **Bad:** "Find the Hue Go light in the office and make it teal."
 

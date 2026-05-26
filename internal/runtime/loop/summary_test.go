@@ -41,7 +41,7 @@ func TestReportAgentRun_PopulatesSummary(t *testing.T) {
 		ContextWindow:  200000,
 		ToolsUsed:      map[string]int{"archive_search": 2, "remember_fact": 1},
 		ActiveTags:     []string{"forge", "ha"},
-		EffectiveTools: []string{"get_state", "forge_issue_list"},
+		EffectiveTools: []string{"ha_get_state", "forge_issue_list"},
 		LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
 			{Tag: "forge", Description: "Forge tools", ToolCount: 8},
 		},
@@ -70,8 +70,8 @@ func TestReportAgentRun_PopulatesSummary(t *testing.T) {
 	if active, ok := got["active_tags"].([]string); !ok || len(active) != 2 || active[0] != "forge" || active[1] != "ha" {
 		t.Errorf("active_tags = %#v, want [forge ha]", got["active_tags"])
 	}
-	if tools, ok := got["effective_tools"].([]string); !ok || len(tools) != 2 || tools[0] != "get_state" || tools[1] != "forge_issue_list" {
-		t.Errorf("effective_tools = %#v, want [get_state forge_issue_list]", got["effective_tools"])
+	if tools, ok := got["effective_tools"].([]string); !ok || len(tools) != 2 || tools[0] != "ha_get_state" || tools[1] != "forge_issue_list" {
+		t.Errorf("effective_tools = %#v, want [ha_get_state forge_issue_list]", got["effective_tools"])
 	}
 	if caps, ok := got["loaded_capabilities"].([]toolcatalog.LoadedCapabilityEntry); !ok || len(caps) != 1 || caps[0].Tag != "forge" {
 		t.Errorf("loaded_capabilities = %#v, want forge entry", got["loaded_capabilities"])

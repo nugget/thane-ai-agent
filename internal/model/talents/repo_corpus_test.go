@@ -134,7 +134,7 @@ var nonToolTokens = map[string]struct{}{
 	// because neither `next` (first segment) nor `tags` (second
 	// segment) appears in the catalog's prefix/second-segment sets.
 	// `tags_all` is unlucky: its second segment `all` appears as
-	// the second segment of `export_all_vcf`, so the matcher flags
+	// the second segment of `contact_export_all_vcf`, so the matcher flags
 	// the shape as tool-family-ish. Explicit allowlist entry keeps
 	// the matcher's heuristics loose for real-tool catches without
 	// flagging a documented frontmatter key.

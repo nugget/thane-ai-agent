@@ -59,7 +59,7 @@ When HA sends a conversation to Thane's Ollama-compatible API, Thane:
 ### REST API
 
 State queries, service calls, template rendering. Used by native HA tools
-(`get_state`, `find_entity`, `call_service`, `control_device`). This is
+(`ha_get_state`, `ha_find_entity`, `ha_call_service`, `ha_control_device`). This is
 the workhorse for most HA interactions.
 
 ### WebSocket API
