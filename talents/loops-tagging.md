@@ -19,23 +19,25 @@ There are two always-X concepts and they're often confused:
   always-active in their site config. They load into every
   conversation and every loop iteration by default, *in addition to*
   whatever the loop's own `tags` array specifies. Site-specific —
-  one deployment's always-active set isn't another's. Inspect with
-  `list_loaded_capabilities` (entries with `always_active: true`).
+  one deployment's always-active set isn't another's. The `##
+  Active Capabilities` section of your system prompt lists what's
+  currently loaded with `always_active: true` flagged per entry; no
+  tool call needed to see it.
 
 - **Always-available tools** are a small set of tools that survive
   capability-tag filtering regardless of the loop's tag scope:
   `activate_capability`, `deactivate_capability`, `reset_capabilities`,
-  `list_loaded_capabilities`, `inspect_capability`, `activate_lens`,
-  `deactivate_lens`, `list_lenses`, `thane_now`, `thane_assign`,
-  `request_core_attention`, `logs_query`. These are bootstrap and
-  escape primitives — every loop, however tightly scoped, has them.
-  Their Godoc explains why each one earns the slot.
+  `inspect_capability`, `activate_lens`, `deactivate_lens`,
+  `list_lenses`, `thane_now`, `thane_assign`, `request_core_attention`,
+  `logs_query`. These eleven are bootstrap and escape primitives —
+  every loop, however tightly scoped, has them. Their Godoc explains
+  why each one earns the slot.
 
 A loop with `tags: []` is deployment-dependent, and the trap is that
 the empty case isn't a single behavior:
 
 - **Operator has always-active tags** → tag filtering kicks in. The
-  loop sees the always-active tools plus the 12 always-available
+  loop sees the always-active tools plus the 11 always-available
   primitives. Scoped, predictable.
 - **No always-active tags at this deployment** → `tags: []` falls
   through to "no filtering at all," and the loop sees the *entire*
@@ -106,19 +108,22 @@ which loop family is doing the launching:
   the loop ends up with no HA tools at all. The catalog tag
   description spells this out.
 
-## Discovering what a tag opens
+## Discovering what's loaded vs. what a tag would open
 
-Before adding a tag you haven't used before, inspect it:
+These are two different questions with two different answers.
 
-- `inspect_capability(tag: "<tag>")` — returns the per-tool breakdown
-  with source attribution (native, mcp, overlay) and whether the
-  operator overlay has excluded any tools. Use this to answer "what
-  does adding `forge` actually surface?" without guessing.
+**What's loaded right now?** Read your own system prompt. The `##
+Active Capabilities` section is rendered into every prompt (top-loop
+and delegate) with each loaded tag's `description`, `tool_count`,
+`always_active`, `protected`, and `ad_hoc` flags. No tool call
+needed — the answer is already in your context. Reaching for a tool
+to retrieve information you already have just burns a turn.
 
-- `list_loaded_capabilities` — shows what's already loaded in your
-  current scope, including which entries are always-active. Useful
-  for telling "this is already covered" from "I need to add this
-  tag."
+**What would adding a new tag pull in?** Call `inspect_capability(tag:
+"<tag>")`. Returns the per-tool breakdown with source attribution
+(native, mcp, overlay) and whether the operator overlay has excluded
+any tools. Use this before adding an unfamiliar tag — the catalog is
+the source of truth on what's actually behind that name.
 
 When in doubt, the empirical answer beats the remembered one — a
 running loop that worked before is better evidence than your model of

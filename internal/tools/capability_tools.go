@@ -258,16 +258,31 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 
 // registerListLoadedCapabilities registers the list_loaded_capabilities tool.
 //
-// Always-available rationale: self-introspection. The model needs to
-// be able to ask "what's currently loaded" without that answer
-// depending on what's loaded. Especially important for delegates and
-// service loops that inherit a narrowed surface and need to discover
-// whether a tag they want is already in scope.
+// NOT always-available. This tool returns a strict subset of the data
+// already rendered into every prompt under "## Active Capabilities"
+// (see loop.go:1090 → toolcatalog.RenderLoadedCapabilitySummary). The
+// prompt section carries tag, description, tool_count, always_active,
+// protected, ad_hoc, and context per loaded tag; this tool returns
+// just tag, always_active, protected, ad_hoc — so every call burns a
+// tool turn to retrieve less than the model already has in its
+// context.
+//
+// The five-way repair shim at loop.go:1302 (list_capabilities,
+// loaded_capabilities, active_capabilities, get_loaded_capabilities,
+// list_loaded_capabilities) is the smoking gun: the model has been
+// reaching for this tool repeatedly under different names because it
+// looked like the canonical handle for capability introspection. The
+// fix is the prompt section, not a more findable tool.
+//
+// Demoted out of always-available as a stepping stone toward full
+// removal. Keep the registration in place until the repair shim
+// aliases retire too, so the tool still loads when an unfiltered
+// scope happens to include it. The model-facing answer to "what's
+// loaded?" is the prompt section.
 func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "list_loaded_capabilities",
-		AlwaysAvailable: true,
-		Description:     "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
+		Name:        "list_loaded_capabilities",
+		Description: "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

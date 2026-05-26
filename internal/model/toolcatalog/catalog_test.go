@@ -46,11 +46,16 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 }
 
 func TestBuiltinToolCatalogIncludesAlwaysAvailableTools(t *testing.T) {
+	// The canonical always-available set: 11 tools that survive
+	// capability-tag filtering regardless of scope. list_loaded_capabilities
+	// was previously a 12th member but was demoted because its output is
+	// a strict subset of the "## Active Capabilities" section already
+	// rendered into every prompt (see capability_tools.go's
+	// registerListLoadedCapabilities Godoc for the full rationale).
 	names := []string{
 		"activate_capability",
 		"deactivate_capability",
 		"reset_capabilities",
-		"list_loaded_capabilities",
 		"inspect_capability",
 		"activate_lens",
 		"deactivate_lens",
