@@ -226,7 +226,7 @@ type Config struct {
 	// Use this for deliberate operator overrides or custom tags. Built-in
 	// tags usually do not need entries here. Tags marked core are
 	// loaded unconditionally. Other tags are activated via
-	// activate_capability/deactivate_capability tools, runtime source
+	// activate_tag/deactivate_tag tools, runtime source
 	// policy, or channel-pinned configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
@@ -1224,7 +1224,7 @@ type CapabilityTagConfig struct {
 	// Protected tags are reserved for runtime trust and environment
 	// assertions (for example an owner-authenticated conversation).
 	// They are visible to the model when active, but cannot be toggled
-	// via activate_capability or deactivate_capability.
+	// via activate_tag or deactivate_tag.
 	Protected bool `yaml:"protected"`
 
 	// Tools is the resolved tool membership populated by the resolver
@@ -1497,7 +1497,7 @@ type MCPServerConfig struct {
 	// Tags lists capability tags assigned to every bridged MCP tool from
 	// this server unless a per-tool override replaces them. Use this to
 	// attach MCP tools to existing capability tags so the model gates
-	// them behind activate_capability the same as native tools.
+	// them behind activate_tag the same as native tools.
 	Tags []string `yaml:"tags"`
 
 	// Tools contains optional metadata overrides keyed by the raw MCP tool

@@ -95,12 +95,12 @@ func TestRepairToolCall_RepairsInventedCapabilityToolName(t *testing.T) {
 	}
 	foundActivationResult := false
 	for _, m := range mock.calls[1].Messages {
-		if m.Role == "tool" && strings.Contains(m.Content, "Capability **forge** activated.") {
+		if m.Role == "tool" && strings.Contains(m.Content, "Tag **forge** activated.") {
 			foundActivationResult = true
 			break
 		}
 	}
 	if !foundActivationResult {
-		t.Fatalf("recovery call messages = %#v, want repaired activate_capability tool result", mock.calls[1].Messages)
+		t.Fatalf("recovery call messages = %#v, want repaired activate_tag tool result", mock.calls[1].Messages)
 	}
 }

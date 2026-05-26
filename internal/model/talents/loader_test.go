@@ -431,8 +431,8 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Preamble text.
-	if !strings.Contains(talent.Content, "activate_capability") {
-		t.Error("manifest should mention activate_capability in preamble")
+	if !strings.Contains(talent.Content, "activate_tag") {
+		t.Error("manifest should mention activate_tag in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
 		t.Error("manifest should mention delegate in preamble")
@@ -455,19 +455,19 @@ func TestGenerateManifest(t *testing.T) {
 				KBArticles int  `json:"kb_articles"`
 				Live       bool `json:"live"`
 			} `json:"context"`
-		} `json:"capability_menu"`
+		} `json:"tag_menu"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		t.Fatalf("manifest JSON should be valid: %v\nJSON: %s", err, jsonStr)
 	}
-	if parsed.Kind != "capability_menu" {
-		t.Fatalf("kind = %q, want capability_menu", parsed.Kind)
+	if parsed.Kind != "tag_menu" {
+		t.Fatalf("kind = %q, want tag_menu", parsed.Kind)
 	}
 
 	// Configured tag: ha
 	ha, ok := parsed.Capabilities["ha"]
 	if !ok {
-		t.Fatal("missing ha capability")
+		t.Fatal("missing ha tag")
 	}
 	if ha.Status != "core" {
 		t.Errorf("ha status = %q, want core", ha.Status)

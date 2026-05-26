@@ -157,14 +157,14 @@ func TestBuiltinToolCatalogIncludesCoreTools(t *testing.T) {
 	// The canonical core set: 11 tools that survive
 	// capability-tag filtering regardless of scope. list_loaded_capabilities
 	// was previously a 12th member but was demoted because its output is
-	// a strict subset of the "## Active Capabilities" section already
+	// a strict subset of the "## Active Tags" section already
 	// rendered into every prompt (see capability_tools.go's
 	// registerListLoadedCapabilities Godoc for the full rationale).
 	names := []string{
-		"activate_capability",
-		"deactivate_capability",
-		"reset_capabilities",
-		"inspect_capability",
+		"activate_tag",
+		"deactivate_tag",
+		"reset_tags",
+		"inspect_tag",
 		"activate_lens",
 		"deactivate_lens",
 		"list_lenses",
@@ -253,17 +253,17 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Kind: TagKindMenu},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
-	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
-		t.Fatalf("manifest = %q, want capability_menu kind", manifest)
+	if !strings.Contains(manifest, "\"kind\":\"tag_menu\"") {
+		t.Fatalf("manifest = %q, want tag_menu kind", manifest)
 	}
-	if !strings.Contains(manifest, "\"activate\":\"activate_capability\"") {
-		t.Fatalf("manifest = %q, want activate_capability example", manifest)
+	if !strings.Contains(manifest, "\"activate\":\"activate_tag\"") {
+		t.Fatalf("manifest = %q, want activate_tag example", manifest)
 	}
-	if !strings.Contains(manifest, "\"reset\":\"reset_capabilities\"") {
-		t.Fatalf("manifest = %q, want reset_capabilities example", manifest)
+	if !strings.Contains(manifest, "\"reset\":\"reset_tags\"") {
+		t.Fatalf("manifest = %q, want reset_tags example", manifest)
 	}
-	if !strings.Contains(manifest, "\"inspect\":\"inspect_capability\"") {
-		t.Fatalf("manifest = %q, want inspect_capability example", manifest)
+	if !strings.Contains(manifest, "\"inspect\":\"inspect_tag\"") {
+		t.Fatalf("manifest = %q, want inspect_tag example", manifest)
 	}
 	if !strings.Contains(manifest, "\"delegate\":\"thane_now\"") {
 		t.Fatalf("manifest = %q, want thane_now example", manifest)
@@ -295,8 +295,8 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	if !strings.Contains(desc, "coarse-to-fine menu") {
 		t.Fatalf("description = %q, want coarse-to-fine guidance", desc)
 	}
-	if !strings.Contains(desc, "`reset_capabilities`") {
-		t.Fatalf("description = %q, want reset_capabilities exact tool name", desc)
+	if !strings.Contains(desc, "`reset_tags`") {
+		t.Fatalf("description = %q, want reset_tags exact tool name", desc)
 	}
 	if !strings.Contains(desc, "**development**") {
 		t.Fatalf("description = %q, want development menu bullet", desc)

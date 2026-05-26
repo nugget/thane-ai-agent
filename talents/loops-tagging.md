@@ -15,17 +15,16 @@ sleep envelope.
 
 Two things load regardless of your `tags` array:
 
-- **Core tools**: `activate_capability`, `deactivate_capability`,
-  `reset_capabilities`, `inspect_capability`, `activate_lens`,
+- **Core tools**: `activate_tag`, `deactivate_tag`,
+  `reset_tags`, `inspect_tag`, `activate_lens`,
   `deactivate_lens`, `list_lenses`, `thane_now`, `thane_assign`,
   `request_core_attention`, `logs_query`. Every loop has these
   regardless of scope.
 
-- **Core tags.** Some capability tags load automatically and stay
-  loaded — you can't deactivate them. Your system prompt's `##
-  Active Capabilities` section lists what's loaded with `core: true`
-  flagged per entry; trust that as ground truth for "what's already
-  in scope."
+- **Core tags.** Some tags load automatically and stay
+  loaded — you can't deactivate them. Your system prompt's `## Active
+  Tags` section lists what's loaded with `core: true` flagged per
+  entry; trust that as ground truth for "what's already in scope."
 
 A loop with `tags: []` is unreliable — depending on what's already
 loaded, you may end up with a narrow surface or with the entire tool
@@ -57,8 +56,8 @@ which loop family is doing the launching:
 
 - **`thane_now` / `thane_assign`** — `inherit_caller_tags` defaults to
   true, so omitting `tags:` inherits the caller's currently-loaded
-  capabilities. Pass `inherit_caller_tags: false` along with an
-  explicit `tags` array when you need a clean scope.
+  tags. Pass `inherit_caller_tags: false` along with an explicit
+  `tags` array when you need a clean scope.
 - **`thane_curate` / `spawn_loop` / `loop_definition_launch`** — no
   caller-tag inheritance. Omitting `tags:` behaves the same as `tags:
   []` (unreliable, see above). Name the tags explicitly for service
@@ -91,13 +90,13 @@ which loop family is doing the launching:
 These are two different questions with two different answers.
 
 **What's loaded right now?** Read your own system prompt. The `##
-Active Capabilities` section is rendered into every prompt with each
-loaded tag's `description`, `tool_count`, `core`, `protected`, and
-`ad_hoc` flags. No tool call needed — the answer is already in your
-context. Reaching for a tool to retrieve information you already have
-just burns a turn.
+Active Tags` section is rendered into every prompt with each loaded
+tag's `description`, `tool_count`, `core`, `protected`, and `ad_hoc`
+flags. No tool call needed — the answer is already in your context.
+Reaching for a tool to retrieve information you already have just
+burns a turn.
 
-**What would adding a new tag pull in?** Call `inspect_capability(tag:
+**What would adding a new tag pull in?** Call `inspect_tag(tag:
 "<tag>")`. Returns the per-tool breakdown with source attribution
 (native, mcp, overlay). Use this before adding an unfamiliar tag —
 the catalog is the source of truth on what's actually behind that

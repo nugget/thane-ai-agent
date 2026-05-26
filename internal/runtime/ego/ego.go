@@ -189,5 +189,5 @@ var egoExcludeTools = append([]string{
 	"exec",
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
-	"activate_capability", "deactivate_capability",
+	"activate_tag", "deactivate_tag",
 }, tools.DirectHumanEgressToolNames()...)

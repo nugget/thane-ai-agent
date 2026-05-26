@@ -60,7 +60,7 @@ func (k TagKind) IsMenu() bool {
 // time instead of being separately-declared spec entries.
 type BuiltinTagSpec struct {
 	// Description is the short, model-facing summary rendered into
-	// the capability menu and inspect_capability output.
+	// the tag menu and inspect_tag output.
 	Description string
 
 	// Core tags are pinned in every scope by operator configuration.
@@ -76,8 +76,8 @@ type BuiltinTagSpec struct {
 	// Protected.
 	Kind TagKind
 
-	// Protected tags cannot be toggled via activate_capability /
-	// deactivate_capability — they're reserved for runtime trust
+	// Protected tags cannot be toggled via activate_tag /
+	// deactivate_tag — they're reserved for runtime trust
 	// assertions (e.g. owner-authenticated conversations, channel
 	// affordance tags asserted by the integration). Orthogonal to
 	// Kind: a tag can be a protected leaf (`message_channel`,
@@ -96,9 +96,8 @@ type BuiltinTagSpec struct {
 	// tag. Most relevant for backward-compatible renames or
 	// operator-friendly synonyms (e.g. `homeassistant` resolves to
 	// `ha`). Resolution happens at every boundary the tag enters the
-	// system: activate_capability / inspect_capability calls,
-	// channel-tag binding, operator YAML. Internally only canonical
-	// names exist.
+	// system: activate_tag / inspect_tag calls, channel-tag binding,
+	// operator YAML. Internally only canonical names exist.
 	Aliases []string
 }
 
@@ -134,7 +133,7 @@ type CapabilitySurface struct {
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
-	"activate_capability":         {CanonicalID: "native:activate_capability", Source: NativeToolSource},
+	"activate_tag":                {CanonicalID: "native:activate_tag", Source: NativeToolSource},
 	"activate_lens":               {CanonicalID: "native:activate_lens", Source: NativeToolSource},
 	"archive_range":               {CanonicalID: "native:archive_range", Source: NativeToolSource, Tags: []string{"archive"}},
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, Tags: []string{"archive"}},
@@ -149,7 +148,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
-	"deactivate_capability":       {CanonicalID: "native:deactivate_capability", Source: NativeToolSource},
+	"deactivate_tag":              {CanonicalID: "native:deactivate_tag", Source: NativeToolSource},
 	"deactivate_lens":             {CanonicalID: "native:deactivate_lens", Source: NativeToolSource},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, Tags: []string{"documents"}},
@@ -226,8 +225,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
-	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
-	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
+	"inspect_tag":                 {CanonicalID: "native:inspect_tag", Source: NativeToolSource},
+	"reset_tags":                  {CanonicalID: "native:reset_tags", Source: NativeToolSource},
 	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, Tags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"lookup_contact":              {CanonicalID: "native:lookup_contact", Source: NativeToolSource, Tags: []string{"contacts"}},

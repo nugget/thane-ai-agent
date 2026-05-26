@@ -27,7 +27,7 @@ func TestBuildSystemPrompt_ActiveCapabilitiesUseSharedSurface(t *testing.T) {
 	})
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
-	if !strings.Contains(prompt, "## Active Capabilities") {
+	if !strings.Contains(prompt, "## Active Tags") {
 		t.Fatalf("prompt missing Active Capabilities section: %s", prompt)
 	}
 	if !strings.Contains(prompt, "\"kind\":\"loaded_capabilities\"") {
@@ -52,7 +52,7 @@ func TestBuildSystemPrompt_ActiveCapabilitiesEmptyStateUsesSharedSurface(t *test
 	})
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
-	if !strings.Contains(prompt, "## Active Capabilities") {
+	if !strings.Contains(prompt, "## Active Tags") {
 		t.Fatalf("prompt missing Active Capabilities section: %s", prompt)
 	}
 	if !strings.Contains(prompt, "\"kind\":\"loaded_capabilities\"") {

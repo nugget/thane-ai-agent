@@ -10,8 +10,8 @@ import (
 )
 
 // CapabilityTagStore persists activated capability tags per conversation.
-// Tags activated via activate_capability are saved at the end of each
-// Run and restored at the start of the next Run for the same conversation.
+// Tags activated via activate_tag are saved at the end of each Run
+// and restored at the start of the next Run for the same conversation.
 type CapabilityTagStore interface {
 	// LoadTags returns the previously activated tags for a conversation.
 	// Returns nil on missing/empty.
@@ -73,7 +73,7 @@ func newCapabilityScope(capTags map[string]config.CapabilityTagConfig, globalLen
 	// that apply to all conversations.
 	for _, lens := range globalLenses {
 		s.active[lens] = true
-		s.pinned[lens] = true // protect from deactivate_capability
+		s.pinned[lens] = true // protect from deactivate_tag
 	}
 	return s
 }

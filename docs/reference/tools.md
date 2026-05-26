@@ -8,7 +8,7 @@ choices interact with prompt caching.
 
 Tools under the **Core tools** heading below are not tag-gated and
 load on every turn. Everything else loads only when a relevant
-capability is activated, either by the model via `activate_capability`
+capability is activated, either by the model via `activate_tag`
 or via configured core tags.
 
 The authoritative source for which tool is tagged how is
@@ -47,10 +47,10 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `activate_capability` | Activate a capability tag for the current conversation. |
-| `deactivate_capability` | Deactivate a capability tag for the current conversation. |
-| `reset_capabilities` | Return the current conversation to its baseline capability state. |
-| `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
+| `activate_tag` | Activate a capability tag for the current conversation. |
+| `deactivate_tag` | Deactivate a capability tag for the current conversation. |
+| `reset_tags` | Return the current conversation to its baseline capability state. |
+| `inspect_tag` | Inspect one capability tag's active and excluded tool surface. |
 | `activate_lens` | Activate a persistent global behavioral lens. |
 | `deactivate_lens` | Deactivate a global behavioral lens. |
 | `list_lenses` | List currently active behavioral lenses. |
@@ -97,7 +97,7 @@ clear forecast fetching for that subscription.
 ## `ha` — Home Assistant state and control
 
 `homeassistant` is an alias that resolves to `ha`. Either name works at
-`activate_capability`; the canonical name `ha` is what flows through the
+`activate_tag`; the canonical name `ha` is what flows through the
 scope and prompt rendering.
 
 

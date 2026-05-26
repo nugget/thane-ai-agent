@@ -316,8 +316,8 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					}
 				} else {
 					iterLog.Debug("tool exec done", "tool", toolName, "result_len", len(result))
-					if toolName != "activate_capability" &&
-						toolName != "deactivate_capability" &&
+					if toolName != "activate_tag" &&
+						toolName != "deactivate_tag" &&
 						toolName != "activate_lens" &&
 						toolName != "deactivate_lens" &&
 						toolName != "list_lenses" {
