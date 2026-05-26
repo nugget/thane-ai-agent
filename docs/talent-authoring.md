@@ -178,6 +178,111 @@ sequential ("first do A, then do B") rather than alternative
 ("either A or B"). Flat prose with a numbered list is the right
 shape.
 
+## Leaf grammar
+
+The "multi-node vs flat" decision sits inside a broader grammar for
+what a *well-formed leaf talent* looks like. The grammar was
+extracted from the corpus during the
+[tool-and-talent audit](tool-and-talent-audit.md) — each talent in
+the repo evolved its own shape independently before the grammar was
+named; today new talents should follow these conventions.
+
+### Shape by surface size and fork-honesty
+
+| Tool count | Real fork? | Shape |
+|---|---|---|
+| 0 (context-only) | n/a | Pure posture — what does it mean that this is active |
+| 1–2 | n/a | Flat doctrine, safety/judgment-focused |
+| 3–4 | No (mechanical CRUD) | Flat doctrine listing tool-shape per case |
+| 3–4 | Yes (real choice) | Multi-node tree, small (e.g., `archive`'s text/time/session/list) |
+| 5+ | Yes | Multi-node tree, often with sub-trailheads (e.g., `documents`' mutate sub-tree) |
+
+The cutoff isn't really about count — it's about whether the tools
+split on a *real model-facing decision*. Three CRUD tools (add /
+list / remove) are mechanical and stay flat. Three tools that fork
+on different model intents (text-search vs time-range vs
+specific-id) want multi-node.
+
+### Required sections
+
+Every leaf-talent — flat or multi-node — should carry:
+
+1. **Frontmatter**: `tags: [<leaf>]`. In a multi-node tree, **every
+   node** (root and each sub-leaf) carries `kind: trailhead` — that
+   way each node sorts as a trailhead and loads first when its tag
+   activates, instead of getting buried behind unrelated doctrine.
+   Flat single-node leaves omit `kind:`.
+2. **One-paragraph framing**: what is the model doing when it lands
+   here? This is what the trailhead-bullet teaser compresses from.
+3. **Trigger conditions**: 1–3 sentences on when to reach for this
+   leaf vs siblings (the disqualification half of the teaser).
+4. **Body** (flat or multi-node per the table above).
+5. **Cross-references**: a designated section near the end naming
+   sibling leaves and the trigger to bounce. Cross-reference density
+   is high — every multi-tool leaf in the corpus cites 2+ siblings.
+6. **Posture / safety / gotchas**: explicit, not buried in prose.
+   Especially for action-shaped surfaces (`shell`, `ha_control`,
+   `email_compose`, `doc_mutate`, automation authoring).
+
+### The two-talent split (special case)
+
+A small number of leaves benefit from splitting *posture* and
+*examples* into separate talents that share a tag. The canonical
+case is `loops`:
+
+- `loops.md` — flat doctrine, posture about lifecycle and bi-directionality
+- `loops-examples.md` — multi-node tree, concrete JSON launch patterns
+- `loops-tagging.md` — meta-doctrine on tag-set selection at launch
+
+Other candidates where the split makes sense: large surfaces where
+the posture is rich enough to drown the routing if combined (or
+vice versa). Default to single-talent; split only when the combined
+file becomes unreadable.
+
+### Cross-references convention
+
+Within a leaf-talent's body, a `## Cross-references` section near
+the end names sibling leaves with one-sentence triggers:
+
+> ## Cross-references
+>
+> - For sustained entity attention across loop iterations, bounce
+>   to `awareness` and subscribe — don't poll `get_state` from a
+>   loop's turn budget when a subscription will keep it current
+>   for free.
+
+The trigger condition matters more than the leaf name. "Bounce to
+`awareness`" tells the model nothing; "bounce to `awareness` when
+the same entity will matter across more than one turn" tells the
+model when to do it.
+
+In a multi-node tree, each leaf node carries its own
+cross-references, not just the root. Siblings of `ha_control`
+include `ha_automate` (one-shot vs durable rule) and `notifications`
+(verify-then-tell), which are different from the root's siblings
+(`awareness`, `notifications`, `loops`).
+
+### Worked examples
+
+- [`ha.md`](../talents/ha.md) — three-branch multi-node tree
+  (observe / control / automate), heavy safety doctrine in
+  `ha_control`, cross-references in every node.
+- [`documents.md`](../talents/documents.md) — four-branch tree with
+  a sub-trailhead under `documents_mutate`; the
+  read/discover/mutate/curate split is the canonical operation-
+  shape decomposition.
+- [`forge.md`](../talents/forge.md) — four-branch tree organized
+  around the model's anchor (`known_issue` / `known_pr` /
+  `discover` / `review_loop`); the review_loop branch is the
+  canonical workflow-shape leaf.
+- [`loops.md`](../talents/loops.md) +
+  [`loops-examples.md`](../talents/loops-examples.md) — the two-
+  talent split: posture and concrete-patterns each get their own
+  file under the same tag.
+- [`notifications.md`](../talents/notifications.md) — flat doctrine
+  for a leaf where the choice is posture ("speak up for / stay
+  silent for"), not routing.
+
 ## Teaser-writing craft
 
 The `teaser:` field is high-stakes copy. It's what the model sees when
