@@ -62,6 +62,27 @@ while preserving semantic content. Compaction happens automatically when
 a conversation approaches context limits. The LLM generates the summary,
 preserving decisions, facts, and preferences.
 
+### Configured Tags
+
+A read-only snapshot of the tag inputs declared at loop launch — the
+loop spec's `Tags` plus any request-base or request-override
+`InitialTags` — frozen so dashboards and forensic event payloads can
+compare "what was configured" against "what became active." Three
+adjacent concepts to keep distinct:
+
+- **`Spec.Tags`** — what the loop definition declares.
+- **`ActiveTags`** (on the run's `Response`) — what became active
+  during the run after the model's activations and deactivations.
+- **Configured tags** — the frozen launch-time snapshot, surfaced on
+  `ToolingState.ConfiguredTags`.
+
+The forensic motivation: when a loop's runtime active set diverges
+from what the spec declared, the configured-tag snapshot is the
+read-only baseline that surfaces "what the operator asked for vs.
+what happened." See [The Tag System](tag-system.md) (concept matrix
+row "Configured tags") and `internal/runtime/loop/doc.go` for where
+the snapshot gets taken in the lifecycle.
+
 ### Context Layer
 
 One of the distinct sections of the system prompt, each with a specific

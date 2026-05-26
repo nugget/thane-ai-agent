@@ -66,9 +66,10 @@ boundaries, that's a smell.
 [pr-813]: https://github.com/nugget/thane-ai-agent/pull/813
 
 The glossary in [docs/understanding/glossary.md](glossary.md) covers
-the user-facing definitions of *Capability Tag*, *Lens*, *Talent*,
-and *Routing Profile*. This doc is the technical companion that adds
-the disambiguations the glossary doesn't need to make.
+the user-facing definitions of *Capability Tag*, *Configured Tags*,
+*Lens*, *Talent*, and *Routing Profile*. This doc is the technical
+companion that adds the disambiguations the glossary doesn't need to
+make.
 
 ## The lifecycle
 
@@ -140,6 +141,40 @@ The combinatorics are deliberate but easy to mis-compose. Always-on
 preservation is at the *tool* level; always-on tagging is at the
 *tag* level; explicit exclusions can override either. When in doubt,
 read the test for the case you're touching.
+
+### Why Tool.Core exists
+
+`Tool.Core` is the one knob in the table above that operates at the
+*tool* level rather than the *tag* level — it exempts a tool from
+`FilterByTags` so the tool stays in the catalog even when its tags
+(if any) aren't active. Two distinct needs ride this single flag:
+
+**Meta-tools must be reachable from any scope.** `tag_activate`,
+`tag_deactivate`, `tag_inspect`, `tag_reset`, and the other
+tag-navigation tools are themselves part of the contract that makes
+tags safe to mutate at runtime: a model that wanders into a
+too-restrictive tag set has to be able to widen scope from where it
+stands. If those tools were tag-gated, the activation prompt would
+become the only widening path, and runtime tag mutation would lose
+its symmetry. Marking the navigation tools `Core` keeps the door
+open in both directions.
+
+**Request-scoped `RuntimeTools` join the catalog via this flag,
+not via tags.** When the agent loop calls
+`WithRuntimeTools(req.RuntimeTools)` it inserts request-provided
+tools into the registry view with `Core = true` automatically. The
+contract for `RuntimeTools` is "this request provides these tools;
+they're available for this run regardless of the active tag set" —
+which is exactly what `Core` delivers. Treating them as `Core` is
+the mechanism; the request is the source of truth.
+
+The flag is intentionally not configurable from outside the Go
+source. A tag-system that let arbitrary tools opt out of filtering
+would defeat the point of the filter. New tools that genuinely
+need this property declare `Core: true` at registration, and the
+review for "is this really a third use case?" lives at the code
+review, not in config. If you find yourself reaching for it for a
+third reason, that's a smell — read this section first.
 
 ### The two-layer delegate exclusion (this is load-bearing)
 
@@ -260,25 +295,13 @@ code; some are queued as cleanup work.
    "combine these tag slices and dedup." A unified helper would
    reduce drift risk. Tracked as a follow-up.
 
-3. **`configured_tags` is undocumented user-facing.** Introduced in
-   [#813][pr-813] for telemetry/forensics, but the concept lives in a
-   field comment. Worth a glossary entry once we're sure the
-   user-facing surface is stable.
-
-4. **Test coverage is path-asymmetric.** Today's bug ([#833][pr-833])
+3. **Test coverage is path-asymmetric.** Today's bug ([#833][pr-833])
    existed because the empty-scope delegate path was tested but the
    tag-scoped path wasn't. Several other branch-condition pairs in
    [`prepareExecution`][prepare-execution] have similar asymmetry —
    worth a sweep.
 
-5. **Core has no architectural doc.** The flag exists on
-   `Tool`, the docstring says "Survives capability tag filtering,"
-   but the *why* (meta-tools must survive the filter so the model can
-   navigate, runtime tools join via this mechanism) lives in scattered
-   comments. A short note in this doc or in `tools/doc.go` would
-   close the gap.
-
-6. **Two-layer exclusion has no helper.** Documented above, but
+4. **Two-layer exclusion has no helper.** Documented above, but
    currently expressed only as "remember to do this in both places."
    A helper that returns both the in-process filter and the
    request-level exclusion list would make the invariant
