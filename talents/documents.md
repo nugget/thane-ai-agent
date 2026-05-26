@@ -33,12 +33,23 @@ Activate the next tag based on the shape of the work:
   `documents_curate`. The two-step `doc_intake` → `doc_commit` pipeline
   that decides title/path/tags before writing.
 
-## Stay in the abstraction
+## The single most important disambiguation
+
+**`documents` is the managed-document layer; `files` is raw
+filesystem access.** The two share the word "file" but do different
+jobs. Pick by whether the path has a semantic ref:
+
+| You want... | Surface |
+|---|---|
+| Read, edit, or search inside a managed root (`kb:`, `core:`, `scratchpad:`, `dossiers:`, etc.) | `documents` — this leaf. Frontmatter, timestamp, index hygiene are owned here. |
+| Read or write a raw workspace path (`./README.md`, `./Cargo.toml`, build outputs, config) | `files` — drop down when the work is genuinely outside any managed root |
+| Store a compact key+value that survives the conversation | `memory` (`remember_fact`) — documents are for the source material, memory is for the distilled fact |
+| Search past conversation history (not document content) | `archive` — the conversation transcript is in a different store than the corpus |
 
 These tools own frontmatter integrity, timestamp hygiene, and index
-updates. Drop to `files` only when the work is genuinely raw filesystem
-operations *outside* a managed root — config files, build outputs,
-anything the document index doesn't track.
+updates. Drop to `files` only when the work is genuinely raw
+filesystem operations *outside* a managed root — config files, build
+outputs, anything the document index doesn't track.
 
 ---
 name: documents_read
