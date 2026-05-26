@@ -79,15 +79,25 @@ settle *how*:
 
 ## Constants across all branches
 
-- **Recipients resolve through the contact directory.** Every tool
-  takes a `recipient` (contact name) and the system looks up the
-  channel from contact facts. Get the contact lookup right and the
-  delivery routing is automatic; pass a name that doesn't resolve
-  and the send fails before reaching the channel.
-- **Priority is `low` / `normal` / `urgent`.** Low is passive/FYI
-  (won't break through Do Not Disturb on most channels). Normal is
-  the default. Urgent bypasses quiet hours. Match priority to the
-  judgment doctrine above, not to your enthusiasm about the event.
+- **Recipients resolve through the contact directory.** The
+  *outbound* tools (`send_notification`, `ha_notify`,
+  `request_human_decision`, `request_human_escalation`) take a
+  `recipient` (contact name) and the system looks up the channel
+  from contact facts. `resolve_actionable` is the exception — it
+  closes an existing tracked notification by `request_id` /
+  `action_id` and has no recipient. Get the contact lookup right
+  on the outbound side and the delivery routing is automatic; pass
+  a name that doesn't resolve and the send fails before reaching
+  the channel.
+- **Priority is `low` / `normal` / `urgent`** — but the parameter
+  name differs across tools. `send_notification`, `ha_notify`, and
+  `request_human_decision` use `priority`. `request_human_escalation`
+  uses `urgency`. Same enum, different keys; the misroute the model
+  walks into is passing `priority` to `request_human_escalation` and
+  getting it silently dropped. Low is passive/FYI (won't break
+  through Do Not Disturb on most channels). Normal is the default.
+  Urgent bypasses quiet hours. Match the level to the judgment
+  doctrine above, not to your enthusiasm about the event.
 - **Conversational channels deliver responses asynchronously.** When
   a user replies "yes" in Signal to an outstanding actionable, the
   conversation history annotates the message with `[request_id:
@@ -95,7 +105,7 @@ settle *how*:
 
 ## Cross-references
 
-- For recipient resolution, bounce to `contacts` (`lookup_contact`)
+- For recipient resolution, bounce to `contacts` (`contact_lookup`)
   when the contact name isn't certain. Sends to unknown recipients
   fail at the routing layer, not at compose time — the lookup is
   the catch.
@@ -127,9 +137,10 @@ move on without waiting for or expecting a reply.
 
 ## Prefer the channel-agnostic tool
 
-`send_notification` is the right default. The system picks the
-delivery channel from the recipient's contact facts (currently HA
-push; more channels later):
+`send_notification` is the right default. The notification router
+picks the delivery channel from the recipient's contact facts and
+recent channel activity — HA push, Signal, and other registered
+providers are all possible targets depending on configuration:
 
 ```json
 {
@@ -169,11 +180,12 @@ keeps the routing decision in the system, not in your prose.
 
 ## Don't reach for actions here
 
-Both tools above are *fire-and-forget* when you omit `actions`.
-`ha_notify` will *also* accept an `actions` array, at which point it
-becomes an actionable notification with callback routing — but that
-crosses a behavior line. If you're adding actions, you're asking, not
-informing; bounce to `notifications_ask` so the doctrine for response
+`ha_notify` accepts an `actions` array; with it, the call crosses
+the behavior line from fire-and-forget into an actionable
+notification with callback routing. `send_notification` does *not*
+accept `actions` at all — it is fire-and-forget by construction.
+Either way, if you're adding actions you're asking, not informing;
+bounce to `notifications_ask` so the doctrine for response
 tracking and timeout policy loads.
 
 ## Cross-references
@@ -181,7 +193,7 @@ tracking and timeout policy loads.
 - For decision-shaped notifications (actions + callback), bounce to
   `notifications_ask`.
 - For "where's the user reading this?", that's a contact-fact
-  question — `contacts` (`lookup_contact`) shows the configured
+  question — `contacts` (`contact_lookup`) shows the configured
   channels.
 
 ---
@@ -289,7 +301,7 @@ it works. When (if) it lands, the tool description here will say so.
   the callback dispatches automatically into your originating
   conversation; no explicit fetch needed.
 - For grounding the recipient in real contact data, bounce to
-  `contacts` (`lookup_contact`) — sending to an unknown name fails
+  `contacts` (`contact_lookup`) — sending to an unknown name fails
   at routing time.
 
 ---
