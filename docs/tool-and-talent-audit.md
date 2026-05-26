@@ -105,7 +105,7 @@ The recurring anti-patterns:
 
 | Anti-pattern | Symptom | Worked example |
 |---|---|---|
-| **Implementation-shaped tag** | Tag groups tools by service/package, not by model problem | `media` originally bundled feeds + transcripts (two different problems) |
+| **Implementation-shaped tag** | Tag groups tools by service/package, not by model problem; the model never *lands* on this tag as a starting point, it only passes through en route from somewhere else | `media` originally bundled feeds + transcripts (two different problems); `mqtt` bundles MQTT-protocol tools that only appear inside HA-automation / loop-wake workflows |
 | **Ghost trailhead** | Menu tag with no talent at all | `knowledge` for years; flagged in PR-C |
 | **Cafeteria talent** | Flat list of "use X when Y" bullets with no decision frame | `documents-knowledge.md` before PR-D — 12 bullets, no shape |
 | **Ghost tool reference** | Talent backticks a tool name that doesn't exist | `watch_entity` / `unwatch_entity` in early `loops-doctrine.md` |
@@ -113,6 +113,7 @@ The recurring anti-patterns:
 | **Type-name vs runtime mismatch** | Talent describes behavior matching internal type names rather than actual runtime behavior; the type signals one thing, the runtime delivers another | Email trust gate: `TrustResult.Warnings` slice name implied "send proceeds with warnings" but `HasIssues()` treats warnings as rejections — caught in PR-927 Copilot review |
 | **Buried safety doctrine** | Action-shaped leaf with safety pattern present but at the bottom rather than as a featured root-level invariant | `ha-trailhead.md`'s find_entity → call_service → get_state pattern lived under a "Verifying device control" section at the file's end; `ha.md` elevated it to the root's "constants across all branches" section |
 | **Cross-reference gap** | Leaf carries internal routing but no "and here's when to bounce" section | Most pre-grammar leaves |
+| **Missing border doctrine** | Each leaf is internally clean, but the *boundaries* between leaves aren't featured at the model's actual entry points. A model that lands on the wrong leaf reads through the whole talent before any cross-reference disambiguates — by which point it has already burned the turn picking a tool. Disambiguation tables belong **on both sides of the border**, at the top, not only in the cross-references list at the bottom. | `archive.md` features the archive-vs-logs_query split prominently but doesn't disambiguate against memory at all; the pre-refresh `memory.md` carries no disambiguation table. The two stores share lookup-shaped framing yet point at neither each other's surface. Same gap pattern for files-vs-documents, notifications-vs-email, contacts-vs-memory. The follow-up border-audit PR sweeps these (#936 for the on-main pairs; the in-flight leaf PRs cover the rest). |
 | **Architecture-stale advice** | Talent captures how the system used to work, routes the model around a current boundary | `loops-tagging.md`'s pre-#696 escalation advice — caught in PR-F review |
 | **Developer-doc co-mingling** | Prose explains config / deployment / mechanism that the model doesn't need to decide | site-specific operator config explanations in early `loops-tagging.md` |
 
@@ -144,6 +145,46 @@ Within leaves, sequence by:
 After 3–4 leaves exist, the trailheads above them compose naturally
 and you can confirm the grammar holds. Don't write trailheads
 top-down — that's how cafeteria talents emerge.
+
+#### Redistribute, don't document
+
+Not every leaf in the queue should be audited; some should be
+**dissolved**. When inventorying a tag, ask: *does the model ever
+land here as a starting point, or only en route from somewhere
+else?* If only en route, the tag is implementation-shaped (see the
+anti-pattern in step 3) and its tools belong wherever the model
+actually starts the work. The right cycle in that case isn't a
+leaf rebuild but a **redistribution**: re-tag the tools to their
+problem-shaped homes, document the cross-system pattern from those
+homes, and drop the implementation-shaped tag from the menu. The
+talent corpus gets *smaller*, not larger.
+
+Worked example: `mqtt` carries `mqtt_wake_add` / `mqtt_wake_list` /
+`mqtt_wake_remove`. The model never lands on "mqtt" as a starting
+point — these tools appear inside HA-automation / loop-wake
+workflows (HA publishes on event; a Thane loop registers an
+`mqtt_wake_*` to react). Redistributing the tools to `loops` (the
+loop-side concern) and documenting the cross-system pattern in
+`ha.md` and `loops-examples.md` serves the model better than
+building a standalone mqtt leaf the model only traverses to get
+back to where the real work lives.
+
+The triage question when staring at a queue of tags-without-talents:
+*"will the model ever ask a question that starts here?"* If no, the
+tag is a redistribute candidate, not a leaf candidate.
+
+#### Cross-leaf border audit
+
+After enough leaves exist, run a separate pass on the *borders*
+between them. Per-leaf audits catch intra-leaf confusion; the
+**Missing border doctrine** anti-pattern in step 3 catches the
+inter-leaf kind. Walk the confusable pairs (archive ↔ memory,
+files ↔ documents, contacts ↔ memory, notifications ↔ email, etc.)
+and verify the disambiguation is featured **on both sides of the
+border** at the top of each talent, not only in the cross-references
+list at the bottom. A model that lands on the wrong leaf should hit
+the redirection within the first screen, not after reading the
+whole talent.
 
 ### 5. Build
 
@@ -223,6 +264,45 @@ bullet compresses.
 A running history of what each audit cycle taught the methodology.
 Newest first. Each entry is "what we did + what it changed about
 how we work."
+
+### 2026-Q2 — methodology refinements after several leaf cycles
+
+After eight leaf cycles (HA / archive / email / contacts / session /
+shell / notifications / memory), two cross-cutting concerns surfaced
+that no individual leaf could catch:
+
+- **Borders matter as much as bodies.** Per-leaf audits clean up
+  the inside of each leaf but don't address the *boundaries*
+  between leaves. A model that lands in `archive` looking for
+  "what we know about X" has no in-talent redirection toward
+  `memory` at all — the archive↔memory border is missing entirely
+  in the current corpus, despite the two stores being a natural
+  confusable. The mis-route burns a turn before any cross-leaf
+  signal could intervene. **Missing border doctrine** added to
+  the diagnose-mismatches table; a cross-leaf border audit pass
+  added as a sequencing step in step 4. The remedy: disambiguation
+  tables on *both sides* of every confusable pair, featured at
+  the top of the talent rather than in the cross-references list
+  at the bottom. The follow-up sweeps (#936 for on-main pairs;
+  edits inside the in-flight leaf PRs for the rest) apply this
+  remedy across the corpus.
+- **Not every queue entry deserves a leaf.** The instinct to
+  "build a talent for every tag in the catalog" misses the
+  implementation-shaped-tag anti-pattern: some tags exist because
+  of how the tools are organized in code, not because the model
+  ever lands on them as a starting point. `mqtt` was the worked
+  example — the protocol-shaped tag bundles wake-loop registration
+  tools the model only encounters inside HA-automation workflows.
+  Redistribution (re-tag the tools to their problem-shaped homes;
+  drop the implementation-shaped tag) serves the model better than
+  building a talent that just acts as a way station.
+  **Redistribute, don't document** added as a sequencing principle
+  in step 4.
+
+Both refinements are about the *shape of the trail system* rather
+than the contents of any single leaf. The audit doc previously
+treated each leaf as an independent unit; it now also treats the
+inter-leaf taxonomy as something the audit can fix.
 
 ### 2026-Q2 — email leaf (cycle #3)
 

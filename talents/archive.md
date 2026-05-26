@@ -14,26 +14,30 @@ three ways the model usually asks the question.
 
 ## The single most important disambiguation
 
-**The `archive` tag holds the tools for what was *said*. The
-`logs_query` tool (always available, no activation needed) holds
-the system's events.**
+**Archive holds the *words said*. Logs hold the *events produced*.
+Memory holds the *truths distilled*. Working memory holds the
+*texture of the current conversation*.** Four surfaces, four
+altitudes, easily confused with each other:
 
 | You want... | Surface |
 |---|---|
 | The literal words of a past conversation | Activate `archive`, then pick a tool below |
 | A system event (loop iteration, tool call, error, model response) | Call `logs_query` directly — it's a core tool |
+| A stable host-level fact you wrote down (preferences, layout, routines) | Activate `memory` — the search axis there is `recall_fact`, not text search |
+| The texture/tone/arc of the *current* conversation | `session_working_memory` (see [`working-memory.md`](working-memory.md)) — not archive |
 
-Both span time. Both have free-text search. Both can be queried by
-attribute. They are not the same surface. A question like "what did
-I tell the user about VLAN 30 last week?" goes to archive. A
+All four span time. Three have free-text search. They are not the
+same surface. A question like "what did I tell the user about VLAN
+30 last week?" goes to archive — the conversation is the source. A
 question like "what loop iterations ran during that crash last
-Tuesday?" goes to logs_query. A question like "what happened around
-3pm on Thursday?" needs both — archive for what was said, logs for
-what the system did.
+Tuesday?" goes to logs_query. A question like "what do I know about
+the VLAN 30 routine?" goes to memory — the *fact* outlives any one
+conversation that produced it. A question like "what happened around
+3pm on Thursday?" needs both archive and logs.
 
-When you're not sure, ask: am I looking for *words spoken in
-conversation*, or *events the system produced*? The split is clean
-once named.
+When you're not sure, ask: am I looking for *words spoken*, *events
+produced*, *truths distilled*, or *texture from this very
+conversation*? The split is clean once named.
 
 ## Choose by the shape of your question
 
