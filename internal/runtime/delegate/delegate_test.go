@@ -56,7 +56,7 @@ func (m *mockLLMClient) Ping(_ context.Context) error { return nil }
 func newTestRegistry() *tools.Registry {
 	r := tools.NewEmptyRegistry()
 	r.Register(&tools.Tool{
-		Name:        "get_state",
+		Name:        "ha_get_state",
 		Description: "Get entity state",
 		Parameters: map[string]any{
 			"type":       "object",
@@ -96,7 +96,7 @@ func newTestRegistry() *tools.Registry {
 		})
 	}
 	r.SetTagIndex(map[string][]string{
-		"ha":  {"get_state"},
+		"ha":  {"ha_get_state"},
 		"web": {"web_search"},
 	})
 	return r
@@ -129,7 +129,7 @@ func (m *mockLoopRunner) Run(_ context.Context, req looppkg.Request, _ looppkg.S
 		m.onRun(req)
 	}
 	if req.OnProgress != nil {
-		req.OnProgress(events.KindLoopToolDone, map[string]any{"tool": "get_state"})
+		req.OnProgress(events.KindLoopToolDone, map[string]any{"tool": "ha_get_state"})
 	}
 	return m.resp, m.err
 }
@@ -183,7 +183,7 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if result.Exhausted {
 		t.Fatal("Exhausted = true, want false")
 	}
-	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "get_state" || !result.ToolCalls[0].Success {
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "ha_get_state" || !result.ToolCalls[0].Success {
 		t.Fatalf("ToolCalls = %#v", result.ToolCalls)
 	}
 	if captured.ConversationID == "" {
@@ -339,7 +339,7 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 		t.Fatalf("execute() error = %v", err)
 	}
 
-	wantExcluded := append([]string{"get_state", "web_search"}, delegateFamilyToolNames...)
+	wantExcluded := append([]string{"ha_get_state", "web_search"}, delegateFamilyToolNames...)
 	for _, want := range wantExcluded {
 		if !containsString(captured.ExcludeTools, want) {
 			t.Fatalf("ExcludeTools = %#v, want %s", captured.ExcludeTools, want)
@@ -460,8 +460,8 @@ func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 			}
 		}
 		// Sanity: non-family tools survive.
-		if !containsString(names, "get_state") {
-			t.Errorf("fall-through delegate registry missing non-family tool get_state (registry: %v)", names)
+		if !containsString(names, "ha_get_state") {
+			t.Errorf("fall-through delegate registry missing non-family tool ha_get_state (registry: %v)", names)
 		}
 	})
 }
@@ -504,8 +504,8 @@ func TestDelegateToolRegistry_ExcludesDirectHumanEgress(t *testing.T) {
 			if tt.name == "tag-scoped branch" && !containsString(names, "web_search") {
 				t.Errorf("tag-scoped delegate registry missing non-egress tag tool web_search (registry: %v)", names)
 			}
-			if tt.name == "fall-through branch" && !containsString(names, "get_state") {
-				t.Errorf("fall-through delegate registry missing non-egress tool get_state (registry: %v)", names)
+			if tt.name == "fall-through branch" && !containsString(names, "ha_get_state") {
+				t.Errorf("fall-through delegate registry missing non-egress tool ha_get_state (registry: %v)", names)
 			}
 		})
 	}
@@ -690,10 +690,10 @@ func TestMergeExcludeToolNames(t *testing.T) {
 		{
 			name: "overlapping groups dedup to a single sorted slice",
 			groups: [][]string{
-				{"get_state", "thane_now", "thane_assign"},
+				{"ha_get_state", "thane_now", "thane_assign"},
 				{"thane_delegate", "thane_now", "thane_assign"},
 			},
-			want: []string{"get_state", "thane_assign", "thane_delegate", "thane_now"},
+			want: []string{"ha_get_state", "thane_assign", "thane_delegate", "thane_now"},
 		},
 	}
 
@@ -1199,7 +1199,7 @@ func taggedDelegateTestRegistry() *tools.Registry {
 		},
 	})
 	reg.Register(&tools.Tool{
-		Name:        "get_state",
+		Name:        "ha_get_state",
 		Description: "HA state",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Handler: func(_ context.Context, _ map[string]any) (string, error) {
@@ -1215,7 +1215,7 @@ func taggedDelegateTestRegistry() *tools.Registry {
 		},
 	})
 	reg.Register(&tools.Tool{
-		Name:        "owner_contact",
+		Name:        "contact_owner",
 		Description: "Owner contact",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Handler: func(_ context.Context, _ map[string]any) (string, error) {
@@ -1234,9 +1234,9 @@ func taggedDelegateTestRegistry() *tools.Registry {
 	}
 	reg.SetTagIndex(map[string][]string{
 		"web":             {"web_search"},
-		"ha":              {"get_state"},
+		"ha":              {"ha_get_state"},
 		"message_channel": {"send_reaction"},
-		"owner":           {"owner_contact"},
+		"owner":           {"contact_owner"},
 	})
 	return reg
 }

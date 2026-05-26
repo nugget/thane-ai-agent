@@ -7,8 +7,8 @@ import (
 )
 
 // selectCapabilityMenuEntries returns the entries that should appear
-// in the capability menu surface: every menu trailhead plus any
-// protected leaf (those are runtime-asserted gates worth surfacing for
+// in the tag menu surface: every menu trailhead plus any protected
+// leaf (those are runtime-asserted gates worth surfacing for
 // situational awareness, even though the model can't activate them).
 // Falls back to all entries if no entry qualifies — covers the
 // pre-config edge case where the catalog hasn't classified anything
@@ -27,18 +27,18 @@ func selectCapabilityMenuEntries(entries []CapabilitySurface) []CapabilitySurfac
 	return sorted
 }
 
-// RenderCapabilityActivationDescription renders the activate_capability
-// tool help text from the shared capability surface.
+// RenderCapabilityActivationDescription renders the tag_activate
+// tool help text from the shared tag surface.
 func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	actionTools := defaultCapabilityActionTools(true)
 	var sb strings.Builder
-	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
+	sb.WriteString("Activate a tag to load its tools and context into YOUR current conversation. ")
 	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	sb.WriteString(fmt.Sprintf("The only valid capability tools are `%s`, `%s`, `%s`, and `%s`; do not invent per-capability tool names. ",
+	sb.WriteString(fmt.Sprintf("The only valid tag-control tools are `%s`, `%s`, `%s`, and `%s`; do not invent per-tag tool names. ",
 		actionTools.Activate, actionTools.Deactivate, actionTools.Reset, actionTools.Inspect))
-	sb.WriteString(fmt.Sprintf("Delegates get capabilities via the tags parameter on `%s`.\n\n", actionTools.Delegate))
-	sb.WriteString("Treat capability activation like a coarse-to-fine menu: start with one broad tag, read the newly loaded context, and only then decide whether to activate a narrower tag.\n\n")
-	sb.WriteString("Capability menu:\n")
+	sb.WriteString(fmt.Sprintf("Delegates get tags via the tags parameter on `%s`.\n\n", actionTools.Delegate))
+	sb.WriteString("Treat tag activation like a coarse-to-fine menu: start with one broad tag, read the newly loaded context, and only then decide whether to activate a narrower tag.\n\n")
+	sb.WriteString("Tag menu:\n")
 
 	for _, entry := range selectCapabilityMenuEntries(entries) {
 		if entry.Core {
@@ -60,12 +60,12 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("\nThe `## Active Capabilities` section in the system prompt lists what's currently loaded; use %s to return to baseline, or %s when you only want to drop one specific tag.",
+	sb.WriteString(fmt.Sprintf("\nThe `## Active Tags` section in the system prompt lists what's currently loaded; use %s to return to baseline, or %s when you only want to drop one specific tag.",
 		actionTools.Reset, actionTools.Deactivate))
 	return sb.String()
 }
 
-// RenderCapabilityManifestMarkdown renders the model-facing capability
+// RenderCapabilityManifestMarkdown renders the model-facing tag
 // menu as a heading plus a compact JSON payload.
 func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 	if len(entries) == 0 {
@@ -84,15 +84,15 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 	payload := struct {
 		Kind            string                         `json:"kind"`
 		ActivationTools CapabilityActionTools          `json:"activation_tools"`
-		CapabilityMenu  map[string]capabilityMenuEntry `json:"capability_menu"`
+		TagMenu         map[string]capabilityMenuEntry `json:"tag_menu"`
 	}{
-		Kind:            "capability_menu",
+		Kind:            "tag_menu",
 		ActivationTools: defaultCapabilityActionTools(true),
-		CapabilityMenu:  make(map[string]capabilityMenuEntry, len(entries)),
+		TagMenu:         make(map[string]capabilityMenuEntry, len(entries)),
 	}
 
 	for _, rendered := range BuildCapabilityCatalogView(selectCapabilityMenuEntries(entries), CatalogViewOptions{IncludeDelegate: true}).Capabilities {
-		payload.CapabilityMenu[rendered.Tag] = capabilityMenuEntry{
+		payload.TagMenu[rendered.Tag] = capabilityMenuEntry{
 			Status:      rendered.Status,
 			Description: rendered.Description,
 			Teaser:      rendered.Teaser,
@@ -104,12 +104,12 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return "### Capability Menu\n\n{\"kind\":\"capability_menu\",\"error\":\"manifest marshal failed\"}"
+		return "### Tag Menu\n\n{\"kind\":\"tag_menu\",\"error\":\"manifest marshal failed\"}"
 	}
 
 	var sb strings.Builder
-	sb.WriteString("### Capability Menu\n\n")
-	sb.WriteString("These are trailheads into richer guidance. Activate one relevant capability when the turn needs a domain; otherwise keep the straight path and answer.\n\n")
+	sb.WriteString("### Tag Menu\n\n")
+	sb.WriteString("These are trailheads into richer guidance. Activate one relevant tag when the turn needs a domain; otherwise keep the straight path and answer.\n\n")
 	sb.Write(data)
 	return sb.String()
 }

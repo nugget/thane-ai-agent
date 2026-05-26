@@ -34,11 +34,11 @@ func TestExtractToolsCalled(t *testing.T) {
 						Function: struct {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
-						}{Name: "get_state"},
+						}{Name: "ha_get_state"},
 					}},
 				},
 			},
-			want: map[string]int{"get_state": 1},
+			want: map[string]int{"ha_get_state": 1},
 		},
 		{
 			name: "repeated tool calls",
@@ -49,11 +49,11 @@ func TestExtractToolsCalled(t *testing.T) {
 						{Function: struct {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
-						}{Name: "get_state"}},
+						}{Name: "ha_get_state"}},
 						{Function: struct {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
-						}{Name: "list_entities"}},
+						}{Name: "ha_list_entities"}},
 					},
 				},
 				{Role: "tool", Content: "result1"},
@@ -64,11 +64,11 @@ func TestExtractToolsCalled(t *testing.T) {
 						{Function: struct {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
-						}{Name: "get_state"}},
+						}{Name: "ha_get_state"}},
 					},
 				},
 			},
-			want: map[string]int{"get_state": 2, "list_entities": 1},
+			want: map[string]int{"ha_get_state": 2, "ha_list_entities": 1},
 		},
 		{
 			name: "mixed messages with text-only assistant",
@@ -81,13 +81,13 @@ func TestExtractToolsCalled(t *testing.T) {
 						{Function: struct {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
-						}{Name: "call_service"}},
+						}{Name: "ha_call_service"}},
 					},
 				},
 				{Role: "tool", Content: "ok"},
 				{Role: "assistant", Content: "Done."},
 			},
-			want: map[string]int{"call_service": 1},
+			want: map[string]int{"ha_call_service": 1},
 		},
 	}
 

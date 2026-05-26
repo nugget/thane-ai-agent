@@ -182,7 +182,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 								ID:   "call_1",
 								Type: "function",
 								Function: lmStudioToolFunctionDelta{
-									Name:      "get_state",
+									Name:      "ha_get_state",
 									Arguments: `{"entity_id":"sun.sun"}`,
 								},
 							},
@@ -197,7 +197,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 
 	client := NewLMStudioClientWithTTL(srv.URL, "secret-token", nil, 600)
 	resp, err := client.Chat(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
-		{"type": "function", "function": map[string]any{"name": "get_state"}},
+		{"type": "function", "function": map[string]any{"name": "ha_get_state"}},
 	})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
@@ -211,8 +211,8 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
 	}
-	if got := resp.Message.ToolCalls[0].Function.Name; got != "get_state" {
-		t.Fatalf("tool name = %q, want get_state", got)
+	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
+		t.Fatalf("tool name = %q, want ha_get_state", got)
 	}
 	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
 		t.Fatalf("tool args entity_id = %v, want sun.sun", got)
@@ -429,7 +429,7 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 						ID:    "call_1",
 						Type:  "function",
 						Function: lmStudioToolFunctionDelta{
-							Name:      "get_state",
+							Name:      "ha_get_state",
 							Arguments: `{"entity_id":"`,
 						},
 					}},
@@ -458,7 +458,7 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	client := NewLMStudioClient(srv.URL, "", nil)
 	var tokens []string
 	resp, err := client.ChatStream(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "say hello and plan a tool call"}}, []map[string]any{
-		{"type": "function", "function": map[string]any{"name": "get_state"}},
+		{"type": "function", "function": map[string]any{"name": "ha_get_state"}},
 	}, func(event llm.StreamEvent) {
 		if event.Kind == llm.KindToken {
 			tokens = append(tokens, event.Token)
@@ -485,8 +485,8 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
 	}
-	if got := resp.Message.ToolCalls[0].Function.Name; got != "get_state" {
-		t.Fatalf("tool name = %q, want get_state", got)
+	if got := resp.Message.ToolCalls[0].Function.Name; got != "ha_get_state" {
+		t.Fatalf("tool name = %q, want ha_get_state", got)
 	}
 	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
 		t.Fatalf("tool args entity_id = %v, want sun.sun", got)

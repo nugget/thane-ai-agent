@@ -28,12 +28,12 @@ the work to one of three branches.
 
 ## The constants across all three branches
 
-- **`call_service` does not validate entity IDs.** A typo or stale
+- **`ha_call_service` does not validate entity IDs.** A typo or stale
   ID returns success and silently does nothing. This is the single
   most consequential gotcha in the HA surface; every action-shaped
   branch carries the verify-after pattern.
-- **`control_device` is the high-level path; `call_service` is the
-  low-level path.** Use `control_device` unless you already have the
+- **`ha_control_device` is the high-level path; `ha_call_service` is the
+  low-level path.** Use `ha_control_device` unless you already have the
   exact entity_id from a recent lookup *in the same turn*.
 - **Sustained attention is `awareness`'s job, not `ha`'s.** A one-off
   state check uses `ha_observe`; a loop watching a room subscribes
@@ -56,7 +56,7 @@ specifically you can name what you're looking for.
 
 ## I know the exact entity_id
 
-`get_state` returns the current state and attributes:
+`ha_get_state` returns the current state and attributes:
 
 ```json
 {
@@ -70,7 +70,7 @@ etc.).
 
 ## I know the description but not the entity_id
 
-`find_entity` does fuzzy lookup by description, optionally narrowed
+`ha_find_entity` does fuzzy lookup by description, optionally narrowed
 by area or domain:
 
 ```json
@@ -83,11 +83,11 @@ by area or domain:
 
 Returns the best match with a confidence score, or candidate
 entity_ids when the description is ambiguous. The natural precursor
-to `get_state` or `control_device`.
+to `ha_get_state` or `ha_control_device`.
 
 ## I want everything in a domain
 
-`list_entities` enumerates by domain:
+`ha_list_entities` enumerates by domain:
 
 ```json
 {
@@ -97,7 +97,7 @@ to `get_state` or `control_device`.
 
 Right for discovery ("what lights exist?") or for iterating over a
 set ("check every door sensor"). Returns entity_ids and friendly
-names — read these, then `get_state` the specific ones you care
+names — read these, then `ha_get_state` the specific ones you care
 about.
 
 ## I want richer search across the registry
@@ -123,7 +123,7 @@ scores. The right tool when:
 ## Cross-references
 
 - For sustained entity attention across loop iterations, bounce to
-  `awareness` and subscribe — don't poll `get_state` from a loop's
+  `awareness` and subscribe — don't poll `ha_get_state` from a loop's
   turn budget when a subscription will keep it current for free.
 - For "who is home / what zone is X in," `awareness` owns
   presence-shaped questions even though they're technically HA
@@ -140,18 +140,18 @@ teaser: "Change device state — find → act → verify, with safety on stale I
 
 You want to change something. The single most important pattern in
 HA control is the three-step move; the second is choosing between
-`control_device` (high-level) and `call_service` (low-level).
+`ha_control_device` (high-level) and `ha_call_service` (low-level).
 
 ## The find → act → verify pattern
 
 Never trust an action's success alone. Stale entity IDs return
 success and silently do nothing. For anything that matters:
 
-1. **find** the entity — `find_entity` if working from a
-   description, `get_state` to confirm a known entity_id is still
+1. **find** the entity — `ha_find_entity` if working from a
+   description, `ha_get_state` to confirm a known entity_id is still
    real.
-2. **act** — `control_device` (preferred) or `call_service`.
-3. **verify** — `get_state` after the action, confirm the new value
+2. **act** — `ha_control_device` (preferred) or `ha_call_service`.
+3. **verify** — `ha_get_state` after the action, confirm the new value
    actually took.
 
 The pattern is overkill for cheap idempotent actions ("turn on a
@@ -160,9 +160,9 @@ involving locks, garage doors, alarms, safety devices, scenes that
 affect multiple rooms, or any configuration change. The cost of a
 silent no-op there is real.
 
-## High-level: control_device
+## High-level: ha_control_device
 
-`control_device` accepts a description and an action; it does the
+`ha_control_device` accepts a description and an action; it does the
 lookup internally:
 
 ```json
@@ -177,14 +177,14 @@ Right for voice-shape commands and any case where the entity_id
 isn't already in hand. The action vocabulary matches HA's natural
 services (turn_on, turn_off, toggle, set_brightness, etc.).
 
-When `control_device` reports ambiguity, that's the find-step doing
+When `ha_control_device` reports ambiguity, that's the find-step doing
 its job — re-call with a tighter description or a specific `area` /
-`domain` to disambiguate, don't fall through to `call_service` with
+`domain` to disambiguate, don't fall through to `ha_call_service` with
 a guessed entity_id.
 
-## Low-level: call_service
+## Low-level: ha_call_service
 
-`call_service` requires the exact entity_id:
+`ha_call_service` requires the exact entity_id:
 
 ```json
 {
@@ -200,16 +200,16 @@ a guessed entity_id.
 
 Use when:
 
-- You already have the exact entity_id from a recent `find_entity`
-  or `get_state` (within the same turn — not from memory of a
+- You already have the exact entity_id from a recent `ha_find_entity`
+  or `ha_get_state` (within the same turn — not from memory of a
   previous conversation).
-- The service needs structured `data` that `control_device`'s
+- The service needs structured `data` that `ha_control_device`'s
   vocabulary doesn't cover: specific color temperatures, scene
   activation with arguments, climate setpoints, media player
   payloads, etc.
 
 **Do not** pull an entity_id from memory and reach for
-`call_service`. Always re-verify with `find_entity` or `get_state`
+`ha_call_service`. Always re-verify with `ha_find_entity` or `ha_get_state`
 first — entity IDs change when devices are renamed or reconfigured,
 and a stale ID is the canonical silent-no-op trap.
 
@@ -314,7 +314,7 @@ prefer the `_id` suffixed variants (`area_id`, `label_ids`,
 **Before authoring**: use `ha_registry_search` to find real area
 IDs, label IDs, and entity IDs. Don't guess — typos in entity_ids
 inside a trigger silently break the automation the same way they
-silently break `call_service`. The automation will register, return
+silently break `ha_call_service`. The automation will register, return
 success, and never fire.
 
 ## Update an existing automation

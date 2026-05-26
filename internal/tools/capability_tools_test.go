@@ -62,22 +62,22 @@ func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
 func TestActivateCapability(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state"}, Core: false},
+		{Tag: "ha", Description: "Home Assistant", Tools: []string{"ha_get_state"}, Core: false},
 		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("activate_capability")
+	tool := reg.Get("tag_activate")
 	if tool == nil {
-		t.Fatal("activate_capability not registered")
+		t.Fatal("tag_activate not registered")
 	}
 
 	// Activate a valid tag.
 	result, err := tool.Handler(context.Background(), map[string]any{"tag": "ha"})
 	if err != nil {
-		t.Fatalf("activate_capability error: %v", err)
+		t.Fatalf("tag_activate error: %v", err)
 	}
 	if !strings.Contains(result, "activated") {
 		t.Errorf("result = %q, want to contain 'activated'", result)
@@ -102,22 +102,22 @@ func TestDeactivateCapability(t *testing.T) {
 	mgr.activeTags["web"] = true
 
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state", "call_service"}, Core: false},
+		{Tag: "ha", Description: "Home Assistant", Tools: []string{"ha_get_state", "ha_call_service"}, Core: false},
 		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("deactivate_capability")
+	tool := reg.Get("tag_deactivate")
 	if tool == nil {
-		t.Fatal("deactivate_capability not registered")
+		t.Fatal("tag_deactivate not registered")
 	}
 
 	// Drop an active tag.
 	result, err := tool.Handler(context.Background(), map[string]any{"tag": "ha"})
 	if err != nil {
-		t.Fatalf("deactivate_capability error: %v", err)
+		t.Fatalf("tag_deactivate error: %v", err)
 	}
 	if !strings.Contains(result, "deactivated") {
 		t.Errorf("result = %q, want to contain 'deactivated'", result)
@@ -156,16 +156,16 @@ func TestResetCapabilities(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("reset_capabilities")
+	tool := reg.Get("tag_reset")
 	if tool == nil {
-		t.Fatal("reset_capabilities not registered")
+		t.Fatal("tag_reset not registered")
 	}
 
 	result, err := tool.Handler(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("reset_capabilities error: %v", err)
+		t.Fatalf("tag_reset error: %v", err)
 	}
-	if !strings.Contains(result, "Capability state reset to baseline.") {
+	if !strings.Contains(result, "Tag state reset to baseline.") {
 		t.Fatalf("result = %q, want baseline-reset confirmation", result)
 	}
 	if !strings.Contains(result, "Deactivated: forge, web.") {
@@ -198,14 +198,14 @@ func TestResetCapabilities_TruncatesRemovedTools(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("reset_capabilities")
+	tool := reg.Get("tag_reset")
 	if tool == nil {
-		t.Fatal("reset_capabilities not registered")
+		t.Fatal("tag_reset not registered")
 	}
 
 	result, err := tool.Handler(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("reset_capabilities error: %v", err)
+		t.Fatalf("tag_reset error: %v", err)
 	}
 	if !strings.Contains(result, "Tools removed: a1, a2, a3, a4, a5, b1, b2, b3, and 2 more.") {
 		t.Fatalf("result = %q, want truncated tool list", result)
@@ -217,7 +217,7 @@ func TestActivateCapability_EmptyTag(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, nil)
 
-	tool := reg.Get("activate_capability")
+	tool := reg.Get("tag_activate")
 	_, err := tool.Handler(context.Background(), map[string]any{"tag": ""})
 	if err == nil {
 		t.Error("expected error for empty tag")
@@ -229,7 +229,7 @@ func TestDeactivateCapability_EmptyTag(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, nil)
 
-	tool := reg.Get("deactivate_capability")
+	tool := reg.Get("tag_deactivate")
 	_, err := tool.Handler(context.Background(), map[string]any{"tag": ""})
 	if err == nil {
 		t.Error("expected error for empty tag")
@@ -239,14 +239,14 @@ func TestDeactivateCapability_EmptyTag(t *testing.T) {
 func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, Core: true},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"ha_get_state", "ha_call_service"}, Core: true},
 		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("activate_capability")
+	tool := reg.Get("tag_activate")
 
 	// Always-active tags should NOT appear in the description (they can't be toggled).
 	if strings.Contains(tool.Description, "**ha**") {
@@ -264,7 +264,7 @@ func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 
 func TestBuildCapabilityManifest(t *testing.T) {
 	tags := map[string][]string{
-		"ha":  {"get_state", "call_service"},
+		"ha":  {"ha_get_state", "ha_call_service"},
 		"web": {"web_search"},
 	}
 	descriptions := map[string]string{
@@ -298,13 +298,13 @@ func TestBuildCapabilityManifest(t *testing.T) {
 
 func TestRegistryFilterByTags(t *testing.T) {
 	reg := NewEmptyRegistry()
-	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
-	reg.Register(&Tool{Name: "call_service", Description: "HA service"})
+	reg.Register(&Tool{Name: "ha_get_state", Description: "HA state"})
+	reg.Register(&Tool{Name: "ha_call_service", Description: "HA service"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
 	reg.Register(&Tool{Name: "remember_fact", Description: "Memory"})
 
 	reg.SetTagIndex(map[string][]string{
-		"ha":     {"get_state", "call_service"},
+		"ha":     {"ha_get_state", "ha_call_service"},
 		"web":    {"web_search"},
 		"memory": {"remember_fact"},
 	})
@@ -318,35 +318,35 @@ func TestRegistryFilterByTags(t *testing.T) {
 		{
 			name:   "nil tags returns all",
 			tags:   nil,
-			wantIn: []string{"get_state", "call_service", "web_search", "remember_fact"},
+			wantIn: []string{"ha_get_state", "ha_call_service", "web_search", "remember_fact"},
 		},
 		{
 			name:   "empty tags returns all",
 			tags:   []string{},
-			wantIn: []string{"get_state", "call_service", "web_search", "remember_fact"},
+			wantIn: []string{"ha_get_state", "ha_call_service", "web_search", "remember_fact"},
 		},
 		{
 			name:    "ha tag only",
 			tags:    []string{"ha"},
-			wantIn:  []string{"get_state", "call_service"},
+			wantIn:  []string{"ha_get_state", "ha_call_service"},
 			wantOut: []string{"web_search", "remember_fact"},
 		},
 		{
 			name:    "web tag only",
 			tags:    []string{"web"},
 			wantIn:  []string{"web_search"},
-			wantOut: []string{"get_state", "call_service", "remember_fact"},
+			wantOut: []string{"ha_get_state", "ha_call_service", "remember_fact"},
 		},
 		{
 			name:    "multiple tags",
 			tags:    []string{"ha", "web"},
-			wantIn:  []string{"get_state", "call_service", "web_search"},
+			wantIn:  []string{"ha_get_state", "ha_call_service", "web_search"},
 			wantOut: []string{"remember_fact"},
 		},
 		{
 			name:    "unknown tag filters to tagged-only",
 			tags:    []string{"nonexistent"},
-			wantOut: []string{"get_state", "call_service", "web_search", "remember_fact"},
+			wantOut: []string{"ha_get_state", "ha_call_service", "web_search", "remember_fact"},
 		},
 	}
 
@@ -370,23 +370,23 @@ func TestRegistryFilterByTags(t *testing.T) {
 func TestRegistryFilterByTags_CoreTools(t *testing.T) {
 	reg := NewEmptyRegistry()
 	// Tagged tools
-	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
+	reg.Register(&Tool{Name: "ha_get_state", Description: "HA state"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
 	reg.Register(&Tool{Name: "loop_status", Description: "Inspect running loops"})
 	reg.Register(&Tool{Name: "set_next_sleep", Description: "Adjust service loop sleep"})
 	reg.Register(&Tool{Name: "send_notification", Description: "Send a notification"})
 	reg.Register(&Tool{Name: "request_human_decision", Description: "Request a decision"})
 	reg.Register(&Tool{Name: "macos_calendar_events", Description: "Read macOS calendar events"})
-	// Core meta-tools (like activate_capability, deactivate_capability,
-	// and reset_capabilities)
-	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", Core: true})
-	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", Core: true})
-	reg.Register(&Tool{Name: "reset_capabilities", Description: "Reset capability state", Core: true})
+	// Core meta-tools (like tag_activate, tag_deactivate,
+	// and tag_reset)
+	reg.Register(&Tool{Name: "tag_activate", Description: "Activate a tag", Core: true})
+	reg.Register(&Tool{Name: "tag_deactivate", Description: "Deactivate a tag", Core: true})
+	reg.Register(&Tool{Name: "tag_reset", Description: "Reset tag state", Core: true})
 	// Untagged tool WITHOUT Core — should be filtered out
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
 	reg.SetTagIndex(map[string][]string{
-		"ha":            {"get_state"},
+		"ha":            {"ha_get_state"},
 		"web":           {"web_search"},
 		"core":          {"loop_status"},
 		"loops":         {"loop_status", "set_next_sleep"},
@@ -403,27 +403,27 @@ func TestRegistryFilterByTags_CoreTools(t *testing.T) {
 		{
 			name:    "core tools survive ha-only filter",
 			tags:    []string{"ha"},
-			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability", "reset_capabilities"},
+			wantIn:  []string{"ha_get_state", "tag_activate", "tag_deactivate", "tag_reset"},
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
 			name:    "core tools survive web-only filter",
 			tags:    []string{"web"},
-			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "reset_capabilities"},
-			wantOut: []string{"get_state", "plain_untagged"},
+			wantIn:  []string{"web_search", "tag_activate", "tag_deactivate", "tag_reset"},
+			wantOut: []string{"ha_get_state", "plain_untagged"},
 		},
 		{
 			name:    "core tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
-			wantIn:  []string{"activate_capability", "deactivate_capability", "reset_capabilities"},
-			wantOut: []string{"get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "plain_untagged"},
+			wantIn:  []string{"tag_activate", "tag_deactivate", "tag_reset"},
+			wantOut: []string{"ha_get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "plain_untagged"},
 		},
 		{
 			name:   "core filter does not leak tagged non-core tools",
 			tags:   []string{"core"},
-			wantIn: []string{"loop_status", "activate_capability", "deactivate_capability", "reset_capabilities"},
+			wantIn: []string{"loop_status", "tag_activate", "tag_deactivate", "tag_reset"},
 			wantOut: []string{
-				"get_state",
+				"ha_get_state",
 				"web_search",
 				"set_next_sleep",
 				"send_notification",
@@ -435,7 +435,7 @@ func TestRegistryFilterByTags_CoreTools(t *testing.T) {
 		{
 			name:   "nil tags returns everything",
 			tags:   nil,
-			wantIn: []string{"get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "activate_capability", "deactivate_capability", "reset_capabilities", "plain_untagged"},
+			wantIn: []string{"ha_get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "tag_activate", "tag_deactivate", "tag_reset", "plain_untagged"},
 		},
 	}
 
@@ -459,7 +459,7 @@ func TestRegistryFilterByTags_CoreTools(t *testing.T) {
 func TestRegistryTaggedToolNames(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetTagIndex(map[string][]string{
-		"ha":  {"get_state", "call_service"},
+		"ha":  {"ha_get_state", "ha_call_service"},
 		"web": {"web_search"},
 	})
 
