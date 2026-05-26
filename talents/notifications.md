@@ -205,19 +205,31 @@ teaser: "Get a decision back — async (callback later) or sync (blocks until th
 
 # Ask (decision-shaped)
 
-You need a response, not just to inform. The single most important
-fork at this leaf:
+You need a response, not just to inform. **First check whether your
+question is really shaped like a decision for a specific human at
+all** — many "escalate this" instincts inside a service loop are
+actually loop-side concerns better routed via
+`request_core_attention` (in `loops`, always available; not part
+of this leaf). That tool wakes the core/owner loop's next iteration
+to review your concern; no actions, no recipient, no wait. It is
+the canonical service-loop → operator attention path and the
+default escalation shape for metacog, ego, and other internal
+loops.
+
+If you genuinely need a decision from a specific contact via
+actionable buttons, the leaf has two real tools plus one stub:
 
 | You need... | Tool | Behavior |
 |---|---|---|
 | A decision eventually; you can keep working | `request_human_decision` | **Async.** Returns a `request_id`. Callback dispatched to your originating conversation when they answer. |
 | A decision *now*; you cannot proceed without it | `request_human_escalation` | **Sync.** Blocks the current turn until they respond or timeout. |
-| AI judgment beyond your capability | `request_ai_escalation` | **Currently a stub.** Returns an error pointing at human escalation or a higher routing profile. |
+| ~~Frontier-AI judgment inline~~ | ~~`request_ai_escalation`~~ | **Don't use — the handler returns "not yet implemented" on every call.** Real escalation paths: `request_core_attention` for loop→operator; `request_human_escalation` for human judgment; the orchestrator-side routing-profile bump (e.g. `thane:premium`) for "make the current turn smarter." |
 
-Picking wrong is the most consequential mis-route at this leaf.
-Async-when-you-should-have-been-sync leaves the turn proceeding with
-no decision; sync-when-you-should-have-been-async wastes a turn-long
-blocking wait on something you could have continued past.
+Picking wrong between the two real tools is the most consequential
+mis-route at this leaf. Async-when-you-should-have-been-sync leaves
+the turn proceeding with no decision; sync-when-you-should-have-
+been-async wastes a turn-long blocking wait on something you could
+have continued past.
 
 ## The async path
 
@@ -280,18 +292,32 @@ turn genuinely depends on the answer** and there's no useful work to
 do in parallel. If you could send the question async, keep working,
 and pick up the response next turn, async is the right move.
 
-## The AI escalation stub
+## The AI escalation stub — don't reach for it
 
-`request_ai_escalation` is registered but **not yet implemented**.
-Calling it returns an error pointing at two workarounds:
+`request_ai_escalation` is registered in the catalog but the
+handler returns `"not yet implemented"` on every call. It exists
+as a phantom-symmetry artifact alongside `request_human_escalation`
+— the sync-AI slot was completed to match the sync-human slot, but
+the implementation never landed. **Calling it always errors.**
 
-- Use `request_human_escalation` if a human can answer
-- Escalate by selecting a higher-capability routing profile (e.g.
-  `thane:premium`) at the orchestrator side — that brings a frontier
-  model into the loop for the next turn
+If you find yourself reaching for AI-shaped escalation, the working
+alternatives are:
 
-Don't include `request_ai_escalation` in workflow shapes that assume
-it works. When (if) it lands, the tool description here will say so.
+- **For "make the current turn smarter"** — that's an orchestrator-
+  side concern, not a tool call. Selecting a higher-capability
+  routing profile (e.g. `thane:premium`) brings a frontier model
+  into the next loop iteration. The loop's `SupervisorProfile`
+  field already does this on supervisor turns.
+- **For "ask a one-shot frontier agent for judgment on this specific
+  question"** — spawn a delegate with `thane_now` and a premium
+  profile. Returns the delegate's answer inline; same shape as
+  what `request_ai_escalation` was supposed to be.
+- **For "get a human's read instead"** — `request_human_escalation`
+  (sync) or `request_human_decision` (async).
+
+The catalog will lose this entry in a future cycle once the
+single-unified "ask for assistance" tool design lands (tracked
+separately as a redesign issue). Until then: skip it.
 
 ## Cross-references
 
