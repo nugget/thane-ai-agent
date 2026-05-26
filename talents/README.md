@@ -141,8 +141,13 @@ a comment explaining why.
 
 ## Authoring guidance
 
-Coming in a follow-on PR: a deeper guide on the decision-trail pattern —
-when to use multi-node trails, how to write good per-leaf teasers, the
-"decision frame → 3-5 teasers" root shape, and the success criterion of
-concrete JSON in leaves. Until then, read `loops-examples.md` for the
-canonical example and `loops.md` for the canonical doctrine voice.
+See [`docs/talent-authoring.md`](../docs/talent-authoring.md) for the
+craft side: the decision-trail pattern, when to use multi-node trails
+vs flat prose, how to write good per-leaf teasers, the "decision frame
+→ 3-5 teasers" root shape, concrete JSON in leaves as the leaf
+success criterion, and the anti-patterns that bit earlier PRs.
+
+The quick orientation: read [`loops-examples.md`](loops-examples.md)
+for the canonical multi-node decision tree, and [`loops.md`](loops.md)
+for the canonical doctrine voice. If your draft doesn't feel like
+either of those, it's probably trying to be both.
