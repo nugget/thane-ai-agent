@@ -1,7 +1,6 @@
 ---
 name: session
 tags: [session]
-kind: trailhead
 teaser: "Open for conversation-lifecycle decisions — reset, close, checkpoint, or split."
 ---
 
