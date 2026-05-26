@@ -16,7 +16,7 @@ place of `remember_fact` more often than it reaches for memory itself:
 
 | You want to store... | Surface | Why not memory |
 |---|---|---|
-| "Frank prefers Signal" / "Alice works at X" / any person attribute | `contacts` (`save_contact`) | Person identity belongs on a contact record, not loose facts |
+| "Frank prefers Signal" / "Alice works at X" / any person attribute | `contacts` (`contact_save`) | Person identity belongs on a contact record, not loose facts |
 | "The VLAN renumber landed 2026-04-22" / a project decision / a design rationale | `documents` or a workspace file | Complex, evolving, or document-shaped knowledge — memory truncates to a key+value |
 | "What did this person and I last discuss" | `archive_text` | The conversation history *is* the search surface for past discussion |
 | The texture/tone/arc of *this* conversation | `session_working_memory` (covered below; also see `working-memory.md`) | Different store with different lifetime |
@@ -162,7 +162,7 @@ section is the *operational* documentation; that one is the craft.
 ## Cross-references
 
 - For person attributes (anything about a specific human), bounce
-  to `contacts` (`save_contact`). The contact directory is the
+  to `contacts` (`contact_save`). The contact directory is the
   authoritative person record; memory should not duplicate it.
 - For complex or evolving knowledge that won't fit in a key+value
   shape, bounce to `documents` for managed docs or workspace files
