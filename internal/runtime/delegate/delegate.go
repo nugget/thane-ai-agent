@@ -855,7 +855,7 @@ func (e *Executor) profileForScope(profileName string, scopeTags []string) *Prof
 			return profile
 		}
 	}
-	if hasAnyTag(scopeTags, "ha", "ha_admin") {
+	if hasAnyTag(scopeTags, "ha") {
 		if profile := e.profiles["ha"]; profile != nil {
 			return profile
 		}

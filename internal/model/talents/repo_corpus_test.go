@@ -60,8 +60,9 @@ func loadRepoTalents(t *testing.T) []Talent {
 // block per deployment) are intentionally rejected here: they're not
 // portable across configurations and shouldn't appear in the bundled
 // talent corpus. If a concept genuinely deserves a trailhead pointer,
-// promote it to a real [toolcatalog.BuiltinTagSpec] entry — see
-// ha_admin's addition alongside this test as the worked example.
+// promote it to a real [toolcatalog.BuiltinTagSpec] entry (and back it
+// with an in-repo talent tagged to match), or declare the tag on
+// another loaded talent's `tags:` field for intra-talent navigation.
 func TestRepoTrailheadNextTagsResolve(t *testing.T) {
 	talents := loadRepoTalents(t)
 	known := buildResolvableTagSet(talents)

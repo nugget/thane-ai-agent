@@ -233,7 +233,6 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 		tags []string
 	}{
 		{name: "ha", tags: []string{"ha"}},
-		{name: "ha_admin", tags: []string{"ha_admin"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var captured looppkg.Request

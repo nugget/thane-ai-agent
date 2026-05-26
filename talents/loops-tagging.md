@@ -86,11 +86,6 @@ which loop family is doing the launching:
   "just the basics" knob — see above. Pass an explicit narrow set
   instead.
 
-- **Adding `ha_admin` without `ha`.** `ha_admin` is an additive
-  routing hint, not a self-contained surface — pair it with `ha` or
-  the loop ends up with no HA tools at all. The catalog tag
-  description spells this out.
-
 ## Discovering what's loaded vs. what a tag would open
 
 These are two different questions with two different answers.

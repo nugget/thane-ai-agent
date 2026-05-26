@@ -2,7 +2,7 @@
 kind: trailhead
 tags: [ha]
 teaser: "Open for Home Assistant state, control, registry, automation, and history."
-next_tags: [awareness, notifications, operations, ha_admin]
+next_tags: [awareness, notifications, operations]
 ---
 
 # HA Trailhead

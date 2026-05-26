@@ -134,9 +134,8 @@ determine the delegate's tool and tagged context scope.
 | `ha` | `ha` when no explicit tags are supplied | local, device-control mission | HA-domain delegations |
 
 The model-facing tools do not expose a `profile` knob. When a delegate's
-scope includes the `ha` or `ha_admin` tag, the executor selects the `ha`
-profile's budget and routing hints automatically; otherwise it uses
-`general`.
+scope includes the `ha` tag, the executor selects the `ha` profile's
+budget and routing hints automatically; otherwise it uses `general`.
 
 Delegates inherit elective caller capability tags by default. This keeps
 task context such as activated domain tags or KB articles attached to
