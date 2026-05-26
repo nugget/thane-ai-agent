@@ -2,8 +2,8 @@
 
 Read this before writing or restructuring a talent. The audience for a
 talent is the model — past-self writing for present-self about how to
-move through a domain. The audience for *this* doc is the human
-contributor authoring those talents. The
+move through a domain. The audience for *this* doc is whoever is
+authoring those talents next — human contributor or agent. The
 [talents/README.md](../talents/README.md) is the quick-reference
 companion (file naming, frontmatter shape, what kinds exist, regression
 tests). This page is about craft: how to mark a good trail.
@@ -300,9 +300,14 @@ written. The `TestRepoTalentToolReferences` regression test catches
 the obvious shape; the less obvious shape is the model wanting a
 verb-noun tool that doesn't exist and the talent confirming the
 hallucination. When you reach for a tool name while writing a talent,
-verify it's in
-[`internal/model/toolcatalog/catalog.go`](../internal/model/toolcatalog/catalog.go)
-or run `grep "Name:" internal/tools/*.go` to confirm.
+verify it's a map key in
+[`internal/model/toolcatalog/catalog.go`](../internal/model/toolcatalog/catalog.go) —
+that file is the canonical list of every registered tool regardless of
+which package implements it (tools live in `internal/tools/`,
+`internal/channels/*`, and other provider packages, so a grep scoped to
+`internal/tools/` alone will miss real tools like `mqtt_wake_add`). If
+in doubt, run `go test ./internal/model/talents/ -run
+TestRepoTalentToolReferences` and let the test surface the miss.
 
 ### Wrong-data-store substitution
 
@@ -348,10 +353,17 @@ allowlist is short on purpose; every addition is a small architectural
 decision.
 
 The third safety net is `TestTalents_SkipsContributorDocs` in the
-loader tests — it pins the rule that uppercase-leading markdown files
-in the talents directory are contributor docs, not talents. Without
-that filter, this very document — if it lived in `talents/` instead
-of `docs/` — would silently inject into every model prompt forever.
+loader tests — it pins the rule that **uppercase-leading** markdown
+files in the talents directory (`README.md`, `CONTRIBUTING.md`,
+`LICENSE.md`) are treated as contributor docs and skipped, not as
+talents. Without that filter, `talents/README.md` would silently
+inject into every model prompt forever.
+
+The filter is filename-shape only: a lowercase-named markdown file
+that ends up inside `talents/` — say, a stray copy of this very guide
+named `talent-authoring.md` — would still load as an untagged
+always-on talent. Keep contributor docs uppercase-leading, or place
+them outside the directory.
 
 ## When you're stuck
 
