@@ -94,7 +94,12 @@ fetch Home Assistant forecast response data each turn and include a
 compact forecast in the injected entity context. Use `forecast: none` to
 clear forecast fetching for that subscription.
 
-## `ha` / `homeassistant` — Home Assistant state and control
+## `ha` — Home Assistant state and control
+
+`homeassistant` is an alias that resolves to `ha`. Either name works at
+`activate_capability`; the canonical name `ha` is what flows through the
+scope and prompt rendering.
+
 
 | Tool | Description |
 |------|-------------|

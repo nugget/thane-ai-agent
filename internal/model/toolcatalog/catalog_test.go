@@ -1,9 +1,117 @@
 package toolcatalog
 
 import (
+	"sort"
 	"strings"
 	"testing"
 )
+
+// TestBuiltinTagSpecs_ParentsResolveToMenuTags pins the invariant that
+// every Parent value points at a real menu tag. Catches the dangling
+// reference that the loose prose "Usually leads to X, Y, Z" descriptions
+// were prone to — a leaf claiming Parents: []string{"typo"} or pointing
+// at a tag whose Kind isn't TagKindMenu would slip past code review
+// without this guard.
+func TestBuiltinTagSpecs_ParentsResolveToMenuTags(t *testing.T) {
+	specs := BuiltinTagSpecs()
+	var problems []string
+	for name, spec := range specs {
+		for _, parent := range spec.Parents {
+			parentSpec, ok := specs[parent]
+			if !ok {
+				problems = append(problems, name+": parent "+parent+" is not a registered tag")
+				continue
+			}
+			if !parentSpec.Kind.IsMenu() {
+				problems = append(problems, name+": parent "+parent+" is registered but not a menu (Kind="+string(parentSpec.Kind)+")")
+			}
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		t.Fatalf("BuiltinTagSpecs Parents reference non-menu tags:\n  - %s",
+			strings.Join(problems, "\n  - "))
+	}
+}
+
+// TestBuiltinTagSpecs_AliasesResolveToCanonicals pins that every Alias
+// is unique across the catalog (no two canonical tags claim the same
+// alias) and doesn't collide with an existing canonical name. Without
+// this, a future addition like Aliases: []string{"ha"} on a sibling tag
+// would silently override the canonical ha entry in the reverse-alias
+// map.
+func TestBuiltinTagSpecs_AliasesResolveToCanonicals(t *testing.T) {
+	specs := BuiltinTagSpecs()
+	seenAliases := make(map[string]string)
+	var problems []string
+	for name, spec := range specs {
+		for _, alias := range spec.Aliases {
+			if _, ok := specs[alias]; ok {
+				problems = append(problems, name+": alias "+alias+" collides with an existing canonical tag")
+				continue
+			}
+			if owner, dup := seenAliases[alias]; dup {
+				problems = append(problems, name+": alias "+alias+" already declared by "+owner)
+				continue
+			}
+			seenAliases[alias] = name
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		t.Fatalf("BuiltinTagSpecs Aliases are not unique:\n  - %s",
+			strings.Join(problems, "\n  - "))
+	}
+}
+
+// TestCanonicalTagName_ResolvesHomeAssistantAlias is the worked example
+// for alias resolution: the reverse-alias map populated at init must
+// resolve homeassistant → ha, and the canonical name must round-trip
+// unchanged.
+func TestCanonicalTagName_ResolvesHomeAssistantAlias(t *testing.T) {
+	if got := CanonicalTagName("homeassistant"); got != "ha" {
+		t.Fatalf("CanonicalTagName(homeassistant) = %q, want ha", got)
+	}
+	if got := CanonicalTagName("ha"); got != "ha" {
+		t.Fatalf("CanonicalTagName(ha) = %q, want ha (canonical round-trip)", got)
+	}
+	if got := CanonicalTagName("nonexistent"); got != "nonexistent" {
+		t.Fatalf("CanonicalTagName(nonexistent) = %q, want nonexistent (unchanged for unknown)", got)
+	}
+}
+
+// TestHasBuiltinTag_AcceptsAliases checks that aliases register as
+// known tags. The runtime relies on this so validation against
+// unknown-tag references (channel_tags pointing at homeassistant, KB
+// articles tagged homeassistant) keeps working through the alias.
+func TestHasBuiltinTag_AcceptsAliases(t *testing.T) {
+	if !HasBuiltinTag("homeassistant") {
+		t.Fatal("HasBuiltinTag(homeassistant) = false, want true via ha's alias")
+	}
+	if !HasBuiltinTag("ha") {
+		t.Fatal("HasBuiltinTag(ha) = false, want true (canonical)")
+	}
+	if HasBuiltinTag("definitely_not_a_tag") {
+		t.Fatal("HasBuiltinTag(definitely_not_a_tag) = true, want false")
+	}
+}
+
+// TestLookupBuiltinTagSpec_ResolvesAliases confirms that fetching the
+// spec for an alias returns the canonical spec.
+func TestLookupBuiltinTagSpec_ResolvesAliases(t *testing.T) {
+	viaCanonical, ok := LookupBuiltinTagSpec("ha")
+	if !ok {
+		t.Fatal("LookupBuiltinTagSpec(ha) not found")
+	}
+	viaAlias, ok := LookupBuiltinTagSpec("homeassistant")
+	if !ok {
+		t.Fatal("LookupBuiltinTagSpec(homeassistant) not found via alias")
+	}
+	if viaAlias.Description != viaCanonical.Description {
+		t.Fatalf("alias resolution returned different spec: alias=%+v canonical=%+v",
+			viaAlias, viaCanonical)
+	}
+}
 
 func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	surface := BuildCapabilitySurface(
@@ -34,7 +142,7 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	if !surface[0].Core {
 		t.Fatal("forge should be core")
 	}
-	if !surface[1].Menu {
+	if !surface[1].Kind.IsMenu() {
 		t.Fatal("interactive should be a menu tag")
 	}
 	if !surface[2].Protected {
@@ -142,7 +250,7 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
-		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
+		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Kind: TagKindMenu},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
 	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
@@ -179,9 +287,9 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 
 func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	desc := RenderCapabilityActivationDescription([]CapabilitySurface{
-		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
+		{Tag: "development", Description: "Development trailhead.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Kind: TagKindMenu},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
-		{Tag: "owner", Description: "Owner guidance.", Menu: true, Protected: true},
+		{Tag: "owner", Description: "Owner guidance.", Protected: true},
 	})
 
 	if !strings.Contains(desc, "coarse-to-fine menu") {

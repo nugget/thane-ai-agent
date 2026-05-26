@@ -262,7 +262,7 @@ func overlayExcludeReason(tag string) string {
 }
 
 func shouldSeedBuiltinTag(tag string, spec toolcatalog.BuiltinTagSpec) bool {
-	if spec.Protected || spec.Menu {
+	if spec.Protected || spec.Kind.IsMenu() {
 		return true
 	}
 	switch tag {

@@ -5,7 +5,7 @@ package toolcatalog
 
 import (
 	"encoding/json"
-	"maps"
+	"fmt"
 	"sort"
 )
 
@@ -24,12 +24,82 @@ type BuiltinToolSpec struct {
 	Tags        []string
 }
 
-// BuiltinTagSpec captures compiled-in metadata for a tag/toolset.
+// TagKind describes a tag's surface role in the capability menu.
+//
+//   - [TagKindLeaf] is the default: an ordinary capability tag that
+//     carries tools, talents, and KB articles. When the model activates
+//     a leaf tag, those resources load into scope.
+//   - [TagKindMenu] is a coarse trailhead that routes the model toward
+//     leaf tags. Menus typically carry few or no tools of their own;
+//     their value is the per-branch teaser surfaced in the capability
+//     menu prompt.
+//
+// Tag kind is orthogonal to [BuiltinTagSpec.Protected] — a leaf can be
+// protected (e.g. `message_channel`, `owner`) without becoming a menu.
+type TagKind string
+
+const (
+	// TagKindLeaf is the default kind. Empty string normalizes to this.
+	TagKindLeaf TagKind = "leaf"
+	// TagKindMenu marks a coarse trailhead — see [TagKind] for the
+	// distinction from leaves.
+	TagKindMenu TagKind = "menu"
+)
+
+// IsMenu reports whether the kind is a menu. The empty string
+// (zero-value) is treated as [TagKindLeaf].
+func (k TagKind) IsMenu() bool {
+	return k == TagKindMenu
+}
+
+// BuiltinTagSpec captures compiled-in metadata for a tag/toolset. The
+// shape grew incrementally and was formalized in PR-G as part of the
+// #910 talent corpus overhaul to make tag-grouping data instead of
+// prose: leaf tags now point at the menu(s) they belong under via
+// [Parents], and alternate names funnel through [Aliases] at activation
+// time instead of being separately-declared spec entries.
 type BuiltinTagSpec struct {
+	// Description is the short, model-facing summary rendered into
+	// the capability menu and inspect_capability output.
 	Description string
-	Core        bool
-	Menu        bool
-	Protected   bool
+
+	// Core tags are pinned in every scope by operator configuration.
+	// Survives capability-tag filtering; cannot be deactivated by the
+	// model. Re-seeded each run from config — not a property of
+	// individual built-in tags, but operators can set it via the
+	// capability_tags YAML overlay.
+	Core bool
+
+	// Kind classifies the tag's surface role. Zero value is treated
+	// as [TagKindLeaf]; menu trailheads explicitly set
+	// [TagKindMenu]. See [TagKind] for the orthogonality with
+	// Protected.
+	Kind TagKind
+
+	// Protected tags cannot be toggled via activate_capability /
+	// deactivate_capability — they're reserved for runtime trust
+	// assertions (e.g. owner-authenticated conversations, channel
+	// affordance tags asserted by the integration). Orthogonal to
+	// Kind: a tag can be a protected leaf (`message_channel`,
+	// `owner`) without being a menu.
+	Protected bool
+
+	// Parents lists the menu tag(s) this leaf appears under in the
+	// hierarchical capability menu. Multi-valued because some leaves
+	// legitimately serve more than one menu (e.g. `files` is
+	// reachable from both development and knowledge). Omitted for
+	// menus themselves and for tags that don't fit any menu — those
+	// surface as top-level entries in the menu rendering.
+	Parents []string
+
+	// Aliases lists alternate names that resolve to this canonical
+	// tag. Most relevant for backward-compatible renames or
+	// operator-friendly synonyms (e.g. `homeassistant` resolves to
+	// `ha`). Resolution happens at every boundary the tag enters the
+	// system: activate_capability / inspect_capability calls,
+	// channel-tag binding, operator YAML. Internally only canonical
+	// names exist.
+	Aliases []string
 }
 
 // CapabilitySurface captures the resolved model-facing view of a
@@ -52,12 +122,15 @@ type CapabilitySurface struct {
 	ToolEntries   []CapabilityToolEntry
 	ExcludedTools []CapabilityToolEntry
 	Core          bool
-	Menu          bool
-	Protected     bool
-	Loaded        bool
-	KBArticles    int
-	LiveContext   bool
-	AdHoc         bool
+	// Kind mirrors [BuiltinTagSpec.Kind]. Use Kind.IsMenu() to test
+	// menu-ness; the zero value normalizes to [TagKindLeaf].
+	Kind        TagKind
+	Parents     []string
+	Protected   bool
+	Loaded      bool
+	KBArticles  int
+	LiveContext bool
+	AdHoc       bool
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
@@ -239,15 +312,84 @@ func BuiltinToolSpecs() map[string]BuiltinToolSpec {
 	return out
 }
 
-// BuiltinTagSpecs returns a copy of the compiled-in tag catalog.
+// BuiltinTagSpecs returns a deep copy of the compiled-in tag catalog.
+// The returned map and the slice fields on each spec (Parents,
+// Aliases) are independent copies — mutating them does not affect the
+// global catalog. Parallels [BuiltinToolSpecs] for the tool half.
 func BuiltinTagSpecs() map[string]BuiltinTagSpec {
-	return maps.Clone(builtinTagSpecs)
+	out := make(map[string]BuiltinTagSpec, len(builtinTagSpecs))
+	for name, spec := range builtinTagSpecs {
+		spec.Parents = append([]string(nil), spec.Parents...)
+		spec.Aliases = append([]string(nil), spec.Aliases...)
+		out[name] = spec
+	}
+	return out
 }
 
-// HasBuiltinTag reports whether the name is a compiled-in tag.
+// HasBuiltinTag reports whether the name is a compiled-in tag,
+// resolving aliases. So `HasBuiltinTag("homeassistant")` returns true
+// because `ha` declares it as an alias.
 func HasBuiltinTag(name string) bool {
-	_, ok := builtinTagSpecs[name]
+	if _, ok := builtinTagSpecs[name]; ok {
+		return true
+	}
+	_, ok := builtinTagAliases[name]
 	return ok
+}
+
+// CanonicalTagName returns the canonical tag name for value, resolving
+// aliases. If value is already a canonical tag (or an unknown name), it
+// is returned unchanged.
+func CanonicalTagName(value string) string {
+	if canonical, ok := builtinTagAliases[value]; ok {
+		return canonical
+	}
+	return value
+}
+
+// LookupBuiltinTagSpec returns the spec for name, resolving aliases.
+// Returns the zero value and false for unknown names.
+func LookupBuiltinTagSpec(name string) (BuiltinTagSpec, bool) {
+	if spec, ok := builtinTagSpecs[name]; ok {
+		return spec, true
+	}
+	if canonical, ok := builtinTagAliases[name]; ok {
+		spec, found := builtinTagSpecs[canonical]
+		return spec, found
+	}
+	return BuiltinTagSpec{}, false
+}
+
+// builtinTagAliases is the reverse-lookup map populated from each
+// canonical spec's Aliases field at package init. Lookups are
+// alias → canonical name; resolving an unknown name returns ("", false).
+//
+// Until alias resolution propagates to every tag ingress point (config
+// validation, channel-tag binding, loop spec, persisted scope), tools
+// belonging to a canonical tag with aliases should *also* carry the
+// alias names in their Tags slice — see the `ha` / `homeassistant`
+// pattern in builtinToolSpecs. The CanonicalTagName helper is the
+// model-facing resolution boundary; the double-tagging is the
+// tag-index bridge until that resolution covers every ingress.
+var builtinTagAliases map[string]string
+
+func init() {
+	builtinTagAliases = make(map[string]string)
+	for canonical, spec := range builtinTagSpecs {
+		for _, alias := range spec.Aliases {
+			if _, collides := builtinTagSpecs[alias]; collides {
+				panic(fmt.Sprintf(
+					"toolcatalog: alias %q on canonical tag %q collides with an existing canonical tag of the same name",
+					alias, canonical))
+			}
+			if existing, dup := builtinTagAliases[alias]; dup {
+				panic(fmt.Sprintf(
+					"toolcatalog: alias %q declared by both %q and %q",
+					alias, existing, canonical))
+			}
+			builtinTagAliases[alias] = canonical
+		}
+	}
 }
 
 // BuildCapabilitySurface builds a sorted capability surface from
@@ -263,7 +405,8 @@ func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]st
 			Description: descriptions[tag],
 			Tools:       copiedTools,
 			Core:        core[tag],
-			Menu:        spec.Menu,
+			Kind:        spec.Kind,
+			Parents:     append([]string(nil), spec.Parents...),
 			Protected:   protected[tag],
 		})
 	}

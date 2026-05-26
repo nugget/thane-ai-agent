@@ -45,6 +45,10 @@ boundaries, that's a smell.
 | **Scope** / **capabilityScope** | The runtime tag-set object for one `agent.Run()`. | [`capability_scope.go:51`][scope]. | Lives in context; mutated by tools; not directly persisted. |
 | **Core tool** | A boolean flag on a `Tool`. | [`tools.Tool.Core`][core-tool]. | Tool-level, not tag-level. Survives all tag filters. Used for meta-tools (`activate_capability` itself, etc.) and for `RuntimeTools`. |
 | **Core tag** | Tags pinned in every scope by config. | [`Executor.SetCoreTags`][exec-core], config `capability_tags.*.core`. | Tag-level, not tool-level. Re-seeded each run. |
+| **Tag kind** | Tag's surface role: leaf (carries tools) vs. menu (coarse trailhead routing to leaves). | [`BuiltinTagSpec.Kind`][tag-spec]. | Orthogonal to Protected. Menus surface as routing entries in the activation prompt; leaves carry tool surface. |
+| **Tag parents** | Menu(s) a leaf appears under in the hierarchical menu. Multi-valued. | [`BuiltinTagSpec.Parents`][tag-spec]. | Data, not prose. Replaces the "usually leads to X, Y, Z" sentences that were the only menu→leaf mapping before PR-G. |
+| **Tag aliases** | Alternate names that resolve to a canonical tag at every system boundary (activate_capability, channel binding, config). | [`BuiltinTagSpec.Aliases`][tag-spec], [`CanonicalTagName`][tag-canonical]. | Internally only canonical names exist; aliases funnel in at boundaries via reverse-lookup map populated at init. `homeassistant` resolves to `ha`. |
+| **Protected tag** | Runtime-asserted; can't be model-toggled. | [`BuiltinTagSpec.Protected`][tag-spec]. | Orthogonal to Kind. A leaf can be protected (`message_channel`, `owner`) without being a menu. |
 | **Delegate profile** (`delegate.Profile`) | Operational bundle for a delegated task: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints*. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
 | **Routing profile** | A user-facing model name (`thane:premium`, `thane:ops`). | [Routing Profiles](../operating/routing-profiles.md). | Selected by Ollama-API model name; resolves to a `LoopProfile`. |
@@ -57,6 +61,8 @@ boundaries, that's a smell.
 [delegate-profile]: ../../internal/runtime/delegate/profile.go
 [loop-profile]: ../../internal/model/router/loopprofile.go
 [configured-tags]: ../../internal/runtime/loop/tooling.go
+[tag-spec]: ../../internal/model/toolcatalog/catalog.go
+[tag-canonical]: ../../internal/model/toolcatalog/catalog.go
 [pr-813]: https://github.com/nugget/thane-ai-agent/pull/813
 
 The glossary in [docs/understanding/glossary.md](glossary.md) covers
