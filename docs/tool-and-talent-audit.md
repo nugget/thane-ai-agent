@@ -110,6 +110,7 @@ The recurring anti-patterns:
 | **Cafeteria talent** | Flat list of "use X when Y" bullets with no decision frame | `documents-knowledge.md` before PR-D — 12 bullets, no shape |
 | **Ghost tool reference** | Talent backticks a tool name that doesn't exist | `watch_entity` / `unwatch_entity` in early `loops-doctrine.md` |
 | **Wrong-data-store** | Talent points at a real tool that mutates a different store than the reader expects | `add_entity_subscription` (conversation-wide) vs `update_entity_subscriptions` (loop-scoped) — caught in PR-A |
+| **Type-name vs runtime mismatch** | Talent describes behavior matching internal type names rather than actual runtime behavior; the type signals one thing, the runtime delivers another | Email trust gate: `TrustResult.Warnings` slice name implied "send proceeds with warnings" but `HasIssues()` treats warnings as rejections — caught in PR-927 Copilot review |
 | **Buried safety doctrine** | Action-shaped leaf with safety pattern present but at the bottom rather than as a featured root-level invariant | `ha-trailhead.md`'s find_entity → call_service → get_state pattern lived under a "Verifying device control" section at the file's end; `ha.md` elevated it to the root's "constants across all branches" section |
 | **Cross-reference gap** | Leaf carries internal routing but no "and here's when to bounce" section | Most pre-grammar leaves |
 | **Missing border doctrine** | Each leaf is internally clean, but the *boundaries* between leaves aren't featured at the model's actual entry points. A model that lands on the wrong leaf reads through the whole talent before any cross-reference disambiguates — by which point it has already burned the turn picking a tool. Disambiguation tables belong **on both sides of the border**, at the top, not only in the cross-references list at the bottom. | `archive.md` features the archive-vs-logs_query split prominently but doesn't disambiguate against memory at all; the pre-refresh `memory.md` carries no disambiguation table. The two stores share lookup-shaped framing yet point at neither each other's surface. Same gap pattern for files-vs-documents, notifications-vs-email, contacts-vs-memory. The follow-up border-audit PR sweeps these (#936 for the on-main pairs; the in-flight leaf PRs cover the rest). |
@@ -302,6 +303,32 @@ Both refinements are about the *shape of the trail system* rather
 than the contents of any single leaf. The audit doc previously
 treated each leaf as an independent unit; it now also treats the
 inter-leaf taxonomy as something the audit can fix.
+
+### 2026-Q2 — email leaf (cycle #3)
+
+- **Type signatures lie about runtime behavior.** The email trust
+  gate's internal type names a slice `Warnings`, suggesting "send
+  proceeds with a warning result." The actual runtime calls
+  `HasIssues() = len(Warnings) > 0 || len(Blocked) > 0` and aborts
+  on either. The first draft of `email.md` described the
+  type-implied behavior; Copilot caught it in review. New
+  anti-pattern (**Type-name vs runtime mismatch**) added to step 3's
+  table. The author check: trace the failure path in code, not just
+  in type signatures.
+- **Safety-surface leaves benefit from compressing the safety
+  constant into the trailhead bullet.** Updates to the people
+  trailhead's email/contacts bullets and the interactive/operations
+  trailheads' session bullets all gained value by including the
+  safety qualifier ("only on explicit user request," "contact-trust
+  gated") rather than just naming the sub-tags. Listing branches is
+  navigation; naming the safety constant is the *reason* the model
+  cares the leaf exists.
+- **Flat-doctrine vs multi-node grammar held.** Session (4
+  mechanical tools, each genuinely distinct → flat) and HA / archive
+  / email / contacts (real forks → multi-node) both fell out cleanly
+  from the leaf grammar's tool-count + fork-honesty rule. The rule
+  appears stable enough that future cycles can apply it without
+  re-deriving.
 
 ### 2026-Q2 — HA leaf + audit doc (this cycle)
 

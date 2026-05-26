@@ -20,7 +20,9 @@ Choose the next move deliberately:
 - If the task is specifically about Signal messaging, activate
   `signal`.
 - If the relationship thread lives in inbox history or email
-  correspondence rather than chat, activate `email`.
+  correspondence rather than chat, activate `email` — it branches
+  into triage (read), respond (compose, trust-gated by contacts),
+  and organize (mark/move).
 - If `owner` is already present and authenticated owner identity
   matters, use it as trustworthy ground truth.
 
