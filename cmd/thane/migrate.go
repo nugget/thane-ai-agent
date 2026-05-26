@@ -37,10 +37,10 @@ var datasetRename = map[string]string{
 // legacyFilenames are pre-cutover artifacts that move verbatim into
 // sources/thane_legacy/ (preserving the original filename).
 var legacyFilenames = map[string]bool{
-	"thane.log":                  true,
-	"stderr.log":                 true,
-	"original-thane-log.tar.gz":  true,
-	"final-thane-log.tar.gz":     true,
+	"thane.log":                 true,
+	"stderr.log":                true,
+	"original-thane-log.tar.gz": true,
+	"final-thane-log.tar.gz":    true,
 }
 
 // legacyGzPattern matches the daily-rotated gzipped slog era
