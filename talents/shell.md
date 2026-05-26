@@ -26,7 +26,7 @@ job with structured results and tighter safety:
 | `ls`, `cat`, `find`, `grep` inside the workspace | `files` tag (`file_read`, `file_list`, `file_grep`, `file_search`, `file_tree`) |
 | `git status`, `git log`, `gh pr view`, anything PR/issue-shaped | `forge` tag (`forge_pr_get`, `forge_issue_list`, etc.) |
 | `curl https://...`, `wget` | `web` tag (`web_fetch`) |
-| `ha-cli`, `hass` invocations | `ha` tag (`get_state`, `call_service`, `control_device`) |
+| `ha-cli`, `hass` invocations | `ha` tag (`ha_get_state`, `ha_call_service`, `ha_control_device`) |
 | Querying logs | `logs_query` (core; always available) |
 
 `exec` is the right call when *nothing* in the catalog covers the
