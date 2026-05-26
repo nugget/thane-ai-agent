@@ -254,7 +254,7 @@ func TestTalents(t *testing.T) {
 
 	// Write talent files with and without frontmatter.
 	writeFile(t, dir, "core.md", "# Core\nAlways loaded.")
-	writeFile(t, dir, "ha-tools.md", "---\nkind: trailhead\ntags: [ha]\nteaser: \"Open when the work touches home state.\"\nnext_tags: [ha_admin, notifications]\n---\n# HA Tools\nHome Assistant guidance.")
+	writeFile(t, dir, "ha-tools.md", "---\nkind: trailhead\ntags: [ha]\nteaser: \"Open when the work touches home state.\"\nnext_tags: [awareness, notifications]\n---\n# HA Tools\nHome Assistant guidance.")
 	writeFile(t, dir, "web.md", "---\ntags: [web, remote]\n---\n# Web\nWeb guidance.")
 
 	loader := NewLoader(dir)
@@ -296,8 +296,8 @@ func TestTalents(t *testing.T) {
 	if talents[1].Teaser != "Open when the work touches home state." {
 		t.Errorf("talents[1].Teaser = %q, want menu teaser", talents[1].Teaser)
 	}
-	if got := strings.Join(talents[1].NextTags, ","); got != "ha_admin,notifications" {
-		t.Errorf("talents[1].NextTags = %q, want ha_admin,notifications", got)
+	if got := strings.Join(talents[1].NextTags, ","); got != "awareness,notifications" {
+		t.Errorf("talents[1].NextTags = %q, want awareness,notifications", got)
 	}
 
 	if talents[2].Name != "web" {

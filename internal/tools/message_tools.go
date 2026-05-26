@@ -23,6 +23,16 @@ func (r *Registry) ConfigureMessageTools(deps MessageToolDeps) {
 	r.registerMessageTools()
 }
 
+// registerMessageTools registers request_core_attention.
+//
+// Always-available rationale: escalation primitive. Any tightly
+// scoped service or delegate loop must be able to reach back to the
+// core loop when something deserves the operator's attention. Hiding
+// this behind a tag would orphan loops that already filtered down to
+// their domain — they'd be unable to surface a concern *because* they
+// did the right thing and scoped narrowly. The cost of an over-eager
+// escalation is a wasted supervisor turn; the cost of a missing
+// escalation primitive is a silent service loop.
 func (r *Registry) registerMessageTools() {
 	if r.messageBus == nil {
 		return

@@ -100,6 +100,14 @@ func (s *LensStore) Remove(lens string) error {
 // across all conversations. Lenses use the same tag system as
 // capabilities — when a lens is active, KB articles and talents tagged
 // with that lens name are loaded into every conversation.
+//
+// All three are AlwaysAvailable. Rationale: lens management is the
+// meta-operation that adjusts which lens is in effect. Locking it
+// behind a lens would be a chicken-and-egg — you can't activate a
+// lens if activate_lens itself depends on a lens being active. Same
+// argument applies to deactivate_lens (must work to release a lens
+// the loop no longer needs) and list_lenses (self-introspection
+// can't depend on what's currently active).
 func (r *Registry) SetLensTools(store *LensStore) {
 	if store == nil {
 		return

@@ -42,7 +42,7 @@ func RuntimeContract() string {
 		"Capabilities are bright trailheads into richer tool, context, and talent menus. When a task needs a domain, open one relevant door, read what appears, and keep moving without narrating the machinery.",
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
-		"- Use capability tools for runtime state: `activate_capability`, `deactivate_capability`, `reset_capabilities`, `list_loaded_capabilities`, or `inspect_capability` when those exact tools are visible.",
+		"- Use capability tools for runtime state: `activate_capability`, `deactivate_capability`, `reset_capabilities`, or `inspect_capability` when those exact tools are visible. To see what's currently loaded, read the `## Active Capabilities` section already in this prompt — no tool call needed.",
 		"- Preserve semantic path references exactly as provided, including prefixes like `kb:` or `core:`. Do not rewrite, normalize, or paraphrase them.",
 		"- Start with one broad trailhead unless the request clearly spans domains. Prefer the currently loaded context before opening more doors.",
 		"- If a needed tool is unavailable, use an available tool, activate a relevant capability, delegate with `thane_now` or `thane_assign` when visible, or answer directly.",
@@ -54,7 +54,7 @@ func RuntimeContract() string {
 // pushes the model back toward the exact runtime contract instead of
 // encouraging speculative delegation or invented tool names. It is a
 // format string accepting the tool name as its single argument.
-const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, prefer activate_capability, deactivate_capability, reset_capabilities, list_loaded_capabilities, or inspect_capability when those exact tools are available in this turn. Otherwise choose another available tool or respond directly."
+const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, prefer activate_capability, deactivate_capability, reset_capabilities, or inspect_capability when those exact tools are available in this turn. To see what is currently loaded, read the ## Active Capabilities section of this prompt — no tool call needed. Otherwise choose another available tool or respond directly."
 
 // TimeoutRecoverySystem is the system prompt for the recovery model
 // when the primary model times out after completing tool calls.

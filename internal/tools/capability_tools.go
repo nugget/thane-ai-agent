@@ -108,6 +108,12 @@ func summarizeRemovedTools(tags []string, tagManifest map[string]CapabilityManif
 }
 
 // registerActivateCapability registers the activate_capability tool.
+//
+// Always-available rationale: this is the bootstrap primitive for
+// opening capability scopes. If it required a tag to be loaded first,
+// there would be no way to widen the model's surface from any
+// starting state — a chicken-and-egg that would leave a tightly
+// scoped loop unable to ever ask for more.
 func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
 		Name:            "activate_capability",
@@ -148,6 +154,12 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 }
 
 // registerDeactivateCapability registers the deactivate_capability tool.
+//
+// Always-available rationale: symmetric counterpart to
+// activate_capability. A loop that widened its surface for one phase
+// of work needs to be able to narrow back without keeping a tag
+// loaded just for the release primitive. Locking this behind a tag
+// would create stuck-wide states.
 func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
 		Name:            "deactivate_capability",
@@ -193,6 +205,12 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 }
 
 // registerResetCapabilities registers the reset_capabilities tool.
+//
+// Always-available rationale: the emergency hatch for returning to
+// baseline when the loop has accumulated voluntary tags it no longer
+// needs. Same bootstrap argument as activate/deactivate — must work
+// from any state, including states where the model intentionally
+// dropped most of its surface.
 func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
 		Name:            "reset_capabilities",
@@ -239,11 +257,32 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 }
 
 // registerListLoadedCapabilities registers the list_loaded_capabilities tool.
+//
+// NOT always-available. This tool returns a strict subset of the data
+// already rendered into every prompt under "## Active Capabilities"
+// (see loop.go:1090 → toolcatalog.RenderLoadedCapabilitySummary). The
+// prompt section carries tag, description, tool_count, always_active,
+// protected, ad_hoc, and context per loaded tag; this tool returns
+// just tag, always_active, protected, ad_hoc — so every call burns a
+// tool turn to retrieve less than the model already has in its
+// context.
+//
+// The five-way repair shim at loop.go:1302 (list_capabilities,
+// loaded_capabilities, active_capabilities, get_loaded_capabilities,
+// list_loaded_capabilities) is the smoking gun: the model has been
+// reaching for this tool repeatedly under different names because it
+// looked like the canonical handle for capability introspection. The
+// fix is the prompt section, not a more findable tool.
+//
+// Demoted out of always-available as a stepping stone toward full
+// removal. Keep the registration in place until the repair shim
+// aliases retire too, so the tool still loads when an unfiltered
+// scope happens to include it. The model-facing answer to "what's
+// loaded?" is the prompt section.
 func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "list_loaded_capabilities",
-		AlwaysAvailable: true,
-		Description:     "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
+		Name:        "list_loaded_capabilities",
+		Description: "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -293,6 +332,11 @@ func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagMani
 // attribution (native / mcp / overlay), and optionally
 // operator-excluded tools. Use this to audit "where did this tool
 // come from" or "what's actually in the ha tag at this site".
+//
+// Always-available rationale: auditing a tag must work *before* the
+// tag is activated. The whole point of inspection is to decide
+// whether opening the tag is worth the surface cost, which means the
+// answer can't depend on the tag already being in scope.
 func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
 		Name:            "inspect_capability",
@@ -319,7 +363,7 @@ func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityMa
 			}
 			manifest, ok := tagManifest[tag]
 			if !ok {
-				return "", fmt.Errorf("unknown capability tag %q; use list_loaded_capabilities or activate_capability to discover available tags", tag)
+				return "", fmt.Errorf("unknown capability tag %q; read the ## Active Capabilities section of your prompt to see what's already loaded, or use activate_capability to discover available tags", tag)
 			}
 			includeExcluded, _ := args["include_excluded"].(bool)
 			entry := toolcatalog.RenderCapabilityCatalogEntry(manifest, toolcatalog.CatalogViewOptions{

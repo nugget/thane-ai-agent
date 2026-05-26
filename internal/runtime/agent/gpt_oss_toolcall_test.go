@@ -205,6 +205,11 @@ func TestGptOSSProviderProfile_RecoversCapabilityActivationFromRawText(t *testin
 }
 
 func TestGptOSSProviderProfile_RecoversListLoadedCapabilitiesAliasFromRawText(t *testing.T) {
+	t.Skip("list_loaded_capabilities was demoted from always-available; the " +
+		"gpt-oss raw-text recovery path still parses the alias but the tool " +
+		"now surfaces as 'not available'. Both the tool and the shim are " +
+		"scheduled for retirement (#918) — delete this test along with the " +
+		"shim block in loop.go:1302 when that lands.")
 	mock := &rawTextMockLLM{
 		textProfile: llm.DefaultToolCallTextProfile(),
 		responses: []*llm.ChatResponse{

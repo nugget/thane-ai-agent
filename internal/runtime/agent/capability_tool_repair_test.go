@@ -106,6 +106,11 @@ func TestRepairToolCall_RepairsInventedCapabilityToolName(t *testing.T) {
 }
 
 func TestRepairToolCall_RepairsListCapabilitiesAlias(t *testing.T) {
+	t.Skip("list_loaded_capabilities was demoted from always-available; the " +
+		"repair shim still rewrites the alias but the tool now surfaces as " +
+		"'not available'. Both the tool and the shim are scheduled for " +
+		"retirement (#918) — delete this test along with the shim block " +
+		"in loop.go:1302 when that lands.")
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			{

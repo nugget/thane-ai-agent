@@ -331,6 +331,50 @@ paragraph of posture — it's not a trailhead, it's doctrine that
 should drop the `kind: trailhead` declaration. The discriminator: a
 trailhead points somewhere else. Doctrine stands alone.
 
+### Developer-doc co-mingling
+
+The audience for a talent is the model's decision moment. Background
+about *why* a thing exists, *how* it gets configured at deploy time,
+*what* runtime mechanism drives it, or *who* owns the
+implementation does not belong in talent prose. Those facts don't
+change what the model should do; they only explain it to a human
+reader. Different audience, different page (Godoc, `docs/`, the
+catalog source).
+
+Signal you're co-mingling: you find yourself writing "site-specific,"
+"the operator configures...", "this depends on the deployment," or
+"each deployment's set isn't another's." A model reading those lines
+gets context-heavier without getting decision-clearer. PR #917's
+review cut ~20 lines from `loops-tagging.md` that explained operator
+config and site variation around always-active tags — the model only
+needed "some tags are immutably present; look at `## Active
+Capabilities` for the list."
+
+The same line tells you whether to delete or relocate: if the line
+helps a *contributor* understand the system, move it to Godoc or
+`docs/`; if it doesn't help anyone, delete it.
+
+### Architecture-stale advice
+
+A talent that captures how a system used to work can route the model
+*around* the boundary that exists now. PR #917's `loops-tagging.md`
+example bullet originally said "add `notifications` if the loop
+should be able to escalate" — true in the pre-#696 world where any
+loop called `send_notification` directly. After #696 built the
+core-mediated attention boundary, escalation goes through
+`request_core_attention` (a core tool, free to every loop) and the
+`notifications` tag now holds the human-egress tools that **only the
+core loop** should reach. The stale bullet pointed non-core loops at
+the exact surface the boundary exists to gate.
+
+The regression test catches dead tool names, not dead architectures.
+Whenever you write routing advice, grep the catalog for the tool
+family you're describing and verify the *current* invariants —
+especially around security, attention, and trust boundaries — before
+naming a path. If the talent's framing predates a known refactor or
+issue, treat that as a smell: the current code is the source of
+truth, not the previous talent.
+
 ## Verification
 
 Two regression tests in

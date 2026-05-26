@@ -50,7 +50,6 @@ These tools load on every turn regardless of active tags.
 | `activate_capability` | Activate a capability tag for the current conversation. |
 | `deactivate_capability` | Deactivate a capability tag for the current conversation. |
 | `reset_capabilities` | Return the current conversation to its baseline capability state. |
-| `list_loaded_capabilities` | List capability tags currently loaded in this conversation. |
 | `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
 | `activate_lens` | Activate a persistent global behavioral lens. |
 | `deactivate_lens` | Deactivate a global behavioral lens. |
@@ -345,9 +344,9 @@ The delegate family (`thane_now`, `thane_assign`) uses capability tags as
 its primary tool and context scope. Delegates inherit elective caller tags
 by default so child work keeps the same task context; explicit `tags`
 override profile default tags.
-When the resulting scope includes `ha` or `ha_admin`, the executor uses
-HA-oriented budget and routing hints automatically; otherwise it uses the
-general delegate defaults.
+When the resulting scope includes `ha`, the executor uses HA-oriented
+budget and routing hints automatically; otherwise it uses the general
+delegate defaults.
 Use root trailhead tags such as `development`, `home`, `operations`,
 `knowledge`, `media`, `interactive`, or `people` when the delegate should
 read the menu guidance and choose a narrower branch. Use leaf tags such
