@@ -1,23 +1,25 @@
 // Command archive-migration relocates a legacy Thane log tree into
-// the archive/ layout established in #937.
+// the archive/ layout established in #937 and performs follow-on
+// transformations on the migrated tree.
 //
 // This is a one-shot tool — once the migration has run against every
 // known data source and #940 has retired the sqlite content tables,
 // this binary can be deleted with no impact on the main thane binary.
 //
-// Usage:
+// Subcommands:
 //
 //	archive-migration [--copy] <old_root> <new_root>
+//	    Move (or copy with --copy) a legacy log tree into the archive
+//	    layout. Idempotent. Manifest at <new_root>/meta/migration.jsonl.
 //
-// Default mode renames files (fast in-place migration on the same
-// filesystem, destructive to the source). With --copy it reads and
-// writes instead, leaving the source intact — required for staging a
-// working tree on a different filesystem (e.g. SMB → local) before
-// rsyncing the result to its production home.
-//
-// Idempotent in both modes: re-running on an already-migrated tree
-// is a no-op. Every action is appended to <new_root>/meta/migration.jsonl
-// so the relocation is auditable after the fact.
+//	archive-migration legacy-collate <archive_root>
+//	    Collate every legacy log source under
+//	    <archive_root>/sources/thane_legacy/ — the deprecated
+//	    monolithic thane.log, any *.tar.gz snapshots, and the existing
+//	    daily thane-YYYY-MM-DD.log.gz files — into one canonical
+//	    thane-YYYY-MM-DD.log.gz per UTC date. Lines are deduplicated
+//	    across sources. Originals move to collated-sources/ for
+//	    forensic preservation.
 package main
 
 import (
@@ -91,10 +93,13 @@ func main() {
 	}
 }
 
-// run parses CLI arguments and dispatches to the migration. Keeping
-// it separate from main() lets tests drive the full code path against
-// a bytes.Buffer rather than spawning a subprocess.
+// run parses CLI arguments and dispatches to the right subcommand.
+// Keeping it separate from main() lets tests drive the full code path
+// against a bytes.Buffer rather than spawning a subprocess.
 func run(w io.Writer, args []string) error {
+	if len(args) > 0 && args[0] == "legacy-collate" {
+		return runLegacyCollate(w, args[1:])
+	}
 	copyMode := false
 	positional := args[:0]
 	for _, a := range args {
@@ -102,12 +107,18 @@ func run(w io.Writer, args []string) error {
 		case "--copy", "-c":
 			copyMode = true
 		case "-h", "--help":
-			fmt.Fprintln(w, "Usage: archive-migration [--copy] <old_root> <new_root>")
+			fmt.Fprintln(w, "Usage:")
+			fmt.Fprintln(w, "  archive-migration [--copy] <old_root> <new_root>")
+			fmt.Fprintln(w, "  archive-migration legacy-collate <archive_root>")
 			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Moves a legacy Thane log tree into the #937 archive layout.")
-			fmt.Fprintln(w, "Default mode renames files (destructive). --copy reads and writes")
-			fmt.Fprintln(w, "instead, leaving the source intact — required for cross-filesystem")
-			fmt.Fprintln(w, "staging.")
+			fmt.Fprintln(w, "Default form moves a legacy Thane log tree into the #937 archive")
+			fmt.Fprintln(w, "layout. Move mode renames (destructive). --copy reads and writes,")
+			fmt.Fprintln(w, "leaving the source intact — required for cross-filesystem staging.")
+			fmt.Fprintln(w, "")
+			fmt.Fprintln(w, "legacy-collate dedups + re-buckets the monolithic legacy sources")
+			fmt.Fprintln(w, "(thane.log, *.tar.gz, existing thane-YYYY-MM-DD.log.gz) into one")
+			fmt.Fprintln(w, "canonical gzipped file per UTC date. Originals move to")
+			fmt.Fprintln(w, "collated-sources/ for forensic preservation.")
 			return nil
 		default:
 			positional = append(positional, a)
