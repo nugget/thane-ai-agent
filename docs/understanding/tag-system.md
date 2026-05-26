@@ -206,10 +206,11 @@ The next run for that conversation re-seeds them via `LoadTags`.
 Always-active and pinned tags are re-seeded from config and channel
 binding each run, not from the store.
 
-**The model sees only the tags, not the scope object.** Tools that
-inspect the scope (`list_loaded_capabilities`, `inspect_capability`)
-return the tag set as strings; the scope object itself is not
-visible.
+**The model sees only the tags, not the scope object.** The
+`## Active Capabilities` section rendered into every prompt carries
+the loaded tag set with description, tool_count, and metadata flags;
+`inspect_capability` returns the per-tool breakdown of a single tag.
+The scope object itself is not exposed.
 
 [save-tags]: ../../internal/runtime/agent/capability_scope.go
 

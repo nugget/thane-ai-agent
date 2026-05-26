@@ -22,7 +22,7 @@ func TestApplyTextToolCallFallback_PreservesUnknownToolShapeForRuntimeRepair(t *
 	profile := DefaultToolCallTextProfile()
 	resp := &ChatResponse{
 		Message: Message{
-			Content: "```tool\n{\"name\":\"list_capabilities\",\"arguments\":{}}\n```",
+			Content: "```tool\n{\"name\":\"request_capability\",\"arguments\":{\"tag\":\"forge\"}}\n```",
 		},
 	}
 
@@ -31,8 +31,8 @@ func TestApplyTextToolCallFallback_PreservesUnknownToolShapeForRuntimeRepair(t *
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
 	}
-	if resp.Message.ToolCalls[0].Function.Name != "list_capabilities" {
-		t.Fatalf("tool name = %q, want list_capabilities", resp.Message.ToolCalls[0].Function.Name)
+	if resp.Message.ToolCalls[0].Function.Name != "request_capability" {
+		t.Fatalf("tool name = %q, want request_capability", resp.Message.ToolCalls[0].Function.Name)
 	}
 	if resp.Message.Content != "" {
 		t.Fatalf("content = %q, want empty after promoting repairable tool shape", resp.Message.Content)

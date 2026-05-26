@@ -154,7 +154,7 @@ func ParseTextToolCalls(content string, validTools []string, profile ToolCallTex
 // ParseTextToolCallsForRepair extracts tool-shaped JSON payloads even
 // when the tool names do not currently match the valid tool list. This
 // lets later runtime layers repair aliases such as forge_capability or
-// list_capabilities instead of dropping them as hallucinated text.
+// request_capability instead of dropping them as hallucinated text.
 func ParseTextToolCallsForRepair(content string, profile ToolCallTextProfile) []ToolCall {
 	content = normalizeToolCallPayload(content, profile)
 	if content == "" {

@@ -191,9 +191,9 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	if !slices.Contains(resp.EffectiveTools, "get_state") {
 		t.Fatalf("EffectiveTools = %#v, want get_state", resp.EffectiveTools)
 	}
-	// list_loaded_capabilities was demoted from always-available (see #918)
-	// because its output is a strict subset of the ## Active Capabilities
-	// prompt section. The remaining four still earn the always-on slot.
+	// The four capability management tools that survive any tag filter.
+	// list_loaded_capabilities was retired in #918 (its output was a
+	// strict subset of the ## Active Capabilities prompt section).
 	for _, toolName := range []string{"activate_capability", "deactivate_capability", "reset_capabilities", "inspect_capability"} {
 		if !slices.Contains(resp.EffectiveTools, toolName) {
 			t.Fatalf("EffectiveTools = %#v, missing %q", resp.EffectiveTools, toolName)
