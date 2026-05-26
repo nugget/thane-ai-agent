@@ -139,6 +139,14 @@ var nonToolTokens = map[string]struct{}{
 	// the matcher's heuristics loose for real-tool catches without
 	// flagging a documented frontmatter key.
 	"tags_all": {},
+
+	// Contact field names that appear backticked in talent prose
+	// describing the contacts surface. `ai_summary` is a top-level
+	// save_contact parameter; `ha_companion_app` is a conventional
+	// contact-facts key (the matcher flags it because `ha_` is a real
+	// tool prefix). Both are person-record fields, not tools.
+	"ai_summary":       {},
+	"ha_companion_app": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in

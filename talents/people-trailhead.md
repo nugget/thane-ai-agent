@@ -13,8 +13,10 @@ handles. Begin with the most stable anchor you have.
 Choose the next move deliberately:
 
 - If you need the structured person record or relationship directory,
-  activate the host's person-record branch. On many hosts that is
-  `contacts`; local overlays may remap it.
+  activate `contacts` — it branches into lookup (find a person),
+  save (create/update + the trust-zone decision), and vcf (vCard
+  import/export and QR codes). On hosts that override the
+  person-record surface, the local overlay may remap this name.
 - If the task is specifically about Signal messaging, activate
   `signal`.
 - If the relationship thread lives in inbox history or email
