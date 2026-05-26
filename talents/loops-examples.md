@@ -235,21 +235,166 @@ its timer.
 
 For wakes triggered by *arbitrary external events* — most commonly
 an HA automation publishing an MQTT message — register the loop
-with `mqtt_wake_add`:
+with `mqtt_wake_add` and pair it with an HA automation whose action
+publishes to the same topic. The two sides are independent
+artifacts that share only the topic string; the topic string IS
+the contract.
+
+### Worked example: morning-briefing loop on Alice's office arrival
+
+The situation: Alice's HA presence usually transitions `not_home →
+office` once each weekday morning, when she walks in. That
+arrival is a meaningful semantic moment — she's at her desk, the
+day is starting, anything that accumulated overnight (email, PRs,
+household notes) is now relevant to surface. The pairing below
+fires a Thane briefing loop on that exact transition.
+
+**The HA-side automation** (created via `ha_automation_create`)
+triggers on the zone transition specifically — not "person.alice
+is at the office," which would re-fire on every brief HA state
+flap. Triggering on the transition means once-per-arrival
+semantics, which is what the briefing wants:
 
 ```json
 {
-  "topic": "thane/wake/laundry_done",
-  "loop": "laundry_curator"
+  "config": {
+    "alias": "Alice arrived at office — wake Thane briefing",
+    "description": "When Alice's presence transitions from anywhere to office, publish to thane/wake/alice_arrived_office so the morning-briefing loop fires once.",
+    "trigger": [
+      {
+        "platform": "state",
+        "entity_id": "person.alice",
+        "to": "office"
+      }
+    ],
+    "condition": [
+      {
+        "condition": "time",
+        "after": "06:00:00",
+        "before": "12:00:00"
+      }
+    ],
+    "action": [
+      {
+        "service": "mqtt.publish",
+        "data": {
+          "topic": "thane/wake/alice_arrived_office",
+          "payload": "{\"source\": \"ha\", \"trigger\": \"alice_arrived_office\", \"timestamp_iso\": \"{{ now().isoformat() }}\"}"
+        }
+      }
+    ],
+    "mode": "single"
+  },
+  "metadata": {
+    "area_id": "office",
+    "label_ids": ["presence", "thane-bridge"]
+  }
 }
 ```
 
-The companion shape on the HA side is an automation whose action
-publishes to the same topic (`mqtt.publish` service call). The
-pairing is the canonical "let HA tell Thane something happened"
-pattern — see the HA automation leaf for the publish side. List
-current subscriptions with `mqtt_wake_list`; retire one with
-`mqtt_wake_remove`.
+A few choices that matter:
+
+- **`platform: state` with `to: "office"`** fires on the *edge*
+  (entering office), not the level (currently in office). HA
+  state-trigger semantics give once-per-entry for free; no
+  manual debouncing.
+- **Time condition** keeps the briefing morning-shaped. If Alice
+  steps out for lunch and comes back at 13:00, that's a different
+  context and not what this loop is for.
+- **`mode: single`** means a second trigger while the automation
+  is still running won't double-fire. With `mqtt.publish` this
+  matters less, but it's the safe default for any HA-side action.
+- **Payload as JSON** carries useful context to the loop side
+  even though `mqtt_wake_add` doesn't currently parse the body
+  for routing. The future-proofing is cheap, and the timestamp
+  helps the loop notice when it's reacting to a stale message
+  (network flap, broker replay).
+
+**The Thane-side registration** ties a loop to that topic:
+
+```json
+{
+  "topic": "thane/wake/alice_arrived_office",
+  "loop": "alice_morning_briefing"
+}
+```
+
+The `loop` parameter names a curate or service loop already
+defined elsewhere (via `loop_definition_set` or `thane_curate`).
+That loop's `Task` is where the briefing's intent lives:
+
+```text
+Alice just arrived at the office. Surface the small set of things
+that benefit her in the next 30 minutes:
+
+- Anything from overnight email that needs a response by today.
+- PRs she's been requested to review where CI is now green.
+- Any unresolved household concerns the family raised after she
+  left yesterday.
+- Calendar conflicts or schedule shifts for the next 4 hours.
+
+Compose a brief Signal message to her summarizing what you found —
+two to four bullets, no preamble. If nothing material surfaced,
+send nothing. Use her contact preferences (signal preferred,
+short-form, plain text).
+```
+
+A few framing choices worth naming:
+
+- **Time-boxed scope** ("next 30 minutes," "next 4 hours") keeps
+  the loop from sprawling. Without those, "surface relevant
+  things" is unbounded; with them, the loop knows what to filter.
+- **"Send nothing if nothing material"** is the off-switch.
+  Without it, the loop will manufacture a briefing every morning
+  even when the day is quiet, and the model trains itself (and
+  Alice) to ignore Thane's voice. Silence is a feature.
+- **Contact-preference grounding** routes through the
+  `contacts` directory — the loop doesn't decide the channel,
+  it reads it from Alice's record. Same payoff as the email
+  trust gate: keep delivery routing in the system, not in
+  per-turn judgment.
+
+**Operations on the wake subscription:**
+
+```json
+{}
+```
+
+`mqtt_wake_list` returns currently registered topic→loop bindings.
+Useful before adding a new one to confirm you're not accidentally
+creating a duplicate, or after re-running the registration in a
+test cycle.
+
+```json
+{
+  "topic": "thane/wake/alice_arrived_office"
+}
+```
+
+`mqtt_wake_remove` retires a binding when the loop is being
+decommissioned. The HA automation can stay registered if other
+consumers need the topic; conversely, removing the HA automation
+without removing the wake subscription leaves the loop quietly
+waiting for a message that never comes. Both sides are
+independent — manage them as a pair when you can.
+
+**Why this shape is the canonical event-bridge:**
+
+- HA owns the *observation* (Alice's location, sensor states,
+  schedule). Its trigger semantics are mature and well-tested.
+- Thane owns the *response* (composing the briefing, deciding
+  what's material, picking the channel). The loop's model-driven
+  reasoning is what HA's automation YAML can't express.
+- MQTT is the dumb pipe between them. The topic name carries the
+  semantics (`thane/wake/alice_arrived_office`); the payload is
+  optional context.
+
+The same pattern fits any "HA notices something → Thane decides
+what to do about it" workflow: sump pump cycled twice in an hour,
+garage door open past 10pm, child's bedtime motion detector
+quiet for 30 minutes after lights-off, freezer temperature
+drifting. Each is a different topic, a different loop, but the
+same two-artifact pairing.
 
 ---
 name: loops_examples_now
