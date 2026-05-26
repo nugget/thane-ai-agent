@@ -82,7 +82,7 @@ func TestOllamaWireResponse_WithToolCalls(t *testing.T) {
 			"tool_calls": [
 				{
 					"function": {
-						"name": "get_state",
+						"name": "ha_get_state",
 						"arguments": {"entity_id": "light.kitchen"}
 					}
 				}
@@ -104,8 +104,8 @@ func TestOllamaWireResponse_WithToolCalls(t *testing.T) {
 		t.Fatalf("ToolCalls count = %d, want 1", len(resp.Message.ToolCalls))
 	}
 	tc := resp.Message.ToolCalls[0]
-	if tc.Function.Name != "get_state" {
-		t.Errorf("tool name = %q, want %q", tc.Function.Name, "get_state")
+	if tc.Function.Name != "ha_get_state" {
+		t.Errorf("tool name = %q, want %q", tc.Function.Name, "ha_get_state")
 	}
 	if tc.Function.Arguments["entity_id"] != "light.kitchen" {
 		t.Errorf("entity_id = %v", tc.Function.Arguments["entity_id"])
@@ -207,13 +207,13 @@ func TestOllamaWireResponse_MultipleToolCalls(t *testing.T) {
 			"tool_calls": [
 				{
 					"function": {
-						"name": "get_state",
+						"name": "ha_get_state",
 						"arguments": {"entity_id": "light.kitchen"}
 					}
 				},
 				{
 					"function": {
-						"name": "get_state",
+						"name": "ha_get_state",
 						"arguments": {"entity_id": "light.bedroom"}
 					}
 				}
@@ -330,7 +330,7 @@ func TestConvertFromAnthropic_ToolUse(t *testing.T) {
 			{
 				Type:  "tool_use",
 				ID:    "toolu_01ABC",
-				Name:  "control_device",
+				Name:  "ha_control_device",
 				Input: map[string]any{"entity": "light.office", "action": "turn_on"},
 			},
 		},
@@ -351,7 +351,7 @@ func TestConvertFromAnthropic_ToolUse(t *testing.T) {
 	if tc.ID != "toolu_01ABC" {
 		t.Errorf("ToolCall.ID = %q, want %q", tc.ID, "toolu_01ABC")
 	}
-	if tc.Function.Name != "control_device" {
+	if tc.Function.Name != "ha_control_device" {
 		t.Errorf("ToolCall.Function.Name = %q", tc.Function.Name)
 	}
 	if tc.Function.Arguments["entity"] != "light.office" {
@@ -370,13 +370,13 @@ func TestConvertFromAnthropic_MultipleToolCalls(t *testing.T) {
 			{
 				Type:  "tool_use",
 				ID:    "toolu_01",
-				Name:  "get_state",
+				Name:  "ha_get_state",
 				Input: map[string]any{"entity_id": "light.kitchen"},
 			},
 			{
 				Type:  "tool_use",
 				ID:    "toolu_02",
-				Name:  "get_state",
+				Name:  "ha_get_state",
 				Input: map[string]any{"entity_id": "light.bedroom"},
 			},
 		},

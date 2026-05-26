@@ -158,8 +158,8 @@ capability_tags:
   ha:
     description: Home Assistant
     tools:
-      - get_state
-      - call_service
+      - ha_get_state
+      - ha_call_service
 `), 0600)
 
 	_, err := Load(path)
@@ -216,7 +216,7 @@ func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 		t.Fatal("expected delegation_required to be true")
 	}
 
-	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "owner_contact", "session_working_memory", "session_close", "archive_search"}
+	want := []string{"thane_now", "thane_assign", "recall_fact", "remember_fact", "contact_save", "contact_lookup", "contact_owner", "session_working_memory", "session_close", "archive_search"}
 	if len(cfg.Agent.OrchestratorTools) != len(want) {
 		t.Fatalf("orchestrator_tools length = %d, want %d; got %v", len(cfg.Agent.OrchestratorTools), len(want), cfg.Agent.OrchestratorTools)
 	}
@@ -552,7 +552,7 @@ func TestSignalConfig_Configured(t *testing.T) {
 func TestValidate_CapabilityTagEmptyDescription(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"custom": {Description: "", Tools: []string{"get_state"}},
+		"custom": {Description: "", Tools: []string{"ha_get_state"}},
 	}
 
 	err := cfg.Validate()
@@ -592,7 +592,7 @@ func TestValidate_BuiltinCapabilityOverlayMayOmitDescriptionAndTools(t *testing.
 func TestValidate_CapabilityTagValid(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"ha":  {Description: "Home Assistant", Tools: []string{"get_state"}, Core: true},
+		"ha":  {Description: "Home Assistant", Tools: []string{"ha_get_state"}, Core: true},
 		"web": {Description: "Web search", Tools: []string{"web_search"}},
 	}
 
@@ -671,7 +671,7 @@ func TestValidate_ChannelTagsBuiltinTagValid(t *testing.T) {
 func TestValidate_ChannelTagsEmptyIsValid(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"ha": {Description: "Home Assistant", Tools: []string{"get_state"}},
+		"ha": {Description: "Home Assistant", Tools: []string{"ha_get_state"}},
 	}
 	// ChannelTags left nil
 

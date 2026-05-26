@@ -18,7 +18,7 @@ const (
 
 // LensStore manages persistent behavioral lenses via opstate.
 // Lenses are global — they apply to all conversations and survive
-// restarts. Use activate_capability for per-conversation tool access.
+// restarts. Use tag_activate for per-conversation tool access.
 type LensStore struct {
 	mu    sync.Mutex
 	state *opstate.Store
@@ -95,7 +95,7 @@ func (s *LensStore) Remove(lens string) error {
 	return s.setLenses(filtered)
 }
 
-// SetLensTools registers activate_lens, deactivate_lens, and list_lenses
+// SetLensTools registers lens_activate, lens_deactivate, and lens_list
 // tools. These manage persistent behavioral lenses that apply globally
 // across all conversations. Lenses use the same tag system as
 // capabilities — when a lens is active, KB articles and talents tagged
@@ -104,9 +104,9 @@ func (s *LensStore) Remove(lens string) error {
 // All three are Core. Rationale: lens management is the
 // meta-operation that adjusts which lens is in effect. Locking it
 // behind a lens would be a chicken-and-egg — you can't activate a
-// lens if activate_lens itself depends on a lens being active. Same
-// argument applies to deactivate_lens (must work to release a lens
-// the loop no longer needs) and list_lenses (self-introspection
+// lens if lens_activate itself depends on a lens being active. Same
+// argument applies to lens_deactivate (must work to release a lens
+// the loop no longer needs) and lens_list (self-introspection
 // can't depend on what's currently active).
 func (r *Registry) SetLensTools(store *LensStore) {
 	if store == nil {
@@ -115,13 +115,13 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	r.lensStore = store
 
 	r.Register(&Tool{
-		Name: "activate_lens",
+		Name: "lens_activate",
 		Core: true,
 		Description: "Activate a behavioral lens globally. Lenses are persistent context modes that apply to ALL conversations " +
 			"and survive restarts. They change how you perceive and respond — like switching between different attentional states. " +
 			"Any KB articles or talents tagged with the lens name will load automatically.\n\n" +
 			"Examples: night_quiet (gentle tone, higher notification thresholds), everyone_away (security focus), storm_watch (weather-focused).\n\n" +
-			"Unlike activate_capability (per-conversation tools), lenses are environmental — they reflect the household's state, not a task.",
+			"Unlike tag_activate (per-conversation tools), lenses are environmental — they reflect the household's state, not a task.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -135,7 +135,7 @@ func (r *Registry) SetLensTools(store *LensStore) {
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			lens := extractLensArg(args)
 			if lens == "" {
-				return "", fmt.Errorf("tag is required (e.g., activate_lens(tag: \"night_quiet\"))")
+				return "", fmt.Errorf("tag is required (e.g., lens_activate(tag: \"night_quiet\"))")
 			}
 
 			if err := store.Add(lens); err != nil {
@@ -148,7 +148,7 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	})
 
 	r.Register(&Tool{
-		Name:        "deactivate_lens",
+		Name:        "lens_deactivate",
 		Core:        true,
 		Description: "Deactivate a behavioral lens globally. The lens and its associated context will be removed from all conversations.",
 		Parameters: map[string]any{
@@ -180,7 +180,7 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	})
 
 	r.Register(&Tool{
-		Name:        "list_lenses",
+		Name:        "lens_list",
 		Core:        true,
 		Description: "List all currently active behavioral lenses.",
 		Parameters: map[string]any{
