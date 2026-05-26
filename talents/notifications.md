@@ -205,19 +205,37 @@ teaser: "Get a decision back — async (callback later) or sync (blocks until th
 
 # Ask (decision-shaped)
 
-You need a response, not just to inform. The single most important
-fork at this leaf:
+You need a response, not just to inform. **First check whether your
+question is really shaped like a decision for a specific human at
+all** — many "escalate this" instincts inside a service loop are
+actually loop-side concerns better routed via
+`request_core_attention` (a core tool — always available, no tag
+activation needed; appears under the `loops` tag in the catalog
+but isn't gated by it). That tool wakes the core/owner loop's next iteration
+to review your concern; no actions, no recipient, no wait. It is
+the canonical service-loop → operator attention path and the
+default escalation shape for metacog, ego, and other internal
+loops.
+
+If you genuinely need a decision from a specific contact via
+actionable buttons, the leaf has two real tools:
 
 | You need... | Tool | Behavior |
 |---|---|---|
 | A decision eventually; you can keep working | `request_human_decision` | **Async.** Returns a `request_id`. Callback dispatched to your originating conversation when they answer. |
 | A decision *now*; you cannot proceed without it | `request_human_escalation` | **Sync.** Blocks the current turn until they respond or timeout. |
-| AI judgment beyond your capability | `request_ai_escalation` | **Currently a stub.** Returns an error pointing at human escalation or a higher routing profile. |
 
-Picking wrong is the most consequential mis-route at this leaf.
-Async-when-you-should-have-been-sync leaves the turn proceeding with
-no decision; sync-when-you-should-have-been-async wastes a turn-long
-blocking wait on something you could have continued past.
+Picking wrong between them is the most consequential mis-route at
+this leaf. Async-when-you-should-have-been-sync leaves the turn
+proceeding with no decision; sync-when-you-should-have-been-async
+wastes a turn-long blocking wait on something you could have
+continued past.
+
+For an "ask a frontier AI model for judgment inline" pattern,
+call `thane_now` from a premium-routed turn (e.g. a turn running
+under `thane:premium`) so the delegate inherits the higher-
+capability routing. That returns the answer inline, same shape,
+with a real handler behind it.
 
 ## The async path
 
@@ -279,19 +297,6 @@ The synchronous behavior is what makes this distinct from
 turn genuinely depends on the answer** and there's no useful work to
 do in parallel. If you could send the question async, keep working,
 and pick up the response next turn, async is the right move.
-
-## The AI escalation stub
-
-`request_ai_escalation` is registered but **not yet implemented**.
-Calling it returns an error pointing at two workarounds:
-
-- Use `request_human_escalation` if a human can answer
-- Escalate by selecting a higher-capability routing profile (e.g.
-  `thane:premium`) at the orchestrator side — that brings a frontier
-  model into the loop for the next turn
-
-Don't include `request_ai_escalation` in workflow shapes that assume
-it works. When (if) it lands, the tool description here will say so.
 
 ## Cross-references
 

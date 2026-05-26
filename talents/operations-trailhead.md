@@ -13,6 +13,12 @@ fastest.
 
 Choose the next move deliberately:
 
+- If you're a service loop and you've decided something deserves the
+  core/owner loop's attention, call `request_core_attention` directly.
+  It's a core tool (always available, no tag activation needed) that
+  forces a supervisor turn on the next iteration of the owner loop;
+  this is the canonical service-loop → operator attention path. No
+  recipient, no actions, no waiting — file the concern and continue.
 - If you need logs, version, usage, or failure evidence, activate
   `diagnostics`.
 - If the question is about model registry, routing, or policy, activate
