@@ -209,8 +209,9 @@ You need a response, not just to inform. **First check whether your
 question is really shaped like a decision for a specific human at
 all** — many "escalate this" instincts inside a service loop are
 actually loop-side concerns better routed via
-`request_core_attention` (in `loops`, always available; not part
-of this leaf). That tool wakes the core/owner loop's next iteration
+`request_core_attention` (a core tool — always available, no tag
+activation needed; appears under the `loops` tag in the catalog
+but isn't gated by it). That tool wakes the core/owner loop's next iteration
 to review your concern; no actions, no recipient, no wait. It is
 the canonical service-loop → operator attention path and the
 default escalation shape for metacog, ego, and other internal
@@ -231,9 +232,10 @@ wastes a turn-long blocking wait on something you could have
 continued past.
 
 For an "ask a frontier AI model for judgment inline" pattern,
-spawn a delegate with `thane_now` and a premium routing profile
-— that returns the answer inline, same shape, with a real
-handler behind it.
+call `thane_now` from a premium-routed turn (e.g. a turn running
+under `thane:premium`) so the delegate inherits the higher-
+capability routing. That returns the answer inline, same shape,
+with a real handler behind it.
 
 ## The async path
 
