@@ -1,0 +1,362 @@
+---
+name: ha
+tags: [ha]
+kind: trailhead
+teaser: "Open for Home Assistant work — reading state, controlling devices, or authoring automations."
+next_tags: [ha_observe, ha_control, ha_automate]
+---
+
+# Home Assistant
+
+The HA surface is the largest lever this agent has on the physical
+world. Reading is cheap and safe; control is fast and stale-ID-prone;
+automation authoring is durable and breakable. Match the shape of
+the work to one of three branches.
+
+## Choose by what you're doing
+
+- **You want to know what's happening right now** — activate
+  `ha_observe`. Single-entity state, fuzzy lookup by description,
+  domain enumeration, registry search across areas/labels/devices.
+
+- **You want to change something** — activate `ha_control`. The
+  find → act → verify pattern, with safety on stale entity IDs.
+
+- **You want to manage Home Assistant's own automations** — activate
+  `ha_automate`. List with activity stats, inspect, create, update,
+  delete.
+
+## The constants across all three branches
+
+- **`call_service` does not validate entity IDs.** A typo or stale
+  ID returns success and silently does nothing. This is the single
+  most consequential gotcha in the HA surface; every action-shaped
+  branch carries the verify-after pattern.
+- **`control_device` is the high-level path; `call_service` is the
+  low-level path.** Use `control_device` unless you already have the
+  exact entity_id from a recent lookup *in the same turn*.
+- **Sustained attention is `awareness`'s job, not `ha`'s.** A one-off
+  state check uses `ha_observe`; a loop watching a room subscribes
+  via `awareness` and lets entity state stay current between turns.
+- **Delivery and escalation are `notifications`'s job.** When the
+  next move is "tell someone about this," activate notifications;
+  HA's tools are about state and control, not interruption.
+
+---
+name: ha_observe
+tags: [ha_observe]
+kind: trailhead
+teaser: "Read current state — single entity, fuzzy lookup, domain enum, or registry search."
+---
+
+# Observe
+
+You want to know what's happening. Four tools, picked by how
+specifically you can name what you're looking for.
+
+## I know the exact entity_id
+
+`get_state` returns the current state and attributes:
+
+```json
+{
+  "entity_id": "light.office_main"
+}
+```
+
+The fastest path when the entity_id is already in hand. Returns the
+state value plus all attributes (brightness, color, last_changed,
+etc.).
+
+## I know the description but not the entity_id
+
+`find_entity` does fuzzy lookup by description, optionally narrowed
+by area or domain:
+
+```json
+{
+  "description": "ceiling light",
+  "area": "office",
+  "domain": "light"
+}
+```
+
+Returns the best match with a confidence score, or candidate
+entity_ids when the description is ambiguous. The natural precursor
+to `get_state` or `control_device`.
+
+## I want everything in a domain
+
+`list_entities` enumerates by domain:
+
+```json
+{
+  "domain": "light"
+}
+```
+
+Right for discovery ("what lights exist?") or for iterating over a
+set ("check every door sensor"). Returns entity_ids and friendly
+names — read these, then `get_state` the specific ones you care
+about.
+
+## I want richer search across the registry
+
+`ha_registry_search` searches areas, labels, devices, and entities
+in one call:
+
+```json
+{
+  "query": "kitchen",
+  "limit": 8
+}
+```
+
+Returns matches across all four registry categories with relevance
+scores. The right tool when:
+
+- Authoring an automation (you need real label IDs, area IDs, and
+  entity IDs — not guesses).
+- Investigating a room ("what's actually in here?").
+- Following a label across categories ("everything tagged security").
+
+## Cross-references
+
+- For sustained entity attention across loop iterations, bounce to
+  `awareness` and subscribe — don't poll `get_state` from a loop's
+  turn budget when a subscription will keep it current for free.
+- For "who is home / what zone is X in," `awareness` owns
+  presence-shaped questions even though they're technically HA
+  entities. Presence has its own context grammar.
+
+---
+name: ha_control
+tags: [ha_control]
+kind: trailhead
+teaser: "Change device state — find → act → verify, with safety on stale IDs."
+---
+
+# Control
+
+You want to change something. The single most important pattern in
+HA control is the three-step move; the second is choosing between
+`control_device` (high-level) and `call_service` (low-level).
+
+## The find → act → verify pattern
+
+Never trust an action's success alone. Stale entity IDs return
+success and silently do nothing. For anything that matters:
+
+1. **find** the entity — `find_entity` if working from a
+   description, `get_state` to confirm a known entity_id is still
+   real.
+2. **act** — `control_device` (preferred) or `call_service`.
+3. **verify** — `get_state` after the action, confirm the new value
+   actually took.
+
+The pattern is overkill for cheap idempotent actions ("turn on a
+light that's probably already on"). It is **mandatory** for anything
+involving locks, garage doors, alarms, safety devices, scenes that
+affect multiple rooms, or any configuration change. The cost of a
+silent no-op there is real.
+
+## High-level: control_device
+
+`control_device` accepts a description and an action; it does the
+lookup internally:
+
+```json
+{
+  "description": "kitchen ceiling light",
+  "action": "turn_on",
+  "area": "kitchen"
+}
+```
+
+Right for voice-shape commands and any case where the entity_id
+isn't already in hand. The action vocabulary matches HA's natural
+services (turn_on, turn_off, toggle, set_brightness, etc.).
+
+When `control_device` reports ambiguity, that's the find-step doing
+its job — re-call with a tighter description or a specific `area` /
+`domain` to disambiguate, don't fall through to `call_service` with
+a guessed entity_id.
+
+## Low-level: call_service
+
+`call_service` requires the exact entity_id:
+
+```json
+{
+  "entity_id": "light.office_main",
+  "service": "light.turn_on",
+  "data": {
+    "brightness_pct": 60,
+    "color_temp_kelvin": 3000
+  }
+}
+```
+
+Use when:
+
+- You already have the exact entity_id from a recent `find_entity`
+  or `get_state` (within the same turn — not from memory of a
+  previous conversation).
+- The service needs structured `data` that `control_device`'s
+  vocabulary doesn't cover: specific color temperatures, scene
+  activation with arguments, climate setpoints, media player
+  payloads, etc.
+
+**Do not** pull an entity_id from memory and reach for
+`call_service`. Always re-verify with `find_entity` or `get_state`
+first — entity IDs change when devices are renamed or reconfigured,
+and a stale ID is the canonical silent-no-op trap.
+
+## Cross-references
+
+- For "encode this rule durably so it fires whenever X happens"
+  instead of one-shot control, bounce to `ha_automate`.
+- For "I changed the thing and now want to tell someone," bounce to
+  `notifications` after the verify step.
+
+---
+name: ha_automate
+tags: [ha_automate]
+kind: trailhead
+teaser: "Manage HA's own automations — list with activity, inspect, create, update, delete."
+---
+
+# Automate
+
+You want to manage Home Assistant's automation engine — not just
+trigger an action, but durably encode "when X happens, do Y."
+
+## Almost always: discover what already exists
+
+`ha_automation_list` returns automations with their config IDs,
+entity_ids, current enabled state, and recent trigger activity
+(1h/24h/7d counts plus recent activation deltas):
+
+```json
+{
+  "limit": 25
+}
+```
+
+Activity counts are how you spot automations that never fire (likely
+broken trigger or stale entity_id in the trigger), or fire too often
+(likely a runaway loop or noisy sensor). Read the list before
+authoring anything new — duplicate automations are a common
+self-inflicted mess in HA.
+
+## Inspect a specific automation
+
+`ha_automation_get` fetches one by config ID or entity_id:
+
+```json
+{
+  "id": "1700000000"
+}
+```
+
+Returns the full raw automation object plus registry metadata (area,
+labels, aliases, icon). Read this before updating — config updates
+are merged shallowly, so you want to know what's there before
+modifying.
+
+## Author a new automation
+
+`ha_automation_create` takes a full HA automation object:
+
+```json
+{
+  "automation": {
+    "alias": "Driveway camera notification",
+    "description": "Notify when the driveway camera sees motion at night",
+    "trigger": [
+      {
+        "platform": "state",
+        "entity_id": "binary_sensor.driveway_motion",
+        "to": "on"
+      }
+    ],
+    "condition": [
+      {
+        "condition": "sun",
+        "after": "sunset",
+        "before": "sunrise"
+      }
+    ],
+    "action": [
+      {
+        "service": "notify.mobile_app_pixel",
+        "data": {
+          "message": "Driveway motion detected"
+        }
+      }
+    ],
+    "mode": "single"
+  },
+  "metadata": {
+    "area": "driveway",
+    "labels": ["security"]
+  }
+}
+```
+
+**Before authoring**: use `ha_registry_search` to find real area
+IDs, label IDs, and entity IDs. Don't guess — typos in entity_ids
+inside a trigger silently break the automation the same way they
+silently break `call_service`. The automation will register, return
+success, and never fire.
+
+## Update an existing automation
+
+`ha_automation_update` merges config changes shallowly over the
+current automation:
+
+```json
+{
+  "id": "1700000000",
+  "config": {
+    "mode": "queued"
+  }
+}
+```
+
+The shallow merge means you can change `mode` without re-supplying
+triggers and actions. For deeper structural changes (replacing the
+trigger array entirely), pass the whole `trigger` key — what you
+pass replaces what's there for that key.
+
+Always `ha_automation_get` first if you're changing structure;
+otherwise you'll trample fields you didn't mean to touch.
+
+## Retire an automation
+
+`ha_automation_delete` removes it:
+
+```json
+{
+  "id": "1700000000"
+}
+```
+
+Verify with `ha_automation_list` afterwards when the deletion
+matters. Deleting the wrong automation is recoverable from HA's own
+config backups but annoying; double-check the ID first.
+
+## Cross-references
+
+- For one-shot control instead of "encode this rule durably,"
+  bounce to `ha_control`. Many "automation" requests are really
+  "do this once right now."
+- For automations that should run inside a Thane loop instead of
+  HA's engine (richer model-driven logic, document outputs,
+  multi-step reasoning), bounce to `loops_examples` — `thane_curate`
+  is the alternative when HA's automation YAML can't express the
+  judgment you need.
+- For inspecting *why* an automation fired or didn't, the activity
+  counts on `ha_automation_list` are usually enough; for deeper
+  forensics on the events leading up to a trigger, `logs_query`
+  (always available) scoped to the relevant time window.
