@@ -59,32 +59,35 @@ durable definitions before saving them, especially when the envelope,
 jitter, or direct domain-tool access matters. Tagged service loops
 often want `profile.delegation_gating: "disabled"`.
 
-## Composing the task
+## Composing the loop
 
-A loop's `task`, `guidance`, and `output` parameters carry different
-weight. Get the boundaries right and the loop runs honestly; muddle
-them and the loop drifts.
+A `thane_curate` spec separates `intent` (what this loop tracks and
+why), `instructions` (steering text prepended to every iteration —
+the spec's `Profile.Instructions`), and `output` (the document target
+and mode). Get the boundaries right and the loop runs honestly;
+muddle them and the loop drifts.
 
-- **Document destinations belong in `output`, not in the task prose.**
-  "Update kb:foo with the current state" is the wrong shape; the loop
-  already knows where to write because `output: {document: "kb:foo",
-  mode: "maintain"}` told it. Task prose names *what to observe and
-  why it matters*, not where to write. Document management is a
-  framework concern; the task description shouldn't restate it.
+- **Document destinations belong in `output`, not in `intent`.**
+  "Update kb:foo with the current state" is the wrong shape for the
+  intent; the loop already knows where to write because `output:
+  {document: "kb:foo", mode: "maintain"}` told it. Intent names
+  *what to observe and why it matters*, not where to write. Document
+  management is a framework concern; the intent shouldn't restate it.
 
-- **Guidance tone shapes the loop's posture.** Earnest, mission-
-  focused, concrete about what to look for. Skip distracting
+- **`instructions` tone shapes the loop's posture.** Earnest,
+  mission-focused, concrete about what to look for. Skip distracting
   meta-commentary ("this is our first attempt", "let's see if this
   works") — it leaks into the loop's voice and erodes the focused
-  attention the loop is meant to embody. Treat the guidance as
+  attention the loop is meant to embody. Treat instructions as
   setting an intention, not as commentary about the experiment.
 
-- **Reach for a loop when the data is messy.** Brittle scripts win on
-  structured feeds. Loops win on human-edited sources with
-  inconsistent formatting, drifting layouts, or judgment calls about
-  what changed. If you find yourself writing fragile parsing logic
-  to coax a script through messy input, that's the signal — a loop
-  with interpretive guidance handles it more durably.
+- **Reach for a loop when the source is messy.** Scripts win on
+  structured feeds — the parser is short, the failure modes are
+  finite. Loops win on human-edited sources with inconsistent
+  formatting, drifting layouts, or judgment calls about what changed.
+  If you find yourself writing brittle parsing logic to coax a
+  script through unstructured input, that's the signal — a loop
+  with interpretive instructions handles it more durably.
 
 When you need concrete JSON launch patterns, activate `loops_examples`
 and adapt the closest recipe minimally.
