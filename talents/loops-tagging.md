@@ -31,9 +31,21 @@ There are two always-X concepts and they're often confused:
   escape primitives — every loop, however tightly scoped, has them.
   Their Godoc explains why each one earns the slot.
 
-A loop with `tags: []` is NOT empty — it still has the operator's
-always-active tags plus the 12 always-available tools. It's missing
-*scoped* tools, not all tools.
+A loop with `tags: []` is deployment-dependent, and the trap is that
+the empty case isn't a single behavior:
+
+- **Operator has always-active tags** → tag filtering kicks in. The
+  loop sees the always-active tools plus the 12 always-available
+  primitives. Scoped, predictable.
+- **No always-active tags at this deployment** → `tags: []` falls
+  through to "no filtering at all," and the loop sees the *entire*
+  tool registry (every native + MCP tool, ~150+ tools at a typical
+  site). This is almost never what a focused service loop wants;
+  it's a context-blow-up disguised as a config minimum.
+
+Treat `tags: []` as "the default makes a judgment call I haven't
+verified." Pass an explicit narrow set instead, even if it's just
+`["awareness"]` for an ambient watcher.
 
 ## Picking the right tag set
 
@@ -51,18 +63,30 @@ job:
   ground claims in person records; `notifications` if it should be
   able to escalate.
 
-Omitting `tags:` is *not* the same as `tags: []`. An omitted field
-inherits the parent context's tags (channel + currently-activated
-capabilities), which is usually wider than the loop needs. For
-service loops, name the tags explicitly so the surface is stable
-across the loop's lifetime.
+Whether omitting `tags:` differs from passing `tags: []` depends on
+which loop family is doing the launching:
+
+- **`thane_now` / `thane_assign`** — `inherit_caller_tags` defaults to
+  true, so omitting `tags:` inherits the caller's capability scope
+  (the operator's always-active set plus whatever the caller had
+  activated). Pass `inherit_caller_tags: false` along with an
+  explicit `tags` array when you need a clean scope that doesn't
+  carry over caller context.
+- **`thane_curate` / `spawn_loop` / `loop_definition_launch`** — no
+  caller-tag inheritance. Omitting `tags:` is the same as passing
+  `tags: []`, with the deployment-dependent behavior above. Name
+  the tags explicitly for service loops so the surface is stable
+  across the loop's lifetime.
 
 ## Anti-patterns
 
 - **Tag-as-label.** Tags are not free-form metadata. Each tag binds
-  to a real tool surface. Adding `tags: ["server-room"]` does
-  nothing useful — `server-room` isn't a registered tag, so it
-  resolves to no tools (and contributes to ad-hoc-tag confusion).
+  to a real tool surface. Adding `tags: ["server-room"]` doesn't
+  pull in any scoped tools — `server-room` isn't a registered tag,
+  so the filter resolves to just the 12 always-available primitives
+  (no `ha`, no `awareness`, no actual server-watching capability).
+  The loop still runs, but it runs blind. Use a real tag name; the
+  catalog is the source of truth.
 
 - **Over-tagging "just in case."** Every tag you add pulls in its
   full tool surface, its trailhead/doctrine talents, and any KB
@@ -72,10 +96,10 @@ across the loop's lifetime.
   use. Start with the minimum; expand only when the loop demonstrably
   needs more.
 
-- **Empty tags expecting "everything."** `tags: []` means "just the
-  baseline" — operator always-active set plus the 12 always-available
-  primitives. If you wanted a kitchen-sink surface, you wanted
-  something else; `tags` doesn't have a wildcard.
+- **Empty tags expecting "baseline."** `tags: []` is not a portable
+  "just the basics" knob — see the deployment-dependent split above.
+  At a site with operator always-active tags it narrows; at a site
+  without, it explodes. Pass an explicit narrow set instead.
 
 - **Adding `ha_admin` without `ha`.** `ha_admin` is an additive
   routing hint, not a self-contained surface — pair it with `ha` or
