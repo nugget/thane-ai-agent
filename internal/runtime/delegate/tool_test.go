@@ -11,9 +11,9 @@ func TestFormatExecSummary_CleanExecution(t *testing.T) {
 		Iterations: 3,
 		Duration:   8200 * time.Millisecond,
 		ToolCalls: []ToolCallOutcome{
-			{Name: "find_entity", Success: true},
-			{Name: "call_service", Success: true},
-			{Name: "get_state", Success: true},
+			{Name: "ha_find_entity", Success: true},
+			{Name: "ha_call_service", Success: true},
+			{Name: "ha_get_state", Success: true},
 		},
 	}
 
@@ -23,7 +23,7 @@ func TestFormatExecSummary_CleanExecution(t *testing.T) {
 		"--- execution summary ---",
 		"iterations: 3",
 		"duration: 8.2s",
-		"tool_calls: find_entity(ok) → call_service(ok) → get_state(ok)",
+		"tool_calls: ha_find_entity(ok) → ha_call_service(ok) → ha_get_state(ok)",
 		"errors: 0",
 	}
 	for _, want := range checks {
@@ -38,11 +38,11 @@ func TestFormatExecSummary_WithErrors(t *testing.T) {
 		Iterations: 5,
 		Duration:   15400 * time.Millisecond,
 		ToolCalls: []ToolCallOutcome{
-			{Name: "get_state", Success: true},
-			{Name: "call_service", Success: false},
-			{Name: "get_state", Success: true},
-			{Name: "call_service", Success: false},
-			{Name: "call_service", Success: true},
+			{Name: "ha_get_state", Success: true},
+			{Name: "ha_call_service", Success: false},
+			{Name: "ha_get_state", Success: true},
+			{Name: "ha_call_service", Success: false},
+			{Name: "ha_call_service", Success: true},
 		},
 	}
 
@@ -51,8 +51,8 @@ func TestFormatExecSummary_WithErrors(t *testing.T) {
 	checks := []string{
 		"iterations: 5",
 		"duration: 15.4s",
-		"call_service(err)",
-		"call_service(ok)",
+		"ha_call_service(err)",
+		"ha_call_service(ok)",
 		"errors: 2",
 	}
 	for _, want := range checks {

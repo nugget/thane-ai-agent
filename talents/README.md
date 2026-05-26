@@ -3,7 +3,7 @@
 Talents are markdown files that shape the model's posture and decision-making in
 context. They are not configuration and they are not a user manual — they are
 prose memory of past-self for present-self, loaded into the prompt when the
-matching capability tag is active. See [`foundation.md`](foundation.md) for
+matching tag is active. See [`foundation.md`](foundation.md) for
 the self-facing framing the model receives at the top of every turn.
 
 The loader for this directory lives at
@@ -21,9 +21,9 @@ used at runtime; the filename and frontmatter together signal which kind.
 | Kind | Frontmatter | Filename | When it loads |
 |---|---|---|---|
 | **Foundation** | none | bare topic (e.g. `presence.md`) | Always — part of the base prompt |
-| **Trailhead** | `kind: trailhead` + `next_tags:` | `<tag>-trailhead.md` | When the capability tag activates; sorts first |
-| **Doctrine** | `tags: [...]` | `<tag>.md` (single per tag) or `<tag>-doctrine.md` | When the capability tag activates |
-| **Examples** | `tags: [...]`, often multi-node | `<tag>-examples.md` | When the capability tag activates |
+| **Trailhead** | `kind: trailhead` + `next_tags:` | `<tag>-trailhead.md` | When the tag activates; sorts first |
+| **Doctrine** | `tags: [...]` | `<tag>.md` (single per tag) or `<tag>-doctrine.md` | When the tag activates |
+| **Examples** | `tags: [...]`, often multi-node | `<tag>-examples.md` | When the tag activates |
 
 ### Foundation
 
@@ -36,7 +36,7 @@ Add a foundation talent rarely. Every line earns its always-on slot.
 
 ### Trailheads
 
-Decision-tree roots. When a capability tag activates, the trailhead is the
+Decision-tree roots. When a tag activates, the trailhead is the
 first thing the model reads about that tag — a small, opinionated map of
 where to look next. See the [Trailhead section in the tools
 reference](../docs/reference/tools.md#trailheads) for the canonical
@@ -53,7 +53,7 @@ definition.
   next_tags: [<resolvable_tag>, <resolvable_tag>, ...]
   ---
   ```
-- `next_tags` entries must resolve to either a built-in capability tag in
+- `next_tags` entries must resolve to either a built-in tag in
   [`internal/model/toolcatalog/catalog_tags.go`](../internal/model/toolcatalog/catalog_tags.go)
   or a tag declared by another loaded talent. The regression test
   `TestRepoTrailheadNextTagsResolve` enforces this.
@@ -104,7 +104,7 @@ trailhead-root  →  (decision frame + per-leaf teasers)
 
 Each leaf carries its own `name:` and `tags: [own_name]`, so the parent
 trailhead's `next_tags` can target it without polluting the global
-capability-tag catalog.
+tag catalog.
 
 See [`loops-examples.md`](loops-examples.md) for the 8-node reference
 implementation.
@@ -116,7 +116,7 @@ The loader parses these keys (others are silently ignored):
 | Key | Type | Purpose |
 |---|---|---|
 | `name` | string | Per-talent identifier. Required in multi-node files; optional in single-node (falls back to filename). |
-| `tags` | `[string, ...]` | Capability tags that activate this talent. OR semantics. |
+| `tags` | `[string, ...]` | Tags that activate this talent. OR semantics. |
 | `tags_all` | `[string, ...]` | Parsed but **not currently consulted for talent loading** — the talents loader only inspects `tags:` when deciding what to inject. `tags_all` is honored today for tagged KB articles (via the `tag_context` pipeline), where it composes AND-style with `tags:`. Leave it off talent frontmatter unless you're prepared to wire it through `Talent` and `FilterByTags` first. |
 | `kind` | `trailhead` or empty | Marks the file as a trailhead. The legacy `entry_point` value still loads with a deprecation warning. |
 | `teaser` | string | One-line summary shown when a parent menu surfaces this branch. Trailheads should set this. |

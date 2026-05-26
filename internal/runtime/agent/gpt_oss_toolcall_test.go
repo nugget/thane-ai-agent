@@ -194,12 +194,12 @@ func TestGptOSSProviderProfile_RecoversCapabilityActivationFromRawText(t *testin
 
 	foundActivationResult := false
 	for _, msg := range mock.calls[1].Messages {
-		if msg.Role == "tool" && strings.Contains(msg.Content, "Capability **forge** activated.") {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "Tag **forge** activated.") {
 			foundActivationResult = true
 			break
 		}
 	}
 	if !foundActivationResult {
-		t.Fatalf("recovery call messages = %#v, want activate_capability tool result", mock.calls[1].Messages)
+		t.Fatalf("recovery call messages = %#v, want tag_activate tool result", mock.calls[1].Messages)
 	}
 }

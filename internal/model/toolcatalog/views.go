@@ -26,7 +26,7 @@ type CapabilityToolState struct {
 }
 
 // CapabilityToolEntry is the rich per-tool view for a tag with full
-// source attribution. Used by inspect_capability, the CLI, and the
+// source attribution. Used by tag_inspect, the CLI, and the
 // /api/capabilities endpoints.
 type CapabilityToolEntry struct {
 	Name   string               `json:"name"`
@@ -92,7 +92,7 @@ type LoadedCapabilityEntry struct {
 // CapabilityActionTools lists the tool names the model should use for
 // capability lifecycle actions (activate, deactivate, reset, inspect).
 // There is no "list" tool: the model reads the currently-loaded
-// capabilities from the `## Active Capabilities` section of its
+// capabilities from the `## Active Tags` section of its
 // system prompt, which carries the same shape on every turn without a
 // tool call.
 type CapabilityActionTools struct {
@@ -136,10 +136,10 @@ type CatalogViewOptions struct {
 
 func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 	tools := CapabilityActionTools{
-		Activate:   "activate_capability",
-		Deactivate: "deactivate_capability",
-		Reset:      "reset_capabilities",
-		Inspect:    "inspect_capability",
+		Activate:   "tag_activate",
+		Deactivate: "tag_deactivate",
+		Reset:      "tag_reset",
+		Inspect:    "tag_inspect",
 	}
 	if includeDelegate {
 		tools.Delegate = "thane_now"

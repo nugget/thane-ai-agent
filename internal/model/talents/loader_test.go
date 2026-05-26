@@ -413,7 +413,7 @@ func TestTalents_MissingDir(t *testing.T) {
 
 func TestGenerateManifest(t *testing.T) {
 	entries := []ManifestEntry{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, Core: true, KBArticles: 3, LiveContext: true},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"ha_get_state", "ha_call_service"}, Core: true, KBArticles: 3, LiveContext: true},
 		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search", "web_fetch"}, Core: false},
 		{Tag: "hpde", AdHoc: true, KBArticles: 2},
 	}
@@ -431,8 +431,8 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Preamble text.
-	if !strings.Contains(talent.Content, "activate_capability") {
-		t.Error("manifest should mention activate_capability in preamble")
+	if !strings.Contains(talent.Content, "tag_activate") {
+		t.Error("manifest should mention tag_activate in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
 		t.Error("manifest should mention delegate in preamble")
@@ -455,19 +455,19 @@ func TestGenerateManifest(t *testing.T) {
 				KBArticles int  `json:"kb_articles"`
 				Live       bool `json:"live"`
 			} `json:"context"`
-		} `json:"capability_menu"`
+		} `json:"tag_menu"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		t.Fatalf("manifest JSON should be valid: %v\nJSON: %s", err, jsonStr)
 	}
-	if parsed.Kind != "capability_menu" {
-		t.Fatalf("kind = %q, want capability_menu", parsed.Kind)
+	if parsed.Kind != "tag_menu" {
+		t.Fatalf("kind = %q, want tag_menu", parsed.Kind)
 	}
 
 	// Configured tag: ha
 	ha, ok := parsed.Capabilities["ha"]
 	if !ok {
-		t.Fatal("missing ha capability")
+		t.Fatal("missing ha tag")
 	}
 	if ha.Status != "core" {
 		t.Errorf("ha status = %q, want core", ha.Status)
@@ -501,7 +501,7 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Tool names should NOT appear in the output.
-	if strings.Contains(talent.Content, "get_state") {
+	if strings.Contains(talent.Content, "ha_get_state") {
 		t.Error("manifest should not list individual tool names")
 	}
 }

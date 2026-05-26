@@ -50,7 +50,7 @@ func CheckRecipientTrust(cr ContactResolver, addresses []string) TrustResult {
 
 		if !found {
 			result.Blocked = append(result.Blocked,
-				fmt.Sprintf("Cannot send to %s: no contact record. Add with save_contact first.", bare))
+				fmt.Sprintf("Cannot send to %s: no contact record. Add with contact_save first.", bare))
 			continue
 		}
 

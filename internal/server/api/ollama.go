@@ -590,8 +590,8 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 			// Check for JSON tool call patterns (escaped or unescaped)
 			hasToolJSON := strings.HasPrefix(content, "{\"name\":") ||
 				strings.HasPrefix(content, "{\\\"name\\\":") ||
-				strings.Contains(content, "\"name\": \"find_entity\"") ||
-				strings.Contains(content, "\"name\": \"call_service\"")
+				strings.Contains(content, "\"name\": \"ha_find_entity\"") ||
+				strings.Contains(content, "\"name\": \"ha_call_service\"")
 
 			if hasToolJSON {
 				// Find where JSON objects end and keep only the trailing text
