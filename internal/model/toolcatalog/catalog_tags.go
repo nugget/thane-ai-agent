@@ -13,7 +13,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"files":           {Description: "Workspace file read, write, edit, and search tools."},
 	"forge":           {Description: "Forge and code-collaboration tools for issues, pull requests, checks, and reviews."},
 	"ha":              {Description: "Home Assistant state, control, registry, and automation tools."},
-	"ha_admin":        {Description: "Elevated Home Assistant scope hint. The delegate executor pairs it with the ha profile and routing budgets so admin-shaped HA work (system-wide control, registry mutation, sweeping automation edits) gets the same tool surface as ha while signalling the higher trust requirement to routing."},
+	"ha_admin":        {Description: "Additive routing hint for admin-shaped Home Assistant work — system-wide control, registry mutation, sweeping automation edits. ha_admin in scope tells the delegate executor to apply the ha profile's higher-trust routing and budgets, but ha_admin carries no tools of its own — pair it with `ha` so the HA tool surface actually loads. Setting ha_admin alone results in a scope with no HA tools."},
 	"home":            {Description: "Coarse trailhead for home, device, room, and automation work. Usually leads to ha or notifications.", Menu: true},
 	"homeassistant":   {Description: "Alias for ha: Home Assistant state, control, registry, and automation tools."},
 	"interactive":     {Description: "Coarse trailhead for interactive loop behavior and channel guidance. Usually leads to signal, owu, or owner context.", Menu: true},
