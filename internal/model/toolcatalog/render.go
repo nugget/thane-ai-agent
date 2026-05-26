@@ -6,10 +6,17 @@ import (
 	"strings"
 )
 
+// selectCapabilityMenuEntries returns the entries that should appear
+// in the capability menu surface: every menu trailhead plus any
+// protected leaf (those are runtime-asserted gates worth surfacing for
+// situational awareness, even though the model can't activate them).
+// Falls back to all entries if no entry qualifies — covers the
+// pre-config edge case where the catalog hasn't classified anything
+// yet.
 func selectCapabilityMenuEntries(entries []CapabilitySurface) []CapabilitySurface {
 	menu := make([]CapabilitySurface, 0, len(entries))
 	for _, entry := range SortCapabilitySurface(entries) {
-		if entry.Menu {
+		if entry.Kind.IsMenu() || entry.Protected {
 			menu = append(menu, entry)
 		}
 	}

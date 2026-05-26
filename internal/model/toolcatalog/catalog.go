@@ -24,12 +24,82 @@ type BuiltinToolSpec struct {
 	Tags        []string
 }
 
-// BuiltinTagSpec captures compiled-in metadata for a tag/toolset.
+// TagKind describes a tag's surface role in the capability menu.
+//
+//   - [TagKindLeaf] is the default: an ordinary capability tag that
+//     carries tools, talents, and KB articles. When the model activates
+//     a leaf tag, those resources load into scope.
+//   - [TagKindMenu] is a coarse trailhead that routes the model toward
+//     leaf tags. Menus typically carry few or no tools of their own;
+//     their value is the per-branch teaser surfaced in the capability
+//     menu prompt.
+//
+// Tag kind is orthogonal to [BuiltinTagSpec.Protected] — a leaf can be
+// protected (e.g. `message_channel`, `owner`) without becoming a menu.
+type TagKind string
+
+const (
+	// TagKindLeaf is the default kind. Empty string normalizes to this.
+	TagKindLeaf TagKind = "leaf"
+	// TagKindMenu marks a coarse trailhead — see [TagKind] for the
+	// distinction from leaves.
+	TagKindMenu TagKind = "menu"
+)
+
+// IsMenu reports whether the kind is a menu. The empty string
+// (zero-value) is treated as [TagKindLeaf].
+func (k TagKind) IsMenu() bool {
+	return k == TagKindMenu
+}
+
+// BuiltinTagSpec captures compiled-in metadata for a tag/toolset. The
+// shape grew incrementally and was formalized in PR-G as part of the
+// #910 talent corpus overhaul to make tag-grouping data instead of
+// prose: leaf tags now point at the menu(s) they belong under via
+// [Parents], and alternate names funnel through [Aliases] at activation
+// time instead of being separately-declared spec entries.
 type BuiltinTagSpec struct {
+	// Description is the short, model-facing summary rendered into
+	// the capability menu and inspect_capability output.
 	Description string
-	Core        bool
-	Menu        bool
-	Protected   bool
+
+	// Core tags are pinned in every scope by operator configuration.
+	// Survives capability-tag filtering; cannot be deactivated by the
+	// model. Re-seeded each run from config — not a property of
+	// individual built-in tags, but operators can set it via the
+	// capability_tags YAML overlay.
+	Core bool
+
+	// Kind classifies the tag's surface role. Zero value is treated
+	// as [TagKindLeaf]; menu trailheads explicitly set
+	// [TagKindMenu]. See [TagKind] for the orthogonality with
+	// Protected.
+	Kind TagKind
+
+	// Protected tags cannot be toggled via activate_capability /
+	// deactivate_capability — they're reserved for runtime trust
+	// assertions (e.g. owner-authenticated conversations, channel
+	// affordance tags asserted by the integration). Orthogonal to
+	// Kind: a tag can be a protected leaf (`message_channel`,
+	// `owner`) without being a menu.
+	Protected bool
+
+	// Parents lists the menu tag(s) this leaf appears under in the
+	// hierarchical capability menu. Multi-valued because some leaves
+	// legitimately serve more than one menu (e.g. `files` is
+	// reachable from both development and knowledge). Omitted for
+	// menus themselves and for tags that don't fit any menu — those
+	// surface as top-level entries in the menu rendering.
+	Parents []string
+
+	// Aliases lists alternate names that resolve to this canonical
+	// tag. Most relevant for backward-compatible renames or
+	// operator-friendly synonyms (e.g. `homeassistant` resolves to
+	// `ha`). Resolution happens at every boundary the tag enters the
+	// system: activate_capability / inspect_capability calls,
+	// channel-tag binding, operator YAML. Internally only canonical
+	// names exist.
+	Aliases []string
 }
 
 // CapabilitySurface captures the resolved model-facing view of a
@@ -52,12 +122,15 @@ type CapabilitySurface struct {
 	ToolEntries   []CapabilityToolEntry
 	ExcludedTools []CapabilityToolEntry
 	Core          bool
-	Menu          bool
-	Protected     bool
-	Loaded        bool
-	KBArticles    int
-	LiveContext   bool
-	AdHoc         bool
+	// Kind mirrors [BuiltinTagSpec.Kind]. Use Kind.IsMenu() to test
+	// menu-ness; the zero value normalizes to [TagKindLeaf].
+	Kind        TagKind
+	Parents     []string
+	Protected   bool
+	Loaded      bool
+	KBArticles  int
+	LiveContext bool
+	AdHoc       bool
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
@@ -70,9 +143,9 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"attachment_describe":         {CanonicalID: "native:attachment_describe", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_list":             {CanonicalID: "native:attachment_list", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_search":           {CanonicalID: "native:attachment_search", Source: NativeToolSource, Tags: []string{"attachments"}},
-	"call_service":                {CanonicalID: "native:call_service", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"call_service":                {CanonicalID: "native:call_service", Source: NativeToolSource, Tags: []string{"ha"}},
 	"cancel_task":                 {CanonicalID: "native:cancel_task", Source: NativeToolSource, Tags: []string{"scheduler"}},
-	"control_device":              {CanonicalID: "native:control_device", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"control_device":              {CanonicalID: "native:control_device", Source: NativeToolSource, Tags: []string{"ha"}},
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
@@ -116,7 +189,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"file_stat":                   {CanonicalID: "native:file_stat", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_tree":                   {CanonicalID: "native:file_tree", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_write":                  {CanonicalID: "native:file_write", Source: NativeToolSource, Tags: []string{"files"}},
-	"find_entity":                 {CanonicalID: "native:find_entity", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"find_entity":                 {CanonicalID: "native:find_entity", Source: NativeToolSource, Tags: []string{"ha"}},
 	"forget_contact":              {CanonicalID: "native:forget_contact", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"forget_fact":                 {CanonicalID: "native:forget_fact", Source: NativeToolSource, Tags: []string{"memory"}},
 	"forge_issue_comment":         {CanonicalID: "native:forge_issue_comment", Source: NativeToolSource, Tags: []string{"forge"}},
@@ -140,18 +213,18 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"forge_repo_subscriptions":    {CanonicalID: "native:forge_repo_subscriptions", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_repo_unfollow":         {CanonicalID: "native:forge_repo_unfollow", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_search":                {CanonicalID: "native:forge_search", Source: NativeToolSource, Tags: []string{"forge"}},
-	"get_state":                   {CanonicalID: "native:get_state", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"get_state":                   {CanonicalID: "native:get_state", Source: NativeToolSource, Tags: []string{"ha"}},
 	"get_version":                 {CanonicalID: "native:get_version", Source: NativeToolSource, Tags: []string{"diagnostics"}},
-	"ha_automation_create":        {CanonicalID: "native:ha_automation_create", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"ha_automation_delete":        {CanonicalID: "native:ha_automation_delete", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"ha_automation_get":           {CanonicalID: "native:ha_automation_get", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"ha_automation_list":          {CanonicalID: "native:ha_automation_list", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
-	"ha_automation_update":        {CanonicalID: "native:ha_automation_update", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_automation_create":        {CanonicalID: "native:ha_automation_create", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_delete":        {CanonicalID: "native:ha_automation_delete", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_get":           {CanonicalID: "native:ha_automation_get", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_list":          {CanonicalID: "native:ha_automation_list", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_update":        {CanonicalID: "native:ha_automation_update", Source: NativeToolSource, Tags: []string{"ha"}},
 	"ha_notify":                   {CanonicalID: "native:ha_notify", Source: NativeToolSource, Tags: []string{"notifications"}},
-	"ha_registry_search":          {CanonicalID: "native:ha_registry_search", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_registry_search":          {CanonicalID: "native:ha_registry_search", Source: NativeToolSource, Tags: []string{"ha"}},
 	"import_vcf":                  {CanonicalID: "native:import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha"}},
 	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
 	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
 	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
@@ -244,10 +317,52 @@ func BuiltinTagSpecs() map[string]BuiltinTagSpec {
 	return maps.Clone(builtinTagSpecs)
 }
 
-// HasBuiltinTag reports whether the name is a compiled-in tag.
+// HasBuiltinTag reports whether the name is a compiled-in tag,
+// resolving aliases. So `HasBuiltinTag("homeassistant")` returns true
+// because `ha` declares it as an alias.
 func HasBuiltinTag(name string) bool {
-	_, ok := builtinTagSpecs[name]
+	if _, ok := builtinTagSpecs[name]; ok {
+		return true
+	}
+	_, ok := builtinTagAliases[name]
 	return ok
+}
+
+// CanonicalTagName returns the canonical tag name for value, resolving
+// aliases. If value is already a canonical tag (or an unknown name), it
+// is returned unchanged.
+func CanonicalTagName(value string) string {
+	if canonical, ok := builtinTagAliases[value]; ok {
+		return canonical
+	}
+	return value
+}
+
+// LookupBuiltinTagSpec returns the spec for name, resolving aliases.
+// Returns the zero value and false for unknown names.
+func LookupBuiltinTagSpec(name string) (BuiltinTagSpec, bool) {
+	if spec, ok := builtinTagSpecs[name]; ok {
+		return spec, true
+	}
+	if canonical, ok := builtinTagAliases[name]; ok {
+		spec, found := builtinTagSpecs[canonical]
+		return spec, found
+	}
+	return BuiltinTagSpec{}, false
+}
+
+// builtinTagAliases is the reverse-lookup map populated from each
+// canonical spec's Aliases field at package init. Lookups are
+// alias → canonical name; resolving an unknown name returns ("", false).
+var builtinTagAliases map[string]string
+
+func init() {
+	builtinTagAliases = make(map[string]string)
+	for canonical, spec := range builtinTagSpecs {
+		for _, alias := range spec.Aliases {
+			builtinTagAliases[alias] = canonical
+		}
+	}
 }
 
 // BuildCapabilitySurface builds a sorted capability surface from
@@ -263,7 +378,8 @@ func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]st
 			Description: descriptions[tag],
 			Tools:       copiedTools,
 			Core:        core[tag],
-			Menu:        spec.Menu,
+			Kind:        spec.Kind,
+			Parents:     append([]string(nil), spec.Parents...),
 			Protected:   protected[tag],
 		})
 	}
