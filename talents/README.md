@@ -117,7 +117,7 @@ The loader parses these keys (others are silently ignored):
 |---|---|---|
 | `name` | string | Per-talent identifier. Required in multi-node files; optional in single-node (falls back to filename). |
 | `tags` | `[string, ...]` | Capability tags that activate this talent. OR semantics. |
-| `tags_all` | `[string, ...]` | Capability tags that must all be active for this talent to load. AND semantics. Composes with `tags:` when both are set. |
+| `tags_all` | `[string, ...]` | Parsed but **not currently consulted for talent loading** — the talents loader only inspects `tags:` when deciding what to inject. `tags_all` is honored today for tagged KB articles (via the `tag_context` pipeline), where it composes AND-style with `tags:`. Leave it off talent frontmatter unless you're prepared to wire it through `Talent` and `FilterByTags` first. |
 | `kind` | `trailhead` or empty | Marks the file as a trailhead. The legacy `entry_point` value still loads with a deprecation warning. |
 | `teaser` | string | One-line summary shown when a parent menu surfaces this branch. Trailheads should set this. |
 | `next_tags` | `[string, ...]` | Suggested follow-on tags. Trailheads use this to chain decision steps. Must resolve to built-in tags or talent-declared tags. |

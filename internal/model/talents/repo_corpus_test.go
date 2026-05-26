@@ -128,10 +128,15 @@ var nonToolTokens = map[string]struct{}{
 	"wake_loop": {},
 
 	// Talent frontmatter keys. The authoring README documents these
-	// alongside their tool-like siblings (`tags`, `kind`, `teaser`,
-	// `next_tags` — all single-word, not flagged by the matcher);
-	// `tags_all` is the one compound key that happens to look
-	// tool-shaped.
+	// alongside their tool-like siblings (`tags`, `kind`, `teaser`).
+	// `next_tags` matches the regex but slips past the matcher
+	// because neither `next` (first segment) nor `tags` (second
+	// segment) appears in the catalog's prefix/second-segment sets.
+	// `tags_all` is unlucky: its second segment `all` appears as
+	// the second segment of `export_all_vcf`, so the matcher flags
+	// the shape as tool-family-ish. Explicit allowlist entry keeps
+	// the matcher's heuristics loose for real-tool catches without
+	// flagging a documented frontmatter key.
 	"tags_all": {},
 }
 
