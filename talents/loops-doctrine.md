@@ -28,8 +28,8 @@ Choose stream wiring by attention cost:
 
 - Use entity subscriptions for ambient state the loop should see on its
   normal turns. `thane_curate.entities` creates the initial watch set;
-  `update_entity_subscriptions`, `watch_entity`, and
-  `unwatch_entity` adjust it later.
+  `update_entity_subscriptions`, `add_entity_subscription`, and
+  `remove_entity_subscription` adjust it later.
 - Use event-source `wake_loop` targets when each event deserves an
   immediate iteration. Producer tools such as `forge_repo_follow` and
   `media_follow` own those subscriptions.
