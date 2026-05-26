@@ -4,15 +4,174 @@ tags: [memory]
 
 # Memory
 
-`memory` is not a filing cabinet. It is where documents collapse into
-durable truths.
+Memory is not a filing cabinet. It is where documents collapse into
+durable truths — the compact facts you keep after reading the source,
+not the source itself.
 
-Use it for facts, preferences, and relationship details that should
-survive the current turn.
+## The single most important disambiguation
 
-Trust these instincts:
+**Most "should I remember this?" impulses belong somewhere else.** The
+catalog has three more-specific homes that the model reaches for in
+place of `remember_fact` more often than it reaches for memory itself:
 
-- store concise truths, not whole documents
-- prefer memory for stable preferences and short summaries
-- if the source is a document, read it first and then decide whether a
-  compact fact should be remembered
+| You want to store... | Surface | Why not memory |
+|---|---|---|
+| "Frank prefers Signal" / "Alice works at X" / any person attribute | `contacts` (`save_contact`) | Person identity belongs on a contact record, not loose facts |
+| "The VLAN renumber landed 2026-04-22" / a project decision / a design rationale | `documents` or a workspace file | Complex, evolving, or document-shaped knowledge — memory truncates to a key+value |
+| "What did this person and I last discuss" | `archive_text` | The conversation history *is* the search surface for past discussion |
+| The texture/tone/arc of *this* conversation | `session_working_memory` (covered below; also see `working-memory.md`) | Different store with different lifetime |
+| Stable, compact, host-level truths (preferences, layout, routines) | `memory` — `remember_fact` | This is what memory is *for* |
+
+If a fact is large enough to need structure, evolves more than once a
+year, or belongs to a specific person, it isn't a memory fact. Push
+it to its natural home and let memory carry only the residue.
+
+## Two stores share this tag
+
+The `memory` tag carries four tools across two genuinely different
+stores. Don't conflate them:
+
+**Persistent facts** (`remember_fact`, `recall_fact`, `forget_fact`)
+survive across conversations, sessions, restarts. Host-level
+truths that the agent should still know next week. Keyed storage
+with categories and subject tags.
+
+**Session working memory** (`session_working_memory`) is a per-
+conversation scratchpad. Single text blob, auto-injected into
+context each turn, survives compaction but not closing the
+session. For experiential texture, not stable knowledge.
+
+A fact you'd want six months from now goes in the persistent store.
+A note about *this* conversation's tone goes in working memory.
+Mixing them — putting transient context in `remember_fact` or
+stable facts in working memory — wastes the affordance of each.
+
+## Storing a fact
+
+`remember_fact` writes one compact truth. Required: `key` and
+`value`. Optional but high-value: `category`, `subjects`, `source`.
+
+```json
+{
+  "category": "device",
+  "key": "garage_motion_sensor",
+  "value": "binary_sensor.garage_motion — wired, mounted ceiling-center, false positives on cobweb sway when AC runs",
+  "subjects": ["entity:binary_sensor.garage_motion", "zone:garage"],
+  "source": "owner observation, 2026-05-12"
+}
+```
+
+**Categories are constrained** to: `user`, `home`, `device`, `routine`,
+`preference`. The schema rejects others; pick the closest fit rather
+than inventing a new one. `user` is owner-shaped attributes,
+preferences, habits. `home` is household / room / pet. `device` is
+hardware and mappings. `routine` is recurring schedules and workflows.
+`preference` is communication and interaction preferences.
+
+**The `subjects` array is the cross-reference index** — it links the
+fact to entities, contacts, zones, etc. by prefixed key. Standard
+prefixes: `entity:`, `contact:`, `phone:`, `zone:`, `camera:`,
+`location:`. Recall by subject is significantly faster than full-text
+search; populate this when you know the relationships.
+
+**Write semantics**: a `remember_fact` call for an existing `(category,
+key)` pair overwrites the prior value. No append, no merge. If you
+want to extend an existing fact, recall it first and write the
+combined value.
+
+## Recalling facts
+
+`recall_fact` reads by category, by specific key, or by text query:
+
+```json
+{
+  "category": "device",
+  "key": "garage_motion_sensor"
+}
+```
+
+Returns the matching fact's full record. Without `key`, returns the
+whole category. Without arguments at all, returns directory
+statistics — useful for "what's in here at all."
+
+Query mode searches across values:
+
+```json
+{
+  "query": "false positive"
+}
+```
+
+Returns matching facts ranked. Slower than direct key lookup;
+prefer key when you have it.
+
+## Forgetting
+
+`forget_fact` removes one entry, hard. Requires both `category` and
+`key`:
+
+```json
+{
+  "category": "device",
+  "key": "garage_motion_sensor"
+}
+```
+
+There's no tombstone, no soft-delete, no undo. The fact is gone, and
+anything that resolved against it on the next turn won't find it.
+Recall before forgetting; the cost of removing the wrong fact is
+real and not always recoverable from the source documents that
+produced it.
+
+## Session working memory
+
+`session_working_memory` reads or writes the per-conversation
+scratchpad:
+
+```json
+{
+  "action": "read"
+}
+```
+
+…or…
+
+```json
+{
+  "action": "write",
+  "content": "User is debugging a confusing CI failure. Mood: tired, mildly frustrated but constructive. Promised to look at the rate-limit retry decision after we resolve this. Watch for them switching to questions about the retry stack — that's the deferred thread."
+}
+```
+
+**Write replaces entirely** — there is no append mode. If you want
+to extend existing working memory, read it first, splice your
+addition, and write the combined content back. The replacement is
+intentional: working memory is a *current state* of the
+conversation, not a log of every observation.
+
+The content is auto-injected into the system prompt each turn, so
+there's no separate fetch step needed for the model to see what's
+there. Read explicitly only when you want to verify content before
+a careful write.
+
+For *what* to capture in working memory — emotional tone,
+relationship dynamics, the throughline — see the
+[`working-memory.md`](working-memory.md) foundation talent. This
+section is the *operational* documentation; that one is the craft.
+
+## Cross-references
+
+- For person attributes (anything about a specific human), bounce
+  to `contacts` (`save_contact`). The contact directory is the
+  authoritative person record; memory should not duplicate it.
+- For complex or evolving knowledge that won't fit in a key+value
+  shape, bounce to `documents` for managed docs or workspace files
+  for ad-hoc notes.
+- For "what did we say about this in past conversations," bounce
+  to `archive` — the search surface there is conversation history,
+  not stored facts.
+- For the *craft* of writing session working memory (tone, arc,
+  texture rather than action notes), the
+  [`working-memory.md`](working-memory.md) foundation talent loads
+  on every turn already; this leaf carries only the operational
+  read/write semantics.
