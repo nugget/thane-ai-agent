@@ -11,8 +11,10 @@ not the source itself.
 ## The single most important disambiguation
 
 **Most "should I remember this?" impulses belong somewhere else.** The
-catalog has three more-specific homes that the model reaches for in
-place of `remember_fact` more often than it reaches for memory itself:
+catalog has three external surfaces the model often reaches for in
+place of `remember_fact` (`contacts`, `documents`/files, `archive_text`),
+plus an in-tag distinction (`session_working_memory` for current-
+conversation texture, separate from persistent facts):
 
 | You want to store... | Surface | Why not memory |
 |---|---|---|
@@ -71,8 +73,12 @@ hardware and mappings. `routine` is recurring schedules and workflows.
 **The `subjects` array is the cross-reference index** — it links the
 fact to entities, contacts, zones, etc. by prefixed key. Standard
 prefixes: `entity:`, `contact:`, `phone:`, `zone:`, `camera:`,
-`location:`. Recall by subject is significantly faster than full-text
-search; populate this when you know the relationships.
+`location:`. Subjects feed *automatic context injection* when a
+request carries matching subjects — the indexed facts surface in
+the run's context without explicit recall. They are *not* a
+`recall_fact` filter parameter; `recall_fact` accepts only
+`category` / `key` / `query`. Populate `subjects` on save when you
+know the relationships; let the context layer do the rest.
 
 **Write semantics**: a `remember_fact` call for an existing `(category,
 key)` pair overwrites the prior value. No append, no merge. If you
@@ -94,7 +100,9 @@ Returns the matching fact's full record. Without `key`, returns the
 whole category. Without arguments at all, returns directory
 statistics — useful for "what's in here at all."
 
-Query mode searches across values:
+Query mode runs a full-text search across `key` and `value` (and
+`source` when FTS5 is available; the LIKE fallback covers key/
+value):
 
 ```json
 {

@@ -22,7 +22,7 @@ Choose the next move deliberately:
 - If the turn wants a distilled truth that should survive beyond this
   moment — a *stable, compact* fact (preferences, home layout,
   routines), not a person attribute (→ `contacts`) or evolving
-  knowledge (→ `documents`/files) — activate `memory`.
+  knowledge (→ `documents` / `files`) — activate `memory`.
 - If the answer probably lives in prior sessions, earlier threads, or
   old exchanges, activate `archive`.
 - If more than one surface is claiming authority, delegate with the
