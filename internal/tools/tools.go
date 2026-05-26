@@ -32,17 +32,25 @@ import (
 
 // Tool represents a callable tool.
 type Tool struct {
-	Name                 string                                                         `json:"name"`
-	Description          string                                                         `json:"description"`
-	Parameters           map[string]any                                                 `json:"parameters"`
-	Handler              func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
-	Core                 bool                                                           `json:"-"` // Core tool — survives capability tag filtering regardless of scope.
-	SkipContentResolve   bool                                                           `json:"-"` // Exempt from prefix-to-content resolution.
-	ContentResolveExempt []string                                                       `json:"-"` // Top-level arg keys that must remain literal during content resolution.
-	CanonicalID          string                                                         `json:"-"`
-	Source               string                                                         `json:"-"`
-	Origin               string                                                         `json:"-"`
-	Tags                 []string                                                       `json:"-"`
+	Name        string                                                         `json:"name"`
+	Description string                                                         `json:"description"`
+	Parameters  map[string]any                                                 `json:"parameters"`
+	Handler     func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
+	// Core marks the tool as exempt from capability-tag filtering: it
+	// stays in the catalog even when its tags (if any) aren't active.
+	// Two distinct use cases ride this flag — meta-tools that must be
+	// reachable from any scope so the tag system itself remains
+	// navigable (tag_activate, tag_inspect, and friends), and
+	// request-scoped tools layered in via WithRuntimeTools (where the
+	// contract is "available for this run regardless of active tags").
+	// See docs/understanding/tag-system.md, "Why Tool.Core exists".
+	Core                 bool     `json:"-"`
+	SkipContentResolve   bool     `json:"-"` // Exempt from prefix-to-content resolution.
+	ContentResolveExempt []string `json:"-"` // Top-level arg keys that must remain literal during content resolution.
+	CanonicalID          string   `json:"-"`
+	Source               string   `json:"-"`
+	Origin               string   `json:"-"`
+	Tags                 []string `json:"-"`
 }
 
 // Registry holds available tools.
