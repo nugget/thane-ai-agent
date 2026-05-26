@@ -154,6 +154,9 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"reset\":\"reset_capabilities\"") {
 		t.Fatalf("manifest = %q, want reset_capabilities example", manifest)
 	}
+	if !strings.Contains(manifest, "\"inspect\":\"inspect_capability\"") {
+		t.Fatalf("manifest = %q, want inspect_capability example", manifest)
+	}
 	if !strings.Contains(manifest, "\"delegate\":\"thane_now\"") {
 		t.Fatalf("manifest = %q, want thane_now example", manifest)
 	}

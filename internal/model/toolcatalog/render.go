@@ -52,7 +52,7 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("\nThe `## Active Capabilities` section above lists what's currently loaded; use %s to return to baseline, or %s when you only want to drop one specific tag.",
+	sb.WriteString(fmt.Sprintf("\nThe `## Active Capabilities` section in the system prompt lists what's currently loaded; use %s to return to baseline, or %s when you only want to drop one specific tag.",
 		actionTools.Reset, actionTools.Deactivate))
 	return sb.String()
 }
