@@ -10,13 +10,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 )
 
-// CapabilityManager controls per-Run capability tag activation.
-// Implemented by agent.Loop. All methods operate on the
-// context-scoped capability scope created at the start of each Run().
+// CapabilityManager controls per-Run tag activation. Implemented by
+// agent.Loop. All methods operate on the context-scoped tag scope
+// created at the start of each Run().
+//
+// The "Capability" name on this interface is internal-implementation
+// terminology that predates the model-facing rename to "tag"; the
+// model surface (tool names, descriptions, JSON) speaks "tag"
+// throughout. An internal-only rename is a separate cleanup.
 type CapabilityManager interface {
-	// RequestCapability activates a capability tag for the current Run.
+	// RequestCapability activates a tag for the current Run.
 	RequestCapability(ctx context.Context, tag string) error
-	// DropCapability deactivates a capability tag for the current Run.
+	// DropCapability deactivates a tag for the current Run.
 	DropCapability(ctx context.Context, tag string) error
 	// ResetCapabilities drops all voluntary tags for the current Run,
 	// returning the tags that were removed.
@@ -25,34 +30,36 @@ type CapabilityManager interface {
 	ActiveTags(ctx context.Context) map[string]bool
 }
 
-// CapabilityManifest describes a capability tag for the manifest.
+// CapabilityManifest describes a tag for the manifest.
 type CapabilityManifest = toolcatalog.CapabilitySurface
 
-// SetCapabilityTools adds activate_capability, deactivate_capability,
-// reset_capabilities, and inspect_capability tools to the registry.
-// These tools let the agent inspect and mutate capability tags
-// mid-conversation. For "what's currently loaded," the model reads the
-// `## Active Capabilities` section already rendered into every prompt
-// — no tool call needed.
+// SetCapabilityTools adds tag_activate, tag_deactivate, tag_reset,
+// and tag_inspect tools to the registry. These tools let the agent
+// inspect and mutate which tags are loaded mid-conversation. For
+// "what's currently loaded," the model reads the `## Active Tags`
+// section already rendered into every prompt — no tool call needed.
 //
 // These tools are intentionally not assigned to any tag group. They
-// live in the base registry and survive all tag filtering, ensuring the
-// agent can always activate or deactivate capabilities regardless of
-// which tags are currently active.
+// live in the base registry and survive all tag filtering, ensuring
+// the agent can always change tag activation regardless of which
+// tags are currently active.
 func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []CapabilityManifest) {
 	// Index manifest by tag for fast lookup in handlers.
 	tagManifest := make(map[string]CapabilityManifest, len(manifest))
 	for _, m := range manifest {
 		tagManifest[m.Tag] = m
 	}
-	r.registerActivateCapability(mgr, manifest, tagManifest)
-	r.registerDeactivateCapability(mgr, tagManifest)
-	r.registerResetCapabilities(mgr, tagManifest)
-	r.registerInspectCapability(tagManifest)
+	r.registerActivateTag(mgr, manifest, tagManifest)
+	r.registerDeactivateTag(mgr, tagManifest)
+	r.registerResetTags(mgr, tagManifest)
+	r.registerInspectTag(tagManifest)
 }
 
 // extractTag extracts the tag parameter from args, accepting common
-// misnames ("capability", "name") as aliases for "tag".
+// misnames ("capability", "name") as aliases for "tag". The
+// "capability" alias survives the rename because older models or
+// transcripts may still pass it; it's cheap defensive code and does
+// not appear in tool descriptions.
 func extractTag(args map[string]any) string {
 	if tag, ok := args["tag"].(string); ok {
 		if t := strings.TrimSpace(tag); t != "" {
@@ -108,16 +115,16 @@ func summarizeRemovedTools(tags []string, tagManifest map[string]CapabilityManif
 	return fmt.Sprintf(" Tools removed: %s, and %d more.", strings.Join(shown, ", "), remaining)
 }
 
-// registerActivateCapability registers the activate_capability tool.
+// registerActivateTag registers the tag_activate tool.
 //
-// Core-tool rationale: this is the bootstrap primitive for
-// opening capability scopes. If it required a tag to be loaded first,
-// there would be no way to widen the model's surface from any
-// starting state — a chicken-and-egg that would leave a tightly
-// scoped loop unable to ever ask for more.
-func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
+// Core-tool rationale: this is the bootstrap primitive for opening
+// tag scopes. If it required a tag to be loaded first, there would
+// be no way to widen the model's surface from any starting state —
+// a chicken-and-egg that would leave a tightly scoped loop unable
+// to ever ask for more.
+func (r *Registry) registerActivateTag(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:        "activate_capability",
+		Name:        "tag_activate",
 		Core:        true,
 		Description: toolcatalog.RenderCapabilityActivationDescription(manifest),
 		Parameters: map[string]any{
@@ -125,7 +132,7 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 			"properties": map[string]any{
 				"tag": map[string]any{
 					"type":        "string",
-					"description": "The capability tag to activate (e.g., \"forge\", \"ha\", \"email\")",
+					"description": "The tag to activate (e.g., \"forge\", \"ha\", \"email\")",
 				},
 			},
 			"required": []string{"tag"},
@@ -133,11 +140,11 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			rawTag := extractTag(args)
 			if rawTag == "" {
-				return "", fmt.Errorf("tag is required (e.g., activate_capability(tag: \"forge\"))")
+				return "", fmt.Errorf("tag is required (e.g., tag_activate(tag: \"forge\"))")
 			}
 			// Resolve aliases before activation so the canonical name is
-			// what flows through the scope, the prompt's ## Active
-			// Capabilities section, and the persistence layer.
+			// what flows through the scope, the prompt's ## Active Tags
+			// section, and the persistence layer.
 			tag := toolcatalog.CanonicalTagName(rawTag)
 
 			if err := mgr.RequestCapability(ctx, tag); err != nil {
@@ -146,9 +153,9 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 
 			var result strings.Builder
 			if tag != rawTag {
-				fmt.Fprintf(&result, "Capability **%s** activated (alias for **%s**).", rawTag, tag)
+				fmt.Fprintf(&result, "Tag **%s** activated (alias for **%s**).", rawTag, tag)
 			} else {
-				fmt.Fprintf(&result, "Capability **%s** activated.", tag)
+				fmt.Fprintf(&result, "Tag **%s** activated.", tag)
 			}
 			if m, ok := tagManifest[tag]; ok {
 				if len(m.Tools) > 0 {
@@ -162,25 +169,25 @@ func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []
 	})
 }
 
-// registerDeactivateCapability registers the deactivate_capability tool.
+// registerDeactivateTag registers the tag_deactivate tool.
 //
-// Core-tool rationale: symmetric counterpart to
-// activate_capability. A loop that widened its surface for one phase
-// of work needs to be able to narrow back without keeping a tag
-// loaded just for the release primitive. Locking this behind a tag
-// would create stuck-wide states.
-func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+// Core-tool rationale: symmetric counterpart to tag_activate. A loop
+// that widened its surface for one phase of work needs to be able
+// to narrow back without keeping a tag loaded just for the release
+// primitive. Locking this behind a tag would create stuck-wide
+// states.
+func (r *Registry) registerDeactivateTag(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name: "deactivate_capability",
+		Name: "tag_deactivate",
 		Core: true,
-		Description: "Deactivate a capability to remove its tools and context from YOUR current conversation. " +
-			"Always-active and protected tags cannot be deactivated. Use when you no longer need a capability's tools to keep your context focused.",
+		Description: "Deactivate a tag to remove its tools and context from YOUR current conversation. " +
+			"Core and protected tags cannot be deactivated. Use when you no longer need a tag's tools to keep your context focused.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"tag": map[string]any{
 					"type":        "string",
-					"description": "The capability tag to deactivate",
+					"description": "The tag to deactivate",
 				},
 			},
 			"required": []string{"tag"},
@@ -188,7 +195,7 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			rawTag := extractTag(args)
 			if rawTag == "" {
-				return "", fmt.Errorf("tag is required (e.g., deactivate_capability(tag: \"forge\"))")
+				return "", fmt.Errorf("tag is required (e.g., tag_deactivate(tag: \"forge\"))")
 			}
 			// Resolve aliases so deactivating by an alternate name
 			// (e.g. `homeassistant`) hits the canonical tag in scope.
@@ -200,9 +207,9 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 
 			var result strings.Builder
 			if tag != rawTag {
-				fmt.Fprintf(&result, "Capability **%s** deactivated (alias for **%s**).", rawTag, tag)
+				fmt.Fprintf(&result, "Tag **%s** deactivated (alias for **%s**).", rawTag, tag)
 			} else {
-				fmt.Fprintf(&result, "Capability **%s** deactivated.", tag)
+				fmt.Fprintf(&result, "Tag **%s** deactivated.", tag)
 			}
 			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
 				fmt.Fprintf(&result, " %d tools removed.", len(m.Tools))
@@ -220,19 +227,19 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 	})
 }
 
-// registerResetCapabilities registers the reset_capabilities tool.
+// registerResetTags registers the tag_reset tool.
 //
-// Core-tool rationale: the emergency hatch for returning to
-// baseline when the loop has accumulated voluntary tags it no longer
-// needs. Same bootstrap argument as activate/deactivate — must work
-// from any state, including states where the model intentionally
-// dropped most of its surface.
-func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+// Core-tool rationale: the emergency hatch for returning to baseline
+// when the loop has accumulated voluntary tags it no longer needs.
+// Same bootstrap argument as activate/deactivate — must work from
+// any state, including states where the model intentionally dropped
+// most of its surface.
+func (r *Registry) registerResetTags(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name: "reset_capabilities",
+		Name: "tag_reset",
 		Core: true,
-		Description: "Reset your current conversation back to baseline capability state by deactivating all voluntary tags at once. " +
-			"Always-active, protected, and channel-pinned tags remain loaded. Use when the loop feels too widened or you want to return to the channel's default stance.",
+		Description: "Reset your current conversation back to baseline tag state by deactivating all voluntary tags at once. " +
+			"Core, protected, and channel-pinned tags remain loaded. Use when the loop feels too widened or you want to return to the channel's default stance.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -254,13 +261,13 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 
 			if len(dropped) == 0 {
 				if len(remaining) == 0 {
-					return "Capability state is already at baseline.", nil
+					return "Tag state is already at baseline.", nil
 				}
-				return fmt.Sprintf("Capability state is already at baseline. Active: %s.", strings.Join(remaining, ", ")), nil
+				return fmt.Sprintf("Tag state is already at baseline. Active: %s.", strings.Join(remaining, ", ")), nil
 			}
 
 			var result strings.Builder
-			fmt.Fprintf(&result, "Capability state reset to baseline. Deactivated: %s.", strings.Join(dropped, ", "))
+			fmt.Fprintf(&result, "Tag state reset to baseline. Deactivated: %s.", strings.Join(dropped, ", "))
 			if removedSummary := summarizeRemovedTools(dropped, tagManifest); removedSummary != "" {
 				result.WriteString(removedSummary)
 			}
@@ -272,28 +279,28 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 	})
 }
 
-// registerInspectCapability registers the inspect_capability tool,
-// which returns the full per-tool breakdown of a single capability
-// tag — description, status, active tools with their source
-// attribution (native / mcp / overlay), and optionally
-// operator-excluded tools. Use this to audit "where did this tool
-// come from" or "what's actually in the ha tag at this site".
+// registerInspectTag registers the tag_inspect tool, which returns
+// the full per-tool breakdown of a single tag — description, status,
+// active tools with their source attribution (native / mcp /
+// overlay), and optionally operator-excluded tools. Use this to
+// audit "where did this tool come from" or "what's actually in the
+// ha tag at this site".
 //
-// Core-tool rationale: auditing a tag must work *before* the
-// tag is activated. The whole point of inspection is to decide
-// whether opening the tag is worth the surface cost, which means the
-// answer can't depend on the tag already being in scope.
-func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityManifest) {
+// Core-tool rationale: auditing a tag must work *before* the tag is
+// activated. The whole point of inspection is to decide whether
+// opening the tag is worth the surface cost, which means the answer
+// can't depend on the tag already being in scope.
+func (r *Registry) registerInspectTag(tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:        "inspect_capability",
+		Name:        "tag_inspect",
 		Core:        true,
-		Description: "Inspect a single capability tag and return a structured breakdown of its tools with source attribution (native, mcp, overlay). Use to audit what a tag exposes and where each tool came from. Pass include_excluded: true to also surface operator-disabled tools.",
+		Description: "Inspect a single tag and return a structured breakdown of its tools with source attribution (native, mcp, overlay). Use to audit what a tag exposes and where each tool came from. Pass include_excluded: true to also surface operator-disabled tools.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"tag": map[string]any{
 					"type":        "string",
-					"description": "The capability tag to inspect (e.g., \"ha\", \"forge\").",
+					"description": "The tag to inspect (e.g., \"ha\", \"forge\").",
 				},
 				"include_excluded": map[string]any{
 					"type":        "boolean",
@@ -305,14 +312,14 @@ func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityMa
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			rawTag := extractTag(args)
 			if rawTag == "" {
-				return "", fmt.Errorf("tag is required (e.g., inspect_capability(tag: \"ha\"))")
+				return "", fmt.Errorf("tag is required (e.g., tag_inspect(tag: \"ha\"))")
 			}
-			// Resolve aliases so inspect_capability("homeassistant")
-			// returns ha's breakdown.
+			// Resolve aliases so tag_inspect("homeassistant") returns
+			// ha's breakdown.
 			tag := toolcatalog.CanonicalTagName(rawTag)
 			manifest, ok := tagManifest[tag]
 			if !ok {
-				return "", fmt.Errorf("unknown capability tag %q; read the ## Active Capabilities section of your prompt to see what's already loaded, or use activate_capability to discover available tags", rawTag)
+				return "", fmt.Errorf("unknown tag %q; read the ## Active Tags section of your prompt to see what's already loaded, or use tag_activate to discover available tags", rawTag)
 			}
 			includeExcluded, _ := args["include_excluded"].(bool)
 			entry := toolcatalog.RenderCapabilityCatalogEntry(manifest, toolcatalog.CatalogViewOptions{
@@ -320,16 +327,16 @@ func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityMa
 			})
 			out, err := json.Marshal(entry)
 			if err != nil {
-				return "", fmt.Errorf("marshal capability inspection: %w", err)
+				return "", fmt.Errorf("marshal tag inspection: %w", err)
 			}
 			return string(out), nil
 		},
 	})
 }
 
-// BuildCapabilityManifest creates a sorted list of capability descriptions
-// from the config map. This is used both for the tool description and for
-// generating the capability manifest talent.
+// BuildCapabilityManifest creates a sorted list of tag descriptions
+// from the config map. This is used both for the tool description and
+// for generating the tag manifest talent.
 func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, core map[string]bool, protected map[string]bool) []CapabilityManifest {
 	return toolcatalog.BuildCapabilitySurface(tags, descriptions, core, protected)
 }

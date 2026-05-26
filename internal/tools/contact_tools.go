@@ -20,7 +20,7 @@ func (r *Registry) registerContactTools() {
 	}
 
 	r.Register(&Tool{
-		Name:        "save_contact",
+		Name:        "contact_save",
 		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Use origin_tags and origin_context_refs only to shape future sessions when this contact is the runtime origin. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty scalar fields are overwritten; facts are additive. origin_tags and origin_context_refs are replaced when provided, and an empty array clears that origin policy field.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -99,7 +99,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "lookup_contact",
+		Name:        "contact_lookup",
 		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -137,7 +137,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "owner_contact",
+		Name:        "contact_owner",
 		Description: "Return the primary owner/operator contact record with rich details and contact properties, plus a structured summary of currently active owner-scoped channels. Uses identity.owner_contact_name when configured; otherwise falls back to the sole admin contact if exactly one exists.",
 		Parameters: map[string]any{
 			"type":       "object",
@@ -153,7 +153,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "forget_contact",
+		Name:        "contact_forget",
 		Description: "Remove a contact from the directory by name.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -175,7 +175,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "list_contacts",
+		Name:        "contact_list",
 		Description: "List contacts from the directory. Optionally filter by kind and limit the number of results.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -201,7 +201,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "export_vcf",
+		Name:        "contact_export_vcf",
 		Description: "Export a contact as a vCard (.vcf) file or text. Use name=\"self\" to export the agent's own contact card. When exporting the self-contact, recipient_trust_zone controls which fields are included (e.g., a known contact gets fewer details than a trusted one).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -233,7 +233,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "export_all_vcf",
+		Name:        "contact_export_all_vcf",
 		Description: "Export all contacts (or a filtered subset) as a multi-vCard .vcf file. Useful for backups or bulk transfer.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -260,7 +260,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "import_vcf",
+		Name:        "contact_import_vcf",
 		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, TrustZone and AISummary are never overwritten. Use dry_run to preview changes.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -293,7 +293,7 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "export_vcf_qr",
+		Name:        "contact_export_vcf_qr",
 		Description: "Generate a QR code PNG containing a vCard for the named contact. The QR code can be scanned by mobile devices to add the contact. Use recipient_trust_zone to control which fields are included (reduces size for QR capacity).",
 		Parameters: map[string]any{
 			"type": "object",

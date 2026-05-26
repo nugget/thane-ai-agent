@@ -185,7 +185,7 @@ func TestSimpleChatResponse_JSON(t *testing.T) {
 		Response:       "The kitchen is 22°C.",
 		Model:          "qwen2.5:72b",
 		ConversationID: "kitchen-conv",
-		ToolCalls:      []string{"get_state"},
+		ToolCalls:      []string{"ha_get_state"},
 	}
 
 	data, err := json.Marshal(resp)
@@ -207,7 +207,7 @@ func TestSimpleChatResponse_JSON(t *testing.T) {
 	if decoded.ConversationID != resp.ConversationID {
 		t.Errorf("conversation_id mismatch")
 	}
-	if len(decoded.ToolCalls) != 1 || decoded.ToolCalls[0] != "get_state" {
+	if len(decoded.ToolCalls) != 1 || decoded.ToolCalls[0] != "ha_get_state" {
 		t.Errorf("tool_calls mismatch")
 	}
 }

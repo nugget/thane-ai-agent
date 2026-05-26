@@ -1496,7 +1496,7 @@ func TestImportToolCalls_Unified(t *testing.T) {
 			ID:             "imp-tc-1",
 			ConversationID: "conv-import",
 			SessionID:      sess.ID,
-			ToolName:       "get_state",
+			ToolName:       "ha_get_state",
 			Arguments:      `{"entity_id":"light.test"}`,
 			Result:         "on",
 			StartedAt:      now,
@@ -1515,8 +1515,8 @@ func TestImportToolCalls_Unified(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(got))
 	}
-	if got[0].ToolName != "get_state" {
-		t.Errorf("tool_name = %q, want %q", got[0].ToolName, "get_state")
+	if got[0].ToolName != "ha_get_state" {
+		t.Errorf("tool_name = %q, want %q", got[0].ToolName, "ha_get_state")
 	}
 
 	// Verify status='archived' in the database.

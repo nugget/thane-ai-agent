@@ -2568,7 +2568,7 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 				ContextWindow:  200000,
 				ToolsUsed:      map[string]int{"archive_search": 2, "remember_fact": 1},
 				ActiveTags:     []string{"forge", "ha"},
-				EffectiveTools: []string{"forge_issue_list", "get_state"},
+				EffectiveTools: []string{"forge_issue_list", "ha_get_state"},
 				LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
 					{Tag: "forge", Description: "Forge tools", ToolCount: 8},
 					{Tag: "ha", Description: "Home Assistant tools", ToolCount: 5},
@@ -2606,8 +2606,8 @@ func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 	if !slices.Equal(snap.ActiveTags, []string{"forge", "ha"}) {
 		t.Fatalf("snap.ActiveTags = %v, want [forge ha]", snap.ActiveTags)
 	}
-	if !slices.Equal(snap.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
-		t.Fatalf("snap.EffectiveTools = %v, want [forge_issue_list get_state]", snap.EffectiveTools)
+	if !slices.Equal(snap.EffectiveTools, []string{"forge_issue_list", "ha_get_state"}) {
+		t.Fatalf("snap.EffectiveTools = %v, want [forge_issue_list ha_get_state]", snap.EffectiveTools)
 	}
 	if snap.ToolsUsed["archive_search"] != 2 || snap.ToolsUsed["remember_fact"] != 1 {
 		t.Fatalf("snap.ToolsUsed = %v, want archive_search=2 remember_fact=1", snap.ToolsUsed)

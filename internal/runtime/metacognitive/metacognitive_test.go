@@ -107,7 +107,7 @@ func TestAppendIterationLog(t *testing.T) {
 		Model:        "llama3:8b",
 		InputTokens:  12000,
 		OutputTokens: 500,
-		ToolsUsed:    map[string]int{"get_state": 3, "replace_output_metacognitive_state": 1},
+		ToolsUsed:    map[string]int{"ha_get_state": 3, "replace_output_metacognitive_state": 1},
 		Elapsed:      3*time.Minute + 12*time.Second,
 		Supervisor:   false,
 		Sleep:        8 * time.Minute,
@@ -148,7 +148,7 @@ func TestAppendIterationLog(t *testing.T) {
 	if !strings.Contains(s, "sleep_set=8m0s") {
 		t.Error("should contain sleep duration")
 	}
-	if !strings.Contains(s, "get_state x3") {
+	if !strings.Contains(s, "ha_get_state x3") {
 		t.Error("should contain tools with counts")
 	}
 	if !strings.Contains(s, "replace_output_metacognitive_state") {
@@ -304,13 +304,13 @@ func TestFormatToolsUsed_Empty(t *testing.T) {
 func TestFormatToolsUsed_Sorted(t *testing.T) {
 	toolsMap := map[string]int{
 		"set_next_sleep":                     1,
-		"get_state":                          3,
+		"ha_get_state":                       3,
 		"replace_output_metacognitive_state": 1,
 	}
 	got := formatToolsUsed(toolsMap)
 
 	// Should be sorted alphabetically.
-	if got != "[get_state x3, replace_output_metacognitive_state, set_next_sleep]" {
+	if got != "[ha_get_state x3, replace_output_metacognitive_state, set_next_sleep]" {
 		t.Errorf("formatToolsUsed = %q, want sorted with counts", got)
 	}
 }

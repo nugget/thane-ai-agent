@@ -19,7 +19,7 @@ func TestLaunchMarshalJSONUsesDurationStrings(t *testing.T) {
 		Task:            "test launch",
 		RunTimeout:      2 * time.Minute,
 		ToolTimeout:     45 * time.Second,
-		AllowedTools:    []string{"get_state"},
+		AllowedTools:    []string{"ha_get_state"},
 		FallbackContent: "please try again",
 		PromptMode:      agentctx.PromptModeTask,
 	})
