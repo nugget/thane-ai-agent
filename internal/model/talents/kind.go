@@ -8,13 +8,15 @@ import (
 
 // KindTrailhead is the canonical frontmatter value that marks a talent
 // or KB document as a decision-tree root — the first navigation or
-// triage document a model meets when a capability activates. The legacy
-// value [KindAliasEntryPoint] still loads for one migration cycle but
-// emits a deprecation warning; new content must use KindTrailhead.
-const (
-	KindTrailhead       = "trailhead"
-	KindAliasEntryPoint = "entry_point"
-)
+// triage document a model meets when a capability activates. New
+// content must use this value.
+const KindTrailhead = "trailhead"
+
+// KindAliasEntryPoint is the legacy frontmatter value that still loads
+// as a trailhead for one migration cycle. Parsing it emits a one-time
+// deprecation warning via [WarnIfKindAlias]; consumers should normalize
+// it through [CanonicalKind] and never compare against it directly.
+const KindAliasEntryPoint = "entry_point"
 
 // trailheadAliasWarned dedupes the kind: entry_point deprecation
 // warning so the message fires once per file path per process even
