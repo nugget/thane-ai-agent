@@ -25,8 +25,8 @@ often reaches for one when the right answer is another:
 
 | You want to store / find... | Surface |
 |---|---|
-| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`save_contact` with `facts` or `note`) — this leaf |
-| "Who is the owner of this host" | `contacts` (`owner_contact`) — this leaf |
+| "Frank prefers Signal" / "Alice is Engineering Lead at X" / "Bob's home address" | `contacts` (`contact_save` with `facts` or `note`) — this leaf |
+| "Who is the owner of this host" | `contacts` (`contact_owner`) — this leaf |
 | "Sump pump runs Tuesdays" / "Garage door takes 23s to close" — stable, compact, *non-person* facts | `memory` (`remember_fact`) — see [`memory.md`](memory.md) |
 | "The VLAN renumber plan landed on 2026-04-22" / a project decision / design rationale | `documents` (`kb:`, `core:`) or workspace files — NOT memory, NOT contacts |
 | "What did Frank and I last discuss" | `archive_text` scoped to the conversation — the words live there, not in the contact record |
@@ -60,18 +60,18 @@ document-shaped, it isn't a memory fact either — push to documents.
   which contacts get owner-scoped privileges. Assigning a zone is a
   policy decision, not a metadata field.
 
-- **save merges; forget destroys.** `save_contact` with an existing
+- **save merges; forget destroys.** `contact_save` with an existing
   name merges into the current record — non-empty scalar fields
   overwrite, facts are additive, origin arrays replace. There's no
   "update" tool separate from save; the save IS the update. By
-  contrast, `forget_contact` removes the record entirely with no
+  contrast, `contact_forget` removes the record entirely with no
   tombstone. Lookup before forgetting; the cost of removing the wrong
   record is real.
 
 - **The owner is a contact too.** The host's primary user lives in the
   same table as everyone else, marked by `identity.owner_contact_name`
   config or (fallback) by being the sole `admin`-zone contact. Treat
-  `owner_contact` as authoritative for "who is this host's user"
+  `contact_owner` as authoritative for "who is this host's user"
   rather than guessing from message senders or workspace metadata.
 
 ## Cross-references
@@ -105,7 +105,7 @@ specifically you can name what you're looking for.
 
 ## You know the name
 
-`lookup_contact` with `name` is the fastest path. Case-insensitive,
+`contact_lookup` with `name` is the fastest path. Case-insensitive,
 also matches `nickname`:
 
 ```json
@@ -117,11 +117,11 @@ also matches `nickname`:
 Returns the contact record if found, including all facts, trust zone,
 origin policy, and metadata. Missing returns a not-found result with
 search hints — that's your signal to either re-query with `query` or
-decide to `save_contact` deliberately.
+decide to `contact_save` deliberately.
 
 ## You have partial information
 
-`lookup_contact` with `query` searches across name, nickname, org, and
+`contact_lookup` with `query` searches across name, nickname, org, and
 facts:
 
 ```json
@@ -152,7 +152,7 @@ key alone is not a valid filter.
 
 ## You want to browse the directory
 
-`list_contacts` is the right tool when you don't have a specific
+`contact_list` is the right tool when you don't have a specific
 anchor — useful for "show me everyone" or "show me all orgs":
 
 ```json
@@ -167,7 +167,7 @@ all types appear. Use `limit` to bound the result size.
 
 ## You need the host's owner
 
-`owner_contact` returns the primary operator's record with rich
+`contact_owner` returns the primary operator's record with rich
 detail plus a structured summary of currently active owner-scoped
 channels:
 
@@ -207,7 +207,7 @@ belong in.
 
 ## The trust-zone decision
 
-`save_contact` assigns a `trust_zone`, and that zone gates downstream
+`contact_save` assigns a `trust_zone`, and that zone gates downstream
 tool access. The four zones:
 
 - **`admin`** — full access. The host's primary user(s). Mail sends
@@ -232,7 +232,7 @@ demoting after the contact has been used for sends is messy.
 
 ## Create or update a person
 
-`save_contact` with `name` and `trust_zone`. Properties are person
+`contact_save` with `name` and `trust_zone`. Properties are person
 attributes; the merge semantics let you add details incrementally:
 
 ```json
@@ -266,7 +266,7 @@ names; the model-facing lookup syntax accepts either form (`key:
 
 ## What does NOT belong in a contact
 
-`save_contact`'s description is explicit: **do not store project
+`contact_save`'s description is explicit: **do not store project
 knowledge, design philosophy, technical insights, or collaboration
 patterns in contact facts**. Those are `memory` (`remember_fact`) or
 workspace-file material. The contact directory is *who*, not *what we
@@ -302,7 +302,7 @@ contact would shadow the trustworthy assertion).
 
 ## Remove a contact
 
-`forget_contact` deletes the record entirely:
+`contact_forget` deletes the record entirely:
 
 ```json
 {
@@ -345,7 +345,7 @@ exporters with different shapes.
 
 ## Import a vCard
 
-`import_vcf` reads single- or multi-vCard data from a file path or
+`contact_import_vcf` reads single- or multi-vCard data from a file path or
 inline text:
 
 ```json
@@ -367,12 +367,12 @@ Trust-zone semantics on import: **`trust_zone` and `ai_summary` are
 never overwritten by import.** The import can fill missing fields, but
 it cannot demote a `trusted` contact to `known` just because the
 incoming vCard didn't carry a zone. Promoting/demoting a contact's
-trust is a deliberate `save_contact` action, not a side effect of
+trust is a deliberate `contact_save` action, not a side effect of
 import.
 
 ## Export one contact as a vCard
 
-`export_vcf` produces a vCard for one contact. The `recipient_trust_zone`
+`contact_export_vcf` produces a vCard for one contact. The `recipient_trust_zone`
 parameter is the trust *of the person you're sharing the card with* —
 it filters which fields are included so you don't leak sensitive
 attributes:
@@ -395,7 +395,7 @@ card with `recipient_trust_zone`-aware field filtering. Right tool for
 
 ## Export all contacts (backup or bulk transfer)
 
-`export_all_vcf` produces a multi-vCard file:
+`contact_export_all_vcf` produces a multi-vCard file:
 
 ```json
 {
@@ -410,7 +410,7 @@ operations or for migrating to another host.
 
 ## Generate a QR code
 
-`export_vcf_qr` produces a PNG containing the vCard, scannable from a
+`contact_export_vcf_qr` produces a PNG containing the vCard, scannable from a
 phone:
 
 ```json
@@ -422,13 +422,13 @@ phone:
 
 QR codes have capacity limits; the `recipient_trust_zone` filtering
 keeps the encoded vCard small enough to scan reliably. As with
-`export_vcf`, `name: "self"` exports the agent's own card.
+`contact_export_vcf`, `name: "self"` exports the agent's own card.
 
 ## Cross-references
 
 - For bulk *deduplication* after import (multiple records that should
-  collapse), the loop is `lookup_contact` → identify duplicates →
-  `save_contact` on the canonical one to absorb facts → `forget_contact`
+  collapse), the loop is `contact_lookup` → identify duplicates →
+  `contact_save` on the canonical one to absorb facts → `contact_forget`
   on the duplicates. Multi-step; consider whether a curate loop is the
   better shape (`loops_examples_curate`).
 - For *sending* the exported card, bounce to `email` or `signal`
