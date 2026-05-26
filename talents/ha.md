@@ -189,7 +189,8 @@ a guessed entity_id.
 ```json
 {
   "entity_id": "light.office_main",
-  "service": "light.turn_on",
+  "domain": "light",
+  "service": "turn_on",
   "data": {
     "brightness_pct": 60,
     "color_temp_kelvin": 3000
@@ -270,7 +271,7 @@ modifying.
 
 ```json
 {
-  "automation": {
+  "config": {
     "alias": "Driveway camera notification",
     "description": "Notify when the driveway camera sees motion at night",
     "trigger": [
@@ -298,11 +299,17 @@ modifying.
     "mode": "single"
   },
   "metadata": {
-    "area": "driveway",
-    "labels": ["security"]
+    "area_id": "driveway",
+    "label_ids": ["security"]
   }
 }
 ```
+
+The `config` key holds the raw HA automation object — preserve
+HA-native field names (alias, description, trigger, condition,
+action, mode). The `metadata` key holds entity registry overrides;
+prefer the `_id` suffixed variants (`area_id`, `label_ids`,
+`category_id`) over their friendly-name siblings.
 
 **Before authoring**: use `ha_registry_search` to find real area
 IDs, label IDs, and entity IDs. Don't guess — typos in entity_ids

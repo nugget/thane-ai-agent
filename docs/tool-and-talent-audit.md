@@ -110,7 +110,7 @@ The recurring anti-patterns:
 | **Cafeteria talent** | Flat list of "use X when Y" bullets with no decision frame | `documents-knowledge.md` before PR-D — 12 bullets, no shape |
 | **Ghost tool reference** | Talent backticks a tool name that doesn't exist | `watch_entity` / `unwatch_entity` in early `loops-doctrine.md` |
 | **Wrong-data-store** | Talent points at a real tool that mutates a different store than the reader expects | `add_entity_subscription` (conversation-wide) vs `update_entity_subscriptions` (loop-scoped) — caught in PR-A |
-| **Missing safety doctrine** | Action-shaped leaf with no doctrine on stale IDs, verify-after, blast radius | `ha-trailhead.md` had this for control_device — verify-after-control pattern was buried |
+| **Buried safety doctrine** | Action-shaped leaf with safety pattern present but at the bottom rather than as a featured root-level invariant | `ha-trailhead.md`'s find_entity → call_service → get_state pattern lived under a "Verifying device control" section at the file's end; `ha.md` elevated it to the root's "constants across all branches" section |
 | **Cross-reference gap** | Leaf carries internal routing but no "and here's when to bounce" section | Most pre-grammar leaves |
 | **Architecture-stale advice** | Talent captures how the system used to work, routes the model around a current boundary | `loops-tagging.md`'s pre-#696 escalation advice — caught in PR-F review |
 | **Developer-doc co-mingling** | Prose explains config / deployment / mechanism that the model doesn't need to decide | site-specific operator config explanations in early `loops-tagging.md` |
@@ -264,7 +264,7 @@ For starting a new audit cycle:
 
 ```bash
 # Per-leaf tool count
-for tag in $(grep -E '^\s*"[a-z_]+":\s*\{' \
+for tag in $(grep -E '^[[:space:]]*"[a-z_]+":[[:space:]]*\{' \
              internal/model/toolcatalog/catalog_tags.go \
              | sed -E 's/.*"([a-z_]+)".*/\1/'); do
   count=$(grep -cE "\"$tag\"" internal/model/toolcatalog/catalog.go)
@@ -283,7 +283,7 @@ done
 
 # Tags in catalog without a talent (assuming POSIX comm)
 comm -23 \
-  <(grep -E '^\s*"[a-z_]+":\s*\{' internal/model/toolcatalog/catalog_tags.go \
+  <(grep -E '^[[:space:]]*"[a-z_]+":[[:space:]]*\{' internal/model/toolcatalog/catalog_tags.go \
     | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u) \
   <(for f in talents/*.md; do
       awk '/^---$/{n++; next} n==1 && /^tags:/{print}' "$f" 2>/dev/null

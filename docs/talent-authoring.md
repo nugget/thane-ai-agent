@@ -207,8 +207,11 @@ specific-id) want multi-node.
 
 Every leaf-talent — flat or multi-node — should carry:
 
-1. **Frontmatter**: `tags: [<leaf>]`. Add `kind: trailhead` only on
-   the root of a multi-node tree.
+1. **Frontmatter**: `tags: [<leaf>]`. In a multi-node tree, **every
+   node** (root and each sub-leaf) carries `kind: trailhead` — that
+   way each node sorts as a trailhead and loads first when its tag
+   activates, instead of getting buried behind unrelated doctrine.
+   Flat single-node leaves omit `kind:`.
 2. **One-paragraph framing**: what is the model doing when it lands
    here? This is what the trailhead-bullet teaser compresses from.
 3. **Trigger conditions**: 1–3 sentences on when to reach for this
