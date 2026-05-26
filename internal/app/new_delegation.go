@@ -52,11 +52,17 @@ func (a *App) initDelegation(s *newState) error {
 	if tfs := a.loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
-	// AlwaysAvailable on both family front doors so they survive
-	// capability tag filtering (channel_tags, model-driven
-	// activate_capability). Without this, FilterByTags drops untagged
-	// tools when any tag is active and the model loses access to the
-	// recommended delegation surface.
+	// thane_now and thane_assign are AlwaysAvailable: delegation is a
+	// primitive operation, not a capability. A loop with a narrow tag
+	// scope (forge only, ha only) still needs to be able to spawn a
+	// sub-loop for a side investigation or background task — restricting
+	// delegate spawning to a tag would create cases where the model
+	// wanted to delegate but couldn't see the spawn primitive.
+	//
+	// Mechanically: without AlwaysAvailable, FilterByTags would drop
+	// these untagged tools when any tag is active (via channel_tags or
+	// model-driven activate_capability), and the model would lose access
+	// to the recommended delegation surface mid-conversation.
 	a.loop.Tools().Register(&tools.Tool{
 		Name:            "thane_now",
 		Description:     delegate.NowToolDescription,

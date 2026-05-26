@@ -22,6 +22,15 @@ func (r *Registry) SetLogIndexDB(db *sql.DB) {
 }
 
 // registerLogsQuery registers the logs_query tool.
+//
+// Always-available rationale: forensics primitive. Debugging a
+// loop's own behavior shouldn't depend on the tag set the loop runs
+// with — a tightly scoped service loop hitting an anomaly still needs
+// to be able to look at what happened on prior iterations, even
+// though it doesn't carry the `diagnostics` tag in its surface. The
+// alternative — requiring the model to widen its capabilities before
+// it can investigate — adds an extra round trip at exactly the
+// moment the loop wants to converge on a cause.
 func (r *Registry) registerLogsQuery() {
 	if r.logIndexDB == nil {
 		return
