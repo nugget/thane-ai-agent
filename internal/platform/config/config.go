@@ -350,11 +350,12 @@ type PricingEntry struct {
 // LoggingConfig configures Thane's structured filesystem log datasets,
 // stdout policy, and SQLite-backed log/query retention.
 type LoggingConfig struct {
-	// Root is the directory where Thane writes category-partitioned JSONL
-	// datasets and logs.db. Relative paths are resolved from the working
-	// directory (typically ~/Thane). Defaults to "logs" when omitted.
-	// Set to an explicit empty string (root: "") to disable filesystem
-	// logging entirely.
+	// Root is the archive root — the top of the layout described in
+	// archive/README.md (interactions/, sources/, meta/). Thane writes
+	// every per-dataset JSONL stream under root/sources/thane/<dataset>/.
+	// Relative paths are resolved from the working directory (typically
+	// ~/Thane). Defaults to "archive" when omitted. Set to an explicit
+	// empty string (root: "") to disable filesystem archiving entirely.
 	Root *string `yaml:"root"`
 
 	// Dir is the deprecated alias for Root. It is kept for backwards
@@ -443,9 +444,13 @@ type LoggingDatasetConfig struct {
 	Enabled *bool `yaml:"enabled"`
 }
 
-// RootPath returns the resolved logging root. When Root is nil and Dir is
-// also nil, it returns the default "logs". When either is an explicit empty
-// string, it returns "" which signals that filesystem logging is disabled.
+// RootPath returns the resolved archive root. When Root is nil and Dir
+// is also nil, it returns the default "archive" — fresh installs land
+// at <workspace>/archive/. When either is an explicit empty string, it
+// returns "" which signals that filesystem archiving is disabled.
+//
+// The archive root is the top of the layout described in
+// archive/README.md: it holds interactions/, sources/, and meta/.
 func (l LoggingConfig) RootPath() string {
 	if l.Root != nil {
 		return *l.Root
@@ -453,7 +458,7 @@ func (l LoggingConfig) RootPath() string {
 	if l.Dir != nil {
 		return *l.Dir
 	}
-	return "logs"
+	return "archive"
 }
 
 // DirPath returns the resolved logging root path. It is kept as a

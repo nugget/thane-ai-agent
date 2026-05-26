@@ -1040,11 +1040,12 @@ ego:
 # Logging configures Thane's filesystem datasets, stdout policy, and
 # queryable request/log retention.
 logging:
-  # Root is the directory where Thane writes category-partitioned JSONL
-  # datasets and logs.db. Relative paths are resolved from the working
-  # directory (typically ~/Thane). Defaults to "logs" when omitted.
-  # Set to an explicit empty string (root: "") to disable filesystem
-  # logging entirely.
+  # Root is the archive root — the top of the layout described in
+  # archive/README.md (interactions/, sources/, meta/). Thane writes
+  # every per-dataset JSONL stream under root/sources/thane/<dataset>/.
+  # Relative paths are resolved from the working directory (typically
+  # ~/Thane). Defaults to "archive" when omitted. Set to an explicit
+  # empty string (root: "") to disable filesystem archiving entirely.
   root: logs
   # Dir is the deprecated alias for Root. It is kept for backwards
   # compatibility with older configs.
