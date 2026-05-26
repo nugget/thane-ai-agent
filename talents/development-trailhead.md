@@ -22,7 +22,9 @@ Choose the next move deliberately:
 - If the work becomes physical and local, activate `shell` — but
   only when nothing in the catalog covers it. `shell` is the escape
   hatch (arbitrary `exec`), not the default; most "I want to run X"
-  impulses have a focused tool in `files`/`forge`/`web`/`ha`.
+  impulses have a focused tool in `files`/`forge`/`web` (or under
+  the `home` menu for HA-shaped work, which lives there rather than
+  development).
 
 Once one surface starts giving you real state, stop menuing and work. If
 you can already feel that this spans repo state, local files, and local

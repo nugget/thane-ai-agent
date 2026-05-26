@@ -1,7 +1,6 @@
 ---
 name: shell
 tags: [shell]
-kind: trailhead
 teaser: "Open only when arbitrary command execution is genuinely the next move — almost everything has a more specific tool."
 ---
 
@@ -79,13 +78,19 @@ dry-run or read-only confirmation pass first:
 
 ```json
 {
-  "command": "rm -rf /tmp/staging/old-*",
+  "command": "find /tmp/staging -name 'old-*' -mtime +7 -delete",
   "timeout": 30
 }
 ```
 
 The cost of the extra read is one tool call. The cost of mutating
 the wrong path is real and usually unrecoverable from this surface.
+
+(Note: the deny list blocks any command containing the substring
+`rm -rf /`. Recursive cleanup via `find ... -delete` works around
+the pattern match while still failing fast on bad paths. The deny
+list is a syntactic backstop, not a sandbox — its job is catching
+the obvious foot-guns, not policing your every command.)
 
 ## Quoting is your responsibility
 
