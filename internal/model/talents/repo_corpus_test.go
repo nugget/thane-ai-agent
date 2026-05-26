@@ -140,6 +140,14 @@ var nonToolTokens = map[string]struct{}{
 	// flagging a documented frontmatter key.
 	"tags_all": {},
 
+	// Contact field names that appear backticked in talent prose
+	// describing the contacts surface. `ai_summary` is a top-level
+	// save_contact parameter; `ha_companion_app` is a conventional
+	// contact-facts key (the matcher flags it because `ha_` is a real
+	// tool prefix). Both are person-record fields, not tools.
+	"ai_summary":       {},
+	"ha_companion_app": {},
+
 	// Notification record field name (UUID identifying an outstanding
 	// actionable). Appears as a parameter on resolve_actionable and
 	// as an annotation in conversation history. The matcher flags it
