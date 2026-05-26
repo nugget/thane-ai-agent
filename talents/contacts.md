@@ -74,9 +74,12 @@ isn't a contact fact.
 ## Cross-references
 
 - For sending mail after looking up a recipient, bounce to `email` —
-  the recipient gate reads the trust zone assigned here and translates
-  it into send policy (`admin`/`household`/`trusted` allow,
-  `known` warns, missing blocks).
+  the recipient gate reads the trust zone assigned here. Only
+  `admin`/`household`/`trusted` zones send through;
+  `known` zone is rejected with a "promote-or-authorize" message,
+  and missing-contact recipients are rejected with a "no contact
+  record" message. The gate is all-or-nothing: any rejected
+  recipient aborts the whole send.
 - For Signal messages, the same contact directory backs sender
   recognition; activate `signal` for the messaging side.
 - For "what did this person and I last discuss" beyond what's in the
@@ -205,21 +208,24 @@ belong in.
 tool access. The four zones:
 
 - **`admin`** — full access. The host's primary user(s). Mail sends
-  freely, channels resolve, owner-scoped tools work. Almost always
+  through, channels resolve, owner-scoped tools work. Almost always
   exactly one contact in this zone (the owner).
-- **`household`** — family-level. Mail sends freely. Routine
+- **`household`** — family-level. Mail sends through. Routine
   conversational access. Spouse, kids, anyone in the household.
 - **`trusted`** — established external relationship. Mail sends
-  freely; some scoped tool gates may add friction. Colleagues,
+  through; some scoped tool gates may add friction. Colleagues,
   long-time collaborators, vetted vendors.
-- **`known`** — default zone for someone you've encountered but not
-  vetted. Mail sends with a warning; sensitive fields are stripped
-  from exports. Don't conflate `known` with "trusted enough" — it's
-  the lowest-trust assignment that still acknowledges existence.
+- **`known`** — *send-blocked* zone for someone you've encountered
+  but not vetted. The contact record exists (so signal/email can
+  recognize incoming traffic from them), but outbound mail to a
+  `known` recipient is **rejected** by the trust gate until
+  explicitly promoted or authorized. Sensitive fields are also
+  stripped from vCard exports targeting `known` recipients.
 
-When uncertain, **`known` is the safe default**. Promoting later is
-easy; demoting after the contact has been used for sends and channels
-is messy.
+When uncertain, **`known` is the safe default**: the record exists,
+the contact is recognized inbound, but no outbound action goes through
+without a deliberate decision. Promoting to `trusted` later is easy;
+demoting after the contact has been used for sends is messy.
 
 ## Create or update a person
 
