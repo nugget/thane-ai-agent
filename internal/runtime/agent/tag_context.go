@@ -71,19 +71,19 @@ type TagContextBucketer interface {
 // activates on any (OR), `tags_all: [a, b]` requires all (AND).
 // When both are set, the article injects only when the OR check on
 // Tags AND the AND check on TagsAll both pass — useful for articles
-// that should fire for several entry-point tags but only when paired
+// that should fire for several trailhead tags but only when paired
 // with a runtime-asserted gate (e.g., owner + signal).
 type kbArticle struct {
 	Path     string   // absolute file path
 	Tags     []string // any-of activation set, from frontmatter `tags:`
 	TagsAll  []string // all-of activation set, from frontmatter `tags_all:`
-	Kind     string   // frontmatter kind: entry_point or empty/article
-	Teaser   string   // short menu teaser for entry-point docs
-	NextTags []string // suggested next tags from an entry point
+	Kind     string   // canonical frontmatter kind ([talents.KindTrailhead] or empty/article)
+	Teaser   string   // short menu teaser for trailhead docs
+	NextTags []string // suggested next tags from a trailhead
 	Name     string   // filename without .md
 }
 
-// KBMenuHint captures entry-point metadata that can be surfaced in
+// KBMenuHint captures trailhead metadata that can be surfaced in
 // the capability menu before a tag is activated.
 type KBMenuHint struct {
 	Teaser   string
@@ -637,7 +637,7 @@ func (a *TagContextAssembler) KBArticleTags() map[string]int {
 }
 
 // KBMenuHints returns one root-menu hint per tag, sourced from tagged
-// KB entry-point documents. The first teaser encountered for a tag
+// KB trailhead documents. The first teaser encountered for a tag
 // wins, with deterministic ordering provided by scanKBArticles.
 func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 	if a == nil {
@@ -645,7 +645,7 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 	}
 	hints := make(map[string]KBMenuHint)
 	for _, article := range a.loadKBArticles() {
-		if !isEntryPointKind(article.Kind) {
+		if !isTrailheadKind(article.Kind) {
 			continue
 		}
 		if strings.TrimSpace(article.Teaser) == "" && len(article.NextTags) == 0 {
@@ -664,8 +664,8 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 	return hints
 }
 
-func isEntryPointKind(kind string) bool {
-	return strings.TrimSpace(kind) == "entry_point"
+func isTrailheadKind(kind string) bool {
+	return strings.TrimSpace(kind) == talents.KindTrailhead
 }
 
 // scanKBArticles walks the KB directory for .md files with tags:
@@ -700,11 +700,13 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 			return nil // untagged KB articles are not auto-loaded
 		}
 
+		canonicalKind, _ := talents.CanonicalKind(meta.Kind)
+		talents.WarnIfKindAlias(path, meta.Kind)
 		articles = append(articles, kbArticle{
 			Path:     path,
 			Tags:     meta.Tags,
 			TagsAll:  append([]string(nil), meta.TagsAll...),
-			Kind:     strings.TrimSpace(meta.Kind),
+			Kind:     canonicalKind,
 			Teaser:   strings.TrimSpace(meta.Teaser),
 			NextTags: append([]string(nil), meta.NextTags...),
 			Name:     strings.TrimSuffix(d.Name(), ".md"),
@@ -717,10 +719,10 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 
 	// Sort for deterministic ordering.
 	sort.Slice(articles, func(i, j int) bool {
-		if isEntryPointKind(articles[i].Kind) && !isEntryPointKind(articles[j].Kind) {
+		if isTrailheadKind(articles[i].Kind) && !isTrailheadKind(articles[j].Kind) {
 			return true
 		}
-		if !isEntryPointKind(articles[i].Kind) && isEntryPointKind(articles[j].Kind) {
+		if !isTrailheadKind(articles[i].Kind) && isTrailheadKind(articles[j].Kind) {
 			return false
 		}
 		return articles[i].Path < articles[j].Path

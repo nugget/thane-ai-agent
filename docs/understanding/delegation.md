@@ -144,7 +144,7 @@ the child work without making the orchestrator restate it on every
 handoff. If explicit tags are provided, they take precedence over profile
 default tags.
 
-Use root entry-point tags when the delegate should read the menu guidance
+Use root trailhead tags when the delegate should read the menu guidance
 and choose the next branch itself: `development`, `home`, `operations`,
 `knowledge`, `media`, `interactive`, or `people`. Use leaf tags when the
 caller already knows the needed toolset: `ha`, `files`, `forge`, `web`,

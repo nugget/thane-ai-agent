@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [knowledge]
 teaser: "Open when the truth lives in docs, memory, archives, or named sources."
 next_tags: [files, documents, memory, archive, web]
 ---
 
-# Knowledge Entry Point
+# Knowledge Trailhead
 
 The first question is not what the topic is. It is where the truth would
 live if you had to verify it for yourself.

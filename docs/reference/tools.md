@@ -25,6 +25,22 @@ fine-grained tags that actually own the tools. Activating any coarse
 tag surfaces its teaser; the model then activates the fine tag it
 needs.
 
+### Trailheads
+
+A **trailhead** is a talent or KB document that marks the root of a
+decision tree for a capability tag — the first navigation or triage
+document a model meets when the tag activates. Trailheads are
+declared with `kind: trailhead` in frontmatter (the legacy
+`kind: entry_point` value still loads with a deprecation warning for
+one migration cycle). A trailhead exists, names itself honestly, stays
+small, takes a clear opinion about where to look next, and locates
+itself in the surface a reader is currently on — it does not try to
+encyclopedia the whole domain. By convention, trailhead filenames use
+the `-trailhead.md` suffix and the heading is `# <Domain> Trailhead`.
+When both a trailhead and ordinary doctrine articles share an active
+tag, trailheads sort first so navigation scaffolding precedes deeper
+guidance.
+
 ## Always-active
 
 These tools load on every turn regardless of active tags.
@@ -332,7 +348,7 @@ override profile default tags.
 When the resulting scope includes `ha` or `ha_admin`, the executor uses
 HA-oriented budget and routing hints automatically; otherwise it uses the
 general delegate defaults.
-Use root entry-point tags such as `development`, `home`, `operations`,
+Use root trailhead tags such as `development`, `home`, `operations`,
 `knowledge`, `media`, `interactive`, or `people` when the delegate should
 read the menu guidance and choose a narrower branch. Use leaf tags such
 as `ha`, `files`, `forge`, `web`, `loops`, `documents`, or `diagnostics`

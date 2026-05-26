@@ -31,9 +31,9 @@ func NewLoader(dir string) *Loader {
 type Talent struct {
 	Name       string   // Filename without .md extension
 	Tags       []string // Tags from YAML frontmatter (nil = untagged)
-	Kind       string   // Optional frontmatter kind (for example entry_point)
-	Teaser     string   // Optional short menu copy for entry-point talents
-	NextTags   []string // Optional likely follow-on tags for entry-point talents
+	Kind       string   // Canonical frontmatter kind (for example [KindTrailhead]); empty for ordinary doctrine
+	Teaser     string   // Optional short menu copy for trailhead talents
+	NextTags   []string // Optional likely follow-on tags for trailhead talents
 	Content    string   // Markdown content (frontmatter stripped)
 	SourcePath string   // Filesystem path loaded for verification/debugging
 }
@@ -45,7 +45,7 @@ type Talent struct {
 // matcher: any tag in Tags activates the article (OR), every tag in
 // TagsAll must be active (AND). When both are non-empty the matcher
 // requires the OR check to pass AND the AND check to pass — useful
-// for articles that should fire for several entry-point tags but only
+// for articles that should fire for several trailhead tags but only
 // when paired with a runtime-asserted gate (e.g., owner + signal).
 //
 // Name is the explicit per-talent identifier. Required for every node
@@ -153,6 +153,7 @@ func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) 
 	out := make([]Talent, 0, len(blocks))
 	seen := make(map[string]bool, len(blocks))
 	multi := len(blocks) > 1
+	aliasSeenInFile := false
 	for i, block := range blocks {
 		name := strings.TrimSpace(block.Frontmatter.Name)
 		if name == "" {
@@ -165,15 +166,22 @@ func talentsFromBlocks(blocks []Block, filename, path string) ([]Talent, error) 
 			return nil, fmt.Errorf("talent %s: duplicate node name %q within file", path, name)
 		}
 		seen[name] = true
+		canonical, deprecated := CanonicalKind(block.Frontmatter.Kind)
+		if deprecated {
+			aliasSeenInFile = true
+		}
 		out = append(out, Talent{
 			Name:       name,
 			Tags:       block.Frontmatter.Tags,
-			Kind:       block.Frontmatter.Kind,
+			Kind:       canonical,
 			Teaser:     block.Frontmatter.Teaser,
 			NextTags:   append([]string(nil), block.Frontmatter.NextTags...),
 			Content:    block.Content,
 			SourcePath: path,
 		})
+	}
+	if aliasSeenInFile {
+		WarnIfKindAlias(path, KindAliasEntryPoint)
 	}
 	return out, nil
 }
@@ -197,7 +205,7 @@ func talentOrderKey(t Talent) int {
 	switch {
 	case len(t.Tags) == 0:
 		return 0
-	case strings.TrimSpace(t.Kind) == "entry_point":
+	case strings.TrimSpace(t.Kind) == KindTrailhead:
 		return 1
 	default:
 		return 2

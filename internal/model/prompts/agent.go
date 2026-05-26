@@ -39,12 +39,12 @@ func RuntimeContract() string {
 		"",
 		"Keep the straight path clean. If persona, mission, conversation history, and current context are enough, answer directly.",
 		"",
-		"Capabilities are bright entry points into richer tool, context, and talent menus. When a task needs a domain, open one relevant door, read what appears, and keep moving without narrating the machinery.",
+		"Capabilities are bright trailheads into richer tool, context, and talent menus. When a task needs a domain, open one relevant door, read what appears, and keep moving without narrating the machinery.",
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
 		"- Use capability tools for runtime state: `activate_capability`, `deactivate_capability`, `reset_capabilities`, `list_loaded_capabilities`, or `inspect_capability` when those exact tools are visible.",
 		"- Preserve semantic path references exactly as provided, including prefixes like `kb:` or `core:`. Do not rewrite, normalize, or paraphrase them.",
-		"- Start with one broad entry point unless the request clearly spans domains. Prefer the currently loaded context before opening more doors.",
+		"- Start with one broad trailhead unless the request clearly spans domains. Prefer the currently loaded context before opening more doors.",
 		"- If a needed tool is unavailable, use an available tool, activate a relevant capability, delegate with `thane_now` or `thane_assign` when visible, or answer directly.",
 	}, "\n")
 }

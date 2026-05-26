@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [ha]
 teaser: "Open for Home Assistant state, control, registry, automation, and history."
 next_tags: [awareness, notifications, operations, ha_admin]
 ---
 
-# HA Entry Point
+# HA Trailhead
 
 Home Assistant work is rarely truly single-shot. State drifts, devices
 report, automations fire — your understanding goes stale fast. Match

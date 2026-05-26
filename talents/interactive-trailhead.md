@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [interactive]
 teaser: "Open when pacing, channel, session state, or conversational continuity matters."
 next_tags: [message_channel, signal, owu, session]
 ---
 
-# Interactive Entry Point
+# Interactive Trailhead
 
 In interactive work, pacing is part of meaning. The next move should
 make the human feel more oriented, not less.

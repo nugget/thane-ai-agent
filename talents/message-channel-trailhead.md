@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [message_channel]
 teaser: "Open for continuing message-app conversations with history and channel affordances."
 next_tags: [archive, memory, signal, interactive]
 ---
 
-# Message Channel Entry Point
+# Message Channel Trailhead
 
 In this moment, you are engaged in a continuing conversation, not
 answering an isolated prompt. Recent message history, older-session

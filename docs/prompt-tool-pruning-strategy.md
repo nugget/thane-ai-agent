@@ -203,14 +203,14 @@ This is the opposite of a "browse and load everything" posture.
 ## Progressive Disclosure Model
 
 The current working model is a coarse-to-fine capability menu backed by
-entry-point talents or KB documents that lead into a broader decision
+trailhead talents or KB documents that lead into a broader decision
 tree.
 
 The important design choice is that these should be the same documents,
 not two parallel systems:
 
-- the manifest exposes a small set of broad entry-point tags
-- activating one broad tag loads tagged entry-point guidance for that domain
+- the manifest exposes a small set of broad trailhead tags
+- activating one broad tag loads tagged trailhead guidance for that domain
 - that guidance acts like a local decision tree
 - the guidance defines the next tier of options, narrower tags, and
   delegation boundaries
@@ -221,7 +221,7 @@ useful even outside that posture.
 
 ### Initial root menu tags
 
-The first menu-sized entry points should stay small:
+The first menu-sized trailheads should stay small:
 
 - `interactive`
 - `development`
@@ -245,9 +245,9 @@ already has a natural home:
 - `email` under `people`
 - `mqtt` under `operations`
 
-### Entry-point document shape
+### Trailhead document shape
 
-Each root-tag entry-point document should answer only local questions:
+Each root-tag trailhead document should answer only local questions:
 
 - what kind of request belongs here
 - what tools or narrower tags are usually relevant next
@@ -255,31 +255,32 @@ Each root-tag entry-point document should answer only local questions:
 - when to delegate instead of serially loading more context
 
 The teaser already did the activation advertisement. Once the tag is
-active, the entry-point body should not waste space repeating that same
+active, the trailhead body should not waste space repeating that same
 pitch after the heading.
 
-Every byte in an entry-point file should make the next choice easier.
+Every byte in a trailhead file should make the next choice easier.
 
 That keeps the documents operator-friendly and avoids recreating the old
 "one immortal encyclopedia" problem in KB form.
 
-### Distinguishing entry points from articles
+### Distinguishing trailheads from articles
 
-Entry points and doctrine articles should remain separate documents even
+Trailheads and doctrine articles should remain separate documents even
 when they share a tag.
 
 The current working convention is:
 
-- `kind: entry_point` for the first navigation or triage document on a
-  path
-- filename suffix `-entry-point.md` for entry-point documents so they
+- `kind: trailhead` for the first navigation or triage document on a
+  path (legacy `kind: entry_point` still loads with a deprecation
+  warning for one migration cycle)
+- filename suffix `-trailhead.md` for trailhead documents so they
   are easy to distinguish from doctrine without consuming a root-name
   prefix
 - `teaser:` for short pre-activation menu copy
 - `next_tags:` for structured likely follow-on tags
 - no `kind` field for ordinary doctrine or knowledge articles
 
-When both exist for the same active tag, entry points should appear
+When both exist for the same active tag, trailheads should appear
 first so the model sees navigation scaffolding before richer doctrine.
 
 The broader filename vocabulary should also stay explicit for authors,
@@ -297,7 +298,7 @@ clear about its role.
 
 For model-facing copy inside the document itself:
 
-- heading format should be `# <Domain> Entry Point`
+- heading format should be `# <Domain> Trailhead`
 - use one stable cue line: `Choose the next move deliberately:`
 - write from the receiving model's vantage point, not from the
   maintainer's view of a markdown file on disk
@@ -314,12 +315,12 @@ Thane runtime.
 
 The working convention should be:
 
-- keep global root entry points in the shared repo corpus
-- keep exactly one `kind: entry_point` document per tag in a deployed
+- keep global root trailheads in the shared repo corpus
+- keep exactly one `kind: trailhead` document per tag in a deployed
   talents directory
 - if a site truly needs a different root path for a tag, edit that
-  site's local `<tag>-entry-point.md` directly instead of adding a
-  second competing entry point
+  site's local `<tag>-trailhead.md` directly instead of adding a
+  second competing trailhead
 - express site-specific guidance as tagged local doctrine, not as new
   global roots
 - route site-specific capabilities from the nearest existing root rather
@@ -481,7 +482,7 @@ thresholds moved behind tagged notification guidance.
 The root-menu experiment is also live in the prompt path now, not just
 in examples: broad tags like `development`, `home`, `interactive`,
 `knowledge`, `media`, `operations`, and `people` now have tagged
-entry-point talents, and tagged doctrine slices like `forge`,
+trailhead talents, and tagged doctrine slices like `forge`,
 `interactive`, and `notifications` now load as real behavioral guidance
 when active.
 

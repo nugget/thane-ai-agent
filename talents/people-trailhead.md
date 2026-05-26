@@ -1,11 +1,11 @@
 ---
-kind: entry_point
+kind: trailhead
 tags: [people]
 teaser: "Open for identity, relationships, contacts, channels, or audience context."
 next_tags: [contacts, signal, email, message_channel]
 ---
 
-# People Entry Point
+# People Trailhead
 
 Identity work becomes messy when you start from vibes instead of
 handles. Begin with the most stable anchor you have.

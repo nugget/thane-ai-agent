@@ -1,14 +1,14 @@
 ---
 name: loops_examples
 tags: [loops_examples]
-kind: entry_point
+kind: trailhead
 teaser: "Open when about to launch any loop-shaped work. Walks you to the right thane_* call."
 next_tags: [loops_examples_curate, loops_examples_now, loops_examples_assign, loops_examples_advanced]
 ---
 
 # Loops Examples
 
-Loops are how Thane runs concurrent attention. This is the entry point
+Loops are how Thane runs concurrent attention. This is the trailhead
 for picking the right shape of loop for the work in front of you.
 
 ## First move: look at what's already running
@@ -56,7 +56,7 @@ primary shape first.
 ---
 name: loops_examples_curate
 tags: [loops_examples_curate]
-kind: entry_point
+kind: trailhead
 teaser: "Recurring service loops that maintain a managed document over time."
 next_tags: [loops_examples_curate_dashboard, loops_examples_curate_journal, loops_examples_curate_circle]
 ---
@@ -100,7 +100,7 @@ least `home` or `ha` so it has the tools to interpret its watch set.
 ---
 name: loops_examples_curate_dashboard
 tags: [loops_examples_curate_dashboard]
-kind: entry_point
+kind: trailhead
 teaser: "Maintain a single dashboard document idempotently each cycle."
 ---
 
@@ -139,7 +139,7 @@ model rewrites the body via `replace_output_server_closet_guardian`.
 ---
 name: loops_examples_curate_journal
 tags: [loops_examples_curate_journal]
-kind: entry_point
+kind: trailhead
 teaser: "Append a dated entry to a journal document each cycle."
 ---
 
@@ -172,7 +172,7 @@ and yesterday's state is just noise.
 ---
 name: loops_examples_curate_circle
 tags: [loops_examples_curate_circle]
-kind: entry_point
+kind: trailhead
 teaser: "Bi-directional curate loop: escalates decisions to you, accepts new focus when you adjust its scope."
 ---
 
@@ -235,7 +235,7 @@ its timer.
 ---
 name: loops_examples_now
 tags: [loops_examples_now]
-kind: entry_point
+kind: trailhead
 teaser: "Sync foreground delegate — must finish before this turn replies."
 ---
 
@@ -263,7 +263,7 @@ work is recurring.
 ---
 name: loops_examples_assign
 tags: [loops_examples_assign]
-kind: entry_point
+kind: trailhead
 teaser: "Async one-shot delegate — reports back when done; this turn continues."
 ---
 
@@ -292,7 +292,7 @@ inline; use `thane_curate` when the work is recurring.
 ---
 name: loops_examples_advanced
 tags: [loops_examples_advanced]
-kind: entry_point
+kind: trailhead
 teaser: "Custom shapes, lifecycle management, supervisor turns, lint before save."
 ---
 

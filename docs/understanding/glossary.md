@@ -223,6 +223,19 @@ editable, version-controlled. Natural language as the configuration
 mechanism.
 See [Context Layers](context-layers.md).
 
+### Trailhead
+
+A talent or KB document marked `kind: trailhead` in frontmatter that
+roots the decision tree for a capability tag — the first navigation or
+triage document a model meets when the tag activates. A trailhead is a
+noun with a contract: it exists, names itself honestly, stays small,
+takes a clear opinion about where to go next, and locates itself in the
+surface the reader is currently on. By convention trailhead files use a
+`-trailhead.md` filename suffix and a `# <Domain> Trailhead` heading.
+The legacy `kind: entry_point` value still loads with a deprecation
+warning for one migration cycle.
+See [Tools Reference](../reference/tools.md#trailheads).
+
 ### Trust Zone
 
 A classification assigned to every contact: `admin`, `household`,
