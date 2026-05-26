@@ -14,8 +14,9 @@ import (
 // pre-config edge case where the catalog hasn't classified anything
 // yet.
 func selectCapabilityMenuEntries(entries []CapabilitySurface) []CapabilitySurface {
-	menu := make([]CapabilitySurface, 0, len(entries))
-	for _, entry := range SortCapabilitySurface(entries) {
+	sorted := SortCapabilitySurface(entries)
+	menu := make([]CapabilitySurface, 0, len(sorted))
+	for _, entry := range sorted {
 		if entry.Kind.IsMenu() || entry.Protected {
 			menu = append(menu, entry)
 		}
@@ -23,7 +24,7 @@ func selectCapabilityMenuEntries(entries []CapabilitySurface) []CapabilitySurfac
 	if len(menu) > 0 {
 		return menu
 	}
-	return SortCapabilitySurface(entries)
+	return sorted
 }
 
 // RenderCapabilityActivationDescription renders the activate_capability

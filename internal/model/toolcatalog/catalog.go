@@ -5,7 +5,7 @@ package toolcatalog
 
 import (
 	"encoding/json"
-	"maps"
+	"fmt"
 	"sort"
 )
 
@@ -143,9 +143,9 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"attachment_describe":         {CanonicalID: "native:attachment_describe", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_list":             {CanonicalID: "native:attachment_list", Source: NativeToolSource, Tags: []string{"attachments"}},
 	"attachment_search":           {CanonicalID: "native:attachment_search", Source: NativeToolSource, Tags: []string{"attachments"}},
-	"call_service":                {CanonicalID: "native:call_service", Source: NativeToolSource, Tags: []string{"ha"}},
+	"call_service":                {CanonicalID: "native:call_service", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"cancel_task":                 {CanonicalID: "native:cancel_task", Source: NativeToolSource, Tags: []string{"scheduler"}},
-	"control_device":              {CanonicalID: "native:control_device", Source: NativeToolSource, Tags: []string{"ha"}},
+	"control_device":              {CanonicalID: "native:control_device", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"conversation_reset":          {CanonicalID: "native:conversation_reset", Source: NativeToolSource, Tags: []string{"session"}},
 	"cost_summary":                {CanonicalID: "native:cost_summary", Source: NativeToolSource, Tags: []string{"diagnostics"}},
 	"create_temp_file":            {CanonicalID: "native:create_temp_file", Source: NativeToolSource, Tags: []string{"files"}},
@@ -189,7 +189,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"file_stat":                   {CanonicalID: "native:file_stat", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_tree":                   {CanonicalID: "native:file_tree", Source: NativeToolSource, Tags: []string{"files"}},
 	"file_write":                  {CanonicalID: "native:file_write", Source: NativeToolSource, Tags: []string{"files"}},
-	"find_entity":                 {CanonicalID: "native:find_entity", Source: NativeToolSource, Tags: []string{"ha"}},
+	"find_entity":                 {CanonicalID: "native:find_entity", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"forget_contact":              {CanonicalID: "native:forget_contact", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"forget_fact":                 {CanonicalID: "native:forget_fact", Source: NativeToolSource, Tags: []string{"memory"}},
 	"forge_issue_comment":         {CanonicalID: "native:forge_issue_comment", Source: NativeToolSource, Tags: []string{"forge"}},
@@ -213,18 +213,18 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"forge_repo_subscriptions":    {CanonicalID: "native:forge_repo_subscriptions", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_repo_unfollow":         {CanonicalID: "native:forge_repo_unfollow", Source: NativeToolSource, Tags: []string{"forge"}},
 	"forge_search":                {CanonicalID: "native:forge_search", Source: NativeToolSource, Tags: []string{"forge"}},
-	"get_state":                   {CanonicalID: "native:get_state", Source: NativeToolSource, Tags: []string{"ha"}},
+	"get_state":                   {CanonicalID: "native:get_state", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"get_version":                 {CanonicalID: "native:get_version", Source: NativeToolSource, Tags: []string{"diagnostics"}},
-	"ha_automation_create":        {CanonicalID: "native:ha_automation_create", Source: NativeToolSource, Tags: []string{"ha"}},
-	"ha_automation_delete":        {CanonicalID: "native:ha_automation_delete", Source: NativeToolSource, Tags: []string{"ha"}},
-	"ha_automation_get":           {CanonicalID: "native:ha_automation_get", Source: NativeToolSource, Tags: []string{"ha"}},
-	"ha_automation_list":          {CanonicalID: "native:ha_automation_list", Source: NativeToolSource, Tags: []string{"ha"}},
-	"ha_automation_update":        {CanonicalID: "native:ha_automation_update", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_create":        {CanonicalID: "native:ha_automation_create", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_automation_delete":        {CanonicalID: "native:ha_automation_delete", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_automation_get":           {CanonicalID: "native:ha_automation_get", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_automation_list":          {CanonicalID: "native:ha_automation_list", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
+	"ha_automation_update":        {CanonicalID: "native:ha_automation_update", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"ha_notify":                   {CanonicalID: "native:ha_notify", Source: NativeToolSource, Tags: []string{"notifications"}},
-	"ha_registry_search":          {CanonicalID: "native:ha_registry_search", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_registry_search":          {CanonicalID: "native:ha_registry_search", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"import_vcf":                  {CanonicalID: "native:import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, Tags: []string{"contacts"}},
-	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha"}},
+	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, Tags: []string{"ha", "homeassistant"}},
 	"list_lenses":                 {CanonicalID: "native:list_lenses", Source: NativeToolSource},
 	"inspect_capability":          {CanonicalID: "native:inspect_capability", Source: NativeToolSource},
 	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
@@ -312,9 +312,18 @@ func BuiltinToolSpecs() map[string]BuiltinToolSpec {
 	return out
 }
 
-// BuiltinTagSpecs returns a copy of the compiled-in tag catalog.
+// BuiltinTagSpecs returns a deep copy of the compiled-in tag catalog.
+// The returned map and the slice fields on each spec (Parents,
+// Aliases) are independent copies — mutating them does not affect the
+// global catalog. Parallels [BuiltinToolSpecs] for the tool half.
 func BuiltinTagSpecs() map[string]BuiltinTagSpec {
-	return maps.Clone(builtinTagSpecs)
+	out := make(map[string]BuiltinTagSpec, len(builtinTagSpecs))
+	for name, spec := range builtinTagSpecs {
+		spec.Parents = append([]string(nil), spec.Parents...)
+		spec.Aliases = append([]string(nil), spec.Aliases...)
+		out[name] = spec
+	}
+	return out
 }
 
 // HasBuiltinTag reports whether the name is a compiled-in tag,
@@ -354,12 +363,30 @@ func LookupBuiltinTagSpec(name string) (BuiltinTagSpec, bool) {
 // builtinTagAliases is the reverse-lookup map populated from each
 // canonical spec's Aliases field at package init. Lookups are
 // alias → canonical name; resolving an unknown name returns ("", false).
+//
+// Until alias resolution propagates to every tag ingress point (config
+// validation, channel-tag binding, loop spec, persisted scope), tools
+// belonging to a canonical tag with aliases should *also* carry the
+// alias names in their Tags slice — see the `ha` / `homeassistant`
+// pattern in builtinToolSpecs. The CanonicalTagName helper is the
+// model-facing resolution boundary; the double-tagging is the
+// tag-index bridge until that resolution covers every ingress.
 var builtinTagAliases map[string]string
 
 func init() {
 	builtinTagAliases = make(map[string]string)
 	for canonical, spec := range builtinTagSpecs {
 		for _, alias := range spec.Aliases {
+			if _, collides := builtinTagSpecs[alias]; collides {
+				panic(fmt.Sprintf(
+					"toolcatalog: alias %q on canonical tag %q collides with an existing canonical tag of the same name",
+					alias, canonical))
+			}
+			if existing, dup := builtinTagAliases[alias]; dup {
+				panic(fmt.Sprintf(
+					"toolcatalog: alias %q declared by both %q and %q",
+					alias, existing, canonical))
+			}
 			builtinTagAliases[alias] = canonical
 		}
 	}
