@@ -429,7 +429,7 @@ type LoggingStdoutConfig struct {
 type LoggingDatasetsConfig struct {
 	Events    LoggingDatasetConfig `yaml:"events"`
 	Requests  LoggingDatasetConfig `yaml:"requests"`
-	Access    LoggingDatasetConfig `yaml:"access"`
+	Access    LoggingDatasetConfig `yaml:"http_access"`
 	Loops     LoggingDatasetConfig `yaml:"loops"`
 	Delegates LoggingDatasetConfig `yaml:"delegates"`
 	Envelopes LoggingDatasetConfig `yaml:"envelopes"`
@@ -549,7 +549,7 @@ func (l LoggingConfig) DatasetEnabled(dataset string) bool {
 		return datasetEnabled(l.Datasets.Events, true)
 	case "requests":
 		return datasetEnabled(l.Datasets.Requests, true)
-	case "access":
+	case "http_access":
 		return datasetEnabled(l.Datasets.Access, false)
 	case "loops":
 		return datasetEnabled(l.Datasets.Loops, true)
