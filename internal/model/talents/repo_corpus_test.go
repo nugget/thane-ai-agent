@@ -164,9 +164,19 @@ var nonToolTokens = map[string]struct{}{
 // When a new tool is added to the catalog its segments automatically
 // expand both gates, so future hallucinations in the same families
 // get caught without changes here.
+//
+// Talent-declared tag names (the intra-talent navigation tags a
+// multi-node tree uses to chain its branches together, e.g.
+// `documents_read` declared by `documents.md`) are exempted: a tag
+// can't be a tool by construction, and multi-node trees naturally
+// produce snake_case names whose verb segments overlap with real tool
+// families. Without this exemption, every `<parent>_read` /
+// `<parent>_write` / `<parent>_curate` leaf name would require a
+// per-name allowlist entry.
 func TestRepoTalentToolReferences(t *testing.T) {
 	talents := loadRepoTalents(t)
 	knownTools, knownPrefixes, knownSecondSegments := buildToolReferenceSets()
+	knownTags := buildResolvableTagSet(talents)
 
 	var problems []string
 	for _, talent := range talents {
@@ -181,6 +191,9 @@ func TestRepoTalentToolReferences(t *testing.T) {
 				continue
 			}
 			if _, ok := nonToolTokens[token]; ok {
+				continue
+			}
+			if _, ok := knownTags[token]; ok {
 				continue
 			}
 			segments := strings.Split(token, "_")
