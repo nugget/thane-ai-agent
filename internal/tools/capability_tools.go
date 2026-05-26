@@ -363,7 +363,7 @@ func (r *Registry) registerInspectCapability(tagManifest map[string]CapabilityMa
 			}
 			manifest, ok := tagManifest[tag]
 			if !ok {
-				return "", fmt.Errorf("unknown capability tag %q; use list_loaded_capabilities or activate_capability to discover available tags", tag)
+				return "", fmt.Errorf("unknown capability tag %q; read the ## Active Capabilities section of your prompt to see what's already loaded, or use activate_capability to discover available tags", tag)
 			}
 			includeExcluded, _ := args["include_excluded"].(bool)
 			entry := toolcatalog.RenderCapabilityCatalogEntry(manifest, toolcatalog.CatalogViewOptions{

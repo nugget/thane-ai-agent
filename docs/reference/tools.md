@@ -50,7 +50,6 @@ These tools load on every turn regardless of active tags.
 | `activate_capability` | Activate a capability tag for the current conversation. |
 | `deactivate_capability` | Deactivate a capability tag for the current conversation. |
 | `reset_capabilities` | Return the current conversation to its baseline capability state. |
-| `list_loaded_capabilities` | List capability tags currently loaded in this conversation. |
 | `inspect_capability` | Inspect one capability tag's active and excluded tool surface. |
 | `activate_lens` | Activate a persistent global behavioral lens. |
 | `deactivate_lens` | Deactivate a global behavioral lens. |
