@@ -2,7 +2,7 @@
 kind: trailhead
 tags: [operations]
 teaser: "Open for runtime health, logs, models, loops, schedules, or local ops."
-next_tags: [diagnostics, models, loops, scheduler, mqtt]
+next_tags: [diagnostics, models, loops, scheduler]
 ---
 
 # Operations Trailhead
@@ -19,13 +19,14 @@ Choose the next move deliberately:
   `models`.
 - If the work is about scheduled tasks or timing policy, activate
   `scheduler`.
-- If you need loop definitions, loop policy, or loop launches, activate
+- If you need loop definitions, loop policy, or loop launches —
+  including MQTT-based wake subscriptions that fire when an external
+  event (often an HA automation) publishes a message — activate
   `loops`.
 - If the operational question is really about session lifecycle —
   closing with carry-forward, splitting off old context,
   checkpointing as a safety net, or (only on explicit user request)
   resetting — activate `session`.
-- If the work is MQTT plumbing or wake subscriptions, activate `mqtt`.
 - If the operational issue actually lives inside Home Assistant, its
   registries, or automations, activate `ha`.
 - If this loop should keep watching specific entities, devices, or
