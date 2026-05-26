@@ -71,7 +71,15 @@ type Block struct {
 	Content     string
 }
 
-// listFiles returns a sorted slice of .md filenames in l.dir.
+// listFiles returns a sorted slice of .md filenames in l.dir, excluding
+// files whose name begins with an uppercase ASCII letter. Talent
+// filenames follow a lowercase-with-hyphens convention (e.g.
+// loops-doctrine.md, awareness-trailhead.md); uppercase-leading names
+// like README.md, CONTRIBUTING.md, or LICENSE.md are contributor docs
+// that shouldn't load as model context. Without this filter the
+// loader's "untagged talents always load" rule would inject every
+// repo's README straight into the prompt.
+//
 // Returns nil, nil when dir is unset or does not exist.
 func (l *Loader) listFiles() ([]string, error) {
 	if l.dir == "" {
@@ -86,12 +94,26 @@ func (l *Loader) listFiles() ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			files = append(files, e.Name())
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
 		}
+		if isContributorDocFilename(e.Name()) {
+			continue
+		}
+		files = append(files, e.Name())
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// isContributorDocFilename reports whether name belongs to a
+// contributor-facing markdown file that should not load as a talent.
+// The discriminator is the first byte: talents are all lowercase
+// (loops-doctrine.md, awareness-trailhead.md), so a leading uppercase
+// ASCII letter is a reliable signal that the file is a README,
+// CONTRIBUTING, LICENSE, or similar human-facing doc.
+func isContributorDocFilename(name string) bool {
+	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
 }
 
 // Talents reads all .md files from the talents directory, parses their

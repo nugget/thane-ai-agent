@@ -126,6 +126,18 @@ var nonToolTokens = map[string]struct{}{
 	// tools like forge_repo_follow / media_follow / mqtt_wake_add).
 	// Appears in talent prose describing routing, not as a tool call.
 	"wake_loop": {},
+
+	// Talent frontmatter keys. The authoring README documents these
+	// alongside their tool-like siblings (`tags`, `kind`, `teaser`).
+	// `next_tags` matches the regex but slips past the matcher
+	// because neither `next` (first segment) nor `tags` (second
+	// segment) appears in the catalog's prefix/second-segment sets.
+	// `tags_all` is unlucky: its second segment `all` appears as
+	// the second segment of `export_all_vcf`, so the matcher flags
+	// the shape as tool-family-ish. Explicit allowlist entry keeps
+	// the matcher's heuristics loose for real-tool catches without
+	// flagging a documented frontmatter key.
+	"tags_all": {},
 }
 
 // TestRepoTalentToolReferences pins backticked tool-name references in

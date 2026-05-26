@@ -344,6 +344,51 @@ func TestTalentsVerified_VerifiesBeforeRead(t *testing.T) {
 	}
 }
 
+// TestTalents_SkipsContributorDocs pins the loader's "skip
+// uppercase-leading .md files" rule. Without it, files like
+// README.md, CONTRIBUTING.md, and LICENSE.md would be parsed as
+// untagged talents and the always-on injection path would silently
+// pump contributor docs into every model prompt. Regression guard for
+// the bug Copilot caught on PR #912 — adding talents/README.md
+// without this filter would dump the authoring guide into context on
+// every turn.
+func TestTalents_SkipsContributorDocs(t *testing.T) {
+	dir := t.TempDir()
+	for filename, content := range map[string]string{
+		// Talent files (lowercase-leading): should load.
+		"loops-doctrine.md":      "---\ntags: [loops]\n---\n# Loops",
+		"presence.md":            "# Presence\n\nposture prose.",
+		"awareness-trailhead.md": "---\nkind: trailhead\ntags: [awareness]\nteaser: \"...\"\nnext_tags: [ha]\n---\n# Awareness Trailhead",
+		// Contributor docs (uppercase-leading): should skip.
+		"README.md":       "# Authoring Guide\n\nThis describes how to write talents.",
+		"CONTRIBUTING.md": "# Contributing\n\nFork and submit a PR.",
+		"LICENSE.md":      "# License",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", filename, err)
+		}
+	}
+	loader := NewLoader(dir)
+	talents, err := loader.Talents()
+	if err != nil {
+		t.Fatalf("Talents() error: %v", err)
+	}
+	loaded := map[string]bool{}
+	for _, talent := range talents {
+		loaded[talent.Name] = true
+	}
+	for _, want := range []string{"loops-doctrine", "presence", "awareness-trailhead"} {
+		if !loaded[want] {
+			t.Errorf("expected to load talent %q, got %v", want, loaded)
+		}
+	}
+	for _, skip := range []string{"README", "CONTRIBUTING", "LICENSE"} {
+		if loaded[skip] {
+			t.Errorf("expected to skip contributor doc %q, but it loaded as a talent", skip)
+		}
+	}
+}
+
 func TestTalents_EmptyDir(t *testing.T) {
 	loader := NewLoader("")
 	talents, err := loader.Talents()

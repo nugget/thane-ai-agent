@@ -2,7 +2,7 @@
 tags: [documents]
 ---
 
-# Documents For Knowledge Work
+# Documents
 
 `documents` is for finding your way back into a corpus when the truth is
 still local but the exact path has drifted out of mind.
