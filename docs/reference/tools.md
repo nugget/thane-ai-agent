@@ -1,15 +1,15 @@
 # Tools Reference
 
-Thane provides ~150 native tools organized by capability tag. A tool is
-available to a given turn only when one of its default tags is active —
-see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
-on and off, and [Prompt Caching](../prompt-caching.md) for how tag
-choices interact with prompt caching.
+Thane provides ~150 native tools organized by tag. A tool is available
+to a given turn only when one of its default tags is active — see
+[The Agent Loop](../understanding/agent-loop.md) for how tags flip on
+and off, and [Prompt Caching](../prompt-caching.md) for how tag choices
+interact with prompt caching.
 
 Tools under the **Core tools** heading below are not tag-gated and
-load on every turn. Everything else loads only when a relevant
-capability is activated, either by the model via `tag_activate`
-or via configured core tags.
+load on every turn. Everything else loads only when a relevant tag is
+activated, either by the model via `tag_activate` or via configured
+core tags.
 
 The authoritative source for which tool is tagged how is
 [`internal/model/toolcatalog/catalog.go`](../../internal/model/toolcatalog/catalog.go);
@@ -47,10 +47,10 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `tag_activate` | Activate a capability tag for the current conversation. |
-| `tag_deactivate` | Deactivate a capability tag for the current conversation. |
-| `tag_reset` | Return the current conversation to its baseline capability state. |
-| `tag_inspect` | Inspect one capability tag's active and excluded tool surface. |
+| `tag_activate` | Activate a tag for the current conversation. |
+| `tag_deactivate` | Deactivate a tag for the current conversation. |
+| `tag_reset` | Return the current conversation to its baseline tag state. |
+| `tag_inspect` | Inspect one tag's active and excluded tool surface. |
 | `lens_activate` | Activate a persistent global behavioral lens. |
 | `lens_deactivate` | Deactivate a global behavioral lens. |
 | `lens_list` | List currently active behavioral lenses. |
