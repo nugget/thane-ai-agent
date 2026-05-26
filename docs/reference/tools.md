@@ -6,10 +6,10 @@ see [The Agent Loop](../understanding/agent-loop.md) for how tags flip
 on and off, and [Prompt Caching](../prompt-caching.md) for how tag
 choices interact with prompt caching.
 
-Tools under the `always` heading below are not tag-gated and load on
-every turn. Everything else loads only when a relevant capability is
-activated, either by the model via `activate_capability` or via
-configured core tags.
+Tools under the **Core tools** heading below are not tag-gated and
+load on every turn. Everything else loads only when a relevant
+capability is activated, either by the model via `activate_capability`
+or via configured core tags.
 
 The authoritative source for which tool is tagged how is
 [`internal/model/toolcatalog/catalog.go`](../../internal/model/toolcatalog/catalog.go);

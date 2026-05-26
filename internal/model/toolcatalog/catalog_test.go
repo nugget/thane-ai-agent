@@ -32,7 +32,7 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 		t.Fatalf("tags = %v, want [forge interactive web]", got)
 	}
 	if !surface[0].Core {
-		t.Fatal("forge should be always active")
+		t.Fatal("forge should be core")
 	}
 	if !surface[1].Menu {
 		t.Fatal("interactive should be a menu tag")

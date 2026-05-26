@@ -1042,7 +1042,6 @@ function renderCapabilityCatalog(summaryEl, listEl, metaEl, entries, activationT
     const chips = document.createElement('div');
     chips.className = 'system-item__chips';
     chips.appendChild(buildSystemChip(entry.status || 'available', entry.core ? 'ok' : entry.adHoc ? 'warn' : 'config'));
-    if (entry.core) chips.appendChild(buildSystemChip('core', 'ok'));
     if (entry.context && entry.context.live) chips.appendChild(buildSystemChip('live context', 'ok'));
     if (entry.context && entry.context.kbArticles > 0) chips.appendChild(buildSystemChip(formatNumber(entry.context.kbArticles) + ' KB', 'config'));
     item.appendChild(chips);
