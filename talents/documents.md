@@ -70,7 +70,7 @@ happens, switch to outline-then-section.
 ## Outline first, then sections
 
 When the document is large or you only need one part, walk the heading
-tree before reading:
+tree first. `doc_outline` returns the structural map without the body:
 
 ```json
 {
@@ -78,7 +78,7 @@ tree before reading:
 }
 ```
 
-Then pull the specific section:
+Then pull the specific section with `doc_section`:
 
 ```json
 {
@@ -90,6 +90,12 @@ Then pull the specific section:
 `doc_section` accepts either the heading text or its slug
 (`vlan-30-iot`). Omit `section` to get the full body without
 frontmatter.
+
+`doc_outline` and `doc_read` take the same `{ "ref": ... }` shape, so
+picking the right one is a judgment call, not a schema constraint.
+Use `doc_outline` when you need the heading tree before deciding what
+to read; use `doc_read` when the whole document is worth loading in
+one payload.
 
 ## Relationship structure
 
