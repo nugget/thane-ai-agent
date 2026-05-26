@@ -75,8 +75,8 @@ func TestRunMigrate_RelocatesEverythingLosslessly(t *testing.T) {
 	checksums := seedOldLayout(t, old)
 
 	var buf bytes.Buffer
-	if err := runMigrate(&buf, []string{old, newRoot}); err != nil {
-		t.Fatalf("runMigrate: %v\noutput:\n%s", err, buf.String())
+	if err := run(&buf, []string{old, newRoot}); err != nil {
+		t.Fatalf("run: %v\noutput:\n%s", err, buf.String())
 	}
 
 	// Datasets land at sources/thane/<dataset>/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl.
@@ -131,14 +131,14 @@ func TestRunMigrate_Idempotent(t *testing.T) {
 	seedOldLayout(t, old)
 
 	var buf1 bytes.Buffer
-	if err := runMigrate(&buf1, []string{old, newRoot}); err != nil {
-		t.Fatalf("first runMigrate: %v", err)
+	if err := run(&buf1, []string{old, newRoot}); err != nil {
+		t.Fatalf("first run: %v", err)
 	}
 
 	// Re-running on the fully migrated tree should be a no-op.
 	var buf2 bytes.Buffer
-	if err := runMigrate(&buf2, []string{old, newRoot}); err != nil {
-		t.Fatalf("second runMigrate (idempotent): %v\noutput:\n%s", err, buf2.String())
+	if err := run(&buf2, []string{old, newRoot}); err != nil {
+		t.Fatalf("second run (idempotent): %v\noutput:\n%s", err, buf2.String())
 	}
 	out := buf2.String()
 	if !strings.Contains(out, "0 moved") {
@@ -161,8 +161,8 @@ func TestRunMigrate_UnknownEntriesAreLeftInPlace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runMigrate(&buf, []string{old, newRoot}); err != nil {
-		t.Fatalf("runMigrate: %v", err)
+	if err := run(&buf, []string{old, newRoot}); err != nil {
+		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(mystery); err != nil {
 		t.Errorf("unknown file %s should remain in place, got %v", mystery, err)
@@ -192,7 +192,7 @@ func TestRunMigrate_RefusesConflictingDestination(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runMigrate(&buf, []string{old, newRoot})
+	err := run(&buf, []string{old, newRoot})
 	if err == nil {
 		t.Fatalf("expected error for conflicting destination, got nil\noutput:\n%s", buf.String())
 	}
@@ -209,8 +209,8 @@ func TestRunMigrate_CopyModeLeavesSourceIntact(t *testing.T) {
 	checksums := seedOldLayout(t, old)
 
 	var buf bytes.Buffer
-	if err := runMigrate(&buf, []string{"--copy", old, newRoot}); err != nil {
-		t.Fatalf("runMigrate --copy: %v\noutput:\n%s", err, buf.String())
+	if err := run(&buf, []string{"--copy", old, newRoot}); err != nil {
+		t.Fatalf("run --copy: %v\noutput:\n%s", err, buf.String())
 	}
 	if !strings.Contains(buf.String(), "mode: copy") {
 		t.Errorf("expected mode banner to say copy, got:\n%s", buf.String())
@@ -244,11 +244,11 @@ func TestRunMigrate_CopyModeIdempotent(t *testing.T) {
 	seedOldLayout(t, old)
 
 	var first bytes.Buffer
-	if err := runMigrate(&first, []string{"--copy", old, newRoot}); err != nil {
+	if err := run(&first, []string{"--copy", old, newRoot}); err != nil {
 		t.Fatalf("first --copy: %v", err)
 	}
 	var second bytes.Buffer
-	if err := runMigrate(&second, []string{"--copy", old, newRoot}); err != nil {
+	if err := run(&second, []string{"--copy", old, newRoot}); err != nil {
 		t.Fatalf("second --copy: %v\noutput:\n%s", err, second.String())
 	}
 	if !strings.Contains(second.String(), "0 moved") {

@@ -1,3 +1,23 @@
+// Command archive-migration relocates a legacy Thane log tree into
+// the archive/ layout established in #937.
+//
+// This is a one-shot tool — once the migration has run against every
+// known data source and #940 has retired the sqlite content tables,
+// this binary can be deleted with no impact on the main thane binary.
+//
+// Usage:
+//
+//	archive-migration [--copy] <old_root> <new_root>
+//
+// Default mode renames files (fast in-place migration on the same
+// filesystem, destructive to the source). With --copy it reads and
+// writes instead, leaving the source intact — required for staging a
+// working tree on a different filesystem (e.g. SMB → local) before
+// rsyncing the result to its production home.
+//
+// Idempotent in both modes: re-running on an already-migrated tree
+// is a no-op. Every action is appended to <new_root>/meta/migration.jsonl
+// so the relocation is auditable after the fact.
 package main
 
 import (
@@ -49,7 +69,7 @@ var legacyGzPattern = regexp.MustCompile(`^thane-\d{4}-\d{2}-\d{2}\.log\.gz$`)
 
 // indexFilenames are the sqlite log index files that move to the new
 // archive root verbatim (no path nesting, no rename). Their content
-// retires in #940; this issue just relocates them.
+// retires in #940; this tool just relocates them.
 var indexFilenames = map[string]bool{
 	"logs.db":     true,
 	"logs.db-wal": true,
@@ -64,28 +84,37 @@ var oldHourPattern = regexp.MustCompile(`^(\d{2})\.jsonl$`)
 // oldDayPattern matches the legacy date-directory name YYYY-MM-DD.
 var oldDayPattern = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`)
 
-// runMigrate handles `thane migrate [--copy] <old_root> <new_root>`.
-// By default it renames files (fast in-place migration on the same
-// filesystem, destructive to the source). With --copy it reads and
-// writes instead, leaving the source intact — useful for staging a
-// working tree on a different filesystem (e.g. SMB → local) before
-// rsyncing the result to its production home.
-//
-// Idempotent in both modes: re-running on an already-migrated tree
-// is a no-op.
-func runMigrate(w io.Writer, args []string) error {
+func main() {
+	if err := run(os.Stdout, os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// run parses CLI arguments and dispatches to the migration. Keeping
+// it separate from main() lets tests drive the full code path against
+// a bytes.Buffer rather than spawning a subprocess.
+func run(w io.Writer, args []string) error {
 	copyMode := false
 	positional := args[:0]
 	for _, a := range args {
 		switch a {
 		case "--copy", "-c":
 			copyMode = true
+		case "-h", "--help":
+			fmt.Fprintln(w, "Usage: archive-migration [--copy] <old_root> <new_root>")
+			fmt.Fprintln(w, "")
+			fmt.Fprintln(w, "Moves a legacy Thane log tree into the #937 archive layout.")
+			fmt.Fprintln(w, "Default mode renames files (destructive). --copy reads and writes")
+			fmt.Fprintln(w, "instead, leaving the source intact — required for cross-filesystem")
+			fmt.Fprintln(w, "staging.")
+			return nil
 		default:
 			positional = append(positional, a)
 		}
 	}
 	if len(positional) < 2 {
-		return fmt.Errorf("usage: thane migrate [--copy] <old_root> <new_root>")
+		return fmt.Errorf("usage: archive-migration [--copy] <old_root> <new_root>")
 	}
 	oldRoot, err := filepath.Abs(positional[0])
 	if err != nil {
@@ -437,4 +466,29 @@ func (m *mover) recordManifest(src, dst, category string, size int64, status str
 		return // best-effort manifest write — don't fail the migration
 	}
 	_, _ = m.manifest.Write(append(line, '\n'))
+}
+
+// writeIfMissing atomically creates path with the given permissions and
+// writes data to it. If the file already exists it is left untouched.
+// The create uses O_CREATE|O_EXCL so there is no race between checking
+// and writing.
+func writeIfMissing(w io.Writer, path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			fmt.Fprintf(w, "  · %s (exists, skipping)\n", path)
+			return nil
+		}
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write %s: %w", path, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s: %w", path, closeErr)
+	}
+	fmt.Fprintf(w, "  ✓ %s\n", path)
+	return nil
 }
