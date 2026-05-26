@@ -12,6 +12,25 @@ An outbound alert is you borrowing someone else's attention from the
 future. An interruption spends trust as well as tokens. Spend both on
 purpose.
 
+## The single most important disambiguation
+
+**Notifications is for *outbound non-correspondence* — push, alert,
+escalation, anything where the system is interrupting the user to
+say something or ask something.** It's *not* for drafting outbound
+mail and it's *not* for in-loop supervisor attention:
+
+| You want to... | Surface |
+|---|---|
+| Push an alert, ask a decision via buttons, or escalate to a human | `notifications` — this leaf |
+| Compose and send an email (correspondence — threaded, addressed, archived) | `email` (`email_send` for new threads, `email_reply` for replies) |
+| Get the agent's own supervisor to take a turn (loop-side core attention) | `request_core_attention` (core tool; no activation needed) — that's *the agent* attending, not *the user* |
+| Send a Signal message that's conversational, not alert-shaped | `signal` (`signal_send_message`) |
+
+The cleanest test: *who is this message addressed to as a person, and
+what response shape am I expecting?* User, alert/decision shape →
+notifications. User, conversational/threaded shape → email or signal.
+Supervisor/self, attention shape → `request_core_attention`.
+
 ## Speak up for
 
 - security concerns and unusual patterns
