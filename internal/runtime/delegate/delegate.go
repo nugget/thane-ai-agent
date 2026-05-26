@@ -162,7 +162,7 @@ func applyProfileDefaultTags(scopeTags []string, profile *Profile, explicitScope
 
 func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequested bool) *tools.Registry {
 	if len(scopeTags) > 0 || explicitScopeRequested {
-		merged := mergeTagLists(scopeTags, e.alwaysActiveTags)
+		merged := mergeTagLists(scopeTags, e.coreTags)
 		var reg *tools.Registry
 		if len(merged) > 0 {
 			reg = e.parentReg.FilterByTags(merged)
@@ -223,23 +223,23 @@ type labelExpander interface {
 
 // Executor runs delegate sub-agent tasks.
 type Executor struct {
-	logger           *slog.Logger
-	llm              llm.Client
-	router           *router.Router
-	parentReg        *tools.Registry
-	profiles         map[string]*Profile
-	timezone         string
-	defaultModel     string
-	archiver         *memory.ArchiveStore
-	tempFiles        labelExpander
-	alwaysActiveTags []string
-	lensProvider     func() []string // returns active global lenses (nil = none)
-	eventBus         *events.Bus
-	loopRunner       looppkg.Runner
-	loopRegistry     *looppkg.Registry
-	completionSink   looppkg.CompletionSink
-	sessionArchiver  agent.SessionArchiver
-	conversations    *memory.SQLiteStore
+	logger          *slog.Logger
+	llm             llm.Client
+	router          *router.Router
+	parentReg       *tools.Registry
+	profiles        map[string]*Profile
+	timezone        string
+	defaultModel    string
+	archiver        *memory.ArchiveStore
+	tempFiles       labelExpander
+	coreTags        []string
+	lensProvider    func() []string // returns active global lenses (nil = none)
+	eventBus        *events.Bus
+	loopRunner      looppkg.Runner
+	loopRegistry    *looppkg.Registry
+	completionSink  looppkg.CompletionSink
+	sessionArchiver agent.SessionArchiver
+	conversations   *memory.SQLiteStore
 }
 
 // NewExecutor creates a delegate executor. The returned executor is not
@@ -324,12 +324,13 @@ func (e *Executor) SetEventBus(bus *events.Bus) {
 	e.eventBus = bus
 }
 
-// SetAlwaysActiveTags configures the capability tags that are
-// automatically included in every tag-scoped delegation, regardless
-// of which tags the caller requests. This mirrors the agent loop's
-// always_active tag behavior.
-func (e *Executor) SetAlwaysActiveTags(tags []string) {
-	e.alwaysActiveTags = tags
+// SetCoreTags configures the capability tags that are automatically
+// included in every tag-scoped delegation, regardless of which tags
+// the caller requests. These are the operator's core tag set —
+// pinned in every scope so the delegate's surface stays consistent
+// with the parent loop's baseline.
+func (e *Executor) SetCoreTags(tags []string) {
+	e.coreTags = tags
 }
 
 // SetLensProvider configures a function that returns the currently
@@ -747,7 +748,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
-	filterTags := mergeTagLists(scopeTags, e.alwaysActiveTags)
+	filterTags := mergeTagLists(scopeTags, e.coreTags)
 	// Delegate tool exclusions must hold on every code path. The
 	// loop-backed launch rebuilds the catalog from the parent registry
 	// filtered by the launched loop's request, so the exclusions have to
@@ -775,11 +776,11 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		"tools_available", len(toolDefs),
 	)
 
-	effectiveTagsMap := make(map[string]bool, len(scopeTags)+len(e.alwaysActiveTags))
+	effectiveTagsMap := make(map[string]bool, len(scopeTags)+len(e.coreTags))
 	for _, t := range scopeTags {
 		effectiveTagsMap[t] = true
 	}
-	for _, t := range e.alwaysActiveTags {
+	for _, t := range e.coreTags {
 		effectiveTagsMap[t] = true
 	}
 	if e.lensProvider != nil {

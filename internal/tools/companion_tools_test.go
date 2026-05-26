@@ -46,8 +46,8 @@ func TestSetCompanionCallerRegistersCalendarTool(t *testing.T) {
 	if tool == nil {
 		t.Fatal("expected macos_calendar_events to be registered")
 	}
-	if tool.AlwaysAvailable {
-		t.Fatal("expected macos_calendar_events to rely on capability tags instead of AlwaysAvailable")
+	if tool.Core {
+		t.Fatal("expected macos_calendar_events to rely on capability tags instead of being a core tool")
 	}
 
 	output, err := reg.Execute(context.Background(), "macos_calendar_events", `{

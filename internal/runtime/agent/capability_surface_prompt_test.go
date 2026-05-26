@@ -12,17 +12,17 @@ func TestBuildSystemPrompt_ActiveCapabilitiesUseSharedSurface(t *testing.T) {
 	l := newTagTestLoop()
 	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
 		"forge": {
-			Description:  "Forge and code review tools.",
-			Tools:        []string{"forge_pr_get", "forge_search"},
-			AlwaysActive: true,
+			Description: "Forge and code review tools.",
+			Tools:       []string{"forge_pr_get", "forge_search"},
+			Core:        true,
 		},
 	}, nil)
 	l.UseCapabilitySurface([]toolcatalog.CapabilitySurface{
 		{
-			Tag:          "forge",
-			Description:  "Forge and code review tools.",
-			Tools:        []string{"forge_pr_get", "forge_search"},
-			AlwaysActive: true,
+			Tag:         "forge",
+			Description: "Forge and code review tools.",
+			Tools:       []string{"forge_pr_get", "forge_search"},
+			Core:        true,
 		},
 	})
 

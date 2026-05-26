@@ -71,7 +71,7 @@ type CapabilityCatalogEntry struct {
 	Tools         []string                  `json:"tools,omitempty"`
 	ToolEntries   []CapabilityToolEntry     `json:"tool_entries,omitempty"`
 	ExcludedTools []CapabilityToolEntry     `json:"excluded_tools,omitempty"`
-	AlwaysActive  bool                      `json:"always_active,omitempty"`
+	Core          bool                      `json:"core,omitempty"`
 	Protected     bool                      `json:"protected,omitempty"`
 	AdHoc         bool                      `json:"ad_hoc,omitempty"`
 	Context       *CapabilityContextSummary `json:"context,omitempty"`
@@ -80,13 +80,13 @@ type CapabilityCatalogEntry struct {
 // LoadedCapabilityEntry is the API/model-facing representation of one
 // currently loaded (active) capability in the session.
 type LoadedCapabilityEntry struct {
-	Tag          string                    `json:"tag"`
-	Description  string                    `json:"description,omitempty"`
-	ToolCount    int                       `json:"tool_count,omitempty"`
-	AlwaysActive bool                      `json:"always_active,omitempty"`
-	Protected    bool                      `json:"protected,omitempty"`
-	AdHoc        bool                      `json:"ad_hoc,omitempty"`
-	Context      *CapabilityContextSummary `json:"context,omitempty"`
+	Tag         string                    `json:"tag"`
+	Description string                    `json:"description,omitempty"`
+	ToolCount   int                       `json:"tool_count,omitempty"`
+	Core        bool                      `json:"core,omitempty"`
+	Protected   bool                      `json:"protected,omitempty"`
+	AdHoc       bool                      `json:"ad_hoc,omitempty"`
+	Context     *CapabilityContextSummary `json:"context,omitempty"`
 }
 
 // CapabilityActionTools lists the tool names the model should use for
@@ -178,24 +178,24 @@ func renderCatalogEntry(entry CapabilitySurface, opts CatalogViewOptions) Capabi
 	switch {
 	case entry.AdHoc:
 		status = "discoverable"
-	case entry.AlwaysActive:
-		status = "always_active"
+	case entry.Core:
+		status = "core"
 	case entry.Protected:
 		status = "protected"
 	}
 
 	rendered := CapabilityCatalogEntry{
-		Tag:          entry.Tag,
-		Status:       status,
-		Description:  capabilityDescription(entry),
-		Teaser:       strings.TrimSpace(entry.Teaser),
-		NextTags:     append([]string(nil), entry.NextTags...),
-		ToolCount:    len(entry.Tools),
-		Tools:        append([]string(nil), entry.Tools...),
-		ToolEntries:  cloneToolEntries(entry.ToolEntries),
-		AlwaysActive: entry.AlwaysActive,
-		Protected:    entry.Protected,
-		AdHoc:        entry.AdHoc,
+		Tag:         entry.Tag,
+		Status:      status,
+		Description: capabilityDescription(entry),
+		Teaser:      strings.TrimSpace(entry.Teaser),
+		NextTags:    append([]string(nil), entry.NextTags...),
+		ToolCount:   len(entry.Tools),
+		Tools:       append([]string(nil), entry.Tools...),
+		ToolEntries: cloneToolEntries(entry.ToolEntries),
+		Core:        entry.Core,
+		Protected:   entry.Protected,
+		AdHoc:       entry.AdHoc,
 	}
 	if opts.IncludeExcluded {
 		rendered.ExcludedTools = cloneToolEntries(entry.ExcludedTools)
@@ -248,12 +248,12 @@ func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []stri
 			continue
 		}
 		rendered := LoadedCapabilityEntry{
-			Tag:          tag,
-			Description:  capabilityDescription(entry),
-			ToolCount:    len(entry.Tools),
-			AlwaysActive: entry.AlwaysActive,
-			Protected:    entry.Protected,
-			AdHoc:        entry.AdHoc,
+			Tag:         tag,
+			Description: capabilityDescription(entry),
+			ToolCount:   len(entry.Tools),
+			Core:        entry.Core,
+			Protected:   entry.Protected,
+			AdHoc:       entry.AdHoc,
 		}
 		if entry.KBArticles > 0 || entry.LiveContext {
 			rendered.Context = &CapabilityContextSummary{

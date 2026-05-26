@@ -64,9 +64,9 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 			continue
 		}
 		out.Configs[tag] = config.CapabilityTagConfig{
-			Description:  firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
-			AlwaysActive: spec.AlwaysActive,
-			Protected:    spec.Protected,
+			Description: firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
+			Core:        spec.Core,
+			Protected:   spec.Protected,
 		}
 	}
 
@@ -90,8 +90,8 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 		cfg := out.Configs[tag]
 		spec := builtinTags[tag]
 		cfg.Description = firstNonEmpty(strings.TrimSpace(spec.Description), cfg.Description, generatedTagDescription(tag))
-		if spec.AlwaysActive {
-			cfg.AlwaysActive = true
+		if spec.Core {
+			cfg.Core = true
 		}
 		if spec.Protected {
 			cfg.Protected = true
@@ -108,8 +108,8 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 			if desc := strings.TrimSpace(override.Description); desc != "" {
 				cfg.Description = desc
 			}
-			if override.AlwaysActive {
-				cfg.AlwaysActive = true
+			if override.Core {
+				cfg.Core = true
 			}
 			if override.Protected {
 				cfg.Protected = true
@@ -311,16 +311,16 @@ func buildCapabilitySurface(
 ) []toolcatalog.CapabilitySurface {
 	tagIndex := make(map[string][]string, len(resolved.Configs))
 	descriptions := make(map[string]string, len(resolved.Configs))
-	alwaysActive := make(map[string]bool, len(resolved.Configs))
+	core := make(map[string]bool, len(resolved.Configs))
 	protected := make(map[string]bool, len(resolved.Configs))
 	for tag, cfg := range resolved.Configs {
 		tagIndex[tag] = append([]string(nil), cfg.Tools...)
 		descriptions[tag] = cfg.Description
-		alwaysActive[tag] = cfg.AlwaysActive
+		core[tag] = cfg.Core
 		protected[tag] = cfg.Protected
 	}
 
-	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, alwaysActive, protected)
+	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, core, protected)
 	indexByTag := make(map[string]int, len(surface))
 	for i := range surface {
 		indexByTag[surface[i].Tag] = i

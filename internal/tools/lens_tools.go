@@ -101,7 +101,7 @@ func (s *LensStore) Remove(lens string) error {
 // capabilities — when a lens is active, KB articles and talents tagged
 // with that lens name are loaded into every conversation.
 //
-// All three are AlwaysAvailable. Rationale: lens management is the
+// All three are Core. Rationale: lens management is the
 // meta-operation that adjusts which lens is in effect. Locking it
 // behind a lens would be a chicken-and-egg — you can't activate a
 // lens if activate_lens itself depends on a lens being active. Same
@@ -115,8 +115,8 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	r.lensStore = store
 
 	r.Register(&Tool{
-		Name:            "activate_lens",
-		AlwaysAvailable: true,
+		Name: "activate_lens",
+		Core: true,
 		Description: "Activate a behavioral lens globally. Lenses are persistent context modes that apply to ALL conversations " +
 			"and survive restarts. They change how you perceive and respond — like switching between different attentional states. " +
 			"Any KB articles or talents tagged with the lens name will load automatically.\n\n" +
@@ -148,9 +148,9 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	})
 
 	r.Register(&Tool{
-		Name:            "deactivate_lens",
-		AlwaysAvailable: true,
-		Description:     "Deactivate a behavioral lens globally. The lens and its associated context will be removed from all conversations.",
+		Name:        "deactivate_lens",
+		Core:        true,
+		Description: "Deactivate a behavioral lens globally. The lens and its associated context will be removed from all conversations.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -180,9 +180,9 @@ func (r *Registry) SetLensTools(store *LensStore) {
 	})
 
 	r.Register(&Tool{
-		Name:            "list_lenses",
-		AlwaysAvailable: true,
-		Description:     "List all currently active behavioral lenses.",
+		Name:        "list_lenses",
+		Core:        true,
+		Description: "List all currently active behavioral lenses.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},

@@ -23,15 +23,15 @@ func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]
 	// production wiring: loop.Tools().SetCapabilityTools(loop, manifest).
 	tagTools := make(map[string][]string, len(capTags))
 	descriptions := make(map[string]string, len(capTags))
-	alwaysActive := make(map[string]bool, len(capTags))
+	core := make(map[string]bool, len(capTags))
 	protected := make(map[string]bool, len(capTags))
 	for tag, cfg := range capTags {
 		tagTools[tag] = cfg.Tools
 		descriptions[tag] = cfg.Description
-		alwaysActive[tag] = cfg.AlwaysActive
+		core[tag] = cfg.Core
 		protected[tag] = cfg.Protected
 	}
-	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive, protected)
+	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, core, protected)
 	loop.Tools().SetCapabilityTools(loop, manifest)
 
 	return loop
@@ -100,9 +100,9 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 			Tools:       []string{"forge_tool"},
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}
 
@@ -165,9 +165,9 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"ha": {
-			Description:  "Home Assistant tools",
-			Tools:        []string{"get_state"},
-			AlwaysActive: true,
+			Description: "Home Assistant tools",
+			Tools:       []string{"get_state"},
+			Core:        true,
 		},
 	}
 
@@ -336,9 +336,9 @@ func TestRuntimeTags_PinForRunWithoutPersistence(t *testing.T) {
 func TestCapabilityScope_InheritableTagsOnlyElective(t *testing.T) {
 	scope := newCapabilityScope(map[string]config.CapabilityTagConfig{
 		"core": {
-			Description:  "Core tools",
-			Tools:        []string{"remember_fact"},
-			AlwaysActive: true,
+			Description: "Core tools",
+			Tools:       []string{"remember_fact"},
+			Core:        true,
 		},
 		"ha": {
 			Description: "Home Assistant",
@@ -520,9 +520,9 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}
 

@@ -154,7 +154,7 @@ capability_tags:
 Thane ships with a compiled-in capability-tag catalog for native and
 provider-discovered tools. Most operators leave built-in tags out of
 config. Use `capability_tags` only for deliberate overrides or custom
-tags. Tags with `always_active: true` are always loaded. Others activate
+tags. Tags with `core: true` are always loaded. Others activate
 on demand. See [The Agent Loop](../understanding/agent-loop.md).
 
 ## Channel Tags

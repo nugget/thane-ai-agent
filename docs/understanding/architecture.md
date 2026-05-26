@@ -41,7 +41,7 @@ sometimes. Models ignore it other times.
 
 Capability tags solve this structurally. Tools and talents are organized
 by semantic domain (`ha`, `email`, `forge`, `web`). Sessions start with
-only the `always_active` tags — core tools like memory, notifications,
+only the `core` tags — foundational tools like memory, notifications,
 session management. Maybe 15-20 tools visible.
 
 When a request needs Home Assistant control, the orchestrator has two

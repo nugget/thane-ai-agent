@@ -630,7 +630,7 @@ function renderSystemRegistries(summaryEl, listEl, metaEl, sys, actions = {}) {
       description: 'Runtime-defined capability catalog, tool membership, and operator-facing toolbox inventory.',
       chips: [
         buildSystemChip(formatNumber(capabilitySummary.uniqueToolCount) + ' tools', 'config'),
-        capabilitySummary.alwaysActiveCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.alwaysActiveCount) + ' always-on', 'ok') : null,
+        capabilitySummary.coreCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.coreCount) + ' core', 'ok') : null,
         capabilitySummary.discoverableCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.discoverableCount) + ' discoverable', 'warn') : null,
         capabilitySummary.liveContextCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.liveContextCount) + ' live context', 'ok') : null,
       ].filter(Boolean),
@@ -826,7 +826,7 @@ function normalizeCapabilityCatalogEntry(entry) {
     description,
     toolCount: Number.isFinite(toolCount) ? toolCount : 0,
     tools,
-    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    core: !!(entry.core || entry.Core || entry.always_active || entry.core),
     adHoc: !!(entry.ad_hoc || entry.adHoc),
     context: context && typeof context === 'object'
       ? {
@@ -848,7 +848,7 @@ function normalizeLoadedCapabilityEntry(entry) {
     tag,
     description,
     toolCount: Number.isFinite(toolCount) ? toolCount : 0,
-    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    core: !!(entry.core || entry.Core || entry.always_active || entry.core),
     adHoc: !!(entry.ad_hoc || entry.adHoc),
     context: context && typeof context === 'object'
       ? {
@@ -871,7 +871,7 @@ function normalizeLoadedCapabilities(entries, loadedTags) {
   for (const tag of cloneTokenList(loadedTags)) {
     if (seen.has(tag)) continue;
     seen.add(tag);
-    result.push({ tag, description: '', toolCount: 0, alwaysActive: false, adHoc: false, context: null });
+    result.push({ tag, description: '', toolCount: 0, core: false, adHoc: false, context: null });
   }
   result.sort((a, b) => a.tag.localeCompare(b.tag));
   return result;
@@ -923,11 +923,11 @@ function getCapabilityCatalogEntries(system) {
 function summarizeCapabilityCatalog(entries) {
   const valid = Array.isArray(entries) ? entries : [];
   const uniqueTools = new Set();
-  let alwaysActiveCount = 0;
+  let coreCount = 0;
   let discoverableCount = 0;
   let liveContextCount = 0;
   for (const entry of valid) {
-    if (entry.alwaysActive) alwaysActiveCount++;
+    if (entry.core) coreCount++;
     if (entry.status === 'discoverable' || entry.adHoc) discoverableCount++;
     if (entry.context && entry.context.live) liveContextCount++;
     for (const tool of entry.tools || []) uniqueTools.add(tool);
@@ -935,7 +935,7 @@ function summarizeCapabilityCatalog(entries) {
   return {
     capabilityCount: valid.length,
     uniqueToolCount: uniqueTools.size,
-    alwaysActiveCount,
+    coreCount,
     discoverableCount,
     liveContextCount,
   };
@@ -947,7 +947,7 @@ function describeCapabilityEntry(entry) {
   if (entry.description) parts.push(entry.description);
   const meta = [];
   if (entry.toolCount > 0) meta.push(formatNumber(entry.toolCount) + ' tools');
-  if (entry.alwaysActive) meta.push('always active');
+  if (entry.core) meta.push('core');
   else if (entry.status) meta.push(formatSchemaToken(entry.status));
   if (entry.context && entry.context.kbArticles > 0) meta.push(formatNumber(entry.context.kbArticles) + ' KB');
   if (entry.context && entry.context.live) meta.push('live context');
@@ -996,7 +996,7 @@ function renderCapabilityCatalog(summaryEl, listEl, metaEl, entries, activationT
     } else {
       summaryEl.appendChild(buildSystemStat('Capabilities', formatNumber(summary.capabilityCount)));
       summaryEl.appendChild(buildSystemStat('Tools', formatNumber(summary.uniqueToolCount)));
-      summaryEl.appendChild(buildSystemStat('Always-on', formatNumber(summary.alwaysActiveCount)));
+      summaryEl.appendChild(buildSystemStat('Core', formatNumber(summary.coreCount)));
       summaryEl.appendChild(buildSystemStat('Discoverable', formatNumber(summary.discoverableCount)));
       summaryEl.appendChild(buildSystemStat('Live context', formatNumber(summary.liveContextCount)));
     }
@@ -1041,8 +1041,8 @@ function renderCapabilityCatalog(summaryEl, listEl, metaEl, entries, activationT
 
     const chips = document.createElement('div');
     chips.className = 'system-item__chips';
-    chips.appendChild(buildSystemChip(entry.status || 'available', entry.alwaysActive ? 'ok' : entry.adHoc ? 'warn' : 'config'));
-    if (entry.alwaysActive) chips.appendChild(buildSystemChip('always-on', 'ok'));
+    chips.appendChild(buildSystemChip(entry.status || 'available', entry.core ? 'ok' : entry.adHoc ? 'warn' : 'config'));
+    if (entry.core) chips.appendChild(buildSystemChip('core', 'ok'));
     if (entry.context && entry.context.live) chips.appendChild(buildSystemChip('live context', 'ok'));
     if (entry.context && entry.context.kbArticles > 0) chips.appendChild(buildSystemChip(formatNumber(entry.context.kbArticles) + ' KB', 'config'));
     item.appendChild(chips);

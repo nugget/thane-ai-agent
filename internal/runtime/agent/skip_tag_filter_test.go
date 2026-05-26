@@ -59,8 +59,8 @@ func TestSkipTagFilter_Bypasses(t *testing.T) {
 	loop.SetCapabilityTags(
 		map[string]config.CapabilityTagConfig{
 			"testing": {
-				Tools:        []string{"tagged_tool"},
-				AlwaysActive: true,
+				Tools: []string{"tagged_tool"},
+				Core:  true,
 			},
 		},
 		nil,
@@ -146,8 +146,8 @@ func TestSkipTagFilter_DefaultPreserves(t *testing.T) {
 	loop.SetCapabilityTags(
 		map[string]config.CapabilityTagConfig{
 			"testing": {
-				Tools:        []string{"tagged_tool"},
-				AlwaysActive: true,
+				Tools: []string{"tagged_tool"},
+				Core:  true,
 			},
 		},
 		nil,

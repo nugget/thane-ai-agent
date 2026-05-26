@@ -1852,7 +1852,7 @@ function buildSystemEntity(sys) {
     capabilityEntries,
     capabilityCount: capabilitySummary.capabilityCount,
     toolboxToolCount: capabilitySummary.uniqueToolCount,
-    alwaysActiveCapabilityCount: capabilitySummary.alwaysActiveCount,
+    coreCapabilityCount: capabilitySummary.coreCount,
     discoverableCapabilityCount: capabilitySummary.discoverableCount,
     routerStats,
     registry,

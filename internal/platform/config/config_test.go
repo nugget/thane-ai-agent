@@ -581,7 +581,7 @@ func TestValidate_CapabilityTagEmptyToolsAllowed(t *testing.T) {
 func TestValidate_BuiltinCapabilityOverlayMayOmitDescriptionAndTools(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"ha": {AlwaysActive: true},
+		"ha": {Core: true},
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -592,7 +592,7 @@ func TestValidate_BuiltinCapabilityOverlayMayOmitDescriptionAndTools(t *testing.
 func TestValidate_CapabilityTagValid(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"ha":  {Description: "Home Assistant", Tools: []string{"get_state"}, AlwaysActive: true},
+		"ha":  {Description: "Home Assistant", Tools: []string{"get_state"}, Core: true},
 		"web": {Description: "Web search", Tools: []string{"web_search"}},
 	}
 

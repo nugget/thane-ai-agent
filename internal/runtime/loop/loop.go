@@ -42,7 +42,7 @@ type Request struct {
 	RoutingFactors   map[string]string      `yaml:"routing_factors,omitempty" json:"routing_factors,omitempty"`
 	DelegationGating string                 `yaml:"delegation_gating,omitempty" json:"delegation_gating,omitempty"` // Typed feature switch; "disabled" gives the model direct tool access (no orchestrator-and-delegate gating).
 	// InitialTags are capability tags to activate at the start of the Run,
-	// in addition to always-active and channel-pinned tags. Used by loops
+	// in addition to core and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
 	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 	// RuntimeTags are trusted runtime-asserted tags pinned for this runner

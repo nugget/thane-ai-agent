@@ -62,8 +62,8 @@ func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
 func TestActivateCapability(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state"}, AlwaysActive: false},
-		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state"}, Core: false},
+		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -102,8 +102,8 @@ func TestDeactivateCapability(t *testing.T) {
 	mgr.activeTags["web"] = true
 
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state", "call_service"}, AlwaysActive: false},
-		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state", "call_service"}, Core: false},
+		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -150,7 +150,7 @@ func TestResetCapabilities(t *testing.T) {
 	manifest := []CapabilityManifest{
 		{Tag: "forge", Description: "Forge tools", Tools: []string{"forge_pr_get"}},
 		{Tag: "web", Description: "Web tools", Tools: []string{"web_fetch"}},
-		{Tag: "core", Description: "Core tools", Tools: []string{"thane_now"}, AlwaysActive: true},
+		{Tag: "core", Description: "Core tools", Tools: []string{"thane_now"}, Core: true},
 	}
 
 	reg := NewEmptyRegistry()
@@ -192,7 +192,7 @@ func TestResetCapabilities_TruncatesRemovedTools(t *testing.T) {
 	manifest := []CapabilityManifest{
 		{Tag: "alpha", Tools: []string{"a1", "a2", "a3", "a4", "a5"}},
 		{Tag: "beta", Tools: []string{"b1", "b2", "b3", "b4", "b5"}},
-		{Tag: "core", Tools: []string{"thane_now"}, AlwaysActive: true},
+		{Tag: "core", Tools: []string{"thane_now"}, Core: true},
 	}
 
 	reg := NewEmptyRegistry()
@@ -239,8 +239,8 @@ func TestDeactivateCapability_EmptyTag(t *testing.T) {
 func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true},
-		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, Core: true},
+		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search"}, Core: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -250,10 +250,10 @@ func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 
 	// Always-active tags should NOT appear in the description (they can't be toggled).
 	if strings.Contains(tool.Description, "**ha**") {
-		t.Error("always-active tag 'ha' should not appear in description")
+		t.Error("core tag 'ha' should not appear in description")
 	}
 
-	// Non-always-active tags should appear.
+	// Non-core tags should appear.
 	if !strings.Contains(tool.Description, "**web**") {
 		t.Errorf("description should mention 'web': %s", tool.Description)
 	}
@@ -271,11 +271,11 @@ func TestBuildCapabilityManifest(t *testing.T) {
 		"ha":  "Home Assistant",
 		"web": "Web retrieval",
 	}
-	alwaysActive := map[string]bool{
+	core := map[string]bool{
 		"ha": true,
 	}
 
-	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive, nil)
+	manifest := BuildCapabilityManifest(tags, descriptions, core, nil)
 
 	if len(manifest) != 2 {
 		t.Fatalf("len(manifest) = %d, want 2", len(manifest))
@@ -288,11 +288,11 @@ func TestBuildCapabilityManifest(t *testing.T) {
 	if manifest[1].Tag != "web" {
 		t.Errorf("manifest[1].Tag = %q, want %q", manifest[1].Tag, "web")
 	}
-	if !manifest[0].AlwaysActive {
-		t.Error("ha should be always_active")
+	if !manifest[0].Core {
+		t.Error("ha should be core")
 	}
-	if manifest[1].AlwaysActive {
-		t.Error("web should not be always_active")
+	if manifest[1].Core {
+		t.Error("web should not be core")
 	}
 }
 
@@ -367,7 +367,7 @@ func TestRegistryFilterByTags(t *testing.T) {
 	}
 }
 
-func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
+func TestRegistryFilterByTags_CoreTools(t *testing.T) {
 	reg := NewEmptyRegistry()
 	// Tagged tools
 	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
@@ -377,12 +377,12 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	reg.Register(&Tool{Name: "send_notification", Description: "Send a notification"})
 	reg.Register(&Tool{Name: "request_human_decision", Description: "Request a decision"})
 	reg.Register(&Tool{Name: "macos_calendar_events", Description: "Read macOS calendar events"})
-	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability,
+	// Core meta-tools (like activate_capability, deactivate_capability,
 	// and reset_capabilities)
-	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "reset_capabilities", Description: "Reset capability state", AlwaysAvailable: true})
-	// Untagged tool WITHOUT AlwaysAvailable — should be filtered out
+	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", Core: true})
+	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", Core: true})
+	reg.Register(&Tool{Name: "reset_capabilities", Description: "Reset capability state", Core: true})
+	// Untagged tool WITHOUT Core — should be filtered out
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
 	reg.SetTagIndex(map[string][]string{
@@ -401,19 +401,19 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 		wantOut []string
 	}{
 		{
-			name:    "always-available tools survive ha-only filter",
+			name:    "core tools survive ha-only filter",
 			tags:    []string{"ha"},
 			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability", "reset_capabilities"},
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
-			name:    "always-available tools survive web-only filter",
+			name:    "core tools survive web-only filter",
 			tags:    []string{"web"},
 			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "reset_capabilities"},
 			wantOut: []string{"get_state", "plain_untagged"},
 		},
 		{
-			name:    "always-available tools survive unknown-tag filter",
+			name:    "core tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
 			wantIn:  []string{"activate_capability", "deactivate_capability", "reset_capabilities"},
 			wantOut: []string{"get_state", "web_search", "loop_status", "set_next_sleep", "send_notification", "request_human_decision", "macos_calendar_events", "plain_untagged"},

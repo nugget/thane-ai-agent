@@ -274,7 +274,7 @@ type Loop struct {
 	// Capability tags — per-Run tool/talent filtering.
 	//
 	// Each Run() creates its own capabilityScope (stored in context)
-	// seeded with always-active + channel-pinned tags. Tool handlers
+	// seeded with core + channel-pinned tags. Tool handlers
 	// mutate the scope via context, so concurrent Run() calls from
 	// different channels are fully isolated.
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config (static)
@@ -667,7 +667,7 @@ func (l *Loop) SetOrchestratorTools(names []string) {
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
-// Tags marked always_active are activated immediately. The method also
+// Tags marked core are activated immediately. The method also
 // builds the tool registry's tag index and stores parsed talents for
 // per-run filtering. When capTags is nil or empty, capability tagging
 // is disabled and all tools/talents load unconditionally.
@@ -685,11 +685,11 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 	}
 	l.tools.SetTagIndex(tagIndex)
 
-	// Seed lastRunTags with always-active tags for initial dashboard display.
+	// Seed lastRunTags with core tags for initial dashboard display.
 	l.lastRunTagsMu.Lock()
 	l.lastRunTags = make(map[string]bool)
 	for tag, cfg := range capTags {
-		if cfg.AlwaysActive {
+		if cfg.Core {
 			l.lastRunTags[tag] = true
 		}
 	}
@@ -715,7 +715,7 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // SetChannelTags configures channel-pinned tag activation. When a
 // Run() request carries a "source" hint matching a key in channelTags,
 // the listed capability tags are activated for that run in addition to
-// any always-active or agent-requested tags. Channel-pinned tags are
+// any core or agent-requested tags. Channel-pinned tags are
 // ref-counted per concurrent Run() call and cannot be dropped via
 // DropCapability. They are removed on return to prevent cross-channel bleed.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
@@ -801,7 +801,7 @@ func runtimeOnlyOriginTag(tag string) bool {
 
 // SetLensProvider configures a function that returns the currently
 // active global lenses. These are merged into every Run's capability
-// scope alongside always-active and channel-pinned tags.
+// scope alongside core and channel-pinned tags.
 func (l *Loop) SetLensProvider(fn func() []string) {
 	l.lensProvider = fn
 }
@@ -891,7 +891,7 @@ func (l *Loop) DropCapability(ctx context.Context, tag string) error {
 
 // ResetCapabilities returns the current Run to baseline capability
 // state by dropping all user-activated tags while preserving
-// always-active, protected, and pinned tags.
+// core, protected, and pinned tags.
 func (l *Loop) ResetCapabilities(ctx context.Context) ([]string, error) {
 	scope := capabilityScopeFromContext(ctx)
 	if scope == nil {
@@ -1643,7 +1643,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		})
 	}
 
-	// Create a per-Run capability scope seeded with always-active tags.
+	// Create a per-Run capability scope seeded with core tags.
 	// Channel-pinned tags are merged based on the request's source hint.
 	// Runtime-asserted tags (such as owner) are pinned from typed
 	// conversation bindings so tool gating can rely on Go-validated
@@ -2381,7 +2381,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Persist conversation-scoped capability tags so they survive
 		// across messages within the same conversation. Only user-
-		// activated tags are saved — always-active, channel-pinned,
+		// activated tags are saved — core, channel-pinned,
 		// and lens tags are loaded independently each Run.
 		if l.capTagStore != nil && convID != "" {
 			userTags := scope.UserActivatedTags()

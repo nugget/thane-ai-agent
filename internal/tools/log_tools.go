@@ -23,7 +23,7 @@ func (r *Registry) SetLogIndexDB(db *sql.DB) {
 
 // registerLogsQuery registers the logs_query tool.
 //
-// Always-available rationale: forensics primitive. Debugging a
+// Core-tool rationale: forensics primitive. Debugging a
 // loop's own behavior shouldn't depend on the tag set the loop runs
 // with — a tightly scoped service loop hitting an anomaly still needs
 // to be able to look at what happened on prior iterations, even
@@ -48,7 +48,7 @@ func (r *Registry) registerLogsQuery() {
 			"`pattern` is a substring search on the log message text only — " +
 			"it does NOT search attribute fields, so `pattern=\"my-loop\"` will miss every entry " +
 			"whose loop_name is \"my-loop\" unless that literal string appears in the message text.",
-		AlwaysAvailable: true,
+		Core: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

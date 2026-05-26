@@ -10,7 +10,7 @@ import (
 
 // finalizeCapabilityTags resolves capability-tag membership from the
 // fully-assembled tool registry and wires up all downstream state that
-// depends on that snapshot: always-active tags on the delegate executor,
+// depends on that snapshot: core tags on the delegate executor,
 // tag context assembler, capability surface, manifest talent
 // prepending, capability tools on the registry, and the delegate's
 // tag-context closure.
@@ -50,17 +50,17 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// variable.
 	capTalents := append([]talents.Talent(nil), s.parsedTalents...)
 
-	// Always-active tags on the delegate executor. Moved here (from
+	// Core tags on the delegate executor. Moved here (from
 	// initDelegation) so the tag set is taken from the finalized
 	// snapshot, not the mid-init snapshot that preceded initServers.
-	var alwaysActiveTags []string
+	var coreTags []string
 	for tag, tagCfg := range resolvedCapTags {
-		if tagCfg.AlwaysActive {
-			alwaysActiveTags = append(alwaysActiveTags, tag)
+		if tagCfg.Core {
+			coreTags = append(coreTags, tag)
 		}
 	}
-	if len(alwaysActiveTags) > 0 && delegateExec != nil {
-		delegateExec.SetAlwaysActiveTags(alwaysActiveTags)
+	if len(coreTags) > 0 && delegateExec != nil {
+		delegateExec.SetCoreTags(coreTags)
 	}
 
 	// Warn about tools referenced in config but not registered.
@@ -182,7 +182,7 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	}
 	logger.Info("capability tags enabled",
 		"tags", len(resolvedCapTags),
-		"always_active", activeTagNames,
+		"core_tags", activeTagNames,
 		"talents", len(s.parsedTalents),
 		"kb_tagged_articles", kbCounts,
 	)

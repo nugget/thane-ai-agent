@@ -73,9 +73,9 @@ func TestChannelTags_ActivatedBySource(t *testing.T) {
 			Tools:       []string{"signal_send_reaction"},
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
@@ -98,7 +98,7 @@ func TestChannelTags_ActivatedBySource(t *testing.T) {
 		t.Errorf("signal_send_reaction should be available via channel tags: %v", names)
 	}
 	if !hasName(names, "base_tool") {
-		t.Errorf("base_tool (always-active) should still be available: %v", names)
+		t.Errorf("base_tool (core) should still be available: %v", names)
 	}
 }
 
@@ -122,9 +122,9 @@ func TestChannelTags_NotActivatedWithoutSource(t *testing.T) {
 			Tools:       []string{"signal_send_reaction"},
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
@@ -147,7 +147,7 @@ func TestChannelTags_NotActivatedWithoutSource(t *testing.T) {
 		t.Errorf("signal_send_reaction should NOT appear without source hint: %v", names)
 	}
 	if !hasName(names, "base_tool") {
-		t.Errorf("base_tool (always-active) should still be available: %v", names)
+		t.Errorf("base_tool (core) should still be available: %v", names)
 	}
 }
 
@@ -180,9 +180,9 @@ func TestChannelTags_NoBleedBetweenRuns(t *testing.T) {
 			Tools:       []string{"signal_send_reaction"},
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
@@ -223,8 +223,8 @@ func TestChannelTags_NoBleedBetweenRuns(t *testing.T) {
 	}
 }
 
-func TestChannelTags_AdditiveWithAlwaysActive(t *testing.T) {
-	// Channel-pinned tags are additive to always-active tags. Both sets
+func TestChannelTags_AdditiveWithCore(t *testing.T) {
+	// Channel-pinned tags are additive to core tags. Both sets
 	// of tools should appear together.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
@@ -244,9 +244,9 @@ func TestChannelTags_AdditiveWithAlwaysActive(t *testing.T) {
 			Tools:       []string{"signal_tool"},
 		},
 		"ha": {
-			Description:  "Home Assistant",
-			Tools:        []string{"ha_tool"},
-			AlwaysActive: true,
+			Description: "Home Assistant",
+			Tools:       []string{"ha_tool"},
+			Core:        true,
 		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
@@ -269,7 +269,7 @@ func TestChannelTags_AdditiveWithAlwaysActive(t *testing.T) {
 		t.Errorf("signal_tool should be available via channel tag: %v", names)
 	}
 	if !hasName(names, "ha_tool") {
-		t.Errorf("ha_tool should be available via always-active: %v", names)
+		t.Errorf("ha_tool should be available via core: %v", names)
 	}
 }
 
@@ -294,9 +294,9 @@ func TestChannelTags_UnknownChannel(t *testing.T) {
 			Tools:       []string{"signal_tool"},
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}, nil)
 	loop.SetChannelTags(map[string][]string{
@@ -319,7 +319,7 @@ func TestChannelTags_UnknownChannel(t *testing.T) {
 		t.Errorf("signal_tool should NOT appear for unknown channel 'matrix': %v", names)
 	}
 	if !hasName(names, "base_tool") {
-		t.Errorf("base_tool (always-active) should still be available: %v", names)
+		t.Errorf("base_tool (core) should still be available: %v", names)
 	}
 }
 
@@ -425,9 +425,9 @@ func TestProtectedOwnerTag_ActivatedByChannelBinding(t *testing.T) {
 			Protected:   true,
 		},
 		"base": {
-			Description:  "Base tools",
-			Tools:        []string{"base_tool"},
-			AlwaysActive: true,
+			Description: "Base tools",
+			Tools:       []string{"base_tool"},
+			Core:        true,
 		},
 	}, nil)
 
@@ -880,8 +880,8 @@ func TestContactOrigin_InjectsExactContextRefs(t *testing.T) {
 func TestResetCapabilities_DropsOnlyVoluntaryTags(t *testing.T) {
 	capTags := map[string]config.CapabilityTagConfig{
 		"base": {
-			Description:  "Base tools",
-			AlwaysActive: true,
+			Description: "Base tools",
+			Core:        true,
 		},
 		"signal": {Description: "Signal channel"},
 		"owner": {

@@ -1225,7 +1225,7 @@ func compileLoopRuntimeTools(src []looppkg.RuntimeTool) []*tools.Tool {
 			Description:          t.Description,
 			Parameters:           t.Parameters,
 			Handler:              t.Handler,
-			AlwaysAvailable:      true,
+			Core:                 true,
 			SkipContentResolve:   t.SkipContentResolve,
 			ContentResolveExempt: append([]string(nil), t.ContentResolveExempt...),
 			Source:               string(toolcatalog.NativeToolSource),

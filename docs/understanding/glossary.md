@@ -20,7 +20,7 @@ See [The Agent Loop](agent-loop.md).
 
 A semantic label (`ha`, `email`, `forge`, `web`, etc.) that gates which tools
 and talents are active in a given session. Sessions start with a minimal set of
-`always_active` tags. Additional tags are activated on demand — by the agent,
+`core` tags. Additional tags are activated on demand — by the agent,
 the user, or the channel. Tags create *delegation pressure*: the orchestrator
 starts with a small toolset and naturally reaches for delegation when it needs
 capabilities outside its active set.
