@@ -20,7 +20,9 @@ Choose the next move deliberately:
 - If the truth is already named on the web, in a URL or page, activate
   `web`.
 - If the turn wants a distilled truth that should survive beyond this
-  moment, activate `memory`.
+  moment — a *stable, compact* fact (preferences, home layout,
+  routines), not a person attribute (→ `contacts`) or evolving
+  knowledge (→ `documents` / `files`) — activate `memory`.
 - If the answer probably lives in prior sessions, earlier threads, or
   old exchanges, activate `archive`.
 - If more than one surface is claiming authority, delegate with the
