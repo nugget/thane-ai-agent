@@ -1462,7 +1462,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
-	ctx = withRequestSubjects(ctx, req)
 	runStarted := time.Now()
 	defer func() {
 		attrs := []any{
@@ -1640,6 +1639,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if channelBinding == nil {
 		channelBinding = l.conversationChannelBinding(convID)
 	}
+	// Inject subjects from the effective channel binding (request first,
+	// persisted conversation binding as fallback) so subject-aware
+	// context providers find relevant stored facts. Must run after the
+	// persisted-binding fallback above; otherwise API turns that supply
+	// only conversation_id would miss the injection entirely.
+	ctx = withChannelSubjects(ctx, channelBinding)
 	origin := newSessionOrigin(req.RoutingFactors, channelBinding)
 	originResult := SessionOriginPolicyResult{Origin: origin}
 	if contactPolicy := l.contactOriginPolicy(origin); contactPolicy != nil {

@@ -8,14 +8,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-func TestWithRequestSubjects_InjectsBoth(t *testing.T) {
-	req := &Request{
-		ChannelBinding: &memory.ChannelBinding{
-			ContactID: "c-abc",
-			Address:   "+15551234567",
-		},
+func TestWithChannelSubjects_InjectsBoth(t *testing.T) {
+	binding := &memory.ChannelBinding{
+		ContactID: "c-abc",
+		Address:   "+15551234567",
 	}
-	ctx := withRequestSubjects(context.Background(), req)
+	ctx := withChannelSubjects(context.Background(), binding)
 
 	got := knowledge.SubjectsFromContext(ctx)
 	want := []string{"contact:c-abc", "contact:+15551234567"}
@@ -29,18 +27,16 @@ func TestWithRequestSubjects_InjectsBoth(t *testing.T) {
 	}
 }
 
-func TestWithRequestSubjects_PreservesExistingThenAppends(t *testing.T) {
+func TestWithChannelSubjects_PreservesExistingThenAppends(t *testing.T) {
 	base := knowledge.WithSubjects(context.Background(), []string{
 		"entity:binary_sensor.driveway",
 		"contact:c-abc", // duplicate of what binding would add — should not duplicate
 	})
-	req := &Request{
-		ChannelBinding: &memory.ChannelBinding{
-			ContactID: "c-abc",
-			Address:   "+15551234567",
-		},
+	binding := &memory.ChannelBinding{
+		ContactID: "c-abc",
+		Address:   "+15551234567",
 	}
-	ctx := withRequestSubjects(base, req)
+	ctx := withChannelSubjects(base, binding)
 
 	got := knowledge.SubjectsFromContext(ctx)
 	want := []string{"entity:binary_sensor.driveway", "contact:c-abc", "contact:+15551234567"}
@@ -54,31 +50,25 @@ func TestWithRequestSubjects_PreservesExistingThenAppends(t *testing.T) {
 	}
 }
 
-func TestWithRequestSubjects_NilBindingIsNoop(t *testing.T) {
-	req := &Request{}
-	ctx := withRequestSubjects(context.Background(), req)
+func TestWithChannelSubjects_NilBindingIsNoop(t *testing.T) {
+	ctx := withChannelSubjects(context.Background(), nil)
 	if got := knowledge.SubjectsFromContext(ctx); got != nil {
 		t.Errorf("expected nil subjects, got %v", got)
 	}
 }
 
-func TestWithRequestSubjects_NilBindingPreservesExisting(t *testing.T) {
+func TestWithChannelSubjects_NilBindingPreservesExisting(t *testing.T) {
 	base := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
-	req := &Request{}
-	ctx := withRequestSubjects(base, req)
+	ctx := withChannelSubjects(base, nil)
 	got := knowledge.SubjectsFromContext(ctx)
 	if len(got) != 1 || got[0] != "entity:light.office" {
 		t.Errorf("subjects = %v, want [entity:light.office]", got)
 	}
 }
 
-func TestWithRequestSubjects_EmptyBindingFieldsAreSkipped(t *testing.T) {
-	req := &Request{
-		ChannelBinding: &memory.ChannelBinding{
-			Channel: "signal", // present but no ContactID or Address
-		},
-	}
-	ctx := withRequestSubjects(context.Background(), req)
+func TestWithChannelSubjects_EmptyBindingFieldsAreSkipped(t *testing.T) {
+	binding := &memory.ChannelBinding{Channel: "signal"} // no ContactID, no Address
+	ctx := withChannelSubjects(context.Background(), binding)
 	if got := knowledge.SubjectsFromContext(ctx); got != nil {
 		t.Errorf("expected nil subjects when binding has no id/address, got %v", got)
 	}

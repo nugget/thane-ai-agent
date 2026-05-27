@@ -4,15 +4,20 @@ import (
 	"context"
 
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// withRequestSubjects extends ctx with subject keys derived from req's
-// channel binding so that subject-aware context providers (the
+// withChannelSubjects extends ctx with subject keys derived from a
+// resolved channel binding so subject-aware context providers (the
 // archive prewarm and the subject-keyed knowledge provider) can find
-// stored facts relevant to the current wake without needing the
-// user's message itself to mention them. Existing subjects already on
+// stored facts relevant to the current wake. Existing subjects on
 // ctx (e.g. from an outer wake bridge that knows about
-// entity:/area:/space: subjects) are preserved.
+// entity:/area:/space: subjects) are preserved and deduplicated.
+//
+// The caller is responsible for resolving the effective binding
+// before invoking — passing req.ChannelBinding directly would miss
+// the persisted-binding fallback that Loop.Run uses for API turns
+// supplying only conversation_id.
 //
 // Currently injects:
 //
@@ -28,16 +33,16 @@ import (
 // Loops and channels that want richer subjects (entity:, area:,
 // space:) can call [knowledge.WithSubjects] before invoking the agent
 // loop; this helper preserves what they set.
-func withRequestSubjects(ctx context.Context, req *Request) context.Context {
+func withChannelSubjects(ctx context.Context, binding *memory.ChannelBinding) context.Context {
 	existing := knowledge.SubjectsFromContext(ctx)
 	subjects := append([]string{}, existing...)
 
-	if cb := req.ChannelBinding; cb != nil {
-		if cb.ContactID != "" {
-			subjects = appendUniqueSubject(subjects, "contact:"+cb.ContactID)
+	if binding != nil {
+		if binding.ContactID != "" {
+			subjects = appendUniqueSubject(subjects, "contact:"+binding.ContactID)
 		}
-		if cb.Address != "" {
-			subjects = appendUniqueSubject(subjects, "contact:"+cb.Address)
+		if binding.Address != "" {
+			subjects = appendUniqueSubject(subjects, "contact:"+binding.Address)
 		}
 	}
 
