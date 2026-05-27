@@ -1043,12 +1043,23 @@ func (r *Registry) SetTagIndex(tags map[string][]string) {
 // belong to at least one of the given tags, plus any tools marked as
 // Core. If tags is empty or the tag index is nil, returns a copy of
 // the full registry.
+//
+// Both paths propagate tagIndex to the returned registry, matching
+// the convention of [FilteredCopy], [FilteredCopyExcluding], and
+// [WithRuntimeTools]. Without the propagation, tag-aware operations
+// on the result misbehave in two distinct ways: [TaggedToolNames]
+// returns nil for every tag (loses the tag→tool mapping entirely),
+// and a chained FilterByTags call takes the nil-index early-return
+// path so it stops narrowing — returning the full set unfiltered
+// instead of the intended subset. Either failure mode is a latent
+// bug; carrying tagIndex forward prevents both.
 func (r *Registry) FilterByTags(tags []string) *Registry {
 	if len(tags) == 0 || r.tagIndex == nil {
 		// No filtering — return a shallow copy with all tools.
 		filtered := &Registry{
 			tools:           make(map[string]*Tool, len(r.tools)),
 			contentResolver: r.contentResolver,
+			tagIndex:        r.tagIndex,
 		}
 		for name, t := range r.tools {
 			filtered.tools[name] = t
@@ -1066,6 +1077,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 	filtered := &Registry{
 		tools:           make(map[string]*Tool, len(allowed)),
 		contentResolver: r.contentResolver,
+		tagIndex:        r.tagIndex,
 	}
 	for name, t := range r.tools {
 		if allowed[name] || t.Core {
