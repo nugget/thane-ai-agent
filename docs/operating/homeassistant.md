@@ -128,7 +128,11 @@ particularly useful:
 
 - **`thane:latest`** — General conversation, delegates HA tasks to local
   models
-- **`thane:command`** — Quick device control ("turn off the lights")
-- **`thane:trigger`** — Cheapest option for HA automations calling Thane
+- **`thane:assist`** — Quick device control ("turn off the lights").
+  Accepts the deprecated aliases `thane:command`, `thane:fast`, and
+  `thane:homeassistant`.
+- **`thane:event`** — Cheapest option for HA automations calling
+  Thane. Not listed in `/api/tags` (use the explicit name from your
+  automation). Accepts the deprecated alias `thane:trigger`.
 - **`thane:ops`** — Direct tool access when you need the primary model to
   see HA state firsthand

@@ -69,11 +69,6 @@ complete onboarding guide for Home Assistant users.
 - **[Event Sources](reference/event-sources.md)** — Everything that can
   wake the agent loop
 
-## Extending Thane
-
-- **[OpenClaw Compatibility](openclaw.md)** — Run an OpenClaw-style
-  workspace agent through Thane's `thane:openclaw` profile
-
 ## Developer Internals
 
 - **[Prompt & Tool Pruning Strategy](prompt-tool-pruning-strategy.md)** — Tracking doc for shrinking the always-on prompt and moving domain doctrine behind tagged context

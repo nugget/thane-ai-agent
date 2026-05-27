@@ -190,7 +190,7 @@ against whatever models are actually available.
 These routing profiles are exposed as **virtual models** on the
 Ollama-compatible API. When Home Assistant (or any Ollama client)
 lists available models, it sees `thane:latest`, `thane:premium`,
-`thane:command`, `thane:trigger`, and so on — each one a different
+`thane:ops`, `thane:assist`, and `thane:local` — each one a different
 intent profile backed by the same agent. An operator can set up
 multiple HA conversation agents pointing at different virtual models:
 one for daily use, one for quick device control, one for automations

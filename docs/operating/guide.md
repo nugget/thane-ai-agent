@@ -139,9 +139,9 @@ profile by setting the model name in HA or any Ollama-compatible client:
 | Profile | What It Does | Cost |
 |---------|-------------|------|
 | `thane:latest` | General conversation (default) | Free (local) or cheap (cloud) |
-| `thane:command` | Quick device control | Cheapest |
+| `thane:assist` | Quick device control | Cheapest |
 | `thane:premium` | Best available model for complex questions | Higher (cloud if configured) |
-| `thane:trigger` | For HA automations calling Thane | Cheapest possible |
+| `thane:event` | For HA automations calling Thane (advanced — not in `/api/tags`) | Cheapest possible |
 
 Start with `thane:latest`. It's the default and handles most things well.
 See [Routing Profiles](routing-profiles.md) for the full list.
@@ -277,7 +277,7 @@ to replicate. It feels less like a tool and more like a knowledgeable helper.
    "set light X to value Y." Thane learns what "cozy" means to you.
 
 4. **Use voice for the simple stuff.** Quick commands through HA voice are
-   where `thane:command` shines. Save complex questions for text chat.
+   where `thane:assist` shines. Save complex questions for text chat.
 
 5. **Check the talents.** If Thane keeps doing something you don't like,
    look at the talent files. The fix is usually a one-line addition to a

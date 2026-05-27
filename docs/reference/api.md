@@ -100,9 +100,9 @@ When HA sends a conversation to this port, Thane:
 3. Processes through the full agent loop
 4. Returns the response in Ollama's expected format
 
-Available models are listed at `GET /api/tags`. Each
-[routing profile](../operating/routing-profiles.md) appears as a model
-(e.g., `thane:latest`, `thane:command`, `thane:premium`).
+Available models are listed at `GET /api/tags`. Each exposed
+[routing profile](../operating/routing-profiles.md) appears as a
+model (e.g., `thane:latest`, `thane:premium`, `thane:assist`).
 
 ## Port 8843 — CardDAV Server
 
