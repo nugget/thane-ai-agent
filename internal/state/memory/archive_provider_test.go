@@ -231,6 +231,60 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 	})
 
+	t.Run("rich_hit_fits_default_4kb_budget", func(t *testing.T) {
+		// Regression coverage for #969 review: a single hit with the full
+		// context window the archive_search tool would return (5 messages
+		// per side, ~2KB content each) must still fit under the prewarm
+		// default budget. Prewarm trimming caps context-per-side and
+		// content size so the projection fits without dropping the hit.
+		big := strings.Repeat("paragraph of content text ", 80) // ~2KB
+		ctxMsgs := make([]Message, 5)
+		for i := range ctxMsgs {
+			ctxMsgs[i] = Message{Role: "user", Content: big, Timestamp: ts.Add(-time.Minute * time.Duration(5-i))}
+		}
+		afterMsgs := make([]Message, 5)
+		for i := range afterMsgs {
+			afterMsgs[i] = Message{Role: "user", Content: big, Timestamp: ts.Add(time.Minute * time.Duration(i+1))}
+		}
+		mock := &mockArchiveSearcher{
+			results: []SearchResult{
+				makeResultWithContext("sess-rich", "assistant", big, ctxMsgs, afterMsgs),
+			},
+		}
+		p := NewArchiveContextProvider(mock, 5, 4000, nil)
+
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:meaning.of.life"})
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		if got == "" {
+			t.Fatalf("expected the trimmed hit to fit under the 4KB prewarm budget")
+		}
+		if len(got) > 4000 {
+			t.Errorf("output length %d exceeds budget 4000", len(got))
+		}
+		payload := parseArchiveBody(t, got)
+		if len(payload.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Results))
+		}
+		// Match content is clipped to the prewarm cap.
+		match := payload.Results[0]["match"].(map[string]any)
+		matchContent := match["content"].(string)
+		if len(matchContent) > prewarmMessageContentMax {
+			t.Errorf("match.content length %d exceeds prewarm cap %d", len(matchContent), prewarmMessageContentMax)
+		}
+		// Context is narrowed to prewarmContextPerSide on each side.
+		before, _ := payload.Results[0]["context_before"].([]any)
+		after, _ := payload.Results[0]["context_after"].([]any)
+		if len(before) > prewarmContextPerSide {
+			t.Errorf("context_before len %d exceeds prewarm cap %d", len(before), prewarmContextPerSide)
+		}
+		if len(after) > prewarmContextPerSide {
+			t.Errorf("context_after len %d exceeds prewarm cap %d", len(after), prewarmContextPerSide)
+		}
+	})
+
 	t.Run("byte_budget_too_small_returns_empty", func(t *testing.T) {
 		mock := &mockArchiveSearcher{
 			results: []SearchResult{
