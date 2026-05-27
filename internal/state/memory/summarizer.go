@@ -251,10 +251,25 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+
+		// Zero-message sessions (typically crash_recovery
+		// placeholders) short-circuit to markEmpty — no transcript
+		// fetch, no model routing, no inter-session pause. This is
+		// what lets the worker drain the historical backlog of
+		// empties at SQL speed instead of LLM-rate-limited speed.
+		// See [SummarizerWorker.summarizeSession] for the full path
+		// when the session has content.
+		if sess.MessageCount == 0 {
+			w.markEmpty(sess.ID)
+			continue
+		}
+
 		w.summarizeSession(ctx, sess)
 
 		// Rate-limit: pause between sessions to avoid starving
-		// interactive requests.
+		// interactive requests during the LLM-calling path. Cleanup
+		// markEmpty calls above skip this — they're cheap SQL writes,
+		// not model invocations.
 		if !sleepCtx(ctx, w.config.PauseBetween) {
 			return
 		}
