@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,21 @@ import (
 // suited for "where is prewarm silently empty?" sweeps.
 func cmdBatch(g *globals, args []string) error {
 	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
-	since := fs.Duration("since", 24*time.Hour, "look back window (e.g. 7d, 24h, 1h)")
+	sinceStr := fs.String("since", "24h", "look back window (accepts time.ParseDuration plus the `d` day suffix, e.g. 7d, 24h, 90m)")
 	channel := fs.String("channel", "", "filter by ChannelBinding.Channel (e.g. signal); empty = all")
-	limit := fs.Int("limit", 200, "maximum number of user messages to replay")
+	limit := fs.Int("limit", 200, "maximum number of user messages to replay (must be positive)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	since, err := parseSinceDuration(*sinceStr)
+	if err != nil {
+		return fmt.Errorf("batch: -since %q: %w", *sinceStr, err)
+	}
+	if *limit <= 0 {
+		// Bare flag.Int passes negatives through, and SQLite reads a
+		// negative LIMIT as "no limit" — a typo of -1 would replay the
+		// entire archive into stdout. Reject early.
+		return fmt.Errorf("batch: -limit must be > 0, got %d", *limit)
 	}
 
 	s, err := openStores(g.DataDir)
@@ -32,7 +43,7 @@ func cmdBatch(g *globals, args []string) error {
 	}
 	defer s.close()
 
-	rows, err := loadBatchTurns(s.thane, *since, *channel, *limit)
+	rows, err := loadBatchTurns(s.thane, since, *channel, *limit)
 	if err != nil {
 		return err
 	}
@@ -64,7 +75,30 @@ func cmdBatch(g *globals, args []string) error {
 	if g.Format == "json" {
 		return renderBatchJSON(results)
 	}
-	return renderBatchHuman(results, *since, *channel)
+	return renderBatchHuman(results, since, *channel)
+}
+
+// parseSinceDuration accepts the same suffixes as time.ParseDuration
+// plus a `d` day suffix (since "7d" is the natural way an operator
+// thinks about a one-week window). Pure-day inputs like "7d" route
+// through a manual conversion before delegating to time.ParseDuration
+// for everything else.
+func parseSinceDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.ParseInt(strings.TrimSuffix(s, "d"), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid days value: %w", err)
+		}
+		if days < 0 {
+			return 0, fmt.Errorf("days must be >= 0")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
 }
 
 type batchTurn struct {
@@ -75,15 +109,33 @@ type batchTurn struct {
 }
 
 func loadBatchTurns(db *sql.DB, since time.Duration, channelFilter string, limit int) ([]batchTurn, error) {
-	cutoff := time.Now().Add(-since).Format(time.RFC3339)
+	// Bind time.Time directly so the driver writes its own canonical
+	// SQLiteTimestampLayout (space-separated). Formatting via RFC3339
+	// would compare lexically against differently-shaped stored rows
+	// and silently miss the lower edge of the window — see
+	// internal/platform/database/timestamp.go.
+	cutoff := time.Now().Add(-since)
+
+	args := []any{cutoff}
+	channelClause := ""
+	if channelFilter != "" {
+		// Apply the channel filter in SQL so LIMIT doesn't fill its
+		// budget with non-matching rows first. json_extract returns
+		// NULL for conversations without a channel_binding, which
+		// naturally excludes them from the filtered window.
+		channelClause = " AND json_extract(c.metadata, '$.channel_binding.channel') = ?"
+		args = append(args, channelFilter)
+	}
+	args = append(args, limit)
+
 	q := `SELECT m.conversation_id, m.content, m.timestamp,
 	             json_extract(c.metadata, '$.channel_binding') AS binding_json
 	      FROM messages m
 	      JOIN conversations c ON c.id = m.conversation_id
-	      WHERE m.role = 'user' AND m.timestamp >= ?
+	      WHERE m.role = 'user' AND m.timestamp >= ?` + channelClause + `
 	      ORDER BY m.timestamp DESC
 	      LIMIT ?`
-	rows, err := db.Query(q, cutoff, limit)
+	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query batch turns: %w", err)
 	}
@@ -101,15 +153,8 @@ func loadBatchTurns(db *sql.DB, since time.Duration, channelFilter string, limit
 		if bindingJSON.Valid && bindingJSON.String != "" {
 			binding, err := parseBinding(bindingJSON.String)
 			if err == nil && binding != nil {
-				if channelFilter != "" && !strings.EqualFold(binding.Channel, channelFilter) {
-					continue
-				}
 				t.binding = binding
-			} else if channelFilter != "" {
-				continue
 			}
-		} else if channelFilter != "" {
-			continue
 		}
 		out = append(out, t)
 	}

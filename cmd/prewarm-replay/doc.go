@@ -6,12 +6,13 @@
 // The tool opens the prod sqlite databases read-only (so it is safe to
 // run while the live agent is writing) and exposes three modes:
 //
-//	prewarm-replay replay --conv-id <id> [--message TEXT | --at TIME]
+//	prewarm-replay replay --conv-id <id> [--message TEXT] [--subject KEY ...]
 //	    Reconstruct a wake from a stored conversation: load the
-//	    ChannelBinding from conversations.metadata, optionally pick
-//	    the user message from the archive, and run every prewarm
-//	    provider against the resulting subjects. Best for "why
-//	    didn't this turn get prewarm context?" investigations.
+//	    ChannelBinding from conversations.metadata, default the
+//	    user message to the conversation's most recent user turn
+//	    (override with --message), and run every prewarm provider
+//	    against the resulting subjects. Best for "why didn't this
+//	    turn get prewarm context?" investigations.
 //
 //	prewarm-replay query --message TEXT [--subject KEY ...] [--contact-id|--contact-address]
 //	    Synthesize a wake without an archived turn behind it. Best
