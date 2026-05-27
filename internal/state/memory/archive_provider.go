@@ -126,8 +126,13 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 const maxUserMessageLen = 100
 
 // buildQuery constructs a search query from subjects and/or the user
-// message. Subject prefixes (entity:, zone:, etc.) are stripped to
-// leave raw identifiers that match conversational references.
+// message. Content-shaped subject prefixes (entity:, zone:, area:,
+// space:) are stripped to leave raw identifiers that match
+// conversational references. Identity-shaped subjects (contact:) are
+// dropped from the query because their values are stable handles
+// (UUIDs, phone numbers, email addresses) that either match nothing
+// or match every message from that handle — neither produces a
+// useful FTS ranking.
 //
 // Returns the query string and a source label ("subjects" or
 // "message_fallback") for logging.
@@ -136,6 +141,9 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	var terms []string
 
 	for _, s := range subjects {
+		if isIdentitySubject(s) {
+			continue
+		}
 		term := stripSubjectPrefix(s)
 		if term != "" && !seen[term] {
 			seen[term] = true
@@ -147,9 +155,12 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 		return strings.Join(terms, " "), "subjects"
 	}
 
-	// Fall back to user message when no subjects are available.
-	// Only use short, single-line messages — long content produces
-	// noisy queries.
+	// Fall back to user message when no content-shaped subjects are
+	// available. Only use short, single-line messages — long content
+	// produces noisy queries. This branch handles two cases that look
+	// the same from here: no subjects at all, and only identity-shaped
+	// subjects (e.g. Signal contact handles) that we filtered out
+	// above.
 	if userMessage != "" {
 		msg := strings.TrimSpace(userMessage)
 		if len(msg) <= maxUserMessageLen && !strings.ContainsAny(msg, "\n\r") {
@@ -158,6 +169,28 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	}
 
 	return "", ""
+}
+
+// identitySubjectPrefixes lists the subject kinds whose values are
+// stable identity handles, not content terms. Stripping the prefix
+// leaves a UUID, phone, or address that the FTS index treats as a
+// generic token — typically matching every message from that
+// participant and ranking the shortest of those highest. Useful for
+// scoping (conversation_id filters, knowledge subject keys) but a
+// pollutant in a full-text query.
+var identitySubjectPrefixes = map[string]struct{}{
+	"contact": {},
+}
+
+// isIdentitySubject reports whether a subject's prefix marks it as
+// an identity handle rather than a content term.
+func isIdentitySubject(s string) bool {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return false
+	}
+	_, ok := identitySubjectPrefixes[s[:idx]]
+	return ok
 }
 
 // stripSubjectPrefix removes the type prefix from a subject string.

@@ -314,7 +314,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		})
 		_, _ = p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 
-		// Verify all prefixes are stripped.
+		// Content-shaped prefixes are stripped and their values
+		// become query terms. Identity-shaped prefixes (contact:)
+		// are dropped entirely — their values are stable handles
+		// that pollute the FTS query (see #979).
 		q := mock.lastQuery
 		if strings.Contains(q, "entity:") {
 			t.Errorf("query %q should not contain 'entity:' prefix", q)
@@ -331,8 +334,8 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		if !strings.Contains(q, "kitchen") {
 			t.Errorf("query %q should contain 'kitchen'", q)
 		}
-		if !strings.Contains(q, "dan@example.com") {
-			t.Errorf("query %q should contain 'dan@example.com'", q)
+		if strings.Contains(q, "dan@example.com") {
+			t.Errorf("query %q should NOT contain 'dan@example.com' — contact subjects are identity-shaped, dropped from FTS", q)
 		}
 	})
 
@@ -468,6 +471,38 @@ func TestBuildQuery(t *testing.T) {
 			subjects:   []string{"bare_subject"},
 			wantQuery:  "bare_subject",
 			wantSource: "subjects",
+		},
+		{
+			// Channel-binding subjects (sender handle + contact UUID)
+			// must not become the FTS query — they either match
+			// nothing or match every message from that sender. With
+			// only identity subjects and a user message present, the
+			// provider must fall through to message_fallback.
+			name:       "contact_subjects_dropped_falls_through_to_message",
+			subjects:   []string{"contact:019c76e4-2ff1-7918-8d6f-6c2488f5098d", "contact:+15124232707"},
+			message:    "why don't you use the game room door after a shower",
+			wantQuery:  "why don't you use the game room door after a shower",
+			wantSource: "message_fallback",
+		},
+		{
+			// Identity subjects coexisting with a content subject:
+			// the content subject still drives the query; identity
+			// values are dropped silently.
+			name:       "contact_subjects_dropped_alongside_content",
+			subjects:   []string{"contact:+15124232707", "entity:binary_sensor.game_room_door"},
+			message:    "fallback that should not be used",
+			wantQuery:  "binary_sensor.game_room_door",
+			wantSource: "subjects",
+		},
+		{
+			// Identity-only subjects with no user message → no query.
+			// The "" / "" return tells the caller to skip the prewarm
+			// pass entirely; emitting an FTS-poisoning query would
+			// be worse.
+			name:       "contact_subjects_only_no_message",
+			subjects:   []string{"contact:+15124232707"},
+			wantQuery:  "",
+			wantSource: "",
 		},
 	}
 
