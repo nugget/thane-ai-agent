@@ -17,15 +17,37 @@ import (
 // defensive guard against the empty-with-truncated degenerate
 // state where the byte-cap fitter drops everything to zero.
 func countSearchHits(data []byte) int {
-	var env struct {
-		Messages      []json.RawMessage `json:"messages"`
-		Sessions      []json.RawMessage `json:"sessions"`
-		WorkingMemory []json.RawMessage `json:"working_memory"`
-	}
-	if err := json.Unmarshal(data, &env); err != nil {
-		return 0
-	}
+	env := parseSearchEnvelope(data)
 	return len(env.Messages) + len(env.Sessions) + len(env.WorkingMemory)
+}
+
+// countMessages returns the count of raw-message hits in the
+// envelope. Used by the staged byte-cap fitter to remember how
+// many raw messages the stage-1 pass retained when stage 2 shrinks
+// the distilled surfaces.
+func countMessages(data []byte) int {
+	return len(parseSearchEnvelope(data).Messages)
+}
+
+// countSessions returns the count of session hits in the envelope —
+// stage-2 fitter's analog of [countMessages] for the stage-3
+// working_memory shrink.
+func countSessions(data []byte) int {
+	return len(parseSearchEnvelope(data).Sessions)
+}
+
+// searchEnvelope is the multi-surface archive_search envelope
+// shape, projected just enough to count by surface.
+type searchEnvelope struct {
+	Messages      []json.RawMessage `json:"messages"`
+	Sessions      []json.RawMessage `json:"sessions"`
+	WorkingMemory []json.RawMessage `json:"working_memory"`
+}
+
+func parseSearchEnvelope(data []byte) searchEnvelope {
+	var env searchEnvelope
+	_ = json.Unmarshal(data, &env)
+	return env
 }
 
 // archiveResultByteCap is the per-tool byte ceiling on JSON output.
@@ -126,32 +148,70 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				bundle = &memory.SearchBundle{}
 			}
 
-			// Fit to byte cap by dropping raw-message hits from the
-			// tail. Distilled surfaces (sessions, working_memory) are
-			// kept across all iterations — they're small, high-signal,
-			// and worth preserving even when the raw side has to
-			// shrink. Binary search avoids O(n^2) re-marshaling.
+			// Two-stage fit to the byte cap:
+			//   1. Drop raw-message hits from the tail until the
+			//      formatted envelope fits. Distilled surfaces stay
+			//      put — they're high signal per byte.
+			//   2. If the remainder STILL exceeds the cap (zero raw
+			//      messages but heavy distilled surfaces, or a single
+			//      huge session summary), drop distilled hits from
+			//      the tail. Sessions first (typically more numerous
+			//      per query), then working_memory. Honors the same
+			//      "keep at least one hit when any exist" defensive
+			//      pass at the end.
 			now := time.Now()
-			render := func(k int) []byte {
+			render := func(msgs, sess, wm int) []byte {
 				clipped := &memory.SearchBundle{
-					Messages:      bundle.Messages[:k],
-					Sessions:      bundle.Sessions,
-					WorkingMemory: bundle.WorkingMemory,
+					Messages:      bundle.Messages[:msgs],
+					Sessions:      bundle.Sessions[:sess],
+					WorkingMemory: bundle.WorkingMemory[:wm],
 					Truncated:     bundle.Truncated,
 				}
-				return memory.FormatMultiKindResults(clipped, now, k < len(bundle.Messages))
+				truncated := bundle.Truncated ||
+					msgs < len(bundle.Messages) ||
+					sess < len(bundle.Sessions) ||
+					wm < len(bundle.WorkingMemory)
+				return memory.FormatMultiKindResults(clipped, now, truncated)
 			}
-			data := memory.FitPrefix(len(bundle.Messages), archiveResultByteCap, render)
+			// Stage 1: vary raw-message prefix; keep distilled intact.
+			fullSess := len(bundle.Sessions)
+			fullWM := len(bundle.WorkingMemory)
+			data := memory.FitPrefix(len(bundle.Messages), archiveResultByteCap, func(k int) []byte {
+				return render(k, fullSess, fullWM)
+			})
+			// Stage 2: if still over budget (the FitPrefix(0) case or a
+			// single distilled hit too big on its own), shrink distilled.
+			if len(data) > archiveResultByteCap {
+				keptMessages := countMessages(data)
+				// Sessions first.
+				data = memory.FitPrefix(fullSess, archiveResultByteCap, func(s int) []byte {
+					return render(keptMessages, s, fullWM)
+				})
+				if len(data) > archiveResultByteCap {
+					keptSessions := countSessions(data)
+					// Then working_memory.
+					data = memory.FitPrefix(fullWM, archiveResultByteCap, func(w int) []byte {
+						return render(keptMessages, keptSessions, w)
+					})
+				}
+			}
 
 			// Defensive: if the fitter clipped every surface to zero
-			// despite the bundle having hits, force the top
-			// raw-message hit through even if it overshoots the
-			// budget. Returning empty with truncated=true would
+			// despite the bundle having hits, force one hit through
+			// even if it overshoots the budget. Prefer raw-message,
+			// then session, then working-memory — same priority order
+			// as the fit. Returning empty with truncated=true would
 			// silently swallow useful signal — far worse than going
 			// slightly over budget on one oversized hit.
-			if (len(bundle.Messages) > 0 || len(bundle.Sessions) > 0 || len(bundle.WorkingMemory) > 0) &&
-				countSearchHits(data) == 0 && len(bundle.Messages) > 0 {
-				data = render(1)
+			if countSearchHits(data) == 0 {
+				switch {
+				case len(bundle.Messages) > 0:
+					data = render(1, 0, 0)
+				case len(bundle.Sessions) > 0:
+					data = render(0, 1, 0)
+				case len(bundle.WorkingMemory) > 0:
+					data = render(0, 0, 1)
+				}
 			}
 			return string(data), nil
 		},

@@ -241,16 +241,18 @@ func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResul
 // hit. Compact compared to a raw-message search result — the
 // summary is already distilled, so no context window is needed.
 // session_id pairs with archive_session_transcript for full
-// drilldown when the match looks worth reading.
+// drilldown when the match looks worth reading. Tags is a structured
+// list of strings, matching SessionMatch.Tags and Session.Tags shape
+// (caller doesn't have to parse JSON).
 type SessionMatchView struct {
-	SessionID      string `json:"session_id"`
-	ConversationID string `json:"conversation_id"`
-	Started        string `json:"started"`
-	Ended          string `json:"ended,omitempty"`
-	Title          string `json:"title"`
-	Summary        string `json:"summary,omitempty"`
-	Tags           string `json:"tags,omitempty"`
-	Highlight      string `json:"highlight,omitempty"`
+	SessionID      string   `json:"session_id"`
+	ConversationID string   `json:"conversation_id"`
+	Started        string   `json:"started"`
+	Ended          string   `json:"ended,omitempty"`
+	Title          string   `json:"title"`
+	Summary        string   `json:"summary,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	Highlight      string   `json:"highlight,omitempty"`
 }
 
 // WorkingMemoryMatchView is the JSON-facing projection of a
@@ -292,7 +294,7 @@ func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []by
 			Started:        promptfmt.FormatDeltaOnly(s.StartedAt, now),
 			Title:          s.Title,
 			Summary:        s.Summary,
-			Tags:           s.Tags,
+			Tags:           append([]string(nil), s.Tags...),
 			Highlight:      s.Highlight,
 		}
 		if !s.EndedAt.IsZero() {

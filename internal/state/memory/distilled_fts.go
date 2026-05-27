@@ -84,6 +84,15 @@ func NewMemorySearch(archive *ArchiveStore, working *WorkingMemoryStore, logger 
 // returns a SearchBundle. The raw-message path uses opts.Limit; the
 // distilled surfaces use their own tighter caps so the envelope
 // stays bounded.
+//
+// When opts.ConversationID is non-empty, ALL three surfaces are
+// scoped to that conversation. The raw-message search honors it
+// via ArchiveStore.Search's SQL filter; the distilled surfaces are
+// filtered in Go after the FTS pass (sessions_fts and
+// working_memory_fts are scoped over the global corpus today).
+// Filtering after BM25 ranking is acceptable because the distilled
+// hit count is capped small (5 sessions, 3 working memory) — the
+// extra fetched-then-discarded rows are bounded and cheap.
 func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
 	bundle := &SearchBundle{}
 	if m.archive == nil {
@@ -99,7 +108,7 @@ func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
 	// Session summaries. Soft-fail: a sessions_fts query error
 	// shouldn't drop the raw-message results we already collected.
 	if sess, err := m.archive.SearchSessions(opts.Query, maxDistilledSessions); err == nil {
-		bundle.Sessions = sess
+		bundle.Sessions = filterSessionMatchesByConversation(sess, opts.ConversationID)
 	} else if m.logger != nil {
 		m.logger.Warn("session summaries search failed", "query", opts.Query, "error", err)
 	}
@@ -107,13 +116,45 @@ func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
 	// Working memory. Soft-fail for the same reason.
 	if m.working != nil {
 		if wm, err := m.working.Search(opts.Query, maxDistilledWorkingMemory); err == nil {
-			bundle.WorkingMemory = wm
+			bundle.WorkingMemory = filterWorkingMemoryMatchesByConversation(wm, opts.ConversationID)
 		} else if m.logger != nil {
 			m.logger.Warn("working memory search failed", "query", opts.Query, "error", err)
 		}
 	}
 
 	return bundle, nil
+}
+
+// filterSessionMatchesByConversation returns matches scoped to a
+// conversation when convID is non-empty; otherwise passes through.
+// Used by [MemorySearch.Search] to honor opts.ConversationID across
+// distilled surfaces (the raw-message search already filters in SQL).
+func filterSessionMatchesByConversation(matches []SessionMatch, convID string) []SessionMatch {
+	if convID == "" {
+		return matches
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if m.ConversationID == convID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// filterWorkingMemoryMatchesByConversation — analogous helper for
+// the working_memory surface.
+func filterWorkingMemoryMatchesByConversation(matches []WorkingMemoryMatch, convID string) []WorkingMemoryMatch {
+	if convID == "" {
+		return matches
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if m.ConversationID == convID {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // sessionsFTSTable is the FTS5 virtual table name covering the
