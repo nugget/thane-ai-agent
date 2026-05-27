@@ -1,60 +1,78 @@
 package awareness
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestCurrentConditions_ContainsRequiredSections(t *testing.T) {
-	result := CurrentConditions("")
+// parseConditionsBody extracts the JSON payload that follows the
+// "# Current Conditions\n\n" heading and unmarshals it for assertion.
+func parseConditionsBody(t *testing.T, out string) map[string]any {
+	t.Helper()
+
+	const heading = "# Current Conditions\n\n"
+	if !strings.HasPrefix(out, heading) {
+		t.Fatalf("CurrentConditions output missing heading prefix\nGot:\n%s", out)
+	}
+	body := strings.TrimPrefix(out, heading)
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("CurrentConditions body not valid JSON: %v\nBody: %s", err, body)
+	}
+	return got
+}
+
+func TestCurrentConditions_JSONPayloadHasRequiredFields(t *testing.T) {
+	got := parseConditionsBody(t, CurrentConditions(""))
 
 	required := []string{
-		"# Current Conditions",
-		"**Time:**",
-		"**Host:**",
-		"**Thane:**",
-		"**Uptime:**",
+		"time", "time_zone_abbrev", "weekday",
+		"host", "os", "arch", "environment",
+		"version", "commit", "branch", "uptime_seconds",
 	}
-
-	for _, section := range required {
-		if !strings.Contains(result, section) {
-			t.Errorf("CurrentConditions() missing %q\nGot:\n%s", section, result)
+	for _, field := range required {
+		if _, ok := got[field]; !ok {
+			t.Errorf("conditions JSON missing %q field\nGot: %v", field, got)
 		}
 	}
-}
 
-func TestCurrentConditions_WithTimezone(t *testing.T) {
-	result := CurrentConditions("America/Chicago")
-
-	if !strings.Contains(result, "America/Chicago") {
-		t.Errorf("CurrentConditions(America/Chicago) should include timezone name\nGot:\n%s", result)
+	if _, err := time.Parse(time.RFC3339, got["time"].(string)); err != nil {
+		t.Errorf("conditions.time not RFC3339: %v", err)
 	}
 }
 
-func TestCurrentConditions_InvalidTimezone(t *testing.T) {
-	// Use a timezone name that time.LoadLocation rejects on all platforms.
+func TestCurrentConditions_WithTimezoneSetsIANAName(t *testing.T) {
+	got := parseConditionsBody(t, CurrentConditions("America/Chicago"))
+
+	if tz, _ := got["time_zone"].(string); tz != "America/Chicago" {
+		t.Errorf("conditions.time_zone = %q; want America/Chicago", tz)
+	}
+}
+
+func TestCurrentConditions_InvalidTimezoneOmitsIANA(t *testing.T) {
 	const bogus = "Bogus/ZZZZZ_Not_Real_12345"
 	if _, err := time.LoadLocation(bogus); err == nil {
 		t.Skip("platform resolved bogus timezone; cannot test fallback")
 	}
 
-	result := CurrentConditions(bogus)
+	got := parseConditionsBody(t, CurrentConditions(bogus))
 
-	if !strings.Contains(result, "**Time:**") {
-		t.Errorf("CurrentConditions with invalid timezone should still include time\nGot:\n%s", result)
+	if _, ok := got["time_zone"]; ok {
+		t.Errorf("conditions.time_zone should be omitted for invalid timezone\nGot: %v", got["time_zone"])
 	}
-	// Should NOT contain the invalid timezone name.
-	if strings.Contains(result, bogus) {
-		t.Errorf("CurrentConditions with invalid timezone should not include invalid name\nGot:\n%s", result)
+	if tz, _ := got["time_zone_abbrev"].(string); tz == "" {
+		t.Errorf("conditions.time_zone_abbrev should still be present")
 	}
 }
 
-func TestCurrentConditions_EmptyTimezone(t *testing.T) {
-	// Should use local timezone.
-	result := CurrentConditions("")
-	if !strings.Contains(result, "**Time:**") {
-		t.Errorf("CurrentConditions('') should still include time\nGot:\n%s", result)
+func TestCurrentConditions_EmptyTimezoneOmitsIANA(t *testing.T) {
+	got := parseConditionsBody(t, CurrentConditions(""))
+
+	if _, ok := got["time_zone"]; ok {
+		t.Errorf("conditions.time_zone should be omitted when no timezone is configured")
 	}
 }
 

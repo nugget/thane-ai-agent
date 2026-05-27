@@ -15,19 +15,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 )
 
+// conditionsPayload is the JSON projection emitted under the
+// "# Current Conditions" heading. Field names are stable across turns so
+// the model can compare snapshots; pre-computed fields (weekday,
+// uptime_seconds, environment) remove arithmetic the model would
+// otherwise have to do itself.
+type conditionsPayload struct {
+	Time           string `json:"time"`
+	TimeZone       string `json:"time_zone,omitempty"`
+	TimeZoneAbbrev string `json:"time_zone_abbrev"`
+	Weekday        string `json:"weekday"`
+	Host           string `json:"host"`
+	OS             string `json:"os"`
+	Arch           string `json:"arch"`
+	Environment    string `json:"environment"`
+	Version        string `json:"version"`
+	Commit         string `json:"commit"`
+	Branch         string `json:"branch"`
+	UptimeSeconds  int64  `json:"uptime_seconds"`
+}
+
 // CurrentConditions returns a formatted "# Current Conditions" section
-// for injection into the system prompt. The timezone parameter should be
-// an IANA timezone name (e.g., "America/Chicago"). If empty or invalid,
-// the system's local timezone is used.
+// for injection into the system prompt. The body is a compact JSON object
+// (typed runtime state per docs/model-facing-context.md). The timezone
+// parameter should be an IANA timezone name (e.g., "America/Chicago"). If
+// empty or invalid, the system's local timezone is used and the IANA name
+// is omitted from the output.
 func CurrentConditions(timezone string) string {
-	var sb strings.Builder
-
-	sb.WriteString("# Current Conditions\n\n")
-
-	// Time — use configured timezone, fall back to system local.
 	loc := time.Now().Location()
 	tzResolved := false
 	if timezone != "" {
@@ -37,35 +55,33 @@ func CurrentConditions(timezone string) string {
 		}
 	}
 	now := time.Now().In(loc)
-	zoneName, _ := now.Zone()
+	zoneAbbrev, _ := now.Zone()
 
-	// Format: Saturday, February 14, 2026 at 15:45 CST (America/Chicago)
-	sb.WriteString("**Time:** ")
-	sb.WriteString(now.Format("Monday, January 2, 2006 at 15:04 "))
-	sb.WriteString(zoneName)
-	// Include IANA name when we successfully resolved a configured timezone.
-	if tzResolved && timezone != zoneName {
-		sb.WriteString(" (")
-		sb.WriteString(timezone)
-		sb.WriteString(")")
-	}
-	sb.WriteString("\n")
-
-	// Host — hostname, OS/arch, bare metal vs container.
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
 	}
-	env := detectEnvironment()
-	fmt.Fprintf(&sb, "**Host:** %s (%s/%s, %s)\n", hostname, runtime.GOOS, runtime.GOARCH, env)
 
-	// Thane — version and commit.
-	fmt.Fprintf(&sb, "**Thane:** %s (%s@%s)\n", buildinfo.Version, buildinfo.GitCommit, buildinfo.GitBranch)
+	payload := conditionsPayload{
+		Time:           now.Format(time.RFC3339),
+		TimeZoneAbbrev: zoneAbbrev,
+		Weekday:        now.Weekday().String(),
+		Host:           hostname,
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		Environment:    detectEnvironment(),
+		Version:        buildinfo.Version,
+		Commit:         buildinfo.GitCommit,
+		Branch:         buildinfo.GitBranch,
+		UptimeSeconds:  int64(buildinfo.Uptime().Truncate(time.Second).Seconds()),
+	}
+	if tzResolved {
+		payload.TimeZone = timezone
+	}
 
-	// Uptime.
-	uptime := buildinfo.Uptime()
-	fmt.Fprintf(&sb, "**Uptime:** %s", formatUptime(uptime))
-
+	var sb strings.Builder
+	sb.WriteString("# Current Conditions\n\n")
+	sb.WriteString(promptfmt.MarshalCompact(payload))
 	return sb.String()
 }
 
@@ -96,7 +112,10 @@ func detectEnvironment() string {
 }
 
 // formatUptime formats a duration as a human-readable uptime string.
-// Examples: "4h 23m", "2d 5h", "45m", "30s".
+// Examples: "4h 23m", "2d 5h", "45m", "30s". Used only by
+// FormatContextUsage for the operator-facing context line, where a
+// compact human-readable string is preferred over a delta. CurrentConditions
+// emits uptime as a raw seconds integer inside the JSON payload.
 func formatUptime(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
