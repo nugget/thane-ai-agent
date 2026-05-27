@@ -49,7 +49,7 @@ complete onboarding guide for Home Assistant users.
   wake subscriptions
 - **[Configuration](operating/configuration.md)** — Config guide organized
   by concern
-- **[Routing Profiles](operating/routing-profiles.md)** — Model selection
+- **[Virtual Models](operating/routing-profiles.md)** — Model selection
   presets (`thane:latest`, `thane:premium`, `thane:ops`, etc.)
 - **[Hardware Requirements](operating/hardware.md)** — Platform support,
   production observations, minimum specs
@@ -68,11 +68,6 @@ complete onboarding guide for Home Assistant users.
   dashboard, CardDAV
 - **[Event Sources](reference/event-sources.md)** — Everything that can
   wake the agent loop
-
-## Extending Thane
-
-- **[OpenClaw Compatibility](openclaw.md)** — Run an OpenClaw-style
-  workspace agent through Thane's `thane:openclaw` profile
 
 ## Developer Internals
 

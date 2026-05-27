@@ -28,7 +28,7 @@ models:
 
 **`ollama_url`** — Where your Ollama instance lives. Required.
 
-**`default`** — The model used when no routing profile specifies otherwise.
+**`default`** — The model used when no virtual model specifies otherwise.
 
 **`available`** — List of models Thane can choose from. Each model has a
 quality score (1-10), speed score (1-10), and cost tier (1-5). The router
@@ -36,8 +36,8 @@ uses these scores plus routing hints to select the best model for each
 request. You don't hardcode which model handles which task — you describe
 the models, and Thane's router does the matching.
 
-See [Routing Profiles](routing-profiles.md) for how profiles map to model
-selection.
+See [Virtual Models](routing-profiles.md) for how virtual models map to
+model selection.
 
 ## Anthropic (Cloud Models)
 

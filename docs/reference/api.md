@@ -12,7 +12,7 @@ endpoints from the same listener.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. The `model` field selects a [routing profile](../operating/routing-profiles.md), such as `thane:latest` or `thane:premium`. |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. The `model` field selects a [virtual model](../operating/routing-profiles.md), such as `thane:latest` or `thane:premium`. |
 | `POST` | `/v1/chat` | Minimal JSON chat endpoint for simple testing. |
 | `GET` | `/v1/models` | OpenAI-compatible model list. |
 
@@ -96,13 +96,13 @@ instance.
 When HA sends a conversation to this port, Thane:
 
 1. Strips HA's injected tools and system prompts
-2. Maps the requested model name to a routing profile
+2. Maps the requested model name to a virtual model
 3. Processes through the full agent loop
 4. Returns the response in Ollama's expected format
 
-Available models are listed at `GET /api/tags`. Each
-[routing profile](../operating/routing-profiles.md) appears as a model
-(e.g., `thane:latest`, `thane:command`, `thane:premium`).
+Available models are listed at `GET /api/tags`. Each exposed
+[virtual model](../operating/routing-profiles.md) appears
+(e.g., `thane:latest`, `thane:premium`, `thane:assist`).
 
 ## Port 8843 — CardDAV Server
 

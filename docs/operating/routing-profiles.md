@@ -1,10 +1,13 @@
-# Routing Profiles
+# Virtual Models
 
-Thane uses **routing profiles** to adapt its behavior based on the nature of
-each interaction. Profiles are selected by setting the model name in any
-Ollama-compatible client (Open WebUI, HA Assist, API calls).
+Thane uses **virtual model names** to adapt its behavior based on the
+nature of each interaction. Names like `thane:latest`, `thane:premium`,
+or `thane:assist` are selected by setting the model field in any
+Ollama-compatible client (Open WebUI, HA Assist, API calls). The
+canonical Go shape is `router.VirtualModel`; older docs may still call
+these "routing profiles."
 
-## Available Profiles
+## Available Virtual Models
 
 ### `thane:latest` — Daily Conversation *(default)*
 
@@ -16,6 +19,7 @@ access.
 - **Delegation:** Enabled (all-iteration gating)
 - **Context:** Full (persona, memory, talents, episodic history)
 - **Use when:** Chatting, asking questions, general interaction
+- **Aliases:** `thane`, `thane:balanced`
 
 ### `thane:premium` — Complex Reasoning
 
@@ -28,6 +32,7 @@ tasks requiring deep analysis, judgment, or creative work.
 - **Use when:** Complex analysis, nuanced questions, creative writing
 - **Note:** Vendor-neutral — routes to whatever model has the highest quality
   score in your config (Opus, Gemini, GPT, etc.)
+- **Aliases:** `thane:best`, `thane:thinking`
 
 ### `thane:ops` — Operations / Direct Tool Access
 
@@ -42,104 +47,117 @@ than delegating to a smaller model.
   where the primary model needs direct tool control
 - **Cost:** Highest. Every tool-call iteration uses the premium model.
 
-### `thane:command` — Quick Task Execution
+### `thane:assist` — Quick Task Execution
 
-Optimized for brief, action-oriented requests. Fast model selection with
-device-control mission hints.
+Optimized for brief, action-oriented requests. Fast local-first model
+selection with `device_control` mission hints. The canonical name for
+HA voice commands and quick device control.
 
-- **Model:** Cost-optimized (device_control mission scoring)
+- **Model:** Cost-optimized, local-first (`local_only=true`, `quality_floor=4`)
 - **Delegation:** Enabled
 - **Context:** Minimal
 - **Use when:** "Turn off the lights," "what's the temperature," quick
   lookups
 - **Good for:** HA voice commands, quick device control
-
-### `thane:trigger` — Automation / Fire-and-Forget
-
-For machine-initiated requests with no person on the other end. Uses the
-cheapest local model.
-
-- **Model:** Cheapest local model (local_only, quality_floor=1)
-- **Delegation:** Enabled
-- **Context:** Minimal — no persona or memory overhead
-- **Use when:** HA automations, webhooks, scheduled tasks, cron triggers
-- **Note:** Responses are terse and structured, not conversational
-
-### `thane:peer` — Agent-to-Agent
-
-For communication between Thane instances or other AI agents. No persona
-performance — structured, efficient interaction between machines that both
-understand they're talking to software.
-
-- **Model:** Default routing
-- **Delegation:** Enabled
-- **Context:** Structured, no persona
-- **Use when:** Another Thane instance, MCP client, or external agent is
-  calling
-
-### `thane:openclaw` — OpenClaw Workspace Emulation
-
-Replicates OpenClaw's workspace-aware agent behavior using Thane's agent
-loop. Requires the `openclaw` config section.
-
-- **Model:** Highest quality score (same as premium)
-- **Delegation:** Enabled
-- **Context:** OpenClaw-style system prompt (workspace files, skills, memory)
-- **Setup:** See [OpenClaw Compatibility](../openclaw.md)
+- **Aliases:** `thane:command`, `thane:fast`, `thane:homeassistant`
 
 ### `thane:local` — Local Models Only
 
 Forces local/free model selection. No paid API calls will be made.
 
-- **Model:** Best local model (local_only=true)
+- **Model:** Best local model (`local_only=true`)
 - **Delegation:** Enabled
 - **Context:** Full
 - **Use when:** Cost-sensitive work, privacy-sensitive topics, testing local
   models
 
-## Deprecated Profiles
+### `thane:event` — Automation / Fire-and-Forget *(advanced)*
 
-These old names still work but log a deprecation warning:
+For machine-initiated requests with no person on the other end. Uses the
+cheapest local model. **Not exposed in `/api/tags`** — clients that
+auto-discover models won't see it, but the name resolves when used
+explicitly.
 
-| Old Name | Replacement | Notes |
+- **Model:** Cheapest local model (`local_only=true`, `quality_floor=1`)
+- **Delegation:** Enabled
+- **Context:** Minimal — no persona or memory overhead
+- **Use when:** HA automations, webhooks, scheduled tasks, cron triggers
+- **Note:** Responses are terse and structured, not conversational
+- **Aliases:** `thane:trigger`
+
+### `thane:peer` — Agent-to-Agent *(advanced)*
+
+For communication between Thane instances or other AI agents. No persona
+performance — structured, efficient interaction between machines that both
+understand they're talking to software. **Not exposed in `/api/tags`**
+— clients that auto-discover models won't see it, but the name resolves
+when used explicitly.
+
+- **Model:** Default routing (`mission=conversation`)
+- **Delegation:** Enabled
+- **Context:** Structured, no persona
+- **Use when:** Another Thane instance, MCP client, or external agent is
+  calling
+
+## Aliases
+
+These names still resolve to the canonical virtual model on the right.
+
+| Alias | Canonical | Notes |
 |----------|-------------|-------|
-| `thane:thinking` | `thane:premium` | Vendor-neutral name |
-| `thane:balanced` | `thane:latest` | Was redundant with default routing |
-| `thane:fast` | `thane:command` | Renamed for clarity |
-| `thane:homeassistant` | `thane:command` | Channel is not a profile |
+| `thane`, `thane:balanced` | `thane:latest` | Aliases of the default |
+| `thane:best`, `thane:thinking` | `thane:premium` | Vendor-neutral name |
+| `thane:command`, `thane:fast`, `thane:homeassistant` | `thane:assist` | Renamed for clarity |
+| `thane:trigger` | `thane:event` | Renamed for clarity |
 
-## How Profiles Work
+Most aliases log `virtual model alias used` at warn level on
+resolution so operators can find and update legacy callers; the bare
+`thane` alias and the empty-string default to `thane:latest` are
+silent. The canonical name never logs. The router behavior is
+identical either way — switching to the canonical name just quiets the
+log line.
+
+## How Virtual Models Work
 
 When a client sends a request with `"model": "thane:premium"`, Thane:
 
-1. Maps the profile name to **routing hints** (quality floor, mission,
-   local-only flag, delegation gating)
+1. Maps the virtual-model name to **routing hints** (quality floor,
+   mission, local-only flag, delegation gating)
 2. The **router** scores all configured models against those hints and
    selects the best match
 3. The **agent loop** checks hints for delegation gating (enabled/disabled)
 4. **Context injection** adapts based on the interaction type
 
-The profile does *not* hardcode a specific model — it describes the *intent*,
-and the router finds the best model for that intent from your configured
-model list.
+The virtual model does *not* hardcode a specific deployment — it
+describes the *intent*, and the router finds the best model for that
+intent from your configured model list.
 
-## Choosing a Profile
+## Choosing a Virtual Model
 
 ```
-Cost:    trigger < command < latest < premium = ops
-Quality: trigger < command < latest < premium = ops
-Control: trigger = command = latest = premium < ops (ops = direct tool access)
+Cost:    event < assist < latest < premium = ops
+Quality: event < assist < latest < premium = ops
+Control: event = assist = latest = premium < ops  (ops = direct tool access)
 ```
 
 For most users: `thane:latest` for conversation, `thane:premium` when you
-need the best, `thane:ops` for hands-on operations work.
+need the best, `thane:ops` for hands-on operations work, `thane:assist`
+for quick device control.
 
 ## Configuration
 
-Profiles appear as models in any Ollama-compatible client. In Open WebUI,
-they show up in the model selector. In HA Assist, set the model name in the
-conversation agent configuration.
+Exposed virtual models (`thane:latest`, `thane:premium`, `thane:ops`,
+`thane:assist`, `thane:local`) appear as models in any
+Ollama-compatible client. In Open WebUI, they show up in the model
+selector. In HA Assist, set the model name in the conversation agent
+configuration.
 
-No configuration is needed to use profiles — they work out of the box. The
-router uses your `models.available` list to determine what "premium" and
-"local" mean for your setup.
+The advanced virtual models (`thane:event`, `thane:peer`) are not
+listed in `/api/tags` for auto-discovery, but resolve correctly when
+used as an explicit model name — useful for machine-initiated calls
+(automations, agent-to-agent traffic) where the caller knows what it
+wants.
+
+No configuration is needed — virtual models work out of the box. The
+router uses your `models.available` list to determine what "premium"
+and "local" mean for your setup.
