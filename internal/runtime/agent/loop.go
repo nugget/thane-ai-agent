@@ -1462,6 +1462,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
+	ctx = withRequestSubjects(ctx, req)
 	runStarted := time.Now()
 	defer func() {
 		attrs := []any{
