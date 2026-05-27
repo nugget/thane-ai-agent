@@ -411,13 +411,20 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	parentID := b.parentID
 	b.mu.Unlock()
 
-	// Resolve a display name and trust zone for the loop node.
+	// Resolve a stable identifier and trust zone for the loop node.
+	// Prefer the contact UUID prefix over the contact name or raw phone:
+	// the UUID is opaque to operator-visible surfaces (dashboard,
+	// /api/loops, structured logs) and cross-references the
+	// "Session Origin Context" block in the system prompt
+	// (origin.contact_id), so a model reading log lines can chain back
+	// to the trust zone and name without each loop name being a
+	// re-emission of personal data.
 	loopName := "signal/" + sanitizePhone(sender)
 	trustZone := "unknown"
 	binding := b.resolveBinding(sender)
 	if binding != nil {
-		if binding.ContactName != "" {
-			loopName = "signal/" + sanitizeLoopName(binding.ContactName)
+		if binding.ContactID != "" {
+			loopName = "signal/" + shortContactID(binding.ContactID)
 		}
 		if binding.TrustZone != "" {
 			trustZone = binding.TrustZone
@@ -944,20 +951,18 @@ func sanitizePhone(phone string) string {
 	return sb.String()
 }
 
-// sanitizeLoopName strips characters from a contact display name that
-// could confuse the loop hierarchy (e.g. "/" which is the parent/child
-// separator) or produce unreadable node labels (control characters).
-func sanitizeLoopName(name string) string {
-	name = strings.TrimSpace(name)
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1 // drop control characters
-		}
-		if r == '/' {
-			return '_' // avoid hierarchy separator
-		}
-		return r
-	}, name)
+// shortContactID returns the first 8 characters of a contact UUID for
+// use as a stable, low-PII loop-name component. UUIDs are 8-4-4-4-12
+// hyphenated; the first segment is 8 hex chars which collides only
+// at very small probability across the household-scale contact list
+// and is easy to grep against the full ID in [contact_lookup] /
+// session-origin output. Inputs shorter than 8 characters are
+// returned as-is.
+func shortContactID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // formatMessage builds the user-facing message content for the agent
