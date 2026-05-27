@@ -1308,6 +1308,22 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 			wantToolTimeout: defaultToolTimeout,
 		},
 		{
+			name:            "only MaxTokens set → others clamp, MaxTokens preserved",
+			profile:         Profile{Name: "general", MaxTokens: 5000},
+			wantMaxIter:     defaultMaxIter,
+			wantMaxTokens:   5000,
+			wantMaxDuration: defaultMaxDuration,
+			wantToolTimeout: defaultToolTimeout,
+		},
+		{
+			name:            "only MaxDuration set → others clamp, MaxDuration preserved",
+			profile:         Profile{Name: "general", MaxDuration: 3 * time.Minute},
+			wantMaxIter:     defaultMaxIter,
+			wantMaxTokens:   defaultMaxTokens,
+			wantMaxDuration: 3 * time.Minute,
+			wantToolTimeout: defaultToolTimeout,
+		},
+		{
 			name:            "only ToolTimeout set → others clamp, ToolTimeout preserved",
 			profile:         Profile{Name: "general", ToolTimeout: 2 * time.Minute},
 			wantMaxIter:     defaultMaxIter,
