@@ -514,6 +514,87 @@ named `talent-authoring.md` — would still load as an untagged
 always-on talent. Keep contributor docs uppercase-leading, or place
 them outside the directory.
 
+## Host overlays — site-specific tuning
+
+Some talents need facts that are true on *this* host and would mislead
+on another: the default forge account, the canonical repo owner, the
+accounts/profiles configured for outbound channels. These don't belong
+in the repo's `talents/` directory — they'd ship as defaults to every
+fresh install — but they do belong in the operator's workspace
+`talents/` alongside the base talents.
+
+The convention is a filename suffix: **`<base-tag>-<host>-local.md`**.
+Examples from pocket today:
+
+- `forge-pocket-local.md` — the canonical repo owner, the default
+  forge account name, the exact spelling to use for the repo.
+- `ha-pocket-local.md` — host-specific Home Assistant defaults that
+  the base `ha` talent shouldn't carry.
+- `home-pocket-local.md`, `operations-pocket-local.md`,
+  `people-pocket-local.md`, `web-pocket-local.md` — same shape.
+
+### How overlays load
+
+The loader has no special handling for the `-local` suffix. Overlays
+are just talents with frontmatter `tags: [<base-tag>]` that load
+alongside the base talent when the tag activates. The naming
+convention is for *operators* — so it's obvious by filename that a
+file is host-specific and shouldn't be promoted to the repo.
+
+Minimal overlay shape:
+
+```markdown
+---
+tags: [forge]
+---
+
+# Pocket Forge Local Notes
+
+Site-specific facts about how forge is wired on pocket.
+
+- Default repo owner is `nugget`.
+- Default forge account is `github-primary`.
+- ...
+```
+
+### The repo-vs-overlay discipline
+
+The split that keeps both surfaces honest:
+
+- **Base talents** (`<tag>.md`, `<tag>-trailhead.md`, etc.) live in
+  the repo and ship as defaults. They contain doctrine that's true
+  for any Thane install. Edits flow through pull request.
+- **Host overlays** (`<tag>-<host>-local.md`) live only in the
+  operator's workspace `talents/` directory. They are never copied
+  back to the repo. They contain facts that depend on the operator's
+  Home Assistant entities, forge accounts, household, or other
+  site-specific state.
+
+If you find yourself wanting to put a host-specific fact in a base
+talent ("on pocket, the forge account is named github-primary"),
+that's the signal to write or extend the host overlay instead. The
+base talent should describe the *shape* of the question ("the forge
+account name is configured per-host; check the capability context");
+the overlay supplies *this host's answer*.
+
+### When operator workspaces drift from the repo
+
+The repo `talents/` and the operator workspace `talents/` are
+expected to diverge over time:
+
+- The workspace will have host overlay files the repo doesn't.
+- The workspace base talents may have minor production edits that
+  haven't been backported to the repo yet.
+
+Reconciliation is a human / LLM judgment call, not a tooling
+problem. When the gap matters — a base talent edited in production
+has language worth promoting, or a repo update changes a base talent
+the operator depended on — the right move is to read both side by
+side and decide. There is no `just talents-sync` recipe and there
+shouldn't be: the distinction between "this is a doctrine
+improvement worth promoting" and "this is a host fact that belongs
+in an overlay" requires reading the prose, not diffing the bytes.
+
 ## When you're stuck
 
 Two reference talents to read when you're not sure what shape to use:

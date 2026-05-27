@@ -139,6 +139,23 @@ a false positive (a backticked snake_case term that isn't a tool — e.g., a
 field name on a config struct), add it to the `nonToolTokens` allowlist with
 a comment explaining why.
 
+## Host overlays
+
+Files in this directory ship as defaults to every fresh `thane init`
+install. Some facts are site-specific (the operator's forge account
+name, household entity IDs, configured channels) and *should not* be
+in the repo. Those live in the operator workspace's `talents/`
+directory as **host overlay** files using the convention
+`<base-tag>-<host>-local.md` — e.g. `forge-pocket-local.md`. The
+loader has no special handling for `-local`; the suffix is for
+humans, so operators (and reviewers reading a PR) can tell at a
+glance that a file is host-specific and shouldn't be promoted to the
+repo.
+
+See the "Host overlays — site-specific tuning" section in
+[`docs/talent-authoring.md`](../docs/talent-authoring.md#host-overlays--site-specific-tuning)
+for the convention and the repo-vs-overlay discipline.
+
 ## Authoring guidance
 
 See [`docs/talent-authoring.md`](../docs/talent-authoring.md) for the
