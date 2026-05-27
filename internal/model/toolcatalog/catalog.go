@@ -6,11 +6,12 @@
 // external surface (operator config, channel bindings, loop specs,
 // persisted scope, talents, knowledge frontmatter) spells each
 // built-in tag with its compiled-in name; the v0.9.3 retirement of
-// the alias machinery (#925) removed [CanonicalTagName] and the
-// `Aliases` field on [BuiltinTagSpec], so any pre-v0.9.3 reference to
-// `homeassistant` (the one alias that ever existed) needs to be
-// rewritten as `ha`. Operators may still define ad-hoc tags via the
-// `capability_tags:` YAML overlay; those names pass through verbatim.
+// the alias machinery (#925) removed the `CanonicalTagName` resolver
+// and the `Aliases` field on [BuiltinTagSpec], so any pre-v0.9.3
+// reference to `homeassistant` (the one alias that ever existed)
+// needs to be rewritten as `ha`. Operators may still define ad-hoc
+// tags via the `capability_tags:` YAML overlay; those names pass
+// through verbatim.
 package toolcatalog
 
 import (

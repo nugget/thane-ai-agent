@@ -8,34 +8,39 @@
 //
 // # Tag scope and inheritance
 //
-// A delegate's tag scope is composed from three sources, in priority
-// order:
+// A delegate's tag scope is a union of up to three contributors:
 //
-//  1. Explicit tags passed to thane_now / thane_assign. When the
-//     caller names tags, those tags define the scope and the run
-//     policy's DefaultTags are NOT applied — the explicit list is
-//     authoritative. This is the "I know exactly what tools this
-//     subtask needs" path.
+//  1. Inherited tags from the caller's context, when the caller
+//     enabled inherit_caller_tags. Every elective tag the caller
+//     carried is folded in, minus the never-propagate set below.
+//     Inheritance is the default for thane_now / thane_assign so a
+//     delegate working on the same conversation thread sees the
+//     same tag-loaded knowledge as the orchestrator.
 //
-//  2. Elective tags inherited from the caller's context when the
-//     caller did not provide explicit tags. Inheritance is the
-//     default — a delegate working on the same conversation thread
-//     should see the same tag-loaded knowledge as the orchestrator.
+//  2. Explicit tags passed to thane_now / thane_assign. These are
+//     added to the scope (alongside any inherited tags, not in
+//     place of them) and they flip an "explicit scope requested"
+//     flag that the next contributor checks. The flag — not the
+//     tags themselves — is what suppresses RunPolicy.DefaultTags.
 //
-//  3. The run policy's DefaultTags, merged in only when neither
-//     explicit nor inherited tags are present. These exist to give a
-//     bare invocation (no caller context, no explicit tags) a
-//     sensible default tool surface — e.g., the `ha` policy adds
-//     `[ha]` so a `thane_now` aimed at HA work gets HA tools without
-//     the caller having to say so.
+//  3. RunPolicy.DefaultTags, merged in whenever the scope was NOT
+//     explicitly requested. This is the gate operators use when a
+//     bare invocation should still get a sensible tool surface —
+//     e.g., the `ha` policy adds `[ha]` so a `thane_now` aimed at
+//     HA work gets HA tools without the caller having to say so.
+//     Note the asymmetry: explicit tags suppress DefaultTags, but
+//     inherited tags do not. A delegate with no explicit tags and
+//     non-empty inherited tags gets BOTH the inherited set AND the
+//     policy defaults.
 //
 // Tags that never propagate to delegates: `message_channel` and
 // `owner`. These are runtime-asserted trust tags meaningful only in
 // the context they were set; they must be re-asserted (or not) by
 // the delegate's own runtime context, not inherited.
 //
-// Core tags (those operator-pinned via config) always load regardless
-// of which path above contributed the scope.
+// Core tags (those operator-pinned via config) always load
+// regardless of which of the three contributors above produced the
+// scope.
 //
 // # Vocabulary
 //
@@ -78,13 +83,15 @@ type RunPolicy struct {
 	// Description is a human-readable summary for logging.
 	Description string
 
-	// DefaultTags are the policy's fallback tag scope, merged in only
-	// when the caller did not provide explicit tags AND no context
-	// tags were inherited. The motivating example is the `ha` policy:
-	// a bare `thane_now` aimed at HA work gets `[ha]` so HA tools
-	// load even when the caller didn't name them. See the package
-	// "Tag scope and inheritance" comment for the full composition
-	// rule.
+	// DefaultTags merge into the delegate's scope whenever the caller
+	// did NOT pass explicit tags — regardless of whether inherited
+	// tags also contributed. The gate is the "explicit scope
+	// requested" flag, not the absence of inherited tags. The
+	// motivating example is the `ha` policy: a `thane_now` aimed at
+	// HA work gets `[ha]` so HA tools load even when the caller
+	// didn't name them, even if it also inherited unrelated tags
+	// from the caller's context. See the package "Tag scope and
+	// inheritance" comment for the full composition rule.
 	DefaultTags []string
 
 	// RouterHints are passed to the router for model selection.
