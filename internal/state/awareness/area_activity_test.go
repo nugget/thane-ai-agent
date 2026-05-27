@@ -36,6 +36,9 @@ func (f *fakeAreaClient) GetEntityRegistry(_ context.Context) ([]homeassistant.E
 func (f *fakeAreaClient) GetDeviceRegistry(_ context.Context) ([]homeassistant.DeviceRegistryEntry, error) {
 	return f.devices, nil
 }
+func (f *fakeAreaClient) GetLabelRegistry(_ context.Context) ([]homeassistant.LabelRegistryEntry, error) {
+	return nil, nil
+}
 func (f *fakeAreaClient) GetStates(_ context.Context) ([]homeassistant.State, error) {
 	return f.states, nil
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 )
@@ -191,6 +192,7 @@ func mergeLegacySubscriptions(existing []looppkg.EntitySubscription, rows []awar
 			EntityID: row.EntityID,
 			History:  append([]int(nil), row.History...),
 			Forecast: row.Forecast,
+			Include:  cloneEntityMetadataIncludesPtr(row.Include),
 			AddedAt:  addedAt,
 		}
 		if row.ExpiresAt != nil {
@@ -205,4 +207,12 @@ func mergeLegacySubscriptions(existing []looppkg.EntitySubscription, rows []awar
 		return nil
 	}
 	return out
+}
+
+func cloneEntityMetadataIncludesPtr(src *homeassistant.EntityMetadataIncludes) *homeassistant.EntityMetadataIncludes {
+	if src == nil || !src.Any() {
+		return nil
+	}
+	cp := *src
+	return &cp
 }

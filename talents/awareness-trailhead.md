@@ -16,6 +16,8 @@ Choose the next move deliberately:
 - Use `list_entity_subscriptions` to see what this loop is already carrying.
 - Use `add_entity_subscription` when a room, device, person, or live state
   should auto-load while the work continues.
+- Add `include` metadata flags when area, owning device, HA labels, or
+  descriptions would make the subscribed state easier to interpret.
 - Use `remove_entity_subscription` when the work is done. Stale
   subscriptions are quiet clutter.
 - If the work is a one-shot state check, use the currently visible HA or

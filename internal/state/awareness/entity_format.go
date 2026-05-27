@@ -11,6 +11,10 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 	return contextfmt.Format(state, now)
 }
 
+func formatEntityContextWithMetadata(state *homeassistant.State, now time.Time, metadata *homeassistant.EntityMetadata) string {
+	return contextfmt.FormatWithMetadata(state, now, metadata)
+}
+
 func formatFetchError(entityID string) string {
 	return contextfmt.FormatFetchError(entityID)
 }

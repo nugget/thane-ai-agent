@@ -3,6 +3,7 @@
 package contextfmt
 
 import (
+	"encoding/json"
 	"math"
 	"strconv"
 	"strings"
@@ -16,6 +17,27 @@ import (
 // the entity domain.
 func Format(state *homeassistant.State, now time.Time) string {
 	return formatEntityContext(state, now)
+}
+
+// FormatWithMetadata returns the standard entity context payload with
+// optional HA registry metadata joined under the metadata field.
+func FormatWithMetadata(state *homeassistant.State, now time.Time, metadata *homeassistant.EntityMetadata) string {
+	return AttachMetadata(formatEntityContext(state, now), metadata)
+}
+
+// AttachMetadata joins HA registry metadata to an already-formatted
+// entity context payload. It degrades to the original payload when
+// metadata is empty or the payload is not a JSON object.
+func AttachMetadata(formatted string, metadata *homeassistant.EntityMetadata) string {
+	if metadata == nil || metadata.Empty() {
+		return formatted
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(formatted), &payload); err != nil {
+		return formatted
+	}
+	payload["metadata"] = metadata
+	return promptfmt.MarshalCompact(payload)
 }
 
 // EntityDomain extracts the domain from an entity ID (e.g., "weather" from

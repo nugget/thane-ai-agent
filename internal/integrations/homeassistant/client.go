@@ -264,6 +264,7 @@ type EntityRegistryEntry struct {
 	EntityID            string            `json:"entity_id"`
 	Name                string            `json:"name"`
 	OriginalName        string            `json:"original_name"`
+	Description         string            `json:"description"`
 	Aliases             []string          `json:"aliases"`
 	AreaID              string            `json:"area_id"`
 	DeviceID            string            `json:"device_id"`

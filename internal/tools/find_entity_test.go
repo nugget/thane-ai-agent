@@ -115,6 +115,43 @@ func TestFuzzyMatchEntityInfos(t *testing.T) {
 	}
 }
 
+func TestFuzzyMatchEntityInfosWithMetadata(t *testing.T) {
+	entities := []homeassistant.EntityInfo{{
+		EntityID:     "sensor.t_123",
+		FriendlyName: "Temperature",
+		State:        "72",
+	}}
+	entry := &homeassistant.EntityRegistryEntry{
+		EntityID:    "sensor.t_123",
+		DeviceID:    "device_1",
+		Labels:      []string{"label_environment"},
+		Description: "Ambient office temperature",
+	}
+	bundle := &haEntityMetadataBundle{
+		include: homeassistant.AllEntityMetadataIncludes(),
+		entries: map[string]*homeassistant.EntityRegistryEntry{
+			entry.EntityID: entry,
+		},
+		resolver: homeassistant.NewEntityMetadataResolver(
+			[]homeassistant.Area{{AreaID: "office", Name: "Office"}},
+			[]homeassistant.LabelRegistryEntry{{LabelID: "label_environment", Name: "Environment"}},
+			[]homeassistant.DeviceRegistryEntry{{
+				ID:         "device_1",
+				NameByUser: "Office Climate Hub",
+				AreaID:     "office",
+			}},
+		),
+	}
+
+	matches := fuzzyMatchEntityInfosWithMetadata("office climate hub", entities, bundle)
+	if len(matches) == 0 {
+		t.Fatal("expected metadata-backed match")
+	}
+	if matches[0].EntityID != "sensor.t_123" {
+		t.Fatalf("first match = %q, want sensor.t_123", matches[0].EntityID)
+	}
+}
+
 func TestToJSON(t *testing.T) {
 	result := FindEntityResult{
 		Found:    true,

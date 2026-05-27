@@ -145,6 +145,7 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 		EntityID: sub.EntityID,
 		History:  append([]int(nil), sub.History...),
 		Forecast: sub.Forecast,
+		Include:  cloneEntityMetadataIncludesPtr(sub.Include),
 	}
 	state, err := p.ha.GetState(ctx, w.EntityID)
 	if err != nil {
@@ -156,7 +157,7 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 	}
 	state = watchlistStateWithForecast(ctx, p.ha, p.logger, w, state, "failed to fetch loop-scoped weather forecast")
 
-	content := formatEntityContext(state, now)
+	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(w.EntityID, state, w.Include))
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
 	content = enrichUnavailable(content, state, registries)
 	if len(w.History) == 0 {

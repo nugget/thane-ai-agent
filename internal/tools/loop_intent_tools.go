@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
@@ -307,6 +308,7 @@ func (r *Registry) registerThaneCurate() {
 								"type":        "integer",
 								"description": "Optional expiration in seconds. After this TTL elapses, the subscription is auto-removed from future context injection.",
 							},
+							"include": EntityMetadataIncludeParameter(),
 						},
 						"required": []string{"entity_id"},
 					},
@@ -562,6 +564,7 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 			EntityID:   e.EntityID,
 			History:    append([]int(nil), e.History...),
 			Forecast:   e.Forecast,
+			Include:    EntityMetadataIncludesPointer(e.Include),
 			TTLSeconds: e.TTLSeconds,
 			AddedAt:    addedAt,
 		})
@@ -575,6 +578,7 @@ type curateEntity struct {
 	EntityID   string
 	History    []int
 	Forecast   string
+	Include    homeassistant.EntityMetadataIncludes
 	TTLSeconds int
 }
 
@@ -647,6 +651,11 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 			}
 			ent.TTLSeconds = ttl
 		}
+		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
+		if err != nil {
+			return nil, err
+		}
+		ent.Include = include
 		out = append(out, ent)
 	}
 	return out, nil

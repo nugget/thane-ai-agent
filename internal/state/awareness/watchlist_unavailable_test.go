@@ -15,14 +15,22 @@ import (
 // unavailability enrichment, with simple slice-backed storage so
 // tests can shape exactly what the renderer sees.
 type fakeRegistries struct {
+	areas          []homeassistant.Area
 	entities       []homeassistant.EntityRegistryEntry
 	devices        []homeassistant.DeviceRegistryEntry
+	labels         []homeassistant.LabelRegistryEntry
 	states         []homeassistant.State
 	configEntries  []homeassistant.ConfigEntry
+	areasErr       error
 	entitiesErr    error
 	devicesErr     error
+	labelsErr      error
 	statesErr      error
 	configEntryErr error
+}
+
+func (f *fakeRegistries) GetAreas(_ context.Context) ([]homeassistant.Area, error) {
+	return f.areas, f.areasErr
 }
 
 func (f *fakeRegistries) GetEntityRegistry(_ context.Context) ([]homeassistant.EntityRegistryEntry, error) {
@@ -31,6 +39,10 @@ func (f *fakeRegistries) GetEntityRegistry(_ context.Context) ([]homeassistant.E
 
 func (f *fakeRegistries) GetDeviceRegistry(_ context.Context) ([]homeassistant.DeviceRegistryEntry, error) {
 	return f.devices, f.devicesErr
+}
+
+func (f *fakeRegistries) GetLabelRegistry(_ context.Context) ([]homeassistant.LabelRegistryEntry, error) {
+	return f.labels, f.labelsErr
 }
 
 func (f *fakeRegistries) GetStates(_ context.Context) ([]homeassistant.State, error) {

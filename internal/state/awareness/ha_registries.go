@@ -12,8 +12,10 @@ import (
 // per-entity state. Defined as an interface so concrete clients can
 // be swapped in tests without dragging in a real WebSocket connection.
 type HARegistryClient interface {
+	GetAreas(ctx context.Context) ([]homeassistant.Area, error)
 	GetEntityRegistry(ctx context.Context) ([]homeassistant.EntityRegistryEntry, error)
 	GetDeviceRegistry(ctx context.Context) ([]homeassistant.DeviceRegistryEntry, error)
+	GetLabelRegistry(ctx context.Context) ([]homeassistant.LabelRegistryEntry, error)
 	GetStates(ctx context.Context) ([]homeassistant.State, error)
 	GetConfigEntries(ctx context.Context) ([]homeassistant.ConfigEntry, error)
 }
@@ -36,9 +38,18 @@ type renderRegistries struct {
 	entitiesByDevice map[string][]*homeassistant.EntityRegistryEntry
 	entitiesErr      error
 
-	devicesOnce sync.Once
-	devicesByID map[string]*homeassistant.DeviceRegistryEntry
-	devicesErr  error
+	devicesOnce   sync.Once
+	deviceEntries []homeassistant.DeviceRegistryEntry
+	devicesByID   map[string]*homeassistant.DeviceRegistryEntry
+	devicesErr    error
+
+	areasOnce sync.Once
+	areas     []homeassistant.Area
+	areasErr  error
+
+	labelsOnce sync.Once
+	labels     []homeassistant.LabelRegistryEntry
+	labelsErr  error
 
 	statesOnce sync.Once
 	statesByID map[string]*homeassistant.State
@@ -86,6 +97,7 @@ func (r *renderRegistries) devices() (map[string]*homeassistant.DeviceRegistryEn
 			r.devicesErr = err
 			return
 		}
+		r.deviceEntries = append([]homeassistant.DeviceRegistryEntry(nil), devices...)
 		r.devicesByID = make(map[string]*homeassistant.DeviceRegistryEntry, len(devices))
 		for i := range devices {
 			d := &devices[i]
@@ -93,6 +105,30 @@ func (r *renderRegistries) devices() (map[string]*homeassistant.DeviceRegistryEn
 		}
 	})
 	return r.devicesByID, r.devicesErr
+}
+
+func (r *renderRegistries) areaEntries() ([]homeassistant.Area, error) {
+	r.areasOnce.Do(func() {
+		areas, err := r.client.GetAreas(r.ctx)
+		if err != nil {
+			r.areasErr = err
+			return
+		}
+		r.areas = append([]homeassistant.Area(nil), areas...)
+	})
+	return r.areas, r.areasErr
+}
+
+func (r *renderRegistries) labelEntries() ([]homeassistant.LabelRegistryEntry, error) {
+	r.labelsOnce.Do(func() {
+		labels, err := r.client.GetLabelRegistry(r.ctx)
+		if err != nil {
+			r.labelsErr = err
+			return
+		}
+		r.labels = append([]homeassistant.LabelRegistryEntry(nil), labels...)
+	})
+	return r.labels, r.labelsErr
 }
 
 func (r *renderRegistries) states() (map[string]*homeassistant.State, error) {
@@ -133,6 +169,44 @@ func (r *renderRegistries) integrations() (map[string]*homeassistant.ConfigEntry
 		}
 	})
 	return r.integrationByDomain, r.integrationsErr
+}
+
+func (r *renderRegistries) entityMetadata(entityID string, state *homeassistant.State, include *homeassistant.EntityMetadataIncludes) *homeassistant.EntityMetadata {
+	if r == nil || include == nil || !include.Any() {
+		return nil
+	}
+	entities, err := r.entities()
+	if err != nil {
+		return nil
+	}
+	entry := entities[entityID]
+
+	var areas []homeassistant.Area
+	if include.Area || include.Device || include.Labels {
+		areas, err = r.areaEntries()
+		if err != nil {
+			return nil
+		}
+	}
+
+	var labels []homeassistant.LabelRegistryEntry
+	if include.Labels {
+		labels, err = r.labelEntries()
+		if err != nil {
+			return nil
+		}
+	}
+
+	var devices []homeassistant.DeviceRegistryEntry
+	if include.Device || include.Area || include.Labels {
+		if _, err = r.devices(); err != nil {
+			return nil
+		}
+		devices = append([]homeassistant.DeviceRegistryEntry(nil), r.deviceEntries...)
+	}
+
+	resolver := homeassistant.NewEntityMetadataResolver(areas, labels, devices)
+	return resolver.MetadataForEntity(entry, state, *include)
 }
 
 // siblingsByDevice returns sibling entity registry entries for the
