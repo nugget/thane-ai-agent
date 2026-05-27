@@ -100,16 +100,26 @@ const maxMessageMetadataKeyBytes = 64
 // stable schema across calls. ContentTruncated signals when Content was
 // clipped to [maxMessageContentBytes]. Metadata carries transport
 // provenance separated from the literal message body when a known channel
-// envelope is detected. Metadata keys and values are individually capped
-// so one malformed envelope cannot force byte-capped tools to drop all
-// messages.
+// envelope is detected. Metadata keys and string values are individually
+// capped so one malformed envelope cannot force byte-capped tools to
+// drop all messages.
+//
+// Metadata is map[string]any so nested objects can appear under
+// metadata.sender for Signal-like envelopes that resolve a structured
+// {address, name} pair. The model reads metadata.sender.address as a
+// stable handle that cross-references the Session Origin Context block.
+// metadata.sender.name is included only for cross-conversation archive
+// search hits where the model may need to identify a third-party sender
+// (see [FormatSearchResults]); the live-message path
+// ([FormatRecentMessages]) emits address-only to avoid duplicating PII
+// the origin context already carries.
 type MessageView struct {
-	T                string            `json:"t"`
-	Role             string            `json:"role"`
-	Content          string            `json:"content"`
-	ContentTruncated bool              `json:"content_truncated"`
-	SessionID        string            `json:"session_id"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
+	T                string         `json:"t"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content"`
+	ContentTruncated bool           `json:"content_truncated"`
+	SessionID        string         `json:"session_id"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 // SearchResultView is the JSON-facing projection of an archive search hit.
@@ -187,14 +197,19 @@ const maxSearchContextPerSide = 5
 func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) []byte {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
-		match := messageToView(r.Match, now)
+		// Search hits cross conversation boundaries — the matching
+		// session may not be the current run's origin, so the model
+		// cannot rely on Session Origin Context to resolve who the
+		// sender is. Emit the richer sender projection here so
+		// metadata.sender.name is available as best-effort fallback.
+		match := messageToViewWithSender(r.Match, now, senderRich)
 		if match.SessionID == "" {
 			match.SessionID = r.SessionID
 		}
 		views = append(views, SearchResultView{
 			Match:         match,
-			ContextBefore: messagesToViews(tailMessages(r.ContextBefore, maxSearchContextPerSide), now),
-			ContextAfter:  messagesToViews(headMessages(r.ContextAfter, maxSearchContextPerSide), now),
+			ContextBefore: searchContextViews(tailMessages(r.ContextBefore, maxSearchContextPerSide), now),
+			ContextAfter:  searchContextViews(headMessages(r.ContextAfter, maxSearchContextPerSide), now),
 			Highlight:     r.Highlight,
 		})
 	}
@@ -236,8 +251,37 @@ func sessionToView(s *Session, now time.Time) SessionView {
 // unaffected.
 const archiveAssistantRole = "past you"
 
+// senderProjection controls how much of the parsed sender appears in
+// metadata.sender for a rendered MessageView.
+type senderProjection int
+
+const (
+	// senderMinimal emits metadata.sender = {address}. Use for
+	// messages that belong to the current run's session origin —
+	// the model already has the contact's name in the Session
+	// Origin Context block and duplicating it as message metadata
+	// is gratuitous PII.
+	senderMinimal senderProjection = iota
+
+	// senderRich emits metadata.sender = {address, name}. Use for
+	// cross-conversation archive search hits where the model may
+	// need the name to identify a third-party sender it does not
+	// have origin context for.
+	senderRich
+)
+
 func messageToView(m Message, now time.Time) MessageView {
+	return messageToViewWithSender(m, now, senderMinimal)
+}
+
+// messageToViewWithSender is the parameterized form used when the
+// caller knows whether the projection is for a live message or for a
+// cross-conversation search hit.
+func messageToViewWithSender(m Message, now time.Time, sp senderProjection) MessageView {
 	body, metadata := splitTransportEnvelope(m.Content)
+	if sp == senderMinimal {
+		dropSenderName(metadata)
+	}
 	content, truncated := clipContent(body, maxMessageContentBytes)
 	role := m.Role
 	if role == "assistant" {
@@ -250,6 +294,21 @@ func messageToView(m Message, now time.Time) MessageView {
 		ContentTruncated: truncated,
 		SessionID:        m.SessionID,
 		Metadata:         metadata,
+	}
+}
+
+// dropSenderName removes the "name" subfield from a
+// metadata.sender sub-object so the minimal projection emits only the
+// stable address. If sender ends up empty after the drop, the whole
+// "sender" key is removed.
+func dropSenderName(metadata map[string]any) {
+	sender, ok := metadata["sender"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(sender, "name")
+	if len(sender) == 0 {
+		delete(metadata, "sender")
 	}
 }
 
@@ -352,16 +411,22 @@ func sanitizeMetadataToken(value string, maxBytes int) string {
 	return value
 }
 
-func storedHistoryTransportMetadataParts(metadata map[string]string) []metadataPart {
+// storedHistoryTransportMetadataParts flattens the structured
+// transport metadata into the key=value pairs that the stored-history
+// text envelope carries. Sender appears only in group conversations
+// (solo DMs already have the sender obvious from the channel context),
+// and is rendered using the stable address — falling back to the
+// display name only when no address is available.
+func storedHistoryTransportMetadataParts(metadata map[string]any) []metadataPart {
 	if len(metadata) == 0 {
 		return nil
 	}
 	parts := make([]metadataPart, 0, 3)
-	if channel := metadata["channel"]; channel != "" {
+	if channel, _ := metadata["channel"].(string); channel != "" {
 		parts = append(parts, metadataPart{key: "channel", value: channel})
 	}
-	if groupID := metadata["group_id"]; groupID != "" {
-		if sender := metadata["sender"]; sender != "" {
+	if groupID, _ := metadata["group_id"].(string); groupID != "" {
+		if sender := flattenSenderForText(metadata); sender != "" {
 			parts = append(parts, metadataPart{key: "sender", value: sender})
 		}
 		parts = append(parts, metadataPart{key: "group_id", value: groupID})
@@ -369,47 +434,119 @@ func storedHistoryTransportMetadataParts(metadata map[string]string) []metadataP
 	return parts
 }
 
+// flattenSenderForText picks the most useful single string from a
+// structured metadata.sender for the stored-history flat-text path.
+// Prefers the stable address; falls back to the display name when no
+// address resolved. Returns "" when neither is present.
+func flattenSenderForText(metadata map[string]any) string {
+	sender, ok := metadata["sender"].(map[string]any)
+	if !ok || len(sender) == 0 {
+		return ""
+	}
+	if address, _ := sender["address"].(string); address != "" {
+		return address
+	}
+	if name, _ := sender["name"].(string); name != "" {
+		return name
+	}
+	return ""
+}
+
 var signalMessageEnvelopeRE = regexp.MustCompile(`(?s)^Signal message from (.+?)(?: in group (.+?))? \[ts:([^\]]+)\]:\n\n(.*)$`)
 
-func splitTransportEnvelope(content string) (string, map[string]string) {
+// signalSenderRE matches a Signal-envelope sender of the shape
+// "Display Name (+E164)" and captures the name and the address
+// separately. Bare phone numbers (no display name) and bare names
+// (no address) are handled out-of-band by [parseSignalSender].
+var signalSenderRE = regexp.MustCompile(`^(.+?)\s+\((\+[0-9]+)\)\s*$`)
+
+// parseSignalSender splits a Signal envelope's sender slug into a
+// best-effort (name, address) pair. The four observed shapes are
+// handled deterministically:
+//
+//	"David McNett (+15124232707)"  → ("David McNett", "+15124232707")
+//	"+15124232707"                 → ("", "+15124232707")
+//	"David McNett"                 → ("David McNett", "")
+//	""                             → ("", "")
+//
+// Output values are not yet length-clipped — the caller clips when it
+// stores them into the metadata map, so the clip-limit is consistent
+// across all metadata fields.
+func parseSignalSender(raw string) (name, address string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+	if m := signalSenderRE.FindStringSubmatch(raw); m != nil {
+		return strings.TrimSpace(m[1]), strings.TrimSpace(m[2])
+	}
+	if strings.HasPrefix(raw, "+") {
+		return "", raw
+	}
+	return raw, ""
+}
+
+// splitTransportEnvelope detects a known transport envelope on a
+// message's stored Content and returns the literal body plus a
+// structured metadata map suitable for both the JSON projection path
+// (where metadata.sender is a nested {address, name?} sub-object) and
+// the stored-history flat-text envelope path (which flattens via
+// [storedHistoryTransportMetadataParts]).
+//
+// Returns the original content and nil metadata when no envelope
+// matches — the caller treats that as a non-channel message.
+func splitTransportEnvelope(content string) (string, map[string]any) {
 	match := signalMessageEnvelopeRE.FindStringSubmatch(content)
 	if match == nil {
 		return content, nil
 	}
-	metadata := map[string]string{
-		"channel":      "signal",
-		"sender":       strings.TrimSpace(match[1]),
-		"transport_ts": strings.TrimSpace(match[3]),
-	}
+	name, address := parseSignalSender(strings.TrimSpace(match[1]))
+
+	metadata := map[string]any{}
+	setMetadataString(metadata, "channel", "signal")
+	setMetadataString(metadata, "transport_ts", strings.TrimSpace(match[3]))
 	if group := strings.TrimSpace(match[2]); group != "" {
-		metadata["group_id"] = group
+		setMetadataString(metadata, "group_id", group)
 	}
-	return match[4], normalizeMetadata(metadata)
-}
 
-func normalizeMetadata(metadata map[string]string) map[string]string {
+	sender := map[string]any{}
+	setMetadataString(sender, "address", address)
+	setMetadataString(sender, "name", name)
+	if len(sender) > 0 {
+		metadata["sender"] = sender
+	}
+
 	if len(metadata) == 0 {
-		return nil
+		return match[4], nil
 	}
-	out := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		key = sanitizeMetadataToken(key, maxMessageMetadataKeyBytes)
-		value = sanitizeMetadataToken(value, maxMessageMetadataValueBytes)
-		if key == "" || value == "" {
-			continue
-		}
-		out[key] = value
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return match[4], metadata
 }
 
-func messagesToViews(messages []Message, now time.Time) []MessageView {
+// setMetadataString writes a sanitized, clipped string value to a
+// metadata map. The sanitizer in [sanitizeMetadataToken] trims
+// whitespace, collapses runs of whitespace to single spaces,
+// converts newlines and semicolons to safer characters, then clips
+// to maxMessageMetadataValueBytes; values that come out empty after
+// that pass are dropped so the caller can rely on "key present
+// implies non-empty string." It does not strip arbitrary
+// non-printable runes — values that survive the whitespace pass and
+// are non-empty are written through as-is.
+func setMetadataString(m map[string]any, key, value string) {
+	v := sanitizeMetadataToken(value, maxMessageMetadataValueBytes)
+	if v == "" {
+		return
+	}
+	m[key] = v
+}
+
+// searchContextViews renders context messages around a search hit
+// with the rich sender projection (matching the hit itself), since
+// the search result may belong to a different conversation than the
+// current run's origin.
+func searchContextViews(messages []Message, now time.Time) []MessageView {
 	views := make([]MessageView, 0, len(messages))
 	for _, m := range messages {
-		views = append(views, messageToView(m, now))
+		views = append(views, messageToViewWithSender(m, now, senderRich))
 	}
 	return views
 }
