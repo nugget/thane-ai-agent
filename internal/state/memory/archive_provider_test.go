@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -25,6 +26,29 @@ func (m *mockArchiveSearcher) Search(opts SearchOptions) ([]SearchResult, error)
 	m.lastQuery = opts.Query
 	m.lastLimit = opts.Limit
 	return m.results, m.err
+}
+
+// archivePayload is the projection produced under the "### Past
+// Experience" heading. Mirrors the shape of FormatSearchResults so the
+// tests can decode without depending on json tags directly.
+type archivePayload struct {
+	Results   []map[string]any `json:"results"`
+	Truncated bool             `json:"truncated"`
+}
+
+// parseArchiveBody extracts the JSON body that follows the
+// "### Past Experience" heading and returns it for inspection.
+func parseArchiveBody(t *testing.T, out string) archivePayload {
+	t.Helper()
+	if !strings.HasPrefix(out, archiveSectionHeading) {
+		t.Fatalf("archive output missing heading prefix\nGot:\n%s", out)
+	}
+	body := strings.TrimPrefix(out, archiveSectionHeading)
+	var payload archivePayload
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("archive body not valid JSON: %v\nBody: %s", err, body)
+	}
+	return payload
 }
 
 func TestArchiveContextProvider_GetContext(t *testing.T) {
@@ -61,16 +85,21 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:switch.pool_heater"})
 		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
-		if !strings.Contains(got, "Past Experience") {
-			t.Error("output should contain 'Past Experience' heading")
+		if !strings.HasPrefix(got, "### Past Experience") {
+			t.Errorf("output should start with '### Past Experience' heading, got:\n%s", got)
 		}
-		if !strings.Contains(got, "pool heater") {
-			t.Error("output should contain matched message content")
+		payload := parseArchiveBody(t, got)
+		if len(payload.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Results))
 		}
-		if !strings.Contains(got, "sess-abc") {
-			t.Error("output should contain session ID prefix")
+		match := payload.Results[0]["match"].(map[string]any)
+		if !strings.Contains(match["content"].(string), "pool heater") {
+			t.Errorf("match content should mention pool heater, got %q", match["content"])
+		}
+		if got, want := match["session_id"], "sess-abc"; got != want {
+			t.Errorf("session_id = %v, want %v", got, want)
 		}
 		if mock.lastQuery != "switch.pool_heater" {
 			t.Errorf("query = %q, want %q", mock.lastQuery, "switch.pool_heater")
@@ -83,7 +112,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 
 		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
 		if got != "" {
 			t.Errorf("expected empty, got %q", got)
@@ -103,7 +132,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 
 		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "pool heater schedule"})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
 		if got == "" {
 			t.Fatal("expected output from message fallback")
@@ -136,7 +165,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 
 		got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "line one\nline two"})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
 		if got != "" {
 			t.Errorf("expected empty for multiline message, got %q", got)
@@ -150,7 +179,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:sensor.fake"})
 		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
 		if got != "" {
 			t.Errorf("expected empty for no results, got %q", got)
@@ -171,28 +200,52 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 	})
 
-	t.Run("max_bytes_cap_respected", func(t *testing.T) {
-		// Create results with enough content to exceed a small byte budget.
+	t.Run("byte_budget_trims_and_marks_truncated", func(t *testing.T) {
 		mock := &mockArchiveSearcher{
 			results: []SearchResult{
-				makeResult("sess-001", "assistant", "First result with some content that takes up space."),
-				makeResult("sess-002", "assistant", "Second result with more content."),
-				makeResult("sess-003", "assistant", "Third result that should be omitted."),
+				makeResult("sess-001", "assistant", strings.Repeat("First result content. ", 30)),
+				makeResult("sess-002", "assistant", strings.Repeat("Second result content. ", 30)),
+				makeResult("sess-003", "assistant", strings.Repeat("Third result content. ", 30)),
 			},
 		}
-		// Very tight budget: only room for heading + ~1 result.
-		p := NewArchiveContextProvider(mock, 5, 200, nil)
+		// Tight budget — should fit one or two results, not all three.
+		p := NewArchiveContextProvider(mock, 5, 900, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
 		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
-		if len(got) > 300 { // allow some slack for truncation notice
-			t.Errorf("output length %d exceeds expected cap", len(got))
+		if len(got) > 900 {
+			t.Errorf("output length %d exceeds budget 900", len(got))
 		}
-		if !strings.Contains(got, "omitted") {
-			t.Error("expected truncation notice when results are capped")
+		payload := parseArchiveBody(t, got)
+		if len(payload.Results) == 0 {
+			t.Fatal("expected at least one result to fit")
+		}
+		if len(payload.Results) == 3 {
+			t.Error("expected truncation to drop at least one result")
+		}
+		if !payload.Truncated {
+			t.Error("truncated flag should be set when results are dropped")
+		}
+	})
+
+	t.Run("byte_budget_too_small_returns_empty", func(t *testing.T) {
+		mock := &mockArchiveSearcher{
+			results: []SearchResult{
+				makeResult("sess-001", "assistant", strings.Repeat("very large content ", 50)),
+			},
+		}
+		p := NewArchiveContextProvider(mock, 5, 50, nil)
+
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:foo"})
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		if got != "" {
+			t.Errorf("expected empty when nothing fits, got:\n%s", got)
 		}
 	})
 
@@ -256,7 +309,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 	})
 
-	t.Run("context_messages_included", func(t *testing.T) {
+	t.Run("context_messages_included_as_metadata", func(t *testing.T) {
 		mock := &mockArchiveSearcher{
 			results: []SearchResult{
 				makeResultWithContext("sess-ctx", "assistant", "The answer is 42.",
@@ -274,31 +327,50 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:meaning.of.life"})
 		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 		if err != nil {
-			t.Fatalf("GetContext: %v", err)
+			t.Fatalf("TagContext: %v", err)
 		}
-		if !strings.Contains(got, "What is the answer?") {
-			t.Error("output should contain context before")
+		payload := parseArchiveBody(t, got)
+		if len(payload.Results) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Results))
 		}
-		if !strings.Contains(got, "The answer is 42.") {
-			t.Error("output should contain matched message")
+		hit := payload.Results[0]
+		before, _ := hit["context_before"].([]any)
+		after, _ := hit["context_after"].([]any)
+		if len(before) != 1 || len(after) != 1 {
+			t.Errorf("expected one context message on each side, got before=%d after=%d", len(before), len(after))
 		}
-		if !strings.Contains(got, "Thanks!") {
-			t.Error("output should contain context after")
+		matchContent := hit["match"].(map[string]any)["content"].(string)
+		if !strings.Contains(matchContent, "The answer is 42.") {
+			t.Errorf("match.content should be the match body, got %q", matchContent)
 		}
 	})
 
-	t.Run("match_is_bolded", func(t *testing.T) {
+	t.Run("delta_timestamps_not_absolute", func(t *testing.T) {
 		mock := &mockArchiveSearcher{
 			results: []SearchResult{
-				makeResult("sess-bold", "assistant", "Important finding."),
+				makeResult("sess-time", "assistant", "Some past observation."),
 			},
 		}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
 		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:test"})
-		got, _ := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
-		if !strings.Contains(got, "**[assistant] Important finding.**") {
-			t.Errorf("matched message should be bolded, got:\n%s", got)
+		got, err := p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
+		if err != nil {
+			t.Fatalf("TagContext: %v", err)
+		}
+		// Delta format is "-Ns" or "+Ns"; absolute would contain "T" between date/time.
+		// Make sure no date-only or RFC3339 timestamp shows up in the payload.
+		if strings.Contains(got, ts.Format(time.DateOnly)) {
+			t.Errorf("output should use deltas, not absolute date %q\nGot:\n%s", ts.Format(time.DateOnly), got)
+		}
+		if strings.Contains(got, ts.Format(time.RFC3339)) {
+			t.Errorf("output should use deltas, not RFC3339\nGot:\n%s", got)
+		}
+		payload := parseArchiveBody(t, got)
+		match := payload.Results[0]["match"].(map[string]any)
+		tField, _ := match["t"].(string)
+		if !strings.HasPrefix(tField, "-") {
+			t.Errorf("match.t should be a negative delta like '-Ns', got %q", tField)
 		}
 	})
 }
@@ -381,7 +453,7 @@ func TestStripSubjectPrefix(t *testing.T) {
 	}
 }
 
-func TestTruncateContent(t *testing.T) {
+func TestPreviewContent(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -390,26 +462,23 @@ func TestTruncateContent(t *testing.T) {
 		{"short", "hello", "hello"},
 		{"empty", "", "(empty)"},
 		{"whitespace_only", "   ", "(empty)"},
-		{"multiline", "first line\nsecond line", "first line..."},
+		{"multiline", "first line\nsecond line", "first line"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateContent(tt.input)
+			got := previewContent(tt.input)
 			if got != tt.want {
-				t.Errorf("truncateContent(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("previewContent(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
 
 	t.Run("long_content_truncated", func(t *testing.T) {
-		long := strings.Repeat("word ", 60) // 300 chars
-		got := truncateContent(long)
-		if len(got) > maxMessageChars+10 { // allow for "..."
-			t.Errorf("truncated length %d exceeds limit", len(got))
-		}
+		long := strings.Repeat("word ", 60)
+		got := previewContent(long)
 		if !strings.HasSuffix(got, "...") {
-			t.Error("truncated content should end with '...'")
+			t.Errorf("long preview should end with '...', got %q", got)
 		}
 	})
 }
