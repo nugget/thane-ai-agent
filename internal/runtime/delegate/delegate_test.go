@@ -1259,19 +1259,19 @@ func assertContainsDelegateFamily(t *testing.T, toolNames []string) {
 	}
 }
 
-// TestPrepareExecution_ProfileClamps covers the four if-zero clamps
+// TestPrepareExecution_RunPolicyClamps covers the four if-zero clamps
 // in [Executor.prepareExecution] that fall back to the package
-// defaults when a profile leaves a budget field at its zero value.
-// One row per field × one row per "profile sets nonzero value"
+// defaults when a run policy leaves a budget field at its zero value.
+// One row per field × one row per "policy sets nonzero value"
 // preservation guard. The recursion-guard regression in #833 happened
 // because a sibling branch wasn't directly asserted; same shape
 // here.
-func TestPrepareExecution_ProfileClamps(t *testing.T) {
+func TestPrepareExecution_RunPolicyClamps(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name            string
-		profile         Profile
+		policy          RunPolicy
 		wantMaxIter     int
 		wantMaxTokens   int
 		wantMaxDuration time.Duration
@@ -1279,7 +1279,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 	}{
 		{
 			name:            "all fields zero → all clamp to defaults",
-			profile:         Profile{Name: "general"},
+			policy:          RunPolicy{Name: "general"},
 			wantMaxIter:     defaultMaxIter,
 			wantMaxTokens:   defaultMaxTokens,
 			wantMaxDuration: defaultMaxDuration,
@@ -1287,7 +1287,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		},
 		{
 			name: "all fields nonzero → values preserved",
-			profile: Profile{
+			policy: RunPolicy{
 				Name:        "general",
 				MaxIter:     7,
 				MaxTokens:   12345,
@@ -1301,7 +1301,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		},
 		{
 			name:            "only MaxIter set → others clamp, MaxIter preserved",
-			profile:         Profile{Name: "general", MaxIter: 3},
+			policy:          RunPolicy{Name: "general", MaxIter: 3},
 			wantMaxIter:     3,
 			wantMaxTokens:   defaultMaxTokens,
 			wantMaxDuration: defaultMaxDuration,
@@ -1309,7 +1309,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		},
 		{
 			name:            "only MaxTokens set → others clamp, MaxTokens preserved",
-			profile:         Profile{Name: "general", MaxTokens: 5000},
+			policy:          RunPolicy{Name: "general", MaxTokens: 5000},
 			wantMaxIter:     defaultMaxIter,
 			wantMaxTokens:   5000,
 			wantMaxDuration: defaultMaxDuration,
@@ -1317,7 +1317,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		},
 		{
 			name:            "only MaxDuration set → others clamp, MaxDuration preserved",
-			profile:         Profile{Name: "general", MaxDuration: 3 * time.Minute},
+			policy:          RunPolicy{Name: "general", MaxDuration: 3 * time.Minute},
 			wantMaxIter:     defaultMaxIter,
 			wantMaxTokens:   defaultMaxTokens,
 			wantMaxDuration: 3 * time.Minute,
@@ -1325,7 +1325,7 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		},
 		{
 			name:            "only ToolTimeout set → others clamp, ToolTimeout preserved",
-			profile:         Profile{Name: "general", ToolTimeout: 2 * time.Minute},
+			policy:          RunPolicy{Name: "general", ToolTimeout: 2 * time.Minute},
 			wantMaxIter:     defaultMaxIter,
 			wantMaxTokens:   defaultMaxTokens,
 			wantMaxDuration: defaultMaxDuration,
@@ -1337,9 +1337,9 @@ func TestPrepareExecution_ProfileClamps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
-			exec.profiles = map[string]*Profile{tc.profile.Name: &tc.profile}
+			exec.runPolicies = map[string]*RunPolicy{tc.policy.Name: &tc.policy}
 
-			prep, err := exec.prepareExecution(context.Background(), "any task", tc.profile.Name, "", nil, executionOptions{})
+			prep, err := exec.prepareExecution(context.Background(), "any task", tc.policy.Name, "", nil, executionOptions{})
 			if err != nil {
 				t.Fatalf("prepareExecution: %v", err)
 			}
@@ -1540,18 +1540,18 @@ func TestMergeDelegateScopeTags(t *testing.T) {
 	}
 }
 
-// TestApplyProfileDefaultTags is the branch-coverage table for the
-// profile-defaults merge. The three early-return branches
-// (explicitScopeRequested / nil profile / empty DefaultTags) each
-// have a row; the apply-loop's three skip conditions (empty, already
-// in scope, non-delegable) each have a row.
-func TestApplyProfileDefaultTags(t *testing.T) {
+// TestApplyRunPolicyDefaultTags is the branch-coverage table for the
+// run-policy-defaults merge. The three early-return branches
+// (explicitScopeRequested / nil policy / empty DefaultTags) each have
+// a row; the apply-loop's three skip conditions (empty, already in
+// scope, non-delegable) each have a row.
+func TestApplyRunPolicyDefaultTags(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name                   string
 		scope                  []string
-		profile                *Profile
+		policy                 *RunPolicy
 		explicitScopeRequested bool
 		wantMerged             []string
 		wantApplied            []string
@@ -1559,50 +1559,50 @@ func TestApplyProfileDefaultTags(t *testing.T) {
 		{
 			name:                   "explicit scope short-circuits defaults",
 			scope:                  []string{"web"},
-			profile:                &Profile{DefaultTags: []string{"ha"}},
+			policy:                 &RunPolicy{DefaultTags: []string{"ha"}},
 			explicitScopeRequested: true,
 			wantMerged:             []string{"web"},
 			wantApplied:            nil,
 		},
 		{
-			name:        "nil profile returns scope copy with no defaults",
+			name:        "nil policy returns scope copy with no defaults",
 			scope:       []string{"web"},
-			profile:     nil,
+			policy:      nil,
 			wantMerged:  []string{"web"},
 			wantApplied: nil,
 		},
 		{
 			name:        "empty DefaultTags returns scope copy with no defaults",
 			scope:       []string{"web"},
-			profile:     &Profile{DefaultTags: nil},
+			policy:      &RunPolicy{DefaultTags: nil},
 			wantMerged:  []string{"web"},
 			wantApplied: nil,
 		},
 		{
 			name:        "defaults applied when scope empty and not explicit",
 			scope:       nil,
-			profile:     &Profile{DefaultTags: []string{"ha", "web"}},
+			policy:      &RunPolicy{DefaultTags: []string{"ha", "web"}},
 			wantMerged:  []string{"ha", "web"},
 			wantApplied: []string{"ha", "web"},
 		},
 		{
 			name:        "default already in scope is skipped",
 			scope:       []string{"ha"},
-			profile:     &Profile{DefaultTags: []string{"ha", "web"}},
+			policy:      &RunPolicy{DefaultTags: []string{"ha", "web"}},
 			wantMerged:  []string{"ha", "web"},
 			wantApplied: []string{"web"},
 		},
 		{
 			name:        "empty-string and whitespace-only defaults skipped",
 			scope:       nil,
-			profile:     &Profile{DefaultTags: []string{"", "  ", "ha"}},
+			policy:      &RunPolicy{DefaultTags: []string{"", "  ", "ha"}},
 			wantMerged:  []string{"ha"},
 			wantApplied: []string{"ha"},
 		},
 		{
 			name:        "non-delegable defaults skipped (message_channel, owner)",
 			scope:       nil,
-			profile:     &Profile{DefaultTags: []string{"message_channel", "owner", "ha"}},
+			policy:      &RunPolicy{DefaultTags: []string{"message_channel", "owner", "ha"}},
 			wantMerged:  []string{"ha"},
 			wantApplied: []string{"ha"},
 		},
@@ -1611,7 +1611,7 @@ func TestApplyProfileDefaultTags(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gotMerged, gotApplied := applyProfileDefaultTags(tc.scope, tc.profile, tc.explicitScopeRequested)
+			gotMerged, gotApplied := applyRunPolicyDefaultTags(tc.scope, tc.policy, tc.explicitScopeRequested)
 			if !stringSliceEqual(gotMerged, tc.wantMerged) {
 				t.Errorf("merged = %v, want %v", gotMerged, tc.wantMerged)
 			}
