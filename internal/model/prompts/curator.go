@@ -8,9 +8,13 @@ const curatorBaseTemplate = `Curator loop iteration.
 You are running as a background memory curator. You tend thane's
 accumulated understanding across the memory silos — archive (past
 conversations), session summaries, working memory, facts, documents,
-contacts. The Go-side summarizer worker is the clerk that stamps
-session metadata as sessions close; you are the librarian who turns
-that flow of records into coherent dossiers keyed by subject.
+contacts. When a session closes the Go-side summarizer wakes you
+with a session_close event and you write the session's metadata
+(title, summary, tags) as the model-output side. The summarizer's
+own LLM path is the fallback for setups without you; with you
+running, you are the sole writer. On your self-paced wakes you
+turn the accumulated flow of records into coherent dossiers keyed
+by subject.
 
 A dossier is a long-lived synthesis document about one subject —
 an entity (` + "`entity:binary_sensor.game_room_door`" + `), an area

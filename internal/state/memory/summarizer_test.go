@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -707,4 +708,121 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
+}
+
+// TestWorker_CuratorWakeShortCircuitsLLM verifies the #989
+// transformation: when the worker has a curator-wake function set,
+// real sessions fire the wake instead of calling the LLM. The wake
+// becomes the backstop delivery channel; the LLM path is gone.
+// markEmpty still runs for zero-message sessions (SQL-only, no
+// model needed regardless of mode).
+func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// One real session (with messages) + one empty session.
+	real := createUnsummarizedSession(t, store, "conv-real")
+	empty, err := store.StartSession("conv-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(empty.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		mu            sync.Mutex
+		wakedSessions []string
+	)
+	cfg := SummarizerConfig{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
+	w.SetCuratorWake(func(_ context.Context, sessionID, _ string) error {
+		mu.Lock()
+		wakedSessions = append(wakedSessions, sessionID)
+		mu.Unlock()
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+
+	// Give the startup scan time to process both sessions.
+	waitFor(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(wakedSessions) >= 1
+	})
+	time.Sleep(50 * time.Millisecond) // settle any further work
+
+	cancel()
+	w.Stop()
+
+	// Real session: wake fired, LLM NOT called.
+	if mock.calls.Load() != 0 {
+		t.Errorf("expected 0 LLM calls when curator wake is set, got %d", mock.calls.Load())
+	}
+	mu.Lock()
+	snapshot := append([]string(nil), wakedSessions...)
+	mu.Unlock()
+	foundReal := false
+	for _, id := range snapshot {
+		if id == real.ID {
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Errorf("real session %s never fired curator wake; waked=%v", ShortID(real.ID), snapshot)
+	}
+
+	// Empty session: markEmpty ran (SQL-only path), so it should not
+	// be in the unsummarized list anymore.
+	remaining, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range remaining {
+		if sess.ID == empty.ID {
+			t.Error("empty session should have been markEmpty'd, still in queue")
+		}
+	}
+}
+
+// TestWorker_CuratorWakeFailureFallsBackToLLM — when the wake hook
+// returns an error (curator down, queue full), the worker falls
+// through to the direct LLM path so the session still gets
+// summarized one way or the other.
+func TestWorker_CuratorWakeFailureFallsBackToLLM(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+	createUnsummarizedSession(t, store, "conv-fallback")
+
+	cfg := SummarizerConfig{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
+	w.SetCuratorWake(func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("simulated curator unavailable")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+	waitFor(t, 5*time.Second, func() bool {
+		return mock.calls.Load() >= 1
+	})
+	cancel()
+	w.Stop()
+
+	if mock.calls.Load() == 0 {
+		t.Error("expected LLM fallback when curator wake fails, got 0 calls")
+	}
 }
