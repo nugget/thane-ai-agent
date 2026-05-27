@@ -168,8 +168,8 @@ func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
 	if result.Model != "deepslate/google/gemma-3-4b" {
 		t.Fatalf("Model = %q", result.Model)
 	}
-	if result.ProfileName != "ha" {
-		t.Fatalf("ProfileName = %q, want ha", result.ProfileName)
+	if result.RunPolicyName != "ha" {
+		t.Fatalf("RunPolicyName = %q, want ha", result.RunPolicyName)
 	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
@@ -256,8 +256,8 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 			if err != nil {
 				t.Fatalf("execute() error = %v", err)
 			}
-			if result.ProfileName != "ha" {
-				t.Fatalf("ProfileName = %q, want ha profile derived from %v tags", result.ProfileName, tc.tags)
+			if result.RunPolicyName != "ha" {
+				t.Fatalf("RunPolicyName = %q, want ha profile derived from %v tags", result.RunPolicyName, tc.tags)
 			}
 
 			if captured.UsageTaskName != "ha" {
@@ -840,9 +840,9 @@ func TestNowToolHandler_DefaultProfile(t *testing.T) {
 	}
 }
 
-func TestBuiltinProfiles_GeneralForcesLocalOnly(t *testing.T) {
-	profiles := builtinProfiles()
-	general, ok := profiles["general"]
+func TestBuiltinRunPolicies_GeneralForcesLocalOnly(t *testing.T) {
+	policies := builtinRunPolicies()
+	general, ok := policies["general"]
 	if !ok {
 		t.Fatal("missing 'general' profile")
 	}
@@ -864,9 +864,9 @@ func TestBuiltinProfiles_GeneralForcesLocalOnly(t *testing.T) {
 	}
 }
 
-func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
-	profiles := builtinProfiles()
-	ha, ok := profiles["ha"]
+func TestBuiltinRunPolicies_HAForcesLocalOnly(t *testing.T) {
+	policies := builtinRunPolicies()
+	ha, ok := policies["ha"]
 	if !ok {
 		t.Fatal("missing 'ha' profile")
 	}

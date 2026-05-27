@@ -13,9 +13,24 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 )
 
-// Profile defines the configuration for a delegation context.
-type Profile struct {
-	// Name is the profile identifier (e.g., "general", "ha").
+// RunPolicy bounds and routes a single delegated run: budget caps,
+// default tags, and router hints. Operator-facing config still calls
+// these "profiles" (the YAML key is `delegate.profiles`, the wire
+// JSON field is `profile`, the log key is `profile`) — the rename is
+// internal-only and clarifies that the type expresses how a delegated
+// run is bounded and routed, not a free-form configuration profile.
+//
+// Profiles vs. delegate run policies vs. virtual models — three
+// distinct concepts that used to share the word "profile":
+//   - virtual model: user-facing `thane:*` model name selected by
+//     clients (routes via [router.VirtualModel]).
+//   - [router.LoopProfile]: loop/wake routing shape (model, mission,
+//     quality floor, etc.).
+//   - RunPolicy (this type): internal delegate run policy.
+type RunPolicy struct {
+	// Name is the policy identifier (e.g., "general", "ha"). Matches
+	// the YAML key under `delegate.profiles.<name>` and the value
+	// surfaced as `profile=<name>` in model-facing result strings.
 	Name string
 
 	// Description is a human-readable summary for logging.
@@ -49,9 +64,9 @@ const (
 	defaultToolTimeout = 30 * time.Second
 )
 
-// builtinProfiles returns budget and routing defaults for delegate runs.
-func builtinProfiles() map[string]*Profile {
-	return map[string]*Profile{
+// builtinRunPolicies returns budget and routing defaults for delegate runs.
+func builtinRunPolicies() map[string]*RunPolicy {
+	return map[string]*RunPolicy{
 		"general": {
 			Name:        "general",
 			Description: "General-purpose delegation defaults",
