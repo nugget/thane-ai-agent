@@ -167,8 +167,13 @@ func applyRunPolicyDefaultTags(scopeTags []string, policy *RunPolicy, explicitSc
 //  1. Optional tag narrowing. When the caller requested an explicit
 //     scope or supplied non-empty scope tags, narrow the parent
 //     registry by the union of scope tags and operator core tags.
-//     If that union is empty (explicit-empty-scope), FilteredCopy(nil)
-//     yields a registry with zero non-core tools.
+//     FilterByTags preserves Tool.Core members so the tag-navigation
+//     surface stays reachable. When the union is empty
+//     (explicit-empty-scope with no core tags configured),
+//     FilteredCopy(nil) yields a zero-tool registry — FilteredCopy
+//     does not preserve Tool.Core, so the explicit-empty-scope
+//     delegate sees no tools at all. That's the documented contract
+//     covered by TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools.
 //
 //  2. Recursion guard. Strip the delegate family
 //     ([delegateToolExclusions]) so a delegate can't spawn another
