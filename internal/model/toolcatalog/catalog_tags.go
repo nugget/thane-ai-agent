@@ -97,7 +97,6 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"ha": {
 		Description: "Home Assistant state, control, registry, and automation tools.",
 		Parents:     []string{"home"},
-		Aliases:     []string{"homeassistant"},
 	},
 	"loops": {
 		Description: "Live loop status, sleep control, notifications, ad hoc spawn, and durable loop-definition authoring tools.",
