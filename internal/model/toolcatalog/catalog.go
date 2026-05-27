@@ -55,10 +55,12 @@ func (k TagKind) IsMenu() bool {
 // shape grew incrementally and was formalized in PR-G as part of the
 // #910 talent corpus overhaul to make tag-grouping data instead of
 // prose: leaf tags point at the menu(s) they belong under via
-// [Parents]. Tag names are first-class — there is no alias mechanism;
-// every external surface (operator config, channel bindings, loop
-// specs, persisted scope, talents, knowledge frontmatter) must spell
-// each tag with its canonical name.
+// [Parents]. Built-in tag names have no aliases — every external
+// surface (operator config, channel bindings, loop specs, persisted
+// scope, talents, knowledge frontmatter) must spell each built-in
+// tag with its compiled-in name. Operators may still define their
+// own ad-hoc tags via the capability_tags YAML overlay; those names
+// pass through verbatim.
 type BuiltinTagSpec struct {
 	// Description is the short, model-facing summary rendered into
 	// the tag menu and tag_inspect output.

@@ -96,11 +96,6 @@ clear forecast fetching for that subscription.
 
 ## `ha` — Home Assistant state and control
 
-`homeassistant` is an alias that resolves to `ha`. Either name works at
-`tag_activate`; the canonical name `ha` is what flows through the
-scope and prompt rendering.
-
-
 | Tool | Description |
 |------|-------------|
 | `ha_control_device` | Natural-language device control with fuzzy entity matching. |

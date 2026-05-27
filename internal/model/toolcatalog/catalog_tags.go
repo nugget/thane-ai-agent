@@ -2,11 +2,10 @@ package toolcatalog
 
 // builtinTagSpecs is the compiled-in tag catalog. PR-G formalized the
 // hierarchy: every leaf declares its Parents (the menu trailheads it
-// appears under), aliases funnel into canonical names via Aliases, and
-// coarse trailheads are explicitly marked Kind: TagKindMenu. Some
-// leaves legitimately serve more than one menu (files spans development
-// and knowledge; web spans development, knowledge, and media) and
-// declare multi-valued Parents.
+// appears under), and coarse trailheads are explicitly marked
+// Kind: TagKindMenu. Some leaves legitimately serve more than one
+// menu (files spans development and knowledge; web spans development,
+// knowledge, and media) and declare multi-valued Parents.
 //
 // Adding a new tag: pick a Kind, write a Description that fits the
 // model-facing menu, and assign Parents from the existing menus when
