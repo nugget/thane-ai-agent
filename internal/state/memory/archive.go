@@ -1330,13 +1330,12 @@ type matchWithHighlight struct {
 // literal query as a phrase (precision); when phrase hits are
 // fewer than opts.Limit, the backfill pass adds OR-of-terms hits
 // (recall headroom) without disturbing the phrase-anchored
-// ordering. The two passes share the same anticipation /
-// conversation-ID filters via ftsConditions.
+// ordering. Both passes share the same anticipation and
+// conversation-ID filters because they both go through runFTSQuery.
 //
-// Single-word queries collapse cleanly: the phrase form
-// `"word"` is identical to the OR form `"word"` so the backfill
-// produces no new rows. The cost is one extra prepared-statement
-// execution, microseconds.
+// Single-word queries skip the backfill entirely: the OR form
+// `"word"` is identical to the phrase form, so a second query
+// would only produce duplicates.
 func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, error) {
 	phrase := phraseFTS5Query(opts.Query)
 	if phrase == "" {
