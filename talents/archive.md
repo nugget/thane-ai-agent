@@ -80,8 +80,8 @@ teaser: "Semantic search across past sessions — phrasing matters less than con
 
 # Search by text
 
-You have a topic, phrase, or concept in mind. Semantic search
-across every past session you've had with anyone:
+You have a topic, phrase, or concept in mind. The search runs
+against three surfaces at once and returns them in one envelope:
 
 ```json
 {
@@ -90,11 +90,30 @@ across every past session you've had with anyone:
 }
 ```
 
-Each result is the matching message plus surrounding context bounded
-by natural silence gaps — so you see a moment in conversation, not
-an isolated line. The default 10-minute silence threshold catches
-conversational breaks; tighten with `silence_minutes` for tighter
-clips, loosen for fuller context.
+Returns:
+
+```
+{
+  "messages":       [ ... ],    // verbatim raw-message hits with context
+  "sessions":       [ ... ],    // session summaries (title + summary + tags)
+  "working_memory": [ ... ],    // per-conversation distilled state
+  "truncated": false
+}
+```
+
+Read distilled first. `sessions[]` and `working_memory[]` are the
+summarizer and metacog loop's compressed view of the same history —
+higher signal per byte than scrolling through `messages[]` context
+windows. When a session summary hit looks promising, pull the full
+transcript with `archive_session_transcript`. When `messages[]` has
+the right slice but you need more context around it, the same
+trailhead applies.
+
+Each `messages[]` hit carries the matching message plus surrounding
+context bounded by natural silence gaps — so you see a moment in
+conversation, not an isolated line. The default 10-minute silence
+threshold catches conversational breaks; tighten with
+`silence_minutes` for tighter clips, loosen for fuller context.
 
 ## Scoping to one conversation
 

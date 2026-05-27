@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSearchSessions_FindsByTitleSummaryTags exercises the
@@ -276,4 +278,139 @@ func splitTags(s string) []string {
 		}
 	}
 	return out
+}
+
+// TestMemorySearch_AllSurfacesReachModelEnvelope is the seam-level
+// test for #977 Finding 2: a query that has hits across all three
+// memory surfaces (raw messages, session summaries, working memory)
+// must produce a SearchBundle that round-trips through the
+// multi-surface JSON envelope with every surface present. Catches
+// any regression where the unified search drops a surface, or
+// FormatMultiKindResults omits an array.
+func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
+	dbPath := t.TempDir() + "/multi-surface.db"
+	archive, err := NewArchiveStore(dbPath, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { archive.Close() })
+	if !archive.FTSEnabled() {
+		t.Skip("FTS5 not available")
+	}
+
+	working, err := NewWorkingMemoryStore(archive.DB(), archive.FTSEnabled())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Raw-message hit: archive a message about the freezer alarm.
+	if err := archive.ArchiveMessages([]Message{{
+		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
+		Role:          "user",
+		Content:       "Did the freezer alarm go off again last night?",
+		Timestamp:     time.Date(2026, 2, 12, 22, 0, 0, 0, time.UTC),
+		ArchiveReason: string(ArchiveReasonReset),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Session-summary hit: a separate session distilled into metadata.
+	sess, err := archive.StartSession("conv-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.EndSession(sess.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.SetSessionMetadata(sess.ID,
+		&SessionMetadata{OneLiner: "Diagnosed the freezer alarm wiring issue."},
+		"Freezer alarm troubleshooting",
+		[]string{"freezer", "alarm", "kitchen"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Working-memory hit: a per-conversation living distillation.
+	if err := working.Set("conv-3",
+		"Recent thread: user is monitoring the freezer alarm patterns "+
+			"after last week's wiring rework. Watching for false trips."); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unified search across all three surfaces.
+	searcher := NewMemorySearch(archive, working, nil)
+	bundle, err := searcher.Search(SearchOptions{Query: "freezer alarm", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(bundle.Messages) == 0 {
+		t.Error("expected at least one raw-message hit")
+	}
+	if len(bundle.Sessions) == 0 {
+		t.Error("expected at least one session-summary hit")
+	}
+	if len(bundle.WorkingMemory) == 0 {
+		t.Error("expected at least one working-memory hit")
+	}
+
+	// Round-trip through the model-facing envelope. Every surface
+	// must be present (as a non-nil array) so the model sees a
+	// consistent shape.
+	now := time.Now()
+	envelope := FormatMultiKindResults(bundle, now, false)
+	var parsed struct {
+		Messages      []json.RawMessage `json:"messages"`
+		Sessions      []json.RawMessage `json:"sessions"`
+		WorkingMemory []json.RawMessage `json:"working_memory"`
+		Truncated     bool              `json:"truncated"`
+	}
+	if err := json.Unmarshal(envelope, &parsed); err != nil {
+		t.Fatalf("envelope did not round-trip: %v\n%s", err, envelope)
+	}
+	if len(parsed.Messages) == 0 || len(parsed.Sessions) == 0 || len(parsed.WorkingMemory) == 0 {
+		t.Errorf("envelope dropped a surface: messages=%d sessions=%d working_memory=%d\n%s",
+			len(parsed.Messages), len(parsed.Sessions), len(parsed.WorkingMemory), envelope)
+	}
+}
+
+// TestMemorySearch_DistilledFailureDoesNotBlockMessages — a session
+// or working-memory search error must NOT take down the raw-message
+// results. Soft-fail of the distilled side is what keeps retrieval
+// resilient.
+func TestMemorySearch_DistilledFailureDoesNotBlockMessages(t *testing.T) {
+	dbPath := t.TempDir() + "/soft-fail.db"
+	archive, err := NewArchiveStore(dbPath, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { archive.Close() })
+	if !archive.FTSEnabled() {
+		t.Skip("FTS5 not available")
+	}
+
+	// Seed a raw message so messages_fts has something to find.
+	if err := archive.ArchiveMessages([]Message{{
+		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
+		Role: "user", Content: "this is the keeper",
+		Timestamp:     time.Now(),
+		ArchiveReason: string(ArchiveReasonReset),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Working memory store deliberately nil — exercising the "no
+	// working_memory available" branch. Sessions search is in the
+	// same DB, healthy.
+	searcher := NewMemorySearch(archive, nil, nil)
+	bundle, err := searcher.Search(SearchOptions{Query: "keeper", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Messages) == 0 {
+		t.Fatal("messages search blocked by missing working memory — soft-fail broken")
+	}
+	if len(bundle.WorkingMemory) != 0 {
+		t.Errorf("expected zero working_memory hits with nil store, got %d", len(bundle.WorkingMemory))
+	}
 }

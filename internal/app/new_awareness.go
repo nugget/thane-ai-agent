@@ -233,10 +233,14 @@ func (a *App) initAwareness(s *newState) error {
 
 	// Archive retrieval injection — pre-warm cold-start loops with
 	// relevant past conversation excerpts so the model has experiential
-	// judgment alongside Layer 1 knowledge. See issue #404.
+	// judgment alongside Layer 1 knowledge. See issue #404. The
+	// MemorySearch wrapper unifies raw-message and distilled-surface
+	// retrieval into the same call so prewarm and the model-initiated
+	// archive_search tool can't drift apart (see #977 Finding 2).
 	if cfg.Prewarm.Enabled && cfg.Prewarm.Archive.Enabled {
+		searcher := memory.NewMemorySearch(a.archiveStore, a.wmStore, logger)
 		archiveProvider := memory.NewArchiveContextProvider(
-			a.archiveStore,
+			searcher,
 			cfg.Prewarm.Archive.MaxResults,
 			cfg.Prewarm.Archive.MaxBytes,
 			logger,

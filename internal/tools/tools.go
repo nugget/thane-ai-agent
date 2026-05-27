@@ -28,6 +28,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // Tool represents a callable tool.
@@ -55,26 +56,27 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools           map[string]*Tool
-	tagIndex        map[string][]string // tag → tool names
-	ha              *homeassistant.Client
-	scheduler       *scheduler.Scheduler
-	factTools       *knowledge.Tools
-	contactTools    *contacts.Tools
-	emailTools      *email.Tools
-	notifier        *notifications.Sender
-	notifRecords    *notifications.RecordStore
-	notifRouter     *notifications.NotificationRouter
-	notifDispatcher CallbackDispatcher
-	companionCaller companionCallFunc
-	forgeTools      forgeHandler
-	fileTools       *FileTools
-	shellExec       *ShellExec
-	attachmentTools *attachments.Tools
-	tempFileStore   *TempFileStore
-	usageStore      *usage.Store
-	lensStore       *LensStore
-	logIndexDB      *sql.DB
+	tools              map[string]*Tool
+	tagIndex           map[string][]string // tag → tool names
+	ha                 *homeassistant.Client
+	scheduler          *scheduler.Scheduler
+	factTools          *knowledge.Tools
+	contactTools       *contacts.Tools
+	emailTools         *email.Tools
+	notifier           *notifications.Sender
+	notifRecords       *notifications.RecordStore
+	notifRouter        *notifications.NotificationRouter
+	notifDispatcher    CallbackDispatcher
+	companionCaller    companionCallFunc
+	forgeTools         forgeHandler
+	fileTools          *FileTools
+	shellExec          *ShellExec
+	attachmentTools    *attachments.Tools
+	tempFileStore      *TempFileStore
+	usageStore         *usage.Store
+	lensStore          *LensStore
+	logIndexDB         *sql.DB
+	workingMemoryStore *memory.WorkingMemoryStore
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 

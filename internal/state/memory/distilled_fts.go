@@ -4,10 +4,158 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
+
+// SearchBundle is the multi-surface result envelope. Always carries
+// all three slices — an empty slice means "no hits on this surface"
+// (the non-nil zero-length list is the explicit signal to the
+// model). Truncated propagates from the underlying raw-message
+// search; distilled surfaces don't truncate within a single call.
+type SearchBundle struct {
+	Messages      []SearchResult
+	Sessions      []SessionMatch
+	WorkingMemory []WorkingMemoryMatch
+	Truncated     bool
+}
+
+// MemorySearcher is the unified read-side interface across the
+// memory surfaces. Both the model-initiated archive_search tool and
+// the wake-time prewarm provider consume this same interface, so
+// the two paths cannot drift — any retrieval improvement applies
+// uniformly to both. Implementations: [MemorySearch] for production
+// (composed from the real stores), and test mocks.
+//
+// **Contract:** Search MUST return a non-nil *SearchBundle whenever
+// it returns a nil error. Callers may rely on this — "no hits" is
+// signaled by an empty bundle (all three slices empty), not by a nil
+// bundle. A nil bundle paired with a nil error is treated as a
+// programming bug by the prewarm provider and logged as a soft
+// fault. Returning a non-nil error means the bundle value is
+// undefined and callers should not read it.
+type MemorySearcher interface {
+	Search(opts SearchOptions) (*SearchBundle, error)
+}
+
+// MemorySearch is the production MemorySearcher: composes
+// [ArchiveStore] (raw messages via messages_fts, session summaries
+// via sessions_fts) and [WorkingMemoryStore] (per-conversation
+// distilled state via working_memory_fts) into a single search
+// surface.
+//
+// Session and working_memory hits soft-fail individually — a query
+// error on a distilled surface doesn't suppress the raw-message
+// results the model would otherwise have seen. Only a raw-message
+// search failure propagates.
+type MemorySearch struct {
+	archive *ArchiveStore
+	working *WorkingMemoryStore
+	logger  *slog.Logger
+}
+
+// distilledSurfaceLimit caps how many session and working_memory
+// matches each query returns. Distilled hits are dense per byte
+// compared to raw messages with context windows, so a small cap
+// keeps the model-visible envelope readable without sacrificing
+// useful coverage. Working memory in particular is one row per
+// conversation — more than 3 hits rarely tells the model anything
+// new at this stage of retrieval.
+const (
+	maxDistilledSessions      = 5
+	maxDistilledWorkingMemory = 3
+)
+
+// NewMemorySearch builds a MemorySearch from the underlying stores.
+// Either store may be nil at construction time (e.g. during early
+// startup or in tests that only exercise one surface); a nil archive
+// makes Search return an empty bundle, a nil working memory store
+// just skips the working_memory surface.
+func NewMemorySearch(archive *ArchiveStore, working *WorkingMemoryStore, logger *slog.Logger) *MemorySearch {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &MemorySearch{archive: archive, working: working, logger: logger}
+}
+
+// Search runs the query across every available memory surface and
+// returns a SearchBundle. The raw-message path uses opts.Limit; the
+// distilled surfaces use their own tighter caps so the envelope
+// stays bounded.
+//
+// When opts.ConversationID is non-empty, ALL three surfaces are
+// scoped to that conversation. The raw-message search honors it
+// via ArchiveStore.Search's SQL filter; the distilled surfaces are
+// filtered in Go after the FTS pass (sessions_fts and
+// working_memory_fts are scoped over the global corpus today).
+// Filtering after BM25 ranking is acceptable because the distilled
+// hit count is capped small (5 sessions, 3 working memory) — the
+// extra fetched-then-discarded rows are bounded and cheap.
+func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
+	bundle := &SearchBundle{}
+	if m.archive == nil {
+		return bundle, nil
+	}
+
+	msgs, err := m.archive.Search(opts)
+	if err != nil {
+		return nil, err
+	}
+	bundle.Messages = msgs
+
+	// Session summaries. Soft-fail: a sessions_fts query error
+	// shouldn't drop the raw-message results we already collected.
+	if sess, err := m.archive.SearchSessions(opts.Query, maxDistilledSessions); err == nil {
+		bundle.Sessions = filterSessionMatchesByConversation(sess, opts.ConversationID)
+	} else if m.logger != nil {
+		m.logger.Warn("session summaries search failed", "query", opts.Query, "error", err)
+	}
+
+	// Working memory. Soft-fail for the same reason.
+	if m.working != nil {
+		if wm, err := m.working.Search(opts.Query, maxDistilledWorkingMemory); err == nil {
+			bundle.WorkingMemory = filterWorkingMemoryMatchesByConversation(wm, opts.ConversationID)
+		} else if m.logger != nil {
+			m.logger.Warn("working memory search failed", "query", opts.Query, "error", err)
+		}
+	}
+
+	return bundle, nil
+}
+
+// filterSessionMatchesByConversation returns matches scoped to a
+// conversation when convID is non-empty; otherwise passes through.
+// Used by [MemorySearch.Search] to honor opts.ConversationID across
+// distilled surfaces (the raw-message search already filters in SQL).
+func filterSessionMatchesByConversation(matches []SessionMatch, convID string) []SessionMatch {
+	if convID == "" {
+		return matches
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if m.ConversationID == convID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// filterWorkingMemoryMatchesByConversation — analogous helper for
+// the working_memory surface.
+func filterWorkingMemoryMatchesByConversation(matches []WorkingMemoryMatch, convID string) []WorkingMemoryMatch {
+	if convID == "" {
+		return matches
+	}
+	out := matches[:0]
+	for _, m := range matches {
+		if m.ConversationID == convID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
 
 // sessionsFTSTable is the FTS5 virtual table name covering the
 // sessions table's distilled columns. Indexes title, summary, and
