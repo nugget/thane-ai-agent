@@ -3,9 +3,9 @@ package contacts
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts/contextfmt"
 )
 
 // ContextProvider provides relevant contacts as context for the system prompt.
@@ -49,7 +49,8 @@ func (p *ContextProvider) SetMinScore(score float32) {
 
 // TagContext returns relevant contacts formatted for the system prompt.
 // Implements [agent.TagContextProvider]; registered via
-// RegisterAlwaysContextProvider.
+// RegisterAlwaysContextProvider. The body is rendered by
+// [contextfmt.Format] as compact JSON under a markdown heading.
 func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	userMessage := req.UserMessage
 	if userMessage == "" || p.embeddings == nil {
@@ -61,55 +62,36 @@ func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRe
 		return "", fmt.Errorf("embed query: %w", err)
 	}
 
-	contacts, scores, err := p.store.SemanticSearch(embedding, p.maxContacts)
+	contactsList, scores, err := p.store.SemanticSearch(embedding, p.maxContacts)
 	if err != nil {
 		return "", fmt.Errorf("semantic search: %w", err)
 	}
 
-	if len(contacts) == 0 {
-		return "", nil
-	}
-
-	var sb strings.Builder
-	included := 0
-	for i, c := range contacts {
+	matches := make([]contextfmt.Match, 0, len(contactsList))
+	for i, c := range contactsList {
 		if scores[i] < p.minScore {
 			continue
 		}
 
-		// Load properties for this contact.
 		props, _ := p.store.GetProperties(c.ID)
-
-		if included > 0 {
-			sb.WriteString("\n")
-		}
-
-		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
-		if c.Org != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
-		}
-		if c.AISummary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
-		}
-		if c.TrustZone != "" {
-			sb.WriteString(fmt.Sprintf(" [%s]", c.TrustZone))
-		}
-		sb.WriteString("\n")
-
+		viewProps := make([]contextfmt.Property, 0, len(props))
 		for _, prop := range props {
-			label := prop.Property
-			if prop.Type != "" {
-				label += " (" + prop.Type + ")"
-			}
-			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, prop.Value))
+			viewProps = append(viewProps, contextfmt.Property{
+				Label: prop.Property,
+				Type:  prop.Type,
+				Value: prop.Value,
+			})
 		}
 
-		included++
+		matches = append(matches, contextfmt.Match{
+			Name:       c.FormattedName,
+			Org:        c.Org,
+			Summary:    c.AISummary,
+			TrustZone:  c.TrustZone,
+			Score:      scores[i],
+			Properties: viewProps,
+		})
 	}
 
-	if included == 0 {
-		return "", nil
-	}
-
-	return sb.String(), nil
+	return contextfmt.Format(matches), nil
 }
