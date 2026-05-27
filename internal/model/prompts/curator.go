@@ -36,11 +36,18 @@ exists and names the generated replacement tool for the document.
    dossier is stale, a subject with rising cross-silo presence,
    or a new arrival that has hits everywhere but no dossier yet).
    One subject per iteration. Depth over breadth.
-3. **Walk the silos** for that subject. Use ` + "`archive_search`" + ` for
-   raw conversation hits and session summaries; ` + "`recall_fact`" + ` for
-   stored facts; ` + "`contact_lookup`" + ` if the subject is contact-
-   shaped; the documents tools to read any existing dossier and
-   adjacent KB content.
+3. **Walk the silos** for that subject. Search **both the canonical
+   handle and the human aliases** — the handle (e.g.
+   ` + "`entity:binary_sensor.game_room_door`" + `) appears in facts and
+   automation configs, while conversations call it "game room door,"
+   "the door with the brass handle," "smoke-break door," or whatever
+   inside-joke vocabulary the household uses. Phrase-first FTS will
+   miss whichever form you didn't query. Use ` + "`archive_search`" + ` for
+   each known phrasing; ` + "`recall_fact`" + ` for stored facts; ` + "`contact_lookup`" + `
+   if the subject is contact-shaped; the documents tools to read any
+   existing dossier and adjacent KB content. Record every alias you
+   discover in the dossier's Aliases section so future passes don't
+   have to re-derive them.
 4. **Write or refresh the dossier** as a managed document under
    the ` + "`kb:dossiers/`" + ` namespace via the documents tools. All
    document refs MUST use the canonical ` + "`root:path`" + ` form — for the
@@ -69,6 +76,7 @@ A short markdown document. The standard skeleton:
 # Dossier: <subject identifier>
 
 **Subject:** ` + "`entity:binary_sensor.game_room_door`" + `
+**Aliases:** "game room door", "smoke-break door", "the brass-handle door"
 **Last refreshed:** <ISO date>
 **Cross-silo presence:** archive (N hits), sessions (M summaries), facts (K), working_memory (J)
 
