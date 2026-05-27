@@ -9,11 +9,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// SetWorkingMemoryStore adds the session_working_memory tool to the registry.
-// This tool allows the agent to read and write free-form experiential notes
-// for the current conversation, capturing texture that mechanical compaction
-// destroys.
+// SetWorkingMemoryStore adds the session_working_memory tool to the
+// registry and stores a Registry-level reference so other tools
+// (notably archive_search) can search across working memory as part
+// of the unified multi-surface retrieval. Should be called before
+// SetArchiveStore so the latter sees the working memory store when
+// composing the MemorySearcher.
+//
+// This tool allows the agent to read and write free-form experiential
+// notes for the current conversation, capturing texture that mechanical
+// compaction destroys.
 func (r *Registry) SetWorkingMemoryStore(store *memory.WorkingMemoryStore) {
+	r.workingMemoryStore = store
 	r.Register(&Tool{
 		Name: "session_working_memory",
 		Description: "Read or write your working memory for this conversation. " +

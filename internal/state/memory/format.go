@@ -194,7 +194,28 @@ const maxSearchContextPerSide = 5
 // Context lists are trimmed to the [maxSearchContextPerSide] messages
 // closest to the match on each side — for context_before that's the
 // last N, for context_after the first N.
+//
+// Single-surface form: used internally by [FormatMultiKindResults]
+// and (still) by paths that haven't migrated to the multi-surface
+// envelope. New callers should prefer FormatMultiKindResults so the
+// model sees the same shape from prewarm and tool calls alike.
 func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) []byte {
+	views := buildSearchResultViews(results, now)
+	out := struct {
+		Results   []SearchResultView `json:"results"`
+		Truncated bool               `json:"truncated"`
+	}{
+		Results:   views,
+		Truncated: truncated,
+	}
+	data, _ := json.Marshal(out)
+	return data
+}
+
+// buildSearchResultViews is the projection step shared by the
+// single-surface and multi-surface formatters. Keeps the sender-
+// projection / context-trimming logic in one place.
+func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResultView {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
 		// Search hits cross conversation boundaries — the matching
@@ -213,12 +234,93 @@ func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) 
 			Highlight:     r.Highlight,
 		})
 	}
+	return views
+}
+
+// SessionMatchView is the JSON-facing projection of a sessions_fts
+// hit. Compact compared to a raw-message search result — the
+// summary is already distilled, so no context window is needed.
+// session_id pairs with archive_session_transcript for full
+// drilldown when the match looks worth reading.
+type SessionMatchView struct {
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversation_id"`
+	Started        string `json:"started"`
+	Ended          string `json:"ended,omitempty"`
+	Title          string `json:"title"`
+	Summary        string `json:"summary,omitempty"`
+	Tags           string `json:"tags,omitempty"`
+	Highlight      string `json:"highlight,omitempty"`
+}
+
+// WorkingMemoryMatchView is the JSON-facing projection of a
+// working_memory_fts hit. Working memory is one row per conversation
+// — the conversation_id identifies which thread's living
+// distillation matched, and content carries the full snapshot.
+type WorkingMemoryMatchView struct {
+	ConversationID string `json:"conversation_id"`
+	Updated        string `json:"updated"`
+	Content        string `json:"content"`
+	Highlight      string `json:"highlight,omitempty"`
+}
+
+// FormatMultiKindResults renders the unified multi-surface search
+// envelope: raw-message hits with context windows, session summary
+// hits, and working-memory hits, all in one document.
+//
+// Every kind is always present in the JSON (as an array, possibly
+// empty) so the model sees a consistent shape — an empty list is the
+// explicit signal "no hits on this surface," distinguishable from
+// "this surface wasn't queried." Truncated propagates from the
+// raw-message search (distilled surfaces don't truncate within a
+// single call).
+func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []byte {
+	if b == nil {
+		b = &SearchBundle{}
+	}
+
+	msgViews := buildSearchResultViews(b.Messages, now)
+	if msgViews == nil {
+		msgViews = []SearchResultView{}
+	}
+
+	sessViews := make([]SessionMatchView, 0, len(b.Sessions))
+	for _, s := range b.Sessions {
+		v := SessionMatchView{
+			SessionID:      s.SessionID,
+			ConversationID: s.ConversationID,
+			Started:        promptfmt.FormatDeltaOnly(s.StartedAt, now),
+			Title:          s.Title,
+			Summary:        s.Summary,
+			Tags:           s.Tags,
+			Highlight:      s.Highlight,
+		}
+		if !s.EndedAt.IsZero() {
+			v.Ended = promptfmt.FormatDeltaOnly(s.EndedAt, now)
+		}
+		sessViews = append(sessViews, v)
+	}
+
+	wmViews := make([]WorkingMemoryMatchView, 0, len(b.WorkingMemory))
+	for _, w := range b.WorkingMemory {
+		wmViews = append(wmViews, WorkingMemoryMatchView{
+			ConversationID: w.ConversationID,
+			Updated:        promptfmt.FormatDeltaOnly(w.UpdatedAt, now),
+			Content:        w.Content,
+			Highlight:      w.Highlight,
+		})
+	}
+
 	out := struct {
-		Results   []SearchResultView `json:"results"`
-		Truncated bool               `json:"truncated"`
+		Messages      []SearchResultView       `json:"messages"`
+		Sessions      []SessionMatchView       `json:"sessions"`
+		WorkingMemory []WorkingMemoryMatchView `json:"working_memory"`
+		Truncated     bool                     `json:"truncated"`
 	}{
-		Results:   views,
-		Truncated: truncated,
+		Messages:      msgViews,
+		Sessions:      sessViews,
+		WorkingMemory: wmViews,
+		Truncated:     truncated || b.Truncated,
 	}
 	data, _ := json.Marshal(out)
 	return data

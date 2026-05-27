@@ -11,18 +11,21 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
-// countSearchResults parses an archive_search JSON envelope and
-// returns the length of its `results` array, or 0 on parse failure
-// or absent field. Used by the search handler's defensive guard
-// against the empty-with-truncated degenerate state.
-func countSearchResults(data []byte) int {
+// countSearchHits parses the multi-surface archive_search JSON
+// envelope and returns the total number of hits across messages,
+// sessions, and working_memory. Used by the search handler's
+// defensive guard against the empty-with-truncated degenerate
+// state where the byte-cap fitter drops everything to zero.
+func countSearchHits(data []byte) int {
 	var env struct {
-		Results []json.RawMessage `json:"results"`
+		Messages      []json.RawMessage `json:"messages"`
+		Sessions      []json.RawMessage `json:"sessions"`
+		WorkingMemory []json.RawMessage `json:"working_memory"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
 		return 0
 	}
-	return len(env.Results)
+	return len(env.Messages) + len(env.Sessions) + len(env.WorkingMemory)
 }
 
 // archiveResultByteCap is the per-tool byte ceiling on JSON output.
@@ -39,45 +42,55 @@ const archiveTranscriptByteCap = 32000
 // Together they form Thane's long-term memory surface: search across
 // past conversations, browse the catalog of sessions, pull a single
 // session in full, and grab message history by time/conversation range.
+//
+// archive_search now queries every memory surface at once — raw
+// messages, session summaries, and working memory — via the unified
+// [memory.MemorySearcher] interface. The prewarm context provider
+// uses the same MemorySearcher, so the two retrieval paths can't
+// drift apart.
 func (r *Registry) SetArchiveStore(store *memory.ArchiveStore) {
-	r.registerArchiveSearch(store)
+	searcher := memory.NewMemorySearch(store, r.workingMemoryStore, nil)
+	r.registerArchiveSearch(searcher)
 	r.registerArchiveSessions(store)
 	r.registerArchiveSessionTranscript(store)
 	r.registerArchiveRange(store)
 }
 
-func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
+func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 	r.Register(&Tool{
 		Name: "archive_search",
-		Description: "Search your conversation archive — semantic search across every past " +
-			"session you've had with anyone. Use this when something jogs a memory or you " +
-			"need context from a prior conversation. Each result is the matching message " +
-			"plus the surrounding context window (bounded by natural silence gaps), so you " +
-			"see a moment in conversation, not just an isolated line. Returns JSON with " +
-			"delta-second timestamps. Pair with archive_session_transcript when a hit looks " +
-			"worth reading in full.",
+		Description: "Search your memory of past conversations across three surfaces at once: " +
+			"raw message history, session summaries, and working memory. The JSON envelope " +
+			"separates them — messages[] carries the verbatim hits with surrounding context " +
+			"windows (bounded by natural silence gaps); sessions[] carries the summarizer's " +
+			"per-session distilled metadata (title, summary, tags); working_memory[] carries " +
+			"the per-conversation living distillation written by the metacog loop. " +
+			"Use this when something jogs a memory or you need context from a prior " +
+			"conversation — the distilled surfaces are higher signal per byte and worth " +
+			"reading first when they have hits. Pair with archive_session_transcript when " +
+			"a hit looks worth reading in full.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{
 					"type":        "string",
-					"description": "What you're looking for. Semantic search — phrasing matters less than concept.",
+					"description": "What you're looking for. Phrase-anchored full-text search across all three surfaces.",
 				},
 				"conversation_id": map[string]any{
 					"type":        "string",
-					"description": "Optional: scope to one conversation. Omit to search across everything.",
+					"description": "Optional: scope the raw-message search to one conversation. Distilled surfaces are unscoped. Omit to search across everything.",
 				},
 				"silence_minutes": map[string]any{
 					"type":        "number",
-					"description": "How long a silence gap before context expansion stops. Default: 10.",
+					"description": "How long a silence gap before context expansion stops on raw-message hits. Default: 10.",
 				},
 				"no_context": map[string]any{
 					"type":        "boolean",
-					"description": "If true, return only matches without surrounding context. Default: false.",
+					"description": "If true, return only raw-message matches without surrounding context. Default: false.",
 				},
 				"limit": map[string]any{
 					"type":        "number",
-					"description": "Max results. Default: 5.",
+					"description": "Max raw-message results. Default: 5. Distilled surfaces have their own internal caps.",
 				},
 			},
 			"required": []string{"query"},
@@ -105,26 +118,39 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 				opts.Limit = int(limit)
 			}
 
-			results, err := store.Search(opts)
+			bundle, err := searcher.Search(opts)
 			if err != nil {
 				return "", fmt.Errorf("archive search: %w", err)
 			}
+			if bundle == nil {
+				bundle = &memory.SearchBundle{}
+			}
 
-			// Fit to byte cap by dropping from the tail (lowest-relevance
-			// hits go first). Binary search avoids O(n^2) re-marshaling.
+			// Fit to byte cap by dropping raw-message hits from the
+			// tail. Distilled surfaces (sessions, working_memory) are
+			// kept across all iterations — they're small, high-signal,
+			// and worth preserving even when the raw side has to
+			// shrink. Binary search avoids O(n^2) re-marshaling.
 			now := time.Now()
 			render := func(k int) []byte {
-				return memory.FormatSearchResults(results[:k], now, k < len(results))
+				clipped := &memory.SearchBundle{
+					Messages:      bundle.Messages[:k],
+					Sessions:      bundle.Sessions,
+					WorkingMemory: bundle.WorkingMemory,
+					Truncated:     bundle.Truncated,
+				}
+				return memory.FormatMultiKindResults(clipped, now, k < len(bundle.Messages))
 			}
-			data := memory.FitPrefix(len(results), archiveResultByteCap, render)
+			data := memory.FitPrefix(len(bundle.Messages), archiveResultByteCap, render)
 
-			// Defensive: if the fitter clipped to zero results despite
-			// having raw matches, force the top-relevance hit through
-			// even if it overshoots the byte cap. Returning empty with
-			// truncated=true would silently swallow useful signal — far
-			// worse than going slightly over budget on one oversized
-			// result.
-			if len(results) > 0 && countSearchResults(data) == 0 {
+			// Defensive: if the fitter clipped every surface to zero
+			// despite the bundle having hits, force the top
+			// raw-message hit through even if it overshoots the
+			// budget. Returning empty with truncated=true would
+			// silently swallow useful signal — far worse than going
+			// slightly over budget on one oversized hit.
+			if (len(bundle.Messages) > 0 || len(bundle.Sessions) > 0 || len(bundle.WorkingMemory) > 0) &&
+				countSearchHits(data) == 0 && len(bundle.Messages) > 0 {
 				data = render(1)
 			}
 			return string(data), nil

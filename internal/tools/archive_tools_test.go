@@ -361,13 +361,20 @@ func TestArchiveSearchTool_NeverEmptyWhenResultsExist(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	var parsed struct {
-		Results   []memory.SearchResultView `json:"results"`
-		Truncated bool                      `json:"truncated"`
+		Messages      []memory.SearchResultView       `json:"messages"`
+		Sessions      []memory.SessionMatchView       `json:"sessions"`
+		WorkingMemory []memory.WorkingMemoryMatchView `json:"working_memory"`
+		Truncated     bool                            `json:"truncated"`
 	}
 	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
 	}
-	if len(parsed.Results) == 0 {
-		t.Fatalf("results empty despite real matches existing — regression of the production bug:\n%s", out)
+	// The fitter must always seat at least one hit somewhere — raw
+	// message, session summary, or working memory — when the
+	// underlying search found anything. Returning empty across all
+	// surfaces with truncated=true would silently swallow signal.
+	totalHits := len(parsed.Messages) + len(parsed.Sessions) + len(parsed.WorkingMemory)
+	if totalHits == 0 {
+		t.Fatalf("results empty across all surfaces despite real matches existing — regression of the production bug:\n%s", out)
 	}
 }
