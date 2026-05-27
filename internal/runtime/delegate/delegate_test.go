@@ -1258,3 +1258,432 @@ func assertContainsDelegateFamily(t *testing.T, toolNames []string) {
 		}
 	}
 }
+
+// TestPrepareExecution_ProfileClamps covers the four if-zero clamps
+// in [Executor.prepareExecution] that fall back to the package
+// defaults when a profile leaves a budget field at its zero value.
+// One row per field × one row per "profile sets nonzero value"
+// preservation guard. The recursion-guard regression in #833 happened
+// because a sibling branch wasn't directly asserted; same shape
+// here.
+func TestPrepareExecution_ProfileClamps(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name            string
+		profile         Profile
+		wantMaxIter     int
+		wantMaxTokens   int
+		wantMaxDuration time.Duration
+		wantToolTimeout time.Duration
+	}{
+		{
+			name:            "all fields zero → all clamp to defaults",
+			profile:         Profile{Name: "general"},
+			wantMaxIter:     defaultMaxIter,
+			wantMaxTokens:   defaultMaxTokens,
+			wantMaxDuration: defaultMaxDuration,
+			wantToolTimeout: defaultToolTimeout,
+		},
+		{
+			name: "all fields nonzero → values preserved",
+			profile: Profile{
+				Name:        "general",
+				MaxIter:     7,
+				MaxTokens:   12345,
+				MaxDuration: 5 * time.Minute,
+				ToolTimeout: 45 * time.Second,
+			},
+			wantMaxIter:     7,
+			wantMaxTokens:   12345,
+			wantMaxDuration: 5 * time.Minute,
+			wantToolTimeout: 45 * time.Second,
+		},
+		{
+			name:            "only MaxIter set → others clamp, MaxIter preserved",
+			profile:         Profile{Name: "general", MaxIter: 3},
+			wantMaxIter:     3,
+			wantMaxTokens:   defaultMaxTokens,
+			wantMaxDuration: defaultMaxDuration,
+			wantToolTimeout: defaultToolTimeout,
+		},
+		{
+			name:            "only ToolTimeout set → others clamp, ToolTimeout preserved",
+			profile:         Profile{Name: "general", ToolTimeout: 2 * time.Minute},
+			wantMaxIter:     defaultMaxIter,
+			wantMaxTokens:   defaultMaxTokens,
+			wantMaxDuration: defaultMaxDuration,
+			wantToolTimeout: 2 * time.Minute,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec.profiles = map[string]*Profile{tc.profile.Name: &tc.profile}
+
+			prep, err := exec.prepareExecution(context.Background(), "any task", tc.profile.Name, "", nil, executionOptions{})
+			if err != nil {
+				t.Fatalf("prepareExecution: %v", err)
+			}
+			if prep.maxIterations != tc.wantMaxIter {
+				t.Errorf("maxIterations = %d, want %d", prep.maxIterations, tc.wantMaxIter)
+			}
+			if prep.maxOutputTokens != tc.wantMaxTokens {
+				t.Errorf("maxOutputTokens = %d, want %d", prep.maxOutputTokens, tc.wantMaxTokens)
+			}
+			if prep.maxDuration != tc.wantMaxDuration {
+				t.Errorf("maxDuration = %v, want %v", prep.maxDuration, tc.wantMaxDuration)
+			}
+			if prep.toolTimeout != tc.wantToolTimeout {
+				t.Errorf("toolTimeout = %v, want %v", prep.toolTimeout, tc.wantToolTimeout)
+			}
+		})
+	}
+}
+
+// TestPrepareExecution_GuidanceBranch pins the guidance-empty vs
+// guidance-present branch in the userMessage builder. Empty guidance
+// must produce a userMessage of just the task; non-empty guidance
+// must append a "Guidance: …" suffix.
+func TestPrepareExecution_GuidanceBranch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		task     string
+		guidance string
+		wantUser string
+	}{
+		{
+			name:     "empty guidance produces task-only userMessage",
+			task:     "summarize the logs",
+			guidance: "",
+			wantUser: "summarize the logs",
+		},
+		{
+			name:     "non-empty guidance appended after task",
+			task:     "summarize the logs",
+			guidance: "keep it under 200 words",
+			wantUser: "summarize the logs\n\nGuidance: keep it under 200 words",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			prep, err := exec.prepareExecution(context.Background(), tc.task, "", tc.guidance, nil, executionOptions{})
+			if err != nil {
+				t.Fatalf("prepareExecution: %v", err)
+			}
+			if prep.userMessage != tc.wantUser {
+				t.Errorf("userMessage = %q, want %q", prep.userMessage, tc.wantUser)
+			}
+		})
+	}
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestMergeDelegateScopeTags is the branch-coverage table for the
+// scope-tag merge. Each named case targets one of the if/else
+// branches in [mergeDelegateScopeTags] so a regression that toggles
+// any branch (e.g. an inherit path that forgets to drop
+// non-delegable tags, or an explicit-tag path that fails to set
+// explicitScopeRequested) fails a named test rather than slipping
+// past CI on the side-effect-only paths the loop-backed tests
+// exercise. Pure-function — no Executor needed.
+func TestMergeDelegateScopeTags(t *testing.T) {
+	t.Parallel()
+
+	type want struct {
+		scope                  []string
+		inherited              []string
+		dropped                []string
+		explicitScopeRequested bool
+	}
+
+	cases := []struct {
+		name              string
+		ctxInheritable    []string
+		explicitTags      []string
+		inheritCallerTags bool
+		explicitTagScope  bool
+		want              want
+	}{
+		{
+			name:              "inherit only, all delegable",
+			ctxInheritable:    []string{"web", "ha"},
+			inheritCallerTags: true,
+			want: want{
+				scope:     []string{"ha", "web"},
+				inherited: []string{"ha", "web"},
+			},
+		},
+		{
+			name:              "inherit drops non-delegable message_channel + owner",
+			ctxInheritable:    []string{"web", "message_channel", "owner"},
+			inheritCallerTags: true,
+			want: want{
+				scope:     []string{"web"},
+				inherited: []string{"web"},
+				dropped:   []string{"message_channel", "owner"},
+			},
+		},
+		{
+			name:              "inherit disabled ignores context tags entirely",
+			ctxInheritable:    []string{"web", "ha"},
+			inheritCallerTags: false,
+			want:              want{},
+		},
+		{
+			name:             "explicit tags set explicitScopeRequested even when caller passed false",
+			explicitTags:     []string{"forge"},
+			explicitTagScope: false,
+			want: want{
+				scope:                  []string{"forge"},
+				explicitScopeRequested: true,
+			},
+		},
+		{
+			name:             "explicitTagScope flag carries through when explicit tags empty",
+			explicitTags:     nil,
+			explicitTagScope: true,
+			want: want{
+				explicitScopeRequested: true,
+			},
+		},
+		{
+			name:         "explicit non-delegable drops without entering scope",
+			explicitTags: []string{"forge", "owner"},
+			want: want{
+				scope:                  []string{"forge"},
+				dropped:                []string{"owner"},
+				explicitScopeRequested: true,
+			},
+		},
+		{
+			name:              "duplicate inherit + explicit collapses to single scope entry, inherited still populated",
+			ctxInheritable:    []string{"web"},
+			explicitTags:      []string{"web"},
+			inheritCallerTags: true,
+			want: want{
+				scope:                  []string{"web"},
+				inherited:              []string{"web"},
+				explicitScopeRequested: true,
+			},
+		},
+		{
+			name:              "empty strings filtered from both sources",
+			ctxInheritable:    []string{"web", "  ", ""},
+			explicitTags:      []string{"  ", "forge"},
+			inheritCallerTags: true,
+			want: want{
+				scope:                  []string{"forge", "web"},
+				inherited:              []string{"web"},
+				explicitScopeRequested: true,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			if len(tc.ctxInheritable) > 0 {
+				ctx = tools.WithInheritableCapabilityTags(ctx, tc.ctxInheritable)
+			}
+			scope, inherited, dropped, explicit := mergeDelegateScopeTags(
+				ctx, tc.explicitTags, tc.inheritCallerTags, tc.explicitTagScope,
+			)
+			if !stringSliceEqual(scope, tc.want.scope) {
+				t.Errorf("scope = %v, want %v", scope, tc.want.scope)
+			}
+			if !stringSliceEqual(inherited, tc.want.inherited) {
+				t.Errorf("inherited = %v, want %v", inherited, tc.want.inherited)
+			}
+			if !stringSliceEqual(dropped, tc.want.dropped) {
+				t.Errorf("dropped = %v, want %v", dropped, tc.want.dropped)
+			}
+			if explicit != tc.want.explicitScopeRequested {
+				t.Errorf("explicitScopeRequested = %v, want %v", explicit, tc.want.explicitScopeRequested)
+			}
+		})
+	}
+}
+
+// TestApplyProfileDefaultTags is the branch-coverage table for the
+// profile-defaults merge. The three early-return branches
+// (explicitScopeRequested / nil profile / empty DefaultTags) each
+// have a row; the apply-loop's three skip conditions (empty, already
+// in scope, non-delegable) each have a row.
+func TestApplyProfileDefaultTags(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                   string
+		scope                  []string
+		profile                *Profile
+		explicitScopeRequested bool
+		wantMerged             []string
+		wantApplied            []string
+	}{
+		{
+			name:                   "explicit scope short-circuits defaults",
+			scope:                  []string{"web"},
+			profile:                &Profile{DefaultTags: []string{"ha"}},
+			explicitScopeRequested: true,
+			wantMerged:             []string{"web"},
+			wantApplied:            nil,
+		},
+		{
+			name:        "nil profile returns scope copy with no defaults",
+			scope:       []string{"web"},
+			profile:     nil,
+			wantMerged:  []string{"web"},
+			wantApplied: nil,
+		},
+		{
+			name:        "empty DefaultTags returns scope copy with no defaults",
+			scope:       []string{"web"},
+			profile:     &Profile{DefaultTags: nil},
+			wantMerged:  []string{"web"},
+			wantApplied: nil,
+		},
+		{
+			name:        "defaults applied when scope empty and not explicit",
+			scope:       nil,
+			profile:     &Profile{DefaultTags: []string{"ha", "web"}},
+			wantMerged:  []string{"ha", "web"},
+			wantApplied: []string{"ha", "web"},
+		},
+		{
+			name:        "default already in scope is skipped",
+			scope:       []string{"ha"},
+			profile:     &Profile{DefaultTags: []string{"ha", "web"}},
+			wantMerged:  []string{"ha", "web"},
+			wantApplied: []string{"web"},
+		},
+		{
+			name:        "empty-string and whitespace-only defaults skipped",
+			scope:       nil,
+			profile:     &Profile{DefaultTags: []string{"", "  ", "ha"}},
+			wantMerged:  []string{"ha"},
+			wantApplied: []string{"ha"},
+		},
+		{
+			name:        "non-delegable defaults skipped (message_channel, owner)",
+			scope:       nil,
+			profile:     &Profile{DefaultTags: []string{"message_channel", "owner", "ha"}},
+			wantMerged:  []string{"ha"},
+			wantApplied: []string{"ha"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotMerged, gotApplied := applyProfileDefaultTags(tc.scope, tc.profile, tc.explicitScopeRequested)
+			if !stringSliceEqual(gotMerged, tc.wantMerged) {
+				t.Errorf("merged = %v, want %v", gotMerged, tc.wantMerged)
+			}
+			if !stringSliceEqual(gotApplied, tc.wantApplied) {
+				t.Errorf("applied = %v, want %v", gotApplied, tc.wantApplied)
+			}
+		})
+	}
+}
+
+// TestDelegateToolRegistry_BranchCoverage covers the four
+// scopeTags × explicitScopeRequested × coreTags branches of
+// [Executor.delegateToolRegistry] that the existing exclusion-focused
+// tests don't separately assert. The naming of each case is the
+// exact branch decision being verified so a regression is named at
+// the test boundary.
+func TestDelegateToolRegistry_BranchCoverage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                   string
+		scopeTags              []string
+		explicitScopeRequested bool
+		coreTags               []string
+		wantPresent            []string
+		wantAbsent             []string
+	}{
+		{
+			name:                   "scope populated, no core: filter to scope tag's tools",
+			scopeTags:              []string{"web"},
+			explicitScopeRequested: false,
+			wantPresent:            []string{"web_search"},
+			wantAbsent:             []string{"ha_get_state"},
+		},
+		{
+			name:                   "scope populated + core overlay: union of tools available",
+			scopeTags:              []string{"web"},
+			explicitScopeRequested: false,
+			coreTags:               []string{"ha"},
+			wantPresent:            []string{"web_search", "ha_get_state"},
+		},
+		{
+			name:                   "explicit empty scope, no core: zero tools in filtered copy",
+			scopeTags:              nil,
+			explicitScopeRequested: true,
+			wantAbsent:             []string{"web_search", "ha_get_state"},
+		},
+		{
+			name:                   "explicit empty scope + core only: only core tag's tools survive",
+			scopeTags:              nil,
+			explicitScopeRequested: true,
+			coreTags:               []string{"ha"},
+			wantPresent:            []string{"ha_get_state"},
+			wantAbsent:             []string{"web_search"},
+		},
+		{
+			name:                   "no scope and not explicit: fall-through preserves all parent tools (minus delegate family)",
+			scopeTags:              nil,
+			explicitScopeRequested: false,
+			wantPresent:            []string{"web_search", "ha_get_state"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+			if len(tc.coreTags) > 0 {
+				exec.SetCoreTags(tc.coreTags)
+			}
+			reg := exec.delegateToolRegistry(tc.scopeTags, tc.explicitScopeRequested)
+			names := reg.AllToolNames()
+			for _, want := range tc.wantPresent {
+				if !containsString(names, want) {
+					t.Errorf("expected tool %q present, got %v", want, names)
+				}
+			}
+			for _, want := range tc.wantAbsent {
+				if containsString(names, want) {
+					t.Errorf("expected tool %q absent, got %v", want, names)
+				}
+			}
+			// Every branch must exclude the delegate family.
+			for _, want := range delegateFamilyToolNames {
+				if containsString(names, want) {
+					t.Errorf("delegate family member %q leaked through %s branch (registry: %v)", want, tc.name, names)
+				}
+			}
+		})
+	}
+}
