@@ -50,7 +50,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	// entries in Parents.
 
 	"archive": {
-		Description: "Archive search and transcript retrieval across past conversations.",
+		Description: "What you've already heard. Full-text search and transcript retrieval across past conversations — the place to look when a phrase sounds like an inside joke, a name, or shorthand you should already understand.",
 		Parents:     []string{"knowledge"},
 	},
 	"attachments": {
@@ -74,7 +74,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"operations"},
 	},
 	"documents": {
-		Description: "Indexed document-root browsing, search, and section retrieval tools.",
+		Description: "Curated documents you've authored or imported — KB articles, runbooks, persona/ego notes, indexed reference material under managed roots. NOT past conversation history; for things the user said or you've heard before, use `archive` or `memory` instead.",
 		Parents:     []string{"knowledge"},
 	},
 	"email": {
@@ -102,7 +102,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"operations"},
 	},
 	"memory": {
-		Description: "Persistent fact memory and working-memory tools.",
+		Description: "Things you've chosen to remember — durable facts you've stored about people, places, routines, and the user's vocabulary. Also the unified door to contacts and archive search, so it's where to start when something the user said sounds like a reference to your shared past.",
 		Parents:     []string{"knowledge"},
 	},
 	"models": {
