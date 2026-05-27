@@ -297,7 +297,7 @@ is blocked by default.
 
 ```yaml
 logging:
-  root: ~/Thane/logs
+  root: ~/Thane/archive
   level: info
   stdout:
     enabled: true
@@ -307,7 +307,7 @@ logging:
       enabled: true
     requests:
       enabled: true
-    access:
+    http_access:
       enabled: false
     loops:
       enabled: true
@@ -315,6 +315,8 @@ logging:
       enabled: true
     envelopes:
       enabled: true
+    conversations:
+      enabled: false
 ```
 
 Thane writes append-only JSONL datasets under `logging.root`, partitioned by
@@ -347,14 +349,14 @@ See [Delegation & MCP](../understanding/delegation.md).
 ## Delegation
 
 ```yaml
-delegation:
+delegate:
   profiles:
     general:
-      quality_floor: 5
-      prefer_speed: true
+      tool_timeout: 8m
+      max_duration: 15m
     ha:
-      quality_floor: 4
-      prefer_speed: true
+      tool_timeout: 3m
+      max_duration: 5m
 ```
 
 Controls how delegated tasks are routed.
