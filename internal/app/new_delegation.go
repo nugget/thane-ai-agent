@@ -32,16 +32,16 @@ func (a *App) initDelegation(s *newState) error {
 	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
 	completionDispatcher := a.ensureLoopCompletionDispatcher()
 	if len(cfg.Delegate.Profiles) > 0 {
-		overrides := make(map[string]delegate.ProfileOverride, len(cfg.Delegate.Profiles))
+		overrides := make(map[string]delegate.RunPolicyOverride, len(cfg.Delegate.Profiles))
 		for name, pc := range cfg.Delegate.Profiles {
-			overrides[name] = delegate.ProfileOverride{
+			overrides[name] = delegate.RunPolicyOverride{
 				ToolTimeout: pc.ToolTimeout,
 				MaxDuration: pc.MaxDuration,
 				MaxIter:     pc.MaxIter,
 				MaxTokens:   pc.MaxTokens,
 			}
 		}
-		delegateExec.ApplyProfileOverrides(overrides)
+		delegateExec.ApplyRunPolicyOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetArchiver(a.archiveStore)
@@ -78,7 +78,7 @@ func (a *App) initDelegation(s *newState) error {
 		Core:        true,
 	})
 	a.delegateExec = delegateExec
-	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
+	logger.Info("delegation enabled", "profiles", delegateExec.RunPolicyNames())
 
 	// --- Notification callback routing ---
 	// Wire up the callback dispatcher and timeout watcher for actionable

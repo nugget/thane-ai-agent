@@ -48,9 +48,9 @@ boundaries, that's a smell.
 | **Tag kind** | Tag's surface role: leaf (carries tools) vs. menu (coarse trailhead routing to leaves). | [`BuiltinTagSpec.Kind`][tag-spec]. | Orthogonal to Protected. Menus surface as routing entries in the activation prompt; leaves carry tool surface. |
 | **Tag parents** | Menu(s) a leaf appears under in the hierarchical menu. Multi-valued. | [`BuiltinTagSpec.Parents`][tag-spec]. | Data, not prose. Replaces the "usually leads to X, Y, Z" sentences that were the only menu→leaf mapping before PR-G. |
 | **Protected tag** | Runtime-asserted; can't be model-toggled. | [`BuiltinTagSpec.Protected`][tag-spec]. | Orthogonal to Kind. A leaf can be protected (`message_channel`, `owner`) without being a menu. |
-| **Delegate profile** (`delegate.Profile`) | Operational bundle for a delegated task: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints*. No relation to tool gating beyond `DefaultTags`. |
+| **Delegate run policy** (`delegate.RunPolicy`) | Internal delegate run bundle: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints* on a delegated run. Operator-facing config still calls these "profiles" (YAML key `delegate.profiles`, log key `profile`, JSON wire field `profile`) — the type rename is internal. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
-| **Routing profile** | A user-facing model name (`thane:premium`, `thane:ops`). | [Routing Profiles](../operating/routing-profiles.md). | Selected by Ollama-API model name; resolves to a `LoopProfile`. |
+| **Virtual model** | A user-facing `thane:*` model name (`thane:premium`, `thane:ops`) selected via the client's model field. | [`router/virtual_models.go`][virtual-models], [Routing Profiles](../operating/routing-profiles.md). | Expands into a pair of `LoopProfile` values — `TopLevel` for the orchestrator loop and `Delegate` for child delegate runs — plus the routing hints derived from both. Express user/integration execution intent. Prefer this term over the older "routing profile" in new prose. |
 | **Mission** | Routing-hint string identifying task context (`conversation`, `automation`, `metacognitive`). | `LoopProfile.Mission`. | Pure routing input. Not a tag, not a tool gate. |
 | **Configured tags** | Read-only snapshot of the configured tag inputs for the run: loop config `Tags` plus request-base/request-override `InitialTags`. | [`loop/tooling.go`][configured-tags] (`ToolingState.ConfiguredTags`). | Read-only telemetry. Distinct from active tags so the dashboard can show "what was configured at launch" vs "what became active." Introduced in [#813][pr-813]. |
 
@@ -59,6 +59,7 @@ boundaries, that's a smell.
 [exec-core]: ../../internal/runtime/delegate/delegate.go
 [delegate-profile]: ../../internal/runtime/delegate/profile.go
 [loop-profile]: ../../internal/model/router/loopprofile.go
+[virtual-models]: ../../internal/model/router/virtual_models.go
 [configured-tags]: ../../internal/runtime/loop/tooling.go
 [tag-spec]: ../../internal/model/toolcatalog/catalog.go
 [pr-813]: https://github.com/nugget/thane-ai-agent/pull/813
@@ -280,26 +281,20 @@ either parent or child are independent.
 Honest list. Each is something to be aware of when changing nearby
 code; some are queued as cleanup work.
 
-1. **Profile naming is overloaded.** `delegate.Profile` (operational
-   constraints) and `router.LoopProfile` (routing hints) are unrelated
-   structs that share the term "profile." A consolidating rename to
-   `delegate.DelegateConfig` or `delegate.Constraints` would resolve
-   the ambiguity. Tracked as a follow-up.
-
-2. **Tag merging is duplicated.** [`mergeDelegateScopeTags`][merge-scope],
+1. **Tag merging is duplicated.** [`mergeDelegateScopeTags`][merge-scope],
    the inline merge in
    [`agent/loop.go:1620+`][loop-merge-inline], and a simple dedup
    helper [`mergeTagLists`][merge-tag-lists] all do variations of
    "combine these tag slices and dedup." A unified helper would
    reduce drift risk. Tracked as a follow-up.
 
-3. **Test coverage is path-asymmetric.** Today's bug ([#833][pr-833])
+2. **Test coverage is path-asymmetric.** Today's bug ([#833][pr-833])
    existed because the empty-scope delegate path was tested but the
    tag-scoped path wasn't. Several other branch-condition pairs in
    [`prepareExecution`][prepare-execution] have similar asymmetry —
    worth a sweep.
 
-4. **Two-layer exclusion has no helper.** Documented above, but
+3. **Two-layer exclusion has no helper.** Documented above, but
    currently expressed only as "remember to do this in both places."
    A helper that returns both the in-process filter and the
    request-level exclusion list would make the invariant
