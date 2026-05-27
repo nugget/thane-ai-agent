@@ -160,18 +160,37 @@ func applyRunPolicyDefaultTags(scopeTags []string, policy *RunPolicy, explicitSc
 	return mergedTags, appliedDefaults
 }
 
+// delegateToolRegistry builds the catalog a delegate's executor sees
+// during its in-process setup phase (e.g. model-routing sizing in
+// selectModel). Two phases:
+//
+//  1. Optional tag narrowing. When the caller requested an explicit
+//     scope or supplied non-empty scope tags, narrow the parent
+//     registry by the union of scope tags and operator core tags.
+//     FilterByTags preserves Tool.Core members so the tag-navigation
+//     surface stays reachable. When the union is empty
+//     (explicit-empty-scope with no core tags configured),
+//     FilteredCopy(nil) yields a zero-tool registry — FilteredCopy
+//     does not preserve Tool.Core, so the explicit-empty-scope
+//     delegate sees no tools at all. That's the documented contract
+//     covered by TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools.
+//
+//  2. Recursion guard. Strip the delegate family
+//     ([delegateToolExclusions]) so a delegate can't spawn another
+//     delegate. This step runs unconditionally — both the narrowed
+//     and unnarrowed paths funnel through it, single source of truth
+//     for the exclusion set.
 func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequested bool) *tools.Registry {
+	reg := e.parentReg
 	if len(scopeTags) > 0 || explicitScopeRequested {
 		merged := mergeTagLists(scopeTags, e.coreTags)
-		var reg *tools.Registry
 		if len(merged) > 0 {
-			reg = e.parentReg.FilterByTags(merged)
+			reg = reg.FilterByTags(merged)
 		} else {
-			reg = e.parentReg.FilteredCopy(nil)
+			reg = reg.FilteredCopy(nil)
 		}
-		return reg.FilteredCopyExcluding(delegateToolExclusions())
 	}
-	return e.parentReg.FilteredCopyExcluding(delegateToolExclusions())
+	return reg.FilteredCopyExcluding(delegateToolExclusions())
 }
 
 func mergeTagLists(tagGroups ...[]string) []string {
