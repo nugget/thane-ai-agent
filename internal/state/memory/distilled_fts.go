@@ -28,6 +28,14 @@ type SearchBundle struct {
 // the two paths cannot drift — any retrieval improvement applies
 // uniformly to both. Implementations: [MemorySearch] for production
 // (composed from the real stores), and test mocks.
+//
+// **Contract:** Search MUST return a non-nil *SearchBundle whenever
+// it returns a nil error. Callers may rely on this — "no hits" is
+// signaled by an empty bundle (all three slices empty), not by a nil
+// bundle. A nil bundle paired with a nil error is treated as a
+// programming bug by the prewarm provider and logged as a soft
+// fault. Returning a non-nil error means the bundle value is
+// undefined and callers should not read it.
 type MemorySearcher interface {
 	Search(opts SearchOptions) (*SearchBundle, error)
 }

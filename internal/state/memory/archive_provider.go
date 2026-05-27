@@ -99,10 +99,17 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 		return "", nil
 	}
 
-	totalHits := 0
-	if bundle != nil {
-		totalHits = len(bundle.Messages) + len(bundle.Sessions) + len(bundle.WorkingMemory)
+	// MemorySearcher.Search MUST return a non-nil bundle on a nil error
+	// (see the interface contract). Treat a nil bundle here as a soft
+	// fault rather than panicking — log and return empty.
+	if bundle == nil {
+		p.logger.Warn("archive pre-warm: searcher returned nil bundle on nil error",
+			"query", query,
+			"took_ms", elapsed.Milliseconds(),
+		)
+		return "", nil
 	}
+	totalHits := len(bundle.Messages) + len(bundle.Sessions) + len(bundle.WorkingMemory)
 	p.logger.Debug("archive pre-warm: search completed",
 		"query", query,
 		"messages", len(bundle.Messages),
