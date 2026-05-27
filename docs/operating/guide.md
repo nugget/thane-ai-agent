@@ -133,10 +133,10 @@ it's working. That's the difference — Thane discovers your home on its own.
 
 ## Choosing Models
 
-Thane uses **routing profiles** to match models to tasks. You select a
-profile by setting the model name in HA or any Ollama-compatible client:
+Thane uses **virtual models** to match models to tasks. You select one
+by setting the model name in HA or any Ollama-compatible client:
 
-| Profile | What It Does | Cost |
+| Virtual Model | What It Does | Cost |
 |---------|-------------|------|
 | `thane:latest` | General conversation (default) | Free (local) or cheap (cloud) |
 | `thane:assist` | Quick device control | Cheapest |
@@ -144,7 +144,7 @@ profile by setting the model name in HA or any Ollama-compatible client:
 | `thane:event` | For HA automations calling Thane (advanced — not in `/api/tags`) | Cheapest possible |
 
 Start with `thane:latest`. It's the default and handles most things well.
-See [Routing Profiles](routing-profiles.md) for the full list.
+See [Virtual Models](routing-profiles.md) for the full list.
 
 ### The Delegation Trick
 
@@ -314,6 +314,6 @@ at it.
 ## Next Steps
 
 - [Home Assistant](homeassistant.md) — detailed HA setup and protocol information
-- [Routing Profiles](routing-profiles.md) — all available profiles and when to use them
+- [Virtual Models](routing-profiles.md) — all available virtual models and when to use them
 - [Delegation](../understanding/delegation.md) — how the orchestration/execution split works
 - [Architecture](../understanding/architecture.md) — full system design for the technically curious

@@ -182,25 +182,25 @@ request's routing hints: quality floor, speed preference, local-only
 restriction, mission type.
 
 This means the same codebase works whether you have one local model or
-a fleet of cloud providers. Routing profiles (`thane:latest`,
+a fleet of cloud providers. Virtual models (`thane:latest`,
 `thane:premium`, `thane:ops`) describe intent — "I want the best model"
 or "I want the cheapest model" — and the router resolves that intent
 against whatever models are actually available.
 
-These routing profiles are exposed as **virtual models** on the
-Ollama-compatible API. When Home Assistant (or any Ollama client)
-lists available models, it sees `thane:latest`, `thane:premium`,
-`thane:ops`, `thane:assist`, and `thane:local` — each one a different
-intent profile backed by the same agent. An operator can set up
-multiple HA conversation agents pointing at different virtual models:
-one for daily use, one for quick device control, one for automations
-that need the cheapest path. The HA UI presents them as model choices;
-Thane resolves each to the right real model at request time.
+Virtual models are exposed on the Ollama-compatible API. When Home
+Assistant (or any Ollama client) lists available models, it sees
+`thane:latest`, `thane:premium`, `thane:ops`, `thane:assist`, and
+`thane:local` — each one a different intent backed by the same agent.
+An operator can set up multiple HA conversation agents pointing at
+different virtual models: one for daily use, one for quick device
+control, one for automations that need the cheapest path. The HA UI
+presents them as model choices; Thane resolves each to the right real
+model at request time.
 
 Routing hints propagate through delegation. When the orchestrator
 delegates a task, the delegate inherits routing context. A quality
 floor set on the original request carries through to the local model
-selection. See [Routing Profiles](../operating/routing-profiles.md).
+selection. See [Virtual Models](../operating/routing-profiles.md).
 
 ## Speaking Existing Protocols
 

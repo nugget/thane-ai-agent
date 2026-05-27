@@ -50,7 +50,7 @@ boundaries, that's a smell.
 | **Protected tag** | Runtime-asserted; can't be model-toggled. | [`BuiltinTagSpec.Protected`][tag-spec]. | Orthogonal to Kind. A leaf can be protected (`message_channel`, `owner`) without being a menu. |
 | **Delegate run policy** (`delegate.RunPolicy`) | Internal delegate run bundle: max iterations, max duration, token budget, tool timeout, default tags, router hints. | [`delegate/profile.go`][delegate-profile]. | Operational *constraints* on a delegated run. Operator-facing config still calls these "profiles" (YAML key `delegate.profiles`, log key `profile`, JSON wire field `profile`) — the type rename is internal. No relation to tool gating beyond `DefaultTags`. |
 | **Loop profile** (`router.LoopProfile`) | Routing/behavior bundle: model selection, mission, quality floor, instructions. | [`router/loopprofile.go`][loop-profile]. | Routing and prompt-shaping. No relation to tool gating except via `ExcludeTools`. |
-| **Virtual model** | A user-facing `thane:*` model name (`thane:premium`, `thane:ops`) selected via the client's model field. | [`router/virtual_models.go`][virtual-models], [Routing Profiles](../operating/routing-profiles.md). | Expands into a pair of `LoopProfile` values — `TopLevel` for the orchestrator loop and `Delegate` for child delegate runs — plus the routing hints derived from both. Express user/integration execution intent. Prefer this term over the older "routing profile" in new prose. |
+| **Virtual model** | A user-facing `thane:*` model name (`thane:premium`, `thane:ops`) selected via the client's model field. | [`router/virtual_models.go`][virtual-models], [Virtual Models](../operating/routing-profiles.md). | Expands into a pair of `LoopProfile` values — `TopLevel` for the orchestrator loop and `Delegate` for child delegate runs — plus the routing hints derived from both. Express user/integration execution intent. Prefer this term over the older "routing profile" in new prose. |
 | **Mission** | Routing-hint string identifying task context (`conversation`, `automation`, `metacognitive`). | `LoopProfile.Mission`. | Pure routing input. Not a tag, not a tool gate. |
 | **Configured tags** | Read-only snapshot of the configured tag inputs for the run: loop config `Tags` plus request-base/request-override `InitialTags`. | [`loop/tooling.go`][configured-tags] (`ToolingState.ConfiguredTags`). | Read-only telemetry. Distinct from active tags so the dashboard can show "what was configured at launch" vs "what became active." Introduced in [#813][pr-813]. |
 
@@ -66,7 +66,7 @@ boundaries, that's a smell.
 
 The glossary in [docs/understanding/glossary.md](glossary.md) covers
 the user-facing definitions of *Capability Tag*, *Configured Tags*,
-*Lens*, *Talent*, and *Routing Profile*. This doc is the technical
+*Lens*, *Talent*, and *Virtual Model*. This doc is the technical
 companion that adds the disambiguations the glossary doesn't need to
 make.
 
@@ -326,5 +326,5 @@ code; some are queued as cleanup work.
 - [Delegation](delegation.md) — tool gating from the delegation perspective
 - [Context Layers](context-layers.md) — talents, persona, core context
 - [Glossary](glossary.md) — user-facing definitions
-- [Routing Profiles](../operating/routing-profiles.md) — model selection
+- [Virtual Models](../operating/routing-profiles.md) — model selection
 - [`internal/runtime/loop/doc.go`][loop-doc] — capability tag lifecycle (canonical)

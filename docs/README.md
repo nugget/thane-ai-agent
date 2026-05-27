@@ -49,7 +49,7 @@ complete onboarding guide for Home Assistant users.
   wake subscriptions
 - **[Configuration](operating/configuration.md)** — Config guide organized
   by concern
-- **[Routing Profiles](operating/routing-profiles.md)** — Model selection
+- **[Virtual Models](operating/routing-profiles.md)** — Model selection
   presets (`thane:latest`, `thane:premium`, `thane:ops`, etc.)
 - **[Hardware Requirements](operating/hardware.md)** — Platform support,
   production observations, minimum specs

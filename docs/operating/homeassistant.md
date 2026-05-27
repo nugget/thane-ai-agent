@@ -121,9 +121,9 @@ See [MQTT](mqtt.md) for setup and configuration.
 - "What happened while I was away?"
 - "The laundry has been in the washer for an hour — should I move it?"
 
-## Routing Profiles for HA
+## Virtual Models for HA
 
-Any [routing profile](routing-profiles.md) works with HA, but some are
+Any [virtual model](routing-profiles.md) works with HA, but some are
 particularly useful:
 
 - **`thane:latest`** — General conversation, delegates HA tasks to local

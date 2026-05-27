@@ -1,13 +1,13 @@
-# Routing Profiles
+# Virtual Models
 
 Thane uses **virtual model names** to adapt its behavior based on the
 nature of each interaction. Names like `thane:latest`, `thane:premium`,
 or `thane:assist` are selected by setting the model field in any
-Ollama-compatible client (Open WebUI, HA Assist, API calls). The doc
-historically called these "routing profiles" — both terms are still
-used; the canonical Go shape is `router.VirtualModel`.
+Ollama-compatible client (Open WebUI, HA Assist, API calls). The
+canonical Go shape is `router.VirtualModel`; older docs may still call
+these "routing profiles."
 
-## Available Profiles
+## Available Virtual Models
 
 ### `thane:latest` — Daily Conversation *(default)*
 
@@ -116,7 +116,7 @@ resolution; the canonical name does not. The router behaviour is
 identical either way — switching to the canonical name only quiets
 the log line.
 
-## How Profiles Work
+## How Virtual Models Work
 
 When a client sends a request with `"model": "thane:premium"`, Thane:
 
@@ -131,7 +131,7 @@ The virtual model does *not* hardcode a specific deployment — it
 describes the *intent*, and the router finds the best model for that
 intent from your configured model list.
 
-## Choosing a Profile
+## Choosing a Virtual Model
 
 ```
 Cost:    event < assist < latest < premium = ops
@@ -145,18 +145,18 @@ for quick device control.
 
 ## Configuration
 
-Exposed profiles (`thane:latest`, `thane:premium`, `thane:ops`,
+Exposed virtual models (`thane:latest`, `thane:premium`, `thane:ops`,
 `thane:assist`, `thane:local`) appear as models in any
 Ollama-compatible client. In Open WebUI, they show up in the model
 selector. In HA Assist, set the model name in the conversation agent
 configuration.
 
-The advanced profiles (`thane:event`, `thane:peer`) are not listed in
-`/api/tags` for auto-discovery, but resolve correctly when used as an
-explicit model name — useful for machine-initiated calls
+The advanced virtual models (`thane:event`, `thane:peer`) are not
+listed in `/api/tags` for auto-discovery, but resolve correctly when
+used as an explicit model name — useful for machine-initiated calls
 (automations, agent-to-agent traffic) where the caller knows what it
 wants.
 
-No configuration is needed to use profiles — they work out of the
-box. The router uses your `models.available` list to determine what
-"premium" and "local" mean for your setup.
+No configuration is needed — virtual models work out of the box. The
+router uses your `models.available` list to determine what "premium"
+and "local" mean for your setup.

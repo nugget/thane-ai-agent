@@ -55,7 +55,7 @@ Pick by lifecycle: reach for `thane_now` when the orchestrator needs the result 
 - Web, file, shell, document, and other tool families when those tags are active
 - Core tools configured for the instance
 
-The `thane:ops` [routing profile](../operating/routing-profiles.md) disables
+The `thane:ops` [virtual model](../operating/routing-profiles.md) disables
 orchestrator gating — the primary model sees everything directly. Use it when
 you need the frontier model's judgment on tool results, not just
 orchestration.
