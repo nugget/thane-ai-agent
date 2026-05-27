@@ -257,11 +257,11 @@ func TestExecute_LoopBackedDerivesHAProfileFromTagScope(t *testing.T) {
 				t.Fatalf("execute() error = %v", err)
 			}
 			if result.RunPolicyName != "ha" {
-				t.Fatalf("RunPolicyName = %q, want ha profile derived from %v tags", result.RunPolicyName, tc.tags)
+				t.Fatalf("RunPolicyName = %q, want ha run policy derived from %v tags", result.RunPolicyName, tc.tags)
 			}
 
 			if captured.UsageTaskName != "ha" {
-				t.Fatalf("UsageTaskName = %q, want ha profile derived from %v tags", captured.UsageTaskName, tc.tags)
+				t.Fatalf("UsageTaskName = %q, want ha run policy derived from %v tags", captured.UsageTaskName, tc.tags)
 			}
 			if captured.RoutingFactors[router.FactorMission] != "device_control" {
 				t.Fatalf("mission hint = %q, want device_control", captured.RoutingFactors[router.FactorMission])
