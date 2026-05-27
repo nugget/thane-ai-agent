@@ -34,82 +34,32 @@ func TestBuiltinTagSpecs_ParentsResolveToMenuTags(t *testing.T) {
 	}
 }
 
-// TestBuiltinTagSpecs_AliasesResolveToCanonicals pins that every Alias
-// is unique across the catalog (no two canonical tags claim the same
-// alias) and doesn't collide with an existing canonical name. Without
-// this, a future addition like Aliases: []string{"ha"} on a sibling tag
-// would silently override the canonical ha entry in the reverse-alias
-// map.
-func TestBuiltinTagSpecs_AliasesResolveToCanonicals(t *testing.T) {
-	specs := BuiltinTagSpecs()
-	seenAliases := make(map[string]string)
-	var problems []string
-	for name, spec := range specs {
-		for _, alias := range spec.Aliases {
-			if _, ok := specs[alias]; ok {
-				problems = append(problems, name+": alias "+alias+" collides with an existing canonical tag")
-				continue
-			}
-			if owner, dup := seenAliases[alias]; dup {
-				problems = append(problems, name+": alias "+alias+" already declared by "+owner)
-				continue
-			}
-			seenAliases[alias] = name
-		}
-	}
-	if len(problems) > 0 {
-		sort.Strings(problems)
-		t.Fatalf("BuiltinTagSpecs Aliases are not unique:\n  - %s",
-			strings.Join(problems, "\n  - "))
-	}
-}
-
-// TestCanonicalTagName_ResolvesHomeAssistantAlias is the worked example
-// for alias resolution: the reverse-alias map populated at init must
-// resolve homeassistant → ha, and the canonical name must round-trip
-// unchanged.
-func TestCanonicalTagName_ResolvesHomeAssistantAlias(t *testing.T) {
-	if got := CanonicalTagName("homeassistant"); got != "ha" {
-		t.Fatalf("CanonicalTagName(homeassistant) = %q, want ha", got)
-	}
-	if got := CanonicalTagName("ha"); got != "ha" {
-		t.Fatalf("CanonicalTagName(ha) = %q, want ha (canonical round-trip)", got)
-	}
-	if got := CanonicalTagName("nonexistent"); got != "nonexistent" {
-		t.Fatalf("CanonicalTagName(nonexistent) = %q, want nonexistent (unchanged for unknown)", got)
-	}
-}
-
-// TestHasBuiltinTag_AcceptsAliases checks that aliases register as
-// known tags. The runtime relies on this so validation against
-// unknown-tag references (channel_tags pointing at homeassistant, KB
-// articles tagged homeassistant) keeps working through the alias.
-func TestHasBuiltinTag_AcceptsAliases(t *testing.T) {
-	if !HasBuiltinTag("homeassistant") {
-		t.Fatal("HasBuiltinTag(homeassistant) = false, want true via ha's alias")
-	}
+// TestHasBuiltinTag covers the canonical-tag membership check. Tag
+// names are first-class — there is no alias resolution; the historical
+// homeassistant→ha alias was retired in #925.
+func TestHasBuiltinTag(t *testing.T) {
 	if !HasBuiltinTag("ha") {
 		t.Fatal("HasBuiltinTag(ha) = false, want true (canonical)")
+	}
+	if HasBuiltinTag("homeassistant") {
+		t.Fatal("HasBuiltinTag(homeassistant) = true, want false (retired alias)")
 	}
 	if HasBuiltinTag("definitely_not_a_tag") {
 		t.Fatal("HasBuiltinTag(definitely_not_a_tag) = true, want false")
 	}
 }
 
-// TestLookupBuiltinTagSpec_ResolvesAliases confirms that fetching the
-// spec for an alias returns the canonical spec.
-func TestLookupBuiltinTagSpec_ResolvesAliases(t *testing.T) {
-	viaCanonical, ok := LookupBuiltinTagSpec("ha")
-	if !ok {
+// TestLookupBuiltinTagSpec confirms canonical-only lookup behavior.
+// The pre-#925 alias path is gone; only canonical names resolve.
+func TestLookupBuiltinTagSpec(t *testing.T) {
+	if _, ok := LookupBuiltinTagSpec("ha"); !ok {
 		t.Fatal("LookupBuiltinTagSpec(ha) not found")
 	}
-	viaAlias, ok := LookupBuiltinTagSpec("homeassistant")
-	if !ok {
-		t.Fatal("LookupBuiltinTagSpec(homeassistant) not found via alias")
+	if _, ok := LookupBuiltinTagSpec("homeassistant"); ok {
+		t.Fatal("LookupBuiltinTagSpec(homeassistant) found; the alias was retired")
 	}
-	if viaAlias.Description != viaCanonical.Description {
-		t.Fatalf("alias resolution returned different spec: alias=%+v canonical=%+v",
-			viaAlias, viaCanonical)
+	if _, ok := LookupBuiltinTagSpec("definitely_not_a_tag"); ok {
+		t.Fatal("LookupBuiltinTagSpec(definitely_not_a_tag) found")
 	}
 }
 
