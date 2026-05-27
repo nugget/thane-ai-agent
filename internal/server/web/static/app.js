@@ -436,11 +436,13 @@ function updatePinnedAnchorPositions() {
 // well-known structural-root container the runtime auto-creates as
 // the singleton "core" loop. The dashboard already represents that
 // role via the pinned __system__ pseudo-node (rendered as a labeled
-// square), so we hide the loop's own graph node to avoid two
-// nodes both labeled "core" — the actual problem the operator was
-// staring at when reporting "real core has one connect to imposter
-// core also named core." The loop itself stays in state.loops so
-// detail panels and API consumers continue to see its data.
+// square), so we hide the loop's own graph node to avoid two nodes
+// both labeled "core" — one square, one round, both labeled "core,"
+// with a single connection between them and every other loop hanging
+// off the round one.
+//
+// The loop itself stays in state.loops so detail panels and API
+// consumers continue to see its data.
 //
 // Predicate matches the backend's Loop.IsCore: name == "core" and
 // the config Operation is "container." Falling back on name alone
@@ -515,8 +517,17 @@ function syncPhysicsNodes(cx, cy) {
 
   // Remove physics nodes for loops that no longer exist (and aren't system).
   // Exiting nodes stay until their DOM animationend handler cleans them up.
+  // Also handles the boot-order race: an initial render may complete before
+  // /api/system returns, in which case the registry core gets a physics
+  // node like any other loop. When system status later arrives, suppress
+  // the registry core's physics node so it stops participating in layout.
   for (const id of physics.nodes.keys()) {
     if (id === '__system__') continue;
+    const loop = state.loops.get(id);
+    if (state.system && loop && isRegistryCoreLoop(loop)) {
+      physics.nodes.delete(id);
+      continue;
+    }
     if (!state.loops.has(id) && !canvasWorld.querySelector(`[data-loop-id="${id}"].loop-node--exiting`)) {
       physics.nodes.delete(id);
     }
@@ -2910,6 +2921,19 @@ function renderNodes() {
     }, { once: true });
   }
 
+  // Boot-order race cleanup: if /api/system arrived after a first
+  // paint that already rendered the registry-core loop, drop the
+  // stale SVG group and knownLoopIds entry immediately (no exit
+  // animation — the node was a visual error, not a graceful exit).
+  if (hasSystem) {
+    for (const loop of loops) {
+      if (!isRegistryCoreLoop(loop)) continue;
+      const stale = canvasNodeLayer.querySelector(`[data-loop-id="${loop.id}"]`);
+      if (stale) stale.remove();
+      state.knownLoopIds.delete(loop.id);
+    }
+  }
+
   // Remove nodes for loops that no longer exist (with exit animation).
   const existingGroups = canvasNodeLayer.querySelectorAll('.loop-node');
   for (const g of existingGroups) {
@@ -2979,14 +3003,35 @@ function renderLinkingLines(hasSystem, loops) {
   // Build a set of all valid link targets.
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
-  // Remove stale link lines for loops that no longer exist.
+  // Remove stale link lines. Three cases require cleanup, not just one:
+  //
+  //   1. system→child line whose target no longer exists OR system is gone
+  //   2. parent→child line whose target loop is gone
+  //   3. parent→child line whose *parent* has gone away (this catches the
+  //      registry-core-adoption case: a child that previously listed the
+  //      registry core as its parent now belongs to __system__, but the
+  //      old child-of-core line wasn't being pruned because the child
+  //      itself still existed)
   const existing = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const el of existing) {
     const target = el.dataset.targetLoop;
-    const isSystemLink = !el.dataset.parentLoop;
-    if (isSystemLink && (!hasSystem || !activeIds.has(target))) {
+    const parentLoop = el.dataset.parentLoop || '';
+    const isSystemLink = !parentLoop;
+    if (isSystemLink) {
+      if (!hasSystem || !activeIds.has(target)) {
+        el.remove();
+      }
+      continue;
+    }
+    if (!allValidTargets.has(target)) {
       el.remove();
-    } else if (!isSystemLink && !allValidTargets.has(target)) {
+      continue;
+    }
+    // Re-rooting check: if the declared parent is no longer a valid
+    // parent for the current target (target moved, was adopted, or
+    // the parent is the now-hidden registry core), drop the line.
+    const targetLoop = state.loops.get(target);
+    if (!targetLoop || targetLoop.parent_id !== parentLoop || parentLoop === registryCoreID) {
       el.remove();
     }
   }
