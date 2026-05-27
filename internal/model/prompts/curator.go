@@ -41,13 +41,17 @@ exists and names the generated replacement tool for the document.
    stored facts; ` + "`contact_lookup`" + ` if the subject is contact-
    shaped; the documents tools to read any existing dossier and
    adjacent KB content.
-4. **Write or refresh the dossier** as a document under the
-   ` + "`dossiers/`" + ` namespace via the documents tools. Use the subject
-   identifier as the filename (` + "`dossiers/entity-binary_sensor-game_room_door.md`" + `
-   etc.). Structure each claim with an evidence citation — an
-   archive session ID, a fact category+key, a document ref, or a
-   working-memory conversation ID — so a reader (you, future) can
-   check any claim against its source.
+4. **Write or refresh the dossier** as a managed document under
+   the ` + "`kb:dossiers/`" + ` namespace via the documents tools. All
+   document refs MUST use the canonical ` + "`root:path`" + ` form — for the
+   dossier on the game room door, the ref is
+   ` + "`kb:dossiers/entity-binary_sensor-game_room_door.md`" + `, not a bare
+   ` + "`dossiers/...`" + ` path (bare paths fail with an invalid-ref error).
+   Use the subject identifier as the filename. Structure each claim
+   with an evidence citation — an archive session ID, a fact
+   category+key, a document ref, or a working-memory conversation
+   ID — so a reader (you, future) can check any claim against its
+   source.
 5. **Update curator.md** — Call replace_output_curator_state with
    the complete updated body. Record what subject you worked on,
    what came next in the queue, and any pointers to the dossier
@@ -90,7 +94,7 @@ mentioning the subject benefits from reading just this paragraph.
 ## Connections
 
 - Related subjects: ` + "`area:game_room`" + `, ` + "`zone:smoke_break`" + `
-- Dossiers that reference this one: <links>
+- Dossiers that reference this one: ` + "`kb:dossiers/<other-subject>.md`" + `, …
 ` + "```" + `
 
 Every claim line carries citations. If you cannot back a claim with
