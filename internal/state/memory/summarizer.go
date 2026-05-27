@@ -235,52 +235,99 @@ func (w *SummarizerWorker) closeIdleSessions(ctx context.Context) {
 	}
 }
 
+// maxBatchesPerScan caps the number of batches a single scan cycle
+// will pull when the queue contains nothing but empties. Drains the
+// 12,812-row crash_recovery historical at SQL speed without an
+// unbounded loop if a markEmpty failure prevents progress. With the
+// default BatchSize of 50 this drains ~5,000 empties per scan tick.
+const maxBatchesPerScan = 100
+
 func (w *SummarizerWorker) scan(ctx context.Context) {
-	sessions, err := w.store.UnsummarizedSessions(w.config.BatchSize)
-	if err != nil {
-		w.logger.Error("failed to query unsummarized sessions", "error", err)
-		return
-	}
-	if len(sessions) == 0 {
-		return
-	}
-
-	w.logger.Info("found unsummarized sessions", "count", len(sessions))
-
-	for _, sess := range sessions {
-		if ctx.Err() != nil {
+	// When a batch contains only empties (no LLM calls), immediately
+	// fetch the next batch — empties cost only an SQL write to mark
+	// them and we don't need to wait for the next scheduled tick to
+	// keep draining. As soon as any session in a batch triggers a
+	// real LLM summarize, the rate-limit pause kicks in, we finish
+	// the batch, and we return so the next scheduled scan picks up.
+	for batch := 0; batch < maxBatchesPerScan; batch++ {
+		sessions, err := w.store.UnsummarizedSessions(w.config.BatchSize)
+		if err != nil {
+			w.logger.Error("failed to query unsummarized sessions", "error", err)
 			return
 		}
-		w.summarizeSession(ctx, sess)
+		if len(sessions) == 0 {
+			return
+		}
 
-		// Rate-limit: pause between sessions to avoid starving
-		// interactive requests.
-		if !sleepCtx(ctx, w.config.PauseBetween) {
+		w.logger.Info("found unsummarized sessions",
+			"count", len(sessions),
+			"batch", batch,
+		)
+
+		didLLMWork := false
+		for _, sess := range sessions {
+			if ctx.Err() != nil {
+				return
+			}
+
+			// summarizeSession is the source of truth on whether a
+			// session needs LLM work. It re-fetches the transcript
+			// to decide, so we don't rely on the (possibly stale or
+			// silently-zero) MessageCount from UnsummarizedSessions.
+			calledLLM := w.summarizeSession(ctx, sess)
+			if calledLLM {
+				didLLMWork = true
+				// Rate-limit only when we actually called a model.
+				// Cleanup markEmpty paths are cheap SQL writes and
+				// don't need to throttle for interactive traffic.
+				if !sleepCtx(ctx, w.config.PauseBetween) {
+					return
+				}
+			}
+		}
+
+		// If the batch had any real work we hand back to the
+		// scheduler so we don't starve other ticks. Pure-empties
+		// batches loop immediately for the next chunk of cleanup.
+		if didLLMWork {
 			return
 		}
 	}
+	w.logger.Warn("scan hit per-cycle batch cap; backlog may still contain empties",
+		"max_batches", maxBatchesPerScan,
+		"batch_size", w.config.BatchSize,
+	)
 }
 
-func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) {
+// summarizeSession processes one session candidate. Returns true when
+// an LLM call was made (so the caller knows to rate-limit), false
+// when the session was empty (markEmpty'd at SQL speed) or when an
+// unrecoverable error short-circuited the path before any model
+// call. The returned bool is the scan loop's signal: "did this row
+// cost real LLM/router budget?"
+func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) bool {
 	ctx, cancel := context.WithTimeout(ctx, w.config.Timeout)
 	defer cancel()
 
 	// Fetch transcript before routing a model — avoids wasting a router
-	// call on sessions that have no content to summarize.
+	// call on sessions that have no content to summarize. This re-fetch
+	// is also the authoritative empty-check: MessageCount on the
+	// candidate may be 0 because populateMessageCounts silently swallowed
+	// a query error, so we never trust it alone to choose markEmpty.
 	messages, err := w.store.GetSessionTranscript(sess.ID)
 	if err != nil {
 		w.logger.Warn("failed to fetch transcript",
 			"session", ShortID(sess.ID),
 			"error", err,
 		)
-		return
+		return false
 	}
 	if len(messages) == 0 {
-		// Empty-transcript sessions (scheduler tasks, empty delegates)
-		// must be marked as summarized so they don't re-enter the queue
-		// on every scan cycle.
+		// Empty-transcript sessions (scheduler tasks, empty delegates,
+		// crash_recovery placeholders) must be marked as summarized
+		// so they don't re-enter the queue on every scan cycle.
 		w.markEmpty(sess.ID)
-		return
+		return false
 	}
 
 	// Route model selection through the router.
@@ -324,7 +371,10 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 			"model", model,
 			"error", err,
 		)
-		return
+		// Return true even on Chat failure — the LLM was invoked,
+		// consumed router budget, and the caller should still
+		// rate-limit before the next session.
+		return true
 	}
 
 	meta, title, tags := parseMetadataResponse(resp.Message.Content, toolUsage, w.logger)
@@ -334,7 +384,7 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 			"session", ShortID(sess.ID),
 			"error", err,
 		)
-		return
+		return true
 	}
 
 	w.logger.Info("session metadata generated",
@@ -360,6 +410,7 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 			w.interactionCB(sess.ConversationID, sess.ID, *sess.EndedAt, tags)
 		}()
 	}
+	return true
 }
 
 // markEmpty marks a session with no transcript as summarized so it is

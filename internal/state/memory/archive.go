@@ -2037,18 +2037,25 @@ func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, er
 	return sessions, nil
 }
 
-// UnsummarizedSessions returns ended sessions that have no metadata yet,
-// ordered oldest-first for catch-up processing. Only sessions with at
-// least one message are returned — the message count is checked via a
-// post-query filter because messages may live in a different database
-// than sessions in unified mode.
+// UnsummarizedSessions returns ended sessions that have no metadata
+// yet, ordered oldest-first for catch-up processing. Includes
+// zero-message sessions (typically crash_recovery placeholders) —
+// the summarizer worker's empty-transcript branch marks them
+// summarized via markEmpty so they don't re-enter the queue, but
+// they need to *enter* the queue first.
+//
+// Earlier revisions over-fetched and filtered out zero-message
+// candidates here, intending to avoid wasted summarizer work. In
+// practice that put 12,812 crash_recovery rows at the head of the
+// queue (oldest ended_at), filled the over-fetch budget with them,
+// and dropped them all in the filter — the worker returned zero
+// candidates indefinitely and the real backlog never advanced. See
+// issue #977 Finding 3b.
 func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
-	// Over-fetch candidates, then filter by message count. This avoids a
-	// cross-DB EXISTS subquery that would fail in unified mode.
 	rows, err := s.db.Query(`
 		SELECT id, conversation_id, started_at, ended_at, end_reason,
 		       0 AS message_count,
@@ -2059,38 +2066,28 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 		  AND (title IS NULL OR title = '')
 		ORDER BY ended_at ASC
 		LIMIT ?
-	`, limit*3) // over-fetch to account for sessions with no messages
+	`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("unsummarized sessions: %w", err)
 	}
 	defer rows.Close()
 
-	var candidates []*Session
+	var sessions []*Session
 	for rows.Next() {
 		sess, err := s.scanSessionRow(rows)
 		if err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, sess)
+		sessions = append(sessions, sess)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Batch-fetch message counts for all candidates in one query.
-	s.populateMessageCounts(candidates)
-
-	// Filter to sessions with at least one message and apply limit.
-	var sessions []*Session
-	for _, sess := range candidates {
-		if sess.MessageCount > 0 {
-			sessions = append(sessions, sess)
-			if len(sessions) >= limit {
-				break
-			}
-		}
-	}
-
+	// Populate MessageCount so the worker (and any other caller)
+	// sees accurate counts on returned sessions, even though the
+	// query no longer gates on them.
+	s.populateMessageCounts(sessions)
 	return sessions, nil
 }
 

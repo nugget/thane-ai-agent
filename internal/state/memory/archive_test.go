@@ -512,20 +512,24 @@ func TestSetSessionMetadata(t *testing.T) {
 	}
 }
 
-// TestUnsummarizedSessions verifies the query returns ended sessions
-// without metadata, respects filters, and orders oldest-first.
+// TestUnsummarizedSessions verifies the query returns every ended
+// session without metadata (regardless of message count), ordered
+// oldest-first, and excludes still-active sessions and already-titled
+// ones. Zero-message sessions are deliberately INCLUDED — the
+// summarizer worker's cleanup path needs to see them to call
+// markEmpty. See issue #977 Finding 3b for why the prior "filter
+// zero-message rows out here" behavior broke catch-up.
 func TestUnsummarizedSessions(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	// Create 3 ended sessions with actual archived messages but no metadata.
-	var unsummarized []string
+	// Three ended sessions with archived messages, no metadata.
+	var withMessages []string
 	for i := range 3 {
 		convID := fmt.Sprintf("conv-%d", i)
 		sess, err := store.StartSession(convID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Archive a real message so the EXISTS subquery finds it.
 		err = store.ArchiveMessages([]Message{{
 			ID:             fmt.Sprintf("msg-%d", i),
 			ConversationID: convID,
@@ -541,15 +545,15 @@ func TestUnsummarizedSessions(t *testing.T) {
 		if err := store.EndSession(sess.ID, "reset"); err != nil {
 			t.Fatal(err)
 		}
-		unsummarized = append(unsummarized, sess.ID)
+		withMessages = append(withMessages, sess.ID)
 	}
 
-	// Create an ended session WITH metadata — should be excluded.
+	// Ended session with metadata — should be excluded.
 	summarized, err := store.StartSession("conv-summarized")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.ArchiveMessages([]Message{{
+	if err := store.ArchiveMessages([]Message{{
 		ID:             "msg-summarized",
 		ConversationID: "conv-summarized",
 		SessionID:      summarized.ID,
@@ -557,78 +561,136 @@ func TestUnsummarizedSessions(t *testing.T) {
 		Content:        "hello",
 		Timestamp:      time.Now(),
 		ArchiveReason:  "test",
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(summarized.ID, "reset"); err != nil {
 		t.Fatal(err)
 	}
-	meta := &SessionMetadata{OneLiner: "Already summarized"}
-	if err := store.SetSessionMetadata(summarized.ID, meta, "Has Title", nil); err != nil {
+	if err := store.SetSessionMetadata(summarized.ID,
+		&SessionMetadata{OneLiner: "Already summarized"}, "Has Title", nil); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create a still-active session — should be excluded.
-	active, err := store.StartSession("conv-active")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = store.ArchiveMessages([]Message{{
-		ID:             "msg-active",
-		ConversationID: "conv-active",
-		SessionID:      active.ID,
-		Role:           "user",
-		Content:        "hello",
-		Timestamp:      time.Now(),
-		ArchiveReason:  "test",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = active
-
-	// Create an ended session with zero messages — should be excluded.
-	empty, err := store.StartSession("conv-empty")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EndSession(empty.ID, "reset"); err != nil {
+	// Still-active session — should be excluded.
+	if _, err := store.StartSession("conv-active"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create an ended session with NO actual archived messages — should be excluded.
-	stale, err := store.StartSession("conv-stale")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EndSession(stale.ID, "reset"); err != nil {
-		t.Fatal(err)
+	// Two ended sessions with no messages — these are exactly the
+	// crash_recovery placeholders #977 Finding 3b is about. They
+	// MUST be returned so the worker can mark them empty; otherwise
+	// they sit at the head of the ORDER BY ended_at ASC queue
+	// forever and block real sessions.
+	var empties []string
+	for i := range 2 {
+		convID := fmt.Sprintf("conv-empty-%d", i)
+		sess, err := store.StartSession(convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EndSession(sess.ID, "crash_recovery"); err != nil {
+			t.Fatal(err)
+		}
+		empties = append(empties, sess.ID)
 	}
 
-	// Query: should return only the 3 unsummarized sessions.
 	sessions, err := store.UnsummarizedSessions(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 3 {
-		t.Fatalf("expected 3 unsummarized sessions, got %d", len(sessions))
+
+	// Three with-messages + two empties = 5 returned.
+	if len(sessions) != 5 {
+		t.Fatalf("expected 5 unsummarized sessions (3 with messages + 2 empty), got %d", len(sessions))
 	}
 
-	// Verify oldest-first order (by ended_at ASC).
+	// Verify MessageCount is populated accurately so the worker
+	// can distinguish cleanup vs. summarize.
+	gotEmpties := 0
+	gotWithMsgs := 0
+	for _, sess := range sessions {
+		switch sess.MessageCount {
+		case 0:
+			gotEmpties++
+		case 1:
+			gotWithMsgs++
+		default:
+			t.Errorf("session %s: unexpected MessageCount=%d", ShortID(sess.ID), sess.MessageCount)
+		}
+	}
+	if gotEmpties != 2 || gotWithMsgs != 3 {
+		t.Errorf("MessageCount distribution: %d empties + %d with-messages, want 2 + 3", gotEmpties, gotWithMsgs)
+	}
+
+	// Ordered oldest-first by ended_at: the three "withMessages"
+	// rows ended before the two "empties" rows.
+	wantOrder := append(append([]string{}, withMessages...), empties...)
 	for i, sess := range sessions {
-		if sess.ID != unsummarized[i] {
-			t.Errorf("session[%d] = %s, want %s", i, ShortID(sess.ID), ShortID(unsummarized[i]))
+		if sess.ID != wantOrder[i] {
+			t.Errorf("session[%d] = %s, want %s", i, ShortID(sess.ID), ShortID(wantOrder[i]))
 		}
 	}
 
-	// Verify limit is respected.
+	// LIMIT respected.
 	limited, err := store.UnsummarizedSessions(2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(limited) != 2 {
 		t.Fatalf("expected 2 sessions with limit=2, got %d", len(limited))
+	}
+}
+
+// TestUnsummarizedSessions_EmptyQueueDoesNotBlockRealSessions is the
+// pre-fix regression test for #977 Finding 3b. The pre-fix worker
+// over-fetched limit*3 rows, found them all empty, filtered them
+// out in Go, and returned zero candidates — so the real session at
+// the tail of the ORDER BY queue never got picked up. After the fix
+// the worker sees everything and dispatches by MessageCount.
+func TestUnsummarizedSessions_EmptyQueueDoesNotBlockRealSessions(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Many zero-message ended sessions at the head of the queue
+	// (oldest ended_at). The pre-fix code filled the over-fetch
+	// budget with these and returned nothing.
+	const empties = 30
+	for i := range empties {
+		sess, err := store.StartSession(fmt.Sprintf("conv-empty-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EndSession(sess.ID, "crash_recovery"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// One real session that ended last.
+	real, err := store.StartSession("conv-real")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveMessages([]Message{{
+		ID: "msg-real", ConversationID: "conv-real", SessionID: real.ID,
+		Role: "user", Content: "real content", Timestamp: time.Now(),
+		ArchiveReason: "test",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(real.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// limit=10 — pre-fix this returned 0 (over-fetched 30 empties,
+	// filtered them all out). Post-fix it returns the first 10
+	// empties; the worker drains them and the real session shows
+	// up on a later scan once their slots clear.
+	got, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("regression: empty-session queue blocked all candidates")
 	}
 }
 
