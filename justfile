@@ -213,7 +213,7 @@ service-install: install
     THANE_HOME="{{thane-home}}"
     # Create directory structure
     mkdir -p "$THANE_HOME/db"
-    mkdir -p "$THANE_HOME/logs"
+    mkdir -p "$THANE_HOME/archive"
     # Generate plist with absolute paths for this user
     mkdir -p ~/Library/LaunchAgents
     sed -e "s|/usr/local/bin/thane|$THANE_HOME/bin/thane|g" \
@@ -225,8 +225,8 @@ service-install: install
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
     echo "  Data:    $THANE_HOME/db/"
-    echo "  Logs:    $THANE_HOME/logs/{events,requests,access,loops,delegates,envelopes}/YYYY-MM-DD/HH.jsonl"
-    echo "           $THANE_HOME/logs/logs.db"
+    echo "  Archive: $THANE_HOME/archive/sources/thane/{events,requests,http_access,loops,delegates,envelopes,conversations}/YYYY/MM/DD/<dataset>-YYYY-MM-DD-HH.jsonl"
+    echo "  Index:   $THANE_HOME/archive/logs.db"
     echo "  Crashes: $THANE_HOME/crash.log       (pre-init errors only)"
     echo ""
     echo "Next steps:"
@@ -393,7 +393,7 @@ serve: build
 logs workdir="./Thane":
     #!/usr/bin/env bash
     set -euo pipefail
-    events_dir="{{workdir}}/logs/events"
+    events_dir="{{workdir}}/archive/sources/thane/events"
     echo "Tailing events dataset under $events_dir (Ctrl-C to stop)..."
     current=""
     while true; do
