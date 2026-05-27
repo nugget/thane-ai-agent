@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -133,6 +134,11 @@ func (s *ArchiveStore) trySetupSessionsFTS() bool {
 // snippet highlight FTS5 produced from whichever indexed column
 // matched. Use SessionID with the existing archive_session_transcript
 // retrieval to pull the full conversation that generated the summary.
+//
+// Tags is unmarshaled from the JSON blob stored in sessions.tags so
+// callers get a consistent [][]string-shaped tag list — matching
+// [Session.Tags] and freeing callers from having to parse JSON
+// themselves.
 type SessionMatch struct {
 	SessionID      string    `json:"session_id"`
 	ConversationID string    `json:"conversation_id"`
@@ -140,7 +146,7 @@ type SessionMatch struct {
 	EndedAt        time.Time `json:"ended_at,omitempty"`
 	Title          string    `json:"title"`
 	Summary        string    `json:"summary"`
-	Tags           string    `json:"tags,omitempty"`
+	Tags           []string  `json:"tags,omitempty"`
 	Highlight      string    `json:"highlight"`
 }
 
@@ -154,7 +160,12 @@ type SessionMatch struct {
 // the query trims to empty, or when no rows match. Caller composes
 // this with [ArchiveStore.Search] to build a multi-surface envelope.
 func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, error) {
-	if !s.ftsEnabled {
+	// Gate on the sessions-specific FTS setup, not the core ftsEnabled
+	// flag. trySetupSessionsFTS can fail independently (corrupt
+	// pre-existing virtual table, shadow-table permissions issue) even
+	// when messages_fts is healthy — gating here ensures we degrade to
+	// "no hits" instead of erroring against a missing/broken FTS table.
+	if !s.sessionsFTSEnabled {
 		return nil, nil
 	}
 	q := phraseFTS5Query(query)
@@ -170,7 +181,7 @@ func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, 
 		       COALESCE(s.ended_at, '') AS ended_at,
 		       COALESCE(s.title, ''),
 		       COALESCE(s.summary, ''),
-		       COALESCE(s.tags, ''),
+		       COALESCE(s.tags, '') AS tags_json,
 		       snippet(%s, -1, '**', '**', '...', 32) AS highlight
 		FROM %s
 		JOIN sessions s ON s.rowid = %s.rowid
@@ -188,10 +199,10 @@ func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, 
 	var out []SessionMatch
 	for rows.Next() {
 		var m SessionMatch
-		var startedStr, endedStr string
+		var startedStr, endedStr, tagsJSON string
 		if err := rows.Scan(
 			&m.SessionID, &m.ConversationID, &startedStr, &endedStr,
-			&m.Title, &m.Summary, &m.Tags, &m.Highlight,
+			&m.Title, &m.Summary, &tagsJSON, &m.Highlight,
 		); err != nil {
 			return nil, fmt.Errorf("scan session match: %w", err)
 		}
@@ -201,6 +212,18 @@ func (s *ArchiveStore) SearchSessions(query string, limit int) ([]SessionMatch, 
 		if endedStr != "" {
 			if m.EndedAt, err = database.ParseTimestamp(endedStr); err != nil {
 				return nil, fmt.Errorf("parse session ended_at: %w", err)
+			}
+		}
+		// Tags is stored as a JSON blob ([]string) — unmarshal so the
+		// caller gets a consistent shape with Session.Tags. Corrupt JSON
+		// is logged but not fatal (matches populateSession's posture).
+		if tagsJSON != "" {
+			if err := json.Unmarshal([]byte(tagsJSON), &m.Tags); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("corrupt tags JSON on session match",
+						"session", ShortID(m.SessionID), "error", err)
+				}
+				m.Tags = nil
 			}
 		}
 		out = append(out, m)
