@@ -423,8 +423,8 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	trustZone := "unknown"
 	binding := b.resolveBinding(sender)
 	if binding != nil {
-		if binding.ContactID != "" {
-			loopName = "signal/" + shortContactID(binding.ContactID)
+		if short := shortContactID(binding.ContactID); short != "" {
+			loopName = "signal/" + short
 		}
 		if binding.TrustZone != "" {
 			trustZone = binding.TrustZone
@@ -951,18 +951,48 @@ func sanitizePhone(phone string) string {
 	return sb.String()
 }
 
-// shortContactID returns the first 8 characters of a contact UUID for
-// use as a stable, low-PII loop-name component. UUIDs are 8-4-4-4-12
-// hyphenated; the first segment is 8 hex chars which collides only
-// at very small probability across the household-scale contact list
-// and is easy to grep against the full ID in [contact_lookup] /
-// session-origin output. Inputs shorter than 8 characters are
-// returned as-is.
+// shortContactID returns the first segment of a contact UUID for use
+// as a stable, low-PII loop-name component. Loop names are
+// hierarchy-path-shaped (the dashboard / structured logs treat "/"
+// as a parent/child separator), so this validates the input is a
+// safe hex-and-dash identifier and returns "" on any other shape —
+// the caller falls back to sanitizePhone in that case.
+//
+// UUIDs are 8-4-4-4-12 hyphenated; we take the leading 8 hex chars.
+// That's a 16-bit-times-2 namespace which collides only at very
+// small probability across a household-scale contact list and is
+// easy to grep against the full ID in contact_lookup /
+// session-origin output. Non-UUID inputs (tests sometimes pass
+// "contact-1" or paths) get rejected entirely so a stray "/" or
+// other special character can't restructure the loop hierarchy.
 func shortContactID(id string) string {
+	if id == "" {
+		return ""
+	}
+	if !isSafeContactID(id) {
+		return ""
+	}
 	if len(id) <= 8 {
 		return id
 	}
 	return id[:8]
+}
+
+// isSafeContactID reports whether s is a hex-and-dash-only string
+// safe to embed in a loop name. Lower-case [0-9a-f-] only; any other
+// character (including the upper-case A-F, "/" path separator, or
+// dot) disqualifies the value.
+func isSafeContactID(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // formatMessage builds the user-facing message content for the agent

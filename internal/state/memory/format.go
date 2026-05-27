@@ -523,8 +523,14 @@ func splitTransportEnvelope(content string) (string, map[string]any) {
 }
 
 // setMetadataString writes a sanitized, clipped string value to a
-// metadata map. Empty or unprintable values are dropped so the caller
-// can rely on "key present implies non-empty string."
+// metadata map. The sanitizer in [sanitizeMetadataToken] trims
+// whitespace, collapses runs of whitespace to single spaces,
+// converts newlines and semicolons to safer characters, then clips
+// to maxMessageMetadataValueBytes; values that come out empty after
+// that pass are dropped so the caller can rely on "key present
+// implies non-empty string." It does not strip arbitrary
+// non-printable runes — values that survive the whitespace pass and
+// are non-empty are written through as-is.
 func setMetadataString(m map[string]any, key, value string) {
 	v := sanitizeMetadataToken(value, maxMessageMetadataValueBytes)
 	if v == "" {
