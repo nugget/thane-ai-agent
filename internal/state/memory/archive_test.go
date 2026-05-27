@@ -1934,3 +1934,179 @@ func TestGetMessagesInRange_ExcludeSessionIDPreservesNullRows(t *testing.T) {
 		t.Error("NULL session_id row dropped — exclusion should preserve NULLs")
 	}
 }
+
+// TestSearch_PhraseFirstPreferred verifies the phrase-first +
+// OR-of-terms backfill: when a multi-word phrase has dedicated
+// matches, those rank higher than rows where the individual words
+// happen to co-occur densely. The fixture includes a "noise" row
+// that repeats individual query tokens many times — it should not
+// rank above the row that contains the phrase verbatim.
+func TestSearch_PhraseFirstPreferred(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		// Dense-keyword noise: lots of "office", "door", "state" but
+		// never the phrase "office door state" in that order.
+		{
+			ID: "noise", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "tool",
+			Content:       "office occupancy. office camera. office lock. door open. door close. door open. door state changed. state available. state on. state off. state error.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		// Phrase-anchored row: contains the exact "office door state" once.
+		{
+			ID: "phrase", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "What is the office door state right now?",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.Search(SearchOptions{
+		Query:     "office door state",
+		Limit:     5,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].Match.ID != "phrase" {
+		t.Errorf("expected phrase-anchored row to rank first, got %q with content %q",
+			results[0].Match.ID, results[0].Match.Content)
+	}
+}
+
+// TestSearch_AnticipationsFilteredByDefault verifies that
+// wake-bridge synthetic "Anticipation matched: …" rows are
+// excluded from search results by default and only appear when
+// IncludeAnticipations is set true.
+func TestSearch_AnticipationsFilteredByDefault(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		{
+			ID: "anticipation", ConversationID: "wake-ant_999", SessionID: "sess-w",
+			Role:          "user",
+			Content:       "Anticipation matched: \"check the pool heater after 5 minutes\"\n\nEntity sensor.pool_heater changed from off to on.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		{
+			ID: "conversational", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "Is the pool heater on?",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: anticipations excluded.
+	res, err := store.Search(SearchOptions{Query: "pool heater", Limit: 5, NoContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res {
+		if r.Match.ID == "anticipation" {
+			t.Errorf("anticipation row should not appear in default results, got %q", r.Match.Content)
+		}
+	}
+	if len(res) == 0 {
+		t.Fatal("conversational hit should still be returned with default filter")
+	}
+
+	// Opt-in: anticipations included.
+	res, err = store.Search(SearchOptions{Query: "pool heater", Limit: 5, NoContext: true, IncludeAnticipations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawAnticipation bool
+	for _, r := range res {
+		if r.Match.ID == "anticipation" {
+			sawAnticipation = true
+			break
+		}
+	}
+	if !sawAnticipation {
+		t.Error("anticipation row should appear when IncludeAnticipations=true")
+	}
+}
+
+// TestSearch_OrBackfillFillsThinPhrase verifies that when a
+// phrase pass returns fewer hits than the limit, the OR-of-terms
+// backfill tops it up — without duplicating the phrase hits.
+// The backfill path is FTS5-only; the LIKE fallback runs one
+// substring pass and has no equivalent.
+func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
+	store := newTestArchiveStore(t)
+	if !store.FTSEnabled() {
+		t.Skip("FTS5 not available; OR-backfill path requires FTS5")
+	}
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		// One phrase match.
+		{
+			ID: "phrase-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "I lost my keys at the pool patio yesterday.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		// Several rows matching individual terms.
+		{
+			ID: "patio-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "The back patio needs sweeping.",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		{
+			ID: "pool-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "Is the swimming pool open?",
+			Timestamp:     base.Add(2 * time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.Search(SearchOptions{
+		Query:     "pool patio",
+		Limit:     5,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) < 2 {
+		t.Fatalf("expected backfill to add to single phrase hit, got %d results", len(results))
+	}
+	// Phrase match should be at rank 1.
+	if results[0].Match.ID != "phrase-only" {
+		t.Errorf("expected phrase row at rank 1, got %q", results[0].Match.ID)
+	}
+	// No duplicates — every result is unique.
+	seen := map[string]bool{}
+	for _, r := range results {
+		if seen[r.Match.ID] {
+			t.Errorf("duplicate result %q in merged set", r.Match.ID)
+		}
+		seen[r.Match.ID] = true
+	}
+}

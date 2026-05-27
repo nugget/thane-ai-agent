@@ -269,6 +269,16 @@ type SearchOptions struct {
 	MaxDuration      time.Duration // time-based cap per direction
 	Limit            int           // max results
 	NoContext        bool          // if true, return matches only (no surrounding context)
+
+	// IncludeAnticipations controls whether wake-bridge synthetic
+	// "Anticipation matched: …" rows can appear in results. The
+	// default (false) drops them because their dense-keyword shape
+	// dominates BM25 ranking for any household-vocabulary query
+	// (the entity name often repeats 5-10 times in one event),
+	// drowning out the conversational hits the model is actually
+	// reaching for. Set this true when an operator or diagnostic
+	// caller explicitly wants to inspect wake events.
+	IncludeAnticipations bool
 }
 
 // NewArchiveStore creates a new archive store at the given database path.
@@ -1269,70 +1279,177 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 		opts.MaxDuration = s.defaultMaxDuration
 	}
 
-	// Build query — use FTS5 if available, fall back to LIKE
-	var query string
-	var args []any
+	// Run the search. FTS5 path uses phrase-first + OR-of-terms
+	// backfill so multi-word queries get phrase-anchored precision
+	// at the top with recall headroom when the phrase is sparse.
+	// LIKE path is the FTS5-unavailable fallback.
+	var matches []matchWithHighlight
+	var err error
+	if s.ftsEnabled {
+		matches, err = s.searchFTS(opts)
+	} else {
+		matches, err = s.searchLIKE(opts)
+	}
+	if err != nil {
+		return nil, err
+	}
 
+	// Now expand context for each match (safe to query again)
+	var results []SearchResult
+	for _, mh := range matches {
+		var before, after []Message
+		if !opts.NoContext {
+			before = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
+			after = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
+		}
+
+		results = append(results, SearchResult{
+			Match:         mh.msg,
+			SessionID:     mh.msg.SessionID,
+			ContextBefore: before,
+			ContextAfter:  after,
+			Highlight:     mh.highlight,
+		})
+	}
+
+	return results, nil
+}
+
+// matchWithHighlight is the per-row shape both searchFTS and
+// searchLIKE produce. It carries the full archived message plus
+// the FTS5 snippet highlight (or empty string for the LIKE
+// fallback), and lets [Search] do context expansion separately
+// from the candidate-collection phase.
+type matchWithHighlight struct {
+	msg       Message
+	highlight string
+}
+
+// searchFTS runs the phrase-first + OR-of-terms backfill against
+// the FTS5 index. The phrase pass scores rows that contain the
+// literal query as a phrase (precision); when phrase hits are
+// fewer than opts.Limit, the backfill pass adds OR-of-terms hits
+// (recall headroom) without disturbing the phrase-anchored
+// ordering. Both passes share the same anticipation and
+// conversation-ID filters because they both go through runFTSQuery.
+//
+// Single-word queries skip the backfill entirely: the OR form
+// `"word"` is identical to the phrase form, so a second query
+// would only produce duplicates.
+func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, error) {
+	phrase := phraseFTS5Query(opts.Query)
+	if phrase == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+
+	phraseHits, err := s.runFTSQuery(phrase, opts, opts.Limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(phraseHits) >= opts.Limit {
+		return phraseHits, nil
+	}
+
+	// Backfill with the broader OR-of-terms shape. Over-fetch a bit
+	// so that dedup against the phrase hits still leaves headroom
+	// to reach opts.Limit.
+	orExpr := orFTS5Query(opts.Query)
+	if orExpr == "" || orExpr == phrase {
+		// Single-word query — backfill would be identical, skip it.
+		return phraseHits, nil
+	}
+	backfill, err := s.runFTSQuery(orExpr, opts, opts.Limit*2)
+	if err != nil {
+		return nil, err
+	}
+	return mergeFTSMatches(phraseHits, backfill, opts.Limit), nil
+}
+
+// runFTSQuery executes one FTS5 expression against messages_fts
+// and returns the matching rows in BM25 rank order. Filters
+// (conversation_id, anticipation exclusion) live in the SQL WHERE
+// clause so they participate in BM25 scoring rather than being
+// applied post-hoc.
+func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int) ([]matchWithHighlight, error) {
 	ftsTable := s.msgFTSName
 	msgTable := s.msgTableName
-	cols := s.msgSelectCols()
 
-	if s.ftsEnabled {
-		query = fmt.Sprintf(`
-			SELECT %s,
-			       snippet(%s, 0, '**', '**', '...', 64) as highlight
-			FROM %s
-			JOIN %s am ON %s.rowid = am.rowid
-		`, "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason",
-			ftsTable, ftsTable, msgTable, ftsTable)
-		// Sanitize query for FTS5: wrap each term in double quotes to prevent
-		// syntax errors from special characters (periods, colons, etc.)
-		sanitized := sanitizeFTS5Query(opts.Query)
-		args = []any{sanitized}
-		conditions := []string{ftsTable + " MATCH ?"}
+	query := fmt.Sprintf(`
+		SELECT %s,
+		       snippet(%s, 0, '**', '**', '...', 64) as highlight
+		FROM %s
+		JOIN %s am ON %s.rowid = am.rowid
+	`, "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason",
+		ftsTable, ftsTable, msgTable, ftsTable)
 
-		if opts.ConversationID != "" {
-			conditions = append(conditions, "am.conversation_id = ?")
-			args = append(args, opts.ConversationID)
-		}
+	args := []any{ftsExpr}
+	conditions := []string{ftsTable + " MATCH ?"}
 
-		query += " WHERE " + strings.Join(conditions, " AND ")
-		query += " ORDER BY rank LIMIT ?"
-		args = append(args, opts.Limit)
-	} else {
-		// LIKE fallback — less precise but functional
-		query = fmt.Sprintf(`
-			SELECT %s,
-			       '' as highlight
-			FROM %s
-		`, cols, msgTable)
-		args = []any{"%" + opts.Query + "%"}
-		conditions := []string{"content LIKE ?"}
-
-		if opts.ConversationID != "" {
-			conditions = append(conditions, "conversation_id = ?")
-			args = append(args, opts.ConversationID)
-		}
-
-		query += " WHERE " + strings.Join(conditions, " AND ")
-		query += " ORDER BY timestamp DESC LIMIT ?"
-		args = append(args, opts.Limit)
+	if opts.ConversationID != "" {
+		conditions = append(conditions, "am.conversation_id = ?")
+		args = append(args, opts.ConversationID)
 	}
+	if !opts.IncludeAnticipations {
+		// Wake-bridge synthetic content has its own retrieval paths
+		// (watchlist / event tools); semantic search shouldn't
+		// compete with itself. Filter at the storage layer so BM25
+		// scoring sees only the candidate set we care about.
+		conditions = append(conditions, "am.content NOT LIKE 'Anticipation matched:%'")
+	}
+
+	query += " WHERE " + strings.Join(conditions, " AND ")
+	query += " ORDER BY rank LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
 	defer rows.Close()
+	return scanFTSMatches(rows)
+}
 
-	// Collect all matches first (must close rows before doing context expansion
-	// queries, since SQLite may not support concurrent readers on same connection)
-	type matchWithHighlight struct {
-		msg       Message
-		highlight string
+// searchLIKE runs the FTS5-unavailable fallback path. Less
+// precise (substring match, no BM25 ranking) but functional. The
+// anticipation filter applies here too — same rationale as the
+// FTS path, just enforced with a NOT LIKE clause.
+func (s *ArchiveStore) searchLIKE(opts SearchOptions) ([]matchWithHighlight, error) {
+	msgTable := s.msgTableName
+	cols := s.msgSelectCols()
+
+	query := fmt.Sprintf(`
+		SELECT %s,
+		       '' as highlight
+		FROM %s
+	`, cols, msgTable)
+	args := []any{"%" + opts.Query + "%"}
+	conditions := []string{"content LIKE ?"}
+
+	if opts.ConversationID != "" {
+		conditions = append(conditions, "conversation_id = ?")
+		args = append(args, opts.ConversationID)
 	}
-	var matches []matchWithHighlight
+	if !opts.IncludeAnticipations {
+		conditions = append(conditions, "content NOT LIKE 'Anticipation matched:%'")
+	}
 
+	query += " WHERE " + strings.Join(conditions, " AND ")
+	query += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, opts.Limit)
+
+	rows, err := s.msgDB().Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	defer rows.Close()
+	return scanFTSMatches(rows)
+}
+
+// scanFTSMatches reads the shared match-with-highlight projection
+// out of either the FTS5 or LIKE query path. Both queries select
+// the same column list so a single scanner serves both.
+func scanFTSMatches(rows *sql.Rows) ([]matchWithHighlight, error) {
+	var matches []matchWithHighlight
 	for rows.Next() {
 		var m Message
 		var highlight string
@@ -1368,27 +1485,33 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate results: %w", err)
 	}
-	rows.Close()
+	return matches, nil
+}
 
-	// Now expand context for each match (safe to query again)
-	var results []SearchResult
-	for _, mh := range matches {
-		var before, after []Message
-		if !opts.NoContext {
-			before = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
-			after = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
-		}
-
-		results = append(results, SearchResult{
-			Match:         mh.msg,
-			SessionID:     mh.msg.SessionID,
-			ContextBefore: before,
-			ContextAfter:  after,
-			Highlight:     mh.highlight,
-		})
+// mergeFTSMatches appends backfill rows after the phrase-anchored
+// rows, dropping duplicates by message ID and capping at limit.
+// Phrase ordering is preserved at the head; backfill ordering
+// (BM25 over OR-of-terms) fills the tail.
+func mergeFTSMatches(phrase, backfill []matchWithHighlight, limit int) []matchWithHighlight {
+	if len(phrase) >= limit {
+		return phrase[:limit]
 	}
-
-	return results, nil
+	seen := make(map[string]struct{}, len(phrase)+len(backfill))
+	for _, m := range phrase {
+		seen[m.msg.ID] = struct{}{}
+	}
+	out := make([]matchWithHighlight, 0, limit)
+	out = append(out, phrase...)
+	for _, m := range backfill {
+		if _, dup := seen[m.msg.ID]; dup {
+			continue
+		}
+		out = append(out, m)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // expandContext walks messages outward from a timestamp, stopping at silence gaps.
@@ -2584,13 +2707,34 @@ func nullString(s string) any {
 	return s
 }
 
-// sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
-// syntax errors from special characters like periods, colons, and parentheses,
-// then joins terms with OR so that broader recall is possible. BM25 ranking
-// ensures messages matching more terms score higher.
+// phraseFTS5Query wraps the whole query in a single double-quoted
+// phrase so FTS5 matches only rows containing the literal sequence
+// of terms. Embedded double-quotes are escaped per FTS5 string-
+// literal rules. Returns "" for an empty input.
 //
-// E.g., "consciousness hard problem" becomes `"consciousness" OR "hard" OR "problem"`.
-func sanitizeFTS5Query(query string) string {
+// Used as the precision-first leg of Search's phrase-first +
+// OR-of-terms backfill: phrase hits rank by BM25 against rows that
+// actually contain the phrase, instead of being drowned out by
+// dense-keyword rows that happen to match individual tokens.
+func phraseFTS5Query(query string) string {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return ""
+	}
+	q = strings.ReplaceAll(q, `"`, `""`)
+	return `"` + q + `"`
+}
+
+// orFTS5Query wraps each whitespace-separated term in double quotes
+// and joins with OR. Broader recall than [phraseFTS5Query] — used
+// as the backfill leg of Search's phrase-first + OR-of-terms
+// strategy when the phrase pass returns fewer hits than the limit
+// (or for single-word queries, where the two shapes are
+// equivalent).
+//
+// E.g., "consciousness hard problem" becomes
+// `"consciousness" OR "hard" OR "problem"`.
+func orFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
 		return ""
