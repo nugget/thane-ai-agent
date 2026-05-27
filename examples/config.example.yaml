@@ -609,7 +609,7 @@ talents_dir: ./talents
 #       at load time, so per-iteration capability tag activation
 #       continues to work even after the inline-routing form retires.
 #       initial_tags:
-#         - homeassistant
+#         - ha
 #   Telemetry configures operational metric publishing. When enabled,
 #   a separate mqtt-telemetry loop publishes system health, token usage,
 #   loop states, and other operational data as native HA sensors.
@@ -992,7 +992,7 @@ ego:
 #               start: 08:30
 #               end: 18:00
 #       tags:
-#         - homeassistant
+#         - ha
 #       exclude_tools: []
 #       sleep_min: 2m
 #       sleep_max: 10m

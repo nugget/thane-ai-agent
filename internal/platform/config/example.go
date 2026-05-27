@@ -191,7 +191,7 @@ func ExampleConfig() *Config {
 						DelegationGating: "disabled",
 						Instructions:     "Evaluate the security event and decide if action is needed.",
 					},
-					InitialTags: []string{"homeassistant"},
+					InitialTags: []string{"ha"},
 				},
 			},
 			Telemetry: TelemetryConfig{
@@ -286,7 +286,7 @@ func ExampleConfig() *Config {
 						DelegationGating: "disabled",
 						Instructions:     "Be concise and focus on high-signal observations.",
 					},
-					Tags:         []string{"homeassistant"},
+					Tags:         []string{"ha"},
 					SleepMin:     2 * time.Minute,
 					SleepMax:     10 * time.Minute,
 					SleepDefault: 5 * time.Minute,

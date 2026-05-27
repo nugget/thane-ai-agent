@@ -43,7 +43,7 @@ A full audit should be triggered by:
   integration, future Notion integration)
 - **A new tool family is added** (3+ new tools that share a domain,
   e.g., `doc_intake` / `doc_commit` added a curate pipeline)
-- **A capability tag is renamed or repurposed** (the alias/parent
+- **A capability tag is renamed or repurposed** (the parent
   machinery may need updating)
 - **A taxonomy reshape lands** (PR-G's hierarchy formalization was
   the last one)

@@ -138,25 +138,17 @@ func (r *Registry) registerActivateTag(mgr CapabilityManager, manifest []Capabil
 			"required": []string{"tag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			rawTag := extractTag(args)
-			if rawTag == "" {
+			tag := extractTag(args)
+			if tag == "" {
 				return "", fmt.Errorf("tag is required (e.g., tag_activate(tag: \"forge\"))")
 			}
-			// Resolve aliases before activation so the canonical name is
-			// what flows through the scope, the prompt's ## Active Tags
-			// section, and the persistence layer.
-			tag := toolcatalog.CanonicalTagName(rawTag)
 
 			if err := mgr.RequestCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
 			var result strings.Builder
-			if tag != rawTag {
-				fmt.Fprintf(&result, "Tag **%s** activated (alias for **%s**).", rawTag, tag)
-			} else {
-				fmt.Fprintf(&result, "Tag **%s** activated.", tag)
-			}
+			fmt.Fprintf(&result, "Tag **%s** activated.", tag)
 			if m, ok := tagManifest[tag]; ok {
 				if len(m.Tools) > 0 {
 					fmt.Fprintf(&result, " %d tools now available.", len(m.Tools))
@@ -193,24 +185,17 @@ func (r *Registry) registerDeactivateTag(mgr CapabilityManager, tagManifest map[
 			"required": []string{"tag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			rawTag := extractTag(args)
-			if rawTag == "" {
+			tag := extractTag(args)
+			if tag == "" {
 				return "", fmt.Errorf("tag is required (e.g., tag_deactivate(tag: \"forge\"))")
 			}
-			// Resolve aliases so deactivating by an alternate name
-			// (e.g. `homeassistant`) hits the canonical tag in scope.
-			tag := toolcatalog.CanonicalTagName(rawTag)
 
 			if err := mgr.DropCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
 			var result strings.Builder
-			if tag != rawTag {
-				fmt.Fprintf(&result, "Tag **%s** deactivated (alias for **%s**).", rawTag, tag)
-			} else {
-				fmt.Fprintf(&result, "Tag **%s** deactivated.", tag)
-			}
+			fmt.Fprintf(&result, "Tag **%s** deactivated.", tag)
 			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
 				fmt.Fprintf(&result, " %d tools removed.", len(m.Tools))
 			}
@@ -310,16 +295,13 @@ func (r *Registry) registerInspectTag(tagManifest map[string]CapabilityManifest)
 			"required": []string{"tag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			rawTag := extractTag(args)
-			if rawTag == "" {
+			tag := extractTag(args)
+			if tag == "" {
 				return "", fmt.Errorf("tag is required (e.g., tag_inspect(tag: \"ha\"))")
 			}
-			// Resolve aliases so tag_inspect("homeassistant") returns
-			// ha's breakdown.
-			tag := toolcatalog.CanonicalTagName(rawTag)
 			manifest, ok := tagManifest[tag]
 			if !ok {
-				return "", fmt.Errorf("unknown tag %q; read the ## Active Tags section of your prompt to see what's already loaded, or use tag_activate to discover available tags", rawTag)
+				return "", fmt.Errorf("unknown tag %q; read the ## Active Tags section of your prompt to see what's already loaded, or use tag_activate to discover available tags", tag)
 			}
 			includeExcluded, _ := args["include_excluded"].(bool)
 			entry := toolcatalog.RenderCapabilityCatalogEntry(manifest, toolcatalog.CatalogViewOptions{
