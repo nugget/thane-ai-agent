@@ -20,9 +20,13 @@ Choose the next move deliberately:
   without context, a routine you should already know — that is
   `archive` and `memory` territory, not `documents`. Reach for those
   first. Guessing or reasoning around the reference when you could
-  just look it up is the move that costs trust. Activate `memory`
-  (which carries archive search, contacts, and the fact store
-  together) and search for the literal phrase before answering.
+  just look it up is the move that costs trust. **`archive` is for
+  what was said before** (full-text search across past conversations
+  via `archive_search`); **`memory` is for what you've chosen to
+  remember** (durable facts via `recall_fact`). They are sibling
+  doors. For an inside-joke phrase, activate `archive` and search
+  the literal phrase; if the answer is more "what's the user's
+  pattern" than "what did we say," `memory` is the better start.
 - Treat older-session context as a set of doors. If continuity matters
   and the pointer is not enough, activate `archive` or use the visible
   archive tools.

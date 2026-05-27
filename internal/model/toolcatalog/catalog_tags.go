@@ -102,7 +102,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"operations"},
 	},
 	"memory": {
-		Description: "Things you've chosen to remember — durable facts you've stored about people, places, routines, and the user's vocabulary. Also the unified door to contacts and archive search, so it's where to start when something the user said sounds like a reference to your shared past.",
+		Description: "Things you've chosen to remember — durable facts you've stored about people, places, routines, and the user's vocabulary. The store you write to with `remember_fact` and read with `recall_fact`. For past *conversations* (what was said, when, by whom) use `archive` instead; these are sibling doors, not the same room.",
 		Parents:     []string{"knowledge"},
 	},
 	"models": {
