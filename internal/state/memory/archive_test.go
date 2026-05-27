@@ -2172,3 +2172,79 @@ func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
 		seen[r.Match.ID] = true
 	}
 }
+
+// TestEndSession_FiresCloseCallback verifies the post-commit
+// notification hook that the curator wake event (issue #989) is built
+// on. After EndSession returns successfully, any registered callback
+// runs synchronously with the closed session's ID and reason.
+func TestEndSession_FiresCloseCallback(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotID, gotReason string
+	var calls int
+	store.SetSessionCloseCallback(func(id, reason string) {
+		calls++
+		gotID = id
+		gotReason = reason
+	})
+
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatalf("EndSession: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("callback fired %d times, want 1", calls)
+	}
+	if gotID != sess.ID {
+		t.Errorf("callback sessionID = %q, want %q", gotID, sess.ID)
+	}
+	if gotReason != "test" {
+		t.Errorf("callback reason = %q, want %q", gotReason, "test")
+	}
+}
+
+// TestEndSession_NoCallbackWhenUnset confirms the zero-callback path
+// is a clean no-op — EndSession works fine without a registered
+// callback (the common case before app wiring runs).
+func TestEndSession_NoCallbackWhenUnset(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-no-cb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No SetSessionCloseCallback call — store.sessionCloseCallback stays nil.
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatalf("EndSession with no callback: %v", err)
+	}
+}
+
+// TestEndSession_PanickingCallbackDoesNotPoisonCaller — a bad
+// callback should never roll back the session-close state change or
+// crash the caller. The DB commit is authoritative; the notification
+// is best-effort.
+func TestEndSession_PanickingCallbackDoesNotPoisonCaller(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-panic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.SetSessionCloseCallback(func(_, _ string) {
+		panic("intentional test panic")
+	})
+
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Errorf("EndSession should swallow callback panic, got error: %v", err)
+	}
+	// Verify the session actually closed despite the panic.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.EndedAt == nil {
+		t.Error("session ended_at not set — DB write was rolled back by panic")
+	}
+}

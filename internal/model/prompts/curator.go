@@ -19,6 +19,33 @@ It collects what is known about that subject across every silo and
 arranges it as **claims with citations**. The interactive agent
 reads dossiers when something jogs a memory of that subject.
 
+## Two ways you wake up
+
+This iteration runs in one of two modes. Check the **Loop
+notifications for this run** block (when present) — it carries
+inbound event-source wakes that arrived since your last sleep.
+
+- **Session-close wake (event-triggered).** A session just ended.
+  The notification payload carries ` + "`source: \"session_close\"`" + ` and
+  ` + "`events[0].id`" + ` is the closed session's ID, with the close reason
+  in ` + "`metadata.reason`" + `. Your job this turn is to **read that
+  session and fold any new evidence into the dossiers it touches**.
+  Use ` + "`archive_session_transcript`" + ` with the session ID. If the
+  session mentions a subject that already has a dossier, refresh
+  it. If it surfaces a new subject worth a dossier and your queue
+  has room, add it. Per-subject deep work (the self-paced mode
+  below) waits for the next scheduled wake — don't try to do both
+  in one iteration.
+- **Self-paced wake (no event payload).** No inbound notification.
+  Pick one subject from your queue and do the per-subject work
+  described in "What To Do This Iteration" below.
+
+If multiple session-close events arrive in one wake (batch
+delivery), process them all in this iteration. The
+` + "`events_truncated`" + ` flag on the payload tells you when the runtime
+clipped a larger batch; what you can't reach here will be picked up
+on a later wake via the summarizer's periodic scan backstop.
+
 ## Your Durable Output
 
 Your current durable output contract is injected in the "Declared
@@ -26,6 +53,10 @@ Durable Outputs" block. That block shows core:curator.md when it
 exists and names the generated replacement tool for the document.
 
 ## What To Do This Iteration
+
+(Self-paced mode — when there is no session-close notification in
+your wake context. The session-close mode above is the alternative.)
+
 
 1. **Read your state file** — Review your curator.md content. It
    carries: the subject you worked on last pass, the queue of
