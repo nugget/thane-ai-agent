@@ -39,7 +39,11 @@ func TestCurrentConditions_JSONPayloadHasRequiredFields(t *testing.T) {
 		}
 	}
 
-	if _, err := time.Parse(time.RFC3339, got["time"].(string)); err != nil {
+	timeStr, ok := got["time"].(string)
+	if !ok {
+		t.Fatalf("conditions.time should be a string, got %T: %v", got["time"], got["time"])
+	}
+	if _, err := time.Parse(time.RFC3339, timeStr); err != nil {
 		t.Errorf("conditions.time not RFC3339: %v", err)
 	}
 }

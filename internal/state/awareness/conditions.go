@@ -73,7 +73,7 @@ func CurrentConditions(timezone string) string {
 		Version:        buildinfo.Version,
 		Commit:         buildinfo.GitCommit,
 		Branch:         buildinfo.GitBranch,
-		UptimeSeconds:  int64(buildinfo.Uptime().Truncate(time.Second).Seconds()),
+		UptimeSeconds:  int64(buildinfo.Uptime() / time.Second),
 	}
 	if tzResolved {
 		payload.TimeZone = timezone
