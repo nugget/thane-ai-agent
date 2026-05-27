@@ -43,11 +43,15 @@ func run(args []string) error {
 		return cmdQuery(g, subArgs)
 	case "batch":
 		return cmdBatch(g, subArgs)
+	case "compare":
+		return cmdCompare(g, subArgs)
+	case "surfaces":
+		return cmdSurfaces(g, subArgs)
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q (try: replay | query | batch)", sub)
+		return fmt.Errorf("unknown subcommand %q (try: replay | query | batch | compare)", sub)
 	}
 }
 
