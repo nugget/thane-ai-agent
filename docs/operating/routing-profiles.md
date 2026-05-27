@@ -99,10 +99,9 @@ when used explicitly.
 - **Use when:** Another Thane instance, MCP client, or external agent is
   calling
 
-## Deprecated Aliases
+## Aliases
 
-These names still resolve but log a deprecation warning. Prefer the
-canonical name on the right.
+These names still resolve to the canonical virtual model on the right.
 
 | Alias | Canonical | Notes |
 |----------|-------------|-------|
@@ -111,10 +110,12 @@ canonical name on the right.
 | `thane:command`, `thane:fast`, `thane:homeassistant` | `thane:assist` | Renamed for clarity |
 | `thane:trigger` | `thane:event` | Renamed for clarity |
 
-Every alias logs `virtual model alias used` at warn level on
-resolution; the canonical name does not. The router behaviour is
-identical either way — switching to the canonical name only quiets
-the log line.
+Most aliases log `virtual model alias used` at warn level on
+resolution so operators can find and update legacy callers; the bare
+`thane` alias and the empty-string default to `thane:latest` are
+silent. The canonical name never logs. The router behavior is
+identical either way — switching to the canonical name just quiets the
+log line.
 
 ## How Virtual Models Work
 
