@@ -218,20 +218,73 @@ func TestBoolArgDefault(t *testing.T) {
 	}
 }
 
-// TestHandleMark_AddDefault_IsTrue locks in the schema/handler contract
-// from #930: when the caller omits `add`, the tool MUST add the flag
-// (matching the schema description "default: true") rather than
-// silently removing it. The talent guidance accordingly stops telling
-// the model to "always pass add explicitly".
-func TestHandleMark_AddDefault_IsTrue(t *testing.T) {
-	args := map[string]any{
-		"uid":  float64(123),
-		"flag": "seen",
+// TestParseMarkAction exercises the args→MarkAction translation that
+// HandleMark uses. The omitted-`add`-defaults-to-true row is the
+// regression guard for #930: a handler that reverted to
+// `boolArg(args, "add")` (false-default) would silently flip this
+// row's expected Add from true back to false.
+func TestParseMarkAction(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want MarkAction
+	}{
+		{
+			name: "omitted add defaults to true (#930 regression guard)",
+			args: map[string]any{"uid": float64(123), "flag": "seen"},
+			want: MarkAction{Flag: "seen", Add: true, UIDs: []uint32{123}},
+		},
+		{
+			name: "explicit add=false overrides default",
+			args: map[string]any{"uid": float64(123), "flag": "seen", "add": false},
+			want: MarkAction{Flag: "seen", Add: false, UIDs: []uint32{123}},
+		},
+		{
+			name: "explicit add=true matches default",
+			args: map[string]any{"uid": float64(123), "flag": "seen", "add": true},
+			want: MarkAction{Flag: "seen", Add: true, UIDs: []uint32{123}},
+		},
+		{
+			name: "uids array preferred over uid",
+			args: map[string]any{
+				"uids": []any{float64(10), float64(20)},
+				"flag": "flagged",
+			},
+			want: MarkAction{Flag: "flagged", Add: true, UIDs: []uint32{10, 20}},
+		},
+		{
+			name: "missing uids leaves UIDs nil for handler to reject",
+			args: map[string]any{"flag": "seen"},
+			want: MarkAction{Flag: "seen", Add: true},
+		},
 	}
-	add := boolArgDefault(args, "add", true)
-	if !add {
-		t.Errorf("missing `add` must default to true (add the flag) — got %v", add)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMarkAction(tt.args)
+			if got.Flag != tt.want.Flag {
+				t.Errorf("Flag = %q, want %q", got.Flag, tt.want.Flag)
+			}
+			if got.Add != tt.want.Add {
+				t.Errorf("Add = %v, want %v", got.Add, tt.want.Add)
+			}
+			if !uint32SliceEqual(got.UIDs, tt.want.UIDs) {
+				t.Errorf("UIDs = %v, want %v", got.UIDs, tt.want.UIDs)
+			}
+		})
 	}
+}
+
+func uint32SliceEqual(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestFormatEnvelopeList(t *testing.T) {
