@@ -331,6 +331,12 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 	// Try to enable FTS5 — gracefully degrade if not available
 	s.ftsEnabled = s.tryEnableFTS()
 
+	// Distilled-surface FTS lives alongside the raw-message FTS. The
+	// setup is gated on s.ftsEnabled internally; safe to call here
+	// unconditionally and let the function no-op when FTS5 isn't
+	// available.
+	s.trySetupSessionsFTS()
+
 	if logger != nil {
 		if s.ftsEnabled {
 			logger.Info("session archive initialized",
@@ -388,6 +394,7 @@ func NewArchiveStoreFromDB(db *sql.DB, cfg *ArchiveConfig, logger *slog.Logger) 
 
 	s.migrateSchema()
 	s.ftsEnabled = s.tryEnableFTS()
+	s.trySetupSessionsFTS()
 
 	if logger != nil {
 		logger.Info("session archive initialized (consolidated)",
