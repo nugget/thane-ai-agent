@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
@@ -44,6 +45,17 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, ego.DefinitionSpec(egoCfg))
 		}
 	}
+	_, hasCuratorDefinition := seen[curator.DefinitionName]
+	if a.cfg.Curator.Enabled || hasCuratorDefinition {
+		curatorCfg, err := curator.ParseConfig(a.cfg.Curator)
+		if err != nil {
+			return nil, fmt.Errorf("curator config: %w", err)
+		}
+		a.curatorCfg = &curatorCfg
+		if a.cfg.Curator.Enabled && !hasCuratorDefinition {
+			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, curator.DefinitionSpec(curatorCfg))
+		}
+	}
 	return baseDefinitions, nil
 }
 
@@ -68,6 +80,12 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			return looppkg.Spec{}, fmt.Errorf("ego definition requires ego config")
 		}
 		runtimeSpec := ego.HydrateSpec(spec, *a.egoCfg)
+		return a.hydrateLoopOutputs(runtimeSpec)
+	case curator.DefinitionName:
+		if a.curatorCfg == nil {
+			return looppkg.Spec{}, fmt.Errorf("curator definition requires curator config")
+		}
+		runtimeSpec := curator.HydrateSpec(spec, *a.curatorCfg)
 		return a.hydrateLoopOutputs(runtimeSpec)
 	case unifiPollerDefinitionName:
 		if a.unifiPoller == nil {
