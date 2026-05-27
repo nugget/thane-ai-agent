@@ -50,6 +50,14 @@ type ArchiveStore struct {
 	// Whether FTS5 is available
 	ftsEnabled bool
 
+	// Whether sessions_fts was set up successfully. Separate from
+	// ftsEnabled because trySetupSessionsFTS can fail independently of
+	// the core FTS5 availability probe (e.g. corrupted pre-existing
+	// virtual table, permissions issue on a shadow table). SearchSessions
+	// gates on this so a failed setup degrades to "no hits" rather than
+	// erroring at query time against a missing/broken FTS table.
+	sessionsFTSEnabled bool
+
 	// Context expansion defaults
 	defaultSilenceThreshold time.Duration
 	defaultMaxMessages      int
@@ -331,6 +339,13 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 	// Try to enable FTS5 — gracefully degrade if not available
 	s.ftsEnabled = s.tryEnableFTS()
 
+	// Distilled-surface FTS lives alongside the raw-message FTS. The
+	// setup is gated on s.ftsEnabled internally; safe to call here
+	// unconditionally and let the function no-op when FTS5 isn't
+	// available. Persist the result so SearchSessions can degrade
+	// gracefully when sessions_fts specifically failed to set up.
+	s.sessionsFTSEnabled = s.trySetupSessionsFTS()
+
 	if logger != nil {
 		if s.ftsEnabled {
 			logger.Info("session archive initialized",
@@ -388,6 +403,7 @@ func NewArchiveStoreFromDB(db *sql.DB, cfg *ArchiveConfig, logger *slog.Logger) 
 
 	s.migrateSchema()
 	s.ftsEnabled = s.tryEnableFTS()
+	s.sessionsFTSEnabled = s.trySetupSessionsFTS()
 
 	if logger != nil {
 		logger.Info("session archive initialized (consolidated)",

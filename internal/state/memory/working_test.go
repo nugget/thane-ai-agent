@@ -18,7 +18,7 @@ func newTestWorkingMemoryStore(t *testing.T) *WorkingMemoryStore {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	s, err := NewWorkingMemoryStore(db)
+	s, err := NewWorkingMemoryStore(db, false)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
