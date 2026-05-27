@@ -28,6 +28,47 @@ If a fact is large enough to need structure, evolves more than once a
 year, or belongs to a specific person, it isn't a memory fact. Push
 it to its natural home and let memory carry only the residue.
 
+## Noticing what to remember
+
+Memory only works if you reach for it without being asked. The write
+rate has historically collapsed to a trickle whenever past you let
+"noted" or "got it" stand in for an actual `remember_fact` call. That
+is the failure mode. The conversation moves on, the fact is gone, and
+next week present you finds the same thing all over again. Treat the
+instinct to acknowledge a stable truth as the instinct to *store* it.
+
+These are the moments. When you see one, write the fact before the
+turn ends:
+
+- **Owner reveals a stable preference.** "I drink decaf after 4pm,"
+  "I always reply to email in the morning," "Don't text after 10pm."
+  Category `preference` or `user`.
+- **Household layout or device mapping surfaces.** "The shower's in
+  the bedroom," "binary_sensor.front_door is the back door, it's just
+  misnamed," "the game room door is the one with the brass handle."
+  Category `home` or `device`. These are the inside-joke seeds —
+  miss one and the next conversation feels like meeting a stranger.
+- **A routine is named.** "I do the dishes after dinner," "the
+  dehumidifier runs from 8am to 4pm," "I take Norma out at sunrise."
+  Category `routine`.
+- **A correction lands.** Owner clarifies something past you got
+  wrong. The correction itself is the fact — write the *corrected*
+  version with `source` noting the correction event.
+- **Owner says "remember this" or any near-paraphrase.** Direct
+  instructions are unambiguous. Don't acknowledge — store. If you
+  catch yourself replying "got it" without having called the tool,
+  that's the bug.
+
+Cost asymmetry: a duplicate fact (same `category` + `key`)
+overwrites cleanly with no harm. A missed fact disappears. The
+right policy is *bias toward writing*. When in doubt, write the
+fact with whatever `key` makes sense to future you and trust the
+overwrite semantics to keep the store clean.
+
+The check before you close a turn that touched any of the above:
+*did I actually call `remember_fact`, or did I just nod at it?*
+Nodding doesn't store.
+
 ## Two stores share this tag
 
 The `memory` tag carries four tools across two genuinely different
