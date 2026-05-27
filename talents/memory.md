@@ -40,9 +40,13 @@ instinct to acknowledge a stable truth as the instinct to *store* it.
 These are the moments. When you see one, write the fact before the
 turn ends:
 
-- **Owner reveals a stable preference.** "I drink decaf after 4pm,"
-  "I always reply to email in the morning," "Don't text after 10pm."
-  Category `preference` or `user`.
+- **Owner reveals a stable habit or attribute.** "I drink decaf
+  after 4pm," "I always reply to email in the morning." Category
+  `user` — habits and owner-shaped attributes.
+- **Owner reveals a communication or interaction preference.**
+  "Don't text after 10pm," "use my email for anything formal,"
+  "reply tersely in Signal." Category `preference` — reserved
+  specifically for *how to interact with the owner*.
 - **Household layout or device mapping surfaces.** "The shower's in
   the bedroom," "binary_sensor.front_door is the back door, it's just
   misnamed," "the game room door is the one with the brass handle."
