@@ -201,9 +201,18 @@ type ToolCallOutcome struct {
 
 // Result is the outcome of a delegated task execution.
 type Result struct {
-	// RunPolicyName is the [RunPolicy.Name] used to route this run.
-	// The wire JSON field stays "profile" for log/dashboard compat.
-	RunPolicyName            string            `json:"profile"`
+	// RunPolicyName is the [RunPolicy.Name] selected for this run.
+	// The JSON tag stays "profile" because the operator-facing
+	// vocabulary, dashboards, and log-parsing scripts predate the
+	// internal Profile→RunPolicy rename; changing the wire field
+	// would break those surfaces without delivering value.
+	RunPolicyName string `json:"profile"`
+	// Content is the assistant text the delegate produced. Empty when
+	// the delegate exhausted without producing output (Exhausted is
+	// true and ExhaustReason names which budget ran out), or when the
+	// delegate completed but produced only tool calls with no final
+	// answer (Exhausted=true, ExhaustReason=ExhaustNoOutput). Check
+	// Exhausted before treating an empty Content as success.
 	Content                  string            `json:"content"`
 	Model                    string            `json:"model"`
 	Iterations               int               `json:"iterations"`
@@ -287,14 +296,28 @@ func (e *Executor) ApplyRunPolicyOverrides(overrides map[string]RunPolicyOverrid
 	}
 }
 
-// RunPolicyOverride holds optional operator overrides for a builtin
-// run policy. Only positive values are applied; zero and negative
-// fields are ignored.
+// RunPolicyOverride is the partial-update shape operators use to
+// adjust one or more budgets on a builtin run policy without having
+// to restate the whole policy. The struct is intentionally
+// all-zero-valued by default — operators only fill the fields they
+// want to override, and [Executor.ApplyRunPolicyOverrides] leaves
+// builtin values in place wherever the override is zero.
 type RunPolicyOverride struct {
+	// ToolTimeout, when positive, replaces the builtin policy's
+	// per-tool-call timeout. Zero leaves the builtin unchanged.
 	ToolTimeout time.Duration
+	// MaxDuration, when positive, replaces the builtin policy's
+	// wall-clock cap on the whole delegate loop. Zero leaves the
+	// builtin unchanged.
 	MaxDuration time.Duration
-	MaxIter     int
-	MaxTokens   int
+	// MaxIter, when positive, replaces the builtin policy's maximum
+	// tool-calling iteration count. Zero leaves the builtin
+	// unchanged.
+	MaxIter int
+	// MaxTokens, when positive, replaces the builtin policy's
+	// cumulative output-token budget. Zero leaves the builtin
+	// unchanged.
+	MaxTokens int
 }
 
 // SetTimezone configures the IANA timezone used in delegate logging and

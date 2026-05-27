@@ -531,10 +531,17 @@ func boolArg(args map[string]any, key string) bool {
 	return false
 }
 
-// boolArgDefault is the same as boolArg but returns fallback (rather
-// than false) when key is absent or wrong-typed. Use it when the tool
-// schema documents a true-default; reaching for it is a signal that
-// the docs and code agree on the absent-key behavior.
+// boolArgDefault resolves the omitted-bool ambiguity that bit
+// email_mark in #930: when a tool schema documents `default: true`
+// for a boolean argument, the calling model often omits the field
+// entirely rather than sending `true` explicitly — and Go's zero
+// value for the missing key is `false`, the opposite of what the
+// schema promised. boolArgDefault returns the documented fallback
+// when the key is absent or wrong-typed, so runtime behavior matches
+// the schema regardless of how the model encodes the call. Use it
+// for any tool argument whose schema documents a non-false default;
+// use boolArg directly when false-when-omitted is the intended
+// semantic.
 func boolArgDefault(args map[string]any, key string, fallback bool) bool {
 	if v, ok := args[key].(bool); ok {
 		return v
