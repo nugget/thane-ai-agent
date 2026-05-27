@@ -484,11 +484,14 @@ func TestRegistryFilterByTags_NoTagIndex(t *testing.T) {
 
 // TestRegistryFilterByTags_PreservesTagIndex pins the convention every
 // shallow-copy method on Registry follows: tagIndex propagates to the
-// returned copy. Without this, a subsequent TaggedToolNames or chained
-// FilterByTags on the result silently returns nothing — a latent bug
-// the v0.9.3 code-path audit caught (FilterByTags was the lone
-// outlier). Two paths matter: the no-filter early return and the
-// active-filter path.
+// returned copy. Without it, tag-aware operations on the result
+// misbehave in two ways — TaggedToolNames returns nil for every tag
+// (the failure exercised below), and a chained FilterByTags call
+// becomes a no-op early return that surfaces the full tool set
+// instead of the narrower subset the caller asked for. The v0.9.3
+// code-path audit caught this; FilterByTags was the lone outlier
+// among the shallow-copy methods. Two paths matter: the no-filter
+// early return and the active-filter path.
 func TestRegistryFilterByTags_PreservesTagIndex(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.Register(&Tool{Name: "ha_get_state"})

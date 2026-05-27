@@ -1046,10 +1046,13 @@ func (r *Registry) SetTagIndex(tags map[string][]string) {
 //
 // Both paths propagate tagIndex to the returned registry, matching
 // the convention of [FilteredCopy], [FilteredCopyExcluding], and
-// [WithRuntimeTools]. Without the propagation, any tag-aware query
-// on the result (e.g. [TaggedToolNames], a subsequent FilterByTags
-// chain) silently returns nothing — a latent bug the convention
-// exists to prevent.
+// [WithRuntimeTools]. Without the propagation, tag-aware operations
+// on the result misbehave in two distinct ways: [TaggedToolNames]
+// returns nil for every tag (loses the tag→tool mapping entirely),
+// and a chained FilterByTags call takes the nil-index early-return
+// path so it stops narrowing — returning the full set unfiltered
+// instead of the intended subset. Either failure mode is a latent
+// bug; carrying tagIndex forward prevents both.
 func (r *Registry) FilterByTags(tags []string) *Registry {
 	if len(tags) == 0 || r.tagIndex == nil {
 		// No filtering — return a shallow copy with all tools.
