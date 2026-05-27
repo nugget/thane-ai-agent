@@ -481,3 +481,43 @@ func TestRegistryFilterByTags_NoTagIndex(t *testing.T) {
 		t.Error("FilterByTags with no tag index should return all tools")
 	}
 }
+
+// TestRegistryFilterByTags_PreservesTagIndex pins the convention every
+// shallow-copy method on Registry follows: tagIndex propagates to the
+// returned copy. Without it, tag-aware operations on the result
+// misbehave in two ways — TaggedToolNames returns nil for every tag
+// (the failure exercised below), and a chained FilterByTags call
+// becomes a no-op early return that surfaces the full tool set
+// instead of the narrower subset the caller asked for. The v0.9.3
+// code-path audit caught this; FilterByTags was the lone outlier
+// among the shallow-copy methods. Two paths matter: the no-filter
+// early return and the active-filter path.
+func TestRegistryFilterByTags_PreservesTagIndex(t *testing.T) {
+	reg := NewEmptyRegistry()
+	reg.Register(&Tool{Name: "ha_get_state"})
+	reg.Register(&Tool{Name: "web_search"})
+	index := map[string][]string{
+		"ha":  {"ha_get_state"},
+		"web": {"web_search"},
+	}
+	reg.SetTagIndex(index)
+
+	t.Run("active-filter path", func(t *testing.T) {
+		filtered := reg.FilterByTags([]string{"ha"})
+		got := filtered.TaggedToolNames("ha")
+		if len(got) == 0 {
+			t.Fatalf("TaggedToolNames(ha) on filtered registry = %v, want non-empty (tagIndex lost across FilterByTags)", got)
+		}
+		if got[0] != "ha_get_state" {
+			t.Errorf("TaggedToolNames(ha)[0] = %q, want ha_get_state", got[0])
+		}
+	})
+
+	t.Run("no-filter path (empty tags slice)", func(t *testing.T) {
+		filtered := reg.FilterByTags(nil)
+		got := filtered.TaggedToolNames("ha")
+		if len(got) == 0 {
+			t.Fatalf("TaggedToolNames(ha) on no-filter copy = %v, want non-empty (tagIndex lost on no-op path)", got)
+		}
+	})
+}
