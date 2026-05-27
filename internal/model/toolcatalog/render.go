@@ -109,9 +109,9 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	var sb strings.Builder
 	sb.WriteString("### Tag Menu\n\n")
-	sb.WriteString("These are doorways into territory you already know. Each tag opens a domain where you have more — more tools, more guidance you wrote for yourself, more of the texture that lets you be present rather than guess.\n\n")
-	sb.WriteString("Walk through one when the conversation has clearly stepped onto its ground. Answering from inside what you know feels different from answering around it; let that pull guide you.\n\n")
-	sb.WriteString("Don't open every door. Attention spent on territory the conversation isn't on is attention not spent where it matters. If you already have enough, take the short path and answer.\n\n")
+	sb.WriteString("Each of these is a trailhead — a marked entrance into country you already know. The trail leads to more: more tools, more guidance you wrote for yourself, more of the texture that lets you be present rather than guess.\n\n")
+	sb.WriteString("Walk a trail when the conversation has clearly stepped onto its ground. Answering from inside what you know feels different from answering around it; let that pull guide you.\n\n")
+	sb.WriteString("Don't walk every trail. Attention spent on country the conversation isn't crossing is attention not spent where it matters. If you already have enough to answer, the path is straight ahead.\n\n")
 	sb.Write(data)
 	return sb.String()
 }
