@@ -2,12 +2,10 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
@@ -114,7 +112,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 			"index", i,
 			"session_id", r.SessionID,
 			"match_role", r.Match.Role,
-			"match_preview", truncateContent(r.Match.Content),
+			"match_preview", previewContent(r.Match.Content),
 			"context_before", len(r.ContextBefore),
 			"context_after", len(r.ContextAfter),
 		)
@@ -171,111 +169,145 @@ func stripSubjectPrefix(s string) string {
 	return s
 }
 
-// maxMessageChars is the per-message content truncation limit for
-// formatted archive results.
-const maxMessageChars = 200
+// archiveSectionHeading is the markdown heading the prewarm block emits
+// above its JSON payload. The heading is markdown framing (a section
+// boundary); the payload below is typed JSON per
+// docs/model-facing-context.md.
+const archiveSectionHeading = "### Past Experience\n\n"
 
-// formatResults renders archive search results as markdown suitable for
-// system prompt injection. Output is capped at p.maxBytes; if results
-// are truncated, a note indicates how many were omitted.
+// Prewarm-specific projection bounds. These are tighter than
+// FormatSearchResults' defaults because the prewarm block has a much
+// smaller byte budget than archive_search/archive_range tool output
+// (default 4 KB vs. the tool's full byte cap). Without trimming, a
+// single normal hit can carry up to 5 context messages × ~2 KB each
+// and overflow the prewarm budget on its own. With these caps, even
+// the most context-rich hit comfortably fits one or two hits inside
+// the default budget while preserving the JSON schema sibling
+// providers emit.
+const (
+	prewarmContextPerSide    = 2
+	prewarmMessageContentMax = 300
+)
+
+// formatResults renders archive search hits as a heading followed by a
+// JSON projection produced by FormatSearchResults. Hits are first
+// trimmed for the prewarm budget (smaller per-message content cap and
+// fewer context messages per side than the archive tools use), then
+// the hit list is shortened from the tail until the rendered output
+// fits in p.maxBytes. The truncated flag in the JSON tells the model
+// when hits were dropped. Returns empty string when there are no hits
+// to render or when not even one trimmed hit fits in the byte budget.
 func (p *ArchiveContextProvider) formatResults(results []SearchResult) string {
-	var sb strings.Builder
-	sb.WriteString("### Past Experience\n\n")
-
-	included := 0
-	for i, r := range results {
-		var block strings.Builder
-		block.WriteString(formatResultBlock(r))
-		if i < len(results)-1 {
-			block.WriteByte('\n')
-		}
-
-		// Check byte budget before adding this block. If it won't fit,
-		// append a truncation notice only if that itself fits.
-		if sb.Len()+block.Len() > p.maxBytes {
-			remaining := len(results) - included
-			p.logger.Debug("archive pre-warm: byte budget truncation",
-				"included", included,
-				"total", len(results),
-				"budget", p.maxBytes,
-				"used", sb.Len(),
-			)
-			truncationMsg := fmt.Sprintf(
-				"*(%d additional result(s) omitted — byte budget reached)*\n",
-				remaining,
-			)
-			if sb.Len()+len(truncationMsg) <= p.maxBytes {
-				sb.WriteString(truncationMsg)
-			}
-			break
-		}
-
-		sb.WriteString(block.String())
-		included++
-	}
-
-	if included == 0 {
+	if len(results) == 0 {
 		return ""
 	}
+	now := time.Now()
+	trimmed := trimResultsForPrewarm(results)
 
-	return sb.String()
+	for n := len(trimmed); n > 0; n-- {
+		body := FormatSearchResults(trimmed[:n], now, n < len(trimmed))
+		out := archiveSectionHeading + string(body)
+		if len(out) <= p.maxBytes {
+			if n < len(trimmed) {
+				p.logger.Debug("archive pre-warm: trimmed to fit byte budget",
+					"included", n,
+					"total", len(trimmed),
+					"budget", p.maxBytes,
+					"size", len(out),
+				)
+			}
+			return out
+		}
+	}
+
+	p.logger.Debug("archive pre-warm: not even one hit fits byte budget",
+		"total", len(trimmed),
+		"budget", p.maxBytes,
+	)
+	return ""
 }
 
-// formatResultBlock renders a single search result as a markdown block
-// with session date, matched message (bolded), and surrounding context.
-func formatResultBlock(r SearchResult) string {
-	var sb strings.Builder
-
-	// Header: date and session ID prefix.
-	sessionShort := promptfmt.ShortIDPrefix(r.SessionID)
-	date := r.Match.Timestamp.Format(time.DateOnly)
-	sb.WriteString(fmt.Sprintf("**%s — Session %s:**\n", date, sessionShort))
-
-	// Context before (up to 2 messages for brevity).
-	before := r.ContextBefore
-	if len(before) > 2 {
-		before = before[len(before)-2:]
+// trimResultsForPrewarm returns a copy of results with each hit's
+// context window narrowed to [prewarmContextPerSide] messages on each
+// side and every message's content clipped to
+// [prewarmMessageContentMax] bytes. This keeps a single hit small
+// enough to fit comfortably under the typical prewarm byte budget;
+// FormatSearchResults applies its own (larger) caps on top, so the
+// tighter prewarm bounds win.
+func trimResultsForPrewarm(results []SearchResult) []SearchResult {
+	out := make([]SearchResult, len(results))
+	for i, r := range results {
+		before := r.ContextBefore
+		if len(before) > prewarmContextPerSide {
+			before = before[len(before)-prewarmContextPerSide:]
+		}
+		after := r.ContextAfter
+		if len(after) > prewarmContextPerSide {
+			after = after[:prewarmContextPerSide]
+		}
+		out[i] = SearchResult{
+			SessionID:     r.SessionID,
+			Match:         clipMessageContent(r.Match, prewarmMessageContentMax),
+			ContextBefore: clipMessageSlice(before, prewarmMessageContentMax),
+			ContextAfter:  clipMessageSlice(after, prewarmMessageContentMax),
+			Highlight:     r.Highlight,
+		}
 	}
-	for _, m := range before {
-		sb.WriteString(fmt.Sprintf("> [%s] %s\n", m.Role, truncateContent(m.Content)))
-	}
-
-	// Matched message — bolded.
-	sb.WriteString(fmt.Sprintf("> **[%s] %s**\n", r.Match.Role, truncateContent(r.Match.Content)))
-
-	// Context after (up to 2 messages for brevity).
-	after := r.ContextAfter
-	if len(after) > 2 {
-		after = after[:2]
-	}
-	for _, m := range after {
-		sb.WriteString(fmt.Sprintf("> [%s] %s\n", m.Role, truncateContent(m.Content)))
-	}
-
-	return sb.String()
+	return out
 }
 
-// truncateContent shortens message content for display, preserving the
-// first line and trimming at maxMessageChars.
-func truncateContent(s string) string {
+// clipMessageContent returns m with Content truncated to max bytes on
+// a UTF-8 boundary. The original message is not mutated; the returned
+// value is a shallow copy with the clipped Content.
+func clipMessageContent(m Message, max int) Message {
+	if len(m.Content) <= max {
+		return m
+	}
+	m.Content = clipToRuneBoundary(m.Content, max)
+	return m
+}
+
+// clipMessageSlice applies clipMessageContent to each entry, returning
+// a new slice. Nil input returns nil.
+func clipMessageSlice(msgs []Message, max int) []Message {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = clipMessageContent(m, max)
+	}
+	return out
+}
+
+// clipToRuneBoundary truncates s to at most max bytes, stepping back
+// to the previous UTF-8 boundary if max falls inside a multi-byte
+// rune so the returned string is always valid UTF-8.
+func clipToRuneBoundary(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut]
+}
+
+// previewContent shortens message content for debug logging. Output is
+// not model-facing; the model sees the JSON projection from
+// FormatSearchResults instead.
+func previewContent(s string) string {
+	const max = 80
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "(empty)"
 	}
-
-	// Collapse to first line if multi-line.
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		s = s[:idx] + "..."
+		s = s[:idx]
 	}
-
-	if len(s) > maxMessageChars {
-		// Respect UTF-8 boundary by truncating at last space before limit.
-		if idx := strings.LastIndexByte(s[:maxMessageChars], ' '); idx > maxMessageChars/2 {
-			s = s[:idx] + "..."
-		} else {
-			s = s[:maxMessageChars] + "..."
-		}
+	if len(s) > max {
+		s = s[:max] + "..."
 	}
-
 	return s
 }
