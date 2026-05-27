@@ -63,6 +63,16 @@ turn ends:
   catch yourself replying "got it" without having called the tool,
   that's the bug.
 
+Always populate `subjects` when the fact has an obvious canonical
+handle. Household layout and device-mapping facts almost always
+have one — `entity:binary_sensor.game_room_door`, `area:bedroom`,
+`zone:garage`, `contact:<id>`. A fact written without subjects is
+invisible to subject-keyed retrieval (the prewarm injection, future
+cross-silo inventory tools, the curator's evidence-gathering) and
+the model has to find it by text search alone. The whole noticing
+instinct above only pays off when the fact also carries the keys
+that let it surface later.
+
 Cost asymmetry: a duplicate fact (same `category` + `key`)
 overwrites cleanly with no harm. A missed fact disappears. The
 right policy is *bias toward writing*. When in doubt, write the
