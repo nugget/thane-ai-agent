@@ -432,6 +432,26 @@ function updatePinnedAnchorPositions() {
   }
 }
 
+// isRegistryCoreLoop reports whether a loop in state.loops is the
+// well-known structural-root container the runtime auto-creates as
+// the singleton "core" loop. The dashboard already represents that
+// role via the pinned __system__ pseudo-node (rendered as a labeled
+// square), so we hide the loop's own graph node to avoid two
+// nodes both labeled "core" — the actual problem the operator was
+// staring at when reporting "real core has one connect to imposter
+// core also named core." The loop itself stays in state.loops so
+// detail panels and API consumers continue to see its data.
+//
+// Predicate matches the backend's Loop.IsCore: name == "core" and
+// the config Operation is "container." Falling back on name alone
+// would misfire for unrelated loops a user might name "core."
+function isRegistryCoreLoop(loop) {
+  if (!loop) return false;
+  if (loop.name !== 'core') return false;
+  const op = loop.config && loop.config.Operation;
+  return op === 'container';
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -460,6 +480,11 @@ function syncPhysicsNodes(cx, cy) {
 
   // Loop nodes.
   for (const loop of state.loops.values()) {
+    // Skip the registry's structural-root core loop — it shares its
+    // visual slot with __system__ and rendering both produces the
+    // duplicate "core" node operators see in the graph. See
+    // [isRegistryCoreLoop] for the predicate's reasoning.
+    if (state.system && isRegistryCoreLoop(loop)) continue;
     if (physics.nodes.has(loop.id)) continue;
     let sx, sy;
     const target = orbitTargets.get(loop.id);
@@ -2867,6 +2892,9 @@ function renderNodes() {
 
   // Create/update DOM nodes (no position-setting — physics handles that).
   for (const loop of loops) {
+    // Same registry-core suppression as syncPhysicsNodes: the loop
+    // exists in state, but its visual slot is the __system__ node.
+    if (hasSystem && isRegistryCoreLoop(loop)) continue;
     renderNode(loop);
   }
 
@@ -2921,12 +2949,31 @@ function renderNodes() {
 // Manage linking line DOM lifecycle — create/remove elements and apply
 // state classes. Positions (x1/y1/x2/y2) are set by updateNodePositions().
 function renderLinkingLines(hasSystem, loops) {
-  // Top-level loops are those without a parent_id.
-  const topLevel = loops.filter(l => !l.parent_id);
+  // When the registry's core loop is present, its loop node is hidden
+  // (see isRegistryCoreLoop) and its visual slot is the __system__
+  // node. Any loop that named the registry core as its parent gets
+  // re-rooted to __system__ for edge-drawing purposes; the registry
+  // core itself is excluded from both top-level and children sets.
+  const registryCore = hasSystem ? loops.find(isRegistryCoreLoop) : null;
+  const registryCoreID = registryCore ? registryCore.id : null;
+  const adoptedBySystem = (loop) => loop.parent_id === registryCoreID;
+
+  // Top-level loops: genuine orphans plus loops adopted from the
+  // hidden registry core. The registry core itself does not appear.
+  const topLevel = loops.filter(l => {
+    if (isRegistryCoreLoop(l)) return false;
+    if (!l.parent_id) return true;
+    return adoptedBySystem(l);
+  });
   const activeIds = new Set(topLevel.map(l => l.id));
 
-  // Child loops are those with a parent_id.
-  const children = loops.filter(l => l.parent_id);
+  // Child loops: anything with a parent_id that is NOT the registry
+  // core. Their edges go to the named parent normally.
+  const children = loops.filter(l => {
+    if (isRegistryCoreLoop(l)) return false;
+    if (!l.parent_id) return false;
+    return !adoptedBySystem(l);
+  });
   const childKeys = new Set(children.map(l => l.id));
 
   // Build a set of all valid link targets.
