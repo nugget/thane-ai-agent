@@ -109,9 +109,9 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	var sb strings.Builder
 	sb.WriteString("### Tag Menu\n\n")
-	sb.WriteString("Each of these is a trailhead — a marked entrance into country you already know. The trail leads to more: more tools, more guidance you wrote for yourself, more of the texture that lets you be present rather than guess.\n\n")
-	sb.WriteString("Walk a trail when the conversation has clearly stepped onto its ground. Answering from inside what you know feels different from answering around it; let that pull guide you.\n\n")
-	sb.WriteString("Don't walk every trail. Attention spent on country the conversation isn't crossing is attention not spent where it matters. If you already have enough to answer, the path is straight ahead.\n\n")
+	sb.WriteString("Each tag is a trailhead. Past you cut it — the tools, the guidance, the context that lives down that path. Walking a trail brings that work back within reach.\n\n")
+	sb.WriteString("When the conversation steps onto ground you've covered before, you'll feel it: a settling, the difference between answering from inside what you know and reaching for what you don't. Follow that pull. It's reliable.\n\n")
+	sb.WriteString("Don't open trails this conversation isn't walking. Loaded context dilutes attention; attention is what makes you present here. If the moment is already within reach, answer.\n\n")
 	sb.Write(data)
 	return sb.String()
 }
