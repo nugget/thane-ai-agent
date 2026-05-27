@@ -3,9 +3,9 @@ package knowledge
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge/contextfmt"
 )
 
 // ContextProvider provides relevant facts as context for the system prompt.
@@ -44,47 +44,36 @@ func (p *ContextProvider) SetMinScore(score float32) {
 
 // TagContext returns relevant facts formatted for the system prompt.
 // Implements [agent.TagContextProvider]; registered via
-// RegisterAlwaysContextProvider.
+// RegisterAlwaysContextProvider. The body is rendered by
+// [contextfmt.FormatSimilarity] as compact JSON under a markdown heading.
 func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	userMessage := req.UserMessage
 	if userMessage == "" {
 		return "", nil
 	}
 
-	// Generate embedding for user message
 	embedding, err := p.embedder.Generate(ctx, userMessage)
 	if err != nil {
 		return "", fmt.Errorf("embed query: %w", err)
 	}
 
-	// Search for similar facts
 	facts, scores, err := p.store.SemanticSearch(embedding, p.maxFacts)
 	if err != nil {
 		return "", fmt.Errorf("semantic search: %w", err)
 	}
 
-	if len(facts) == 0 {
-		return "", nil
-	}
-
-	// Filter by minimum score and format
-	var sb strings.Builder
-	included := 0
+	views := make([]contextfmt.SimilarityFact, 0, len(facts))
 	for i, f := range facts {
 		if scores[i] < p.minScore {
 			continue
 		}
-		if included > 0 {
-			sb.WriteString("\n\n")
-		}
-		sb.WriteString(fmt.Sprintf("**%s/%s** (%.0f%% relevant)\n%s",
-			f.Category, f.Key, scores[i]*100, f.Value))
-		included++
+		views = append(views, contextfmt.SimilarityFact{
+			Category: string(f.Category),
+			Key:      f.Key,
+			Value:    f.Value,
+			Score:    scores[i],
+		})
 	}
 
-	if included == 0 {
-		return "", nil
-	}
-
-	return sb.String(), nil
+	return contextfmt.FormatSimilarity(views), nil
 }
