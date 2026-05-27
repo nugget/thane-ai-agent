@@ -97,32 +97,47 @@ func (s *ArchiveStore) trySetupSessionsFTS() bool {
 	}
 
 	// 3. Backfill via FTS5's 'rebuild' command when the inverted
-	//    index is empty. Runs only on first init: once any session
-	//    has been indexed (either by this backfill or by AI/AU
-	//    triggers as the summarizer produces metadata), steady-state
-	//    sync is the triggers' job.
+	//    index is incomplete — i.e., the _docsize shadow table holds
+	//    fewer rows than the source `sessions` table.
 	//
-	//    Empty-check probes the _docsize shadow table, not COUNT(*)
-	//    on the virtual table — external-content FTS5 proxies
-	//    SELECT COUNT(*) through to the source `sessions` table and
-	//    so always reports > 0 whenever any session exists. Only the
-	//    shadow tables (_docsize, _data, _idx) tell you whether the
-	//    inverted index itself has any tokenized rows.
-	var docCount int
+	//    `_docsize == 0` is not a sufficient trigger by itself: if a
+	//    previous startup's rebuild failed AFTER the table + triggers
+	//    were created, the AI trigger would index every new session
+	//    going forward, pushing _docsize above 0 — but the historical
+	//    pre-trigger rows would stay invisible forever. Comparing
+	//    _docsize against COUNT(sessions) catches this case on the
+	//    next startup and re-runs the rebuild idempotently.
+	//
+	//    Using the shadow table rather than COUNT(*) on sessions_fts:
+	//    external-content FTS5 proxies SELECT COUNT(*) through to the
+	//    source `sessions` table, which would always self-equal and
+	//    suppress the rebuild. Only the shadow tables (_docsize,
+	//    _data, _idx) reflect the inverted index's actual contents.
+	var docCount, sessCount int
 	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s_docsize`, sessionsFTSTable)).Scan(&docCount); err != nil {
 		if s.logger != nil {
 			s.logger.Warn("sessions_fts docsize probe failed", "error", err)
 		}
 		return true // triggers are installed — degrade gracefully
 	}
-	if docCount == 0 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessCount); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("sessions count probe failed", "error", err)
+		}
+		return true
+	}
+	if docCount < sessCount {
 		if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, sessionsFTSTable, sessionsFTSTable)); err != nil {
 			if s.logger != nil {
-				s.logger.Warn("sessions_fts backfill failed", "error", err)
+				s.logger.Warn("sessions_fts backfill failed; next startup will retry",
+					"docsize", docCount,
+					"sessions", sessCount,
+					"error", err)
 			}
-			// Don't fail the whole setup — the AI trigger handles new
-			// sessions; existing rows can be backfilled by the next
-			// startup retrying.
+			// Setup ends in "table + triggers installed, index partial."
+			// Returning true is correct: new writes via triggers will
+			// keep the index growing while we wait for the next startup
+			// to retry the rebuild against the same shortfall signal.
 		}
 	}
 
