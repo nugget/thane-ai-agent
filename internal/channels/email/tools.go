@@ -141,20 +141,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 
 // HandleMark modifies flags on specified messages.
 func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, error) {
-	action := MarkAction{
-		Folder:  stringArg(args, "folder"),
-		Flag:    stringArg(args, "flag"),
-		Add:     boolArg(args, "add"),
-		Account: stringArg(args, "account"),
-	}
-
-	// Parse UIDs — accept "uids" array or singular "uid".
-	action.UIDs = uint32SliceArg(args, "uids")
-	if len(action.UIDs) == 0 {
-		if uid := uint32(intArg(args, "uid")); uid != 0 {
-			action.UIDs = []uint32{uid}
-		}
-	}
+	action := parseMarkAction(args)
 
 	if len(action.UIDs) == 0 {
 		return "", fmt.Errorf("uids is required")
@@ -177,6 +164,33 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		verb = "Removed"
 	}
 	return fmt.Sprintf("%s %q flag on %d message(s)", verb, action.Flag, len(action.UIDs)), nil
+}
+
+// parseMarkAction translates the raw tool-argument map into a
+// [MarkAction]. Extracted from [Tools.HandleMark] so unit tests can
+// assert the args→action translation (especially the `add`
+// default-true contract from #930) without standing up a Manager.
+//
+// Default semantics:
+//   - `add` omitted defaults to true, matching the schema's
+//     "default: true" — marking seen after triage is the common case.
+//   - `uids` accepts an array; `uid` is a single-message convenience.
+//     If both are absent the returned action has UIDs == nil and the
+//     caller (HandleMark) surfaces "uids is required" to the model.
+func parseMarkAction(args map[string]any) MarkAction {
+	action := MarkAction{
+		Folder:  stringArg(args, "folder"),
+		Flag:    stringArg(args, "flag"),
+		Add:     boolArgDefault(args, "add", true),
+		Account: stringArg(args, "account"),
+	}
+	action.UIDs = uint32SliceArg(args, "uids")
+	if len(action.UIDs) == 0 {
+		if uid := uint32(intArg(args, "uid")); uid != 0 {
+			action.UIDs = []uint32{uid}
+		}
+	}
+	return action
 }
 
 // HandleSend composes and sends a new email.
@@ -515,6 +529,24 @@ func boolArg(args map[string]any, key string) bool {
 		return v
 	}
 	return false
+}
+
+// boolArgDefault resolves the omitted-bool ambiguity that bit
+// email_mark in #930: when a tool schema documents `default: true`
+// for a boolean argument, the calling model often omits the field
+// entirely rather than sending `true` explicitly — and Go's zero
+// value for the missing key is `false`, the opposite of what the
+// schema promised. boolArgDefault returns the documented fallback
+// when the key is absent or wrong-typed, so runtime behavior matches
+// the schema regardless of how the model encodes the call. Use it
+// for any tool argument whose schema documents a non-false default;
+// use boolArg directly when false-when-omitted is the intended
+// semantic.
+func boolArgDefault(args map[string]any, key string, fallback bool) bool {
+	if v, ok := args[key].(bool); ok {
+		return v
+	}
+	return fallback
 }
 
 // uint32SliceArg extracts a slice of uint32 values from args. Handles

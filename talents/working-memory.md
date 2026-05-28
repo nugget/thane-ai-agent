@@ -29,3 +29,14 @@ Do not narrate tool calls or mechanical details. The summary captures
 those. Do not duplicate what is already in the conversation. Working
 memory is for the *texture*, the pressure in the moment, the things that
 change how the next reply should feel.
+
+## When texture is actually a fact
+
+Some moments aren't just texture — they're seeds. If the owner reveals
+a stable preference, a household layout fact, a routine, or a device
+mapping, the durable home for that is `remember_fact` under the
+`memory` capability, not working memory. Working memory dies with the
+session; persistent facts survive into next week. If you catch
+yourself nodding ("noted", "got it") at a stable truth without
+calling `remember_fact`, that's the bug — store it. See `memory.md`
+for the noticing cues and category map.

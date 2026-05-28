@@ -340,11 +340,8 @@ func TestGetContext_WithRef(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(got, "kb:devices/office_light.md") {
-		t.Errorf("expected ref annotation in context output, got:\n%s", got)
-	}
-	if !strings.Contains(got, "📎 Full details:") {
-		t.Errorf("expected '📎 Full details:' prefix in context output, got:\n%s", got)
+	if !strings.Contains(got, `"ref":"devices/office_light.md"`) {
+		t.Errorf("expected ref field in context output, got:\n%s", got)
 	}
 }
 
@@ -365,7 +362,7 @@ func TestGetContext_WithoutRef_NoAnnotation(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if strings.Contains(got, "📎") {
-		t.Errorf("expected no ref annotation for fact without ref, got:\n%s", got)
+	if strings.Contains(got, `"ref":`) {
+		t.Errorf("expected ref field to be omitted when empty, got:\n%s", got)
 	}
 }

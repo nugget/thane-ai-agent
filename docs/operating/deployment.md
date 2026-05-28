@@ -17,7 +17,7 @@ that user's home directory — Finder-visible, easy to inspect and back up.
 just install                  # -> ~/Thane/bin/thane
 just service-install          # -> ~/Library/LaunchAgents/info.nugget.thane.plist
 launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
-just logs                     # Tail the latest ~/Thane/logs/events/... JSONL segment
+just logs                     # Tail the latest ~/Thane/archive/sources/thane/events/... JSONL segment
 ```
 
 ### macOS Local Network Permission

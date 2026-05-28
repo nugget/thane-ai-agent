@@ -136,17 +136,17 @@ func nonDelegableCapabilityTag(tag string) bool {
 	}
 }
 
-func applyProfileDefaultTags(scopeTags []string, profile *Profile, explicitScopeRequested bool) (mergedTags []string, appliedDefaults []string) {
+func applyRunPolicyDefaultTags(scopeTags []string, policy *RunPolicy, explicitScopeRequested bool) (mergedTags []string, appliedDefaults []string) {
 	mergedTags = append([]string(nil), scopeTags...)
-	if explicitScopeRequested || profile == nil || len(profile.DefaultTags) == 0 {
+	if explicitScopeRequested || policy == nil || len(policy.DefaultTags) == 0 {
 		return mergedTags, nil
 	}
 
-	seen := make(map[string]bool, len(mergedTags)+len(profile.DefaultTags))
+	seen := make(map[string]bool, len(mergedTags)+len(policy.DefaultTags))
 	for _, tag := range mergedTags {
 		seen[tag] = true
 	}
-	for _, tag := range profile.DefaultTags {
+	for _, tag := range policy.DefaultTags {
 		tag = strings.TrimSpace(tag)
 		if tag == "" || seen[tag] || nonDelegableCapabilityTag(tag) {
 			continue
@@ -160,18 +160,37 @@ func applyProfileDefaultTags(scopeTags []string, profile *Profile, explicitScope
 	return mergedTags, appliedDefaults
 }
 
+// delegateToolRegistry builds the catalog a delegate's executor sees
+// during its in-process setup phase (e.g. model-routing sizing in
+// selectModel). Two phases:
+//
+//  1. Optional tag narrowing. When the caller requested an explicit
+//     scope or supplied non-empty scope tags, narrow the parent
+//     registry by the union of scope tags and operator core tags.
+//     FilterByTags preserves Tool.Core members so the tag-navigation
+//     surface stays reachable. When the union is empty
+//     (explicit-empty-scope with no core tags configured),
+//     FilteredCopy(nil) yields a zero-tool registry — FilteredCopy
+//     does not preserve Tool.Core, so the explicit-empty-scope
+//     delegate sees no tools at all. That's the documented contract
+//     covered by TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools.
+//
+//  2. Recursion guard. Strip the delegate family
+//     ([delegateToolExclusions]) so a delegate can't spawn another
+//     delegate. This step runs unconditionally — both the narrowed
+//     and unnarrowed paths funnel through it, single source of truth
+//     for the exclusion set.
 func (e *Executor) delegateToolRegistry(scopeTags []string, explicitScopeRequested bool) *tools.Registry {
+	reg := e.parentReg
 	if len(scopeTags) > 0 || explicitScopeRequested {
 		merged := mergeTagLists(scopeTags, e.coreTags)
-		var reg *tools.Registry
 		if len(merged) > 0 {
-			reg = e.parentReg.FilterByTags(merged)
+			reg = reg.FilterByTags(merged)
 		} else {
-			reg = e.parentReg.FilteredCopy(nil)
+			reg = reg.FilteredCopy(nil)
 		}
-		return reg.FilteredCopyExcluding(delegateToolExclusions())
 	}
-	return e.parentReg.FilteredCopyExcluding(delegateToolExclusions())
+	return reg.FilteredCopyExcluding(delegateToolExclusions())
 }
 
 func mergeTagLists(tagGroups ...[]string) []string {
@@ -201,7 +220,18 @@ type ToolCallOutcome struct {
 
 // Result is the outcome of a delegated task execution.
 type Result struct {
-	ProfileName              string            `json:"profile"`
+	// RunPolicyName is the [RunPolicy.Name] selected for this run.
+	// The JSON tag stays "profile" because the operator-facing
+	// vocabulary, dashboards, and log-parsing scripts predate the
+	// internal Profile→RunPolicy rename; changing the wire field
+	// would break those surfaces without delivering value.
+	RunPolicyName string `json:"profile"`
+	// Content is the assistant text the delegate produced. Empty when
+	// the delegate exhausted without producing output (Exhausted is
+	// true and ExhaustReason names which budget ran out), or when the
+	// delegate completed but produced only tool calls with no final
+	// answer (Exhausted=true, ExhaustReason=ExhaustNoOutput). Check
+	// Exhausted before treating an empty Content as success.
 	Content                  string            `json:"content"`
 	Model                    string            `json:"model"`
 	Iterations               int               `json:"iterations"`
@@ -227,7 +257,7 @@ type Executor struct {
 	llm             llm.Client
 	router          *router.Router
 	parentReg       *tools.Registry
-	profiles        map[string]*Profile
+	runPolicies     map[string]*RunPolicy
 	timezone        string
 	defaultModel    string
 	archiver        *memory.ArchiveStore
@@ -253,19 +283,20 @@ func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, 
 		llm:          llmClient,
 		router:       rtr,
 		parentReg:    parentReg,
-		profiles:     builtinProfiles(),
+		runPolicies:  builtinRunPolicies(),
 		defaultModel: defaultModel,
 	}
 }
 
-// ApplyProfileOverrides applies configuration overrides to builtin
-// profiles. Only positive fields in each override replace the builtin
-// defaults. Negative values are logged as warnings and ignored.
-// Unknown profile names are silently ignored (config may reference
-// profiles that don't exist yet).
-func (e *Executor) ApplyProfileOverrides(overrides map[string]ProfileOverride) {
+// ApplyRunPolicyOverrides applies configuration overrides to the
+// builtin run policies. Only positive fields in each override replace
+// the builtin defaults; zero and negative fields are ignored. Unknown
+// policy names are silently ignored (config may reference names that
+// don't exist yet). The map key matches the operator's YAML key under
+// `delegate.profiles.<name>`.
+func (e *Executor) ApplyRunPolicyOverrides(overrides map[string]RunPolicyOverride) {
 	for name, o := range overrides {
-		p, ok := e.profiles[name]
+		p, ok := e.runPolicies[name]
 		if !ok {
 			continue
 		}
@@ -284,13 +315,28 @@ func (e *Executor) ApplyProfileOverrides(overrides map[string]ProfileOverride) {
 	}
 }
 
-// ProfileOverride holds optional overrides for a delegate profile.
-// Only positive values are applied; zero and negative fields are ignored.
-type ProfileOverride struct {
+// RunPolicyOverride is the partial-update shape operators use to
+// adjust one or more budgets on a builtin run policy without having
+// to restate the whole policy. The struct is intentionally
+// all-zero-valued by default — operators only fill the fields they
+// want to override, and [Executor.ApplyRunPolicyOverrides] leaves
+// builtin values in place wherever the override is zero.
+type RunPolicyOverride struct {
+	// ToolTimeout, when positive, replaces the builtin policy's
+	// per-tool-call timeout. Zero leaves the builtin unchanged.
 	ToolTimeout time.Duration
+	// MaxDuration, when positive, replaces the builtin policy's
+	// wall-clock cap on the whole delegate loop. Zero leaves the
+	// builtin unchanged.
 	MaxDuration time.Duration
-	MaxIter     int
-	MaxTokens   int
+	// MaxIter, when positive, replaces the builtin policy's maximum
+	// tool-calling iteration count. Zero leaves the builtin
+	// unchanged.
+	MaxIter int
+	// MaxTokens, when positive, replaces the builtin policy's
+	// cumulative output-token budget. Zero leaves the builtin
+	// unchanged.
+	MaxTokens int
 }
 
 // SetTimezone configures the IANA timezone used in delegate logging and
@@ -364,19 +410,25 @@ func (e *Executor) ConfigureSessionLifecycle(archiver agent.SessionArchiver, sto
 	e.conversations = store
 }
 
-// ProfileNames returns the names of all registered profiles.
-func (e *Executor) ProfileNames() []string {
-	names := make([]string, 0, len(e.profiles))
-	for name := range e.profiles {
+// RunPolicyNames returns the names of all registered run policies.
+// The names match the operator's YAML keys under
+// `delegate.profiles.<name>`.
+func (e *Executor) RunPolicyNames() []string {
+	names := make([]string, 0, len(e.runPolicies))
+	for name := range e.runPolicies {
 		names = append(names, name)
 	}
 	return names
 }
 
-// Execute runs a delegated task with the given profile and guidance.
-// Capability tags define the delegate's tool and context scope. Elective
-// caller tags are inherited by default; compatibility profiles may add
-// default tags only when the caller did not request an explicit scope.
+// Execute runs a delegated task under the named run policy. Capability
+// tags define the delegate's tool and context scope. Elective caller
+// tags are inherited by default; the policy's DefaultTags merge in
+// only when the caller did not request an explicit scope.
+//
+// profileName is the YAML lookup key (`delegate.profiles.<name>`) for
+// the run policy and is preserved as the argument name to match the
+// operator-facing config vocabulary.
 func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (*Result, error) {
 	return e.execute(ctx, task, profileName, guidance, tags, defaultExecutionOptions())
 }
@@ -410,7 +462,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 
 	completion, targetConversationID, targetChannel := tools.LoopCompletionTargetFromContext(ctx)
 	if completion == looppkg.CompletionConversation && targetConversationID == "" {
-		return "", prep.profile.Name, fmt.Errorf("background delegation requires a target conversation")
+		return "", prep.runPolicy.Name, fmt.Errorf("background delegation requires a target conversation")
 	}
 
 	loopName := "delegate-" + promptfmt.ShortIDPrefix(prep.id)
@@ -427,7 +479,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 	})
 	if err != nil {
 		e.finishLoopExecution(prep)
-		return "", prep.profile.Name, fmt.Errorf("delegate failed to start in background: %w", err)
+		return "", prep.runPolicy.Name, fmt.Errorf("delegate failed to start in background: %w", err)
 	}
 
 	prep.log.Info("delegate background started",
@@ -439,7 +491,7 @@ func (e *Executor) startBackground(ctx context.Context, task, profileName, guida
 	)
 
 	e.finishDetachedLoopExecution(launchResult.LoopID, prep)
-	return launchResult.LoopID, prep.profile.Name, nil
+	return launchResult.LoopID, prep.runPolicy.Name, nil
 }
 
 type preparedExecution struct {
@@ -448,7 +500,7 @@ type preparedExecution struct {
 	archiveSessionID string
 	parentLoopID     string
 	channelBinding   *memory.ChannelBinding
-	profile          *Profile
+	runPolicy        *RunPolicy
 	routeHints       map[string]string
 	log              *slog.Logger
 	userMessage      string
@@ -504,7 +556,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 			toolCallsMu.Lock()
 			defer toolCallsMu.Unlock()
 			return &Result{
-				ProfileName:   prep.profile.Name,
+				RunPolicyName: prep.runPolicy.Name,
 				Content:       "Delegate was unable to complete the task within its time limit.",
 				Model:         prep.model,
 				Exhausted:     true,
@@ -541,7 +593,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	}
 
 	return &Result{
-		ProfileName:              prep.profile.Name,
+		RunPolicyName:            prep.runPolicy.Name,
 		Content:                  resp.Content,
 		Model:                    resp.Model,
 		Iterations:               resp.Iterations,
@@ -579,7 +631,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 				"category":          "delegate",
 				"delegate_id":       prep.id,
 				"delegate_task":     truncate(task, 500),
-				"delegate_profile":  prep.profile.Name,
+				"delegate_profile":  prep.runPolicy.Name,
 				"delegate_guidance": truncate(guidance, 500),
 				"prompt_mode":       string(prep.promptMode),
 			},
@@ -596,7 +648,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		MaxOutputTokens:          prep.maxOutputTokens,
 		ToolTimeout:              prep.toolTimeout,
 		UsageRole:                "delegate",
-		UsageTaskName:            prep.profile.Name,
+		UsageTaskName:            prep.runPolicy.Name,
 		PromptMode:               prep.promptMode,
 		RunTimeout:               prep.maxDuration,
 		CompletionConversationID: completionConversationID,
@@ -612,8 +664,8 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 	}
 }
 
-func (e *Executor) effectiveDelegateRouterHints(ctx context.Context, profile *Profile) map[string]string {
-	base := profile.RouterHints
+func (e *Executor) effectiveDelegateRouterHints(ctx context.Context, policy *RunPolicy) map[string]string {
+	base := policy.RouterHints
 	if base == nil {
 		base = map[string]string{}
 	}
@@ -743,8 +795,8 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	if len(droppedTags) > 0 {
 		log.Warn("delegate capability tags skipped", "dropped_tags", droppedTags)
 	}
-	profile := e.profileForScope(profileName, scopeTags)
-	scopeTags, profileDefaultTags := applyProfileDefaultTags(scopeTags, profile, explicitScopeRequested)
+	policy := e.runPolicyForScope(profileName, scopeTags)
+	scopeTags, policyDefaultTags := applyRunPolicyDefaultTags(scopeTags, policy, explicitScopeRequested)
 
 	reg := e.delegateToolRegistry(scopeTags, explicitScopeRequested)
 	toolDefs := reg.List()
@@ -765,14 +817,14 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	excludeTools = mergeExcludeToolNames(excludeTools, delegateToolExclusions())
 	tagFilterActive := len(scopeTags) > 0 || explicitScopeRequested
 
-	log = log.With("profile", profile.Name)
+	log = log.With("profile", policy.Name)
 	ctx = logging.WithLogger(ctx, log)
 	log.Info("delegate started",
 		"task", truncate(task, 200),
 		"guidance", truncate(guidance, 200),
 		"tags", scopeTags,
 		"inherited_tags", inheritedTags,
-		"profile_default_tags", profileDefaultTags,
+		"profile_default_tags", policyDefaultTags,
 		"tools_available", len(toolDefs),
 	)
 
@@ -809,19 +861,19 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		userMsg.WriteString(guidance)
 	}
 
-	maxIterations := profile.MaxIter
+	maxIterations := policy.MaxIter
 	if maxIterations <= 0 {
 		maxIterations = defaultMaxIter
 	}
-	maxOutputTokens := profile.MaxTokens
+	maxOutputTokens := policy.MaxTokens
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = defaultMaxTokens
 	}
-	maxDuration := profile.MaxDuration
+	maxDuration := policy.MaxDuration
 	if maxDuration <= 0 {
 		maxDuration = defaultMaxDuration
 	}
-	toolTimeout := profile.ToolTimeout
+	toolTimeout := policy.ToolTimeout
 	if toolTimeout <= 0 {
 		toolTimeout = defaultToolTimeout
 	}
@@ -832,11 +884,11 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		archiveSessionID: archiveSessionID,
 		parentLoopID:     tools.LoopIDFromContext(ctx),
 		channelBinding:   tools.ChannelBindingFromContext(ctx),
-		profile:          profile,
-		routeHints:       e.effectiveDelegateRouterHints(ctx, profile),
+		runPolicy:        policy,
+		routeHints:       e.effectiveDelegateRouterHints(ctx, policy),
 		log:              log,
 		userMessage:      userMsg.String(),
-		model:            e.selectModel(ctx, task, profile, len(toolDefs)),
+		model:            e.selectModel(ctx, task, policy, len(toolDefs)),
 		scopeTags:        append([]string(nil), scopeTags...),
 		filterTags:       filterTags,
 		excludeTools:     excludeTools,
@@ -850,21 +902,25 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	}, nil
 }
 
-func (e *Executor) profileForScope(profileName string, scopeTags []string) *Profile {
+// runPolicyForScope selects the appropriate run policy for a delegate
+// invocation. profileName is the operator-facing lookup key from the
+// caller; scopeTags drive automatic ha-profile inference when no
+// explicit policy is named.
+func (e *Executor) runPolicyForScope(profileName string, scopeTags []string) *RunPolicy {
 	if profileName != "" && profileName != "general" {
-		if profile := e.profiles[profileName]; profile != nil {
-			return profile
+		if policy := e.runPolicies[profileName]; policy != nil {
+			return policy
 		}
 	}
 	if hasAnyTag(scopeTags, "ha") {
-		if profile := e.profiles["ha"]; profile != nil {
-			return profile
+		if policy := e.runPolicies["ha"]; policy != nil {
+			return policy
 		}
 	}
-	if profile := e.profiles[profileName]; profile != nil {
-		return profile
+	if policy := e.runPolicies[profileName]; policy != nil {
+		return policy
 	}
-	return e.profiles["general"]
+	return e.runPolicies["general"]
 }
 
 func hasAnyTag(tags []string, wants ...string) bool {
@@ -879,7 +935,7 @@ func hasAnyTag(tags []string, wants ...string) bool {
 }
 
 // selectModel picks a model for the delegate via the router or falls back to the default.
-func (e *Executor) selectModel(ctx context.Context, task string, profile *Profile, toolCount int) string {
+func (e *Executor) selectModel(ctx context.Context, task string, policy *RunPolicy, toolCount int) string {
 	log := logging.Logger(ctx)
 	needsStreaming := e.loopRunner != nil && e.loopRegistry != nil
 	if explicitModel, _ := router.OverlayDelegateHints(nil, tools.HintsFromContext(ctx)); explicitModel != "" {
@@ -888,7 +944,7 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 		)
 		return explicitModel
 	}
-	hints := e.effectiveDelegateRouterHints(ctx, profile)
+	hints := e.effectiveDelegateRouterHints(ctx, policy)
 	if e.router != nil {
 		model, _ := e.router.Route(ctx, router.Request{
 			Query:          task,

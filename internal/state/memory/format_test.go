@@ -217,14 +217,24 @@ func TestFormatRecentMessages_SeparatesSignalEnvelopeMetadata(t *testing.T) {
 	if msg.Content != "new binary, this is a fidelity test" {
 		t.Fatalf("content = %q, want literal message body only", msg.Content)
 	}
-	if msg.Metadata["channel"] != "signal" {
-		t.Fatalf("metadata[channel] = %q, want signal", msg.Metadata["channel"])
+	if got, _ := msg.Metadata["channel"].(string); got != "signal" {
+		t.Fatalf("metadata[channel] = %v, want signal", msg.Metadata["channel"])
 	}
-	if msg.Metadata["sender"] != "Alice (+15551234567)" {
-		t.Fatalf("metadata[sender] = %q", msg.Metadata["sender"])
+	// Sender is the structured minimal projection on the live-message
+	// path: address only, name elided (model uses Session Origin
+	// Context to resolve display info).
+	sender, ok := msg.Metadata["sender"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata[sender] = %v, want a nested object", msg.Metadata["sender"])
 	}
-	if msg.Metadata["transport_ts"] != "1700000000000" {
-		t.Fatalf("metadata[transport_ts] = %q", msg.Metadata["transport_ts"])
+	if addr, _ := sender["address"].(string); addr != "+15551234567" {
+		t.Errorf("sender.address = %v, want +15551234567", sender["address"])
+	}
+	if _, present := sender["name"]; present {
+		t.Errorf("sender.name should be elided on the minimal path, got %v", sender["name"])
+	}
+	if got, _ := msg.Metadata["transport_ts"].(string); got != "1700000000000" {
+		t.Fatalf("metadata[transport_ts] = %v, want 1700000000000", msg.Metadata["transport_ts"])
 	}
 }
 
@@ -251,8 +261,10 @@ func TestFormatRecentMessages_ClipsSignalEnvelopeMetadata(t *testing.T) {
 	if len(parsed.Messages) != 1 {
 		t.Fatalf("messages len = %d, want 1", len(parsed.Messages))
 	}
-	for _, key := range []string{"sender", "group_id", "transport_ts"} {
-		value := parsed.Messages[0].Metadata[key]
+	md := parsed.Messages[0].Metadata
+	// group_id and transport_ts are scalar string values.
+	for _, key := range []string{"group_id", "transport_ts"} {
+		value, _ := md[key].(string)
 		if value == "" {
 			t.Fatalf("metadata[%s] is empty", key)
 		}
@@ -262,6 +274,15 @@ func TestFormatRecentMessages_ClipsSignalEnvelopeMetadata(t *testing.T) {
 		if !utf8.ValidString(value) {
 			t.Fatalf("metadata[%s] is not valid UTF-8", key)
 		}
+	}
+	// Sender is now a nested object; "sender" of the form
+	// "hugeSenderhugeSenderhuge..." has no parseable "(+E164)" suffix,
+	// so parseSignalSender treats it as a bare name. On the minimal
+	// (live-message) projection the bare name is elided entirely, so
+	// metadata.sender is absent here. Confirm that the huge value
+	// doesn't leak through under any key.
+	if _, present := md["sender"]; present {
+		t.Errorf("metadata[sender] should be absent for bare-name input on minimal projection, got %v", md["sender"])
 	}
 	if strings.Contains(string(data), hugeSender) || strings.Contains(string(data), hugeGroup) || strings.Contains(string(data), hugeTransportTS) {
 		t.Fatalf("metadata output contains an unclipped huge field: %s", data)
@@ -421,8 +442,23 @@ func TestFormatSearchResults_SeparatesSignalEnvelopeMetadata(t *testing.T) {
 	if match.Content != "new binary, this is a fidelity test" {
 		t.Fatalf("match content = %q, want literal message body only", match.Content)
 	}
-	if match.Metadata["channel"] != "signal" || match.Metadata["transport_ts"] != "1700000000000" {
+	channel, _ := match.Metadata["channel"].(string)
+	transportTS, _ := match.Metadata["transport_ts"].(string)
+	if channel != "signal" || transportTS != "1700000000000" {
 		t.Fatalf("match metadata = %#v, want signal transport metadata", match.Metadata)
+	}
+	// Search results use the rich sender projection — the model may
+	// not have origin context for the matched conversation, so both
+	// address and name are surfaced as best-effort identifiers.
+	sender, ok := match.Metadata["sender"].(map[string]any)
+	if !ok {
+		t.Fatalf("match metadata.sender = %v, want a nested object", match.Metadata["sender"])
+	}
+	if addr, _ := sender["address"].(string); addr != "+15551234567" {
+		t.Errorf("sender.address = %v, want +15551234567", sender["address"])
+	}
+	if name, _ := sender["name"].(string); name != "Alice" {
+		t.Errorf("sender.name = %v, want Alice", sender["name"])
 	}
 }
 

@@ -12,7 +12,7 @@ OpenAI-compatible API on port 8080, or Home Assistant sends a conversation
 through the Ollama-compatible API on port 11434.
 
 API requests carry a conversation ID for session continuity and can specify
-a [routing profile](../operating/routing-profiles.md) via the model name.
+a [virtual model](../operating/routing-profiles.md) via the model name.
 
 ## Home Assistant WebSocket
 

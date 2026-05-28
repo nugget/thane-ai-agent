@@ -356,16 +356,23 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	}
 }
 
-func TestWorker_StaleCountSessionExcluded(t *testing.T) {
+// TestWorker_ZeroMessageSessionMarkedEmpty exercises the
+// crash_recovery cleanup path that #977 Finding 3b restored: an
+// ended session with no archived messages enters
+// UnsummarizedSessions, the worker dispatches it to markEmpty via
+// the MessageCount==0 short-circuit, no LLM call is made, and the
+// session lands with the empty-session marker so it doesn't re-enter
+// the queue on the next scan.
+//
+// Earlier this test asserted the opposite (zero-message sessions
+// were filtered out by UnsummarizedSessions and never touched at
+// all). That contract turned out to break catch-up entirely — see
+// the issue's Finding 3b diagnosis.
+func TestWorker_ZeroMessageSessionMarkedEmpty(t *testing.T) {
 	store := newTestStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
-	// Create an ended session with message_count > 0 but no archived
-	// messages — simulates scheduler/delegate sessions that bump the
-	// counter without producing a user-visible transcript.
-	// With the EXISTS-based query (issue #341), this session is excluded
-	// from UnsummarizedSessions entirely rather than fetched-then-marked.
 	sess, err := store.StartSession("conv-stale")
 	if err != nil {
 		t.Fatal(err)
@@ -374,13 +381,16 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The session should not appear in the unsummarized list at all.
+	// The session MUST appear so the worker can clean it up.
 	remaining, err := store.UnsummarizedSessions(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unsummarized sessions (stale count excluded), got %d", len(remaining))
+	if len(remaining) != 1 {
+		t.Fatalf("expected zero-message session to surface for cleanup, got %d candidates", len(remaining))
+	}
+	if remaining[0].MessageCount != 0 {
+		t.Errorf("MessageCount = %d, want 0 so the worker takes the cleanup branch", remaining[0].MessageCount)
 	}
 
 	cfg := SummarizerConfig{
@@ -394,24 +404,26 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
 	w.Start(ctx)
 
-	// Give the worker one scan cycle.
+	// One scan cycle. The Interval guards against re-firing.
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()
 	w.Stop()
 
-	// LLM should never have been called — session was never fetched.
+	// No LLM call — markEmpty is a SQL write, the LLM path is
+	// bypassed by the MessageCount==0 short-circuit in scan().
 	if mock.calls.Load() != 0 {
 		t.Errorf("expected 0 LLM calls, got %d", mock.calls.Load())
 	}
 
-	// Session should remain untouched (no title, no metadata).
+	// The session now carries the empty-session marker so the
+	// next scan cycle won't pick it up again.
 	got, err := store.GetSession(sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != "" {
-		t.Errorf("title = %q, want empty (session should be untouched)", got.Title)
+	if got.Title == "" {
+		t.Error("title should be set by markEmpty so the session is excluded from future scans")
 	}
 }
 

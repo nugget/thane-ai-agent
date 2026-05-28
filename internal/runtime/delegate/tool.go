@@ -180,8 +180,8 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 		return fmt.Sprintf("[Delegate error: profile=%s] %s", req.profileName, err.Error())
 	}
 	profileName := req.profileName
-	if result.ProfileName != "" {
-		profileName = result.ProfileName
+	if result.RunPolicyName != "" {
+		profileName = result.RunPolicyName
 	}
 	summary := formatExecSummary(result)
 

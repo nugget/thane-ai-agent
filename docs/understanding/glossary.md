@@ -210,15 +210,12 @@ See [Context Layers](context-layers.md).
 A parameter that influences model selection for a specific request.
 Hints include quality floor, speed preference, local-only restriction,
 and mission type. Hints propagate through delegation.
-See [Routing Profiles](../operating/routing-profiles.md).
+See [Virtual Models](../operating/routing-profiles.md).
 
 ### Routing Profile
 
-A named preset that maps to a set of routing hints. Selected by setting
-the model name in any Ollama-compatible client (e.g., `thane:latest`,
-`thane:premium`, `thane:ops`). Profiles describe intent; the router
-finds the best model.
-See [Routing Profiles](../operating/routing-profiles.md).
+Older term for [Virtual Model](#virtual-model). The Go type is named
+`router.VirtualModel`; prefer "virtual model" in new prose.
 
 ### Semantic Fact
 
@@ -265,6 +262,18 @@ universal router for permissions across the system — gating email send,
 compute allocation, notification priority, and proactive behavior.
 Validated in Go, not prompts.
 See [Trust Architecture](trust-architecture.md).
+
+### Virtual Model
+
+A user-facing `thane:*` model name (e.g., `thane:latest`,
+`thane:premium`, `thane:ops`, `thane:assist`) selected by setting the
+model field in any Ollama-compatible client. Each name maps to a set
+of routing hints — the router resolves them against the configured
+models at request time. Virtual models describe intent ("I want the
+best model," "I want the cheapest local model"); the actual model
+chosen depends on what's available. The Go type is
+`router.VirtualModel`. Older docs may call these "routing profiles."
+See [Virtual Models](../operating/routing-profiles.md).
 
 ### Working Memory
 

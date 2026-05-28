@@ -298,8 +298,10 @@ func (a *App) initStores(s *newState) error {
 	a.onCloseErr("archive", archiveStore.Close)
 
 	// --- Working memory ---
-	// Persists free-form experiential context per conversation.
-	wmStore, err := memory.NewWorkingMemoryStore(mem.DB())
+	// Persists free-form experiential context per conversation. Shares
+	// the archive store's FTS5-availability gate so working_memory_fts
+	// only gets created when the archive's messages_fts also can.
+	wmStore, err := memory.NewWorkingMemoryStore(mem.DB(), archiveStore.FTSEnabled())
 	if err != nil {
 		return fmt.Errorf("create working memory store: %w", err)
 	}

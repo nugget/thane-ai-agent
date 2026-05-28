@@ -121,14 +121,18 @@ See [MQTT](mqtt.md) for setup and configuration.
 - "What happened while I was away?"
 - "The laundry has been in the washer for an hour — should I move it?"
 
-## Routing Profiles for HA
+## Virtual Models for HA
 
-Any [routing profile](routing-profiles.md) works with HA, but some are
+Any [virtual model](routing-profiles.md) works with HA, but some are
 particularly useful:
 
 - **`thane:latest`** — General conversation, delegates HA tasks to local
   models
-- **`thane:command`** — Quick device control ("turn off the lights")
-- **`thane:trigger`** — Cheapest option for HA automations calling Thane
+- **`thane:assist`** — Quick device control ("turn off the lights").
+  Accepts the aliases `thane:command`, `thane:fast`, and
+  `thane:homeassistant`.
+- **`thane:event`** — Cheapest option for HA automations calling
+  Thane. Not listed in `/api/tags` (use the explicit name from your
+  automation). Accepts the alias `thane:trigger`.
 - **`thane:ops`** — Direct tool access when you need the primary model to
   see HA state firsthand

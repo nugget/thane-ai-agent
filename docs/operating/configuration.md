@@ -28,7 +28,7 @@ models:
 
 **`ollama_url`** — Where your Ollama instance lives. Required.
 
-**`default`** — The model used when no routing profile specifies otherwise.
+**`default`** — The model used when no virtual model specifies otherwise.
 
 **`available`** — List of models Thane can choose from. Each model has a
 quality score (1-10), speed score (1-10), and cost tier (1-5). The router
@@ -36,8 +36,8 @@ uses these scores plus routing hints to select the best model for each
 request. You don't hardcode which model handles which task — you describe
 the models, and Thane's router does the matching.
 
-See [Routing Profiles](routing-profiles.md) for how profiles map to model
-selection.
+See [Virtual Models](routing-profiles.md) for how virtual models map to
+model selection.
 
 ## Anthropic (Cloud Models)
 
@@ -297,7 +297,7 @@ is blocked by default.
 
 ```yaml
 logging:
-  root: ~/Thane/logs
+  root: ~/Thane/archive
   level: info
   stdout:
     enabled: true
@@ -307,7 +307,7 @@ logging:
       enabled: true
     requests:
       enabled: true
-    access:
+    http_access:
       enabled: false
     loops:
       enabled: true
@@ -315,6 +315,8 @@ logging:
       enabled: true
     envelopes:
       enabled: true
+    conversations:
+      enabled: false
 ```
 
 Thane writes append-only JSONL datasets under `logging.root`, partitioned by
@@ -347,14 +349,14 @@ See [Delegation & MCP](../understanding/delegation.md).
 ## Delegation
 
 ```yaml
-delegation:
+delegate:
   profiles:
     general:
-      quality_floor: 5
-      prefer_speed: true
+      tool_timeout: 8m
+      max_duration: 15m
     ha:
-      quality_floor: 4
-      prefer_speed: true
+      tool_timeout: 3m
+      max_duration: 5m
 ```
 
 Controls how delegated tasks are routed.

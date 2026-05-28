@@ -609,7 +609,7 @@ talents_dir: ./talents
 #       at load time, so per-iteration capability tag activation
 #       continues to work even after the inline-routing form retires.
 #       initial_tags:
-#         - homeassistant
+#         - ha
 #   Telemetry configures operational metric publishing. When enabled,
 #   a separate mqtt-telemetry loop publishes system health, token usage,
 #   loop states, and other operational data as native HA sensors.
@@ -952,6 +952,46 @@ ego:
     # selection. Built-in service defaults: metacognitive uses 3
     # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 8
+# Curator configures the memory curator loop. When enabled, a
+# self-paced service loop tends thane's understanding across the
+# memory silos by authoring dossiers — long-lived synthesis
+# documents keyed by subject. Unlike the Go-side session
+# summarizer worker (event-triggered on session close), the
+# curator picks its own targets each iteration. Maintains
+# core/curator.md as its working state.
+curator:
+  # Enabled controls whether the curator loop starts. Default: false.
+  enabled: false
+  # MinSleep is the minimum allowed sleep duration between iterations.
+  # Default: "15m". Parsed as a Go duration string.
+  min_sleep: 15m
+  # MaxSleep is the maximum allowed sleep duration between iterations.
+  # Default: "12h".
+  max_sleep: 12h
+  # DefaultSleep is used when the LLM does not call set_next_sleep.
+  # Default: "1h".
+  default_sleep: 1h
+  # Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
+  # Set to 0.0 for deterministic timing.
+  jitter: 0.2
+  # SupervisorProbability is the per-wake chance (0.0–1.0) that
+  # this iteration runs as a supervisor turn — a frontier model
+  # with the augmented prompt produced by [prompts.CuratorPrompt].
+  # Default: 0.1. Set to 0.0 to disable supervisor turns entirely.
+  supervisor_probability: 0.1
+  # Router configures model routing for normal iterations.
+  router:
+    # QualityFloor is the minimum quality rating (1–10) for model
+    # selection. Built-in service defaults: metacognitive uses 3
+    # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
+    quality_floor: 5
+  # SupervisorRouter configures model routing for supervisor
+  # turns (frontier model with augmented prompt).
+  supervisor_router:
+    # QualityFloor is the minimum quality rating (1–10) for model
+    # selection. Built-in service defaults: metacognitive uses 3
+    # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
+    quality_floor: 8
 #
 # (optional) Loops configures immutable loop definitions loaded from the config
 # loops:
@@ -992,7 +1032,7 @@ ego:
 #               start: 08:30
 #               end: 18:00
 #       tags:
-#         - homeassistant
+#         - ha
 #       exclude_tools: []
 #       sleep_min: 2m
 #       sleep_max: 10m

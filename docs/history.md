@@ -28,9 +28,9 @@ would produce something qualitatively different.
 v0.3.0 was about memory depth. The session archive gave Thane immutable
 conversation transcripts with FTS5 full-text search — you could ask
 "what did we discuss about the garage last week?" and get real answers.
-An OpenClaw session importer brought in conversation history from an
-earlier experiment, giving Thane memories it hadn't lived through.
-Session metadata generation (titles, tags, summaries) made the archive
+A session importer brought in conversation history from an earlier
+experiment, giving Thane memories it hadn't lived through. Session
+metadata generation (titles, tags, summaries) made the archive
 navigable. AGENTS.md appeared here too — the first gesture toward making
 the repo legible to AI visitors.
 

@@ -2,21 +2,13 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
-
-// ArchiveSearcher abstracts archive search for testing. ArchiveStore
-// satisfies this interface — no adapter needed.
-type ArchiveSearcher interface {
-	Search(opts SearchOptions) ([]SearchResult, error)
-}
 
 // ArchiveContextProvider implements [agent.TagContextProvider] for
 // injecting relevant past conversation excerpts into the system
@@ -24,23 +16,31 @@ type ArchiveSearcher interface {
 // knowledge (facts + KB docs), Layer 2 provides experiential judgment
 // (prior reasoning about similar situations). Registered via
 // [agent.Loop.RegisterAlwaysContextProvider].
+//
+// Consumes the unified [MemorySearcher] interface so prewarm and the
+// model-initiated archive_search tool share one retrieval path — any
+// improvement to ranking or surface coverage applies to both
+// simultaneously.
 type ArchiveContextProvider struct {
-	store      ArchiveSearcher
+	searcher   MemorySearcher
 	maxResults int
 	maxBytes   int
 	logger     *slog.Logger
 }
 
-// NewArchiveContextProvider creates a context provider that searches the
-// conversation archive for relevant past exchanges. maxResults caps the
-// number of search hits; maxBytes caps the formatted output size to
-// prevent context flooding.
-func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, logger *slog.Logger) *ArchiveContextProvider {
+// NewArchiveContextProvider creates a context provider that searches
+// every memory surface (raw messages, session summaries, working
+// memory) for content relevant to the current wake. maxResults caps
+// the raw-message hit count; the distilled surfaces use their own
+// tighter caps inside [MemorySearch.Search]. maxBytes caps the
+// formatted output size so the prewarm block never overruns the
+// system prompt's budget.
+func NewArchiveContextProvider(searcher MemorySearcher, maxResults, maxBytes int, logger *slog.Logger) *ArchiveContextProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ArchiveContextProvider{
-		store:      store,
+		searcher:   searcher,
 		maxResults: maxResults,
 		maxBytes:   maxBytes,
 		logger:     logger,
@@ -84,7 +84,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 	)
 
 	start := time.Now()
-	results, err := p.store.Search(SearchOptions{
+	bundle, err := p.searcher.Search(SearchOptions{
 		Query: query,
 		Limit: p.maxResults,
 	})
@@ -99,28 +99,41 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 		return "", nil
 	}
 
+	// MemorySearcher.Search MUST return a non-nil bundle on a nil error
+	// (see the interface contract). Treat a nil bundle here as a soft
+	// fault rather than panicking — log and return empty.
+	if bundle == nil {
+		p.logger.Warn("archive pre-warm: searcher returned nil bundle on nil error",
+			"query", query,
+			"took_ms", elapsed.Milliseconds(),
+		)
+		return "", nil
+	}
+	totalHits := len(bundle.Messages) + len(bundle.Sessions) + len(bundle.WorkingMemory)
 	p.logger.Debug("archive pre-warm: search completed",
 		"query", query,
-		"results", len(results),
+		"messages", len(bundle.Messages),
+		"sessions", len(bundle.Sessions),
+		"working_memory", len(bundle.WorkingMemory),
 		"took_ms", elapsed.Milliseconds(),
 	)
 
-	if len(results) == 0 {
+	if totalHits == 0 {
 		return "", nil
 	}
 
-	for i, r := range results {
-		p.logger.Debug("archive pre-warm: result",
+	for i, r := range bundle.Messages {
+		p.logger.Debug("archive pre-warm: message result",
 			"index", i,
 			"session_id", r.SessionID,
 			"match_role", r.Match.Role,
-			"match_preview", truncateContent(r.Match.Content),
+			"match_preview", previewContent(r.Match.Content),
 			"context_before", len(r.ContextBefore),
 			"context_after", len(r.ContextAfter),
 		)
 	}
 
-	return p.formatResults(results), nil
+	return p.formatResults(bundle), nil
 }
 
 // maxUserMessageLen is the longest user message we'll use as a fallback
@@ -128,8 +141,13 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 const maxUserMessageLen = 100
 
 // buildQuery constructs a search query from subjects and/or the user
-// message. Subject prefixes (entity:, zone:, etc.) are stripped to
-// leave raw identifiers that match conversational references.
+// message. Content-shaped subject prefixes (entity:, zone:, area:,
+// space:) are stripped to leave raw identifiers that match
+// conversational references. Identity-shaped subjects (contact:) are
+// dropped from the query because their values are stable handles
+// (UUIDs, phone numbers, email addresses) that either match nothing
+// or match every message from that handle — neither produces a
+// useful FTS ranking.
 //
 // Returns the query string and a source label ("subjects" or
 // "message_fallback") for logging.
@@ -138,6 +156,9 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	var terms []string
 
 	for _, s := range subjects {
+		if isIdentitySubject(s) {
+			continue
+		}
 		term := stripSubjectPrefix(s)
 		if term != "" && !seen[term] {
 			seen[term] = true
@@ -149,9 +170,12 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 		return strings.Join(terms, " "), "subjects"
 	}
 
-	// Fall back to user message when no subjects are available.
-	// Only use short, single-line messages — long content produces
-	// noisy queries.
+	// Fall back to user message when no content-shaped subjects are
+	// available. Only use short, single-line messages — long content
+	// produces noisy queries. This branch handles two cases that look
+	// the same from here: no subjects at all, and only identity-shaped
+	// subjects (e.g. Signal contact handles) that we filtered out
+	// above.
 	if userMessage != "" {
 		msg := strings.TrimSpace(userMessage)
 		if len(msg) <= maxUserMessageLen && !strings.ContainsAny(msg, "\n\r") {
@@ -160,6 +184,28 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	}
 
 	return "", ""
+}
+
+// identitySubjectPrefixes lists the subject kinds whose values are
+// stable identity handles, not content terms. Stripping the prefix
+// leaves a UUID, phone, or address that the FTS index treats as a
+// generic token — typically matching every message from that
+// participant and ranking the shortest of those highest. Useful for
+// scoping (conversation_id filters, knowledge subject keys) but a
+// pollutant in a full-text query.
+var identitySubjectPrefixes = map[string]struct{}{
+	"contact": {},
+}
+
+// isIdentitySubject reports whether a subject's prefix marks it as
+// an identity handle rather than a content term.
+func isIdentitySubject(s string) bool {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return false
+	}
+	_, ok := identitySubjectPrefixes[s[:idx]]
+	return ok
 }
 
 // stripSubjectPrefix removes the type prefix from a subject string.
@@ -171,111 +217,170 @@ func stripSubjectPrefix(s string) string {
 	return s
 }
 
-// maxMessageChars is the per-message content truncation limit for
-// formatted archive results.
-const maxMessageChars = 200
+// archiveSectionHeading is the markdown heading the prewarm block emits
+// above its JSON payload. The heading is markdown framing (a section
+// boundary); the payload below is typed JSON per
+// docs/model-facing-context.md.
+const archiveSectionHeading = "### Past Experience\n\n"
 
-// formatResults renders archive search results as markdown suitable for
-// system prompt injection. Output is capped at p.maxBytes; if results
-// are truncated, a note indicates how many were omitted.
-func (p *ArchiveContextProvider) formatResults(results []SearchResult) string {
-	var sb strings.Builder
-	sb.WriteString("### Past Experience\n\n")
+// Prewarm-specific projection bounds. These are tighter than
+// FormatSearchResults' defaults because the prewarm block has a much
+// smaller byte budget than archive_search/archive_range tool output
+// (default 4 KB vs. the tool's full byte cap). Without trimming, a
+// single normal hit can carry up to 5 context messages × ~2 KB each
+// and overflow the prewarm budget on its own. With these caps, even
+// the most context-rich hit comfortably fits one or two hits inside
+// the default budget while preserving the JSON schema sibling
+// providers emit.
+const (
+	prewarmContextPerSide    = 2
+	prewarmMessageContentMax = 300
+)
 
-	included := 0
-	for i, r := range results {
-		var block strings.Builder
-		block.WriteString(formatResultBlock(r))
-		if i < len(results)-1 {
-			block.WriteByte('\n')
-		}
-
-		// Check byte budget before adding this block. If it won't fit,
-		// append a truncation notice only if that itself fits.
-		if sb.Len()+block.Len() > p.maxBytes {
-			remaining := len(results) - included
-			p.logger.Debug("archive pre-warm: byte budget truncation",
-				"included", included,
-				"total", len(results),
-				"budget", p.maxBytes,
-				"used", sb.Len(),
-			)
-			truncationMsg := fmt.Sprintf(
-				"*(%d additional result(s) omitted — byte budget reached)*\n",
-				remaining,
-			)
-			if sb.Len()+len(truncationMsg) <= p.maxBytes {
-				sb.WriteString(truncationMsg)
-			}
-			break
-		}
-
-		sb.WriteString(block.String())
-		included++
-	}
-
-	if included == 0 {
+// formatResults renders the multi-surface bundle as a heading
+// followed by JSON via [FormatMultiKindResults]. Raw-message hits
+// are trimmed for the prewarm budget (tighter per-message content
+// cap and fewer context messages per side than the archive tools
+// use); the distilled surfaces (sessions and working_memory) are
+// already compact and pass through untrimmed.
+//
+// The hit list is shortened from the raw-message tail until the
+// rendered output fits in p.maxBytes — distilled surfaces stay
+// because they're the higher signal-density side and they're
+// budget-cheap. Returns empty string when there's nothing to render
+// or when not even one trimmed hit fits the byte budget.
+func (p *ArchiveContextProvider) formatResults(bundle *SearchBundle) string {
+	if bundle == nil {
 		return ""
 	}
+	if len(bundle.Messages) == 0 && len(bundle.Sessions) == 0 && len(bundle.WorkingMemory) == 0 {
+		return ""
+	}
+	now := time.Now()
 
-	return sb.String()
+	trimmedMessages := trimResultsForPrewarm(bundle.Messages)
+
+	// Walk down the raw-message tail until everything fits. Distilled
+	// surfaces stay throughout — they're small and high-signal.
+	for n := len(trimmedMessages); n >= 0; n-- {
+		clipped := &SearchBundle{
+			Messages:      trimmedMessages[:n],
+			Sessions:      bundle.Sessions,
+			WorkingMemory: bundle.WorkingMemory,
+			Truncated:     bundle.Truncated,
+		}
+		body := FormatMultiKindResults(clipped, now, n < len(trimmedMessages))
+		out := archiveSectionHeading + string(body)
+		if len(out) <= p.maxBytes {
+			if n < len(trimmedMessages) {
+				p.logger.Debug("archive pre-warm: trimmed messages to fit byte budget",
+					"messages_included", n,
+					"messages_total", len(trimmedMessages),
+					"sessions", len(bundle.Sessions),
+					"working_memory", len(bundle.WorkingMemory),
+					"budget", p.maxBytes,
+					"size", len(out),
+				)
+			}
+			return out
+		}
+		if n == 0 {
+			// Distilled surfaces alone exceed the budget — degrade
+			// to nothing rather than emit a half-truth.
+			break
+		}
+	}
+
+	p.logger.Debug("archive pre-warm: not even distilled-only fits byte budget",
+		"messages_total", len(trimmedMessages),
+		"sessions", len(bundle.Sessions),
+		"working_memory", len(bundle.WorkingMemory),
+		"budget", p.maxBytes,
+	)
+	return ""
 }
 
-// formatResultBlock renders a single search result as a markdown block
-// with session date, matched message (bolded), and surrounding context.
-func formatResultBlock(r SearchResult) string {
-	var sb strings.Builder
-
-	// Header: date and session ID prefix.
-	sessionShort := promptfmt.ShortIDPrefix(r.SessionID)
-	date := r.Match.Timestamp.Format(time.DateOnly)
-	sb.WriteString(fmt.Sprintf("**%s — Session %s:**\n", date, sessionShort))
-
-	// Context before (up to 2 messages for brevity).
-	before := r.ContextBefore
-	if len(before) > 2 {
-		before = before[len(before)-2:]
+// trimResultsForPrewarm returns a copy of results with each hit's
+// context window narrowed to [prewarmContextPerSide] messages on each
+// side and every message's content clipped to
+// [prewarmMessageContentMax] bytes. This keeps a single hit small
+// enough to fit comfortably under the typical prewarm byte budget;
+// FormatSearchResults applies its own (larger) caps on top, so the
+// tighter prewarm bounds win.
+func trimResultsForPrewarm(results []SearchResult) []SearchResult {
+	out := make([]SearchResult, len(results))
+	for i, r := range results {
+		before := r.ContextBefore
+		if len(before) > prewarmContextPerSide {
+			before = before[len(before)-prewarmContextPerSide:]
+		}
+		after := r.ContextAfter
+		if len(after) > prewarmContextPerSide {
+			after = after[:prewarmContextPerSide]
+		}
+		out[i] = SearchResult{
+			SessionID:     r.SessionID,
+			Match:         clipMessageContent(r.Match, prewarmMessageContentMax),
+			ContextBefore: clipMessageSlice(before, prewarmMessageContentMax),
+			ContextAfter:  clipMessageSlice(after, prewarmMessageContentMax),
+			Highlight:     r.Highlight,
+		}
 	}
-	for _, m := range before {
-		sb.WriteString(fmt.Sprintf("> [%s] %s\n", m.Role, truncateContent(m.Content)))
-	}
-
-	// Matched message — bolded.
-	sb.WriteString(fmt.Sprintf("> **[%s] %s**\n", r.Match.Role, truncateContent(r.Match.Content)))
-
-	// Context after (up to 2 messages for brevity).
-	after := r.ContextAfter
-	if len(after) > 2 {
-		after = after[:2]
-	}
-	for _, m := range after {
-		sb.WriteString(fmt.Sprintf("> [%s] %s\n", m.Role, truncateContent(m.Content)))
-	}
-
-	return sb.String()
+	return out
 }
 
-// truncateContent shortens message content for display, preserving the
-// first line and trimming at maxMessageChars.
-func truncateContent(s string) string {
+// clipMessageContent returns m with Content truncated to max bytes on
+// a UTF-8 boundary. The original message is not mutated; the returned
+// value is a shallow copy with the clipped Content.
+func clipMessageContent(m Message, max int) Message {
+	if len(m.Content) <= max {
+		return m
+	}
+	m.Content = clipToRuneBoundary(m.Content, max)
+	return m
+}
+
+// clipMessageSlice applies clipMessageContent to each entry, returning
+// a new slice. Nil input returns nil.
+func clipMessageSlice(msgs []Message, max int) []Message {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = clipMessageContent(m, max)
+	}
+	return out
+}
+
+// clipToRuneBoundary truncates s to at most max bytes, stepping back
+// to the previous UTF-8 boundary if max falls inside a multi-byte
+// rune so the returned string is always valid UTF-8.
+func clipToRuneBoundary(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut]
+}
+
+// previewContent shortens message content for debug logging. Output is
+// not model-facing; the model sees the JSON projection from
+// FormatSearchResults instead.
+func previewContent(s string) string {
+	const max = 80
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "(empty)"
 	}
-
-	// Collapse to first line if multi-line.
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		s = s[:idx] + "..."
+		s = s[:idx]
 	}
-
-	if len(s) > maxMessageChars {
-		// Respect UTF-8 boundary by truncating at last space before limit.
-		if idx := strings.LastIndexByte(s[:maxMessageChars], ' '); idx > maxMessageChars/2 {
-			s = s[:idx] + "..."
-		} else {
-			s = s[:maxMessageChars] + "..."
-		}
+	if len(s) > max {
+		s = s[:max] + "..."
 	}
-
 	return s
 }

@@ -2,11 +2,31 @@ package contacts
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/contacts/contextfmt"
 )
+
+// parseContactsBody extracts the JSON payload that follows the
+// "### Relevant Contacts" heading and unmarshals it for assertion.
+func parseContactsBody(t *testing.T, out string) []contextfmt.Match {
+	t.Helper()
+	const heading = "### Relevant Contacts\n\n"
+	if !strings.HasPrefix(out, heading) {
+		t.Fatalf("output missing heading prefix\nGot:\n%s", out)
+	}
+	body := strings.TrimPrefix(out, heading)
+	var env struct {
+		Contacts []contextfmt.Match `json:"contacts"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		t.Fatalf("body not parseable JSON: %v\nBody: %s", err, body)
+	}
+	return env.Contacts
+}
 
 func TestContextProvider_NilEmbedder(t *testing.T) {
 	store := newTestStore(t)
@@ -14,7 +34,7 @@ func TestContextProvider_NilEmbedder(t *testing.T) {
 
 	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext() error = %v", err)
+		t.Fatalf("TagContext() error = %v", err)
 	}
 	if result != "" {
 		t.Errorf("expected empty result with nil embedder, got %q", result)
@@ -28,7 +48,7 @@ func TestContextProvider_EmptyMessage(t *testing.T) {
 
 	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
-		t.Fatalf("GetContext() error = %v", err)
+		t.Fatalf("TagContext() error = %v", err)
 	}
 	if result != "" {
 		t.Errorf("expected empty result for empty message, got %q", result)
@@ -42,7 +62,7 @@ func TestContextProvider_NoContacts(t *testing.T) {
 
 	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "hello"})
 	if err != nil {
-		t.Fatalf("GetContext() error = %v", err)
+		t.Fatalf("TagContext() error = %v", err)
 	}
 	if result != "" {
 		t.Errorf("expected empty result with no contacts, got %q", result)
@@ -68,26 +88,29 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 
 	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "tell me about Alice"})
 	if err != nil {
-		t.Fatalf("GetContext() error = %v", err)
+		t.Fatalf("TagContext() error = %v", err)
 	}
+	matches := parseContactsBody(t, result)
 
-	if !strings.Contains(result, "Alice Relevant") {
-		t.Errorf("result should contain 'Alice Relevant', got %q", result)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match (Alice only), got %d", len(matches))
 	}
-	if !strings.Contains(result, "Works at TechCo") {
-		t.Errorf("result should contain 'Works at TechCo', got %q", result)
+	m := matches[0]
+	if m.Name != "Alice Relevant" {
+		t.Errorf("name = %q, want %q", m.Name, "Alice Relevant")
 	}
-	if !strings.Contains(result, "EMAIL") {
-		t.Errorf("result should contain property 'EMAIL', got %q", result)
+	if m.Summary != "Works at TechCo" {
+		t.Errorf("summary = %q, want %q", m.Summary, "Works at TechCo")
 	}
-	if !strings.Contains(result, "timezone") {
-		t.Errorf("result should contain property 'timezone', got %q", result)
+	if m.TrustZone != "known" {
+		t.Errorf("trust_zone = %q, want %q", m.TrustZone, "known")
 	}
-	if !strings.Contains(result, "[known]") {
-		t.Errorf("result should contain trust zone tag '[known]', got %q", result)
+	props := propsByLabel(m.Properties)
+	if _, ok := props["EMAIL"]; !ok {
+		t.Errorf("expected EMAIL property, got %+v", m.Properties)
 	}
-	if strings.Contains(result, "Bob Irrelevant") {
-		t.Errorf("result should not contain 'Bob Irrelevant'")
+	if _, ok := props["timezone"]; !ok {
+		t.Errorf("expected timezone property, got %+v", m.Properties)
 	}
 }
 
@@ -129,16 +152,9 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	lines := strings.Split(strings.TrimSpace(result), "\n")
-	boldCount := 0
-	for _, line := range lines {
-		if strings.HasPrefix(line, "**") {
-			boldCount++
-		}
-	}
-	if boldCount != 2 {
-		t.Errorf("expected 2 contacts in output, got %d (result: %q)", boldCount, result)
+	matches := parseContactsBody(t, result)
+	if len(matches) != 2 {
+		t.Errorf("expected 2 matches under SetMaxContacts(2), got %d", len(matches))
 	}
 }
 
@@ -155,10 +171,14 @@ func TestContextProvider_TrustZoneTag(t *testing.T) {
 
 	result, err := cp.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: "Alice"})
 	if err != nil {
-		t.Fatalf("GetContext() error = %v", err)
+		t.Fatalf("TagContext() error = %v", err)
 	}
-	if !strings.Contains(result, "[trusted]") {
-		t.Errorf("result should contain '[trusted]' tag, got %q", result)
+	matches := parseContactsBody(t, result)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].TrustZone != "trusted" {
+		t.Errorf("trust_zone = %q, want %q", matches[0].TrustZone, "trusted")
 	}
 }
 
@@ -180,4 +200,12 @@ func TestSetMaxContacts_ClampsToMin(t *testing.T) {
 	if cp.maxContacts != 10 {
 		t.Errorf("SetMaxContacts(10) = %d, want 10", cp.maxContacts)
 	}
+}
+
+func propsByLabel(props []contextfmt.Property) map[string]contextfmt.Property {
+	m := make(map[string]contextfmt.Property, len(props))
+	for _, p := range props {
+		m[p.Label] = p
+	}
+	return m
 }

@@ -109,7 +109,9 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	var sb strings.Builder
 	sb.WriteString("### Tag Menu\n\n")
-	sb.WriteString("These are trailheads into richer guidance. Activate one relevant tag when the turn needs a domain; otherwise keep the straight path and answer.\n\n")
+	sb.WriteString("Each tag is a trailhead. Past you cut and marked it — the tools, the guidance, the context that lives down that path. Walking a trail brings that work back within reach.\n\n")
+	sb.WriteString("When the conversation steps onto ground you've covered before, you'll feel it: a settling, the difference between answering from inside what you know and reaching for what you don't. Follow that pull. It's reliable.\n\n")
+	sb.WriteString("Don't follow trails that lead away from this conversation. Loaded context dilutes attention; attention is what makes you present here. If the moment is already within reach, answer.\n\n")
 	sb.Write(data)
 	return sb.String()
 }

@@ -190,6 +190,103 @@ func TestBoolArg(t *testing.T) {
 	}
 }
 
+// TestBoolArgDefault covers the helper used by tools whose schema
+// documents a true-default (currently email_mark.add). The absent-key
+// case is the one that matters most: the matching test name is the
+// regression guard for #930.
+func TestBoolArgDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     map[string]any
+		key      string
+		fallback bool
+		want     bool
+	}{
+		{"explicit true / default true", map[string]any{"add": true}, "add", true, true},
+		{"explicit false overrides default true", map[string]any{"add": false}, "add", true, false},
+		{"missing key returns default true", map[string]any{}, "add", true, true},
+		{"missing key returns default false", map[string]any{}, "add", false, false},
+		{"wrong type returns default", map[string]any{"add": "yes"}, "add", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := boolArgDefault(tt.args, tt.key, tt.fallback); got != tt.want {
+				t.Errorf("boolArgDefault(%v, %q, %v) = %v, want %v", tt.args, tt.key, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseMarkAction exercises the args→MarkAction translation that
+// HandleMark uses. The omitted-`add`-defaults-to-true row is the
+// regression guard for #930: a handler that reverted to
+// `boolArg(args, "add")` (false-default) would silently flip this
+// row's expected Add from true back to false.
+func TestParseMarkAction(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want MarkAction
+	}{
+		{
+			name: "omitted add defaults to true (#930 regression guard)",
+			args: map[string]any{"uid": float64(123), "flag": "seen"},
+			want: MarkAction{Flag: "seen", Add: true, UIDs: []uint32{123}},
+		},
+		{
+			name: "explicit add=false overrides default",
+			args: map[string]any{"uid": float64(123), "flag": "seen", "add": false},
+			want: MarkAction{Flag: "seen", Add: false, UIDs: []uint32{123}},
+		},
+		{
+			name: "explicit add=true matches default",
+			args: map[string]any{"uid": float64(123), "flag": "seen", "add": true},
+			want: MarkAction{Flag: "seen", Add: true, UIDs: []uint32{123}},
+		},
+		{
+			name: "uids array preferred over uid",
+			args: map[string]any{
+				"uids": []any{float64(10), float64(20)},
+				"flag": "flagged",
+			},
+			want: MarkAction{Flag: "flagged", Add: true, UIDs: []uint32{10, 20}},
+		},
+		{
+			name: "missing uids leaves UIDs nil for handler to reject",
+			args: map[string]any{"flag": "seen"},
+			want: MarkAction{Flag: "seen", Add: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMarkAction(tt.args)
+			if got.Flag != tt.want.Flag {
+				t.Errorf("Flag = %q, want %q", got.Flag, tt.want.Flag)
+			}
+			if got.Add != tt.want.Add {
+				t.Errorf("Add = %v, want %v", got.Add, tt.want.Add)
+			}
+			if !uint32SliceEqual(got.UIDs, tt.want.UIDs) {
+				t.Errorf("UIDs = %v, want %v", got.UIDs, tt.want.UIDs)
+			}
+		})
+	}
+}
+
+func uint32SliceEqual(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestFormatEnvelopeList(t *testing.T) {
 	envelopes := []Envelope{
 		{

@@ -1419,3 +1419,143 @@ func TestApplyDefaults_MetacognitiveZeroFloatsArePreserved(t *testing.T) {
 		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Metacognitive.SupervisorProbability)
 	}
 }
+
+// curatorBaseConfig returns a Config with a valid enabled curator loop
+// for the validation-path tests below. Mirrors [egoBaseConfig].
+func curatorBaseConfig() *Config {
+	cfg := Default()
+	cfg.Workspace.Path = "/tmp/thane-test-workspace"
+	cfg.Curator = CuratorConfig{
+		Enabled:      true,
+		MinSleep:     "15m",
+		MaxSleep:     "12h",
+		DefaultSleep: "1h",
+	}
+	cfg.applyDefaults()
+	return cfg
+}
+
+func TestValidateCurator_Disabled_NoOp(t *testing.T) {
+	cfg := Default()
+	cfg.Curator = CuratorConfig{Enabled: false, MinSleep: "junk"} // would fail if enabled
+	if err := cfg.validateCurator(); err != nil {
+		t.Fatalf("validateCurator with Enabled=false should be a no-op, got: %v", err)
+	}
+}
+
+func TestValidateCurator_RequiresWorkspace(t *testing.T) {
+	cfg := curatorBaseConfig()
+	cfg.Workspace.Path = ""
+	err := cfg.validateCurator()
+	if err == nil {
+		t.Fatal("expected error when workspace.path is unset")
+	}
+	if !strings.Contains(err.Error(), "workspace.path") {
+		t.Errorf("error should mention workspace.path, got: %v", err)
+	}
+}
+
+func TestValidateCurator_DurationParsing(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+		expect string
+	}{
+		{"min_sleep", func(c *Config) { c.Curator.MinSleep = "junk" }, "curator.min_sleep"},
+		{"max_sleep", func(c *Config) { c.Curator.MaxSleep = "junk" }, "curator.max_sleep"},
+		{"default_sleep", func(c *Config) { c.Curator.DefaultSleep = "junk" }, "curator.default_sleep"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := curatorBaseConfig()
+			tc.mutate(cfg)
+			err := cfg.validateCurator()
+			if err == nil {
+				t.Fatalf("expected error for invalid %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.expect) {
+				t.Errorf("error should mention %s, got: %v", tc.expect, err)
+			}
+		})
+	}
+}
+
+func TestValidateCurator_MinExceedsMax(t *testing.T) {
+	cfg := curatorBaseConfig()
+	cfg.Curator.MinSleep = "2h"
+	cfg.Curator.MaxSleep = "1h"
+	err := cfg.validateCurator()
+	if err == nil {
+		t.Fatal("expected error when min_sleep exceeds max_sleep")
+	}
+	if !strings.Contains(err.Error(), "min_sleep") || !strings.Contains(err.Error(), "max_sleep") {
+		t.Errorf("error should mention min_sleep and max_sleep, got: %v", err)
+	}
+}
+
+func TestValidateCurator_DefaultOutOfRange(t *testing.T) {
+	cfg := curatorBaseConfig()
+	cfg.Curator.DefaultSleep = "24h" // exceeds max
+	err := cfg.validateCurator()
+	if err == nil {
+		t.Fatal("expected error when default_sleep is outside [min_sleep, max_sleep]")
+	}
+	if !strings.Contains(err.Error(), "default_sleep") {
+		t.Errorf("error should mention default_sleep, got: %v", err)
+	}
+}
+
+func TestValidateCurator_JitterOutOfRange(t *testing.T) {
+	cases := []float64{-0.1, 1.5}
+	for _, v := range cases {
+		cfg := curatorBaseConfig()
+		cfg.Curator.Jitter = &v
+		err := cfg.validateCurator()
+		if err == nil {
+			t.Fatalf("expected error for jitter=%v", v)
+		}
+		if !strings.Contains(err.Error(), "curator.jitter") {
+			t.Errorf("error should mention curator.jitter, got: %v", err)
+		}
+	}
+}
+
+func TestValidateCurator_SupervisorProbabilityOutOfRange(t *testing.T) {
+	cases := []float64{-0.1, 1.5}
+	for _, v := range cases {
+		cfg := curatorBaseConfig()
+		cfg.Curator.SupervisorProbability = &v
+		err := cfg.validateCurator()
+		if err == nil {
+			t.Fatalf("expected error for supervisor_probability=%v", v)
+		}
+		if !strings.Contains(err.Error(), "curator.supervisor_probability") {
+			t.Errorf("error should mention curator.supervisor_probability, got: %v", err)
+		}
+	}
+}
+
+// TestApplyDefaults_CuratorZeroFloatsArePreserved — same regression
+// guard as the ego and metacognitive variants. Explicit 0.0 for
+// Jitter or SupervisorProbability must survive applyDefaults rather
+// than being silently overwritten by the package default.
+func TestApplyDefaults_CuratorZeroFloatsArePreserved(t *testing.T) {
+	zero := 0.0
+	cfg := Default()
+	cfg.Workspace.Path = "/tmp/thane-test-workspace"
+	cfg.Curator = CuratorConfig{
+		Enabled:               true,
+		MinSleep:              "15m",
+		MaxSleep:              "12h",
+		DefaultSleep:          "1h",
+		Jitter:                &zero,
+		SupervisorProbability: &zero,
+	}
+	cfg.applyDefaults()
+	if cfg.Curator.Jitter == nil || *cfg.Curator.Jitter != 0.0 {
+		t.Errorf("Jitter = %v, want explicit 0.0 to survive applyDefaults", cfg.Curator.Jitter)
+	}
+	if cfg.Curator.SupervisorProbability == nil || *cfg.Curator.SupervisorProbability != 0.0 {
+		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Curator.SupervisorProbability)
+	}
+}

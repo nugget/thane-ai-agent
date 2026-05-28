@@ -2,11 +2,10 @@ package toolcatalog
 
 // builtinTagSpecs is the compiled-in tag catalog. PR-G formalized the
 // hierarchy: every leaf declares its Parents (the menu trailheads it
-// appears under), aliases funnel into canonical names via Aliases, and
-// coarse trailheads are explicitly marked Kind: TagKindMenu. Some
-// leaves legitimately serve more than one menu (files spans development
-// and knowledge; web spans development, knowledge, and media) and
-// declare multi-valued Parents.
+// appears under), and coarse trailheads are explicitly marked
+// Kind: TagKindMenu. Some leaves legitimately serve more than one
+// menu (files spans development and knowledge; web spans development,
+// knowledge, and media) and declare multi-valued Parents.
 //
 // Adding a new tag: pick a Kind, write a Description that fits the
 // model-facing menu, and assign Parents from the existing menus when
@@ -51,7 +50,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	// entries in Parents.
 
 	"archive": {
-		Description: "Archive search and transcript retrieval across past conversations.",
+		Description: "What you've already heard. Full-text search and transcript retrieval across past conversations — the place to look when a phrase sounds like an inside joke, a name, or shorthand you should already understand.",
 		Parents:     []string{"knowledge"},
 	},
 	"attachments": {
@@ -75,7 +74,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"operations"},
 	},
 	"documents": {
-		Description: "Indexed document-root browsing, search, and section retrieval tools.",
+		Description: "Curated documents you've authored or imported — KB articles, runbooks, persona/ego notes, indexed reference material under managed roots. NOT past conversation history; for things the user said or you've heard before, use `archive` or `memory` instead.",
 		Parents:     []string{"knowledge"},
 	},
 	"email": {
@@ -97,14 +96,13 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"ha": {
 		Description: "Home Assistant state, control, registry, and automation tools.",
 		Parents:     []string{"home"},
-		Aliases:     []string{"homeassistant"},
 	},
 	"loops": {
 		Description: "Live loop status, sleep control, notifications, ad hoc spawn, and durable loop-definition authoring tools.",
 		Parents:     []string{"operations"},
 	},
 	"memory": {
-		Description: "Persistent fact memory and working-memory tools.",
+		Description: "Things you've chosen to remember — durable facts you've stored about people, places, routines, and the user's vocabulary. The store you write to with `remember_fact` and read with `recall_fact`. For past *conversations* (what was said, when, by whom) use `archive` instead; these are sibling doors, not the same room.",
 		Parents:     []string{"knowledge"},
 	},
 	"models": {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	"github.com/nugget/thane-ai-agent/internal/state/knowledge/contextfmt"
 )
 
 // subjectCtxKey is the context key for subject-keyed fact injection.
@@ -67,7 +67,9 @@ func (p *SubjectContextProvider) SetMaxFacts(n int) {
 
 // TagContext returns subject-keyed facts formatted for the system
 // prompt. Implements [agent.TagContextProvider]; registered via
-// RegisterAlwaysContextProvider.
+// RegisterAlwaysContextProvider. The body is rendered by
+// [contextfmt.FormatSubjectKeyed] as compact JSON under a markdown
+// heading.
 //
 // Subjects are extracted from the context via [SubjectsFromContext].
 // If no subjects are present, returns empty. The request is unused —
@@ -87,26 +89,22 @@ func (p *SubjectContextProvider) TagContext(ctx context.Context, _ agentctx.Cont
 		return "", nil
 	}
 
-	// Cap at maxFacts.
 	if len(facts) > p.maxFacts {
 		facts = facts[:p.maxFacts]
 	}
 
-	var sb strings.Builder
-	sb.WriteString("### Subject-Keyed Facts\n\n")
-	for i, f := range facts {
-		if i > 0 {
-			sb.WriteString("\n\n")
+	views := make([]contextfmt.SubjectFact, 0, len(facts))
+	for _, f := range facts {
+		view := contextfmt.SubjectFact{
+			Category: string(f.Category),
+			Key:      f.Key,
+			Value:    f.Value,
+			Ref:      f.Ref,
 		}
-		sb.WriteString(fmt.Sprintf("**%s/%s**", f.Category, f.Key))
 		if len(f.Subjects) > 0 {
-			sb.WriteString(fmt.Sprintf(" [%s]", strings.Join(f.Subjects, ", ")))
+			view.Subjects = append([]string{}, f.Subjects...)
 		}
-		sb.WriteString("\n")
-		sb.WriteString(f.Value)
-		if f.Ref != "" {
-			sb.WriteString(fmt.Sprintf("\n📎 Full details: kb:%s", f.Ref))
-		}
+		views = append(views, view)
 	}
 
 	p.logger.Debug("subject context injected",
@@ -114,5 +112,5 @@ func (p *SubjectContextProvider) TagContext(ctx context.Context, _ agentctx.Cont
 		"facts_matched", len(facts),
 	)
 
-	return sb.String(), nil
+	return contextfmt.FormatSubjectKeyed(views), nil
 }

@@ -315,6 +315,15 @@ type Config struct {
 	// output, with supervisor randomization for periodic frontier review.
 	Ego EgoConfig `yaml:"ego"`
 
+	// Curator configures the memory curator loop. When enabled, a
+	// self-paced service loop tends thane's understanding across the
+	// memory silos by authoring dossiers — long-lived synthesis
+	// documents keyed by subject. Unlike the Go-side session
+	// summarizer worker (event-triggered on session close), the
+	// curator picks its own targets each iteration. Maintains
+	// core/curator.md as its working state.
+	Curator CuratorConfig `yaml:"curator"`
+
 	// Loops configures immutable loop definitions loaded from the config
 	// file. These definitions become the base layer for the loop
 	// definition registry, with a persistent dynamic overlay applied at
@@ -1826,10 +1835,56 @@ type EgoConfig struct {
 	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
 }
 
+// CuratorConfig configures the memory curator loop. The loop runs as
+// a service loop: bounded voluntary sleep, supervisor randomization,
+// and a declared maintained-document output at core/curator.md.
+// Where ego maintains self-reflection and metacognitive watches
+// in-flight behavior, the curator synthesizes durable knowledge
+// across the memory silos into long-lived dossiers keyed by subject.
+//
+// Self-paced by design: each iteration picks its own subject rather
+// than reacting to events. The Go-side session summarizer worker
+// still fires on session close and stamps session metadata; the
+// curator works above that layer, turning session summaries (and
+// the rest of the corpus) into per-subject dossiers.
+type CuratorConfig struct {
+	// Enabled controls whether the curator loop starts. Default: false.
+	Enabled bool `yaml:"enabled"`
+
+	// MinSleep is the minimum allowed sleep duration between iterations.
+	// Default: "15m". Parsed as a Go duration string.
+	MinSleep string `yaml:"min_sleep"`
+
+	// MaxSleep is the maximum allowed sleep duration between iterations.
+	// Default: "12h".
+	MaxSleep string `yaml:"max_sleep"`
+
+	// DefaultSleep is used when the LLM does not call set_next_sleep.
+	// Default: "1h".
+	DefaultSleep string `yaml:"default_sleep"`
+
+	// Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
+	// Set to 0.0 for deterministic timing.
+	Jitter *float64 `yaml:"jitter,omitempty"`
+
+	// SupervisorProbability is the per-wake chance (0.0–1.0) that
+	// this iteration runs as a supervisor turn — a frontier model
+	// with the augmented prompt produced by [prompts.CuratorPrompt].
+	// Default: 0.1. Set to 0.0 to disable supervisor turns entirely.
+	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
+
+	// Router configures model routing for normal iterations.
+	Router RouterConfig `yaml:"router"`
+
+	// SupervisorRouter configures model routing for supervisor
+	// turns (frontier model with augmented prompt).
+	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
+}
+
 // RouterConfig holds routing hints used by the built-in services
-// (metacognitive, ego) for both normal and supervisor turns. It is
-// deliberately narrow — operator-tunable knobs only — and gets
-// translated into the spec-level [router.LoopProfile] /
+// (metacognitive, ego, curator) for both normal and supervisor
+// turns. It is deliberately narrow — operator-tunable knobs only —
+// and gets translated into the spec-level [router.LoopProfile] /
 // [router.LoopProfile.QualityFloor] at hydration time. Replaces
 // the previously-duplicated `MetacognitiveRouterConfig` and
 // `EgoRouterConfig` types which were byte-identical apart from
@@ -2290,6 +2345,34 @@ func (c *Config) applyDefaults() {
 		c.Ego.SupervisorRouter.QualityFloor = 8
 	}
 
+	// Curator loop defaults. Sleep envelope: wider than metacog (which
+	// runs minutes apart), narrower than ego (which runs hours apart).
+	// One hour as the default cadence gives the corpus time to
+	// accumulate new evidence between passes without going stale.
+	if c.Curator.MinSleep == "" {
+		c.Curator.MinSleep = "15m"
+	}
+	if c.Curator.MaxSleep == "" {
+		c.Curator.MaxSleep = "12h"
+	}
+	if c.Curator.DefaultSleep == "" {
+		c.Curator.DefaultSleep = "1h"
+	}
+	if c.Curator.Jitter == nil {
+		v := 0.2
+		c.Curator.Jitter = &v
+	}
+	if c.Curator.SupervisorProbability == nil {
+		v := 0.1
+		c.Curator.SupervisorProbability = &v
+	}
+	if c.Curator.Router.QualityFloor == 0 {
+		c.Curator.Router.QualityFloor = 5
+	}
+	if c.Curator.SupervisorRouter.QualityFloor == 0 {
+		c.Curator.SupervisorRouter.QualityFloor = 8
+	}
+
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
 		c.Agent.OrchestratorTools = []string{
 			"thane_now",
@@ -2564,6 +2647,9 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
+	if err := c.validateCurator(); err != nil {
+		return err
+	}
 	if err := c.validateEgo(); err != nil {
 		return err
 	}
@@ -2714,6 +2800,43 @@ func (c *Config) validateEgo() error {
 	}
 	if c.Ego.SupervisorProbability != nil && (*c.Ego.SupervisorProbability < 0 || *c.Ego.SupervisorProbability > 1.0) {
 		return fmt.Errorf("ego.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Ego.SupervisorProbability)
+	}
+	return nil
+}
+
+// validateCurator checks curator loop configuration for internal
+// consistency. No-op when the loop is disabled.
+func (c *Config) validateCurator() error {
+	if !c.Curator.Enabled {
+		return nil
+	}
+	if c.Workspace.Path == "" {
+		return fmt.Errorf("curator requires workspace.path (state file lives under workspace/core)")
+	}
+	minSleep, err := time.ParseDuration(c.Curator.MinSleep)
+	if err != nil {
+		return fmt.Errorf("curator.min_sleep %q: %w", c.Curator.MinSleep, err)
+	}
+	maxSleep, err := time.ParseDuration(c.Curator.MaxSleep)
+	if err != nil {
+		return fmt.Errorf("curator.max_sleep %q: %w", c.Curator.MaxSleep, err)
+	}
+	defaultSleep, err := time.ParseDuration(c.Curator.DefaultSleep)
+	if err != nil {
+		return fmt.Errorf("curator.default_sleep %q: %w", c.Curator.DefaultSleep, err)
+	}
+	if minSleep > maxSleep {
+		return fmt.Errorf("curator.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
+	}
+	if defaultSleep < minSleep || defaultSleep > maxSleep {
+		return fmt.Errorf("curator.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+			defaultSleep, minSleep, maxSleep)
+	}
+	if c.Curator.Jitter != nil && (*c.Curator.Jitter < 0 || *c.Curator.Jitter > 1.0) {
+		return fmt.Errorf("curator.jitter %.2f must be in [0.0, 1.0]", *c.Curator.Jitter)
+	}
+	if c.Curator.SupervisorProbability != nil && (*c.Curator.SupervisorProbability < 0 || *c.Curator.SupervisorProbability > 1.0) {
+		return fmt.Errorf("curator.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Curator.SupervisorProbability)
 	}
 	return nil
 }

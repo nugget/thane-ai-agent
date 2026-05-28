@@ -20,7 +20,7 @@ func newTestWorkingMemoryProvider(t *testing.T, convID string) (*WorkingMemoryPr
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := NewWorkingMemoryStore(db)
+	store, err := NewWorkingMemoryStore(db, false)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
