@@ -73,6 +73,17 @@ func TestSummarizeArchive_ParsesHits(t *testing.T) {
 	}
 }
 
+func TestSummarizeArchive_ParsesMultiSurfaceHits(t *testing.T) {
+	// Post-#983 ArchiveContextProvider shape: distilled hits across
+	// messages[]/sessions[]/working_memory[] instead of results[].
+	body := "### Past Experience\n\n" +
+		`{"messages":[{"m":{}},{"m":{}}],"sessions":[{"s":{}}],"working_memory":[{"w":{}}]}`
+	pr := summarizeArchive([]string{"entity:x"}, "hello", body)
+	if pr.HitCount != 4 {
+		t.Errorf("hits = %d, want 4 (2 messages + 1 session + 1 working_memory)", pr.HitCount)
+	}
+}
+
 func TestSummarizeArchive_EmptyOutputIsZeroHits(t *testing.T) {
 	pr := summarizeArchive(nil, "", "")
 	if pr.HitCount != 0 || pr.OutputBytes != 0 {

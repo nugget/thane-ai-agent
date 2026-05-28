@@ -164,11 +164,22 @@ func summarizeArchive(subjects []string, userMessage, body string) providerResul
 	}
 	const heading = "### Past Experience\n\n"
 	payload := strings.TrimPrefix(body, heading)
+	// Count both archive output shapes. The pre-#983 provider emitted a
+	// single results[] envelope; after #983 ArchiveContextProvider
+	// renders distilled hits across messages[], sessions[], and
+	// working_memory[] instead. A given payload carries one shape or the
+	// other, so summing across all four keys reports the true hit count
+	// during the bridge window without double-counting — the search-
+	// efficacy signal this harness exists to surface.
 	var env struct {
-		Results []map[string]any `json:"results"`
+		Results       []map[string]any `json:"results"`
+		Messages      []map[string]any `json:"messages"`
+		Sessions      []map[string]any `json:"sessions"`
+		WorkingMemory []map[string]any `json:"working_memory"`
 	}
 	if err := json.Unmarshal([]byte(payload), &env); err == nil {
-		pr.HitCount = len(env.Results)
+		pr.HitCount = len(env.Results) + len(env.Messages) +
+			len(env.Sessions) + len(env.WorkingMemory)
 	}
 	return pr
 }
