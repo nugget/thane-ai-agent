@@ -385,9 +385,10 @@ func (r EntityMetadataResolver) areaMetadata(area *Area) *EntityAreaMetadata {
 		HumidityEntityID:    area.HumidityEntityID,
 	}
 	if floor := r.floorsByID[area.FloorID]; floor != nil {
-		out.Floor = floorMetadata(floor)
 		if r.floorAlias == "building" {
 			out.Building = floorMetadata(floor)
+		} else {
+			out.Floor = floorMetadata(floor)
 		}
 	}
 	return out

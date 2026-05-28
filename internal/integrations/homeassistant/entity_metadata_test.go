@@ -273,8 +273,8 @@ func TestEntityMetadataResolverAppliesFloorAlias(t *testing.T) {
 	if got == nil || got.Area == nil {
 		t.Fatalf("MetadataForEntity returned %#v, want area metadata", got)
 	}
-	if got.Area.Floor == nil || got.Area.Floor.Name != "Building A" {
-		t.Fatalf("Floor = %#v, want Building A", got.Area.Floor)
+	if got.Area.Floor != nil {
+		t.Fatalf("Floor = %#v, want nil when floor is aliased as building", got.Area.Floor)
 	}
 	if got.Area.Building == nil || got.Area.Building.Name != "Building A" {
 		t.Fatalf("Building = %#v, want floor metadata exposed as building", got.Area.Building)
