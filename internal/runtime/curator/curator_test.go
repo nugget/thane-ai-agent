@@ -115,8 +115,33 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 	if spec.Profile.DelegationGating != "disabled" {
 		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
 	}
-	if len(spec.Tags) != 1 || spec.Tags[0] != "curator" {
-		t.Errorf("Tags = %v, want [curator]", spec.Tags)
+	// Tags = the curator's initial capability surface. "curator" is
+	// the identity tag; the rest are the tool families the prompt
+	// promises (and tag_activate is excluded, so this is the full
+	// boot-time set the curator can use).
+	wantTags := map[string]bool{
+		"curator": true, "documents": true, "archive": true,
+		"memory": true, "contacts": true,
+	}
+	if len(spec.Tags) != len(wantTags) {
+		t.Errorf("Tags = %v, want %d entries", spec.Tags, len(wantTags))
+	}
+	for _, tag := range spec.Tags {
+		if !wantTags[tag] {
+			t.Errorf("unexpected Tag %q in spec.Tags = %v", tag, spec.Tags)
+		}
+	}
+	for tag := range wantTags {
+		found := false
+		for _, t := range spec.Tags {
+			if t == tag {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing Tag %q from spec.Tags = %v", tag, spec.Tags)
+		}
 	}
 	if spec.Profile.ExtraHints["source"] != "curator" {
 		t.Errorf("Profile.ExtraHints[source] = %q, want curator", spec.Profile.ExtraHints["source"])

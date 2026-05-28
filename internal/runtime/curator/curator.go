@@ -138,7 +138,14 @@ func DefinitionSpec(cfg Config) loop.Spec {
 		SleepDefault: cfg.DefaultSleep,
 		Jitter:       loop.Float64Ptr(cfg.Jitter),
 		ExcludeTools: curatorExcludeTools,
-		Tags:         []string{"curator"},
+		// Tags = capability surfaces the curator boots with active.
+		// `curator` is the loop's own identity tag; the rest match the
+		// tool families the curator's prompt promises it can use
+		// (archive_search, recall_fact, contact_lookup, the documents
+		// tools for dossier writes). Since ExcludeTools blocks
+		// tag_activate, the curator can't expand its surface at
+		// runtime — it has to ship with the right initial set.
+		Tags: []string{"curator", "documents", "archive", "memory", "contacts"},
 		Profile: router.LoopProfile{
 			Mission:          "curator",
 			DelegationGating: "disabled",
