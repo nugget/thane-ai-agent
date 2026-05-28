@@ -886,6 +886,11 @@ type HomeAssistantConfig struct {
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
 
+	// FloorAlias optionally gives HA floor registry entries an
+	// operator-local semantic alias in model-facing metadata. Set to
+	// "building" when floors represent buildings in this deployment.
+	FloorAlias string `yaml:"floor_alias,omitempty"`
+
 	// Subscribe configures WebSocket event subscriptions for real-time
 	// state change monitoring. When entity_globs is non-empty, only
 	// matching entities are processed; when empty, all state changes

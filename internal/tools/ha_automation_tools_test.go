@@ -23,6 +23,7 @@ type fakeHAServer struct {
 	states       []homeassistant.State
 	configs      map[string]map[string]any
 	areas        []map[string]any
+	floors       []map[string]any
 	labels       []map[string]any
 	categories   map[string][]map[string]any
 	devices      []map[string]any
@@ -224,6 +225,8 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 		return f.validations, true
 	case "config/area_registry/list":
 		return f.areas, true
+	case "config/floor_registry/list":
+		return f.floors, true
 	case "config/label_registry/list":
 		return f.labels, true
 	case "config/category_registry/list":
@@ -236,7 +239,15 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 	case "config/entity_registry/get":
 		entityID, _ := msg["entity_id"].(string)
 		row, ok := f.entityByID[entityID]
-		return row, ok
+		if ok {
+			return row, true
+		}
+		for _, row := range f.entityRows {
+			if row["entity_id"] == entityID {
+				return row, true
+			}
+		}
+		return nil, false
 	case "config/entity_registry/update":
 		entityID, _ := msg["entity_id"].(string)
 		row, ok := f.entityByID[entityID]
@@ -1045,6 +1056,33 @@ func TestToIndentedJSONHardCap(t *testing.T) {
 	}
 	if !strings.Contains(result, "_truncated") {
 		t.Fatalf("result = %q, want truncation metadata when payload exceeds hard cap", result)
+	}
+}
+
+func TestListEntitiesTruncationNote(t *testing.T) {
+	var items []haListEntityItem
+	for i := 0; i < 400; i++ {
+		items = append(items, haListEntityItem{
+			EntityID:     "sensor.large",
+			FriendlyName: strings.Repeat("office_environment_sensor_", 40),
+			State:        "on",
+		})
+	}
+	result := toIndentedJSONWithTruncationNote(haListEntitiesResult{
+		Domain: "sensor",
+		Count:  len(items),
+		Total:  len(items),
+		Items:  items,
+	}, haListEntitiesTruncationNote)
+
+	if len(result) > maxHAToolResultBytes {
+		t.Fatalf("result exceeded hard cap: got %d, want <= %d", len(result), maxHAToolResultBytes)
+	}
+	if !strings.Contains(result, "reduce limit") {
+		t.Fatalf("result = %q, want list-entities truncation guidance", result)
+	}
+	if strings.Contains(result, "include_config") {
+		t.Fatalf("result = %q, want no automation include_config guidance", result)
 	}
 }
 

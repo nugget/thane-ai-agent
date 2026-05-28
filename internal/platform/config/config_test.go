@@ -69,7 +69,7 @@ func TestFindConfig_CWD(t *testing.T) {
 func TestLoad_ExpandsEnvVars(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte("homeassistant:\n  token: ${THANE_TEST_TOKEN}\n"), 0600)
+	os.WriteFile(path, []byte("homeassistant:\n  token: ${THANE_TEST_TOKEN}\n  floor_alias: building\n"), 0600)
 	os.Setenv("THANE_TEST_TOKEN", "secret123")
 	defer os.Unsetenv("THANE_TEST_TOKEN")
 
@@ -79,6 +79,9 @@ func TestLoad_ExpandsEnvVars(t *testing.T) {
 	}
 	if cfg.HomeAssistant.Token != "secret123" {
 		t.Errorf("token = %q, want %q", cfg.HomeAssistant.Token, "secret123")
+	}
+	if cfg.HomeAssistant.FloorAlias != "building" {
+		t.Errorf("floor_alias = %q, want building", cfg.HomeAssistant.FloorAlias)
 	}
 }
 

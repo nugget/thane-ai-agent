@@ -27,6 +27,7 @@ type AreaActivityRequest struct {
 	Area              string // name or area_id (case-insensitive on name)
 	LookbackSeconds   int    // <= 0 falls back to default
 	IncludeDiagnostic bool   // include diagnostic/config category entities
+	IncludeHidden     bool   // include hidden-but-enabled entities
 	MaxStable         int    // cap on the stable bucket; <= 0 uses default
 }
 
@@ -113,9 +114,9 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 	deviceByID := indexDevices(devices)
 	statesByID := indexStates(allStates)
 
-	members, totalInArea := selectAreaMembers(entities, deviceByID, area.AreaID, req.IncludeDiagnostic)
+	members, filters := selectAreaMembers(entities, deviceByID, area.AreaID, req.IncludeDiagnostic, req.IncludeHidden)
 	if len(members) == 0 {
-		return promptfmt.MarshalCompact(emptyAreaPayload(area, lookback, totalInArea)), nil
+		return promptfmt.MarshalCompact(emptyAreaPayload(area, lookback, filters)), nil
 	}
 
 	cutoff := now.Add(-time.Duration(lookback) * time.Second)
@@ -155,13 +156,14 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 		"area_id":        area.AreaID,
 		"lookback":       fmt.Sprintf("-%ds", lookback),
 		"entity_count":   len(members),
-		"filtered_count": totalInArea - len(members),
+		"filtered_count": filters.Filtered(),
 		"anomalies":      anomalies,
 		"active":         active,
 		"recent_changes": recent,
 		"ambient":        ambient,
 		"stable":         stable,
 	}
+	addAreaFilterCounts(payload, filters)
 	if recentTruncated > 0 {
 		payload["recent_changes_truncated_count"] = recentTruncated
 	}
@@ -217,19 +219,47 @@ type areaMember struct {
 	device *homeassistant.DeviceRegistryEntry
 }
 
+type areaFilterCounts struct {
+	TotalMatched int
+	Disabled     int
+	Hidden       int
+	Diagnostic   int
+	Config       int
+}
+
+func (c areaFilterCounts) Filtered() int {
+	return c.Disabled + c.Hidden + c.Diagnostic + c.Config
+}
+
+func addAreaFilterCounts(payload map[string]any, counts areaFilterCounts) {
+	if counts.Disabled > 0 {
+		payload["disabled_count"] = counts.Disabled
+	}
+	if counts.Hidden > 0 {
+		payload["hidden_count"] = counts.Hidden
+	}
+	if counts.Diagnostic > 0 {
+		payload["diagnostic_count"] = counts.Diagnostic
+	}
+	if counts.Config > 0 {
+		payload["config_count"] = counts.Config
+	}
+}
+
 // selectAreaMembers returns the entities considered part of the
-// area, plus the count of entities matched before the diagnostic/
-// disabled filter was applied. Entity area assignment can come
-// directly (entity.AreaID) or be inherited from the device
-// (device.AreaID); both paths must be honored.
+// area, plus counts for entities filtered by enabled/visibility/
+// category salience. Entity area assignment can come directly
+// (entity.AreaID) or be inherited from the device (device.AreaID);
+// both paths must be honored.
 func selectAreaMembers(
 	entities []homeassistant.EntityRegistryEntry,
 	deviceByID map[string]*homeassistant.DeviceRegistryEntry,
 	areaID string,
 	includeDiagnostic bool,
-) ([]areaMember, int) {
+	includeHidden bool,
+) ([]areaMember, areaFilterCounts) {
 	members := make([]areaMember, 0, 16)
-	totalMatched := 0
+	counts := areaFilterCounts{}
 	for i := range entities {
 		entry := entities[i]
 		var device *homeassistant.DeviceRegistryEntry
@@ -244,18 +274,28 @@ func selectAreaMembers(
 		if entityAreaID != areaID {
 			continue
 		}
-		totalMatched++
+		counts.TotalMatched++
 
-		if entry.DisabledBy != "" || entry.HiddenBy != "" {
+		if entry.DisabledBy != "" {
+			counts.Disabled++
 			continue
 		}
-		if !includeDiagnostic && (entry.EntityCategory == "diagnostic" || entry.EntityCategory == "config") {
+		if entry.HiddenBy != "" && !includeHidden {
+			counts.Hidden++
+			continue
+		}
+		if !includeDiagnostic && entry.EntityCategory == "diagnostic" {
+			counts.Diagnostic++
+			continue
+		}
+		if !includeDiagnostic && entry.EntityCategory == "config" {
+			counts.Config++
 			continue
 		}
 
 		members = append(members, areaMember{entry: entry, device: device})
 	}
-	return members, totalMatched
+	return members, counts
 }
 
 func indexDevices(devices []homeassistant.DeviceRegistryEntry) map[string]*homeassistant.DeviceRegistryEntry {
@@ -274,19 +314,21 @@ func indexStates(states []homeassistant.State) map[string]*homeassistant.State {
 	return out
 }
 
-func emptyAreaPayload(area homeassistant.Area, lookback, totalInArea int) map[string]any {
-	return map[string]any{
+func emptyAreaPayload(area homeassistant.Area, lookback int, counts areaFilterCounts) map[string]any {
+	payload := map[string]any{
 		"area":           area.Name,
 		"area_id":        area.AreaID,
 		"lookback":       fmt.Sprintf("-%ds", lookback),
 		"entity_count":   0,
-		"filtered_count": totalInArea,
+		"filtered_count": counts.Filtered(),
 		"anomalies":      []any{},
 		"active":         []any{},
 		"recent_changes": []any{},
 		"ambient":        []any{},
 		"stable":         []any{},
 	}
+	addAreaFilterCounts(payload, counts)
+	return payload
 }
 
 // areaClassifier holds the per-bucket accumulators and the cutoff

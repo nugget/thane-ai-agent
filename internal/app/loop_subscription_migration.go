@@ -191,6 +191,7 @@ func mergeLegacySubscriptions(existing []looppkg.EntitySubscription, rows []awar
 			EntityID: row.EntityID,
 			History:  append([]int(nil), row.History...),
 			Forecast: row.Forecast,
+			Include:  row.Include.Clone(),
 			AddedAt:  addedAt,
 		}
 		if row.ExpiresAt != nil {

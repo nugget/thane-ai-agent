@@ -12,8 +12,11 @@ import (
 // per-entity state. Defined as an interface so concrete clients can
 // be swapped in tests without dragging in a real WebSocket connection.
 type HARegistryClient interface {
+	GetAreas(ctx context.Context) ([]homeassistant.Area, error)
 	GetEntityRegistry(ctx context.Context) ([]homeassistant.EntityRegistryEntry, error)
 	GetDeviceRegistry(ctx context.Context) ([]homeassistant.DeviceRegistryEntry, error)
+	GetFloorRegistry(ctx context.Context) ([]homeassistant.FloorRegistryEntry, error)
+	GetLabelRegistry(ctx context.Context) ([]homeassistant.LabelRegistryEntry, error)
 	GetStates(ctx context.Context) ([]homeassistant.State, error)
 	GetConfigEntries(ctx context.Context) ([]homeassistant.ConfigEntry, error)
 }
@@ -28,17 +31,34 @@ type HARegistryClient interface {
 // use only. An entity render that doesn't need any registry data
 // triggers no calls at all.
 type renderRegistries struct {
-	ctx    context.Context
-	client HARegistryClient
+	ctx        context.Context
+	client     HARegistryClient
+	floorAlias string
 
 	entitiesOnce     sync.Once
 	entitiesByID     map[string]*homeassistant.EntityRegistryEntry
 	entitiesByDevice map[string][]*homeassistant.EntityRegistryEntry
 	entitiesErr      error
 
-	devicesOnce sync.Once
-	devicesByID map[string]*homeassistant.DeviceRegistryEntry
-	devicesErr  error
+	devicesOnce   sync.Once
+	deviceEntries []homeassistant.DeviceRegistryEntry
+	devicesByID   map[string]*homeassistant.DeviceRegistryEntry
+	devicesErr    error
+
+	areasOnce sync.Once
+	areas     []homeassistant.Area
+	areasErr  error
+
+	labelsOnce sync.Once
+	labels     []homeassistant.LabelRegistryEntry
+	labelsErr  error
+
+	floorsOnce sync.Once
+	floors     []homeassistant.FloorRegistryEntry
+	floorsErr  error
+
+	metadataResolverMu sync.Mutex
+	metadataResolvers  map[homeassistant.EntityMetadataIncludes]cachedEntityMetadataResolver
 
 	statesOnce sync.Once
 	statesByID map[string]*homeassistant.State
@@ -49,6 +69,11 @@ type renderRegistries struct {
 	integrationsErr     error
 }
 
+type cachedEntityMetadataResolver struct {
+	resolver homeassistant.EntityMetadataResolver
+	err      error
+}
+
 // newRenderRegistries returns a registries bundle. Returns nil when
 // client is nil so callers without a registry client skip enrichment
 // cleanly.
@@ -56,7 +81,11 @@ func newRenderRegistries(ctx context.Context, client HARegistryClient) *renderRe
 	if client == nil {
 		return nil
 	}
-	return &renderRegistries{ctx: ctx, client: client}
+	r := &renderRegistries{ctx: ctx, client: client}
+	if provider, ok := client.(interface{ FloorMetadataAlias() string }); ok {
+		r.floorAlias = provider.FloorMetadataAlias()
+	}
+	return r
 }
 
 func (r *renderRegistries) entities() (map[string]*homeassistant.EntityRegistryEntry, error) {
@@ -86,6 +115,7 @@ func (r *renderRegistries) devices() (map[string]*homeassistant.DeviceRegistryEn
 			r.devicesErr = err
 			return
 		}
+		r.deviceEntries = append([]homeassistant.DeviceRegistryEntry(nil), devices...)
 		r.devicesByID = make(map[string]*homeassistant.DeviceRegistryEntry, len(devices))
 		for i := range devices {
 			d := &devices[i]
@@ -93,6 +123,42 @@ func (r *renderRegistries) devices() (map[string]*homeassistant.DeviceRegistryEn
 		}
 	})
 	return r.devicesByID, r.devicesErr
+}
+
+func (r *renderRegistries) areaEntries() ([]homeassistant.Area, error) {
+	r.areasOnce.Do(func() {
+		areas, err := r.client.GetAreas(r.ctx)
+		if err != nil {
+			r.areasErr = err
+			return
+		}
+		r.areas = append([]homeassistant.Area(nil), areas...)
+	})
+	return r.areas, r.areasErr
+}
+
+func (r *renderRegistries) labelEntries() ([]homeassistant.LabelRegistryEntry, error) {
+	r.labelsOnce.Do(func() {
+		labels, err := r.client.GetLabelRegistry(r.ctx)
+		if err != nil {
+			r.labelsErr = err
+			return
+		}
+		r.labels = append([]homeassistant.LabelRegistryEntry(nil), labels...)
+	})
+	return r.labels, r.labelsErr
+}
+
+func (r *renderRegistries) floorEntries() ([]homeassistant.FloorRegistryEntry, error) {
+	r.floorsOnce.Do(func() {
+		floors, err := r.client.GetFloorRegistry(r.ctx)
+		if err != nil {
+			r.floorsErr = err
+			return
+		}
+		r.floors = append([]homeassistant.FloorRegistryEntry(nil), floors...)
+	})
+	return r.floors, r.floorsErr
 }
 
 func (r *renderRegistries) states() (map[string]*homeassistant.State, error) {
@@ -133,6 +199,84 @@ func (r *renderRegistries) integrations() (map[string]*homeassistant.ConfigEntry
 		}
 	})
 	return r.integrationByDomain, r.integrationsErr
+}
+
+func (r *renderRegistries) entityMetadata(entityID string, state *homeassistant.State, include *homeassistant.EntityMetadataIncludes) *homeassistant.EntityMetadata {
+	if r == nil || include == nil || !include.Any() {
+		return nil
+	}
+	entities, err := r.entities()
+	if err != nil {
+		return nil
+	}
+	entry := entities[entityID]
+
+	resolver, err := r.metadataResolver(*include)
+	if err != nil {
+		return nil
+	}
+	return resolver.MetadataForEntity(entry, state, *include)
+}
+
+func (r *renderRegistries) metadataResolver(include homeassistant.EntityMetadataIncludes) (homeassistant.EntityMetadataResolver, error) {
+	r.metadataResolverMu.Lock()
+	if cached, ok := r.metadataResolvers[include]; ok {
+		r.metadataResolverMu.Unlock()
+		return cached.resolver, cached.err
+	}
+	r.metadataResolverMu.Unlock()
+
+	resolver, err := r.buildMetadataResolver(include)
+
+	r.metadataResolverMu.Lock()
+	defer r.metadataResolverMu.Unlock()
+	if r.metadataResolvers == nil {
+		r.metadataResolvers = make(map[homeassistant.EntityMetadataIncludes]cachedEntityMetadataResolver)
+	}
+	if cached, ok := r.metadataResolvers[include]; ok {
+		return cached.resolver, cached.err
+	}
+	r.metadataResolvers[include] = cachedEntityMetadataResolver{resolver: resolver, err: err}
+	return resolver, err
+}
+
+func (r *renderRegistries) buildMetadataResolver(include homeassistant.EntityMetadataIncludes) (homeassistant.EntityMetadataResolver, error) {
+	var areas []homeassistant.Area
+	if include.Area || include.Device || include.Labels {
+		var err error
+		areas, err = r.areaEntries()
+		if err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
+		}
+	}
+
+	var labels []homeassistant.LabelRegistryEntry
+	if include.Labels {
+		var err error
+		labels, err = r.labelEntries()
+		if err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
+		}
+	}
+
+	var floors []homeassistant.FloorRegistryEntry
+	if include.Area {
+		var err error
+		floors, err = r.floorEntries()
+		if err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
+		}
+	}
+
+	var devices []homeassistant.DeviceRegistryEntry
+	if include.Device || include.Area || include.Labels {
+		if _, err := r.devices(); err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
+		}
+		devices = append([]homeassistant.DeviceRegistryEntry(nil), r.deviceEntries...)
+	}
+
+	return homeassistant.NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, r.floorAlias), nil
 }
 
 // siblingsByDevice returns sibling entity registry entries for the

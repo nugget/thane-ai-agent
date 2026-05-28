@@ -42,7 +42,15 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 	result, err := updateTool.Handler(context.Background(), map[string]any{
 		"name": "watcher",
 		"add": []any{
-			map[string]any{"entity_id": "sensor.new", "history": []any{600}},
+			map[string]any{
+				"entity_id": "sensor.new",
+				"history":   []any{600},
+				"include": map[string]any{
+					"area":        true,
+					"labels":      true,
+					"description": true,
+				},
+			},
 			map[string]any{"entity_id": "weather.home", "forecast": "hourly"},
 		},
 		"remove": []any{"sensor.old"},
@@ -80,6 +88,9 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 			seenNew = true
 			if len(sub.History) != 1 || sub.History[0] != 600 {
 				t.Errorf("sensor.new history = %v, want [600]", sub.History)
+			}
+			if sub.Include == nil || !sub.Include.Area || !sub.Include.Labels || !sub.Include.Description || sub.Include.Device {
+				t.Errorf("sensor.new include = %#v, want area+labels+description", sub.Include)
 			}
 		}
 		if sub.EntityID == "weather.home" {

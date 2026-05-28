@@ -2003,6 +2003,12 @@ func max(a, b float64) float64 {
 }
 
 func toIndentedJSON(v any) string {
+	return toIndentedJSONWithTruncationNote(v, defaultHATruncationNote)
+}
+
+const defaultHATruncationNote = "Result exceeded the tool byte cap; narrow the query or disable include_config for a smaller payload."
+
+func toIndentedJSONWithTruncationNote(v any, note string) string {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return `{"error":"json encoding failed"}`
@@ -2019,7 +2025,7 @@ func toIndentedJSON(v any) string {
 		return string(compact)
 	}
 
-	return encodeTruncatedJSONPreview(compact)
+	return encodeTruncatedJSONPreview(compact, note)
 }
 
 func isEntityRegistryNotFound(err error) bool {
@@ -2033,7 +2039,10 @@ func isEntityRegistryNotFound(err error) bool {
 	return false
 }
 
-func encodeTruncatedJSONPreview(compact []byte) string {
+func encodeTruncatedJSONPreview(compact []byte, note string) string {
+	if note == "" {
+		note = defaultHATruncationNote
+	}
 	const overhead = 256
 	previewBudget := maxHAToolResultBytes - overhead
 	if previewBudget < 0 {
@@ -2045,7 +2054,7 @@ func encodeTruncatedJSONPreview(compact []byte) string {
 			"_truncated":  true,
 			"total_bytes": len(compact),
 			"max_bytes":   maxHAToolResultBytes,
-			"note":        "Result exceeded the tool byte cap; narrow the query or disable include_config for a smaller payload.",
+			"note":        note,
 			"preview":     truncateUTF8(string(compact), previewBudget),
 		}
 		data, err := json.Marshal(envelope)
@@ -2062,5 +2071,5 @@ func encodeTruncatedJSONPreview(compact []byte) string {
 		}
 	}
 
-	return fmt.Sprintf(`{"_truncated":true,"total_bytes":%d,"max_bytes":%d,"note":"Result exceeded the tool byte cap; narrow the query or disable include_config for a smaller payload."}`, len(compact), maxHAToolResultBytes)
+	return fmt.Sprintf(`{"_truncated":true,"total_bytes":%d,"max_bytes":%d,"note":%q}`, len(compact), maxHAToolResultBytes, note)
 }

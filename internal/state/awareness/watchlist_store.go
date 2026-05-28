@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
@@ -19,6 +20,7 @@ type WatchedSubscription struct {
 	Scope     string
 	History   []int
 	Forecast  string
+	Include   *homeassistant.EntityMetadataIncludes
 	ExpiresAt *time.Time
 }
 
@@ -49,12 +51,17 @@ func (s *WatchlistStore) Add(entityID string) error {
 }
 
 // AddWithOptions inserts or updates entity subscriptions with tag scopes,
-// historical offsets, optional weather forecast type, and an optional TTL.
-// Empty tags means the entity is always visible in context.
-func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string) error {
+// historical offsets, optional weather forecast type, an optional TTL,
+// and optional HA entity metadata include flags. Empty tags means the
+// entity is always visible in context.
+func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string, includes ...homeassistant.EntityMetadataIncludes) error {
 	scopes := normalizeScopes(tags)
+	var include homeassistant.EntityMetadataIncludes
+	if len(includes) > 0 {
+		include = includes[0]
+	}
 
-	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast)
+	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast, include)
 	if err != nil {
 		return fmt.Errorf("marshal options: %w", err)
 	}
@@ -304,6 +311,7 @@ func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]W
 			Scope:     scope,
 			History:   append([]int(nil), opts.History...),
 			Forecast:  opts.Forecast,
+			Include:   opts.Include.Clone(),
 			ExpiresAt: cloneTimePtr(opts.ExpiresAt),
 		})
 	}
@@ -352,16 +360,18 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 type watchlistOptions struct {
 	History   []int
 	Forecast  string
+	Include   *homeassistant.EntityMetadataIncludes
 	ExpiresAt *time.Time
 }
 
 type watchlistOptionsWire struct {
-	History   []int  `json:"history,omitempty"`
-	Forecast  string `json:"forecast,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	History   []int                                 `json:"history,omitempty"`
+	Forecast  string                                `json:"forecast,omitempty"`
+	Include   *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
+	ExpiresAt string                                `json:"expires_at,omitempty"`
 }
 
-func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string) ([]byte, error) {
+func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string, include homeassistant.EntityMetadataIncludes) ([]byte, error) {
 	forecast, err := normalizeForecastType(forecast)
 	if err != nil {
 		return nil, err
@@ -369,6 +379,10 @@ func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string) ([]
 	wire := watchlistOptionsWire{
 		History:  append([]int(nil), history...),
 		Forecast: forecast,
+		Include:  (&include).Clone(),
+	}
+	if wire.Include != nil && !wire.Include.Any() {
+		wire.Include = nil
 	}
 	if ttlSeconds > 0 {
 		wire.ExpiresAt = time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second).Format(time.RFC3339)
@@ -386,6 +400,7 @@ func parseWatchlistOptions(optsJSON string) watchlistOptions {
 	}
 	out := watchlistOptions{
 		History: append([]int(nil), wire.History...),
+		Include: wire.Include.Clone(),
 	}
 	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {
 		out.Forecast = forecast

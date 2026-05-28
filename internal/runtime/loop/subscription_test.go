@@ -3,6 +3,8 @@ package loop
 import (
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 // TestEntitySubscriptionIsExpired covers the per-row TTL contract used
@@ -30,6 +32,25 @@ func TestEntitySubscriptionIsExpired(t *testing.T) {
 				t.Errorf("IsExpired = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCloneEntitySubscriptionsDeepCopiesInclude(t *testing.T) {
+	t.Parallel()
+
+	include := &homeassistant.EntityMetadataIncludes{Area: true, Labels: true}
+	src := []EntitySubscription{{
+		EntityID: "sensor.office_temperature",
+		Include:  include,
+	}}
+
+	got := cloneEntitySubscriptions(src)
+	if len(got) != 1 || got[0].Include == nil {
+		t.Fatalf("clone = %#v, want include pointer", got)
+	}
+	got[0].Include.Area = false
+	if !src[0].Include.Area {
+		t.Fatal("clone mutated source Include pointer")
 	}
 }
 

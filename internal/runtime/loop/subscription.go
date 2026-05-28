@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
 
 // EntitySubscription is one entity that a loop wants to see in context
@@ -33,6 +35,11 @@ type EntitySubscription struct {
 	// Forecast is the Home Assistant forecast type ("daily", "hourly",
 	// "twice_daily") for weather.* entities. Empty means no forecast.
 	Forecast string `yaml:"forecast,omitempty" json:"forecast,omitempty"`
+
+	// Include declares optional HA registry metadata to include when
+	// rendering this subscription into model context. Empty keeps the
+	// subscription state-only.
+	Include *homeassistant.EntityMetadataIncludes `yaml:"include,omitempty" json:"include,omitempty"`
 
 	// TTLSeconds is the auto-expire window. Zero means never expires.
 	// Combined with AddedAt at render time to decide whether to drop.
@@ -76,6 +83,10 @@ func cloneEntitySubscriptions(src []EntitySubscription) []EntitySubscription {
 		}
 		if len(sub.Tags) > 0 {
 			out[i].Tags = append([]string(nil), sub.Tags...)
+		}
+		if sub.Include != nil {
+			include := *sub.Include
+			out[i].Include = &include
 		}
 	}
 	return out

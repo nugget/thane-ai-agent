@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -112,6 +114,128 @@ func TestFuzzyMatchEntityInfos(t *testing.T) {
 					tt.description, matches[0].EntityID, tt.wantFirst)
 			}
 		})
+	}
+}
+
+func TestFuzzyMatchEntityInfosWithMetadata(t *testing.T) {
+	entities := []homeassistant.EntityInfo{{
+		EntityID:     "sensor.t_123",
+		FriendlyName: "Temperature",
+		State:        "72",
+	}}
+	entry := &homeassistant.EntityRegistryEntry{
+		EntityID:    "sensor.t_123",
+		DeviceID:    "device_1",
+		Labels:      []string{"label_environment"},
+		Description: "Ambient office temperature",
+	}
+	bundle := &haEntityMetadataBundle{
+		include: homeassistant.AllEntityMetadataIncludes(),
+		entries: map[string]*homeassistant.EntityRegistryEntry{
+			entry.EntityID: entry,
+		},
+		resolver: homeassistant.NewEntityMetadataResolver(
+			[]homeassistant.Area{{AreaID: "office", Name: "Office"}},
+			[]homeassistant.LabelRegistryEntry{{LabelID: "label_environment", Name: "Environment"}},
+			[]homeassistant.DeviceRegistryEntry{{
+				ID:         "device_1",
+				NameByUser: "Office Climate Hub",
+				AreaID:     "office",
+			}},
+		),
+	}
+
+	matches := fuzzyMatchEntityInfosWithMetadata("office climate hub", entities, bundle)
+	if len(matches) == 0 {
+		t.Fatal("expected metadata-backed match")
+	}
+	if matches[0].EntityID != "sensor.t_123" {
+		t.Fatalf("first match = %q, want sensor.t_123", matches[0].EntityID)
+	}
+}
+
+func TestFuzzyMatchEntityInfosWeightsSingleTokenMetadata(t *testing.T) {
+	entities := []homeassistant.EntityInfo{
+		{EntityID: "light.office_lamp", FriendlyName: "Office Lamp"},
+		{EntityID: "sensor.t_123", FriendlyName: "Temperature"},
+	}
+	entry := &homeassistant.EntityRegistryEntry{
+		EntityID: "sensor.t_123",
+		AreaID:   "office",
+	}
+	bundle := &haEntityMetadataBundle{
+		include: homeassistant.EntityMetadataIncludes{Area: true},
+		entries: map[string]*homeassistant.EntityRegistryEntry{
+			entry.EntityID: entry,
+		},
+		resolver: homeassistant.NewEntityMetadataResolver(
+			[]homeassistant.Area{{AreaID: "office", Name: "Office"}},
+			nil,
+			nil,
+		),
+	}
+
+	matches := fuzzyMatchEntityInfosWithMetadata("office", entities, bundle)
+	if len(matches) == 0 {
+		t.Fatal("expected direct entity match")
+	}
+	if matches[0].EntityID != "light.office_lamp" {
+		t.Fatalf("first match = %q, want light.office_lamp", matches[0].EntityID)
+	}
+	for _, match := range matches {
+		if match.EntityID == "sensor.t_123" {
+			t.Fatalf("metadata-only single-token match should not pass threshold: %#v", matches)
+		}
+	}
+}
+
+func TestFindEntityAreaLookupUsesDeviceRegistryWithoutFetchingLabels(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{{
+		EntityID: "light.office_lamp",
+		State:    "off",
+		Attributes: map[string]any{
+			"friendly_name": "Office Lamp",
+		},
+	}}
+	fake.areas = []map[string]any{{
+		"area_id": "office",
+		"name":    "Office",
+	}}
+	fake.devices = []map[string]any{{
+		"id":      "device_1",
+		"area_id": "office",
+	}}
+	fake.entityRows = []map[string]any{{
+		"entity_id": "light.office_lamp",
+		"device_id": "device_1",
+	}}
+
+	reg := fake.registry(t)
+	result, err := reg.Execute(context.Background(), "ha_find_entity", `{
+		"description": "lamp",
+		"area": "Office"
+	}`)
+	if err != nil {
+		t.Fatalf("ha_find_entity: %v", err)
+	}
+	var got FindEntityResult
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v\n%s", err, result)
+	}
+	if !got.Found || got.EntityID != "light.office_lamp" || got.AreaName != "Office" {
+		t.Fatalf("result = %#v, want office lamp with area", got)
+	}
+
+	fake.mu.Lock()
+	deviceCalls := fake.wsCalls["config/device_registry/list"]
+	labelCalls := fake.wsCalls["config/label_registry/list"]
+	fake.mu.Unlock()
+	if deviceCalls == 0 {
+		t.Fatal("device registry was not queried for device-inherited area")
+	}
+	if labelCalls != 0 {
+		t.Fatalf("label registry calls = %d, want 0", labelCalls)
 	}
 }
 
