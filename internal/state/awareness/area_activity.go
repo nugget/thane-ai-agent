@@ -24,11 +24,12 @@ type AreaActivityClient interface {
 
 // AreaActivityRequest describes one invocation of the tool.
 type AreaActivityRequest struct {
-	Area              string // name or area_id (case-insensitive on name)
-	LookbackSeconds   int    // <= 0 falls back to default
-	IncludeDiagnostic bool   // include diagnostic/config category entities
-	IncludeHidden     bool   // include hidden-but-enabled entities
-	MaxStable         int    // cap on the stable bucket; <= 0 uses default
+	Area              string                               // name or area_id (case-insensitive on name)
+	LookbackSeconds   int                                  // <= 0 falls back to default
+	IncludeDiagnostic bool                                 // include diagnostic/config category entities
+	IncludeHidden     bool                                 // include hidden-but-enabled entities
+	MaxStable         int                                  // cap on the stable bucket; <= 0 uses default
+	Include           homeassistant.EntityMetadataIncludes // optional per-entity metadata projection
 }
 
 const (
@@ -114,9 +115,32 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 	deviceByID := indexDevices(devices)
 	statesByID := indexStates(allStates)
 
+	// Build the metadata resolver once. It powers the area's floor/
+	// building context (always emitted) and the optional per-entity
+	// include projection. Floors are tiny and registry-cached; labels
+	// are pulled only when the include set asks for them.
+	floors, err := client.GetFloorRegistry(ctx)
+	if err != nil {
+		return "", fmt.Errorf("area_activity: get floors: %w", err)
+	}
+	var labels []homeassistant.LabelRegistryEntry
+	if req.Include.Labels {
+		labels, err = client.GetLabelRegistry(ctx)
+		if err != nil {
+			return "", fmt.Errorf("area_activity: get labels: %w", err)
+		}
+	}
+	floorAlias := ""
+	if p, ok := client.(interface{ FloorMetadataAlias() string }); ok {
+		floorAlias = p.FloorMetadataAlias()
+	}
+	resolver := homeassistant.NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, floorAlias)
+
 	members, filters := selectAreaMembers(entities, deviceByID, area.AreaID, req.IncludeDiagnostic, req.IncludeHidden)
 	if len(members) == 0 {
-		return promptfmt.MarshalCompact(emptyAreaPayload(area, lookback, filters)), nil
+		payload := emptyAreaPayload(area, lookback, filters)
+		addAreaFloorContext(payload, resolver, area)
+		return promptfmt.MarshalCompact(payload), nil
 	}
 
 	cutoff := now.Add(-time.Duration(lookback) * time.Second)
@@ -164,6 +188,11 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 		"stable":         stable,
 	}
 	addAreaFilterCounts(payload, filters)
+	addAreaFloorContext(payload, resolver, area)
+	if req.Include.Any() {
+		attachAreaEntityMetadata(resolver, req.Include, members, statesByID,
+			anomalies, active, recent, ambient, stable)
+	}
 	if recentTruncated > 0 {
 		payload["recent_changes_truncated_count"] = recentTruncated
 	}
@@ -243,6 +272,51 @@ func addAreaFilterCounts(payload map[string]any, counts areaFilterCounts) {
 	}
 	if counts.Config > 0 {
 		payload["config_count"] = counts.Config
+	}
+}
+
+// addAreaFloorContext attaches the area's resolved floor (or building,
+// when this deployment aliases floors as buildings) to the payload.
+// No-op when the area has no floor assignment.
+func addAreaFloorContext(payload map[string]any, resolver homeassistant.EntityMetadataResolver, area homeassistant.Area) {
+	am := resolver.AreaMetadata(&area)
+	if am == nil {
+		return
+	}
+	if am.Floor != nil {
+		payload["floor"] = am.Floor
+	}
+	if am.Building != nil {
+		payload["building"] = am.Building
+	}
+}
+
+// attachAreaEntityMetadata enriches each bucketed entity object in place
+// with the requested per-entity metadata projection, keyed by the
+// entity_id carried in the object's "entity" field. Buckets share their
+// map objects with the payload, so mutating here updates the rendered
+// output.
+func attachAreaEntityMetadata(
+	resolver homeassistant.EntityMetadataResolver,
+	include homeassistant.EntityMetadataIncludes,
+	members []areaMember,
+	statesByID map[string]*homeassistant.State,
+	buckets ...[]map[string]any,
+) {
+	entryByID := make(map[string]*homeassistant.EntityRegistryEntry, len(members))
+	for i := range members {
+		entryByID[members[i].entry.EntityID] = &members[i].entry
+	}
+	for _, bucket := range buckets {
+		for _, obj := range bucket {
+			id, _ := obj["entity"].(string)
+			if id == "" {
+				continue
+			}
+			if meta := resolver.MetadataForEntity(entryByID[id], statesByID[id], include); meta != nil {
+				obj["metadata"] = meta
+			}
+		}
 	}
 }
 
