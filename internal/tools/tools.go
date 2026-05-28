@@ -748,6 +748,13 @@ func (r *Registry) registerBuiltins() {
 				},
 				"include": EntityMetadataIncludeParameter(),
 			},
+			// Encode the handler's "at least one of domain or pattern"
+			// rule in the schema so the model/tooling won't generate an
+			// empty {} call. The handler still enforces it at runtime.
+			"anyOf": []map[string]any{
+				{"required": []string{"domain"}},
+				{"required": []string{"pattern"}},
+			},
 		},
 		Handler: r.handleListEntities,
 	})
