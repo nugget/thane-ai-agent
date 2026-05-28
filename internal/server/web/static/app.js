@@ -471,9 +471,15 @@ function isRegistryCoreLoop(loop) {
 // when one is present and the __system__ node is active, otherwise null.
 // Returns null whenever state.system is absent so that, before system
 // status arrives, the registry core lays out as an ordinary root (the
-// same boot-order gating syncPhysicsNodes/renderNodes use). Computed
-// once per layout pass and threaded into [getEffectiveParentID] so the
-// per-loop lookup stays O(1).
+// same boot-order gating syncPhysicsNodes/renderNodes use).
+//
+// Each layout builder (buildLoopBranchLoads, buildSiblingIndex,
+// buildOrbitTargets) calls this once at its top — and physicsStep once
+// more for the spring pass — then threads the result into
+// [getEffectiveParentID] so the per-loop parent lookup stays O(1). The
+// scan here is O(loops): run a small constant number of times per tick
+// over a Map of at most a few dozen loops, it's negligible and not
+// worth threading a shared value through every builder's signature.
 function getRegistryCoreID() {
   if (!state.system) return null;
   for (const loop of state.loops.values()) {
