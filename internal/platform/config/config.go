@@ -29,7 +29,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -39,6 +38,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -890,6 +890,16 @@ type HomeAssistantConfig struct {
 	// operator-local semantic alias in model-facing metadata. Set to
 	// "building" when floors represent buildings in this deployment.
 	FloorAlias string `yaml:"floor_alias,omitempty"`
+
+	// RegistryCacheTTL bounds how long entity/device/area/label/floor
+	// registry snapshots are reused across native HA tool calls before a
+	// refetch. These registries change only on HA config edits, so a
+	// short window collapses the repeated (multi-MB at scale) registry
+	// pulls that metadata-bearing tool calls would otherwise issue.
+	// Accepts a Go duration string ("30s", "1m"); empty uses the 30s
+	// default; "0" disables caching (always refetch). Live entity state
+	// is never cached.
+	RegistryCacheTTL string `yaml:"registry_cache_ttl,omitempty"`
 
 	// Subscribe configures WebSocket event subscriptions for real-time
 	// state change monitoring. When entity_globs is non-empty, only
@@ -2945,7 +2955,7 @@ func (c *Config) validateMCP() error {
 // for consistency.
 func (c *Config) validateSubscribe() error {
 	for i, glob := range c.HomeAssistant.Subscribe.EntityGlobs {
-		if _, err := path.Match(glob, ""); err != nil {
+		if err := homeassistant.ValidateEntityGlob(glob); err != nil {
 			return fmt.Errorf("homeassistant.subscribe.entity_globs[%d] %q: invalid glob pattern: %w", i, glob, err)
 		}
 	}

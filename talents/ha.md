@@ -124,6 +124,48 @@ set ("check every door sensor"). Returns structured entity rows; add
 metadata when the model needs room, device, label, or description
 context to choose the right follow-up.
 
+For substring or cross-domain matches, pass a `pattern` glob over the
+full entity_id instead of (or alongside) `domain`:
+
+```json
+{
+  "pattern": "binary_sensor.*door*"
+}
+```
+
+`*` matches any run of characters, so `*_temperature` spans domains and
+`light.office_*` narrows within one. Domain and pattern combine (AND)
+when both are given. This is for *naming*-shaped discovery; to find
+entities by their live *state* (what's on, what's open, low batteries),
+reach for `ha_search_states` instead.
+
+## I want everything matching a live-state condition
+
+`ha_search_states` filters by *current state* across all domains —
+the native answer to "what's on right now," "what doors are open,"
+"which sensors are unavailable," "what batteries are low":
+
+```json
+{
+  "state": ["on"],
+  "area": "office"
+}
+```
+
+```json
+{
+  "attribute": "battery",
+  "comparison": "<",
+  "value": 20
+}
+```
+
+Filters compose (AND): pair a `state` set with a `domain` or `area`,
+or use a numeric `attribute`/`comparison`/`value` predicate for
+threshold questions. This is the right reach instead of fanning out
+many `ha_get_state` calls or listing a whole domain and eyeballing it.
+Add `include` for area/device/label/visibility metadata on each match.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities

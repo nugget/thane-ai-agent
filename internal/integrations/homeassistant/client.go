@@ -23,6 +23,7 @@ type Client struct {
 	watcher            readyChecker // set via SetWatcher for health status
 	ws                 *WSClient
 	floorMetadataAlias string
+	registry           *registryCache
 }
 
 // readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
@@ -84,7 +85,32 @@ func NewClient(baseURL, token string, logger *slog.Logger) *Client {
 			httpkit.WithRetry(3, 2*time.Second),
 			httpkit.WithLogger(logger),
 		),
+		registry: &registryCache{ttl: defaultRegistryCacheTTL},
 	}
+}
+
+// SetRegistryCacheTTL overrides the freshness window for cached
+// entity/device/area/label/floor registry snapshots. A value <= 0
+// disables caching (every registry read refetches). Call once at wiring
+// time, before any registry getter runs.
+func (c *Client) SetRegistryCacheTTL(ttl time.Duration) {
+	if c.registry == nil {
+		c.registry = &registryCache{}
+	}
+	c.registry.ttl = ttl
+}
+
+// InvalidateRegistryCache drops all cached registry snapshots. Useful
+// after an out-of-band change that the TTL would otherwise serve stale.
+func (c *Client) InvalidateRegistryCache() {
+	if c.registry == nil {
+		return
+	}
+	c.registry.areas.invalidate()
+	c.registry.entities.invalidate()
+	c.registry.devices.invalidate()
+	c.registry.labels.invalidate()
+	c.registry.floors.invalidate()
 }
 
 // State represents an entity state from Home Assistant.
@@ -262,14 +288,20 @@ type Area struct {
 
 // GetAreas retrieves all areas from the area registry.
 func (c *Client) GetAreas(ctx context.Context) ([]Area, error) {
-	if c.ws != nil {
-		return c.ws.GetAreaRegistry(ctx)
+	fetch := func() ([]Area, error) {
+		if c.ws != nil {
+			return c.ws.GetAreaRegistry(ctx)
+		}
+		var areas []Area
+		if err := c.get(ctx, "/api/config/area_registry/list", &areas); err != nil {
+			return nil, err
+		}
+		return areas, nil
 	}
-	var areas []Area
-	if err := c.get(ctx, "/api/config/area_registry/list", &areas); err != nil {
-		return nil, err
+	if c.registry == nil {
+		return fetch()
 	}
-	return areas, nil
+	return c.registry.areas.get(c.registry.ttl, time.Now(), fetch)
 }
 
 // EntityRegistryEntry represents an entity from the registry with area info.
@@ -306,14 +338,20 @@ func (e EntityRegistryEntry) IsDisabled() bool {
 
 // GetEntityRegistry retrieves the entity registry.
 func (c *Client) GetEntityRegistry(ctx context.Context) ([]EntityRegistryEntry, error) {
-	if c.ws != nil {
-		return c.ws.GetEntityRegistryWS(ctx)
+	fetch := func() ([]EntityRegistryEntry, error) {
+		if c.ws != nil {
+			return c.ws.GetEntityRegistryWS(ctx)
+		}
+		var entries []EntityRegistryEntry
+		if err := c.get(ctx, "/api/config/entity_registry/list", &entries); err != nil {
+			return nil, err
+		}
+		return entries, nil
 	}
-	var entries []EntityRegistryEntry
-	if err := c.get(ctx, "/api/config/entity_registry/list", &entries); err != nil {
-		return nil, err
+	if c.registry == nil {
+		return fetch()
 	}
-	return entries, nil
+	return c.registry.entities.get(c.registry.ttl, time.Now(), fetch)
 }
 
 // EntityInfo combines state and registry info for an entity.

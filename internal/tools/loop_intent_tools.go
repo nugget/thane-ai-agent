@@ -10,6 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // LoopIntentToolDeps wires the loop-definition registry, document
@@ -116,15 +117,15 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 		return "", fmt.Errorf("thane_create_container not configured: ConfigureLoopIntentTools must be called at startup")
 	}
 
-	name := strings.TrimSpace(ldStringArg(args, "name"))
+	name := strings.TrimSpace(toolargs.TrimmedString(args, "name"))
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	intent := strings.TrimSpace(ldStringArg(args, "intent"))
+	intent := strings.TrimSpace(toolargs.TrimmedString(args, "intent"))
 	if intent == "" {
 		return "", fmt.Errorf("intent is required")
 	}
-	parentName := strings.TrimSpace(ldStringArg(args, "parent_name"))
+	parentName := strings.TrimSpace(toolargs.TrimmedString(args, "parent_name"))
 	replace, _ := args["replace"].(bool)
 
 	var tags []string

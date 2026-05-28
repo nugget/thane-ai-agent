@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // MessageToolDeps wires the shared envelope bus into the tool registry.
@@ -85,7 +86,7 @@ func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[stri
 	if r.messageBus == nil {
 		return "", fmt.Errorf("message bus is not configured")
 	}
-	concern := strings.TrimSpace(ldStringArg(args, "concern"))
+	concern := strings.TrimSpace(toolargs.TrimmedString(args, "concern"))
 	if concern == "" {
 		return "", fmt.Errorf("concern is required")
 	}
@@ -97,8 +98,8 @@ func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[stri
 	payload := messages.LoopNotifyPayload{
 		Kind:            "core_attention_request",
 		Concern:         concern,
-		SuggestedAction: strings.TrimSpace(ldStringArg(args, "suggested_action")),
-		Context:         strings.TrimSpace(ldStringArg(args, "context")),
+		SuggestedAction: strings.TrimSpace(toolargs.TrimmedString(args, "suggested_action")),
+		Context:         strings.TrimSpace(toolargs.TrimmedString(args, "context")),
 		ForceSupervisor: true,
 	}
 
@@ -226,7 +227,7 @@ func senderIdentityFromContext(ctx context.Context) messages.Identity {
 }
 
 func messagePriorityArg(args map[string]any) messages.Priority {
-	switch strings.TrimSpace(ldStringArg(args, "priority")) {
+	switch strings.TrimSpace(toolargs.TrimmedString(args, "priority")) {
 	case "", "normal":
 		return messages.PriorityNormal
 	case "low":
