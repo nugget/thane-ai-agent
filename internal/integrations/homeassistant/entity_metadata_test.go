@@ -33,6 +33,7 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 			AreaID:  "office",
 			Name:    "Office",
 			Aliases: []string{"work room"},
+			FloorID: "building_a",
 			Labels:  []string{"label_work"},
 		}},
 		[]LabelRegistryEntry{
@@ -48,6 +49,11 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 			AreaID:       "office",
 			Labels:       []string{"label_device"},
 		}},
+		FloorRegistryEntry{
+			FloorID: "building_a",
+			Name:    "Building A",
+			Aliases: []string{"main building"},
+		},
 	)
 
 	entry := &EntityRegistryEntry{
@@ -81,6 +87,9 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	}
 	if got.Area == nil || got.Area.ID != "office" || got.Area.Name != "Office" {
 		t.Fatalf("Area = %#v, want resolved office area", got.Area)
+	}
+	if got.Area.Floor == nil || got.Area.Floor.ID != "building_a" || got.Area.Floor.Name != "Building A" {
+		t.Fatalf("Floor = %#v, want resolved Building A floor", got.Area.Floor)
 	}
 	if got.Device == nil || got.Device.ID != "device_1" || got.Device.NameByUser != "Office Climate Hub" {
 		t.Fatalf("Device = %#v, want resolved device", got.Device)
@@ -145,5 +154,31 @@ func TestEntityMetadataResolverCopiesDescriptionMaps(t *testing.T) {
 	}
 	if _, ok := entry.Categories["new"]; ok {
 		t.Fatalf("Categories shared metadata map; source %#v", entry.Categories)
+	}
+}
+
+func TestEntityMetadataResolverAppliesFloorAlias(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewEntityMetadataResolverWithFloorAlias(
+		[]Area{{AreaID: "office", Name: "Office", FloorID: "building_a"}},
+		nil,
+		nil,
+		[]FloorRegistryEntry{{FloorID: "building_a", Name: "Building A"}},
+		"building",
+	)
+
+	got := resolver.MetadataForEntity(&EntityRegistryEntry{
+		EntityID: "sensor.office",
+		AreaID:   "office",
+	}, nil, EntityMetadataIncludes{Area: true})
+	if got == nil || got.Area == nil {
+		t.Fatalf("MetadataForEntity returned %#v, want area metadata", got)
+	}
+	if got.Area.Floor == nil || got.Area.Floor.Name != "Building A" {
+		t.Fatalf("Floor = %#v, want Building A", got.Area.Floor)
+	}
+	if got.Area.Building == nil || got.Area.Building.Name != "Building A" {
+		t.Fatalf("Building = %#v, want floor metadata exposed as building", got.Area.Building)
 	}
 }

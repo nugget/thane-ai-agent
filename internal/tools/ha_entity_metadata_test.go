@@ -24,9 +24,15 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 		LastUpdated: now.Add(-5 * time.Minute),
 	}}
 	fake.areas = []map[string]any{{
-		"area_id": "office",
-		"name":    "Office",
-		"labels":  []any{"label_work"},
+		"area_id":  "office",
+		"name":     "Office",
+		"floor_id": "building_a",
+		"labels":   []any{"label_work"},
+	}}
+	fake.floors = []map[string]any{{
+		"floor_id": "building_a",
+		"name":     "Building A",
+		"aliases":  []string{"main building"},
 	}}
 	fake.labels = []map[string]any{
 		{"label_id": "label_env", "name": "Environment", "description": "Ambient signals"},
@@ -65,8 +71,12 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 		Metadata struct {
 			Description string `json:"description"`
 			Area        struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID    string `json:"id"`
+				Name  string `json:"name"`
+				Floor struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"floor"`
 			} `json:"area"`
 			Device struct {
 				ID         string `json:"id"`
@@ -90,6 +100,9 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 	}
 	if got.Metadata.Area.ID != "office" || got.Metadata.Area.Name != "Office" {
 		t.Errorf("area = %#v, want office", got.Metadata.Area)
+	}
+	if got.Metadata.Area.Floor.ID != "building_a" || got.Metadata.Area.Floor.Name != "Building A" {
+		t.Errorf("floor = %#v, want Building A", got.Metadata.Area.Floor)
 	}
 	if got.Metadata.Device.ID != "device_1" || got.Metadata.Device.NameByUser != "Office Climate Hub" {
 		t.Errorf("device = %#v, want device_1", got.Metadata.Device)

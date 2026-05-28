@@ -18,18 +18,21 @@ type fakeRegistries struct {
 	areas          []homeassistant.Area
 	entities       []homeassistant.EntityRegistryEntry
 	devices        []homeassistant.DeviceRegistryEntry
+	floors         []homeassistant.FloorRegistryEntry
 	labels         []homeassistant.LabelRegistryEntry
 	states         []homeassistant.State
 	configEntries  []homeassistant.ConfigEntry
 	areasErr       error
 	entitiesErr    error
 	devicesErr     error
+	floorsErr      error
 	labelsErr      error
 	statesErr      error
 	configEntryErr error
 	areasCalls     int
 	entitiesCalls  int
 	devicesCalls   int
+	floorsCalls    int
 	labelsCalls    int
 }
 
@@ -46,6 +49,11 @@ func (f *fakeRegistries) GetEntityRegistry(_ context.Context) ([]homeassistant.E
 func (f *fakeRegistries) GetDeviceRegistry(_ context.Context) ([]homeassistant.DeviceRegistryEntry, error) {
 	f.devicesCalls++
 	return f.devices, f.devicesErr
+}
+
+func (f *fakeRegistries) GetFloorRegistry(_ context.Context) ([]homeassistant.FloorRegistryEntry, error) {
+	f.floorsCalls++
+	return f.floors, f.floorsErr
 }
 
 func (f *fakeRegistries) GetLabelRegistry(_ context.Context) ([]homeassistant.LabelRegistryEntry, error) {

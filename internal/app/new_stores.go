@@ -123,6 +123,7 @@ func (a *App) initStores(s *newState) error {
 	// and Thane operates as a general-purpose agent.
 	if cfg.HomeAssistant.Configured() {
 		a.ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
+		a.ha.UseFloorMetadataAlias(cfg.HomeAssistant.FloorAlias)
 		a.haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.ha.UseWSClient(a.haWS)
 		a.onCloseErr("ha-websocket", a.haWS.Close)

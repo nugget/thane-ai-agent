@@ -281,6 +281,14 @@ func metadataSearchTargets(meta *homeassistant.EntityMetadata) []string {
 	if meta.Area != nil {
 		targets = append(targets, meta.Area.ID, meta.Area.Name, meta.Area.FloorID)
 		targets = append(targets, meta.Area.Aliases...)
+		if meta.Area.Floor != nil {
+			targets = append(targets, meta.Area.Floor.ID, meta.Area.Floor.Name)
+			targets = append(targets, meta.Area.Floor.Aliases...)
+		}
+		if meta.Area.Building != nil {
+			targets = append(targets, meta.Area.Building.ID, meta.Area.Building.Name)
+			targets = append(targets, meta.Area.Building.Aliases...)
+		}
 	}
 	if meta.Device != nil {
 		targets = append(targets,

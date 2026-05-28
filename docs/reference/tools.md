@@ -97,7 +97,8 @@ clear forecast fetching for that subscription.
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, and `description`, or `all: true`. Enabled
 metadata is resolved through the native HA registries and injected beside
-the entity state.
+the entity state. Area metadata includes floor registry details; deployments
+can alias floors as buildings with `homeassistant.floor_alias: building`.
 
 ## `ha` — Home Assistant state and control
 

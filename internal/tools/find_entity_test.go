@@ -189,7 +189,7 @@ func TestFuzzyMatchEntityInfosWeightsSingleTokenMetadata(t *testing.T) {
 	}
 }
 
-func TestFindEntityAreaLookupDoesNotFetchLabels(t *testing.T) {
+func TestFindEntityAreaLookupUsesDeviceRegistryWithoutFetchingLabels(t *testing.T) {
 	fake := newFakeHAServer(t)
 	fake.states = []homeassistant.State{{
 		EntityID: "light.office_lamp",
@@ -202,9 +202,13 @@ func TestFindEntityAreaLookupDoesNotFetchLabels(t *testing.T) {
 		"area_id": "office",
 		"name":    "Office",
 	}}
+	fake.devices = []map[string]any{{
+		"id":      "device_1",
+		"area_id": "office",
+	}}
 	fake.entityRows = []map[string]any{{
 		"entity_id": "light.office_lamp",
-		"area_id":   "office",
+		"device_id": "device_1",
 	}}
 
 	reg := fake.registry(t)
@@ -224,8 +228,12 @@ func TestFindEntityAreaLookupDoesNotFetchLabels(t *testing.T) {
 	}
 
 	fake.mu.Lock()
+	deviceCalls := fake.wsCalls["config/device_registry/list"]
 	labelCalls := fake.wsCalls["config/label_registry/list"]
 	fake.mu.Unlock()
+	if deviceCalls == 0 {
+		t.Fatal("device registry was not queried for device-inherited area")
+	}
 	if labelCalls != 0 {
 		t.Fatalf("label registry calls = %d, want 0", labelCalls)
 	}

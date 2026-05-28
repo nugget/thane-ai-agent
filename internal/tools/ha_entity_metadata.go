@@ -9,6 +9,8 @@ import (
 
 const maxHAListEntitiesLimit = 100
 
+const haListEntitiesTruncationNote = "Result exceeded the tool byte cap; reduce limit, narrow the domain, or omit include metadata for a smaller payload."
+
 type haEntityMetadataBundle struct {
 	include  homeassistant.EntityMetadataIncludes
 	entries  map[string]*homeassistant.EntityRegistryEntry
@@ -43,7 +45,7 @@ func EntityMetadataIncludeParameter() map[string]any {
 			},
 			"area": map[string]any{
 				"type":        "boolean",
-				"description": "Include resolved area/floor context.",
+				"description": "Include resolved area/floor/building context.",
 			},
 			"device": map[string]any{
 				"type":        "boolean",
@@ -138,6 +140,14 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 		}
 	}
 
+	var floors []homeassistant.FloorRegistryEntry
+	if include.Area {
+		floors, err = ha.GetFloorRegistry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get floors: %w", err)
+		}
+	}
+
 	var labels []homeassistant.LabelRegistryEntry
 	if include.Labels {
 		labels, err = ha.GetLabelRegistry(ctx)
@@ -154,7 +164,7 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 		}
 	}
 
-	resolver := homeassistant.NewEntityMetadataResolver(areas, labels, devices)
+	resolver := homeassistant.NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, ha.FloorMetadataAlias())
 	return &haEntityMetadataBundle{
 		include:  include,
 		entries:  entryMap,

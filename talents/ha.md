@@ -81,7 +81,7 @@ The same `include` shape works on `ha_find_entity`, `ha_list_entities`,
 and entity subscriptions. `all: true` enables every supported metadata
 projection. Metadata can include resolved area, owning device, HA
 labels from the entity/device/area, aliases, category, platform, device
-class, and human descriptions when HA has them.
+class, floor/building hierarchy, and human descriptions when HA has them.
 
 ## I know the description but not the entity_id
 

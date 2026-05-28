@@ -1,6 +1,9 @@
 package homeassistant
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // EntityMetadataIncludes declares which Home Assistant registry
 // relationships should be included with an entity representation.
@@ -84,13 +87,25 @@ func (m *EntityMetadata) Empty() bool {
 // for an entity, resolved through direct entity area first and device
 // area second.
 type EntityAreaMetadata struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name,omitempty"`
-	Aliases             []string `json:"aliases,omitempty"`
-	FloorID             string   `json:"floor_id,omitempty"`
-	Icon                string   `json:"icon,omitempty"`
-	TemperatureEntityID string   `json:"temperature_entity_id,omitempty"`
-	HumidityEntityID    string   `json:"humidity_entity_id,omitempty"`
+	ID                  string               `json:"id"`
+	Name                string               `json:"name,omitempty"`
+	Aliases             []string             `json:"aliases,omitempty"`
+	FloorID             string               `json:"floor_id,omitempty"`
+	Floor               *EntityFloorMetadata `json:"floor,omitempty"`
+	Building            *EntityFloorMetadata `json:"building,omitempty"`
+	Icon                string               `json:"icon,omitempty"`
+	TemperatureEntityID string               `json:"temperature_entity_id,omitempty"`
+	HumidityEntityID    string               `json:"humidity_entity_id,omitempty"`
+}
+
+// EntityFloorMetadata is the floor/building context associated with
+// an entity's Home Assistant area.
+type EntityFloorMetadata struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	Icon    string   `json:"icon,omitempty"`
+	Level   *int     `json:"level,omitempty"`
 }
 
 // EntityDeviceMetadata is the device registry context for an entity.
@@ -129,14 +144,25 @@ type EntityMetadataResolver struct {
 	areasByID   map[string]*Area
 	labelsByID  map[string]*LabelRegistryEntry
 	devicesByID map[string]*DeviceRegistryEntry
+	floorsByID  map[string]*FloorRegistryEntry
+	floorAlias  string
 }
 
 // NewEntityMetadataResolver builds a resolver for a registry snapshot.
-func NewEntityMetadataResolver(areas []Area, labels []LabelRegistryEntry, devices []DeviceRegistryEntry) EntityMetadataResolver {
+func NewEntityMetadataResolver(areas []Area, labels []LabelRegistryEntry, devices []DeviceRegistryEntry, floors ...FloorRegistryEntry) EntityMetadataResolver {
+	return NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, "")
+}
+
+// NewEntityMetadataResolverWithFloorAlias builds a resolver that can
+// expose floor registry metadata under an operator-local semantic
+// alias, such as "building".
+func NewEntityMetadataResolverWithFloorAlias(areas []Area, labels []LabelRegistryEntry, devices []DeviceRegistryEntry, floors []FloorRegistryEntry, floorAlias string) EntityMetadataResolver {
 	r := EntityMetadataResolver{
 		areasByID:   make(map[string]*Area, len(areas)),
 		labelsByID:  make(map[string]*LabelRegistryEntry, len(labels)),
 		devicesByID: make(map[string]*DeviceRegistryEntry, len(devices)),
+		floorsByID:  make(map[string]*FloorRegistryEntry, len(floors)),
+		floorAlias:  strings.ToLower(strings.TrimSpace(floorAlias)),
 	}
 	for i := range areas {
 		r.areasByID[areas[i].AreaID] = &areas[i]
@@ -146,6 +172,9 @@ func NewEntityMetadataResolver(areas []Area, labels []LabelRegistryEntry, device
 	}
 	for i := range devices {
 		r.devicesByID[devices[i].ID] = &devices[i]
+	}
+	for i := range floors {
+		r.floorsByID[floors[i].FloorID] = &floors[i]
 	}
 	return r
 }
@@ -164,7 +193,7 @@ func (r EntityMetadataResolver) MetadataForEntity(entry *EntityRegistryEntry, st
 		applyEntityDescription(meta, entry, state)
 	}
 	if include.Area && area != nil {
-		meta.Area = areaMetadata(area)
+		meta.Area = r.areaMetadata(area)
 	} else if include.Area {
 		if areaID := entityAreaID(entry, device); areaID != "" {
 			meta.Area = &EntityAreaMetadata{ID: areaID}
@@ -282,8 +311,8 @@ func (r EntityMetadataResolver) areaForEntity(entry *EntityRegistryEntry, device
 	return r.areasByID[areaID]
 }
 
-func areaMetadata(area *Area) *EntityAreaMetadata {
-	return &EntityAreaMetadata{
+func (r EntityMetadataResolver) areaMetadata(area *Area) *EntityAreaMetadata {
+	out := &EntityAreaMetadata{
 		ID:                  area.AreaID,
 		Name:                area.Name,
 		Aliases:             append([]string(nil), area.Aliases...),
@@ -292,6 +321,31 @@ func areaMetadata(area *Area) *EntityAreaMetadata {
 		TemperatureEntityID: area.TemperatureEntityID,
 		HumidityEntityID:    area.HumidityEntityID,
 	}
+	if floor := r.floorsByID[area.FloorID]; floor != nil {
+		out.Floor = floorMetadata(floor)
+		if r.floorAlias == "building" {
+			out.Building = floorMetadata(floor)
+		}
+	}
+	return out
+}
+
+func floorMetadata(floor *FloorRegistryEntry) *EntityFloorMetadata {
+	return &EntityFloorMetadata{
+		ID:      floor.FloorID,
+		Name:    floor.Name,
+		Aliases: append([]string(nil), floor.Aliases...),
+		Icon:    floor.Icon,
+		Level:   cloneIntPtr(floor.Level),
+	}
+}
+
+func cloneIntPtr(src *int) *int {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	return &cp
 }
 
 func (r EntityMetadataResolver) deviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {

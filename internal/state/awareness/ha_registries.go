@@ -15,6 +15,7 @@ type HARegistryClient interface {
 	GetAreas(ctx context.Context) ([]homeassistant.Area, error)
 	GetEntityRegistry(ctx context.Context) ([]homeassistant.EntityRegistryEntry, error)
 	GetDeviceRegistry(ctx context.Context) ([]homeassistant.DeviceRegistryEntry, error)
+	GetFloorRegistry(ctx context.Context) ([]homeassistant.FloorRegistryEntry, error)
 	GetLabelRegistry(ctx context.Context) ([]homeassistant.LabelRegistryEntry, error)
 	GetStates(ctx context.Context) ([]homeassistant.State, error)
 	GetConfigEntries(ctx context.Context) ([]homeassistant.ConfigEntry, error)
@@ -30,8 +31,9 @@ type HARegistryClient interface {
 // use only. An entity render that doesn't need any registry data
 // triggers no calls at all.
 type renderRegistries struct {
-	ctx    context.Context
-	client HARegistryClient
+	ctx        context.Context
+	client     HARegistryClient
+	floorAlias string
 
 	entitiesOnce     sync.Once
 	entitiesByID     map[string]*homeassistant.EntityRegistryEntry
@@ -50,6 +52,10 @@ type renderRegistries struct {
 	labelsOnce sync.Once
 	labels     []homeassistant.LabelRegistryEntry
 	labelsErr  error
+
+	floorsOnce sync.Once
+	floors     []homeassistant.FloorRegistryEntry
+	floorsErr  error
 
 	metadataResolverMu sync.Mutex
 	metadataResolvers  map[homeassistant.EntityMetadataIncludes]cachedEntityMetadataResolver
@@ -75,7 +81,11 @@ func newRenderRegistries(ctx context.Context, client HARegistryClient) *renderRe
 	if client == nil {
 		return nil
 	}
-	return &renderRegistries{ctx: ctx, client: client}
+	r := &renderRegistries{ctx: ctx, client: client}
+	if provider, ok := client.(interface{ FloorMetadataAlias() string }); ok {
+		r.floorAlias = provider.FloorMetadataAlias()
+	}
+	return r
 }
 
 func (r *renderRegistries) entities() (map[string]*homeassistant.EntityRegistryEntry, error) {
@@ -137,6 +147,18 @@ func (r *renderRegistries) labelEntries() ([]homeassistant.LabelRegistryEntry, e
 		r.labels = append([]homeassistant.LabelRegistryEntry(nil), labels...)
 	})
 	return r.labels, r.labelsErr
+}
+
+func (r *renderRegistries) floorEntries() ([]homeassistant.FloorRegistryEntry, error) {
+	r.floorsOnce.Do(func() {
+		floors, err := r.client.GetFloorRegistry(r.ctx)
+		if err != nil {
+			r.floorsErr = err
+			return
+		}
+		r.floors = append([]homeassistant.FloorRegistryEntry(nil), floors...)
+	})
+	return r.floors, r.floorsErr
 }
 
 func (r *renderRegistries) states() (map[string]*homeassistant.State, error) {
@@ -237,6 +259,15 @@ func (r *renderRegistries) buildMetadataResolver(include homeassistant.EntityMet
 		}
 	}
 
+	var floors []homeassistant.FloorRegistryEntry
+	if include.Area {
+		var err error
+		floors, err = r.floorEntries()
+		if err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
+		}
+	}
+
 	var devices []homeassistant.DeviceRegistryEntry
 	if include.Device || include.Area || include.Labels {
 		if _, err := r.devices(); err != nil {
@@ -245,7 +276,7 @@ func (r *renderRegistries) buildMetadataResolver(include homeassistant.EntityMet
 		devices = append([]homeassistant.DeviceRegistryEntry(nil), r.deviceEntries...)
 	}
 
-	return homeassistant.NewEntityMetadataResolver(areas, labels, devices), nil
+	return homeassistant.NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, r.floorAlias), nil
 }
 
 // siblingsByDevice returns sibling entity registry entries for the

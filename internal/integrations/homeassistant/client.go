@@ -17,11 +17,12 @@ import (
 
 // Client is a Home Assistant REST API client.
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
-	watcher    readyChecker // set via SetWatcher for health status
-	ws         *WSClient
+	baseURL            string
+	token              string
+	httpClient         *http.Client
+	watcher            readyChecker // set via SetWatcher for health status
+	ws                 *WSClient
+	floorMetadataAlias string
 }
 
 // readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
@@ -45,6 +46,19 @@ func (c *Client) UseWSClient(ws *WSClient) {
 // registry/config API calls.
 func (c *Client) HasWSClient() bool {
 	return c.ws != nil
+}
+
+// UseFloorMetadataAlias configures an operator-local alias for HA floor
+// registry metadata. Set to "building" when HA floors represent
+// buildings in the deployment's physical hierarchy.
+func (c *Client) UseFloorMetadataAlias(alias string) {
+	c.floorMetadataAlias = strings.ToLower(strings.TrimSpace(alias))
+}
+
+// FloorMetadataAlias reports the operator-local alias for floor
+// registry metadata.
+func (c *Client) FloorMetadataAlias() string {
+	return c.floorMetadataAlias
 }
 
 // IsReady reports whether Home Assistant is currently reachable.

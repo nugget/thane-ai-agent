@@ -1290,7 +1290,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		Truncated: total > len(matches),
 		Items:     matches,
 	}
-	return toIndentedJSON(result), nil
+	return toIndentedJSONWithTruncationNote(result, haListEntitiesTruncationNote), nil
 }
 
 func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (string, error) {
