@@ -80,6 +80,18 @@ func openStores(dataDir string) (*stores, error) {
 	}, nil
 }
 
+// searcher wraps the archive store in the unified MemorySearch that
+// NewArchiveContextProvider consumes post-#983 (Search now returns a
+// multi-surface *SearchBundle, not []SearchResult). The working-memory
+// store is nil: the harness opens its databases read-only/immutable and
+// cannot run the working_memory CREATE-TABLE migration. MemorySearch
+// nil-guards it, so the harness still exercises the archive surfaces
+// (raw messages via messages_fts + session summaries via sessions_fts)
+// — the search-efficacy signal this tool exists to validate.
+func (s *stores) searcher() memory.MemorySearcher {
+	return memory.NewMemorySearch(s.archive, nil, silentLogger())
+}
+
 func openReadOnly(path string) (*sql.DB, error) {
 	dsn := "file:" + path + "?mode=ro&immutable=1&nolock=1"
 	db, err := sql.Open("sqlite3", dsn)

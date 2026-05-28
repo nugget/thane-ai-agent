@@ -48,7 +48,7 @@ func cmdBatch(g *globals, args []string) error {
 		return err
 	}
 
-	archive := memory.NewArchiveContextProvider(s.archive, g.MaxResults, g.MaxBytes, silentLogger())
+	archive := memory.NewArchiveContextProvider(s.searcher(), g.MaxResults, g.MaxBytes, silentLogger())
 	subjectP := knowledge.NewSubjectContextProvider(s.knowledge_, silentLogger())
 	subjectP.SetMaxFacts(g.MaxFacts)
 
