@@ -37,7 +37,7 @@ type haListEntityItem struct {
 func EntityMetadataIncludeParameter() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "Optional HA registry metadata to include with each entity. Use all=true for every supported field, or enable area/device/labels/description individually.",
+		"description": "Optional HA registry metadata to include with each entity. Use all=true for every supported field, or enable area/device/labels/description/visibility individually.",
 		"properties": map[string]any{
 			"all": map[string]any{
 				"type":        "boolean",
@@ -58,6 +58,10 @@ func EntityMetadataIncludeParameter() map[string]any {
 			"description": map[string]any{
 				"type":        "boolean",
 				"description": "Include human-facing entity names, aliases, icon, device class, platform, category, and description when HA provides them.",
+			},
+			"visibility": map[string]any{
+				"type":        "boolean",
+				"description": "Include HA registry visibility and enabled state, including hidden_by/disabled_by and whether the entity is default-dashboard material.",
 			},
 		},
 	}
@@ -94,6 +98,9 @@ func ParseEntityMetadataIncludesArg(raw any, fieldName string) (homeassistant.En
 		return homeassistant.EntityMetadataIncludes{}, err
 	}
 	if include.Description, err = metadataIncludeFlag(obj, "description", fieldName); err != nil {
+		return homeassistant.EntityMetadataIncludes{}, err
+	}
+	if include.Visibility, err = metadataIncludeFlag(obj, "visibility", fieldName); err != nil {
 		return homeassistant.EntityMetadataIncludes{}, err
 	}
 	return include, nil

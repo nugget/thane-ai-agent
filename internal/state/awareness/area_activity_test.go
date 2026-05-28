@@ -66,6 +66,8 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 		{EntityID: "sensor.kitchen_battery", AreaID: "kitchen", EntityCategory: "diagnostic"},
 		// Disabled entity should be filtered.
 		{EntityID: "sensor.kitchen_disabled", AreaID: "kitchen", DisabledBy: "user"},
+		// Hidden entity should be filtered from the default HUD-style view.
+		{EntityID: "sensor.kitchen_switch_amperage", AreaID: "kitchen", HiddenBy: "user"},
 		// Entity in another area should not appear.
 		{EntityID: "light.living_room", AreaID: "living_room"},
 	}
@@ -75,6 +77,7 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 		{EntityID: "binary_sensor.kitchen_motion", State: "clear", LastChanged: now.Add(-45 * time.Second), Attributes: map[string]any{"device_class": "motion"}},
 		{EntityID: "sensor.kitchen_temp", State: "72.4", LastChanged: now.Add(-15 * time.Hour), Attributes: map[string]any{"device_class": "temperature", "state_class": "measurement"}},
 		{EntityID: "switch.kitchen_outlet", State: "off", LastChanged: now.Add(-12 * time.Hour)},
+		{EntityID: "sensor.kitchen_switch_amperage", State: "0.04", LastChanged: now.Add(-12 * time.Hour)},
 	}
 
 	client := &fakeAreaClient{areas: areas, entities: entities, states: states}
@@ -128,9 +131,61 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 		t.Errorf("stable = %v, want [switch.kitchen_outlet]", stable)
 	}
 
-	// filtered_count counts the 2 entities filtered by disabled/diagnostic.
-	if parsed["filtered_count"] != float64(2) {
-		t.Errorf("filtered_count = %v, want 2 (disabled + diagnostic)", parsed["filtered_count"])
+	// filtered_count counts disabled, hidden, and diagnostic entities.
+	if parsed["filtered_count"] != float64(3) {
+		t.Errorf("filtered_count = %v, want 3 (disabled + hidden + diagnostic)", parsed["filtered_count"])
+	}
+	if parsed["disabled_count"] != float64(1) {
+		t.Errorf("disabled_count = %v, want 1", parsed["disabled_count"])
+	}
+	if parsed["hidden_count"] != float64(1) {
+		t.Errorf("hidden_count = %v, want 1", parsed["hidden_count"])
+	}
+	if parsed["diagnostic_count"] != float64(1) {
+		t.Errorf("diagnostic_count = %v, want 1", parsed["diagnostic_count"])
+	}
+}
+
+func TestComputeAreaActivity_IncludeHiddenKeepsHiddenEntities(t *testing.T) {
+	now := testNow
+	areas := []homeassistant.Area{{AreaID: "kitchen", Name: "Kitchen"}}
+	entities := []homeassistant.EntityRegistryEntry{
+		{EntityID: "sensor.kitchen_switch_amperage", AreaID: "kitchen", HiddenBy: "user"},
+	}
+	states := []homeassistant.State{
+		{
+			EntityID:    "sensor.kitchen_switch_amperage",
+			State:       "0.04",
+			LastChanged: now.Add(-12 * time.Hour),
+			Attributes: map[string]any{
+				"device_class":        "current",
+				"unit_of_measurement": "A",
+			},
+		},
+	}
+
+	client := &fakeAreaClient{areas: areas, entities: entities, states: states}
+	got, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{
+		Area:          "Kitchen",
+		IncludeHidden: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, got)
+	}
+	if parsed["filtered_count"] != float64(0) {
+		t.Errorf("filtered_count = %v, want 0", parsed["filtered_count"])
+	}
+	stable, _ := parsed["stable"].([]any)
+	if len(stable) != 1 {
+		t.Fatalf("stable = %#v, want hidden amperage entity included", stable)
+	}
+	item := stable[0].(map[string]any)
+	if item["entity"] != "sensor.kitchen_switch_amperage" {
+		t.Errorf("stable entity = %v, want sensor.kitchen_switch_amperage", item["entity"])
 	}
 }
 

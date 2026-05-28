@@ -55,6 +55,7 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 		"labels":       []any{"label_env"},
 		"platform":     "zwave_js",
 		"device_class": "temperature",
+		"hidden_by":    "user",
 	}}
 
 	reg := fake.registry(t)
@@ -82,6 +83,11 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 				ID         string `json:"id"`
 				NameByUser string `json:"name_by_user"`
 			} `json:"device"`
+			Visibility struct {
+				Enabled  bool   `json:"enabled"`
+				Visible  bool   `json:"visible"`
+				HiddenBy string `json:"hidden_by"`
+			} `json:"visibility"`
 			Labels []struct {
 				ID      string   `json:"id"`
 				Name    string   `json:"name"`
@@ -106,6 +112,9 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 	}
 	if got.Metadata.Device.ID != "device_1" || got.Metadata.Device.NameByUser != "Office Climate Hub" {
 		t.Errorf("device = %#v, want device_1", got.Metadata.Device)
+	}
+	if !got.Metadata.Visibility.Enabled || got.Metadata.Visibility.Visible || got.Metadata.Visibility.HiddenBy != "user" {
+		t.Errorf("visibility = %#v, want enabled hidden-by-user", got.Metadata.Visibility)
 	}
 	if len(got.Metadata.Labels) != 3 {
 		t.Fatalf("labels = %#v, want 3", got.Metadata.Labels)

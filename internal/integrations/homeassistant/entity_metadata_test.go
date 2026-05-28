@@ -12,7 +12,7 @@ func TestEntityMetadataIncludesClone(t *testing.T) {
 		t.Fatalf("empty Clone() = %#v, want nil", got)
 	}
 
-	include := &EntityMetadataIncludes{Area: true, Labels: true}
+	include := &EntityMetadataIncludes{Area: true, Labels: true, Visibility: true}
 	got := include.Clone()
 	if got == nil {
 		t.Fatal("Clone() returned nil")
@@ -20,7 +20,7 @@ func TestEntityMetadataIncludesClone(t *testing.T) {
 	if got == include {
 		t.Fatal("Clone() returned the original pointer")
 	}
-	if !got.Area || !got.Labels || got.Device || got.Description {
+	if !got.Area || !got.Labels || !got.Visibility || got.Device || got.Description {
 		t.Fatalf("Clone() = %#v, want copied flags", got)
 	}
 }
@@ -94,6 +94,9 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	if got.Device == nil || got.Device.ID != "device_1" || got.Device.NameByUser != "Office Climate Hub" {
 		t.Fatalf("Device = %#v, want resolved device", got.Device)
 	}
+	if got.Visibility == nil || !got.Visibility.Enabled || !got.Visibility.Visible {
+		t.Fatalf("Visibility = %#v, want enabled and visible", got.Visibility)
+	}
 
 	wantLabels := map[string]string{
 		"label_device": "device",
@@ -111,6 +114,39 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 		if len(label.Sources) != 1 || label.Sources[0] != wantSource {
 			t.Errorf("label %s sources = %v, want [%s]", label.ID, label.Sources, wantSource)
 		}
+	}
+}
+
+func TestEntityMetadataResolverProjectsVisibility(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewEntityMetadataResolver(nil, nil, nil)
+	got := resolver.MetadataForEntity(&EntityRegistryEntry{
+		EntityID:       "sensor.switch_amperage",
+		HiddenBy:       "user",
+		DisabledBy:     "",
+		EntityCategory: "diagnostic",
+	}, nil, EntityMetadataIncludes{Visibility: true})
+	if got == nil {
+		t.Fatal("MetadataForEntity returned nil")
+	}
+	if got.Visibility == nil {
+		t.Fatal("Visibility metadata missing")
+	}
+	if !got.Visibility.Enabled {
+		t.Errorf("Enabled = false, want true")
+	}
+	if got.Visibility.Visible {
+		t.Errorf("Visible = true, want false for hidden entity")
+	}
+	if got.Visibility.HiddenBy != "user" {
+		t.Errorf("HiddenBy = %q, want user", got.Visibility.HiddenBy)
+	}
+	if got.Visibility.DisabledBy != "" {
+		t.Errorf("DisabledBy = %q, want empty", got.Visibility.DisabledBy)
+	}
+	if got.Visibility.EntityCategory != "diagnostic" {
+		t.Errorf("EntityCategory = %q, want diagnostic", got.Visibility.EntityCategory)
 	}
 }
 

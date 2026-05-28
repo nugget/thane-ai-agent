@@ -66,6 +66,10 @@ func (a *AreaActivityTools) Tools() []*tools.Tool {
 						"type":        "boolean",
 						"description": "When true, includes entities marked as diagnostic or config (battery levels, signal strength, firmware version). Default false — those entities clutter the snapshot when answering 'what's happening'.",
 					},
+					"include_hidden": map[string]any{
+						"type":        "boolean",
+						"description": "When true, includes hidden-but-enabled entities that are useful for forensic or focused research passes. Default false keeps the snapshot aligned with default HA visibility.",
+					},
 					"max_stable": map[string]any{
 						"type":        "integer",
 						"description": "Cap on the stable bucket (entities not in any other bucket). Default 5. Truncated count is reported via stable_truncated_count.",
@@ -92,6 +96,9 @@ func (a *AreaActivityTools) handleAreaActivity(ctx context.Context, args map[str
 	}
 	if v, ok := args["include_diagnostic"].(bool); ok {
 		req.IncludeDiagnostic = v
+	}
+	if v, ok := args["include_hidden"].(bool); ok {
+		req.IncludeHidden = v
 	}
 	if v, err := optionalIntArg(args, "max_stable"); err != nil {
 		return "", err

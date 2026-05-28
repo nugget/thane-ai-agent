@@ -13,11 +13,12 @@ type EntityMetadataIncludes struct {
 	Device      bool `yaml:"device,omitempty" json:"device,omitempty"`
 	Labels      bool `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Description bool `yaml:"description,omitempty" json:"description,omitempty"`
+	Visibility  bool `yaml:"visibility,omitempty" json:"visibility,omitempty"`
 }
 
 // Any reports whether at least one metadata relationship is requested.
 func (i EntityMetadataIncludes) Any() bool {
-	return i.Area || i.Device || i.Labels || i.Description
+	return i.Area || i.Device || i.Labels || i.Description || i.Visibility
 }
 
 // Clone returns a detached copy of the include flags, or nil when no
@@ -38,6 +39,7 @@ func AllEntityMetadataIncludes() EntityMetadataIncludes {
 		Device:      true,
 		Labels:      true,
 		Description: true,
+		Visibility:  true,
 	}
 }
 
@@ -53,6 +55,7 @@ type EntityMetadata struct {
 	EntityCategory string                `json:"entity_category,omitempty"`
 	Platform       string                `json:"platform,omitempty"`
 	DeviceClass    string                `json:"device_class,omitempty"`
+	Visibility     *EntityVisibility     `json:"visibility,omitempty"`
 	Area           *EntityAreaMetadata   `json:"area,omitempty"`
 	Device         *EntityDeviceMetadata `json:"device,omitempty"`
 	Labels         []EntityLabelMetadata `json:"labels,omitempty"`
@@ -75,12 +78,24 @@ func (m *EntityMetadata) Empty() bool {
 		m.EntityCategory == "" &&
 		m.Platform == "" &&
 		m.DeviceClass == "" &&
+		m.Visibility == nil &&
 		m.Area == nil &&
 		m.Device == nil &&
 		len(m.Labels) == 0 &&
 		len(m.Capabilities) == 0 &&
 		len(m.Options) == 0 &&
 		len(m.Categories) == 0
+}
+
+// EntityVisibility describes registry visibility and enabled state.
+// Enabled tracks whether HA currently loads the entity; Visible tracks
+// whether HA considers it default-dashboard material.
+type EntityVisibility struct {
+	Enabled        bool   `json:"enabled"`
+	Visible        bool   `json:"visible"`
+	HiddenBy       string `json:"hidden_by,omitempty"`
+	DisabledBy     string `json:"disabled_by,omitempty"`
+	EntityCategory string `json:"entity_category,omitempty"`
 }
 
 // EntityAreaMetadata is the area/floor context Home Assistant knows
@@ -192,6 +207,9 @@ func (r EntityMetadataResolver) MetadataForEntity(entry *EntityRegistryEntry, st
 	if include.Description {
 		applyEntityDescription(meta, entry, state)
 	}
+	if include.Visibility {
+		applyEntityVisibility(meta, entry)
+	}
 	if include.Area && area != nil {
 		meta.Area = r.areaMetadata(area)
 	} else if include.Area {
@@ -265,6 +283,22 @@ func applyEntityDescription(meta *EntityMetadata, entry *EntityRegistryEntry, st
 	}
 	if len(entry.Categories) > 0 {
 		meta.Categories = cloneStringMap(entry.Categories)
+	}
+}
+
+func applyEntityVisibility(meta *EntityMetadata, entry *EntityRegistryEntry) {
+	if entry == nil {
+		return
+	}
+	meta.Visibility = &EntityVisibility{
+		Enabled:        entry.DisabledBy == "",
+		Visible:        entry.HiddenBy == "",
+		HiddenBy:       entry.HiddenBy,
+		DisabledBy:     entry.DisabledBy,
+		EntityCategory: entry.EntityCategory,
+	}
+	if meta.EntityCategory == "" {
+		meta.EntityCategory = entry.EntityCategory
 	}
 }
 

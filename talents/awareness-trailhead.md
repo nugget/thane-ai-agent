@@ -17,8 +17,9 @@ Choose the next move deliberately:
 - Use `add_entity_subscription` when a room, device, person, or live state
   should auto-load while the work continues.
 - Add `include` metadata flags when area, owning device, HA labels, or
-  descriptions would make the subscribed state easier to interpret; area
-  metadata can carry the HA floor/building hierarchy too.
+  descriptions would make the subscribed state easier to interpret; use
+  `visibility` when hidden/enabled salience matters. Area metadata can
+  carry the HA floor/building hierarchy too.
 - Use `remove_entity_subscription` when the work is done. Stale
   subscriptions are quiet clutter.
 - If the work is a one-shot state check, use the currently visible HA or
