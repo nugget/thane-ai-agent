@@ -110,11 +110,17 @@ func (c *Client) requireWS() (*WSClient, error) {
 
 // GetLabelRegistry retrieves all labels from Home Assistant.
 func (c *Client) GetLabelRegistry(ctx context.Context) ([]LabelRegistryEntry, error) {
-	ws, err := c.requireWS()
-	if err != nil {
-		return nil, err
+	fetch := func() ([]LabelRegistryEntry, error) {
+		ws, err := c.requireWS()
+		if err != nil {
+			return nil, err
+		}
+		return ws.GetLabelRegistry(ctx)
 	}
-	return ws.GetLabelRegistry(ctx)
+	if c.registry == nil {
+		return fetch()
+	}
+	return c.registry.labels.get(c.registry.ttl, time.Now(), fetch)
 }
 
 // GetCategoryRegistry retrieves all categories for a given scope from Home Assistant.
@@ -128,20 +134,32 @@ func (c *Client) GetCategoryRegistry(ctx context.Context, scope string) ([]Categ
 
 // GetFloorRegistry retrieves all floors from Home Assistant.
 func (c *Client) GetFloorRegistry(ctx context.Context) ([]FloorRegistryEntry, error) {
-	ws, err := c.requireWS()
-	if err != nil {
-		return nil, err
+	fetch := func() ([]FloorRegistryEntry, error) {
+		ws, err := c.requireWS()
+		if err != nil {
+			return nil, err
+		}
+		return ws.GetFloorRegistry(ctx)
 	}
-	return ws.GetFloorRegistry(ctx)
+	if c.registry == nil {
+		return fetch()
+	}
+	return c.registry.floors.get(c.registry.ttl, time.Now(), fetch)
 }
 
 // GetDeviceRegistry retrieves all devices from Home Assistant.
 func (c *Client) GetDeviceRegistry(ctx context.Context) ([]DeviceRegistryEntry, error) {
-	ws, err := c.requireWS()
-	if err != nil {
-		return nil, err
+	fetch := func() ([]DeviceRegistryEntry, error) {
+		ws, err := c.requireWS()
+		if err != nil {
+			return nil, err
+		}
+		return ws.GetDeviceRegistry(ctx)
 	}
-	return ws.GetDeviceRegistry(ctx)
+	if c.registry == nil {
+		return fetch()
+	}
+	return c.registry.devices.get(c.registry.ttl, time.Now(), fetch)
 }
 
 // GetConfigEntries retrieves all installed integrations and their
@@ -165,13 +183,19 @@ func (c *Client) GetEntityRegistryEntry(ctx context.Context, entityID string) (*
 	return ws.GetEntityRegistryEntry(ctx, entityID)
 }
 
-// UpdateEntityRegistryEntry updates entity metadata through the registry API.
+// UpdateEntityRegistryEntry updates entity metadata through the registry
+// API. On success it invalidates the cached entity-registry snapshot so
+// the change is not served stale for the rest of the TTL window.
 func (c *Client) UpdateEntityRegistryEntry(ctx context.Context, entityID string, updates map[string]any) (*EntityRegistryEntry, error) {
 	ws, err := c.requireWS()
 	if err != nil {
 		return nil, err
 	}
-	return ws.UpdateEntityRegistryEntry(ctx, entityID, updates)
+	entry, err := ws.UpdateEntityRegistryEntry(ctx, entityID, updates)
+	if err == nil && c.registry != nil {
+		c.registry.entities.invalidate()
+	}
+	return entry, err
 }
 
 // ValidateConfig validates automation trigger/condition/action sections.

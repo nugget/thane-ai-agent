@@ -891,6 +891,16 @@ type HomeAssistantConfig struct {
 	// "building" when floors represent buildings in this deployment.
 	FloorAlias string `yaml:"floor_alias,omitempty"`
 
+	// RegistryCacheTTL bounds how long entity/device/area/label/floor
+	// registry snapshots are reused across native HA tool calls before a
+	// refetch. These registries change only on HA config edits, so a
+	// short window collapses the repeated (multi-MB at scale) registry
+	// pulls that metadata-bearing tool calls would otherwise issue.
+	// Accepts a Go duration string ("30s", "1m"); empty uses the 30s
+	// default; "0" disables caching (always refetch). Live entity state
+	// is never cached.
+	RegistryCacheTTL string `yaml:"registry_cache_ttl,omitempty"`
+
 	// Subscribe configures WebSocket event subscriptions for real-time
 	// state change monitoring. When entity_globs is non-empty, only
 	// matching entities are processed; when empty, all state changes
