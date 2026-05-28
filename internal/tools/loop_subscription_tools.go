@@ -7,6 +7,7 @@ import (
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // registerUpdateEntitySubscriptions wires the external CRUD tool for
@@ -86,7 +87,7 @@ func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map
 		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop definition registry")
 	}
 
-	name := strings.TrimSpace(ldStringArg(args, "name"))
+	name := strings.TrimSpace(toolargs.TrimmedString(args, "name"))
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
