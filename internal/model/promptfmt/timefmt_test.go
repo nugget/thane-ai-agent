@@ -149,6 +149,31 @@ func TestParseTimeOrDelta(t *testing.T) {
 			input: "2026-03-07T12:00:00-06:00",
 			want:  time.Date(2026, 3, 7, 18, 0, 0, 0, time.UTC),
 		},
+		{
+			name:  "negative offset minutes unit",
+			input: "-30m",
+			want:  now.Add(-30 * time.Minute),
+		},
+		{
+			name:  "negative offset hours unit",
+			input: "-24h",
+			want:  now.Add(-24 * time.Hour),
+		},
+		{
+			name:  "negative offset days unit",
+			input: "-7d",
+			want:  now.Add(-7 * 24 * time.Hour),
+		},
+		{
+			name:  "positive offset weeks unit",
+			input: "+2w",
+			want:  now.Add(2 * 7 * 24 * time.Hour),
+		},
+		{
+			name:    "unknown unit",
+			input:   "-7y",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
