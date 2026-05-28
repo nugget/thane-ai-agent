@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 func (r *Registry) handleModelRegistrySummary(_ context.Context, _ map[string]any) (string, error) {
@@ -98,7 +99,7 @@ func (r *Registry) handleModelRegistryList(_ context.Context, args map[string]an
 		return "", err
 	}
 
-	kind := strings.ToLower(strings.TrimSpace(mrStringArg(args, "kind")))
+	kind := strings.ToLower(strings.TrimSpace(toolargs.String(args, "kind")))
 	if kind == "" {
 		kind = "deployments"
 	}
@@ -106,18 +107,18 @@ func (r *Registry) handleModelRegistryList(_ context.Context, args map[string]an
 		return "", fmt.Errorf("kind must be one of [\"deployments\" \"resources\"]")
 	}
 
-	limit := mrIntArg(args, "limit", defaultModelRegistryListLimit)
+	limit := toolargs.IntOr(args, "limit", defaultModelRegistryListLimit)
 	if limit <= 0 {
 		limit = defaultModelRegistryListLimit
 	}
 	if limit > maxModelRegistryListLimit {
 		limit = maxModelRegistryListLimit
 	}
-	query := strings.ToLower(strings.TrimSpace(mrStringArg(args, "query")))
-	provider := strings.ToLower(strings.TrimSpace(mrStringArg(args, "provider")))
-	resource := strings.TrimSpace(mrStringArg(args, "resource"))
-	policyState := strings.ToLower(strings.TrimSpace(mrStringArg(args, "policy_state")))
-	source := strings.ToLower(strings.TrimSpace(mrStringArg(args, "source")))
+	query := strings.ToLower(strings.TrimSpace(toolargs.String(args, "query")))
+	provider := strings.ToLower(strings.TrimSpace(toolargs.String(args, "provider")))
+	resource := strings.TrimSpace(toolargs.String(args, "resource"))
+	policyState := strings.ToLower(strings.TrimSpace(toolargs.String(args, "policy_state")))
+	source := strings.ToLower(strings.TrimSpace(toolargs.String(args, "source")))
 
 	if kind == "resources" {
 		items := make([]modelRegistryResourceView, 0, len(snapshot.Resources))
@@ -131,10 +132,10 @@ func (r *Registry) handleModelRegistryList(_ context.Context, args map[string]an
 			if policyState != "" && string(res.PolicyState) != policyState {
 				continue
 			}
-			if mrHasBoolArg(args, "supports_tools") && res.SupportsTools != mrBoolArg(args, "supports_tools") {
+			if toolargs.HasBool(args, "supports_tools") && res.SupportsTools != toolargs.Bool(args, "supports_tools") {
 				continue
 			}
-			if mrHasBoolArg(args, "supports_images") && res.SupportsImages != mrBoolArg(args, "supports_images") {
+			if toolargs.HasBool(args, "supports_images") && res.SupportsImages != toolargs.Bool(args, "supports_images") {
 				continue
 			}
 			if query != "" && !matchesResourceQuery(res, query) {
@@ -169,13 +170,13 @@ func (r *Registry) handleModelRegistryList(_ context.Context, args map[string]an
 		if source != "" && string(dep.Source) != source {
 			continue
 		}
-		if mrHasBoolArg(args, "supports_tools") && dep.SupportsTools != mrBoolArg(args, "supports_tools") {
+		if toolargs.HasBool(args, "supports_tools") && dep.SupportsTools != toolargs.Bool(args, "supports_tools") {
 			continue
 		}
-		if mrHasBoolArg(args, "supports_images") && dep.SupportsImages != mrBoolArg(args, "supports_images") {
+		if toolargs.HasBool(args, "supports_images") && dep.SupportsImages != toolargs.Bool(args, "supports_images") {
 			continue
 		}
-		if mrHasBoolArg(args, "routable") && dep.Routable != mrBoolArg(args, "routable") {
+		if toolargs.HasBool(args, "routable") && dep.Routable != toolargs.Bool(args, "routable") {
 			continue
 		}
 		if query != "" && !matchesDeploymentQuery(dep, query) {
@@ -202,8 +203,8 @@ func (r *Registry) handleModelRegistryGet(_ context.Context, args map[string]any
 		return "", err
 	}
 
-	resourceID := strings.TrimSpace(mrStringArg(args, "resource"))
-	deploymentID := strings.TrimSpace(mrStringArg(args, "deployment"))
+	resourceID := strings.TrimSpace(toolargs.String(args, "resource"))
+	deploymentID := strings.TrimSpace(toolargs.String(args, "deployment"))
 	if resourceID == "" && deploymentID == "" {
 		return "", fmt.Errorf("resource or deployment is required")
 	}

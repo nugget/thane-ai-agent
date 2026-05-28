@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 func matchesResourceQuery(res fleet.RegistryResourceSnapshot, query string) bool {
@@ -59,83 +60,6 @@ func mrMarshalToolJSON(v any) (string, error) {
 	return string(out), nil
 }
 
-func mrStringArg(args map[string]any, key string) string {
-	if v, ok := args[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func mrIntArg(args map[string]any, key string, def int) int {
-	if v, ok := mrIntArgOK(args, key); ok {
-		return v
-	}
-	return def
-}
-
-func mrIntArgOK(args map[string]any, key string) (int, bool) {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		return 0, false
-	}
-	switch v := raw.(type) {
-	case int:
-		return v, true
-	case int32:
-		return int(v), true
-	case int64:
-		return int(v), true
-	case float64:
-		if v != float64(int(v)) {
-			return 0, false
-		}
-		return int(v), true
-	case json.Number:
-		n, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(n), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	default:
-		return 0, false
-	}
-}
-
-func mrBoolArg(args map[string]any, key string) bool {
-	v, _ := mrBoolArgOK(args, key)
-	return v
-}
-
-func mrHasBoolArg(args map[string]any, key string) bool {
-	_, ok := mrBoolArgOK(args, key)
-	return ok
-}
-
-func mrBoolArgOK(args map[string]any, key string) (bool, bool) {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		return false, false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v, true
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "true":
-			return true, true
-		case "false":
-			return false, true
-		}
-	}
-	return false, false
-}
-
 func mrExtractRouteHints(args map[string]any) map[string]string {
 	hints := make(map[string]string)
 	if raw, ok := args["hints"].(map[string]any); ok {
@@ -147,22 +71,22 @@ func mrExtractRouteHints(args map[string]any) map[string]string {
 			hints[key] = fmt.Sprint(value)
 		}
 	}
-	if mission := strings.TrimSpace(mrStringArg(args, "mission")); mission != "" {
+	if mission := strings.TrimSpace(toolargs.String(args, "mission")); mission != "" {
 		hints[routepkg.FactorMission] = mission
 	}
-	if channel := strings.TrimSpace(mrStringArg(args, "channel")); channel != "" {
+	if channel := strings.TrimSpace(toolargs.String(args, "channel")); channel != "" {
 		hints[routepkg.FactorChannel] = channel
 	}
-	if pref := strings.TrimSpace(mrStringArg(args, "model_preference")); pref != "" {
+	if pref := strings.TrimSpace(toolargs.String(args, "model_preference")); pref != "" {
 		hints[routepkg.FactorModelPreference] = pref
 	}
-	if v, ok := mrIntArgOK(args, "quality_floor"); ok && v > 0 {
+	if v, ok := toolargs.IntOK(args, "quality_floor"); ok && v > 0 {
 		hints[routepkg.FactorQualityFloor] = strconv.Itoa(v)
 	}
-	if v, ok := mrBoolArgOK(args, "local_only"); ok {
+	if v, ok := toolargs.BoolOK(args, "local_only"); ok {
 		hints[routepkg.FactorLocalOnly] = strconv.FormatBool(v)
 	}
-	if v, ok := mrBoolArgOK(args, "prefer_speed"); ok {
+	if v, ok := toolargs.BoolOK(args, "prefer_speed"); ok {
 		hints[routepkg.FactorPreferSpeed] = strconv.FormatBool(v)
 	}
 	if len(hints) == 0 {

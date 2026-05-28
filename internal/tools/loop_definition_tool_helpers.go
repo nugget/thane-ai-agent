@@ -9,22 +9,6 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-func ldStringArg(args map[string]any, key string) string {
-	value, _ := args[key].(string)
-	return strings.TrimSpace(value)
-}
-
-func ldIntArg(args map[string]any, key string) int {
-	switch v := args[key].(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	default:
-		return 0
-	}
-}
-
 func ldMarshalToolJSON(v any) (string, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
