@@ -75,11 +75,13 @@ const physics = {
 };
 
 function buildLoopBranchLoads() {
+  const registryCoreID = getRegistryCoreID();
   const childrenByParent = new Map();
   for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
-    childrenByParent.get(loop.parent_id).push(loop.id);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (!parentID) continue;
+    if (!childrenByParent.has(parentID)) childrenByParent.set(parentID, []);
+    childrenByParent.get(parentID).push(loop.id);
   }
 
   const cache = new Map();
@@ -150,11 +152,13 @@ function compareLoopsForLayout(a, b) {
 }
 
 function buildSiblingIndex() {
+  const registryCoreID = getRegistryCoreID();
   const siblings = new Map();
   for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    if (!siblings.has(loop.parent_id)) siblings.set(loop.parent_id, []);
-    siblings.get(loop.parent_id).push(loop);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (!parentID) continue;
+    if (!siblings.has(parentID)) siblings.set(parentID, []);
+    siblings.get(parentID).push(loop);
   }
   for (const list of siblings.values()) {
     list.sort(compareLoopsForLayout);
@@ -260,8 +264,17 @@ function normalizeAngle(angle) {
 
 function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
   const targets = new Map();
+  const registryCoreID = getRegistryCoreID();
+  // Roots: genuine orphans plus loops re-rooted off the collapsed
+  // registry core. The core itself is excluded — it has no visual node
+  // (the __system__ pin owns its slot), so giving it an orbit target
+  // would reserve a phantom gap on the root ring and pull its adopted
+  // children toward an off-center point their edges never connect to.
   const roots = Array.from(state.loops.values())
-    .filter(loop => !loop.parent_id)
+    .filter(loop => {
+      if (registryCoreID && isRegistryCoreLoop(loop)) return false;
+      return !getEffectiveParentID(loop, registryCoreID);
+    })
     .sort(compareLoopsForLayout);
 
   const aspect = (vw && vh && vh > 0) ? (vw / vh) : 1;
@@ -454,6 +467,38 @@ function isRegistryCoreLoop(loop) {
   return op === 'container';
 }
 
+// getRegistryCoreID returns the id of the collapsed registry-core loop
+// when one is present and the __system__ node is active, otherwise null.
+// Returns null whenever state.system is absent so that, before system
+// status arrives, the registry core lays out as an ordinary root (the
+// same boot-order gating syncPhysicsNodes/renderNodes use). Computed
+// once per layout pass and threaded into [getEffectiveParentID] so the
+// per-loop lookup stays O(1).
+function getRegistryCoreID() {
+  if (!state.system) return null;
+  for (const loop of state.loops.values()) {
+    if (isRegistryCoreLoop(loop)) return loop.id;
+  }
+  return null;
+}
+
+// getEffectiveParentID is the layout-layer counterpart to the edge
+// re-rooting in renderLinkingLines: a loop that named the collapsed
+// registry core as its parent is treated as a root (parent = none),
+// because its visual slot — node, drawn edge, and spring anchor — is
+// the centered __system__ node, not the hidden core's phantom
+// position on the root ring. Every orbit/branch/sibling builder must
+// agree on this; if buildOrbitTargets re-roots a child to center but
+// buildSiblingIndex still files it under the core (or vice versa) the
+// orbit-attraction force and the spring force pull in different
+// directions and the layout never settles. Pass the precomputed
+// registryCoreID from [getRegistryCoreID] to avoid an O(n) scan per loop.
+function getEffectiveParentID(loop, registryCoreID) {
+  if (!loop || !loop.parent_id) return null;
+  if (registryCoreID && loop.parent_id === registryCoreID) return null;
+  return loop.parent_id;
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -629,6 +674,7 @@ function physicsStep(cx, cy, vw, vh) {
   const branchLoads = buildLoopBranchLoads();
   const siblingIndex = buildSiblingIndex();
   const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
+  const registryCoreID = getRegistryCoreID();
   const motionScale = getGraphMotionScale(n);
   const edges = [];
 
@@ -646,11 +692,16 @@ function physicsStep(cx, cy, vw, vh) {
   }
 
   // 2. Edge springs — keep the rendered connectors taut without letting them
-  // dominate the structure.
+  // dominate the structure. Spring to the EFFECTIVE parent so adopted
+  // children of the collapsed registry core spring to __system__ (their
+  // orbit target's center) rather than to the hidden core's phantom slot.
+  // This must match buildOrbitTargets' re-rooting or the spring and the
+  // orbit-attraction force pull in different directions.
   for (const loop of state.loops.values()) {
     if (!P.nodes.has(loop.id)) continue;
-    if (loop.parent_id && P.nodes.has(loop.parent_id)) {
-      const source = P.nodes.get(loop.parent_id);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (parentID && P.nodes.has(parentID)) {
+      const source = P.nodes.get(parentID);
       const target = P.nodes.get(loop.id);
       const targetSpec = orbitTargets.get(loop.id);
       const restLength = targetSpec ? targetSpec.radius : P.childRestLength;
@@ -660,7 +711,7 @@ function physicsStep(cx, cy, vw, vh) {
         P.childSpringStrength,
         restLength,
       );
-      edges.push({ sourceId: loop.parent_id, targetId: loop.id, source, target });
+      edges.push({ sourceId: parentID, targetId: loop.id, source, target });
     } else if (P.nodes.has('__system__')) {
       const source = P.nodes.get('__system__');
       const target = P.nodes.get(loop.id);
