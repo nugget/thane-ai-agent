@@ -45,12 +45,13 @@ func (a *AreaActivityTools) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{
 			Name: "get_area_activity",
-			Description: "Get a snapshot of one Home Assistant area's current state plus a timeline of recent transitions. " +
-				"Returns entities bucketed by relevance: anomalies (offline or in alarm state) first, then active devices " +
+			Description: "Get a full snapshot of one Home Assistant area — the native answer to 'what's in <room>' or " +
+				"'what's happening in <room>' without polling individual entities. Returns the area with its floor/building " +
+				"context and entities bucketed by relevance: anomalies (offline or in alarm state) first, then active devices " +
 				"(lights on, climate running, media playing), then recent changes within the lookback window, then ambient " +
-				"baseline sensors (temperature, humidity), then the rest (capped). Plus a cross-entity timeline of " +
-				"discrete state transitions ordered newest-first. Use this to answer 'what's happening in <room>' or " +
-				"'is everything okay in <room>' without polling individual entities.",
+				"baseline sensors (temperature, humidity), then the rest (capped), plus a cross-entity timeline of discrete " +
+				"transitions newest-first and counts of what was filtered out (disabled/hidden/diagnostic/config). Add include " +
+				"for per-entity area/device/label/description/visibility metadata.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -74,6 +75,7 @@ func (a *AreaActivityTools) Tools() []*tools.Tool {
 						"type":        "integer",
 						"description": "Cap on the stable bucket (entities not in any other bucket). Default 5. Truncated count is reported via stable_truncated_count.",
 					},
+					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"area"},
 			},
@@ -105,6 +107,11 @@ func (a *AreaActivityTools) handleAreaActivity(ctx context.Context, args map[str
 	} else if v != nil {
 		req.MaxStable = *v
 	}
+	include, err := tools.ParseEntityMetadataIncludesArg(args["include"], "include")
+	if err != nil {
+		return "", err
+	}
+	req.Include = include
 
 	result, err := ComputeAreaActivity(ctx, a.client, req, time.Now())
 	if err != nil {

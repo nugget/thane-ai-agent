@@ -94,6 +94,14 @@ fetch Home Assistant forecast response data each turn and include a
 compact forecast in the injected entity context. Use `forecast: none` to
 clear forecast fetching for that subscription.
 
+An entity subscription's `entity_id` may be a glob (e.g.
+`binary_sensor.*door*`, `*_temperature`) instead of a concrete id. A glob
+subscription is re-expanded against live entities every turn — newly
+matching entities join automatically — and is capped per turn, emitting a
+truncation marker when it matches more than the cap. This works across
+`add_entity_subscription`, `watch_entity`, `thane_curate.entities`, and
+`update_entity_subscriptions`.
+
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, `description`, and `visibility`, or
 `all: true`. Enabled metadata is resolved through the native HA registries and
@@ -113,6 +121,7 @@ becoming default context clutter.
 | `ha_get_state` | Current state of any entity, with optional area/device/label/description/visibility metadata. |
 | `ha_list_entities` | Browse entities by domain and/or entity_id glob (e.g. `binary_sensor.*door*`), with optional HA metadata. |
 | `ha_search_states` | Predicate search across live entity state (state value, numeric attribute, domain, area). |
+| `get_area_activity` | Whole-area snapshot: floor context + entities grouped by salience + transition timeline + filtered counts, with optional per-entity metadata. |
 | `ha_call_service` | Direct HA service invocation. |
 | `ha_registry_search` | Search the entity/device/area registry. |
 | `ha_automation_list` | List automations with recent activation counts. |

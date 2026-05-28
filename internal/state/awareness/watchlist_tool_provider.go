@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -66,7 +67,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "The Home Assistant entity ID to subscribe to (e.g., sensor.office_temperature, weather.home).",
+						"description": "The Home Assistant entity ID to subscribe to (e.g., sensor.office_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
 					},
 					"tags": map[string]any{
 						"type":        "array",
@@ -138,6 +139,9 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 	entityID, _ := args["entity_id"].(string)
 	if entityID == "" {
 		return "", fmt.Errorf("entity_id is required")
+	}
+	if err := homeassistant.ValidateEntityTarget(entityID); err != nil {
+		return "", fmt.Errorf("entity_id %q: invalid glob pattern: %w", entityID, err)
 	}
 
 	tags, err := parseWatchlistTagArgs(args["tags"])

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -55,7 +56,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home).",
+						"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
 					},
 					"history": map[string]any{
 						"type":        "array",
@@ -79,6 +80,9 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				entityID := strings.TrimSpace(stringMapValue(args, "entity_id"))
 				if entityID == "" {
 					return "", fmt.Errorf("entity_id is required")
+				}
+				if err := homeassistant.ValidateEntityTarget(entityID); err != nil {
+					return "", fmt.Errorf("entity_id %q: invalid glob pattern: %w", entityID, err)
 				}
 				history, err := intSliceFromMap(args, "history")
 				if err != nil {

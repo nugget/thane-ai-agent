@@ -72,3 +72,6 @@ talents/shared-memory.md
 -e 
 # Site-specific talents (personal to each instance)
 talents/my-*
+
+# Built dev-tool binary (cmd/prewarm-replay)
+/prewarm-replay

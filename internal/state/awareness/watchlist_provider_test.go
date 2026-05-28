@@ -22,6 +22,7 @@ type fakeHA struct {
 	forecasts        map[string][]map[string]any
 	forecastRequests []string
 	err              error // returned for any entity not in states
+	statesErr        error // returned by GetStates (bulk fetch)
 	histErr          error
 	forecastErr      error
 }
@@ -34,6 +35,17 @@ func (f *fakeHA) GetState(_ context.Context, entityID string) (*homeassistant.St
 		return nil, f.err
 	}
 	return nil, errors.New("entity not found")
+}
+
+func (f *fakeHA) GetStates(_ context.Context) ([]homeassistant.State, error) {
+	if f.statesErr != nil {
+		return nil, f.statesErr
+	}
+	out := make([]homeassistant.State, 0, len(f.states))
+	for _, s := range f.states {
+		out = append(out, *s)
+	}
+	return out, nil
 }
 
 func (f *fakeHA) GetStateHistory(_ context.Context, entityID string, _ time.Time, _ time.Time) ([]homeassistant.State, error) {

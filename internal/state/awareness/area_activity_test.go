@@ -19,12 +19,17 @@ type fakeAreaClient struct {
 	areas    []homeassistant.Area
 	entities []homeassistant.EntityRegistryEntry
 	devices  []homeassistant.DeviceRegistryEntry
+	floors   []homeassistant.FloorRegistryEntry
+	labels   []homeassistant.LabelRegistryEntry
 	states   []homeassistant.State
 	configs  []homeassistant.ConfigEntry
 	logbook  []homeassistant.LogbookEntry
 
 	areasErr   error
 	logbookErr error
+	floorsErr  error
+
+	floorCalls int // how many times GetFloorRegistry was invoked
 }
 
 func (f *fakeAreaClient) GetAreas(_ context.Context) ([]homeassistant.Area, error) {
@@ -37,10 +42,11 @@ func (f *fakeAreaClient) GetDeviceRegistry(_ context.Context) ([]homeassistant.D
 	return f.devices, nil
 }
 func (f *fakeAreaClient) GetFloorRegistry(_ context.Context) ([]homeassistant.FloorRegistryEntry, error) {
-	return nil, nil
+	f.floorCalls++
+	return f.floors, f.floorsErr
 }
 func (f *fakeAreaClient) GetLabelRegistry(_ context.Context) ([]homeassistant.LabelRegistryEntry, error) {
-	return nil, nil
+	return f.labels, nil
 }
 func (f *fakeAreaClient) GetStates(_ context.Context) ([]homeassistant.State, error) {
 	return f.states, nil
