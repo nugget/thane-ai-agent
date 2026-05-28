@@ -48,7 +48,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 						"properties": map[string]any{
 							"entity_id": map[string]any{
 								"type":        "string",
-								"description": "The Home Assistant entity ID to watch.",
+								"description": "The Home Assistant entity ID to watch, or a glob pattern (e.g., binary_sensor.*door*) to watch every matching entity, re-expanded live each turn (capped per turn).",
 							},
 							"history": map[string]any{
 								"type":        "array",

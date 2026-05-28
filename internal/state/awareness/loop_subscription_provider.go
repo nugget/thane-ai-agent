@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -21,11 +22,12 @@ import (
 // still emitted by [WatchlistProvider]; this provider only covers
 // loop- and container-scoped subscriptions.
 type LoopSubscriptionProvider struct {
-	loops      *looppkg.Registry
-	store      *WatchlistStore
-	ha         StateGetter
-	registries HARegistryClient
-	logger     *slog.Logger
+	loops            *looppkg.Registry
+	store            *WatchlistStore
+	ha               StateGetter
+	registries       HARegistryClient
+	logger           *slog.Logger
+	maxGlobExpansion int
 }
 
 // NewLoopSubscriptionProvider creates a provider bound to the live
@@ -41,7 +43,13 @@ func NewLoopSubscriptionProvider(loops *looppkg.Registry, store *WatchlistStore,
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LoopSubscriptionProvider{loops: loops, store: store, ha: ha, logger: logger}
+	return &LoopSubscriptionProvider{loops: loops, store: store, ha: ha, logger: logger, maxGlobExpansion: defaultMaxGlobExpansion}
+}
+
+// SetMaxGlobExpansion overrides the per-turn cap on how many entities a
+// single glob subscription renders. A value <= 0 restores the default.
+func (p *LoopSubscriptionProvider) SetMaxGlobExpansion(n int) {
+	p.maxGlobExpansion = normalizeMaxGlobExpansion(n)
 }
 
 // TagContextBucket places loop-scoped entity snapshots in live state,
@@ -110,6 +118,12 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		}
 	}
 
+	// Glob subscriptions re-expand against the live entity set each
+	// render; fetch that snapshot once (lazily, only if a glob is
+	// present) and reuse it across every glob — one bulk GetStates per
+	// render. Concrete subscriptions keep their targeted GetState path.
+	states := newLazyStates(p.ha, p.logger)
+
 	// Render the body first so an all-expired list yields no header.
 	// Otherwise a quiescent loop whose TTLs all elapsed would still
 	// add a "### Watched Entities (loop)" line with no entries, which
@@ -117,6 +131,14 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	var body strings.Builder
 	for _, sub := range subs {
 		if sub.IsExpired(now) {
+			continue
+		}
+		if homeassistant.IsEntityGlob(sub.EntityID) {
+			// Cross-provider dedup is by exact entity_id, so a glob's
+			// expanded matches aren't deduped against always-visible
+			// entries — an acceptable rare double-render for an opt-in
+			// glob, not worth sharing state across providers.
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), states.get(ctx), now, registries, p.maxGlobExpansion))
 			continue
 		}
 		if _, dup := alreadyVisible[sub.EntityID]; dup {
@@ -141,12 +163,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 // as a storage type elsewhere, the renderer can take fields
 // directly.
 func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, sub looppkg.EntitySubscription, now time.Time, registries *renderRegistries) string {
-	w := WatchedSubscription{
-		EntityID: sub.EntityID,
-		History:  append([]int(nil), sub.History...),
-		Forecast: sub.Forecast,
-		Include:  sub.Include.Clone(),
-	}
+	w := watchedFromLoopSubscription(sub)
 	state, err := p.ha.GetState(ctx, w.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch loop-scoped entity state",
@@ -155,26 +172,16 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 		)
 		return formatFetchError(w.EntityID)
 	}
-	state = watchlistStateWithForecast(ctx, p.ha, p.logger, w, state, "failed to fetch loop-scoped weather forecast")
+	return renderWatchedState(ctx, p.ha, p.logger, w, state, now, registries)
+}
 
-	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(w.EntityID, state, w.Include))
-	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
-	content = enrichUnavailable(content, state, registries)
-	if len(w.History) == 0 {
-		return content
+// watchedFromLoopSubscription adapts a loop.EntitySubscription into the
+// WatchedSubscription shim the shared render/expansion path consumes.
+func watchedFromLoopSubscription(sub looppkg.EntitySubscription) WatchedSubscription {
+	return WatchedSubscription{
+		EntityID: sub.EntityID,
+		History:  append([]int(nil), sub.History...),
+		Forecast: sub.Forecast,
+		Include:  sub.Include.Clone(),
 	}
-
-	summaries, truncated, err := buildWatchlistHistorySummaries(ctx, p.ha, state, w.History, now)
-	if err != nil {
-		p.logger.Warn("failed to fetch loop-scoped entity history",
-			"entity_id", w.EntityID,
-			"history", w.History,
-			"error", err,
-		)
-		return content
-	}
-	if len(summaries) == 0 && !truncated {
-		return content
-	}
-	return mergeHistoryIntoEntityContext(content, summaries, truncated)
 }

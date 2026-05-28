@@ -16,6 +16,7 @@ import (
 // real HA instance.
 type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
+	GetStates(ctx context.Context) ([]homeassistant.State, error)
 	GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
 	GetWeatherForecasts(ctx context.Context, entityID, forecastType string) ([]map[string]any, error)
 }
@@ -25,10 +26,11 @@ type StateGetter interface {
 // markdown block for system prompt injection. Registered via
 // [agent.Loop.RegisterAlwaysContextProvider].
 type WatchlistProvider struct {
-	store      *WatchlistStore
-	ha         StateGetter
-	registries HARegistryClient // optional; nil disables unavailable enrichment
-	logger     *slog.Logger
+	store            *WatchlistStore
+	ha               StateGetter
+	registries       HARegistryClient // optional; nil disables unavailable enrichment
+	logger           *slog.Logger
+	maxGlobExpansion int
 }
 
 // NewWatchlistProvider creates a watchlist context provider.
@@ -37,10 +39,17 @@ func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Lo
 		logger = slog.Default()
 	}
 	return &WatchlistProvider{
-		store:  store,
-		ha:     ha,
-		logger: logger,
+		store:            store,
+		ha:               ha,
+		logger:           logger,
+		maxGlobExpansion: defaultMaxGlobExpansion,
 	}
+}
+
+// SetMaxGlobExpansion overrides the per-turn cap on how many entities a
+// single glob subscription renders. A value <= 0 restores the default.
+func (p *WatchlistProvider) SetMaxGlobExpansion(n int) {
+	p.maxGlobExpansion = normalizeMaxGlobExpansion(n)
 }
 
 // TagContextBucket places watched entity snapshots in live state.
@@ -80,15 +89,28 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	now := time.Now()
 	registries := newRenderRegistries(ctx, p.registries)
 
-	var sb strings.Builder
-	sb.WriteString("### Watched Entities\n\n")
+	// Glob subscriptions are re-expanded against the live entity set
+	// each render. Fetch that snapshot once (lazily, only if a glob is
+	// present) and reuse it for every glob — one bulk GetStates per
+	// render, never a per-entity scan. Concrete subscriptions keep their
+	// targeted GetState path.
+	states := newLazyStates(p.ha, p.logger)
 
+	// Body first so an all-empty render (e.g. globs that matched nothing
+	// this turn) yields no bare header.
+	var body strings.Builder
 	for _, sub := range subs {
-		sb.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
-		sb.WriteByte('\n')
+		if homeassistant.IsEntityGlob(sub.EntityID) {
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states.get(ctx), now, registries, p.maxGlobExpansion))
+			continue
+		}
+		body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
+		body.WriteByte('\n')
 	}
-
-	return sb.String(), nil
+	if body.Len() == 0 {
+		return "", nil
+	}
+	return "### Watched Entities\n\n" + body.String(), nil
 }
 
 func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
@@ -100,33 +122,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 		)
 		return formatFetchError(sub.EntityID)
 	}
-	state = p.stateWithForecast(ctx, sub, state)
-
-	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(sub.EntityID, state, sub.Include))
-	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
-	content = enrichUnavailable(content, state, registries)
-	if len(sub.History) == 0 {
-		return content
-	}
-
-	summaries, truncated, err := buildWatchlistHistorySummaries(ctx, p.ha, state, sub.History, now)
-	if err != nil {
-		p.logger.Warn("failed to fetch watched entity history",
-			"entity_id", sub.EntityID,
-			"history", sub.History,
-			"error", err,
-		)
-		return content
-	}
-	if len(summaries) == 0 && !truncated {
-		return content
-	}
-
-	return mergeHistoryIntoEntityContext(content, summaries, truncated)
-}
-
-func (p *WatchlistProvider) stateWithForecast(ctx context.Context, sub WatchedSubscription, state *homeassistant.State) *homeassistant.State {
-	return watchlistStateWithForecast(ctx, p.ha, p.logger, sub, state, "failed to fetch watched weather forecast")
+	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries)
 }
 
 func watchlistStateWithForecast(
