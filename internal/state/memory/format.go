@@ -2,6 +2,7 @@ package memory
 
 import (
 	"encoding/json"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -131,6 +132,13 @@ type SearchResultView struct {
 	ContextBefore []MessageView `json:"context_before"`
 	ContextAfter  []MessageView `json:"context_after"`
 	Highlight     string        `json:"highlight"`
+	// Score is the relevance signal (higher = better), rounded for
+	// model consumption. MatchType ("phrase" | "terms") records which
+	// pass produced the hit — scores are comparable within a MatchType
+	// but not across the two passes. Results are already ordered
+	// best-first regardless.
+	Score     float64 `json:"score"`
+	MatchType string  `json:"match_type,omitempty"`
 }
 
 // FormatSessionsList renders sessions as JSON suitable for tool output
@@ -215,6 +223,21 @@ func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) 
 // buildSearchResultViews is the projection step shared by the
 // single-surface and multi-surface formatters. Keeps the sender-
 // projection / context-trimming logic in one place.
+// roundScoreSignificant rounds a relevance score to sigFigs significant
+// figures so the signal survives regardless of magnitude. BM25 values
+// can be tiny on small or sparse indexes (a one-row exact phrase scores
+// around 1e-06 after negation); fixed-decimal rounding would flatten
+// those to zero and blank the model-facing score field, whereas
+// significant-figure rounding keeps the leading digits at any scale.
+func roundScoreSignificant(v float64, sigFigs int) float64 {
+	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	power := float64(sigFigs) - math.Ceil(math.Log10(math.Abs(v)))
+	mag := math.Pow(10, power)
+	return math.Round(v*mag) / mag
+}
+
 func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResultView {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {
@@ -232,6 +255,8 @@ func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResul
 			ContextBefore: searchContextViews(tailMessages(r.ContextBefore, maxSearchContextPerSide), now),
 			ContextAfter:  searchContextViews(headMessages(r.ContextAfter, maxSearchContextPerSide), now),
 			Highlight:     r.Highlight,
+			Score:         roundScoreSignificant(r.Score, 4),
+			MatchType:     r.MatchType,
 		})
 	}
 	return views
@@ -314,15 +339,17 @@ func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []by
 	}
 
 	out := struct {
-		Messages      []SearchResultView       `json:"messages"`
-		Sessions      []SessionMatchView       `json:"sessions"`
-		WorkingMemory []WorkingMemoryMatchView `json:"working_memory"`
-		Truncated     bool                     `json:"truncated"`
+		Messages       []SearchResultView       `json:"messages"`
+		Sessions       []SessionMatchView       `json:"sessions"`
+		WorkingMemory  []WorkingMemoryMatchView `json:"working_memory"`
+		Truncated      bool                     `json:"truncated"`
+		TotalEstimated int                      `json:"total_estimated,omitempty"`
 	}{
-		Messages:      msgViews,
-		Sessions:      sessViews,
-		WorkingMemory: wmViews,
-		Truncated:     truncated || b.Truncated,
+		Messages:       msgViews,
+		Sessions:       sessViews,
+		WorkingMemory:  wmViews,
+		Truncated:      truncated || b.Truncated,
+		TotalEstimated: b.TotalMessages,
 	}
 	data, _ := json.Marshal(out)
 	return data

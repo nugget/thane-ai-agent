@@ -29,24 +29,45 @@ func FormatDeltaOnly(t time.Time, now time.Time) string {
 	return fmt.Sprintf("+%ds", secs)
 }
 
+// deltaUnits maps the single-character suffix of a signed offset to its
+// duration. Seconds remain the canonical form [FormatDeltaOnly] emits;
+// minutes/hours/days/weeks are accepted on input so model-facing tools
+// can advertise human-scale windows ("-7d") instead of large second
+// counts ("-604800s").
+var deltaUnits = map[byte]time.Duration{
+	's': time.Second,
+	'm': time.Minute,
+	'h': time.Hour,
+	'd': 24 * time.Hour,
+	'w': 7 * 24 * time.Hour,
+}
+
 // ParseTimeOrDelta parses either an absolute RFC3339 timestamp or a signed
-// offset ("+3600s", "-300s") relative to now. Any tool parameter that
-// accepts a timestamp should use this for backwards-compatible offset
-// support.
+// offset relative to now. Offsets are "<sign><integer><unit>" where unit is
+// s (seconds), m (minutes), h (hours), d (days), or w (weeks) — e.g.
+// "+3600s", "-300s", "-30m", "-24h", "-7d". Any tool parameter that accepts
+// a timestamp should use this for backwards-compatible offset support.
 func ParseTimeOrDelta(s string, now time.Time) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, fmt.Errorf("empty timestamp")
 	}
 
-	// Check for signed offset format: +Ns or -Ns
-	if len(s) >= 3 && (s[0] == '+' || s[0] == '-') && s[len(s)-1] == 's' {
-		secsStr := s[1 : len(s)-1]
-		secs, err := strconv.ParseInt(secsStr, 10, 64)
+	// A leading sign unambiguously marks a signed offset (RFC3339 never
+	// starts with + or -), so parse the unit-suffixed delta form here.
+	if s[0] == '+' || s[0] == '-' {
+		if len(s) < 3 {
+			return time.Time{}, fmt.Errorf("invalid offset %q: want <sign><number><unit> (s, m, h, d, or w)", s)
+		}
+		unit, ok := deltaUnits[s[len(s)-1]]
+		if !ok {
+			return time.Time{}, fmt.Errorf("invalid offset %q: unit must be s, m, h, d, or w", s)
+		}
+		n, err := strconv.ParseInt(s[1:len(s)-1], 10, 64)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("invalid offset %q: %w", s, err)
 		}
-		d := time.Duration(secs) * time.Second
+		d := time.Duration(n) * unit
 		if s[0] == '-' {
 			return now.Add(-d), nil
 		}

@@ -87,6 +87,11 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			"windows (bounded by natural silence gaps); sessions[] carries the summarizer's " +
 			"per-session distilled metadata (title, summary, tags); working_memory[] carries " +
 			"the per-conversation living distillation written by the metacog loop. " +
+			"Results are ordered best-first; each message hit carries a relevance score and a " +
+			"match_type (phrase = exact-phrase precision, terms = broader OR-of-terms recall). " +
+			"total_estimated reports how many messages matched so you can tell when you are seeing a " +
+			"capped slice. Scope the raw-message search to a window with min_time/max_time " +
+			"(RFC3339 or a signed delta like -7d); the distilled surfaces stay unscoped. " +
 			"Use this when something jogs a memory or you need context from a prior " +
 			"conversation — the distilled surfaces are higher signal per byte and worth " +
 			"reading first when they have hits. Pair with archive_session_transcript when " +
@@ -101,6 +106,15 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 				"conversation_id": map[string]any{
 					"type":        "string",
 					"description": "Optional: scope the raw-message search to one conversation. Distilled surfaces are unscoped. Omit to search across everything.",
+				},
+				"min_time": map[string]any{
+					"type": "string",
+					"description": "Optional: only return raw-message hits at or after this time. Accepts RFC3339 " +
+						"(\"2026-04-25T14:00:00Z\") or a signed delta (\"-7d\", \"-3600s\"). Scopes the raw-message surface only; distilled surfaces stay unscoped.",
+				},
+				"max_time": map[string]any{
+					"type":        "string",
+					"description": "Optional: only return raw-message hits at or before this time. Same format as min_time.",
 				},
 				"silence_minutes": map[string]any{
 					"type":        "number",
@@ -139,6 +153,21 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			if limit, ok := args["limit"].(float64); ok && limit > 0 {
 				opts.Limit = int(limit)
 			}
+			now := time.Now()
+			if v, ok := args["min_time"].(string); ok && v != "" {
+				t, perr := promptfmt.ParseTimeOrDelta(v, now)
+				if perr != nil {
+					return "", fmt.Errorf("min_time: %w", perr)
+				}
+				opts.From = t
+			}
+			if v, ok := args["max_time"].(string); ok && v != "" {
+				t, perr := promptfmt.ParseTimeOrDelta(v, now)
+				if perr != nil {
+					return "", fmt.Errorf("max_time: %w", perr)
+				}
+				opts.To = t
+			}
 
 			bundle, err := searcher.Search(opts)
 			if err != nil {
@@ -159,13 +188,13 @@ func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {
 			//      per query), then working_memory. Honors the same
 			//      "keep at least one hit when any exist" defensive
 			//      pass at the end.
-			now := time.Now()
 			render := func(msgs, sess, wm int) []byte {
 				clipped := &memory.SearchBundle{
 					Messages:      bundle.Messages[:msgs],
 					Sessions:      bundle.Sessions[:sess],
 					WorkingMemory: bundle.WorkingMemory[:wm],
 					Truncated:     bundle.Truncated,
+					TotalMessages: bundle.TotalMessages,
 				}
 				truncated := bundle.Truncated ||
 					msgs < len(bundle.Messages) ||

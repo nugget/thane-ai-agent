@@ -277,6 +277,16 @@ type SearchResult struct {
 	ContextBefore []Message `json:"context_before"`
 	ContextAfter  []Message `json:"context_after"`
 	Highlight     string    `json:"highlight,omitempty"`
+	// Score is the relevance signal (higher is a better match). It is
+	// derived from the FTS5 BM25 rank, negated so larger means more
+	// relevant. Comparable within a MatchType bucket but not across
+	// buckets (phrase and terms passes score against different MATCH
+	// expressions). Zero on the LIKE fallback path.
+	Score float64 `json:"score"`
+	// MatchType records which pass produced the hit: "phrase" (the
+	// literal-phrase precision pass) or "terms" (the OR-of-terms
+	// recall backfill). Empty on the LIKE fallback path.
+	MatchType string `json:"match_type,omitempty"`
 }
 
 // SearchOptions configures a search query.
@@ -288,6 +298,14 @@ type SearchOptions struct {
 	MaxDuration      time.Duration // time-based cap per direction
 	Limit            int           // max results
 	NoContext        bool          // if true, return matches only (no surrounding context)
+
+	// From / To optionally scope the raw-message search to a time
+	// window (inclusive). Zero values mean unbounded on that edge.
+	// Only the raw-message FTS path honors these; the distilled
+	// session/working-memory surfaces stay unscoped, matching how
+	// ConversationID already behaves.
+	From time.Time
+	To   time.Time
 
 	// IncludeAnticipations controls whether wake-bridge synthetic
 	// "Anticipation matched: …" rows can appear in results. The
@@ -1336,6 +1354,8 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 			ContextBefore: before,
 			ContextAfter:  after,
 			Highlight:     mh.highlight,
+			Score:         mh.score,
+			MatchType:     mh.matchType,
 		})
 	}
 
@@ -1350,6 +1370,8 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 type matchWithHighlight struct {
 	msg       Message
 	highlight string
+	score     float64 // presented relevance (higher = better; negated BM25)
+	matchType string  // "phrase" | "terms" | "" (LIKE fallback)
 }
 
 // searchFTS runs the phrase-first + OR-of-terms backfill against
@@ -1373,6 +1395,7 @@ func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, erro
 	if err != nil {
 		return nil, err
 	}
+	tagMatchType(phraseHits, "phrase")
 	if len(phraseHits) >= opts.Limit {
 		return phraseHits, nil
 	}
@@ -1389,7 +1412,17 @@ func (s *ArchiveStore) searchFTS(opts SearchOptions) ([]matchWithHighlight, erro
 	if err != nil {
 		return nil, err
 	}
+	tagMatchType(backfill, "terms")
 	return mergeFTSMatches(phraseHits, backfill, opts.Limit), nil
+}
+
+// tagMatchType stamps the provenance pass onto each hit so the envelope
+// can tell the model which matches are exact-phrase (precision) versus
+// OR-of-terms backfill (recall headroom).
+func tagMatchType(matches []matchWithHighlight, kind string) {
+	for i := range matches {
+		matches[i].matchType = kind
+	}
 }
 
 // runFTSQuery executes one FTS5 expression against messages_fts
@@ -1403,27 +1436,14 @@ func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int
 
 	query := fmt.Sprintf(`
 		SELECT %s,
-		       snippet(%s, 0, '**', '**', '...', 64) as highlight
+		       snippet(%s, 0, '**', '**', '...', 64) as highlight,
+		       bm25(%s) as score
 		FROM %s
 		JOIN %s am ON %s.rowid = am.rowid
-	`, "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason",
-		ftsTable, ftsTable, msgTable, ftsTable)
+	`, ftsMatchColumns,
+		ftsTable, ftsTable, ftsTable, msgTable, ftsTable)
 
-	args := []any{ftsExpr}
-	conditions := []string{ftsTable + " MATCH ?"}
-
-	if opts.ConversationID != "" {
-		conditions = append(conditions, "am.conversation_id = ?")
-		args = append(args, opts.ConversationID)
-	}
-	if !opts.IncludeAnticipations {
-		// Wake-bridge synthetic content has its own retrieval paths
-		// (watchlist / event tools); semantic search shouldn't
-		// compete with itself. Filter at the storage layer so BM25
-		// scoring sees only the candidate set we care about.
-		conditions = append(conditions, "am.content NOT LIKE 'Anticipation matched:%'")
-	}
-
+	conditions, args := s.ftsConditions(ftsExpr, opts)
 	query += " WHERE " + strings.Join(conditions, " AND ")
 	query += " ORDER BY rank LIMIT ?"
 	args = append(args, limit)
@@ -1436,6 +1456,88 @@ func (s *ArchiveStore) runFTSQuery(ftsExpr string, opts SearchOptions, limit int
 	return scanFTSMatches(rows)
 }
 
+// ftsMatchColumns is the message-column projection shared by the FTS
+// SELECT here and the COUNT/scan paths, kept in one place so the column
+// order can't drift from [scanFTSMatches].
+const ftsMatchColumns = "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason"
+
+// ftsConditions builds the shared WHERE clause and bound args for an
+// FTS query: the MATCH expression plus optional conversation scope,
+// anticipation exclusion, and time-range bounds. Shared by
+// [runFTSQuery] and [countMatches] so the candidate set BM25 ranks over
+// and the total it is drawn from never diverge.
+//
+// The anticipation exclusion drops wake-bridge synthetic content
+// ("Anticipation matched: …"), which has its own retrieval paths and
+// whose dense-keyword shape would otherwise dominate BM25.
+//
+// Time bounds are compared through SQLite's datetime() on both sides so
+// the filter is storage-format agnostic: this same code serves legacy
+// mode (archive_messages, RFC3339Nano "T"-separated strings) and unified
+// mode (messages, go-sqlite3's space-separated native form). A raw
+// string compare would silently mismatch at the window edges in one of
+// the two modes (" " 0x20 < "T" 0x54); datetime() normalizes both forms
+// to a canonical second-granular value first. The candidate set is
+// already constrained by the FTS MATCH, so the per-row datetime() call
+// is cheap.
+func (s *ArchiveStore) ftsConditions(ftsExpr string, opts SearchOptions) ([]string, []any) {
+	conditions := []string{s.msgFTSName + " MATCH ?"}
+	args := []any{ftsExpr}
+	if opts.ConversationID != "" {
+		conditions = append(conditions, "am.conversation_id = ?")
+		args = append(args, opts.ConversationID)
+	}
+	if !opts.IncludeAnticipations {
+		conditions = append(conditions, "am.content NOT LIKE 'Anticipation matched:%'")
+	}
+	if !opts.From.IsZero() {
+		conditions = append(conditions, "datetime(am.timestamp) >= datetime(?)")
+		args = append(args, opts.From.UTC().Format(time.RFC3339Nano))
+	}
+	if !opts.To.IsZero() {
+		conditions = append(conditions, "datetime(am.timestamp) <= datetime(?)")
+		args = append(args, opts.To.UTC().Format(time.RFC3339Nano))
+	}
+	return conditions, args
+}
+
+// countMatches returns how many archived messages match ftsExpr under
+// the same filters runFTSQuery applies, before the result limit. It
+// powers the envelope's total_estimated overflow gauge.
+func (s *ArchiveStore) countMatches(ftsExpr string, opts SearchOptions) (int, error) {
+	ftsTable := s.msgFTSName
+	msgTable := s.msgTableName
+	conditions, args := s.ftsConditions(ftsExpr, opts)
+	query := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM %s
+		JOIN %s am ON %s.rowid = am.rowid
+		WHERE %s
+	`, ftsTable, msgTable, ftsTable, strings.Join(conditions, " AND "))
+	var n int
+	if err := s.msgDB().QueryRow(query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count matches: %w", err)
+	}
+	return n, nil
+}
+
+// CountMatches estimates the total raw-message hits for a query under
+// the given options — the broadest (OR-of-terms) recall set, so it
+// answers "how many messages match any of these terms" rather than the
+// narrower phrase count. Returns 0 with no error when FTS5 is
+// unavailable (the LIKE fallback path skips the estimate). Used by
+// [MemorySearch.Search] to populate the envelope's total_estimated.
+func (s *ArchiveStore) CountMatches(opts SearchOptions) (int, error) {
+	if !s.ftsEnabled {
+		return 0, nil
+	}
+	expr := orFTS5Query(opts.Query)
+	if expr == "" {
+		return 0, nil
+	}
+	return s.countMatches(expr, opts)
+}
+
 // searchLIKE runs the FTS5-unavailable fallback path. Less
 // precise (substring match, no BM25 ranking) but functional. The
 // anticipation filter applies here too — same rationale as the
@@ -1446,7 +1548,8 @@ func (s *ArchiveStore) searchLIKE(opts SearchOptions) ([]matchWithHighlight, err
 
 	query := fmt.Sprintf(`
 		SELECT %s,
-		       '' as highlight
+		       '' as highlight,
+		       0.0 as score
 		FROM %s
 	`, cols, msgTable)
 	args := []any{"%" + opts.Query + "%"}
@@ -1458,6 +1561,18 @@ func (s *ArchiveStore) searchLIKE(opts SearchOptions) ([]matchWithHighlight, err
 	}
 	if !opts.IncludeAnticipations {
 		conditions = append(conditions, "content NOT LIKE 'Anticipation matched:%'")
+	}
+	// Time-range facet applies on the fallback path too — the feature
+	// must not silently no-op when FTS5 is unavailable. datetime() on
+	// both sides keeps the compare storage-format agnostic (see
+	// ftsConditions).
+	if !opts.From.IsZero() {
+		conditions = append(conditions, "datetime(timestamp) >= datetime(?)")
+		args = append(args, opts.From.UTC().Format(time.RFC3339Nano))
+	}
+	if !opts.To.IsZero() {
+		conditions = append(conditions, "datetime(timestamp) <= datetime(?)")
+		args = append(args, opts.To.UTC().Format(time.RFC3339Nano))
 	}
 
 	query += " WHERE " + strings.Join(conditions, " AND ")
@@ -1480,13 +1595,14 @@ func scanFTSMatches(rows *sql.Rows) ([]matchWithHighlight, error) {
 	for rows.Next() {
 		var m Message
 		var highlight string
+		var bm25 float64
 		var tsStr, archivedStr string
 		var toolCalls, toolCallID sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SessionID, &m.Role, &m.Content,
 			&tsStr, &m.TokenCount, &toolCalls, &toolCallID,
-			&archivedStr, &m.ArchiveReason, &highlight,
+			&archivedStr, &m.ArchiveReason, &highlight, &bm25,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -1507,7 +1623,10 @@ func scanFTSMatches(rows *sql.Rows) ([]matchWithHighlight, error) {
 			m.ToolCallID = toolCallID.String
 		}
 
-		matches = append(matches, matchWithHighlight{msg: m, highlight: highlight})
+		// BM25 returns more-negative for better matches; negate so the
+		// model-facing score reads higher = more relevant. The LIKE
+		// fallback selects 0.0, which negates to a harmless 0.
+		matches = append(matches, matchWithHighlight{msg: m, highlight: highlight, score: -bm25})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate results: %w", err)

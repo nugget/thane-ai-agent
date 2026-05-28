@@ -8,6 +8,49 @@ import (
 	"unicode/utf8"
 )
 
+// TestFormatMultiKindResults_PreservesSmallScore guards the #943
+// relevance signal: a tiny BM25 score (a one-row exact phrase scores
+// around 1e-06 after negation) must survive significant-figure rounding
+// into the envelope rather than flatten to 0. Also asserts match_type
+// and total_estimated reach the JSON.
+func TestFormatMultiKindResults_PreservesSmallScore(t *testing.T) {
+	now := time.Now()
+	bundle := &SearchBundle{
+		Messages: []SearchResult{
+			{
+				Match:     Message{ID: "m1", Role: "user", Content: "office door state", Timestamp: now},
+				Score:     0.000001,
+				MatchType: "phrase",
+			},
+		},
+		TotalMessages: 1,
+	}
+	out := FormatMultiKindResults(bundle, now, false)
+
+	var parsed struct {
+		Messages []struct {
+			Score     float64 `json:"score"`
+			MatchType string  `json:"match_type"`
+		} `json:"messages"`
+		TotalEstimated int `json:"total_estimated"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("envelope did not round-trip: %v\n%s", err, out)
+	}
+	if len(parsed.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1\n%s", len(parsed.Messages), out)
+	}
+	if parsed.Messages[0].Score == 0 {
+		t.Errorf("score flattened to 0 in envelope — relevance signal lost:\n%s", out)
+	}
+	if parsed.Messages[0].MatchType != "phrase" {
+		t.Errorf("match_type = %q, want phrase", parsed.Messages[0].MatchType)
+	}
+	if parsed.TotalEstimated != 1 {
+		t.Errorf("total_estimated = %d, want 1", parsed.TotalEstimated)
+	}
+}
+
 func TestFormatSessionsList_StableSchema(t *testing.T) {
 	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
 	endedAt := now.Add(-30 * time.Minute)
