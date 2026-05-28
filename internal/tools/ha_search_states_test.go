@@ -146,6 +146,32 @@ func TestHASearchStates_RendersIncludeMetadataWithoutLeakingAreaOnAreaFilter(t *
 	}
 }
 
+func TestHASearchStates_ScopedEnrichmentWithoutAreaFilter(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{
+		{EntityID: "sensor.office_temp", State: "72", Attributes: map[string]any{"friendly_name": "Office Temp"}},
+	}
+	fake.entityRows = []map[string]any{
+		{"entity_id": "sensor.office_temp", "description": "Ambient office temperature", "platform": "zwave_js"},
+	}
+	reg := fake.registry(t)
+
+	// include without area must still render description metadata —
+	// this exercises the post-limit scoped registry fetch path
+	// (fetchHAEntityMetadataBundleForEntityIDs), not the bulk path.
+	result, err := reg.Execute(context.Background(), "ha_search_states", `{"state":["72"],"include":{"description":true}}`)
+	if err != nil {
+		t.Fatalf("ha_search_states: %v", err)
+	}
+	res := decodeSearchStates(t, result)
+	if len(res.Items) != 1 || res.Items[0].Metadata == nil {
+		t.Fatalf("expected one enriched item, got %#v", res.Items)
+	}
+	if res.Items[0].Metadata.Description != "Ambient office temperature" {
+		t.Errorf("description = %q, want registry description", res.Items[0].Metadata.Description)
+	}
+}
+
 func TestHASearchStates_RequiresAFilter(t *testing.T) {
 	fake := newFakeHAServer(t)
 	reg := fake.registry(t)

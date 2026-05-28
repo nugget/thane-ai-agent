@@ -146,25 +146,30 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 		candidates = append(candidates, s)
 	}
 
-	// Pass 2: area filter and/or metadata enrichment need the registry.
-	// Fetch one full-registry bundle (single GetEntityRegistry pass plus
-	// the area/device/label/floor reads the include implies) rather than
-	// one registry call per candidate.
-	working := q.include
-	if q.area != "" {
-		working.Area = true
-	}
+	// Pass 2: area filtering and metadata enrichment need the registry.
+	// The access pattern is deliberately bounded for production scale
+	// (15k+ live entities): at most one bulk GetStates (above) plus at
+	// most one projection-gated registry read here — never a per-entity
+	// registry loop over the full candidate set.
+	//
+	//   - With an area filter we need the entity->area mapping for the
+	//     whole candidate set (before limiting), so we pull one bulk
+	//     registry snapshot, gated to the requested projection, and
+	//     reuse it for output enrichment too.
+	//   - Without an area filter we defer the registry read until after
+	//     the limit is applied and fetch only the rows we actually
+	//     return, so an enriched search never pulls the entire entity
+	//     registry just to render a single page of results.
 	var bundle *haEntityMetadataBundle
-	if working.Any() {
+	if q.area != "" {
+		working := q.include
+		working.Area = true
 		bundle, err = fetchHAEntityMetadataBundle(ctx, r.ha, working)
 		if err != nil {
 			return "", err
 		}
-	}
-
-	if q.area != "" {
-		filtered := candidates[:0]
 		areaOnly := homeassistant.EntityMetadataIncludes{Area: true}
+		filtered := candidates[:0]
 		for _, s := range candidates {
 			meta := bundle.resolver.MetadataForEntity(bundle.entries[s.EntityID], &s, areaOnly)
 			if meta == nil || meta.Area == nil || !areaMetadataMatches(meta.Area, q.area) {
@@ -178,6 +183,19 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 	total := len(candidates)
 	if len(candidates) > q.limit {
 		candidates = candidates[:q.limit]
+	}
+
+	// No area filter but enrichment requested: fetch registry rows only
+	// for the limited result set rather than the whole registry.
+	if q.include.Any() && bundle == nil {
+		ids := make([]string, 0, len(candidates))
+		for i := range candidates {
+			ids = append(ids, candidates[i].EntityID)
+		}
+		bundle, err = fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, q.include, ids)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	items := make([]haListEntityItem, 0, len(candidates))
