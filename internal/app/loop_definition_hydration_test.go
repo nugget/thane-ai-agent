@@ -14,8 +14,29 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
+	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
+
+// coreServiceTestConfig returns a config with all three model-facing
+// core service loops enabled and valid sleep envelopes, mirroring what
+// applyDefaults stamps in production (which the app-package test can't
+// call directly since it's unexported in the config package).
+func coreServiceTestConfig() *config.Config {
+	return &config.Config{
+		Metacognitive: config.MetacognitiveConfig{
+			Enabled: true, MinSleep: "2m", MaxSleep: "30m", DefaultSleep: "10m",
+		},
+		Ego: config.EgoConfig{
+			Enabled: true, MinSleep: "30m", MaxSleep: "24h", DefaultSleep: "6h",
+		},
+		Curator: config.CuratorConfig{
+			Enabled: true, MinSleep: "15m", MaxSleep: "12h", DefaultSleep: "1h",
+		},
+	}
+}
 
 type testDeviceLocator struct {
 	locations []unifi.DeviceLocation
@@ -176,6 +197,109 @@ func TestBuildLoopDefinitionBaseSpecs_SkipsDuplicateBuiltinNames(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("mqtt definition count = %d, want 1", count)
+	}
+}
+
+// TestBuildLoopDefinitionBaseSpecs_AppendsCoreServiceLoops covers the
+// coreServiceLoops registration path: enabled ego/metacognitive/curator
+// definitions are appended and their parsed configs cached for later
+// hydration. Replaces the assertions the three hand-written blocks used
+// to carry before #988 collapsed them behind one descriptor slice.
+func TestBuildLoopDefinitionBaseSpecs_AppendsCoreServiceLoops(t *testing.T) {
+	t.Parallel()
+
+	a := &App{cfg: coreServiceTestConfig()}
+	specs, err := a.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+
+	want := map[string]bool{
+		metacognitive.DefinitionName: false,
+		ego.DefinitionName:           false,
+		curator.DefinitionName:       false,
+	}
+	for _, spec := range specs {
+		if _, ok := want[spec.Name]; ok {
+			want[spec.Name] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("core service definition %q missing from base specs", name)
+		}
+	}
+
+	// Each enabled core loop must cache its parsed config so
+	// hydrateLoopDefinitionSpec can attach runtime hooks later.
+	if a.metacogCfg == nil {
+		t.Error("metacogCfg not cached after build")
+	}
+	if a.egoCfg == nil {
+		t.Error("egoCfg not cached after build")
+	}
+	if a.curatorCfg == nil {
+		t.Error("curatorCfg not cached after build")
+	}
+}
+
+// TestCoreServiceLoopByNameMatchesSlice guards the invariant that the
+// hydration dispatch index stays in lockstep with the registration
+// slice — and that all three model-facing core loops are registered.
+func TestCoreServiceLoopByNameMatchesSlice(t *testing.T) {
+	t.Parallel()
+
+	if len(coreServiceLoopByName) != len(coreServiceLoops) {
+		t.Fatalf("index size %d != slice size %d", len(coreServiceLoopByName), len(coreServiceLoops))
+	}
+	for _, reg := range coreServiceLoops {
+		indexed, ok := coreServiceLoopByName[reg.Name]
+		if !ok {
+			t.Errorf("registration %q missing from dispatch index", reg.Name)
+			continue
+		}
+		if indexed.Name != reg.Name {
+			t.Errorf("index[%q].Name = %q", reg.Name, indexed.Name)
+		}
+	}
+	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, curator.DefinitionName} {
+		if _, ok := coreServiceLoopByName[name]; !ok {
+			t.Errorf("core loop %q not registered in coreServiceLoops", name)
+		}
+	}
+}
+
+// TestCoreServiceRegistrationHydrate exercises each registration's
+// Hydrate closure directly: a missing cached config is a hard error,
+// and a hydrated spec carries the runtime task builder. Driving the
+// closures (rather than hydrateLoopDefinitionSpec) keeps the test
+// focused on the #988 dispatch contract without pulling in the
+// document-output hydration machinery.
+func TestCoreServiceRegistrationHydrate(t *testing.T) {
+	t.Parallel()
+
+	cfg := coreServiceTestConfig()
+	for _, reg := range coreServiceLoops {
+		t.Run(reg.Name, func(t *testing.T) {
+			// Missing cached config: a definition can't hydrate
+			// without the config that shapes its runtime behavior.
+			bare := &App{cfg: cfg}
+			if _, err := reg.Hydrate(bare, looppkg.Spec{Name: reg.Name}); err == nil {
+				t.Fatalf("Hydrate without cached config: expected error, got nil")
+			}
+
+			a := &App{cfg: cfg}
+			if err := reg.ParseAndCache(a, cfg); err != nil {
+				t.Fatalf("ParseAndCache: %v", err)
+			}
+			spec, err := reg.Hydrate(a, looppkg.Spec{Name: reg.Name})
+			if err != nil {
+				t.Fatalf("Hydrate: %v", err)
+			}
+			if spec.TaskBuilder == nil {
+				t.Error("Hydrate did not attach TaskBuilder")
+			}
+		})
 	}
 }
 
