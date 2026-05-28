@@ -94,14 +94,17 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	// present) and reuse it for every glob — one bulk GetStates per
 	// render, never a per-entity scan. Concrete subscriptions keep their
 	// targeted GetState path.
-	states := newLazyStates(p.ha, p.logger)
+	snap := newLazyStates(p.ha, p.logger)
 
 	// Body first so an all-empty render (e.g. globs that matched nothing
 	// this turn) yields no bare header.
 	var body strings.Builder
 	for _, sub := range subs {
 		if homeassistant.IsEntityGlob(sub.EntityID) {
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states.get(ctx), now, registries, p.maxGlobExpansion))
+			states, statesErr := snap.get(ctx)
+			// No exclusion set — this provider IS the always-visible
+			// surface, so there is nothing upstream to dedup against.
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.maxGlobExpansion, nil))
 			continue
 		}
 		body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))

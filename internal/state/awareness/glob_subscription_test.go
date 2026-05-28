@@ -2,8 +2,11 @@ package awareness
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
@@ -84,6 +87,53 @@ func TestProvider_GlobSubscriptionEmptyIsSilent(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("a glob matching nothing should render nothing (no bare header), got:\n%s", got)
+	}
+}
+
+func TestProvider_GlobSubscriptionFetchErrorMarker(t *testing.T) {
+	ha := globTestHA()
+	ha.statesErr = errors.New("HA unavailable")
+	p, store := setupTestProvider(t, ha)
+	if err := store.Add("binary_sensor.*door*"); err != nil {
+		t.Fatalf("add glob: %v", err)
+	}
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	// A failed bulk fetch must surface an explicit marker, not look like
+	// "matched nothing".
+	if !strings.Contains(got, `"reason":"fetch_error"`) || !strings.Contains(got, `"glob":"binary_sensor.*door*"`) {
+		t.Errorf("expected glob fetch-error marker, got:\n%s", got)
+	}
+}
+
+func TestExpandGlobSubscription_ExcludesAlreadyVisible(t *testing.T) {
+	states := []homeassistant.State{
+		{EntityID: "sensor.a", State: "1"},
+		{EntityID: "sensor.b", State: "2"},
+		{EntityID: "sensor.c", State: "3"},
+	}
+	exclude := map[string]struct{}{"sensor.b": {}}
+
+	out := expandGlobSubscription(
+		context.Background(),
+		globTestHA(),
+		slog.Default(),
+		WatchedSubscription{EntityID: "sensor.*"},
+		states,
+		nil, // no fetch error
+		time.Now(),
+		nil, // no registries
+		25,
+		exclude,
+	)
+	if !strings.Contains(out, "sensor.a") || !strings.Contains(out, "sensor.c") {
+		t.Errorf("expected sensor.a and sensor.c, got:\n%s", out)
+	}
+	if strings.Contains(out, "sensor.b") {
+		t.Errorf("sensor.b should be excluded (already-visible), got:\n%s", out)
 	}
 }
 

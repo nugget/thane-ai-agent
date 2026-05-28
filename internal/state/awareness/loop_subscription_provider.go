@@ -122,7 +122,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	// render; fetch that snapshot once (lazily, only if a glob is
 	// present) and reuse it across every glob — one bulk GetStates per
 	// render. Concrete subscriptions keep their targeted GetState path.
-	states := newLazyStates(p.ha, p.logger)
+	snap := newLazyStates(p.ha, p.logger)
 
 	// Render the body first so an all-expired list yields no header.
 	// Otherwise a quiescent loop whose TTLs all elapsed would still
@@ -134,11 +134,11 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 			continue
 		}
 		if homeassistant.IsEntityGlob(sub.EntityID) {
-			// Cross-provider dedup is by exact entity_id, so a glob's
-			// expanded matches aren't deduped against always-visible
-			// entries — an acceptable rare double-render for an opt-in
-			// glob, not worth sharing state across providers.
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), states.get(ctx), now, registries, p.maxGlobExpansion))
+			states, statesErr := snap.get(ctx)
+			// Pass alreadyVisible so a loop glob (e.g. sensor.*) doesn't
+			// re-render entities the always-visible watchlist already
+			// injects — same dedup the concrete path applies below.
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
 			continue
 		}
 		if _, dup := alreadyVisible[sub.EntityID]; dup {

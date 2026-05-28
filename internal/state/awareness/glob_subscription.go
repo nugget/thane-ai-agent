@@ -36,6 +36,7 @@ type lazyStates struct {
 	ha     StateGetter
 	logger *slog.Logger
 	states []homeassistant.State
+	err    error
 	done   bool
 }
 
@@ -43,20 +44,21 @@ func newLazyStates(ha StateGetter, logger *slog.Logger) *lazyStates {
 	return &lazyStates{ha: ha, logger: logger}
 }
 
-func (l *lazyStates) get(ctx context.Context) []homeassistant.State {
+// get returns the live state snapshot and the fetch error, caching both
+// so repeated glob expansions in one render share a single GetStates.
+// The error is surfaced (not swallowed) so the caller can render an
+// explicit fetch-error marker rather than hide an active glob as if it
+// matched nothing.
+func (l *lazyStates) get(ctx context.Context) ([]homeassistant.State, error) {
 	if l.done {
-		return l.states
+		return l.states, l.err
 	}
 	l.done = true
-	s, err := l.ha.GetStates(ctx)
-	if err != nil {
-		if l.logger != nil {
-			l.logger.Warn("failed to fetch states for glob subscription expansion", "error", err)
-		}
-		return nil
+	l.states, l.err = l.ha.GetStates(ctx)
+	if l.err != nil && l.logger != nil {
+		l.logger.Warn("failed to fetch states for glob subscription expansion", "error", l.err)
 	}
-	l.states = s
-	return l.states
+	return l.states, l.err
 }
 
 // renderWatchedState renders one entity's watched-context block from an
@@ -103,6 +105,15 @@ func renderWatchedState(
 // the subscription's own options applied to each — and appending a
 // truncation marker when more matched than the cap.
 //
+// statesErr is the error from the bulk GetStates that produced states.
+// When non-nil the snapshot couldn't be enumerated, so the glob renders
+// an explicit fetch-error marker rather than silently looking like it
+// matched nothing — mirroring the concrete path's fetch_error block.
+//
+// exclude is the set of entity_ids already rendered elsewhere (the
+// always-visible watchlist, for loop-scoped globs); matches in it are
+// skipped to avoid duplicate prompt blocks. Pass nil for no exclusion.
+//
 // Returns "" when the glob matches nothing this turn; the subscription
 // stays live and is re-evaluated next render, so a silent empty turn is
 // the intended "nothing matches right now" signal rather than an error.
@@ -114,16 +125,24 @@ func expandGlobSubscription(
 	logger *slog.Logger,
 	sub WatchedSubscription,
 	states []homeassistant.State,
+	statesErr error,
 	now time.Time,
 	registries *renderRegistries,
 	maxExpansion int,
+	exclude map[string]struct{},
 ) string {
 	pattern := sub.EntityID
+	if statesErr != nil {
+		return formatGlobFetchError(pattern) + "\n"
+	}
 	stateByID := make(map[string]*homeassistant.State, len(states))
 	matchedIDs := make([]string, 0)
 	for i := range states {
 		s := &states[i]
 		stateByID[s.EntityID] = s
+		if _, skip := exclude[s.EntityID]; skip {
+			continue
+		}
 		if ok, _ := homeassistant.MatchEntityGlob(pattern, s.EntityID); ok {
 			matchedIDs = append(matchedIDs, s.EntityID)
 		}
@@ -152,6 +171,20 @@ func expandGlobSubscription(
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// formatGlobFetchError renders the marker emitted when the live state
+// snapshot needed to expand a glob couldn't be fetched this turn. It
+// mirrors the concrete path's fetch_error shape so the model reads a
+// uniform "active but unavailable" signal instead of inferring the glob
+// matched nothing.
+func formatGlobFetchError(pattern string) string {
+	return promptfmt.MarshalCompact(map[string]any{
+		"glob":      pattern,
+		"available": false,
+		"reason":    "fetch_error",
+		"note":      "could not enumerate entities to expand this glob this turn",
+	})
 }
 
 // formatGlobTruncation renders the marker line appended when a glob
