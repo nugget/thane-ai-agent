@@ -124,6 +124,33 @@ set ("check every door sensor"). Returns structured entity rows; add
 metadata when the model needs room, device, label, or description
 context to choose the right follow-up.
 
+## I want everything matching a live-state condition
+
+`ha_search_states` filters by *current state* across all domains —
+the native answer to "what's on right now," "what doors are open,"
+"which sensors are unavailable," "what batteries are low":
+
+```json
+{
+  "state": ["on"],
+  "area": "office"
+}
+```
+
+```json
+{
+  "attribute": "battery",
+  "comparison": "<",
+  "value": 20
+}
+```
+
+Filters compose (AND): pair a `state` set with a `domain` or `area`,
+or use a numeric `attribute`/`comparison`/`value` predicate for
+threshold questions. This is the right reach instead of fanning out
+many `ha_get_state` calls or listing a whole domain and eyeballing it.
+Add `include` for area/device/label/visibility metadata on each match.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities

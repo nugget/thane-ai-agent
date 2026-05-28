@@ -112,6 +112,7 @@ becoming default context clutter.
 | `ha_find_entity` | Smart entity discovery across HA domains, optionally enriched with HA metadata. |
 | `ha_get_state` | Current state of any entity, with optional area/device/label/description/visibility metadata. |
 | `ha_list_entities` | Browse entities by domain with optional HA metadata. |
+| `ha_search_states` | Predicate search across live entity state (state value, numeric attribute, domain, area). |
 | `ha_call_service` | Direct HA service invocation. |
 | `ha_registry_search` | Search the entity/device/area registry. |
 | `ha_automation_list` | List automations with recent activation counts. |
