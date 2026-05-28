@@ -2,6 +2,7 @@ package memory
 
 import (
 	"encoding/json"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -131,6 +132,13 @@ type SearchResultView struct {
 	ContextBefore []MessageView `json:"context_before"`
 	ContextAfter  []MessageView `json:"context_after"`
 	Highlight     string        `json:"highlight"`
+	// Score is the relevance signal (higher = better), rounded for
+	// model consumption. MatchType ("phrase" | "terms") records which
+	// pass produced the hit — scores are comparable within a MatchType
+	// but not across the two passes. Results are already ordered
+	// best-first regardless.
+	Score     float64 `json:"score"`
+	MatchType string  `json:"match_type,omitempty"`
 }
 
 // FormatSessionsList renders sessions as JSON suitable for tool output
@@ -232,6 +240,8 @@ func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResul
 			ContextBefore: searchContextViews(tailMessages(r.ContextBefore, maxSearchContextPerSide), now),
 			ContextAfter:  searchContextViews(headMessages(r.ContextAfter, maxSearchContextPerSide), now),
 			Highlight:     r.Highlight,
+			Score:         math.Round(r.Score*100) / 100,
+			MatchType:     r.MatchType,
 		})
 	}
 	return views
@@ -314,15 +324,17 @@ func FormatMultiKindResults(b *SearchBundle, now time.Time, truncated bool) []by
 	}
 
 	out := struct {
-		Messages      []SearchResultView       `json:"messages"`
-		Sessions      []SessionMatchView       `json:"sessions"`
-		WorkingMemory []WorkingMemoryMatchView `json:"working_memory"`
-		Truncated     bool                     `json:"truncated"`
+		Messages       []SearchResultView       `json:"messages"`
+		Sessions       []SessionMatchView       `json:"sessions"`
+		WorkingMemory  []WorkingMemoryMatchView `json:"working_memory"`
+		Truncated      bool                     `json:"truncated"`
+		TotalEstimated int                      `json:"total_estimated,omitempty"`
 	}{
-		Messages:      msgViews,
-		Sessions:      sessViews,
-		WorkingMemory: wmViews,
-		Truncated:     truncated || b.Truncated,
+		Messages:       msgViews,
+		Sessions:       sessViews,
+		WorkingMemory:  wmViews,
+		Truncated:      truncated || b.Truncated,
+		TotalEstimated: b.TotalMessages,
 	}
 	data, _ := json.Marshal(out)
 	return data

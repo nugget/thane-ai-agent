@@ -2047,6 +2047,106 @@ func TestSearch_PhraseFirstPreferred(t *testing.T) {
 	}
 }
 
+// TestSearch_TimeRangeScopesMessages verifies the #943 time_range
+// facet: From/To bound the raw-message surface to a window. The
+// datetime()-normalized compare must work against the legacy store's
+// RFC3339Nano timestamps.
+func TestSearch_TimeRangeScopesMessages(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		{ID: "old", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
+			Content: "pool heater status check", Timestamp: base, ArchiveReason: string(ArchiveReasonReset)},
+		{ID: "mid", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
+			Content: "pool heater status check", Timestamp: base.Add(2 * time.Hour), ArchiveReason: string(ArchiveReasonReset)},
+		{ID: "new", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
+			Content: "pool heater status check", Timestamp: base.Add(4 * time.Hour), ArchiveReason: string(ArchiveReasonReset)},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := store.Search(SearchOptions{
+		Query:     "pool heater status",
+		Limit:     10,
+		NoContext: true,
+		From:      base.Add(time.Hour),
+		To:        base.Add(3 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, r := range res {
+		ids[r.Match.ID] = true
+	}
+	if !ids["mid"] {
+		t.Errorf("expected 'mid' inside the window, got %v", ids)
+	}
+	if ids["old"] || ids["new"] {
+		t.Errorf("out-of-window messages leaked into results: %v", ids)
+	}
+}
+
+// TestSearch_SurfacesScoreAndMatchType verifies the #943 relevance
+// signals: each hit carries a positive score (higher = better) and a
+// match_type marking the phrase-precision pass.
+func TestSearch_SurfacesScoreAndMatchType(t *testing.T) {
+	store := newTestArchiveStore(t)
+	if !store.ftsEnabled {
+		t.Skip("BM25 score and phrase/terms match_type require FTS5 (build with -tags sqlite_fts5)")
+	}
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	if err := store.ArchiveMessages([]Message{
+		{ID: "m1", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
+			Content: "the office door state is open", Timestamp: base, ArchiveReason: string(ArchiveReasonReset)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := store.Search(SearchOptions{Query: "office door state", Limit: 5, NoContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) == 0 {
+		t.Fatal("expected a hit")
+	}
+	if res[0].MatchType != "phrase" {
+		t.Errorf("match_type = %q, want phrase", res[0].MatchType)
+	}
+	if res[0].Score <= 0 {
+		t.Errorf("score = %v, want > 0 (negated BM25, higher = better)", res[0].Score)
+	}
+}
+
+// TestSearch_CountMatchesEstimatesTotal verifies total_estimated: the
+// OR-of-terms recall count reflects every matching message, even past
+// the result limit.
+func TestSearch_CountMatchesEstimatesTotal(t *testing.T) {
+	store := newTestArchiveStore(t)
+	if !store.ftsEnabled {
+		t.Skip("total_estimated (OR-of-terms recall count) requires FTS5 (build with -tags sqlite_fts5)")
+	}
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	var msgs []Message
+	for i := 0; i < 7; i++ {
+		msgs = append(msgs, Message{
+			ID: fmt.Sprintf("m%d", i), ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
+			Content: "pool heater note", Timestamp: base.Add(time.Duration(i) * time.Minute), ArchiveReason: string(ArchiveReasonReset),
+		})
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+	total, err := store.CountMatches(SearchOptions{Query: "pool heater"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 7 {
+		t.Errorf("CountMatches = %d, want 7", total)
+	}
+}
+
 // TestSearch_AnticipationsFilteredByDefault verifies that
 // wake-bridge synthetic "Anticipation matched: …" rows are
 // excluded from search results by default and only appear when

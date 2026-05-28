@@ -20,6 +20,11 @@ type SearchBundle struct {
 	Sessions      []SessionMatch
 	WorkingMemory []WorkingMemoryMatch
 	Truncated     bool
+	// TotalMessages estimates how many raw messages matched the query
+	// before the limit (the broadest OR-of-terms recall set), so the
+	// model can gauge overflow without a cursor. Zero when unknown
+	// (FTS5 unavailable or the count failed).
+	TotalMessages int
 }
 
 // MemorySearcher is the unified read-side interface across the
@@ -104,6 +109,14 @@ func (m *MemorySearch) Search(opts SearchOptions) (*SearchBundle, error) {
 		return nil, err
 	}
 	bundle.Messages = msgs
+
+	// Total raw-message matches (pre-limit) for the overflow gauge.
+	// Soft-fail: an estimate failure must not drop the hits we have.
+	if total, err := m.archive.CountMatches(opts); err == nil {
+		bundle.TotalMessages = total
+	} else if m.logger != nil {
+		m.logger.Warn("message match count failed", "query", opts.Query, "error", err)
+	}
 
 	// Session summaries. Soft-fail: a sessions_fts query error
 	// shouldn't drop the raw-message results we already collected.
