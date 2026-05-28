@@ -113,6 +113,10 @@ func (a *App) initAwareness(s *newState) error {
 			Client: a.ha,
 			Logger: logger,
 		}))
+		a.loop.Tools().RegisterProvider(awareness.NewEntityTrendTools(awareness.EntityTrendToolsConfig{
+			Client: a.ha,
+			Logger: logger,
+		}))
 	}
 
 	// --- State change window ---
