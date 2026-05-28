@@ -494,5 +494,11 @@ func (a *App) initStores(s *newState) error {
 		return nil
 	})
 
+	// Hook EndSession → curator wake. Must come after archiveStore is
+	// constructed and the loop registry exists (both are guaranteed at
+	// this point in initStores). No-op when curator is disabled in
+	// config. See issue #989.
+	a.wireSessionCloseToCuratorWake()
+
 	return nil
 }
