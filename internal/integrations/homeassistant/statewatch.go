@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"path"
 	"sync"
 	"time"
 )
@@ -38,7 +37,7 @@ func (f *EntityFilter) Match(entityID string) bool {
 		return true
 	}
 	for _, pat := range f.patterns {
-		matched, err := path.Match(pat, entityID)
+		matched, err := MatchEntityGlob(pat, entityID)
 		if err != nil {
 			f.logger.Debug("glob match error", "pattern", pat, "entity_id", entityID, "error", err)
 			continue

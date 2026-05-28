@@ -18,7 +18,8 @@ type haEntityMetadataBundle struct {
 }
 
 type haListEntitiesResult struct {
-	Domain    string             `json:"domain"`
+	Domain    string             `json:"domain,omitempty"`
+	Pattern   string             `json:"pattern,omitempty"`
 	Count     int                `json:"count"`
 	Total     int                `json:"total"`
 	Truncated bool               `json:"truncated,omitempty"`

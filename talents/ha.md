@@ -124,6 +124,21 @@ set ("check every door sensor"). Returns structured entity rows; add
 metadata when the model needs room, device, label, or description
 context to choose the right follow-up.
 
+For substring or cross-domain matches, pass a `pattern` glob over the
+full entity_id instead of (or alongside) `domain`:
+
+```json
+{
+  "pattern": "binary_sensor.*door*"
+}
+```
+
+`*` matches any run of characters, so `*_temperature` spans domains and
+`light.office_*` narrows within one. Domain and pattern combine (AND)
+when both are given. This is for *naming*-shaped discovery; to find
+entities by their live *state* (what's on, what's open, low batteries),
+reach for `ha_search_states` instead.
+
 ## I want everything matching a live-state condition
 
 `ha_search_states` filters by *current state* across all domains —
