@@ -97,7 +97,22 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 	}
 	area, ok := resolveArea(areas, req.Area)
 	if !ok {
-		return "", fmt.Errorf("area_activity: no area matched %q", req.Area)
+		// A bad or stale area name is recoverable: return a structured
+		// "did you mean?" with candidate areas instead of a flat error,
+		// mirroring ha_device's not-found shape.
+		payload := map[string]any{
+			"found":          false,
+			"reason":         "not_found",
+			"requested_area": req.Area,
+			"note":           "area not found. Pick a candidate, or use ha_registry_search to look up the area name/id; do not retry with a guessed area.",
+		}
+		if cands := suggestAreaCandidates(areas, req.Area); len(cands) > 0 {
+			payload["candidates"] = cands
+		} else {
+			payload["available_areas"] = listAreas(areas, maxAreaSuggestions)
+			payload["note"] = "area not found and nothing similar matched. Choose from available_areas, or use ha_registry_search to discover the right area."
+		}
+		return promptfmt.MarshalCompact(payload), nil
 	}
 
 	entities, err := client.GetEntityRegistry(ctx)
@@ -253,6 +268,71 @@ func resolveArea(areas []homeassistant.Area, query string) (homeassistant.Area, 
 		}
 	}
 	return homeassistant.Area{}, false
+}
+
+// maxAreaSuggestions caps the candidate / available-area lists returned
+// when get_area_activity can't resolve the requested area.
+const maxAreaSuggestions = 8
+
+// suggestAreaCandidates returns the areas whose name, id, or alias
+// overlaps the query (by substring or shared word), as {area_id, name}
+// pairs for chaining. It is the area-shaped sibling of the entity
+// "did you mean?" suggestion: a deliberately simple match, not a scorer,
+// so a near-miss surfaces real area ids without guessing.
+func suggestAreaCandidates(areas []homeassistant.Area, query string) []map[string]any {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	out := make([]map[string]any, 0, maxAreaSuggestions)
+	for _, a := range areas {
+		if len(out) >= maxAreaSuggestions {
+			break
+		}
+		if areaMatchesQuery(a, q) {
+			out = append(out, map[string]any{"area_id": a.AreaID, "name": a.Name})
+		}
+	}
+	return out
+}
+
+// areaMatchesQuery reports whether the area's name, id, or any alias
+// shares a substring or a whole word with the lowercased query.
+func areaMatchesQuery(a homeassistant.Area, q string) bool {
+	hay := []string{strings.ToLower(a.Name), strings.ToLower(a.AreaID)}
+	for _, alias := range a.Aliases {
+		hay = append(hay, strings.ToLower(alias))
+	}
+	qWords := strings.Fields(strings.ReplaceAll(q, "_", " "))
+	for _, h := range hay {
+		if h == "" {
+			continue
+		}
+		if strings.Contains(h, q) || strings.Contains(q, h) {
+			return true
+		}
+		for _, hw := range strings.Fields(strings.ReplaceAll(h, "_", " ")) {
+			for _, qw := range qWords {
+				if hw == qw {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// listAreas returns up to limit areas as {area_id, name} pairs, used to
+// enumerate valid choices when no candidate resembled the query.
+func listAreas(areas []homeassistant.Area, limit int) []map[string]any {
+	out := make([]map[string]any, 0, min(limit, len(areas)))
+	for i, a := range areas {
+		if i >= limit {
+			break
+		}
+		out = append(out, map[string]any{"area_id": a.AreaID, "name": a.Name})
+	}
+	return out
 }
 
 // areaMember pairs an entity registry entry with the resolved

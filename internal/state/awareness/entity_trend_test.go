@@ -19,6 +19,7 @@ type fakeTrendClient struct {
 	history     []homeassistant.State // GetStateHistory (lean)
 	historyAttr []homeassistant.State // GetStateHistoryWithAttributes
 	historyErr  error
+	entities    []homeassistant.EntityInfo // GetEntities (suggestion fallback)
 
 	gotStart time.Time
 }
@@ -33,6 +34,9 @@ func (f *fakeTrendClient) GetStateHistory(_ context.Context, _ string, start, _ 
 func (f *fakeTrendClient) GetStateHistoryWithAttributes(_ context.Context, _ string, start, _ time.Time) ([]homeassistant.State, error) {
 	f.gotStart = start
 	return f.historyAttr, f.historyErr
+}
+func (f *fakeTrendClient) GetEntities(_ context.Context, _ string) ([]homeassistant.EntityInfo, error) {
+	return f.entities, nil
 }
 
 func histState(id, state string, attrs map[string]any, ago time.Duration) homeassistant.State {
@@ -237,5 +241,27 @@ func TestComputeEntityTrend_CurrentStateError(t *testing.T) {
 	client := &fakeTrendClient{currentErr: errors.New("entity not found")}
 	if _, err := ComputeEntityTrend(context.Background(), client, TrendRequest{EntityID: "sensor.ghost"}, testNow); err == nil {
 		t.Error("expected error when current state cannot be fetched")
+	}
+}
+
+func TestHandleHistory_UnknownEntitySuggests(t *testing.T) {
+	client := &fakeTrendClient{
+		currentErr: &homeassistant.APIError{StatusCode: 404},
+		entities: []homeassistant.EntityInfo{
+			{EntityID: "sensor.office_temperature", FriendlyName: "Office Temperature", Domain: "sensor"},
+		},
+	}
+	tool := NewEntityTrendTools(EntityTrendToolsConfig{Client: client})
+
+	out, err := tool.handleHistory(context.Background(), map[string]any{"entity_id": "sensor.office_temperatur"})
+	if err != nil {
+		t.Fatalf("handleHistory: %v", err)
+	}
+	payload := decodeTrend(t, out)
+	if payload["found"] != false {
+		t.Errorf("found = %v, want false", payload["found"])
+	}
+	if payload["reason"] != "not_found" {
+		t.Errorf("reason = %v, want not_found", payload["reason"])
 	}
 }
