@@ -3,6 +3,7 @@ package awareness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -36,6 +37,73 @@ func TestComputeAreaActivity_FloorContext(t *testing.T) {
 	}
 	if floor["id"] != "ground" || floor["name"] != "Ground Floor" {
 		t.Errorf("floor = %#v, want ground/Ground Floor", floor)
+	}
+}
+
+// TestComputeAreaActivity_FloorRegistryErrorDegrades covers the #1015
+// regression fix: floor/building context is optional enrichment, so a
+// floor-registry fetch failure (e.g. a deployment without the floor
+// registry WS API, or a transient outage) must not sink the whole
+// snapshot — it just omits the floor/building fields.
+func TestComputeAreaActivity_FloorRegistryErrorDegrades(t *testing.T) {
+	client := &fakeAreaClient{
+		areas:     []homeassistant.Area{{AreaID: "office", Name: "Office", FloorID: "ground"}},
+		floorsErr: errors.New("floor registry unavailable"),
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "light.office_lamp", AreaID: "office"},
+		},
+		states: []homeassistant.State{
+			{EntityID: "light.office_lamp", State: "on"},
+		},
+	}
+
+	out, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "office"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity should degrade, not fail, on floor-registry error: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if _, ok := payload["floor"]; ok {
+		t.Errorf("expected floor context omitted on registry error, got %#v", payload["floor"])
+	}
+	if _, ok := payload["building"]; ok {
+		t.Errorf("expected building context omitted on registry error, got %#v", payload["building"])
+	}
+	// The rest of the snapshot must still render.
+	if payload["area"] != "Office" {
+		t.Errorf("area = %#v, want Office (snapshot should survive)", payload["area"])
+	}
+}
+
+// TestComputeAreaActivity_NoFloorSkipsRegistry covers the gating: an
+// area with no floor assignment must not call the floor registry at all.
+func TestComputeAreaActivity_NoFloorSkipsRegistry(t *testing.T) {
+	client := &fakeAreaClient{
+		areas:     []homeassistant.Area{{AreaID: "office", Name: "Office"}}, // no FloorID
+		floorsErr: errors.New("should never be called"),
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "light.office_lamp", AreaID: "office"},
+		},
+		states: []homeassistant.State{
+			{EntityID: "light.office_lamp", State: "on"},
+		},
+	}
+
+	out, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "office"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity must skip the floor registry when the area has no floor: %v", err)
+	}
+	if client.floorCalls != 0 {
+		t.Errorf("floor registry called %d times for a floorless area, want 0", client.floorCalls)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if _, ok := payload["floor"]; ok {
+		t.Errorf("did not expect floor context for a floorless area, got %#v", payload["floor"])
 	}
 }
 

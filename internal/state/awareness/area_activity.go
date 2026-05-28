@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -116,12 +117,26 @@ func ComputeAreaActivity(ctx context.Context, client AreaActivityClient, req Are
 	statesByID := indexStates(allStates)
 
 	// Build the metadata resolver once. It powers the area's floor/
-	// building context (always emitted) and the optional per-entity
-	// include projection. Floors are tiny and registry-cached; labels
-	// are pulled only when the include set asks for them.
-	floors, err := client.GetFloorRegistry(ctx)
-	if err != nil {
-		return "", fmt.Errorf("area_activity: get floors: %w", err)
+	// building context and the optional per-entity include projection.
+	// Floor/building context is optional enrichment: fetch the floor
+	// registry only when this area is actually assigned to a floor —
+	// most areas (and every area on a deployment without floor-registry
+	// support) aren't, so the common case skips the WS call entirely.
+	// A fetch failure is best-effort: omit floor/building context rather
+	// than sink the whole snapshot, since nothing else in the view
+	// depends on floors. Labels are pulled only when the include set
+	// asks for them.
+	var floors []homeassistant.FloorRegistryEntry
+	if area.FloorID != "" {
+		if fetched, ferr := client.GetFloorRegistry(ctx); ferr != nil {
+			slog.Default().Warn("area_activity: floor registry unavailable; omitting floor/building context",
+				"area_id", area.AreaID,
+				"floor_id", area.FloorID,
+				"error", ferr,
+			)
+		} else {
+			floors = fetched
+		}
 	}
 	var labels []homeassistant.LabelRegistryEntry
 	if req.Include.Labels {
