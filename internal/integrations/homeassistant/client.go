@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,16 @@ type Client struct {
 	ws                 *WSClient
 	floorMetadataAlias string
 	registry           *registryCache
+	logger             *slog.Logger
+}
+
+// log returns the client's logger, falling back to the default so callers
+// never have to nil-check.
+func (c *Client) log() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return slog.Default()
 }
 
 // readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
@@ -86,6 +97,7 @@ func NewClient(baseURL, token string, logger *slog.Logger) *Client {
 			httpkit.WithLogger(logger),
 		),
 		registry: &registryCache{ttl: defaultRegistryCacheTTL},
+		logger:   logger,
 	}
 }
 
@@ -171,9 +183,19 @@ func (c *Client) GetConfig(ctx context.Context) (*Config, error) {
 // GetStates retrieves all entity states.
 func (c *Client) GetStates(ctx context.Context) ([]State, error) {
 	var states []State
-	if err := c.get(ctx, "/api/states", &states); err != nil {
+	start := time.Now()
+	payloadBytes, err := c.getMeasured(ctx, "/api/states", &states)
+	if err != nil {
 		return nil, err
 	}
+	// /api/states is the full state-machine dump — hot (watchlist renders,
+	// ha_control_device, entity-not-found suggestions) and large at scale.
+	// Log its cost so the load is quantifiable rather than guessed at.
+	c.log().LogAttrs(ctx, slog.LevelInfo, "ha get_states fetched full state machine",
+		slog.Duration("duration", time.Since(start)),
+		slog.Int64("payload_bytes", payloadBytes),
+		slog.Int("entity_count", len(states)),
+	)
 	return states, nil
 }
 
@@ -441,32 +463,56 @@ func (e *APIError) Error() string {
 
 // get performs a GET request to the HA API.
 func (c *Client) get(ctx context.Context, path string, result any) error {
+	_, err := c.getMeasured(ctx, path, result)
+	return err
+}
+
+// countingReader wraps a reader and tallies the bytes read through it, so
+// callers can measure a streamed-decode payload without buffering it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	return n, err
+}
+
+// getMeasured is get with the decoded response size reported back. The
+// byte count covers what the JSON decoder consumed (effectively the whole
+// payload for HA's array/object responses); it lets hot, large endpoints
+// like /api/states log their wire cost.
+func (c *Client) getMeasured(ctx context.Context, path string, result any) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request %s: %w", path, err)
+		return 0, fmt.Errorf("request %s: %w", path, err)
 	}
 	// Drain and close to ensure connection reuse even when result is nil.
 	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode != http.StatusOK {
 		body := httpkit.ReadErrorBody(resp.Body, 512)
-		return &APIError{StatusCode: resp.StatusCode, Body: body}
+		return 0, &APIError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+		cr := &countingReader{r: resp.Body}
+		if err := json.NewDecoder(cr).Decode(result); err != nil {
+			return cr.n, fmt.Errorf("decode response: %w", err)
 		}
+		return cr.n, nil
 	}
 
-	return nil
+	return 0, nil
 }
 
 // post performs a POST request to the HA API.
