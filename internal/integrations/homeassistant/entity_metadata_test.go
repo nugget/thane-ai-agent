@@ -2,6 +2,29 @@ package homeassistant
 
 import "testing"
 
+func TestEntityMetadataIncludesClone(t *testing.T) {
+	t.Parallel()
+
+	if got := (*EntityMetadataIncludes)(nil).Clone(); got != nil {
+		t.Fatalf("nil Clone() = %#v, want nil", got)
+	}
+	if got := (&EntityMetadataIncludes{}).Clone(); got != nil {
+		t.Fatalf("empty Clone() = %#v, want nil", got)
+	}
+
+	include := &EntityMetadataIncludes{Area: true, Labels: true}
+	got := include.Clone()
+	if got == nil {
+		t.Fatal("Clone() returned nil")
+	}
+	if got == include {
+		t.Fatal("Clone() returned the original pointer")
+	}
+	if !got.Area || !got.Labels || got.Device || got.Description {
+		t.Fatalf("Clone() = %#v, want copied flags", got)
+	}
+}
+
 func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	t.Parallel()
 
@@ -79,5 +102,48 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 		if len(label.Sources) != 1 || label.Sources[0] != wantSource {
 			t.Errorf("label %s sources = %v, want [%s]", label.ID, label.Sources, wantSource)
 		}
+	}
+}
+
+func TestEntityMetadataResolverCopiesDescriptionMaps(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewEntityMetadataResolver(nil, nil, nil)
+	entry := &EntityRegistryEntry{
+		EntityID:     "light.office",
+		Options:      map[string]any{"restore": true},
+		Capabilities: map[string]any{"brightness": true},
+		Categories:   map[string]string{"diagnostic": "health"},
+	}
+
+	got := resolver.MetadataForEntity(entry, nil, EntityMetadataIncludes{Description: true})
+	if got == nil {
+		t.Fatal("MetadataForEntity returned nil")
+	}
+
+	entry.Options["restore"] = false
+	entry.Capabilities["brightness"] = false
+	entry.Categories["diagnostic"] = "changed"
+	got.Options["new"] = true
+	got.Capabilities["new"] = true
+	got.Categories["new"] = "value"
+
+	if got.Options["restore"] != true {
+		t.Fatalf("Options shared source map; got %#v", got.Options)
+	}
+	if got.Capabilities["brightness"] != true {
+		t.Fatalf("Capabilities shared source map; got %#v", got.Capabilities)
+	}
+	if got.Categories["diagnostic"] != "health" {
+		t.Fatalf("Categories shared source map; got %#v", got.Categories)
+	}
+	if _, ok := entry.Options["new"]; ok {
+		t.Fatalf("Options shared metadata map; source %#v", entry.Options)
+	}
+	if _, ok := entry.Capabilities["new"]; ok {
+		t.Fatalf("Capabilities shared metadata map; source %#v", entry.Capabilities)
+	}
+	if _, ok := entry.Categories["new"]; ok {
+		t.Fatalf("Categories shared metadata map; source %#v", entry.Categories)
 	}
 }

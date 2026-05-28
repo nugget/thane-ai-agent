@@ -17,6 +17,16 @@ func (i EntityMetadataIncludes) Any() bool {
 	return i.Area || i.Device || i.Labels || i.Description
 }
 
+// Clone returns a detached copy of the include flags, or nil when no
+// metadata relationships are requested.
+func (i *EntityMetadataIncludes) Clone() *EntityMetadataIncludes {
+	if i == nil || !i.Any() {
+		return nil
+	}
+	cp := *i
+	return &cp
+}
+
 // AllEntityMetadataIncludes returns the full currently-supported
 // entity metadata projection.
 func AllEntityMetadataIncludes() EntityMetadataIncludes {
@@ -219,14 +229,36 @@ func applyEntityDescription(meta *EntityMetadata, entry *EntityRegistryEntry, st
 		meta.DeviceClass = entry.OriginalDeviceClass
 	}
 	if len(entry.Capabilities) > 0 {
-		meta.Capabilities = entry.Capabilities
+		meta.Capabilities = cloneAnyMap(entry.Capabilities)
 	}
 	if len(entry.Options) > 0 {
-		meta.Options = entry.Options
+		meta.Options = cloneAnyMap(entry.Options)
 	}
 	if len(entry.Categories) > 0 {
-		meta.Categories = entry.Categories
+		meta.Categories = cloneStringMap(entry.Categories)
 	}
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func (r EntityMetadataResolver) deviceForEntity(entry *EntityRegistryEntry) *DeviceRegistryEntry {

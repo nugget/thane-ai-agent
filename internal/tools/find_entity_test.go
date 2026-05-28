@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -149,6 +151,83 @@ func TestFuzzyMatchEntityInfosWithMetadata(t *testing.T) {
 	}
 	if matches[0].EntityID != "sensor.t_123" {
 		t.Fatalf("first match = %q, want sensor.t_123", matches[0].EntityID)
+	}
+}
+
+func TestFuzzyMatchEntityInfosWeightsSingleTokenMetadata(t *testing.T) {
+	entities := []homeassistant.EntityInfo{
+		{EntityID: "light.office_lamp", FriendlyName: "Office Lamp"},
+		{EntityID: "sensor.t_123", FriendlyName: "Temperature"},
+	}
+	entry := &homeassistant.EntityRegistryEntry{
+		EntityID: "sensor.t_123",
+		AreaID:   "office",
+	}
+	bundle := &haEntityMetadataBundle{
+		include: homeassistant.EntityMetadataIncludes{Area: true},
+		entries: map[string]*homeassistant.EntityRegistryEntry{
+			entry.EntityID: entry,
+		},
+		resolver: homeassistant.NewEntityMetadataResolver(
+			[]homeassistant.Area{{AreaID: "office", Name: "Office"}},
+			nil,
+			nil,
+		),
+	}
+
+	matches := fuzzyMatchEntityInfosWithMetadata("office", entities, bundle)
+	if len(matches) == 0 {
+		t.Fatal("expected direct entity match")
+	}
+	if matches[0].EntityID != "light.office_lamp" {
+		t.Fatalf("first match = %q, want light.office_lamp", matches[0].EntityID)
+	}
+	for _, match := range matches {
+		if match.EntityID == "sensor.t_123" {
+			t.Fatalf("metadata-only single-token match should not pass threshold: %#v", matches)
+		}
+	}
+}
+
+func TestFindEntityAreaLookupDoesNotFetchLabels(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{{
+		EntityID: "light.office_lamp",
+		State:    "off",
+		Attributes: map[string]any{
+			"friendly_name": "Office Lamp",
+		},
+	}}
+	fake.areas = []map[string]any{{
+		"area_id": "office",
+		"name":    "Office",
+	}}
+	fake.entityRows = []map[string]any{{
+		"entity_id": "light.office_lamp",
+		"area_id":   "office",
+	}}
+
+	reg := fake.registry(t)
+	result, err := reg.Execute(context.Background(), "ha_find_entity", `{
+		"description": "lamp",
+		"area": "Office"
+	}`)
+	if err != nil {
+		t.Fatalf("ha_find_entity: %v", err)
+	}
+	var got FindEntityResult
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v\n%s", err, result)
+	}
+	if !got.Found || got.EntityID != "light.office_lamp" || got.AreaName != "Office" {
+		t.Fatalf("result = %#v, want office lamp with area", got)
+	}
+
+	fake.mu.Lock()
+	labelCalls := fake.wsCalls["config/label_registry/list"]
+	fake.mu.Unlock()
+	if labelCalls != 0 {
+		t.Fatalf("label registry calls = %d, want 0", labelCalls)
 	}
 }
 

@@ -62,21 +62,14 @@ func EntityMetadataIncludeParameter() map[string]any {
 }
 
 // ParseEntityMetadataIncludesArg decodes an include object from a
-// model-facing tool argument. A boolean true is accepted as shorthand
-// for all supported metadata.
+// model-facing tool argument.
 func ParseEntityMetadataIncludesArg(raw any, fieldName string) (homeassistant.EntityMetadataIncludes, error) {
 	if raw == nil {
 		return homeassistant.EntityMetadataIncludes{}, nil
 	}
-	if b, ok := raw.(bool); ok {
-		if b {
-			return homeassistant.AllEntityMetadataIncludes(), nil
-		}
-		return homeassistant.EntityMetadataIncludes{}, nil
-	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return homeassistant.EntityMetadataIncludes{}, fmt.Errorf("%s must be an object with boolean metadata flags, or true for all metadata", fieldName)
+		return homeassistant.EntityMetadataIncludes{}, fmt.Errorf("%s must be an object with boolean metadata flags", fieldName)
 	}
 	if raw, ok := obj["all"]; ok && raw != nil {
 		all, ok := raw.(bool)
@@ -120,11 +113,7 @@ func metadataIncludeFlag(obj map[string]any, key, fieldName string) (bool, error
 // and a copy pointer otherwise. It keeps optional subscription fields
 // out of persisted JSON when no metadata was requested.
 func EntityMetadataIncludesPointer(include homeassistant.EntityMetadataIncludes) *homeassistant.EntityMetadataIncludes {
-	if !include.Any() {
-		return nil
-	}
-	cp := include
-	return &cp
+	return (&include).Clone()
 }
 
 func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, include homeassistant.EntityMetadataIncludes) (*haEntityMetadataBundle, error) {

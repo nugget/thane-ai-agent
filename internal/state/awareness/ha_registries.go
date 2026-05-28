@@ -51,6 +51,9 @@ type renderRegistries struct {
 	labels     []homeassistant.LabelRegistryEntry
 	labelsErr  error
 
+	metadataResolverMu sync.Mutex
+	metadataResolvers  map[homeassistant.EntityMetadataIncludes]cachedEntityMetadataResolver
+
 	statesOnce sync.Once
 	statesByID map[string]*homeassistant.State
 	statesErr  error
@@ -58,6 +61,11 @@ type renderRegistries struct {
 	integrationsOnce    sync.Once
 	integrationByDomain map[string]*homeassistant.ConfigEntry
 	integrationsErr     error
+}
+
+type cachedEntityMetadataResolver struct {
+	resolver homeassistant.EntityMetadataResolver
+	err      error
 }
 
 // newRenderRegistries returns a registries bundle. Returns nil when
@@ -181,32 +189,63 @@ func (r *renderRegistries) entityMetadata(entityID string, state *homeassistant.
 	}
 	entry := entities[entityID]
 
+	resolver, err := r.metadataResolver(*include)
+	if err != nil {
+		return nil
+	}
+	return resolver.MetadataForEntity(entry, state, *include)
+}
+
+func (r *renderRegistries) metadataResolver(include homeassistant.EntityMetadataIncludes) (homeassistant.EntityMetadataResolver, error) {
+	r.metadataResolverMu.Lock()
+	if cached, ok := r.metadataResolvers[include]; ok {
+		r.metadataResolverMu.Unlock()
+		return cached.resolver, cached.err
+	}
+	r.metadataResolverMu.Unlock()
+
+	resolver, err := r.buildMetadataResolver(include)
+
+	r.metadataResolverMu.Lock()
+	defer r.metadataResolverMu.Unlock()
+	if r.metadataResolvers == nil {
+		r.metadataResolvers = make(map[homeassistant.EntityMetadataIncludes]cachedEntityMetadataResolver)
+	}
+	if cached, ok := r.metadataResolvers[include]; ok {
+		return cached.resolver, cached.err
+	}
+	r.metadataResolvers[include] = cachedEntityMetadataResolver{resolver: resolver, err: err}
+	return resolver, err
+}
+
+func (r *renderRegistries) buildMetadataResolver(include homeassistant.EntityMetadataIncludes) (homeassistant.EntityMetadataResolver, error) {
 	var areas []homeassistant.Area
 	if include.Area || include.Device || include.Labels {
+		var err error
 		areas, err = r.areaEntries()
 		if err != nil {
-			return nil
+			return homeassistant.EntityMetadataResolver{}, err
 		}
 	}
 
 	var labels []homeassistant.LabelRegistryEntry
 	if include.Labels {
+		var err error
 		labels, err = r.labelEntries()
 		if err != nil {
-			return nil
+			return homeassistant.EntityMetadataResolver{}, err
 		}
 	}
 
 	var devices []homeassistant.DeviceRegistryEntry
 	if include.Device || include.Area || include.Labels {
-		if _, err = r.devices(); err != nil {
-			return nil
+		if _, err := r.devices(); err != nil {
+			return homeassistant.EntityMetadataResolver{}, err
 		}
 		devices = append([]homeassistant.DeviceRegistryEntry(nil), r.deviceEntries...)
 	}
 
-	resolver := homeassistant.NewEntityMetadataResolver(areas, labels, devices)
-	return resolver.MetadataForEntity(entry, state, *include)
+	return homeassistant.NewEntityMetadataResolver(areas, labels, devices), nil
 }
 
 // siblingsByDevice returns sibling entity registry entries for the

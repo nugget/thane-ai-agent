@@ -310,7 +310,7 @@ func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]W
 			Scope:     scope,
 			History:   append([]int(nil), opts.History...),
 			Forecast:  opts.Forecast,
-			Include:   cloneEntityMetadataIncludesPtr(opts.Include),
+			Include:   opts.Include.Clone(),
 			ExpiresAt: cloneTimePtr(opts.ExpiresAt),
 		})
 	}
@@ -378,7 +378,7 @@ func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string, inc
 	wire := watchlistOptionsWire{
 		History:  append([]int(nil), history...),
 		Forecast: forecast,
-		Include:  cloneEntityMetadataIncludesPtr(&include),
+		Include:  (&include).Clone(),
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -399,7 +399,7 @@ func parseWatchlistOptions(optsJSON string) watchlistOptions {
 	}
 	out := watchlistOptions{
 		History: append([]int(nil), wire.History...),
-		Include: cloneEntityMetadataIncludesPtr(wire.Include),
+		Include: wire.Include.Clone(),
 	}
 	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {
 		out.Forecast = forecast
@@ -452,14 +452,6 @@ func normalizeForecastType(value string) (string, error) {
 
 func cloneTimePtr(src *time.Time) *time.Time {
 	if src == nil {
-		return nil
-	}
-	cp := *src
-	return &cp
-}
-
-func cloneEntityMetadataIncludesPtr(src *homeassistant.EntityMetadataIncludes) *homeassistant.EntityMetadataIncludes {
-	if src == nil || !src.Any() {
 		return nil
 	}
 	cp := *src

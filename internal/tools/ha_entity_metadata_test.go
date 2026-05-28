@@ -98,3 +98,19 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 		t.Fatalf("labels = %#v, want 3", got.Metadata.Labels)
 	}
 }
+
+func TestParseEntityMetadataIncludesArgRejectsBoolean(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseEntityMetadataIncludesArg(true, "include"); err == nil {
+		t.Fatal("ParseEntityMetadataIncludesArg(true) succeeded, want error")
+	}
+
+	got, err := ParseEntityMetadataIncludesArg(map[string]any{"all": true}, "include")
+	if err != nil {
+		t.Fatalf("ParseEntityMetadataIncludesArg({all:true}) error = %v", err)
+	}
+	if got != homeassistant.AllEntityMetadataIncludes() {
+		t.Fatalf("ParseEntityMetadataIncludesArg({all:true}) = %#v, want all metadata", got)
+	}
+}

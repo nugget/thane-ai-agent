@@ -145,7 +145,7 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 		EntityID: sub.EntityID,
 		History:  append([]int(nil), sub.History...),
 		Forecast: sub.Forecast,
-		Include:  cloneEntityMetadataIncludesPtr(sub.Include),
+		Include:  sub.Include.Clone(),
 	}
 	state, err := p.ha.GetState(ctx, w.EntityID)
 	if err != nil {

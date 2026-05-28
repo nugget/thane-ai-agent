@@ -32,12 +32,21 @@ func AttachMetadata(formatted string, metadata *homeassistant.EntityMetadata) st
 	if metadata == nil || metadata.Empty() {
 		return formatted
 	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(formatted), &payload); err != nil {
+	trimmed := strings.TrimSpace(formatted)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
 		return formatted
 	}
-	payload["metadata"] = metadata
-	return promptfmt.MarshalCompact(payload)
+	if !json.Valid([]byte(trimmed)) {
+		return formatted
+	}
+	metaJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return formatted
+	}
+	if trimmed == "{}" {
+		return `{"metadata":` + string(metaJSON) + `}`
+	}
+	return trimmed[:len(trimmed)-1] + `,"metadata":` + string(metaJSON) + `}`
 }
 
 // EntityDomain extracts the domain from an entity ID (e.g., "weather" from

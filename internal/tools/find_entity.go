@@ -94,15 +94,16 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 		return "", fmt.Errorf("get entities: %w", err)
 	}
 
-	lookupInclude := homeassistant.AllEntityMetadataIncludes()
+	lookupInclude := args.Include
+	if args.Area != "" {
+		lookupInclude.Area = true
+		lookupInclude.Device = true
+	}
 	var metadata *haEntityMetadataBundle
 	if lookupInclude.Any() {
 		metadata, err = fetchHAEntityMetadataBundle(ctx, r.ha, lookupInclude)
 		if err != nil {
-			if args.Include.Any() || args.Area != "" {
-				return "", err
-			}
-			metadata = nil
+			return "", err
 		}
 	}
 
@@ -212,22 +213,17 @@ func fuzzyMatchEntityInfos(description string, entities []homeassistant.EntityIn
 func fuzzyMatchEntityInfosWithMetadata(description string, entities []homeassistant.EntityInfo, metadata *haEntityMetadataBundle) []EntityMatch {
 	descLower := strings.ToLower(description)
 	descTokens := tokenize(descLower)
+	metadataWeight := metadataMatchWeight
+	if len(descTokens) == 1 {
+		metadataWeight = singleTokenMetadataMatchWeight
+	}
 
 	var matches []EntityMatch
 
 	for _, e := range entities {
-		targets := []string{e.EntityID, e.FriendlyName}
+		score := bestTokenMatch(descTokens, []string{e.EntityID, e.FriendlyName})
 		if metadata != nil {
-			targets = append(targets, metadataSearchTargets(metadata.metadataFromInfo(e))...)
-		}
-
-		score := 0.0
-		for _, target := range targets {
-			target = strings.TrimSpace(target)
-			if target == "" {
-				continue
-			}
-			score = max(score, tokenMatchScore(descTokens, tokenize(strings.ToLower(target))))
+			score = max(score, metadataWeight*bestTokenMatch(descTokens, metadataSearchTargets(metadata.metadataFromInfo(e))))
 		}
 		if score > 0.3 { // Minimum threshold
 			matches = append(matches, EntityMatch{
@@ -249,6 +245,23 @@ func fuzzyMatchEntityInfosWithMetadata(description string, entities []homeassist
 	}
 
 	return matches
+}
+
+const (
+	metadataMatchWeight            = 0.75
+	singleTokenMetadataMatchWeight = 0.30
+)
+
+func bestTokenMatch(query []string, targets []string) float64 {
+	score := 0.0
+	for _, target := range targets {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		score = max(score, tokenMatchScore(query, tokenize(strings.ToLower(target))))
+	}
+	return score
 }
 
 func metadataSearchTargets(meta *homeassistant.EntityMetadata) []string {
