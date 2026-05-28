@@ -55,6 +55,8 @@ type EntityMetadata struct {
 	EntityCategory string                `json:"entity_category,omitempty"`
 	Platform       string                `json:"platform,omitempty"`
 	DeviceClass    string                `json:"device_class,omitempty"`
+	TranslationKey string                `json:"translation_key,omitempty"`
+	HasEntityName  bool                  `json:"has_entity_name,omitempty"`
 	Visibility     *EntityVisibility     `json:"visibility,omitempty"`
 	Area           *EntityAreaMetadata   `json:"area,omitempty"`
 	Device         *EntityDeviceMetadata `json:"device,omitempty"`
@@ -78,6 +80,8 @@ func (m *EntityMetadata) Empty() bool {
 		m.EntityCategory == "" &&
 		m.Platform == "" &&
 		m.DeviceClass == "" &&
+		m.TranslationKey == "" &&
+		!m.HasEntityName &&
 		m.Visibility == nil &&
 		m.Area == nil &&
 		m.Device == nil &&
@@ -93,6 +97,8 @@ func (m *EntityMetadata) Empty() bool {
 type EntityVisibility struct {
 	Enabled        bool   `json:"enabled"`
 	Visible        bool   `json:"visible"`
+	DefaultContext bool   `json:"default_context"`
+	ContextRole    string `json:"context_role"`
 	HiddenBy       string `json:"hidden_by,omitempty"`
 	DisabledBy     string `json:"disabled_by,omitempty"`
 	EntityCategory string `json:"entity_category,omitempty"`
@@ -270,6 +276,8 @@ func applyEntityDescription(meta *EntityMetadata, entry *EntityRegistryEntry, st
 	}
 	meta.EntityCategory = entry.EntityCategory
 	meta.Platform = entry.Platform
+	meta.TranslationKey = entry.TranslationKey
+	meta.HasEntityName = entry.HasEntityName
 	if entry.DeviceClass != "" {
 		meta.DeviceClass = entry.DeviceClass
 	} else if entry.OriginalDeviceClass != "" {
@@ -293,12 +301,36 @@ func applyEntityVisibility(meta *EntityMetadata, entry *EntityRegistryEntry) {
 	meta.Visibility = &EntityVisibility{
 		Enabled:        entry.DisabledBy == "",
 		Visible:        entry.HiddenBy == "",
+		DefaultContext: entityDefaultContext(entry),
+		ContextRole:    entityContextRole(entry),
 		HiddenBy:       entry.HiddenBy,
 		DisabledBy:     entry.DisabledBy,
 		EntityCategory: entry.EntityCategory,
 	}
 	if meta.EntityCategory == "" {
 		meta.EntityCategory = entry.EntityCategory
+	}
+}
+
+func entityDefaultContext(entry *EntityRegistryEntry) bool {
+	return entry.DisabledBy == "" &&
+		entry.HiddenBy == "" &&
+		entry.EntityCategory != "diagnostic" &&
+		entry.EntityCategory != "config"
+}
+
+func entityContextRole(entry *EntityRegistryEntry) string {
+	switch {
+	case entry.DisabledBy != "":
+		return "disabled"
+	case entry.HiddenBy != "":
+		return "hidden"
+	case entry.EntityCategory == "diagnostic":
+		return "diagnostic"
+	case entry.EntityCategory == "config":
+		return "config"
+	default:
+		return "default"
 	}
 }
 

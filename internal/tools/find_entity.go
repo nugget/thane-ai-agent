@@ -276,6 +276,7 @@ func metadataSearchTargets(meta *homeassistant.EntityMetadata) []string {
 		meta.EntityCategory,
 		meta.Platform,
 		meta.DeviceClass,
+		meta.TranslationKey,
 	}
 	targets = append(targets, meta.Aliases...)
 	if meta.Area != nil {

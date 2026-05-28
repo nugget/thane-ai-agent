@@ -100,8 +100,9 @@ Entity subscriptions also accept `include`, a set of HA metadata flags:
 injected beside the entity state. Area metadata includes floor registry
 details; deployments can alias floors as buildings with
 `homeassistant.floor_alias: building`. Visibility metadata exposes the HA
-hidden/enabled status so hidden-but-enabled entities remain available for
-focused research without becoming default context clutter.
+hidden/enabled status plus a model-facing `context_role`, so
+hidden-but-enabled entities remain available for focused research without
+becoming default context clutter.
 
 ## `ha` — Home Assistant state and control
 

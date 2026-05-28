@@ -36,7 +36,8 @@ Choose stream wiring by attention cost:
   Add `include` metadata flags (`area`, `device`, `labels`,
   `description`, `visibility`, or `all`) when the loop needs
   physical-world context beside the live state, including HA's
-  floor/building hierarchy and hidden/enabled salience.
+  floor/building hierarchy and hidden/enabled salience. Use
+  `visibility.context_role` as the quick default-vs-forensic hint.
 - Use event-source `wake_loop` targets when each event deserves an
   immediate iteration. Producer tools such as `forge_repo_follow` and
   `media_follow` own those subscriptions.

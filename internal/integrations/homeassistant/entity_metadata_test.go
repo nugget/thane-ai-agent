@@ -57,15 +57,17 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	)
 
 	entry := &EntityRegistryEntry{
-		EntityID:    "sensor.office_temperature",
-		Name:        "Temperature",
-		Description: "Ambient office temperature",
-		Aliases:     []string{"office temp"},
-		AreaID:      "",
-		DeviceID:    "device_1",
-		Labels:      []string{"label_env"},
-		Platform:    "zwave_js",
-		DeviceClass: "temperature",
+		EntityID:       "sensor.office_temperature",
+		Name:           "Temperature",
+		Description:    "Ambient office temperature",
+		Aliases:        []string{"office temp"},
+		AreaID:         "",
+		DeviceID:       "device_1",
+		Labels:         []string{"label_env"},
+		Platform:       "zwave_js",
+		DeviceClass:    "temperature",
+		TranslationKey: "temperature",
+		HasEntityName:  true,
 	}
 	state := &State{
 		EntityID: "sensor.office_temperature",
@@ -94,8 +96,14 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	if got.Device == nil || got.Device.ID != "device_1" || got.Device.NameByUser != "Office Climate Hub" {
 		t.Fatalf("Device = %#v, want resolved device", got.Device)
 	}
+	if got.TranslationKey != "temperature" || !got.HasEntityName {
+		t.Fatalf("TranslationKey/HasEntityName = %q/%v, want temperature/true", got.TranslationKey, got.HasEntityName)
+	}
 	if got.Visibility == nil || !got.Visibility.Enabled || !got.Visibility.Visible {
 		t.Fatalf("Visibility = %#v, want enabled and visible", got.Visibility)
+	}
+	if got.Visibility.ContextRole != "default" || !got.Visibility.DefaultContext {
+		t.Fatalf("Visibility role/default = %q/%v, want default/true", got.Visibility.ContextRole, got.Visibility.DefaultContext)
 	}
 
 	wantLabels := map[string]string{
@@ -139,6 +147,12 @@ func TestEntityMetadataResolverProjectsVisibility(t *testing.T) {
 	if got.Visibility.Visible {
 		t.Errorf("Visible = true, want false for hidden entity")
 	}
+	if got.Visibility.DefaultContext {
+		t.Errorf("DefaultContext = true, want false for hidden entity")
+	}
+	if got.Visibility.ContextRole != "hidden" {
+		t.Errorf("ContextRole = %q, want hidden", got.Visibility.ContextRole)
+	}
 	if got.Visibility.HiddenBy != "user" {
 		t.Errorf("HiddenBy = %q, want user", got.Visibility.HiddenBy)
 	}
@@ -147,6 +161,51 @@ func TestEntityMetadataResolverProjectsVisibility(t *testing.T) {
 	}
 	if got.Visibility.EntityCategory != "diagnostic" {
 		t.Errorf("EntityCategory = %q, want diagnostic", got.Visibility.EntityCategory)
+	}
+}
+
+func TestEntityMetadataResolverVisibilityContextRoles(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewEntityMetadataResolver(nil, nil, nil)
+	tests := []struct {
+		name        string
+		entry       EntityRegistryEntry
+		wantRole    string
+		wantDefault bool
+	}{
+		{
+			name:        "default",
+			entry:       EntityRegistryEntry{EntityID: "light.office"},
+			wantRole:    "default",
+			wantDefault: true,
+		},
+		{
+			name:     "diagnostic",
+			entry:    EntityRegistryEntry{EntityID: "sensor.office_rssi", EntityCategory: "diagnostic"},
+			wantRole: "diagnostic",
+		},
+		{
+			name:     "config",
+			entry:    EntityRegistryEntry{EntityID: "switch.office_led", EntityCategory: "config"},
+			wantRole: "config",
+		},
+		{
+			name:     "disabled",
+			entry:    EntityRegistryEntry{EntityID: "sensor.office_old", DisabledBy: "user"},
+			wantRole: "disabled",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolver.MetadataForEntity(&tt.entry, nil, EntityMetadataIncludes{Visibility: true})
+			if got == nil || got.Visibility == nil {
+				t.Fatalf("MetadataForEntity returned %#v, want visibility", got)
+			}
+			if got.Visibility.ContextRole != tt.wantRole || got.Visibility.DefaultContext != tt.wantDefault {
+				t.Fatalf("role/default = %q/%v, want %q/%v", got.Visibility.ContextRole, got.Visibility.DefaultContext, tt.wantRole, tt.wantDefault)
+			}
+		})
 	}
 }
 

@@ -57,11 +57,11 @@ func EntityMetadataIncludeParameter() map[string]any {
 			},
 			"description": map[string]any{
 				"type":        "boolean",
-				"description": "Include human-facing entity names, aliases, icon, device class, platform, category, and description when HA provides them.",
+				"description": "Include human-facing entity names, aliases, icon, device class, platform, category, translation key, and description when HA provides them.",
 			},
 			"visibility": map[string]any{
 				"type":        "boolean",
-				"description": "Include HA registry visibility and enabled state, including hidden_by/disabled_by and whether the entity is default-dashboard material.",
+				"description": "Include HA registry visibility and enabled state, including hidden_by/disabled_by and a context_role salience hint for default, hidden, diagnostic, config, or disabled entities.",
 			},
 		},
 	}

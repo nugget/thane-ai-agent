@@ -48,14 +48,16 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 		"labels":       []any{"label_device"},
 	}}
 	fake.entityRows = []map[string]any{{
-		"entity_id":    "sensor.office_temperature",
-		"name":         "Temperature",
-		"description":  "Ambient office temperature",
-		"device_id":    "device_1",
-		"labels":       []any{"label_env"},
-		"platform":     "zwave_js",
-		"device_class": "temperature",
-		"hidden_by":    "user",
+		"entity_id":       "sensor.office_temperature",
+		"name":            "Temperature",
+		"description":     "Ambient office temperature",
+		"device_id":       "device_1",
+		"labels":          []any{"label_env"},
+		"platform":        "zwave_js",
+		"device_class":    "temperature",
+		"translation_key": "temperature",
+		"has_entity_name": true,
+		"hidden_by":       "user",
 	}}
 
 	reg := fake.registry(t)
@@ -84,11 +86,15 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 				NameByUser string `json:"name_by_user"`
 			} `json:"device"`
 			Visibility struct {
-				Enabled  bool   `json:"enabled"`
-				Visible  bool   `json:"visible"`
-				HiddenBy string `json:"hidden_by"`
+				Enabled        bool   `json:"enabled"`
+				Visible        bool   `json:"visible"`
+				DefaultContext bool   `json:"default_context"`
+				ContextRole    string `json:"context_role"`
+				HiddenBy       string `json:"hidden_by"`
 			} `json:"visibility"`
-			Labels []struct {
+			TranslationKey string `json:"translation_key"`
+			HasEntityName  bool   `json:"has_entity_name"`
+			Labels         []struct {
 				ID      string   `json:"id"`
 				Name    string   `json:"name"`
 				Sources []string `json:"sources"`
@@ -113,8 +119,15 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 	if got.Metadata.Device.ID != "device_1" || got.Metadata.Device.NameByUser != "Office Climate Hub" {
 		t.Errorf("device = %#v, want device_1", got.Metadata.Device)
 	}
-	if !got.Metadata.Visibility.Enabled || got.Metadata.Visibility.Visible || got.Metadata.Visibility.HiddenBy != "user" {
+	if !got.Metadata.Visibility.Enabled ||
+		got.Metadata.Visibility.Visible ||
+		got.Metadata.Visibility.DefaultContext ||
+		got.Metadata.Visibility.ContextRole != "hidden" ||
+		got.Metadata.Visibility.HiddenBy != "user" {
 		t.Errorf("visibility = %#v, want enabled hidden-by-user", got.Metadata.Visibility)
+	}
+	if got.Metadata.TranslationKey != "temperature" || !got.Metadata.HasEntityName {
+		t.Errorf("translation metadata = %q/%v, want temperature/true", got.Metadata.TranslationKey, got.Metadata.HasEntityName)
 	}
 	if len(got.Metadata.Labels) != 3 {
 		t.Fatalf("labels = %#v, want 3", got.Metadata.Labels)

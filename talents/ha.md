@@ -84,7 +84,9 @@ labels from the entity/device/area, aliases, category, platform, device
 class, floor/building hierarchy, visibility/enabled status, and human
 descriptions when HA has them. Hidden-but-enabled entities are still
 available for focused research; treat HA visibility as a default-context
-salience hint, not as proof the data is unimportant.
+salience hint, not as proof the data is unimportant. `visibility.context_role`
+summarizes the model-facing role as `default`, `hidden`, `diagnostic`,
+`config`, or `disabled`.
 
 ## I know the description but not the entity_id
 
