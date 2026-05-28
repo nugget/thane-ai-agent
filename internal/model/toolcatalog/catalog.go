@@ -232,6 +232,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"ha_list_entities":            {CanonicalID: "native:ha_list_entities", Source: NativeToolSource, Tags: []string{"ha"}},
 	"ha_search_states":            {CanonicalID: "native:ha_search_states", Source: NativeToolSource, Tags: []string{"ha"}},
 	"get_area_activity":           {CanonicalID: "native:get_area_activity", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_device":                   {CanonicalID: "native:ha_device", Source: NativeToolSource, Tags: []string{"ha"}},
 	"lens_list":                   {CanonicalID: "native:lens_list", Source: NativeToolSource},
 	"tag_inspect":                 {CanonicalID: "native:tag_inspect", Source: NativeToolSource},
 	"tag_reset":                   {CanonicalID: "native:tag_reset", Source: NativeToolSource},

@@ -109,6 +109,10 @@ func (a *App) initAwareness(s *newState) error {
 			Client: a.ha,
 			Logger: logger,
 		}))
+		a.loop.Tools().RegisterProvider(awareness.NewDeviceSnapshotTools(awareness.DeviceSnapshotToolsConfig{
+			Client: a.ha,
+			Logger: logger,
+		}))
 	}
 
 	// --- State change window ---

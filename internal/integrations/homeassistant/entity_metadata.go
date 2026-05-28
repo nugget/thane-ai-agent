@@ -425,6 +425,18 @@ func cloneIntPtr(src *int) *int {
 	return &cp
 }
 
+// DeviceMetadata projects model-facing metadata for a single device —
+// identity, firmware, area, and the resolved area name. It exposes the
+// same device projection the per-entity resolver uses, for surfaces
+// (e.g. the ha_device snapshot) that describe a device directly rather
+// than an entity owned by it. Returns nil for a nil device.
+func (r EntityMetadataResolver) DeviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {
+	if device == nil {
+		return nil
+	}
+	return r.deviceMetadata(device)
+}
+
 func (r EntityMetadataResolver) deviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {
 	out := &EntityDeviceMetadata{
 		ID:               device.ID,
