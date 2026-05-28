@@ -127,6 +127,37 @@ func TestComputeHomeSnapshot_SectionAssembly(t *testing.T) {
 	}
 }
 
+// TestComputeHomeSnapshot_NoIncludeSkipsDeviceRegistry is the #1019
+// regression: the default glanceable path must not pull the device
+// registry (or the area/floor/label registries behind the resolver),
+// since classification needs only live state + the entity registry.
+func TestComputeHomeSnapshot_NoIncludeSkipsDeviceRegistry(t *testing.T) {
+	client := houseClient()
+	if _, err := ComputeHomeSnapshot(context.Background(), client, HomeSnapshotRequest{}, testNow); err != nil {
+		t.Fatalf("ComputeHomeSnapshot: %v", err)
+	}
+	if client.deviceCalls != 0 {
+		t.Errorf("GetDeviceRegistry called %d times on the no-include path, want 0", client.deviceCalls)
+	}
+	if client.floorCalls != 0 {
+		t.Errorf("GetFloorRegistry called %d times on the no-include path, want 0", client.floorCalls)
+	}
+}
+
+// TestComputeHomeSnapshot_IncludeFetchesDeviceRegistry confirms the
+// device registry IS pulled when a per-entity include projection is
+// requested.
+func TestComputeHomeSnapshot_IncludeFetchesDeviceRegistry(t *testing.T) {
+	client := houseClient()
+	req := HomeSnapshotRequest{Include: homeassistant.EntityMetadataIncludes{Device: true}}
+	if _, err := ComputeHomeSnapshot(context.Background(), client, req, testNow); err != nil {
+		t.Fatalf("ComputeHomeSnapshot: %v", err)
+	}
+	if client.deviceCalls == 0 {
+		t.Error("expected GetDeviceRegistry to be called when include.device is set")
+	}
+}
+
 func TestComputeHomeSnapshot_EnergyGated(t *testing.T) {
 	out, err := ComputeHomeSnapshot(context.Background(), houseClient(), HomeSnapshotRequest{}, testNow)
 	if err != nil {

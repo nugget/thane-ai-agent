@@ -70,17 +70,28 @@ func ComputeHomeSnapshot(ctx context.Context, client HARegistryClient, req HomeS
 	if err != nil {
 		return "", fmt.Errorf("ha_home_snapshot: get entity registry: %w", err)
 	}
-	devices, err := client.GetDeviceRegistry(ctx)
-	if err != nil {
-		return "", fmt.Errorf("ha_home_snapshot: get device registry: %w", err)
+
+	// The device registry and metadata resolver are only needed for the
+	// optional per-entity include projection: classification reads the
+	// entity registry and live state, and areaMember.device goes unused
+	// in this view. Skip both on the default glanceable path so the
+	// common "how's the house" call doesn't pay for device/area/floor/
+	// label registry round-trips it won't render — meaningful on a large
+	// install. selectHomeMembers tolerates a nil deviceByID.
+	var deviceByID map[string]*homeassistant.DeviceRegistryEntry
+	var resolver homeassistant.EntityMetadataResolver
+	if req.Include.Any() {
+		devices, derr := client.GetDeviceRegistry(ctx)
+		if derr != nil {
+			return "", fmt.Errorf("ha_home_snapshot: get device registry: %w", derr)
+		}
+		deviceByID = indexDevices(devices)
+		resolver, err = buildHomeResolver(ctx, client, devices, req.Include)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	resolver, err := buildHomeResolver(ctx, client, devices, req.Include)
-	if err != nil {
-		return "", err
-	}
-
-	deviceByID := indexDevices(devices)
 	statesByID := indexStates(allStates)
 
 	members, filters := selectHomeMembers(entities, deviceByID, req.IncludeDiagnostic, req.IncludeHidden)
