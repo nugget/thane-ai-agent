@@ -94,14 +94,24 @@ fetch Home Assistant forecast response data each turn and include a
 compact forecast in the injected entity context. Use `forecast: none` to
 clear forecast fetching for that subscription.
 
+Entity subscriptions also accept `include`, a set of HA metadata flags:
+`area`, `device`, `labels`, `description`, and `visibility`, or
+`all: true`. Enabled metadata is resolved through the native HA registries and
+injected beside the entity state. Area metadata includes floor registry
+details; deployments can alias floors as buildings with
+`homeassistant.floor_alias: building`. Visibility metadata exposes the HA
+hidden/enabled status plus a model-facing `context_role`, so
+hidden-but-enabled entities remain available for focused research without
+becoming default context clutter.
+
 ## `ha` — Home Assistant state and control
 
 | Tool | Description |
 |------|-------------|
 | `ha_control_device` | Natural-language device control with fuzzy entity matching. |
-| `ha_find_entity` | Smart entity discovery across HA domains. |
-| `ha_get_state` | Current state of any entity. |
-| `ha_list_entities` | Browse entities by domain or glob pattern. |
+| `ha_find_entity` | Smart entity discovery across HA domains, optionally enriched with HA metadata. |
+| `ha_get_state` | Current state of any entity, with optional area/device/label/description/visibility metadata. |
+| `ha_list_entities` | Browse entities by domain with optional HA metadata. |
 | `ha_call_service` | Direct HA service invocation. |
 | `ha_registry_search` | Search the entity/device/area registry. |
 | `ha_automation_list` | List automations with recent activation counts. |

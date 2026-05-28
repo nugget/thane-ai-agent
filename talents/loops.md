@@ -33,6 +33,11 @@ Choose stream wiring by attention cost:
   `remove_entity_subscription` here; those mutate the
   conversation-wide always-visible subscription set, a different
   store, and using them on a loop's scope mutates the wrong thing.
+  Add `include` metadata flags (`area`, `device`, `labels`,
+  `description`, `visibility`, or `all`) when the loop needs
+  physical-world context beside the live state, including HA's
+  floor/building hierarchy and hidden/enabled salience. Use
+  `visibility.context_role` as the quick default-vs-forensic hint.
 - Use event-source `wake_loop` targets when each event deserves an
   immediate iteration. Producer tools such as `forge_repo_follow` and
   `media_follow` own those subscriptions.

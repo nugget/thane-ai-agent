@@ -71,6 +71,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 						"type":        "integer",
 						"description": "Optional auto-expiration in seconds. Use for bounded research tasks where the watch should fall off automatically.",
 					},
+					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
 			},
@@ -94,12 +95,17 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if err != nil {
 					return "", fmt.Errorf("forecast: %w", err)
 				}
+				include, err := tools.ParseEntityMetadataIncludesArg(args["include"], "include")
+				if err != nil {
+					return "", err
+				}
 				now := time.Now().UTC()
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
 					return upsertSubscription(current, looppkg.EntitySubscription{
 						EntityID:   entityID,
 						History:    history,
 						Forecast:   forecast,
+						Include:    tools.EntityMetadataIncludesPointer(include),
 						TTLSeconds: ttlSeconds,
 						AddedAt:    now,
 					}), nil

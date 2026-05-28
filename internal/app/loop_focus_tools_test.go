@@ -61,6 +61,9 @@ func TestBuildLoopFocusTools_WatchEntity(t *testing.T) {
 		"history":     []any{3600, 86400},
 		"forecast":    "hourly",
 		"ttl_seconds": 7200,
+		"include": map[string]any{
+			"all": true,
+		},
 	})
 	if err != nil {
 		t.Fatalf("watch_entity handler: %v", err)
@@ -86,6 +89,9 @@ func TestBuildLoopFocusTools_WatchEntity(t *testing.T) {
 	}
 	if got[0].AddedAt.IsZero() {
 		t.Error("AddedAt should be stamped at mutation time, got zero")
+	}
+	if got[0].Include == nil || !got[0].Include.Area || !got[0].Include.Device || !got[0].Include.Labels || !got[0].Include.Description {
+		t.Errorf("Include = %#v, want all metadata flags", got[0].Include)
 	}
 }
 

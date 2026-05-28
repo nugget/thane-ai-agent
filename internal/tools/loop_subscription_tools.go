@@ -64,6 +64,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 								"type":        "integer",
 								"description": "Optional auto-expiration in seconds.",
 							},
+							"include": EntityMetadataIncludeParameter(),
 						},
 						"required": []string{"entity_id"},
 					},
@@ -147,6 +148,7 @@ func applySubscriptionDelta(current []looppkg.EntitySubscription, addList []cura
 			EntityID:   e.EntityID,
 			History:    append([]int(nil), e.History...),
 			Forecast:   e.Forecast,
+			Include:    EntityMetadataIncludesPointer(e.Include),
 			TTLSeconds: e.TTLSeconds,
 			AddedAt:    addedAt,
 		})
