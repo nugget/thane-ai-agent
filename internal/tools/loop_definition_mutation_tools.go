@@ -6,6 +6,7 @@ import (
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]any) (string, error) {
@@ -56,7 +57,7 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	if r.loopDefinitionRegistry == nil {
 		return "", fmt.Errorf("loop definition registry not configured")
 	}
-	name := ldStringArg(args, "name")
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
@@ -121,7 +122,7 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 	if err != nil {
 		return "", err
 	}
-	name := ldStringArg(args, "name")
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
@@ -129,7 +130,7 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 	clearOverride, _ := args["clear_override"].(bool)
-	stateRaw := ldStringArg(args, "state")
+	stateRaw := toolargs.TrimmedString(args, "state")
 	if clearOverride && stateRaw != "" {
 		return "", fmt.Errorf("clear_override cannot be combined with state")
 	}
@@ -153,7 +154,7 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 		}
 		policy := looppkg.DefinitionPolicy{
 			State:     state,
-			Reason:    ldStringArg(args, "reason"),
+			Reason:    toolargs.TrimmedString(args, "reason"),
 			UpdatedAt: time.Now().UTC(),
 		}
 		if r.persistLoopDefinitionPolicy != nil {
@@ -190,7 +191,7 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if r.launchLoopDefinition == nil {
 		return "", fmt.Errorf("loop definition launch is not configured")
 	}
-	name := ldStringArg(args, "name")
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}

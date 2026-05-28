@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 type loopDefinitionLintEffective struct {
@@ -58,14 +59,14 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 	if err != nil {
 		return "", err
 	}
-	query := strings.ToLower(ldStringArg(args, "query"))
-	source := ldStringArg(args, "source")
-	operation := ldStringArg(args, "operation")
-	completion := ldStringArg(args, "completion")
-	policyState := ldStringArg(args, "policy_state")
-	runtimeState := strings.ToLower(ldStringArg(args, "runtime_state"))
-	eligibleFilter := ldStringArg(args, "eligible")
-	limit := ldIntArg(args, "limit")
+	query := strings.ToLower(toolargs.TrimmedString(args, "query"))
+	source := toolargs.TrimmedString(args, "source")
+	operation := toolargs.TrimmedString(args, "operation")
+	completion := toolargs.TrimmedString(args, "completion")
+	policyState := toolargs.TrimmedString(args, "policy_state")
+	runtimeState := strings.ToLower(toolargs.TrimmedString(args, "runtime_state"))
+	eligibleFilter := toolargs.TrimmedString(args, "eligible")
+	limit := toolargs.Int(args, "limit")
 	if limit <= 0 {
 		limit = defaultLoopDefinitionListLimit
 	}
@@ -147,7 +148,7 @@ func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]an
 	if err != nil {
 		return "", err
 	}
-	name := ldStringArg(args, "name")
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}

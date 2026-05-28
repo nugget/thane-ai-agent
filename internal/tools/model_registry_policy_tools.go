@@ -7,18 +7,19 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 func (r *Registry) handleModelResourceSetPolicy(_ context.Context, args map[string]any) (string, error) {
 	if r.modelRegistry == nil {
 		return "", fmt.Errorf("model registry not configured")
 	}
-	resourceID := strings.TrimSpace(mrStringArg(args, "resource"))
+	resourceID := strings.TrimSpace(toolargs.String(args, "resource"))
 	if resourceID == "" {
 		return "", fmt.Errorf("resource is required")
 	}
-	clearOverride := mrBoolArg(args, "clear_override")
-	stateRaw := strings.TrimSpace(mrStringArg(args, "state"))
+	clearOverride := toolargs.Bool(args, "clear_override")
+	stateRaw := strings.TrimSpace(toolargs.String(args, "state"))
 	if clearOverride && stateRaw != "" {
 		return "", fmt.Errorf("clear_override cannot be combined with state")
 	}
@@ -60,7 +61,7 @@ func (r *Registry) handleModelResourceSetPolicy(_ context.Context, args map[stri
 	}
 	policy := fleet.ResourcePolicy{
 		State:     state,
-		Reason:    strings.TrimSpace(mrStringArg(args, "reason")),
+		Reason:    strings.TrimSpace(toolargs.String(args, "reason")),
 		UpdatedAt: time.Now().UTC(),
 	}
 	if r.persistModelRegistryResourcePolicy != nil {
@@ -94,13 +95,13 @@ func (r *Registry) handleModelDeploymentSetPolicy(_ context.Context, args map[st
 	if r.modelRegistry == nil {
 		return "", fmt.Errorf("model registry not configured")
 	}
-	deploymentID := strings.TrimSpace(mrStringArg(args, "deployment"))
+	deploymentID := strings.TrimSpace(toolargs.String(args, "deployment"))
 	if deploymentID == "" {
 		return "", fmt.Errorf("deployment is required")
 	}
-	clearOverride := mrBoolArg(args, "clear_override")
-	stateRaw := strings.TrimSpace(mrStringArg(args, "state"))
-	_, hasRoutable := mrBoolArgOK(args, "routable")
+	clearOverride := toolargs.Bool(args, "clear_override")
+	stateRaw := strings.TrimSpace(toolargs.String(args, "state"))
+	_, hasRoutable := toolargs.BoolOK(args, "routable")
 	if clearOverride && (stateRaw != "" || hasRoutable) {
 		return "", fmt.Errorf("clear_override cannot be combined with state or routable")
 	}
@@ -146,10 +147,10 @@ func (r *Registry) handleModelDeploymentSetPolicy(_ context.Context, args map[st
 	}
 	policy := fleet.DeploymentPolicy{
 		State:     state,
-		Reason:    strings.TrimSpace(mrStringArg(args, "reason")),
+		Reason:    strings.TrimSpace(toolargs.String(args, "reason")),
 		UpdatedAt: time.Now().UTC(),
 	}
-	if value, ok := mrBoolArgOK(args, "routable"); ok {
+	if value, ok := toolargs.BoolOK(args, "routable"); ok {
 		policy.Routable = &value
 	}
 	if r.persistModelRegistryPolicy != nil {

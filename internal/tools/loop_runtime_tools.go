@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 const (
@@ -162,10 +163,10 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
 	}
-	query := strings.ToLower(ldStringArg(args, "query"))
-	state := strings.ToLower(ldStringArg(args, "state"))
-	operation := looppkg.Operation(ldStringArg(args, "operation"))
-	limit := clampLoopListLimit(ldIntArg(args, "limit"), defaultLoopStatusLimit, maxLoopStatusLimit)
+	query := strings.ToLower(toolargs.TrimmedString(args, "query"))
+	state := strings.ToLower(toolargs.TrimmedString(args, "state"))
+	operation := looppkg.Operation(toolargs.TrimmedString(args, "operation"))
+	limit := clampLoopListLimit(toolargs.Int(args, "limit"), defaultLoopStatusLimit, maxLoopStatusLimit)
 
 	statuses := r.liveLoopRegistry.Statuses()
 	filtered := make([]loopStatusView, 0, len(statuses))
@@ -235,7 +236,7 @@ func (r *Registry) handleSetNextSleep(ctx context.Context, args map[string]any) 
 	if applied > status.Config.SleepMax {
 		applied = status.Config.SleepMax
 	}
-	reason := ldStringArg(args, "reason")
+	reason := toolargs.TrimmedString(args, "reason")
 	clamped := applied != requested
 	live.SetNextSleep(applied)
 
@@ -323,8 +324,8 @@ func (r *Registry) handleStopLoop(_ context.Context, args map[string]any) (strin
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
 	}
-	loopID := ldStringArg(args, "loop_id")
-	name := ldStringArg(args, "name")
+	loopID := toolargs.TrimmedString(args, "loop_id")
+	name := toolargs.TrimmedString(args, "name")
 	if loopID == "" && name == "" {
 		return "", fmt.Errorf("loop_id or name is required")
 	}

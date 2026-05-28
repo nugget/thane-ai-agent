@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	routepkg "github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 func (r *Registry) handleModelRouteExplain(_ context.Context, args map[string]any) (string, error) {
@@ -13,11 +14,11 @@ func (r *Registry) handleModelRouteExplain(_ context.Context, args map[string]an
 		return "", fmt.Errorf("model registry router not configured")
 	}
 
-	toolCount, ok := mrIntArgOK(args, "tool_count")
+	toolCount, ok := toolargs.IntOK(args, "tool_count")
 	if !ok || toolCount < 0 {
 		toolCount = len(r.tools)
 	}
-	priority := mrParseRoutePriority(mrStringArg(args, "priority"))
+	priority := mrParseRoutePriority(toolargs.String(args, "priority"))
 	hints := mrExtractRouteHints(args)
 
 	req := routeRequestForExplanation(args, toolCount, priority, hints)
@@ -44,11 +45,11 @@ func (r *Registry) handleModelRouteExplain(_ context.Context, args map[string]an
 
 func routeRequestForExplanation(args map[string]any, toolCount int, priority routepkg.Priority, hints map[string]string) routepkg.Request {
 	return routepkg.Request{
-		Query:          strings.TrimSpace(mrStringArg(args, "query")),
-		ContextSize:    mrIntArg(args, "context_size", 0),
-		NeedsTools:     mrBoolArg(args, "needs_tools"),
-		NeedsStreaming: mrBoolArg(args, "needs_streaming"),
-		NeedsImages:    mrBoolArg(args, "needs_images"),
+		Query:          strings.TrimSpace(toolargs.String(args, "query")),
+		ContextSize:    toolargs.IntOr(args, "context_size", 0),
+		NeedsTools:     toolargs.Bool(args, "needs_tools"),
+		NeedsStreaming: toolargs.Bool(args, "needs_streaming"),
+		NeedsImages:    toolargs.Bool(args, "needs_images"),
 		ToolCount:      toolCount,
 		Priority:       priority,
 		RoutingFactors: hints,
