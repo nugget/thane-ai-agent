@@ -38,7 +38,7 @@ type haSearchStatesResult struct {
 // so it can confirm what was actually searched.
 type haSearchStateFilters struct {
 	Domain     string   `json:"domain,omitempty"`
-	States     []string `json:"states,omitempty"`
+	State      []string `json:"state,omitempty"`
 	Area       string   `json:"area,omitempty"`
 	Attribute  string   `json:"attribute,omitempty"`
 	Comparison string   `json:"comparison,omitempty"`
@@ -76,9 +76,9 @@ func (r *Registry) registerHASearchStates() {
 			"type": "object",
 			"properties": map[string]any{
 				"state": map[string]any{
-					"type":        "array",
+					"type":        []string{"string", "array"},
 					"items":       map[string]any{"type": "string"},
-					"description": "Match entities whose current state is one of these values (e.g. [\"on\"], [\"open\"], [\"unavailable\",\"unknown\"]). A single string is also accepted.",
+					"description": "Match entities whose current state is one of these values. Accepts a single string (\"on\") or an array ([\"unavailable\",\"unknown\"]).",
 				},
 				"domain": map[string]any{
 					"type":        "string",
@@ -227,7 +227,7 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 func (q haSearchStateQuery) filters() haSearchStateFilters {
 	f := haSearchStateFilters{
 		Domain:     q.domain,
-		States:     q.states,
+		State:      q.states,
 		Area:       q.area,
 		Attribute:  q.attribute,
 		Comparison: q.comparison,
