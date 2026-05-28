@@ -293,7 +293,7 @@ func (r *Registry) registerThaneCurate() {
 						"properties": map[string]any{
 							"entity_id": map[string]any{
 								"type":        "string",
-								"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home).",
+								"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
 							},
 							"history": map[string]any{
 								"type":        "array",
@@ -612,6 +612,9 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		entityID = strings.TrimSpace(entityID)
 		if entityID == "" {
 			return nil, fmt.Errorf("%s[%d].entity_id is required", fieldName, i)
+		}
+		if err := homeassistant.ValidateEntityTarget(entityID); err != nil {
+			return nil, fmt.Errorf("%s[%d].entity_id %q: invalid glob pattern: %w", fieldName, i, entityID, err)
 		}
 		if seen[entityID] {
 			return nil, fmt.Errorf("%s[%d] duplicates entity_id %q; each entity may appear at most once", fieldName, i, entityID)

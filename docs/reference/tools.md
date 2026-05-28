@@ -94,6 +94,14 @@ fetch Home Assistant forecast response data each turn and include a
 compact forecast in the injected entity context. Use `forecast: none` to
 clear forecast fetching for that subscription.
 
+An entity subscription's `entity_id` may be a glob (e.g.
+`binary_sensor.*door*`, `*_temperature`) instead of a concrete id. A glob
+subscription is re-expanded against live entities every turn — newly
+matching entities join automatically — and is capped per turn, emitting a
+truncation marker when it matches more than the cap. This works across
+`add_entity_subscription`, `watch_entity`, `thane_curate.entities`, and
+`update_entity_subscriptions`.
+
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, `description`, and `visibility`, or
 `all: true`. Enabled metadata is resolved through the native HA registries and

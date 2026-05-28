@@ -15,7 +15,12 @@ Choose the next move deliberately:
 
 - Use `list_entity_subscriptions` to see what this loop is already carrying.
 - Use `add_entity_subscription` when a room, device, person, or live state
-  should auto-load while the work continues.
+  should auto-load while the work continues. The `entity_id` accepts a
+  glob (e.g. `binary_sensor.*door*`, `*_temperature`) to follow a whole
+  set: it is re-expanded against live entities every turn, so newly-added
+  matches join automatically. A glob is capped per turn and reports
+  truncation when it matches more than the cap — keep patterns narrow so
+  the watch stays a focus, not a firehose.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read
