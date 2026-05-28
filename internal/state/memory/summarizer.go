@@ -92,6 +92,13 @@ type SummarizerWorker struct {
 	startTime     time.Time // process start time — sessions older than this are orphan candidates
 	interactionCB InteractionCallback
 
+	// curatorWake, when set, is fired for each unsummarized session
+	// the worker finds instead of the worker calling the LLM itself.
+	// Wired by the app when the curator loop is enabled (#989). When
+	// unset (curator disabled), the worker falls back to its own LLM
+	// path so SummarizerWorker remains useful on its own.
+	curatorWake func(ctx context.Context, sessionID, reason string) error
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -109,6 +116,19 @@ func NewSummarizerWorker(store *ArchiveStore, llmClient llm.Client, rtr *router.
 		startTime: time.Now().UTC(),
 		done:      make(chan struct{}),
 	}
+}
+
+// SetCuratorWake registers the curator wake-firing function. When
+// set, the worker fires a curator wake for each unsummarized
+// session it finds instead of calling the LLM directly — the
+// curator becomes the sole writer of session metadata (#989).
+// Setting cb to nil restores the LLM-direct fallback path.
+//
+// Should be called from the app wiring whenever the curator loop is
+// enabled. The fallback (no curator wake) preserves backwards
+// compatibility for setups that haven't enabled the curator.
+func (w *SummarizerWorker) SetCuratorWake(cb func(ctx context.Context, sessionID, reason string) error) {
+	w.curatorWake = cb
 }
 
 // SetInteractionCallback registers a callback invoked after each
@@ -274,12 +294,13 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 			// session needs LLM work. It re-fetches the transcript
 			// to decide, so we don't rely on the (possibly stale or
 			// silently-zero) MessageCount from UnsummarizedSessions.
-			calledLLM := w.summarizeSession(ctx, sess)
-			if calledLLM {
+			workedThisRow := w.summarizeSession(ctx, sess)
+			if workedThisRow {
 				didLLMWork = true
-				// Rate-limit only when we actually called a model.
-				// Cleanup markEmpty paths are cheap SQL writes and
-				// don't need to throttle for interactive traffic.
+				// Rate-limit between rows when this one cost
+				// per-session budget — either an LLM call or a
+				// curator wake. Cleanup markEmpty paths are cheap
+				// SQL writes and don't need to throttle.
 				if !sleepCtx(ctx, w.config.PauseBetween) {
 					return
 				}
@@ -300,11 +321,15 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 }
 
 // summarizeSession processes one session candidate. Returns true when
-// an LLM call was made (so the caller knows to rate-limit), false
-// when the session was empty (markEmpty'd at SQL speed) or when an
-// unrecoverable error short-circuited the path before any model
-// call. The returned bool is the scan loop's signal: "did this row
-// cost real LLM/router budget?"
+// the row consumed real per-session budget that the scan loop should
+// rate-limit and break-batch on — either an LLM call (the legacy
+// metadata-generation path) or a successful curator-wake delivery (the
+// #989 path; wakes are cheap individually but enqueue model work
+// downstream and don't mutate the unsummarized-row state, so without
+// the break a backlogged tick would re-fire the same wakes every
+// batch until [maxBatchesPerScan]). Returns false when the session was
+// empty (markEmpty'd at SQL speed) or when an unrecoverable error
+// short-circuited the path before any work was emitted.
 func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) bool {
 	ctx, cancel := context.WithTimeout(ctx, w.config.Timeout)
 	defer cancel()
@@ -326,8 +351,46 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 		// Empty-transcript sessions (scheduler tasks, empty delegates,
 		// crash_recovery placeholders) must be marked as summarized
 		// so they don't re-enter the queue on every scan cycle.
+		// markEmpty is a SQL write — no LLM needed regardless of
+		// curator mode, so this path stays unchanged.
 		w.markEmpty(sess.ID)
 		return false
+	}
+
+	// Curator-wake path (#989). When the worker has a curator wake
+	// hook, fire it for this session and skip the LLM call entirely.
+	// The curator becomes the sole writer of session metadata; this
+	// worker reverts to a thin backstop scanner. A wake failure (curator
+	// disabled, queue full, transient) falls through to the LLM path
+	// so the session still gets summarized one way or the other.
+	if w.curatorWake != nil {
+		reason := ""
+		if sess.EndReason != "" {
+			reason = sess.EndReason
+		}
+		if err := w.curatorWake(ctx, sess.ID, reason); err == nil {
+			w.logger.Debug("session-close wake fired via summarizer scan",
+				"session", ShortID(sess.ID),
+				"reason", reason,
+			)
+			// Return true so [scan] rate-limits via PauseBetween and
+			// exits its batch loop after this tick. The wake itself
+			// doesn't mark the row summarized (the curator does, on
+			// its next iteration), so a `return false` here would
+			// loop the same UnsummarizedSessions batch up to
+			// [maxBatchesPerScan] times per tick — re-firing the
+			// same wakes and flooding the loop notify queue. Cost
+			// of the conservative `true`: a single-batch backlog
+			// processes across multiple scan ticks instead of one,
+			// which is the correct backstop cadence (the real-time
+			// EndSession callback already handled the live case).
+			return true
+		} else {
+			w.logger.Warn("curator wake failed; falling back to direct LLM path",
+				"session", ShortID(sess.ID),
+				"error", err,
+			)
+		}
 	}
 
 	// Route model selection through the router.
