@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,6 +125,14 @@ func (a *App) initStores(s *newState) error {
 	if cfg.HomeAssistant.Configured() {
 		a.ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.ha.UseFloorMetadataAlias(cfg.HomeAssistant.FloorAlias)
+		if ttl := strings.TrimSpace(cfg.HomeAssistant.RegistryCacheTTL); ttl != "" {
+			if d, err := time.ParseDuration(ttl); err != nil {
+				logger.Warn("invalid home_assistant.registry_cache_ttl; using default",
+					"value", ttl, "error", err)
+			} else {
+				a.ha.SetRegistryCacheTTL(d)
+			}
+		}
 		a.haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.ha.UseWSClient(a.haWS)
 		a.onCloseErr("ha-websocket", a.haWS.Close)
