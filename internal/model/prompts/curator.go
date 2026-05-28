@@ -44,11 +44,11 @@ inbound event-source wakes that arrived since your last sleep.
   Pick one subject from your queue and do the per-subject work
   described in "What To Do This Iteration" below.
 
-If multiple session-close events arrive in one wake (batch
-delivery), process them all in this iteration. The
-` + "`events_truncated`" + ` flag on the payload tells you when the runtime
-clipped a larger batch; what you can't reach here will be picked up
-on a later wake via the summarizer's periodic scan backstop.
+If multiple session-close events arrive in one wake — the runtime
+can batch up to fifty events into a single envelope — process them
+all in this iteration. Larger backlogs aren't truncated; producers
+split them into multiple wakes, and the summarizer's periodic scan
+backstop refires anything the real-time path dropped.
 
 ## Your Durable Output
 

@@ -294,12 +294,13 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 			// session needs LLM work. It re-fetches the transcript
 			// to decide, so we don't rely on the (possibly stale or
 			// silently-zero) MessageCount from UnsummarizedSessions.
-			calledLLM := w.summarizeSession(ctx, sess)
-			if calledLLM {
+			workedThisRow := w.summarizeSession(ctx, sess)
+			if workedThisRow {
 				didLLMWork = true
-				// Rate-limit only when we actually called a model.
-				// Cleanup markEmpty paths are cheap SQL writes and
-				// don't need to throttle for interactive traffic.
+				// Rate-limit between rows when this one cost
+				// per-session budget — either an LLM call or a
+				// curator wake. Cleanup markEmpty paths are cheap
+				// SQL writes and don't need to throttle.
 				if !sleepCtx(ctx, w.config.PauseBetween) {
 					return
 				}
@@ -320,11 +321,15 @@ func (w *SummarizerWorker) scan(ctx context.Context) {
 }
 
 // summarizeSession processes one session candidate. Returns true when
-// an LLM call was made (so the caller knows to rate-limit), false
-// when the session was empty (markEmpty'd at SQL speed) or when an
-// unrecoverable error short-circuited the path before any model
-// call. The returned bool is the scan loop's signal: "did this row
-// cost real LLM/router budget?"
+// the row consumed real per-session budget that the scan loop should
+// rate-limit and break-batch on — either an LLM call (the legacy
+// metadata-generation path) or a successful curator-wake delivery (the
+// #989 path; wakes are cheap individually but enqueue model work
+// downstream and don't mutate the unsummarized-row state, so without
+// the break a backlogged tick would re-fire the same wakes every
+// batch until [maxBatchesPerScan]). Returns false when the session was
+// empty (markEmpty'd at SQL speed) or when an unrecoverable error
+// short-circuited the path before any work was emitted.
 func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) bool {
 	ctx, cancel := context.WithTimeout(ctx, w.config.Timeout)
 	defer cancel()
@@ -368,7 +373,18 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 				"session", ShortID(sess.ID),
 				"reason", reason,
 			)
-			return false
+			// Return true so [scan] rate-limits via PauseBetween and
+			// exits its batch loop after this tick. The wake itself
+			// doesn't mark the row summarized (the curator does, on
+			// its next iteration), so a `return false` here would
+			// loop the same UnsummarizedSessions batch up to
+			// [maxBatchesPerScan] times per tick — re-firing the
+			// same wakes and flooding the loop notify queue. Cost
+			// of the conservative `true`: a single-batch backlog
+			// processes across multiple scan ticks instead of one,
+			// which is the correct backstop cadence (the real-time
+			// EndSession callback already handled the live case).
+			return true
 		} else {
 			w.logger.Warn("curator wake failed; falling back to direct LLM path",
 				"session", ShortID(sess.ID),

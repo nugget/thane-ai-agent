@@ -770,14 +770,23 @@ func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
 	mu.Lock()
 	snapshot := append([]string(nil), wakedSessions...)
 	mu.Unlock()
-	foundReal := false
+	realWakes := 0
 	for _, id := range snapshot {
 		if id == real.ID {
-			foundReal = true
+			realWakes++
 		}
 	}
-	if !foundReal {
+	if realWakes == 0 {
 		t.Errorf("real session %s never fired curator wake; waked=%v", ShortID(real.ID), snapshot)
+	}
+	// Regression guard for the tight-loop bug (Copilot review on
+	// #994): the wake doesn't mark the row summarized, so without
+	// the "wake counts as work" signal the scan() batch loop would
+	// re-fetch the same UnsummarizedSessions and re-fire the same
+	// wake up to maxBatchesPerScan times per tick. With the fix one
+	// scan tick fires exactly once per session.
+	if realWakes > 1 {
+		t.Errorf("real session %s waked %d times in a single scan tick; expected 1 (scan tight-loop regression)", ShortID(real.ID), realWakes)
 	}
 
 	// Empty session: markEmpty ran (SQL-only path), so it should not
