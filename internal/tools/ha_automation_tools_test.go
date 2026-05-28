@@ -239,7 +239,15 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 	case "config/entity_registry/get":
 		entityID, _ := msg["entity_id"].(string)
 		row, ok := f.entityByID[entityID]
-		return row, ok
+		if ok {
+			return row, true
+		}
+		for _, row := range f.entityRows {
+			if row["entity_id"] == entityID {
+				return row, true
+			}
+		}
+		return nil, false
 	case "config/entity_registry/update":
 		entityID, _ := msg["entity_id"].(string)
 		row, ok := f.entityByID[entityID]

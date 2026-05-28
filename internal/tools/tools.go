@@ -1204,7 +1204,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 	}
 	var metadata *homeassistant.EntityMetadata
 	if include.Any() {
-		bundle, err := fetchHAEntityMetadataBundle(ctx, r.ha, include)
+		bundle, err := fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, include, []string{entityID})
 		if err != nil {
 			return "", err
 		}
@@ -1255,12 +1255,9 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		return "", err
 	}
 
-	bundle, err := fetchHAEntityMetadataBundle(ctx, r.ha, include)
-	if err != nil {
-		return "", err
-	}
-
 	var matches []haListEntityItem
+	var matchEntityIDs []string
+	var matchStates []homeassistant.State
 	total := 0
 	prefix := domain + "."
 	for _, s := range states {
@@ -1276,10 +1273,18 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 			if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 				item.FriendlyName = friendly
 			}
-			if bundle != nil {
-				item.Metadata = bundle.metadata(s.EntityID, &s)
-			}
 			matches = append(matches, item)
+			matchEntityIDs = append(matchEntityIDs, s.EntityID)
+			matchStates = append(matchStates, s)
+		}
+	}
+	if include.Any() && len(matches) > 0 {
+		bundle, err := fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, include, matchEntityIDs)
+		if err != nil {
+			return "", err
+		}
+		for i := range matches {
+			matches[i].Metadata = bundle.metadata(matches[i].EntityID, &matchStates[i])
 		}
 	}
 

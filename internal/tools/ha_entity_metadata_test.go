@@ -132,6 +132,129 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 	if len(got.Metadata.Labels) != 3 {
 		t.Fatalf("labels = %#v, want 3", got.Metadata.Labels)
 	}
+	fake.mu.Lock()
+	entityGetCalls := fake.wsCalls["config/entity_registry/get"]
+	entityListCalls := fake.wsCalls["config/entity_registry/list"]
+	fake.mu.Unlock()
+	if entityGetCalls != 1 {
+		t.Fatalf("entity registry get calls = %d, want 1", entityGetCalls)
+	}
+	if entityListCalls != 0 {
+		t.Fatalf("entity registry list calls = %d, want 0", entityListCalls)
+	}
+}
+
+func TestHAListEntitiesMetadataHydratesOnlyReturnedEntities(t *testing.T) {
+	fake := newFakeHAServer(t)
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	fake.states = []homeassistant.State{
+		{
+			EntityID: "sensor.office_temperature",
+			State:    "72.1",
+			Attributes: map[string]any{
+				"friendly_name": "Office Temperature",
+				"device_class":  "temperature",
+			},
+			LastChanged: now.Add(-5 * time.Minute),
+			LastUpdated: now.Add(-5 * time.Minute),
+		},
+		{
+			EntityID: "sensor.office_humidity",
+			State:    "45",
+			Attributes: map[string]any{
+				"friendly_name": "Office Humidity",
+				"device_class":  "humidity",
+			},
+			LastChanged: now.Add(-4 * time.Minute),
+			LastUpdated: now.Add(-4 * time.Minute),
+		},
+		{
+			EntityID: "sensor.office_voltage",
+			State:    "120",
+			Attributes: map[string]any{
+				"friendly_name": "Office Voltage",
+				"device_class":  "voltage",
+			},
+			LastChanged: now.Add(-3 * time.Minute),
+			LastUpdated: now.Add(-3 * time.Minute),
+		},
+		{
+			EntityID: "light.office_lamp",
+			State:    "off",
+			Attributes: map[string]any{
+				"friendly_name": "Office Lamp",
+			},
+			LastChanged: now.Add(-2 * time.Minute),
+			LastUpdated: now.Add(-2 * time.Minute),
+		},
+	}
+	fake.entityRows = []map[string]any{
+		{
+			"entity_id":    "sensor.office_temperature",
+			"name":         "Temperature",
+			"description":  "Ambient office temperature",
+			"hidden_by":    "user",
+			"platform":     "zwave_js",
+			"disabled_by":  "",
+			"device_class": "",
+		},
+		{
+			"entity_id":   "sensor.office_humidity",
+			"name":        "Humidity",
+			"description": "Ambient office humidity",
+			"platform":    "zwave_js",
+		},
+		{
+			"entity_id":   "sensor.office_voltage",
+			"name":        "Voltage",
+			"description": "Outlet voltage",
+			"platform":    "zwave_js",
+		},
+	}
+
+	reg := fake.registry(t)
+	result, err := reg.Execute(context.Background(), "ha_list_entities", `{
+		"domain": "sensor",
+		"limit": 2,
+		"include": {"description": true, "visibility": true}
+	}`)
+	if err != nil {
+		t.Fatalf("ha_list_entities: %v", err)
+	}
+
+	var got haListEntitiesResult
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v\n%s", err, result)
+	}
+	if got.Domain != "sensor" || got.Count != 2 || got.Total != 3 || !got.Truncated {
+		t.Fatalf("result summary = %#v, want two returned of three sensors", got)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(got.Items))
+	}
+	if got.Items[0].Metadata == nil {
+		t.Fatal("first item metadata is nil")
+	}
+	if got.Items[0].Metadata.Description != "Ambient office temperature" {
+		t.Fatalf("first description = %q, want registry description", got.Items[0].Metadata.Description)
+	}
+	if got.Items[0].Metadata.DeviceClass != "temperature" {
+		t.Fatalf("first device_class = %q, want state device_class", got.Items[0].Metadata.DeviceClass)
+	}
+	if got.Items[0].Metadata.Visibility == nil || got.Items[0].Metadata.Visibility.ContextRole != "hidden" {
+		t.Fatalf("first visibility = %#v, want hidden role", got.Items[0].Metadata.Visibility)
+	}
+
+	fake.mu.Lock()
+	entityGetCalls := fake.wsCalls["config/entity_registry/get"]
+	entityListCalls := fake.wsCalls["config/entity_registry/list"]
+	fake.mu.Unlock()
+	if entityGetCalls != 2 {
+		t.Fatalf("entity registry get calls = %d, want 2", entityGetCalls)
+	}
+	if entityListCalls != 0 {
+		t.Fatalf("entity registry list calls = %d, want 0", entityListCalls)
+	}
 }
 
 func TestParseEntityMetadataIncludesArgRejectsBoolean(t *testing.T) {

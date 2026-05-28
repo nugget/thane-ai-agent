@@ -134,13 +134,61 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 	if err != nil {
 		return nil, fmt.Errorf("get entity registry: %w", err)
 	}
+	return newHAEntityMetadataBundle(ctx, ha, include, entries)
+}
+
+func fetchHAEntityMetadataBundleForEntityIDs(ctx context.Context, ha *homeassistant.Client, include homeassistant.EntityMetadataIncludes, entityIDs []string) (*haEntityMetadataBundle, error) {
+	if ha == nil || !include.Any() {
+		return nil, nil
+	}
+	entityIDs = uniqueEntityIDs(entityIDs)
+	if len(entityIDs) == 0 {
+		return newHAEntityMetadataBundle(ctx, ha, include, nil)
+	}
+
+	entries := make([]homeassistant.EntityRegistryEntry, 0, len(entityIDs))
+	for _, entityID := range entityIDs {
+		entry, err := ha.GetEntityRegistryEntry(ctx, entityID)
+		if err != nil {
+			if isEntityRegistryNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("get entity registry entry %s: %w", entityID, err)
+		}
+		if entry == nil {
+			continue
+		}
+		entries = append(entries, *entry)
+	}
+	return newHAEntityMetadataBundle(ctx, ha, include, entries)
+}
+
+func uniqueEntityIDs(entityIDs []string) []string {
+	seen := make(map[string]struct{}, len(entityIDs))
+	out := make([]string, 0, len(entityIDs))
+	for _, entityID := range entityIDs {
+		if entityID == "" {
+			continue
+		}
+		if _, ok := seen[entityID]; ok {
+			continue
+		}
+		seen[entityID] = struct{}{}
+		out = append(out, entityID)
+	}
+	return out
+}
+
+func newHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, include homeassistant.EntityMetadataIncludes, entries []homeassistant.EntityRegistryEntry) (*haEntityMetadataBundle, error) {
 	entryMap := make(map[string]*homeassistant.EntityRegistryEntry, len(entries))
 	for i := range entries {
 		entryMap[entries[i].EntityID] = &entries[i]
 	}
 
 	var areas []homeassistant.Area
-	if include.Area || include.Labels || include.Device {
+	var err error
+	hasRegistryEntries := len(entries) > 0
+	if hasRegistryEntries && (include.Area || include.Labels || include.Device) {
 		areas, err = ha.GetAreas(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("get areas: %w", err)
@@ -148,7 +196,7 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 	}
 
 	var floors []homeassistant.FloorRegistryEntry
-	if include.Area {
+	if hasRegistryEntries && include.Area {
 		floors, err = ha.GetFloorRegistry(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("get floors: %w", err)
@@ -156,7 +204,7 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 	}
 
 	var labels []homeassistant.LabelRegistryEntry
-	if include.Labels {
+	if hasRegistryEntries && include.Labels {
 		labels, err = ha.GetLabelRegistry(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("get labels: %w", err)
@@ -164,7 +212,7 @@ func fetchHAEntityMetadataBundle(ctx context.Context, ha *homeassistant.Client, 
 	}
 
 	var devices []homeassistant.DeviceRegistryEntry
-	if include.Device || include.Area || include.Labels {
+	if hasRegistryEntries && (include.Device || include.Area || include.Labels) {
 		devices, err = ha.GetDeviceRegistry(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("get devices: %w", err)
