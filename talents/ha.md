@@ -188,6 +188,73 @@ pass `include_hidden` or `include_diagnostic` for a forensic pass. Reach
 for this instead of listing a domain and cross-referencing rooms by
 hand.
 
+## I want everything one device exposes
+
+`ha_device` is the whole-device perception view — the native answer to
+"show me the thermostat device", "what does the front-door sensor
+expose", or "is this device healthy":
+
+```json
+{
+  "device": "front door lock",
+  "include": {"labels": true}
+}
+```
+
+Returns the device identity (manufacturer/model/firmware/serial/area/
+integration/via_device) plus every child entity it owns, with semantic
+state grouped by salience (anomalies first, then active, ambient, then
+the rest) and an availability rollup (how many of its entities are
+reporting). Resolves by `device_id` or by name — user-assigned or
+registry name, with a substring fallback, returning candidates when a
+name is ambiguous. Reach for this instead of discovering a device's
+child entities one `ha_get_state` at a time.
+
+## I want to know how something has trended
+
+`ha_history` summarizes one entity's recorder history over a lookback
+window — the native answer to "how has the office temperature moved over
+the last 24h" or "how many times did the front door open today":
+
+```json
+{
+  "entity_id": "sensor.office_temperature",
+  "lookback_seconds": 86400
+}
+```
+
+Returns a numeric trend (min/max/start/end/delta + rising/falling/flat)
+for numeric entities, or a discrete change summary (change count +
+recent states) for non-numeric ones. To trend a value that lives in an
+attribute rather than the state — a `climate` entity's
+`current_temperature`, say — pass `attribute`. Defaults to a 24h window,
+clamped to 30 days.
+
+For *sustained*, every-turn attention to an entity, don't poll this from
+a loop's turn budget — subscribe via `awareness` with history windows
+and let the trend stay current between turns for free.
+
+## I want the whole house at a glance
+
+`ha_home_snapshot` is the curated "how's the house right now" overview —
+the native answer to "what's going on at home", "is the house buttoned
+up", or "who's home":
+
+```json
+{
+  "include_energy": true
+}
+```
+
+Leads with what's actionable: anomalies (offline / in alarm), then
+security/openings (open doors and windows, unlocked locks, armed or
+triggered alarm panels), then presence (who's home vs away), then
+climate. A top-level `summary` gives the counts at a glance, and
+`status: "quiet"` means nothing is offline, open, unlocked, or armed.
+Pass `include_energy` for a power/energy section and `include` for
+per-entity metadata. This is the home-wide view; for one room reach for
+`get_area_activity`, for one device `ha_device`.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities

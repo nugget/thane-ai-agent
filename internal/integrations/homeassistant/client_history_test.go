@@ -55,6 +55,46 @@ func TestClient_GetStateHistory(t *testing.T) {
 	}
 }
 
+func TestClient_GetStateHistoryWithAttributes(t *testing.T) {
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			[
+				{
+					"entity_id":"climate.office",
+					"state":"heat",
+					"attributes":{"current_temperature":70.1},
+					"last_changed":"2025-01-15T10:00:00Z",
+					"last_updated":"2025-01-15T10:00:00Z"
+				}
+			]
+		]`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token", nil)
+	start := time.Date(2025, 1, 15, 9, 0, 0, 0, time.UTC)
+	end := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	states, err := client.GetStateHistoryWithAttributes(context.Background(), "climate.office", start, end)
+	if err != nil {
+		t.Fatalf("GetStateHistoryWithAttributes: %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("len(states) = %d, want 1", len(states))
+	}
+	// The attributes-enabled path must NOT request no_attributes, and the
+	// attribute payload must survive into the parsed state.
+	if strings.Contains(capturedPath, "no_attributes") {
+		t.Errorf("path = %q, must not set no_attributes", capturedPath)
+	}
+	if got := states[0].Attributes["current_temperature"]; got != 70.1 {
+		t.Errorf("current_temperature = %#v, want 70.1", got)
+	}
+}
+
 func TestClient_GetWeatherForecasts(t *testing.T) {
 	var capturedPath string
 	var capturedBody map[string]any
