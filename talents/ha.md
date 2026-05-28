@@ -188,6 +188,28 @@ pass `include_hidden` or `include_diagnostic` for a forensic pass. Reach
 for this instead of listing a domain and cross-referencing rooms by
 hand.
 
+## I want everything one device exposes
+
+`ha_device` is the whole-device perception view — the native answer to
+"show me the thermostat device", "what does the front-door sensor
+expose", or "is this device healthy":
+
+```json
+{
+  "device": "front door lock",
+  "include": {"labels": true}
+}
+```
+
+Returns the device identity (manufacturer/model/firmware/serial/area/
+integration/via_device) plus every child entity it owns, with semantic
+state grouped by salience (anomalies first, then active, ambient, then
+the rest) and an availability rollup (how many of its entities are
+reporting). Resolves by `device_id` or by name — user-assigned or
+registry name, with a substring fallback, returning candidates when a
+name is ambiguous. Reach for this instead of discovering a device's
+child entities one `ha_get_state` at a time.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities
