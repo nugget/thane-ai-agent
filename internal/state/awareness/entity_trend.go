@@ -153,20 +153,25 @@ func projectAttributeSeries(states []homeassistant.State, attribute string) []ho
 
 // projectAttributeState returns a copy of current with its state value
 // replaced by the named attribute's value, preserving the attribute map
-// so precision/unit resolution still works. Returns current unchanged
-// when the attribute is absent or non-coercible (the empty/garbage
-// series then yields a clean no-history marker).
+// so precision/unit resolution still works. Returns nil when the
+// attribute is absent or non-coercible on the current state: the shared
+// summarizer appends the current sample to the series, so handing back
+// the *unprojected* state (e.g. a climate entity's "heat") would
+// contaminate a projected numeric attribute series and force a discrete
+// fallback. Dropping the current sample instead lets the recorded
+// attribute history summarize cleanly (or yield a no-history marker
+// when the recorder also has nothing for the attribute).
 func projectAttributeState(current *homeassistant.State, attribute string) *homeassistant.State {
 	if current == nil {
 		return nil
 	}
 	raw, ok := current.Attributes[attribute]
 	if !ok {
-		return current
+		return nil
 	}
 	value, ok := attributeValueString(raw)
 	if !ok {
-		return current
+		return nil
 	}
 	next := *current
 	next.State = value

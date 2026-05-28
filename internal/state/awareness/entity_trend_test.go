@@ -180,6 +180,35 @@ func TestComputeEntityTrend_Attribute(t *testing.T) {
 	}
 }
 
+// TestComputeEntityTrend_AttributeAbsentOnCurrent is the #1018 regression:
+// when the recorder has the attribute but the current state no longer
+// exposes it (e.g. a climate entity turned off), the unprojected current
+// state must NOT be folded into the projected numeric series — the trend
+// stays numeric over the recorded attribute values rather than collapsing
+// to a discrete summary.
+func TestComputeEntityTrend_AttributeAbsentOnCurrent(t *testing.T) {
+	client := &fakeTrendClient{
+		// Current state dropped current_temperature (entity is "off").
+		current: histStateP("climate.office", "off", map[string]any{"unit_of_measurement": "°F"}, 0),
+		historyAttr: []homeassistant.State{
+			histState("climate.office", "heat", map[string]any{"current_temperature": 68.0}, 3*time.Hour),
+			histState("climate.office", "heat", map[string]any{"current_temperature": 70.0}, 2*time.Hour),
+			histState("climate.office", "heat", map[string]any{"current_temperature": 71.5}, 1*time.Hour),
+		},
+	}
+	out, err := ComputeEntityTrend(context.Background(), client, TrendRequest{EntityID: "climate.office", Attribute: "current_temperature"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeEntityTrend: %v", err)
+	}
+	p := decodeTrend(t, out)
+	if p["kind"] != "numeric" {
+		t.Fatalf("kind = %#v, want numeric (current lacks the attribute; must not poison to discrete)\n%s", p["kind"], out)
+	}
+	if p["max_value"] != "71.5" {
+		t.Errorf("max_value = %#v, want \"71.5\" (the off-state current must not be appended)", p["max_value"])
+	}
+}
+
 func TestComputeEntityTrend_LookbackClamped(t *testing.T) {
 	client := &fakeTrendClient{
 		current: histStateP("sensor.office_temp", "72.5", nil, 0),
