@@ -51,8 +51,9 @@ func (s *WatchlistStore) Add(entityID string) error {
 }
 
 // AddWithOptions inserts or updates entity subscriptions with tag scopes,
-// historical offsets, optional weather forecast type, and an optional TTL.
-// Empty tags means the entity is always visible in context.
+// historical offsets, optional weather forecast type, an optional TTL,
+// and optional HA entity metadata include flags. Empty tags means the
+// entity is always visible in context.
 func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string, includes ...homeassistant.EntityMetadataIncludes) error {
 	scopes := normalizeScopes(tags)
 	var include homeassistant.EntityMetadataIncludes

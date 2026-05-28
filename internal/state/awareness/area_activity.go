@@ -224,10 +224,11 @@ type areaFilterCounts struct {
 	Disabled     int
 	Hidden       int
 	Diagnostic   int
+	Config       int
 }
 
 func (c areaFilterCounts) Filtered() int {
-	return c.Disabled + c.Hidden + c.Diagnostic
+	return c.Disabled + c.Hidden + c.Diagnostic + c.Config
 }
 
 func addAreaFilterCounts(payload map[string]any, counts areaFilterCounts) {
@@ -239,6 +240,9 @@ func addAreaFilterCounts(payload map[string]any, counts areaFilterCounts) {
 	}
 	if counts.Diagnostic > 0 {
 		payload["diagnostic_count"] = counts.Diagnostic
+	}
+	if counts.Config > 0 {
+		payload["config_count"] = counts.Config
 	}
 }
 
@@ -280,8 +284,12 @@ func selectAreaMembers(
 			counts.Hidden++
 			continue
 		}
-		if !includeDiagnostic && (entry.EntityCategory == "diagnostic" || entry.EntityCategory == "config") {
+		if !includeDiagnostic && entry.EntityCategory == "diagnostic" {
 			counts.Diagnostic++
+			continue
+		}
+		if !includeDiagnostic && entry.EntityCategory == "config" {
+			counts.Config++
 			continue
 		}
 

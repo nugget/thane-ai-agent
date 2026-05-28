@@ -64,6 +64,8 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 		{EntityID: "switch.kitchen_outlet", AreaID: "kitchen"},
 		// Diagnostic entity should be filtered out by default.
 		{EntityID: "sensor.kitchen_battery", AreaID: "kitchen", EntityCategory: "diagnostic"},
+		// Config entity should be filtered and counted separately.
+		{EntityID: "switch.kitchen_status_led", AreaID: "kitchen", EntityCategory: "config"},
 		// Disabled entity should be filtered.
 		{EntityID: "sensor.kitchen_disabled", AreaID: "kitchen", DisabledBy: "user"},
 		// Hidden entity should be filtered from the default HUD-style view.
@@ -131,9 +133,9 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 		t.Errorf("stable = %v, want [switch.kitchen_outlet]", stable)
 	}
 
-	// filtered_count counts disabled, hidden, and diagnostic entities.
-	if parsed["filtered_count"] != float64(3) {
-		t.Errorf("filtered_count = %v, want 3 (disabled + hidden + diagnostic)", parsed["filtered_count"])
+	// filtered_count counts disabled, hidden, diagnostic, and config entities.
+	if parsed["filtered_count"] != float64(4) {
+		t.Errorf("filtered_count = %v, want 4 (disabled + hidden + diagnostic + config)", parsed["filtered_count"])
 	}
 	if parsed["disabled_count"] != float64(1) {
 		t.Errorf("disabled_count = %v, want 1", parsed["disabled_count"])
@@ -143,6 +145,9 @@ func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 	}
 	if parsed["diagnostic_count"] != float64(1) {
 		t.Errorf("diagnostic_count = %v, want 1", parsed["diagnostic_count"])
+	}
+	if parsed["config_count"] != float64(1) {
+		t.Errorf("config_count = %v, want 1", parsed["config_count"])
 	}
 }
 

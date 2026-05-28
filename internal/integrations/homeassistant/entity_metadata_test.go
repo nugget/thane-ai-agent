@@ -162,6 +162,9 @@ func TestEntityMetadataResolverProjectsVisibility(t *testing.T) {
 	if got.Visibility.EntityCategory != "diagnostic" {
 		t.Errorf("EntityCategory = %q, want diagnostic", got.Visibility.EntityCategory)
 	}
+	if got.EntityCategory != "" {
+		t.Errorf("top-level EntityCategory = %q, want empty for visibility-only include", got.EntityCategory)
+	}
 }
 
 func TestEntityMetadataResolverVisibilityContextRoles(t *testing.T) {

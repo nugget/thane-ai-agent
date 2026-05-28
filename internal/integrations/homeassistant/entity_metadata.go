@@ -307,9 +307,6 @@ func applyEntityVisibility(meta *EntityMetadata, entry *EntityRegistryEntry) {
 		DisabledBy:     entry.DisabledBy,
 		EntityCategory: entry.EntityCategory,
 	}
-	if meta.EntityCategory == "" {
-		meta.EntityCategory = entry.EntityCategory
-	}
 }
 
 func entityDefaultContext(entry *EntityRegistryEntry) bool {
