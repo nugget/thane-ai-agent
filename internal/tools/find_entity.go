@@ -11,20 +11,22 @@ import (
 
 // FindEntityArgs represents the arguments for the ha_find_entity tool.
 type FindEntityArgs struct {
-	Description string `json:"description"`      // e.g., "access point LED", "ceiling fan"
-	Area        string `json:"area,omitempty"`   // e.g., "office", "Nugget's Office"
-	Domain      string `json:"domain,omitempty"` // e.g., "light", "switch", "fan"
+	Description string                               `json:"description"`       // e.g., "access point LED", "ceiling fan"
+	Area        string                               `json:"area,omitempty"`    // e.g., "office", "Nugget's Office"
+	Domain      string                               `json:"domain,omitempty"`  // e.g., "light", "switch", "fan"
+	Include     homeassistant.EntityMetadataIncludes `json:"include,omitempty"` // optional HA registry metadata
 }
 
 // FindEntityResult represents the result of entity discovery.
 type FindEntityResult struct {
-	Found        bool     `json:"found"`
-	EntityID     string   `json:"entity_id,omitempty"`
-	FriendlyName string   `json:"friendly_name,omitempty"`
-	AreaName     string   `json:"area_name,omitempty"`
-	Confidence   float64  `json:"confidence,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	Candidates   []string `json:"candidates,omitempty"` // When ambiguous or not found
+	Found        bool                          `json:"found"`
+	EntityID     string                        `json:"entity_id,omitempty"`
+	FriendlyName string                        `json:"friendly_name,omitempty"`
+	AreaName     string                        `json:"area_name,omitempty"`
+	Confidence   float64                       `json:"confidence,omitempty"`
+	Error        string                        `json:"error,omitempty"`
+	Candidates   []string                      `json:"candidates,omitempty"` // When ambiguous or not found
+	Metadata     *homeassistant.EntityMetadata `json:"metadata,omitempty"`
 }
 
 // registerFindEntity registers the ha_find_entity tool.
@@ -51,6 +53,7 @@ func (r *Registry) registerFindEntity() {
 					"type":        "string",
 					"description": "Entity domain if known, e.g., 'light', 'switch', 'fan', 'cover'",
 				},
+				"include": EntityMetadataIncludeParameter(),
 			},
 			"required": []string{"description"},
 		},
@@ -70,6 +73,11 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 	if domain, ok := argsMap["domain"].(string); ok {
 		args.Domain = domain
 	}
+	include, err := ParseEntityMetadataIncludesArg(argsMap["include"], "include")
+	if err != nil {
+		return "", err
+	}
+	args.Include = include
 
 	if args.Description == "" {
 		return "", fmt.Errorf("description is required")
@@ -84,6 +92,23 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 	entities, err := r.ha.GetEntities(ctx, args.Domain)
 	if err != nil {
 		return "", fmt.Errorf("get entities: %w", err)
+	}
+
+	lookupInclude := args.Include
+	if args.Area != "" {
+		lookupInclude.Area = true
+		lookupInclude.Device = true
+	}
+	var metadata *haEntityMetadataBundle
+	if lookupInclude.Any() {
+		metadata, err = fetchHAEntityMetadataBundle(ctx, r.ha, lookupInclude)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if args.Area != "" {
+		entities = filterEntityInfosByArea(args.Area, entities, metadata)
 	}
 
 	if len(entities) == 0 {
@@ -105,7 +130,7 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 	}
 
 	// Fuzzy match against entities
-	matches := fuzzyMatchEntityInfos(searchStr, entities)
+	matches := fuzzyMatchEntityInfosWithMetadata(searchStr, entities, metadata)
 
 	if len(matches) == 0 {
 		// No matches - return some candidates
@@ -136,6 +161,26 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 		FriendlyName: best.FriendlyName,
 		Confidence:   best.Score,
 	}
+	if metadata != nil {
+		if meta := metadata.metadataFromInfo(homeassistant.EntityInfo{
+			EntityID:     best.EntityID,
+			FriendlyName: best.FriendlyName,
+			State:        best.State,
+		}); meta != nil {
+			if meta.Area != nil {
+				result.AreaName = meta.Area.Name
+			}
+			if args.Include.Any() {
+				result.Metadata = metadata.resolver.MetadataForEntity(metadata.entries[best.EntityID], &homeassistant.State{
+					EntityID: best.EntityID,
+					State:    best.State,
+					Attributes: map[string]any{
+						"friendly_name": best.FriendlyName,
+					},
+				}, args.Include)
+			}
+		}
+	}
 
 	// If multiple high-confidence matches, note ambiguity
 	if len(matches) > 1 && matches[1].Score > 0.5 {
@@ -153,30 +198,38 @@ func (r *Registry) executeFindEntityHandler(ctx context.Context, argsMap map[str
 type EntityMatch struct {
 	EntityID     string
 	FriendlyName string
+	State        string
 	Score        float64
 }
 
-// TODO: Add area-based filtering when entity registry integration is complete.
-// See homeassistant.GetAreas() and GetEntityRegistry() for the data sources.
-// For now, area context is merged into the search string as a workaround.
-
 // fuzzyMatchEntityInfos scores entities against a description.
 func fuzzyMatchEntityInfos(description string, entities []homeassistant.EntityInfo) []EntityMatch {
+	return fuzzyMatchEntityInfosWithMetadata(description, entities, nil)
+}
+
+// fuzzyMatchEntityInfosWithMetadata scores entities against a
+// description, including registry-derived physical context when a
+// metadata bundle is available.
+func fuzzyMatchEntityInfosWithMetadata(description string, entities []homeassistant.EntityInfo, metadata *haEntityMetadataBundle) []EntityMatch {
 	descLower := strings.ToLower(description)
 	descTokens := tokenize(descLower)
+	metadataWeight := metadataMatchWeight
+	if len(descTokens) == 1 {
+		metadataWeight = singleTokenMetadataMatchWeight
+	}
 
 	var matches []EntityMatch
 
 	for _, e := range entities {
-		// Score against entity_id and friendly_name
-		idScore := tokenMatchScore(descTokens, tokenize(strings.ToLower(e.EntityID)))
-		nameScore := tokenMatchScore(descTokens, tokenize(strings.ToLower(e.FriendlyName)))
-
-		score := max(idScore, nameScore)
+		score := bestTokenMatch(descTokens, []string{e.EntityID, e.FriendlyName})
+		if metadata != nil {
+			score = max(score, metadataWeight*bestTokenMatch(descTokens, metadataSearchTargets(metadata.metadataFromInfo(e))))
+		}
 		if score > 0.3 { // Minimum threshold
 			matches = append(matches, EntityMatch{
 				EntityID:     e.EntityID,
 				FriendlyName: e.FriendlyName,
+				State:        e.State,
 				Score:        score,
 			})
 		}
@@ -192,6 +245,98 @@ func fuzzyMatchEntityInfos(description string, entities []homeassistant.EntityIn
 	}
 
 	return matches
+}
+
+const (
+	metadataMatchWeight            = 0.75
+	singleTokenMetadataMatchWeight = 0.30
+)
+
+func bestTokenMatch(query []string, targets []string) float64 {
+	score := 0.0
+	for _, target := range targets {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		score = max(score, tokenMatchScore(query, tokenize(strings.ToLower(target))))
+	}
+	return score
+}
+
+func metadataSearchTargets(meta *homeassistant.EntityMetadata) []string {
+	if meta == nil {
+		return nil
+	}
+	targets := []string{
+		meta.FriendlyName,
+		meta.Name,
+		meta.OriginalName,
+		meta.Description,
+		meta.EntityCategory,
+		meta.Platform,
+		meta.DeviceClass,
+		meta.TranslationKey,
+	}
+	targets = append(targets, meta.Aliases...)
+	if meta.Area != nil {
+		targets = append(targets, meta.Area.ID, meta.Area.Name, meta.Area.FloorID)
+		targets = append(targets, meta.Area.Aliases...)
+		if meta.Area.Floor != nil {
+			targets = append(targets, meta.Area.Floor.ID, meta.Area.Floor.Name)
+			targets = append(targets, meta.Area.Floor.Aliases...)
+		}
+		if meta.Area.Building != nil {
+			targets = append(targets, meta.Area.Building.ID, meta.Area.Building.Name)
+			targets = append(targets, meta.Area.Building.Aliases...)
+		}
+	}
+	if meta.Device != nil {
+		targets = append(targets,
+			meta.Device.ID,
+			meta.Device.Name,
+			meta.Device.NameByUser,
+			meta.Device.Manufacturer,
+			meta.Device.Model,
+			meta.Device.ModelID,
+			meta.Device.SerialNumber,
+			meta.Device.AreaID,
+			meta.Device.AreaName,
+			meta.Device.EntryType,
+		)
+	}
+	for _, label := range meta.Labels {
+		targets = append(targets, label.ID, label.Name, label.Description)
+	}
+	return targets
+}
+
+func filterEntityInfosByArea(area string, entities []homeassistant.EntityInfo, bundle *haEntityMetadataBundle) []homeassistant.EntityInfo {
+	if bundle == nil {
+		return entities
+	}
+	needle := strings.ToLower(strings.TrimSpace(area))
+	if needle == "" {
+		return entities
+	}
+	out := make([]homeassistant.EntityInfo, 0, len(entities))
+	for _, entity := range entities {
+		meta := bundle.metadataFromInfo(entity)
+		if meta == nil || meta.Area == nil {
+			continue
+		}
+		if strings.EqualFold(meta.Area.ID, needle) || strings.EqualFold(meta.Area.Name, area) {
+			out = append(out, entity)
+			continue
+		}
+		for _, alias := range meta.Area.Aliases {
+			if strings.EqualFold(alias, area) {
+				out = append(out, entity)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // tokenize splits a string into lowercase tokens.

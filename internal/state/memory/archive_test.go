@@ -512,20 +512,24 @@ func TestSetSessionMetadata(t *testing.T) {
 	}
 }
 
-// TestUnsummarizedSessions verifies the query returns ended sessions
-// without metadata, respects filters, and orders oldest-first.
+// TestUnsummarizedSessions verifies the query returns every ended
+// session without metadata (regardless of message count), ordered
+// oldest-first, and excludes still-active sessions and already-titled
+// ones. Zero-message sessions are deliberately INCLUDED — the
+// summarizer worker's cleanup path needs to see them to call
+// markEmpty. See issue #977 Finding 3b for why the prior "filter
+// zero-message rows out here" behavior broke catch-up.
 func TestUnsummarizedSessions(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	// Create 3 ended sessions with actual archived messages but no metadata.
-	var unsummarized []string
+	// Three ended sessions with archived messages, no metadata.
+	var withMessages []string
 	for i := range 3 {
 		convID := fmt.Sprintf("conv-%d", i)
 		sess, err := store.StartSession(convID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Archive a real message so the EXISTS subquery finds it.
 		err = store.ArchiveMessages([]Message{{
 			ID:             fmt.Sprintf("msg-%d", i),
 			ConversationID: convID,
@@ -541,15 +545,15 @@ func TestUnsummarizedSessions(t *testing.T) {
 		if err := store.EndSession(sess.ID, "reset"); err != nil {
 			t.Fatal(err)
 		}
-		unsummarized = append(unsummarized, sess.ID)
+		withMessages = append(withMessages, sess.ID)
 	}
 
-	// Create an ended session WITH metadata — should be excluded.
+	// Ended session with metadata — should be excluded.
 	summarized, err := store.StartSession("conv-summarized")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.ArchiveMessages([]Message{{
+	if err := store.ArchiveMessages([]Message{{
 		ID:             "msg-summarized",
 		ConversationID: "conv-summarized",
 		SessionID:      summarized.ID,
@@ -557,78 +561,136 @@ func TestUnsummarizedSessions(t *testing.T) {
 		Content:        "hello",
 		Timestamp:      time.Now(),
 		ArchiveReason:  "test",
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(summarized.ID, "reset"); err != nil {
 		t.Fatal(err)
 	}
-	meta := &SessionMetadata{OneLiner: "Already summarized"}
-	if err := store.SetSessionMetadata(summarized.ID, meta, "Has Title", nil); err != nil {
+	if err := store.SetSessionMetadata(summarized.ID,
+		&SessionMetadata{OneLiner: "Already summarized"}, "Has Title", nil); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create a still-active session — should be excluded.
-	active, err := store.StartSession("conv-active")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = store.ArchiveMessages([]Message{{
-		ID:             "msg-active",
-		ConversationID: "conv-active",
-		SessionID:      active.ID,
-		Role:           "user",
-		Content:        "hello",
-		Timestamp:      time.Now(),
-		ArchiveReason:  "test",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = active
-
-	// Create an ended session with zero messages — should be excluded.
-	empty, err := store.StartSession("conv-empty")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EndSession(empty.ID, "reset"); err != nil {
+	// Still-active session — should be excluded.
+	if _, err := store.StartSession("conv-active"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create an ended session with NO actual archived messages — should be excluded.
-	stale, err := store.StartSession("conv-stale")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EndSession(stale.ID, "reset"); err != nil {
-		t.Fatal(err)
+	// Two ended sessions with no messages — these are exactly the
+	// crash_recovery placeholders #977 Finding 3b is about. They
+	// MUST be returned so the worker can mark them empty; otherwise
+	// they sit at the head of the ORDER BY ended_at ASC queue
+	// forever and block real sessions.
+	var empties []string
+	for i := range 2 {
+		convID := fmt.Sprintf("conv-empty-%d", i)
+		sess, err := store.StartSession(convID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EndSession(sess.ID, "crash_recovery"); err != nil {
+			t.Fatal(err)
+		}
+		empties = append(empties, sess.ID)
 	}
 
-	// Query: should return only the 3 unsummarized sessions.
 	sessions, err := store.UnsummarizedSessions(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 3 {
-		t.Fatalf("expected 3 unsummarized sessions, got %d", len(sessions))
+
+	// Three with-messages + two empties = 5 returned.
+	if len(sessions) != 5 {
+		t.Fatalf("expected 5 unsummarized sessions (3 with messages + 2 empty), got %d", len(sessions))
 	}
 
-	// Verify oldest-first order (by ended_at ASC).
+	// Verify MessageCount is populated accurately so the worker
+	// can distinguish cleanup vs. summarize.
+	gotEmpties := 0
+	gotWithMsgs := 0
+	for _, sess := range sessions {
+		switch sess.MessageCount {
+		case 0:
+			gotEmpties++
+		case 1:
+			gotWithMsgs++
+		default:
+			t.Errorf("session %s: unexpected MessageCount=%d", ShortID(sess.ID), sess.MessageCount)
+		}
+	}
+	if gotEmpties != 2 || gotWithMsgs != 3 {
+		t.Errorf("MessageCount distribution: %d empties + %d with-messages, want 2 + 3", gotEmpties, gotWithMsgs)
+	}
+
+	// Ordered oldest-first by ended_at: the three "withMessages"
+	// rows ended before the two "empties" rows.
+	wantOrder := append(append([]string{}, withMessages...), empties...)
 	for i, sess := range sessions {
-		if sess.ID != unsummarized[i] {
-			t.Errorf("session[%d] = %s, want %s", i, ShortID(sess.ID), ShortID(unsummarized[i]))
+		if sess.ID != wantOrder[i] {
+			t.Errorf("session[%d] = %s, want %s", i, ShortID(sess.ID), ShortID(wantOrder[i]))
 		}
 	}
 
-	// Verify limit is respected.
+	// LIMIT respected.
 	limited, err := store.UnsummarizedSessions(2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(limited) != 2 {
 		t.Fatalf("expected 2 sessions with limit=2, got %d", len(limited))
+	}
+}
+
+// TestUnsummarizedSessions_EmptyQueueDoesNotBlockRealSessions is the
+// pre-fix regression test for #977 Finding 3b. The pre-fix worker
+// over-fetched limit*3 rows, found them all empty, filtered them
+// out in Go, and returned zero candidates — so the real session at
+// the tail of the ORDER BY queue never got picked up. After the fix
+// the worker sees everything and dispatches by MessageCount.
+func TestUnsummarizedSessions_EmptyQueueDoesNotBlockRealSessions(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Many zero-message ended sessions at the head of the queue
+	// (oldest ended_at). The pre-fix code filled the over-fetch
+	// budget with these and returned nothing.
+	const empties = 30
+	for i := range empties {
+		sess, err := store.StartSession(fmt.Sprintf("conv-empty-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EndSession(sess.ID, "crash_recovery"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// One real session that ended last.
+	real, err := store.StartSession("conv-real")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ArchiveMessages([]Message{{
+		ID: "msg-real", ConversationID: "conv-real", SessionID: real.ID,
+		Role: "user", Content: "real content", Timestamp: time.Now(),
+		ArchiveReason: "test",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(real.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// limit=10 — pre-fix this returned 0 (over-fetched 30 empties,
+	// filtered them all out). Post-fix it returns the first 10
+	// empties; the worker drains them and the real session shows
+	// up on a later scan once their slots clear.
+	got, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("regression: empty-session queue blocked all candidates")
 	}
 }
 
@@ -1932,5 +1994,257 @@ func TestGetMessagesInRange_ExcludeSessionIDPreservesNullRows(t *testing.T) {
 	}
 	if !contents["null-session-msg"] {
 		t.Error("NULL session_id row dropped — exclusion should preserve NULLs")
+	}
+}
+
+// TestSearch_PhraseFirstPreferred verifies the phrase-first +
+// OR-of-terms backfill: when a multi-word phrase has dedicated
+// matches, those rank higher than rows where the individual words
+// happen to co-occur densely. The fixture includes a "noise" row
+// that repeats individual query tokens many times — it should not
+// rank above the row that contains the phrase verbatim.
+func TestSearch_PhraseFirstPreferred(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		// Dense-keyword noise: lots of "office", "door", "state" but
+		// never the phrase "office door state" in that order.
+		{
+			ID: "noise", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "tool",
+			Content:       "office occupancy. office camera. office lock. door open. door close. door open. door state changed. state available. state on. state off. state error.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		// Phrase-anchored row: contains the exact "office door state" once.
+		{
+			ID: "phrase", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "What is the office door state right now?",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.Search(SearchOptions{
+		Query:     "office door state",
+		Limit:     5,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].Match.ID != "phrase" {
+		t.Errorf("expected phrase-anchored row to rank first, got %q with content %q",
+			results[0].Match.ID, results[0].Match.Content)
+	}
+}
+
+// TestSearch_AnticipationsFilteredByDefault verifies that
+// wake-bridge synthetic "Anticipation matched: …" rows are
+// excluded from search results by default and only appear when
+// IncludeAnticipations is set true.
+func TestSearch_AnticipationsFilteredByDefault(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		{
+			ID: "anticipation", ConversationID: "wake-ant_999", SessionID: "sess-w",
+			Role:          "user",
+			Content:       "Anticipation matched: \"check the pool heater after 5 minutes\"\n\nEntity sensor.pool_heater changed from off to on.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		{
+			ID: "conversational", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "Is the pool heater on?",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default: anticipations excluded.
+	res, err := store.Search(SearchOptions{Query: "pool heater", Limit: 5, NoContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res {
+		if r.Match.ID == "anticipation" {
+			t.Errorf("anticipation row should not appear in default results, got %q", r.Match.Content)
+		}
+	}
+	if len(res) == 0 {
+		t.Fatal("conversational hit should still be returned with default filter")
+	}
+
+	// Opt-in: anticipations included.
+	res, err = store.Search(SearchOptions{Query: "pool heater", Limit: 5, NoContext: true, IncludeAnticipations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawAnticipation bool
+	for _, r := range res {
+		if r.Match.ID == "anticipation" {
+			sawAnticipation = true
+			break
+		}
+	}
+	if !sawAnticipation {
+		t.Error("anticipation row should appear when IncludeAnticipations=true")
+	}
+}
+
+// TestSearch_OrBackfillFillsThinPhrase verifies that when a
+// phrase pass returns fewer hits than the limit, the OR-of-terms
+// backfill tops it up — without duplicating the phrase hits.
+// The backfill path is FTS5-only; the LIKE fallback runs one
+// substring pass and has no equivalent.
+func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
+	store := newTestArchiveStore(t)
+	if !store.FTSEnabled() {
+		t.Skip("FTS5 not available; OR-backfill path requires FTS5")
+	}
+
+	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		// One phrase match.
+		{
+			ID: "phrase-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "I lost my keys at the pool patio yesterday.",
+			Timestamp:     base,
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		// Several rows matching individual terms.
+		{
+			ID: "patio-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "The back patio needs sweeping.",
+			Timestamp:     base.Add(time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+		{
+			ID: "pool-only", ConversationID: "conv-1", SessionID: "sess-1",
+			Role:          "user",
+			Content:       "Is the swimming pool open?",
+			Timestamp:     base.Add(2 * time.Minute),
+			ArchiveReason: string(ArchiveReasonReset),
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.Search(SearchOptions{
+		Query:     "pool patio",
+		Limit:     5,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) < 2 {
+		t.Fatalf("expected backfill to add to single phrase hit, got %d results", len(results))
+	}
+	// Phrase match should be at rank 1.
+	if results[0].Match.ID != "phrase-only" {
+		t.Errorf("expected phrase row at rank 1, got %q", results[0].Match.ID)
+	}
+	// No duplicates — every result is unique.
+	seen := map[string]bool{}
+	for _, r := range results {
+		if seen[r.Match.ID] {
+			t.Errorf("duplicate result %q in merged set", r.Match.ID)
+		}
+		seen[r.Match.ID] = true
+	}
+}
+
+// TestEndSession_FiresCloseCallback verifies the post-commit
+// notification hook that the curator wake event (issue #989) is built
+// on. After EndSession returns successfully, any registered callback
+// runs synchronously with the closed session's ID and reason.
+func TestEndSession_FiresCloseCallback(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotID, gotReason string
+	var calls int
+	store.SetSessionCloseCallback(func(id, reason string) {
+		calls++
+		gotID = id
+		gotReason = reason
+	})
+
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatalf("EndSession: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("callback fired %d times, want 1", calls)
+	}
+	if gotID != sess.ID {
+		t.Errorf("callback sessionID = %q, want %q", gotID, sess.ID)
+	}
+	if gotReason != "test" {
+		t.Errorf("callback reason = %q, want %q", gotReason, "test")
+	}
+}
+
+// TestEndSession_NoCallbackWhenUnset confirms the zero-callback path
+// is a clean no-op — EndSession works fine without a registered
+// callback (the common case before app wiring runs).
+func TestEndSession_NoCallbackWhenUnset(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-no-cb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No SetSessionCloseCallback call — store.sessionCloseCallback stays nil.
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatalf("EndSession with no callback: %v", err)
+	}
+}
+
+// TestEndSession_PanickingCallbackDoesNotPoisonCaller — a bad
+// callback should never roll back the session-close state change or
+// crash the caller. The DB commit is authoritative; the notification
+// is best-effort.
+func TestEndSession_PanickingCallbackDoesNotPoisonCaller(t *testing.T) {
+	store := newTestArchiveStore(t)
+	sess, err := store.StartSession("conv-panic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.SetSessionCloseCallback(func(_, _ string) {
+		panic("intentional test panic")
+	})
+
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Errorf("EndSession should swallow callback panic, got error: %v", err)
+	}
+	// Verify the session actually closed despite the panic.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.EndedAt == nil {
+		t.Error("session ended_at not set — DB write was rolled back by panic")
 	}
 }

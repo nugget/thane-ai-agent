@@ -123,12 +123,19 @@ func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
 		"history":     []any{60, 3600},
 		"forecast":    "hourly",
 		"ttl_seconds": 120,
+		"include": map[string]any{
+			"area":   true,
+			"device": true,
+		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(result, "expires in 120s") {
 		t.Fatalf("result = %q, want TTL text", result)
+	}
+	if !strings.Contains(result, "includes HA metadata") {
+		t.Fatalf("result = %q, want include text", result)
 	}
 
 	// The pre-migration TagRegistrar callback is gone; this test no
@@ -151,6 +158,9 @@ func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
 	}
 	if subs[0].ExpiresAt == nil {
 		t.Fatal("expected subscription expiration")
+	}
+	if subs[0].Include == nil || !subs[0].Include.Area || !subs[0].Include.Device {
+		t.Fatalf("include = %#v, want area+device", subs[0].Include)
 	}
 }
 

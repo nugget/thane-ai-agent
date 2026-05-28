@@ -3,14 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
-	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
 
 func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
@@ -22,26 +19,23 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	for _, spec := range builtInServiceDefinitionSpecs(a.cfg) {
 		baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 	}
-	_, hasMetacogDefinition := seen[metacognitive.DefinitionName]
-	if a.cfg.Metacognitive.Enabled || hasMetacogDefinition {
-		metacogCfg, err := metacognitive.ParseConfig(a.cfg.Metacognitive)
-		if err != nil {
-			return nil, fmt.Errorf("metacognitive config: %w", err)
+	// Core model-facing service loops (ego, metacognitive, curator)
+	// share a parse-cache-emit shape captured by [coreServiceLoops].
+	// Parse+cache whenever the loop is enabled OR an operator declared
+	// its definition (so an override still gets a config to hydrate
+	// against); only auto-append the built-in definition when enabled
+	// and not already declared.
+	for _, reg := range coreServiceLoops {
+		_, hasDefinition := seen[reg.Name]
+		enabled := reg.ConfigEnabled(a.cfg)
+		if !enabled && !hasDefinition {
+			continue
 		}
-		a.metacogCfg = &metacogCfg
-		if a.cfg.Metacognitive.Enabled && !hasMetacogDefinition {
-			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, metacognitive.DefinitionSpec(metacogCfg))
+		if err := reg.ParseAndCache(a, a.cfg); err != nil {
+			return nil, fmt.Errorf("%s config: %w", reg.Name, err)
 		}
-	}
-	_, hasEgoDefinition := seen[ego.DefinitionName]
-	if a.cfg.Ego.Enabled || hasEgoDefinition {
-		egoCfg, err := ego.ParseConfig(a.cfg.Ego)
-		if err != nil {
-			return nil, fmt.Errorf("ego config: %w", err)
-		}
-		a.egoCfg = &egoCfg
-		if a.cfg.Ego.Enabled && !hasEgoDefinition {
-			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, ego.DefinitionSpec(egoCfg))
+		if enabled && !hasDefinition {
+			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, reg.DefinitionSpec(a))
 		}
 	}
 	return baseDefinitions, nil
@@ -51,24 +45,19 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 	if a == nil {
 		return spec, nil
 	}
-	switch strings.TrimSpace(spec.Name) {
-	case metacognitive.DefinitionName:
-		if a.metacogCfg == nil {
-			return looppkg.Spec{}, fmt.Errorf("metacognitive definition requires metacognitive config")
+	name := strings.TrimSpace(spec.Name)
+	// Core model-facing service loops dispatch through their shared
+	// registration descriptor (see [coreServiceLoops]); each one's
+	// Hydrate closure absorbs its specifics (e.g. metacognitive's
+	// resolved state-file Opts) so this site stays uniform.
+	if reg, ok := coreServiceLoopByName[name]; ok {
+		runtimeSpec, err := reg.Hydrate(a, spec)
+		if err != nil {
+			return looppkg.Spec{}, err
 		}
-		stateFileName := filepath.Base(a.metacogCfg.StateFile)
-		stateFilePath := coreFilePath(a.cfg.Workspace.Path, stateFileName)
-		runtimeSpec := metacognitive.HydrateSpec(spec, *a.metacogCfg, metacognitive.Opts{
-			StateFilePath: stateFilePath,
-			StateFileName: stateFileName,
-		})
 		return a.hydrateLoopOutputs(runtimeSpec)
-	case ego.DefinitionName:
-		if a.egoCfg == nil {
-			return looppkg.Spec{}, fmt.Errorf("ego definition requires ego config")
-		}
-		runtimeSpec := ego.HydrateSpec(spec, *a.egoCfg)
-		return a.hydrateLoopOutputs(runtimeSpec)
+	}
+	switch name {
 	case unifiPollerDefinitionName:
 		if a.unifiPoller == nil {
 			return looppkg.Spec{}, fmt.Errorf("%s definition requires UniFi poller runtime", unifiPollerDefinitionName)

@@ -396,6 +396,17 @@ func ExampleConfig() *Config {
 			SupervisorRouter:      RouterConfig{QualityFloor: 8},
 		},
 
+		Curator: CuratorConfig{
+			Enabled:               false,
+			MinSleep:              "15m",
+			MaxSleep:              "12h",
+			DefaultSleep:          "1h",
+			Jitter:                floatPtr(0.2),
+			SupervisorProbability: floatPtr(0.1),
+			Router:                RouterConfig{QualityFloor: 5},
+			SupervisorRouter:      RouterConfig{QualityFloor: 8},
+		},
+
 		Agent: AgentConfig{
 			DelegationRequired: false,
 		},

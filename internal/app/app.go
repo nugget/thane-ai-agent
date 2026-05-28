@@ -39,6 +39,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
 	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -187,6 +188,9 @@ type App struct {
 
 	// Ego loop config (stored for loop-definition hydration)
 	egoCfg *ego.Config
+
+	// Curator loop config (stored for loop-definition hydration)
+	curatorCfg *curator.Config
 
 	// Event bus
 	eventBus *events.Bus

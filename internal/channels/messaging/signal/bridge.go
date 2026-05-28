@@ -411,13 +411,20 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	parentID := b.parentID
 	b.mu.Unlock()
 
-	// Resolve a display name and trust zone for the loop node.
+	// Resolve a stable identifier and trust zone for the loop node.
+	// Prefer the contact UUID prefix over the contact name or raw phone:
+	// the UUID is opaque to operator-visible surfaces (dashboard,
+	// /api/loops, structured logs) and cross-references the
+	// "Session Origin Context" block in the system prompt
+	// (origin.contact_id), so a model reading log lines can chain back
+	// to the trust zone and name without each loop name being a
+	// re-emission of personal data.
 	loopName := "signal/" + sanitizePhone(sender)
 	trustZone := "unknown"
 	binding := b.resolveBinding(sender)
 	if binding != nil {
-		if binding.ContactName != "" {
-			loopName = "signal/" + sanitizeLoopName(binding.ContactName)
+		if short := shortContactID(binding.ContactID); short != "" {
+			loopName = "signal/" + short
 		}
 		if binding.TrustZone != "" {
 			trustZone = binding.TrustZone
@@ -944,20 +951,48 @@ func sanitizePhone(phone string) string {
 	return sb.String()
 }
 
-// sanitizeLoopName strips characters from a contact display name that
-// could confuse the loop hierarchy (e.g. "/" which is the parent/child
-// separator) or produce unreadable node labels (control characters).
-func sanitizeLoopName(name string) string {
-	name = strings.TrimSpace(name)
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1 // drop control characters
+// shortContactID returns the first segment of a contact UUID for use
+// as a stable, low-PII loop-name component. Loop names are
+// hierarchy-path-shaped (the dashboard / structured logs treat "/"
+// as a parent/child separator), so this validates the input is a
+// safe hex-and-dash identifier and returns "" on any other shape —
+// the caller falls back to sanitizePhone in that case.
+//
+// UUIDs are 8-4-4-4-12 hyphenated; we take the leading 8 hex chars.
+// That's a 16-bit-times-2 namespace which collides only at very
+// small probability across a household-scale contact list and is
+// easy to grep against the full ID in contact_lookup /
+// session-origin output. Non-UUID inputs (tests sometimes pass
+// "contact-1" or paths) get rejected entirely so a stray "/" or
+// other special character can't restructure the loop hierarchy.
+func shortContactID(id string) string {
+	if id == "" {
+		return ""
+	}
+	if !isSafeContactID(id) {
+		return ""
+	}
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// isSafeContactID reports whether s is a hex-and-dash-only string
+// safe to embed in a loop name. Lower-case [0-9a-f-] only; any other
+// character (including the upper-case A-F, "/" path separator, or
+// dot) disqualifies the value.
+func isSafeContactID(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r == '-':
+		default:
+			return false
 		}
-		if r == '/' {
-			return '_' // avoid hierarchy separator
-		}
-		return r
-	}, name)
+	}
+	return true
 }
 
 // formatMessage builds the user-facing message content for the agent

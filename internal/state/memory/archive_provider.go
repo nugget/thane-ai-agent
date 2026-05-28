@@ -10,35 +10,37 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
-// ArchiveSearcher abstracts archive search for testing. ArchiveStore
-// satisfies this interface — no adapter needed.
-type ArchiveSearcher interface {
-	Search(opts SearchOptions) ([]SearchResult, error)
-}
-
 // ArchiveContextProvider implements [agent.TagContextProvider] for
 // injecting relevant past conversation excerpts into the system
 // prompt. This is Layer 2 of the pre-warming system: Layer 1 provides
 // knowledge (facts + KB docs), Layer 2 provides experiential judgment
 // (prior reasoning about similar situations). Registered via
 // [agent.Loop.RegisterAlwaysContextProvider].
+//
+// Consumes the unified [MemorySearcher] interface so prewarm and the
+// model-initiated archive_search tool share one retrieval path — any
+// improvement to ranking or surface coverage applies to both
+// simultaneously.
 type ArchiveContextProvider struct {
-	store      ArchiveSearcher
+	searcher   MemorySearcher
 	maxResults int
 	maxBytes   int
 	logger     *slog.Logger
 }
 
-// NewArchiveContextProvider creates a context provider that searches the
-// conversation archive for relevant past exchanges. maxResults caps the
-// number of search hits; maxBytes caps the formatted output size to
-// prevent context flooding.
-func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, logger *slog.Logger) *ArchiveContextProvider {
+// NewArchiveContextProvider creates a context provider that searches
+// every memory surface (raw messages, session summaries, working
+// memory) for content relevant to the current wake. maxResults caps
+// the raw-message hit count; the distilled surfaces use their own
+// tighter caps inside [MemorySearch.Search]. maxBytes caps the
+// formatted output size so the prewarm block never overruns the
+// system prompt's budget.
+func NewArchiveContextProvider(searcher MemorySearcher, maxResults, maxBytes int, logger *slog.Logger) *ArchiveContextProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &ArchiveContextProvider{
-		store:      store,
+		searcher:   searcher,
 		maxResults: maxResults,
 		maxBytes:   maxBytes,
 		logger:     logger,
@@ -82,7 +84,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 	)
 
 	start := time.Now()
-	results, err := p.store.Search(SearchOptions{
+	bundle, err := p.searcher.Search(SearchOptions{
 		Query: query,
 		Limit: p.maxResults,
 	})
@@ -97,18 +99,31 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 		return "", nil
 	}
 
+	// MemorySearcher.Search MUST return a non-nil bundle on a nil error
+	// (see the interface contract). Treat a nil bundle here as a soft
+	// fault rather than panicking — log and return empty.
+	if bundle == nil {
+		p.logger.Warn("archive pre-warm: searcher returned nil bundle on nil error",
+			"query", query,
+			"took_ms", elapsed.Milliseconds(),
+		)
+		return "", nil
+	}
+	totalHits := len(bundle.Messages) + len(bundle.Sessions) + len(bundle.WorkingMemory)
 	p.logger.Debug("archive pre-warm: search completed",
 		"query", query,
-		"results", len(results),
+		"messages", len(bundle.Messages),
+		"sessions", len(bundle.Sessions),
+		"working_memory", len(bundle.WorkingMemory),
 		"took_ms", elapsed.Milliseconds(),
 	)
 
-	if len(results) == 0 {
+	if totalHits == 0 {
 		return "", nil
 	}
 
-	for i, r := range results {
-		p.logger.Debug("archive pre-warm: result",
+	for i, r := range bundle.Messages {
+		p.logger.Debug("archive pre-warm: message result",
 			"index", i,
 			"session_id", r.SessionID,
 			"match_role", r.Match.Role,
@@ -118,7 +133,7 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 		)
 	}
 
-	return p.formatResults(results), nil
+	return p.formatResults(bundle), nil
 }
 
 // maxUserMessageLen is the longest user message we'll use as a fallback
@@ -126,8 +141,13 @@ func (p *ArchiveContextProvider) TagContext(ctx context.Context, req agentctx.Co
 const maxUserMessageLen = 100
 
 // buildQuery constructs a search query from subjects and/or the user
-// message. Subject prefixes (entity:, zone:, etc.) are stripped to
-// leave raw identifiers that match conversational references.
+// message. Content-shaped subject prefixes (entity:, zone:, area:,
+// space:) are stripped to leave raw identifiers that match
+// conversational references. Identity-shaped subjects (contact:) are
+// dropped from the query because their values are stable handles
+// (UUIDs, phone numbers, email addresses) that either match nothing
+// or match every message from that handle — neither produces a
+// useful FTS ranking.
 //
 // Returns the query string and a source label ("subjects" or
 // "message_fallback") for logging.
@@ -136,6 +156,9 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	var terms []string
 
 	for _, s := range subjects {
+		if isIdentitySubject(s) {
+			continue
+		}
 		term := stripSubjectPrefix(s)
 		if term != "" && !seen[term] {
 			seen[term] = true
@@ -147,9 +170,12 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 		return strings.Join(terms, " "), "subjects"
 	}
 
-	// Fall back to user message when no subjects are available.
-	// Only use short, single-line messages — long content produces
-	// noisy queries.
+	// Fall back to user message when no content-shaped subjects are
+	// available. Only use short, single-line messages — long content
+	// produces noisy queries. This branch handles two cases that look
+	// the same from here: no subjects at all, and only identity-shaped
+	// subjects (e.g. Signal contact handles) that we filtered out
+	// above.
 	if userMessage != "" {
 		msg := strings.TrimSpace(userMessage)
 		if len(msg) <= maxUserMessageLen && !strings.ContainsAny(msg, "\n\r") {
@@ -158,6 +184,28 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 	}
 
 	return "", ""
+}
+
+// identitySubjectPrefixes lists the subject kinds whose values are
+// stable identity handles, not content terms. Stripping the prefix
+// leaves a UUID, phone, or address that the FTS index treats as a
+// generic token — typically matching every message from that
+// participant and ranking the shortest of those highest. Useful for
+// scoping (conversation_id filters, knowledge subject keys) but a
+// pollutant in a full-text query.
+var identitySubjectPrefixes = map[string]struct{}{
+	"contact": {},
+}
+
+// isIdentitySubject reports whether a subject's prefix marks it as
+// an identity handle rather than a content term.
+func isIdentitySubject(s string) bool {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return false
+	}
+	_, ok := identitySubjectPrefixes[s[:idx]]
+	return ok
 }
 
 // stripSubjectPrefix removes the type prefix from a subject string.
@@ -189,39 +237,64 @@ const (
 	prewarmMessageContentMax = 300
 )
 
-// formatResults renders archive search hits as a heading followed by a
-// JSON projection produced by FormatSearchResults. Hits are first
-// trimmed for the prewarm budget (smaller per-message content cap and
-// fewer context messages per side than the archive tools use), then
-// the hit list is shortened from the tail until the rendered output
-// fits in p.maxBytes. The truncated flag in the JSON tells the model
-// when hits were dropped. Returns empty string when there are no hits
-// to render or when not even one trimmed hit fits in the byte budget.
-func (p *ArchiveContextProvider) formatResults(results []SearchResult) string {
-	if len(results) == 0 {
+// formatResults renders the multi-surface bundle as a heading
+// followed by JSON via [FormatMultiKindResults]. Raw-message hits
+// are trimmed for the prewarm budget (tighter per-message content
+// cap and fewer context messages per side than the archive tools
+// use); the distilled surfaces (sessions and working_memory) are
+// already compact and pass through untrimmed.
+//
+// The hit list is shortened from the raw-message tail until the
+// rendered output fits in p.maxBytes — distilled surfaces stay
+// because they're the higher signal-density side and they're
+// budget-cheap. Returns empty string when there's nothing to render
+// or when not even one trimmed hit fits the byte budget.
+func (p *ArchiveContextProvider) formatResults(bundle *SearchBundle) string {
+	if bundle == nil {
+		return ""
+	}
+	if len(bundle.Messages) == 0 && len(bundle.Sessions) == 0 && len(bundle.WorkingMemory) == 0 {
 		return ""
 	}
 	now := time.Now()
-	trimmed := trimResultsForPrewarm(results)
 
-	for n := len(trimmed); n > 0; n-- {
-		body := FormatSearchResults(trimmed[:n], now, n < len(trimmed))
+	trimmedMessages := trimResultsForPrewarm(bundle.Messages)
+
+	// Walk down the raw-message tail until everything fits. Distilled
+	// surfaces stay throughout — they're small and high-signal.
+	for n := len(trimmedMessages); n >= 0; n-- {
+		clipped := &SearchBundle{
+			Messages:      trimmedMessages[:n],
+			Sessions:      bundle.Sessions,
+			WorkingMemory: bundle.WorkingMemory,
+			Truncated:     bundle.Truncated,
+		}
+		body := FormatMultiKindResults(clipped, now, n < len(trimmedMessages))
 		out := archiveSectionHeading + string(body)
 		if len(out) <= p.maxBytes {
-			if n < len(trimmed) {
-				p.logger.Debug("archive pre-warm: trimmed to fit byte budget",
-					"included", n,
-					"total", len(trimmed),
+			if n < len(trimmedMessages) {
+				p.logger.Debug("archive pre-warm: trimmed messages to fit byte budget",
+					"messages_included", n,
+					"messages_total", len(trimmedMessages),
+					"sessions", len(bundle.Sessions),
+					"working_memory", len(bundle.WorkingMemory),
 					"budget", p.maxBytes,
 					"size", len(out),
 				)
 			}
 			return out
 		}
+		if n == 0 {
+			// Distilled surfaces alone exceed the budget — degrade
+			// to nothing rather than emit a half-truth.
+			break
+		}
 	}
 
-	p.logger.Debug("archive pre-warm: not even one hit fits byte budget",
-		"total", len(trimmed),
+	p.logger.Debug("archive pre-warm: not even distilled-only fits byte budget",
+		"messages_total", len(trimmedMessages),
+		"sessions", len(bundle.Sessions),
+		"working_memory", len(bundle.WorkingMemory),
 		"budget", p.maxBytes,
 	)
 	return ""

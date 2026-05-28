@@ -26,6 +26,15 @@ type CategoryRegistryEntry struct {
 	ModifiedAt float64 `json:"modified_at"`
 }
 
+// FloorRegistryEntry represents a Home Assistant floor.
+type FloorRegistryEntry struct {
+	FloorID string   `json:"floor_id"`
+	Name    string   `json:"name"`
+	Aliases []string `json:"aliases"`
+	Icon    string   `json:"icon"`
+	Level   *int     `json:"level"`
+}
+
 // ConfigEntry represents one entry in Home Assistant's config_entries
 // list — an installed integration. State is the lifecycle status:
 // "loaded" when healthy, "setup_error", "setup_retry", "not_loaded",
@@ -115,6 +124,15 @@ func (c *Client) GetCategoryRegistry(ctx context.Context, scope string) ([]Categ
 		return nil, err
 	}
 	return ws.GetCategoryRegistry(ctx, scope)
+}
+
+// GetFloorRegistry retrieves all floors from Home Assistant.
+func (c *Client) GetFloorRegistry(ctx context.Context) ([]FloorRegistryEntry, error) {
+	ws, err := c.requireWS()
+	if err != nil {
+		return nil, err
+	}
+	return ws.GetFloorRegistry(ctx)
 }
 
 // GetDeviceRegistry retrieves all devices from Home Assistant.
@@ -263,6 +281,15 @@ func (c *WSClient) GetLabelRegistry(ctx context.Context) ([]LabelRegistryEntry, 
 		return nil, fmt.Errorf("get label registry: %w", err)
 	}
 	return labels, nil
+}
+
+// GetFloorRegistry retrieves floors via WebSocket.
+func (c *WSClient) GetFloorRegistry(ctx context.Context) ([]FloorRegistryEntry, error) {
+	var floors []FloorRegistryEntry
+	if err := c.call(ctx, "config/floor_registry/list", nil, &floors); err != nil {
+		return nil, fmt.Errorf("get floor registry: %w", err)
+	}
+	return floors, nil
 }
 
 // GetCategoryRegistry retrieves categories for a scope via WebSocket.

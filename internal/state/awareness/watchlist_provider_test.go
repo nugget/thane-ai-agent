@@ -81,6 +81,79 @@ func TestProvider_EmptyWatchlist(t *testing.T) {
 	}
 }
 
+func TestProvider_RendersIncludedEntityMetadata(t *testing.T) {
+	t.Parallel()
+
+	state := &homeassistant.State{
+		EntityID: "sensor.office_temperature",
+		State:    "72",
+		Attributes: map[string]any{
+			"friendly_name":       "Office Temperature",
+			"unit_of_measurement": "F",
+			"device_class":        "temperature",
+		},
+		LastChanged: testNow.Add(-5 * time.Minute),
+		LastUpdated: testNow.Add(-5 * time.Minute),
+	}
+	p, store := setupTestProvider(t, &fakeHA{
+		states: map[string]*homeassistant.State{
+			state.EntityID: state,
+		},
+	})
+	include := homeassistant.EntityMetadataIncludes{
+		Area:        true,
+		Device:      true,
+		Labels:      true,
+		Description: true,
+	}
+	if err := store.AddWithOptions(state.EntityID, nil, nil, 0, "", include); err != nil {
+		t.Fatalf("AddWithOptions: %v", err)
+	}
+	p.SetRegistryClient(&fakeRegistries{
+		areas: []homeassistant.Area{{
+			AreaID: "office",
+			Name:   "Office",
+			Labels: []string{"label_work"},
+		}},
+		labels: []homeassistant.LabelRegistryEntry{
+			{LabelID: "label_temperature", Name: "Temperature"},
+			{LabelID: "label_device", Name: "Device Health"},
+			{LabelID: "label_work", Name: "Work"},
+		},
+		devices: []homeassistant.DeviceRegistryEntry{{
+			ID:         "device_1",
+			NameByUser: "Office Climate Hub",
+			AreaID:     "office",
+			Labels:     []string{"label_device"},
+		}},
+		entities: []homeassistant.EntityRegistryEntry{{
+			EntityID:    state.EntityID,
+			Description: "Ambient office temperature",
+			DeviceID:    "device_1",
+			Labels:      []string{"label_temperature"},
+		}},
+	})
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	for _, want := range []string{
+		`"metadata":`,
+		`"description":"Ambient office temperature"`,
+		`"area":{"id":"office","name":"Office"`,
+		`"device":{"id":"device_1"`,
+		`"name_by_user":"Office Climate Hub"`,
+		`"id":"label_temperature"`,
+		`"id":"label_device"`,
+		`"id":"label_work"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("TagContext missing %s:\n%s", want, got)
+		}
+	}
+}
+
 func TestProvider_SingleEntity(t *testing.T) {
 	ha := &fakeHA{
 		states: map[string]*homeassistant.State{

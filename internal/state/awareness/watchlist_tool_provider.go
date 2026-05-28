@@ -87,6 +87,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"type":        "integer",
 						"description": "Optional expiration in seconds. After this TTL elapses, the subscription is automatically removed from future context injection.",
 					},
+					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
 			},
@@ -162,13 +163,17 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 	if forecast != "" && !strings.HasPrefix(entityID, "weather.") {
 		return "", fmt.Errorf("forecast can only be set for weather.* entities; got %s", entityID)
 	}
+	include, err := tools.ParseEntityMetadataIncludesArg(args["include"], "include")
+	if err != nil {
+		return "", err
+	}
 
-	if len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet {
+	if len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet && !include.Any() {
 		if err := w.store.Add(entityID); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	} else {
-		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast); err != nil {
+		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast, include); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	}
@@ -192,10 +197,13 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 	if ttlSeconds > 0 {
 		msg += fmt.Sprintf(" (expires in %ds)", ttlSeconds)
 	}
+	if include.Any() {
+		msg += " (includes HA metadata)"
+	}
 	msg += "."
 
 	w.logger.Info("entity subscription added",
-		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "ttl_seconds", ttlSeconds)
+		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "include", include, "ttl_seconds", ttlSeconds)
 	return msg, nil
 }
 
@@ -224,6 +232,9 @@ func (w *WatchlistTools) handleListEntitySubscriptions(_ context.Context, args m
 		}
 		if sub.Forecast != "" {
 			item["forecast"] = sub.Forecast
+		}
+		if sub.Include != nil && sub.Include.Any() {
+			item["include"] = sub.Include
 		}
 		if sub.ExpiresAt != nil {
 			item["expires_delta"] = promptfmt.FormatDeltaOnly(*sub.ExpiresAt, now)

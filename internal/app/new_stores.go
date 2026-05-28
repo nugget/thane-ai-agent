@@ -123,6 +123,7 @@ func (a *App) initStores(s *newState) error {
 	// and Thane operates as a general-purpose agent.
 	if cfg.HomeAssistant.Configured() {
 		a.ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
+		a.ha.UseFloorMetadataAlias(cfg.HomeAssistant.FloorAlias)
 		a.haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.ha.UseWSClient(a.haWS)
 		a.onCloseErr("ha-websocket", a.haWS.Close)
@@ -298,8 +299,10 @@ func (a *App) initStores(s *newState) error {
 	a.onCloseErr("archive", archiveStore.Close)
 
 	// --- Working memory ---
-	// Persists free-form experiential context per conversation.
-	wmStore, err := memory.NewWorkingMemoryStore(mem.DB())
+	// Persists free-form experiential context per conversation. Shares
+	// the archive store's FTS5-availability gate so working_memory_fts
+	// only gets created when the archive's messages_fts also can.
+	wmStore, err := memory.NewWorkingMemoryStore(mem.DB(), archiveStore.FTSEnabled())
 	if err != nil {
 		return fmt.Errorf("create working memory store: %w", err)
 	}
@@ -490,6 +493,12 @@ func (a *App) initStores(s *newState) error {
 		a.onClose("scheduler", sched.Stop)
 		return nil
 	})
+
+	// Hook EndSession → curator wake. Must come after archiveStore is
+	// constructed and the loop registry exists (both are guaranteed at
+	// this point in initStores). No-op when curator is disabled in
+	// config. See issue #989.
+	a.wireSessionCloseToCuratorWake()
 
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -356,16 +357,23 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	}
 }
 
-func TestWorker_StaleCountSessionExcluded(t *testing.T) {
+// TestWorker_ZeroMessageSessionMarkedEmpty exercises the
+// crash_recovery cleanup path that #977 Finding 3b restored: an
+// ended session with no archived messages enters
+// UnsummarizedSessions, the worker dispatches it to markEmpty via
+// the MessageCount==0 short-circuit, no LLM call is made, and the
+// session lands with the empty-session marker so it doesn't re-enter
+// the queue on the next scan.
+//
+// Earlier this test asserted the opposite (zero-message sessions
+// were filtered out by UnsummarizedSessions and never touched at
+// all). That contract turned out to break catch-up entirely — see
+// the issue's Finding 3b diagnosis.
+func TestWorker_ZeroMessageSessionMarkedEmpty(t *testing.T) {
 	store := newTestStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
 
-	// Create an ended session with message_count > 0 but no archived
-	// messages — simulates scheduler/delegate sessions that bump the
-	// counter without producing a user-visible transcript.
-	// With the EXISTS-based query (issue #341), this session is excluded
-	// from UnsummarizedSessions entirely rather than fetched-then-marked.
 	sess, err := store.StartSession("conv-stale")
 	if err != nil {
 		t.Fatal(err)
@@ -374,13 +382,16 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The session should not appear in the unsummarized list at all.
+	// The session MUST appear so the worker can clean it up.
 	remaining, err := store.UnsummarizedSessions(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unsummarized sessions (stale count excluded), got %d", len(remaining))
+	if len(remaining) != 1 {
+		t.Fatalf("expected zero-message session to surface for cleanup, got %d candidates", len(remaining))
+	}
+	if remaining[0].MessageCount != 0 {
+		t.Errorf("MessageCount = %d, want 0 so the worker takes the cleanup branch", remaining[0].MessageCount)
 	}
 
 	cfg := SummarizerConfig{
@@ -394,24 +405,26 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
 	w.Start(ctx)
 
-	// Give the worker one scan cycle.
+	// One scan cycle. The Interval guards against re-firing.
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()
 	w.Stop()
 
-	// LLM should never have been called — session was never fetched.
+	// No LLM call — markEmpty is a SQL write, the LLM path is
+	// bypassed by the MessageCount==0 short-circuit in scan().
 	if mock.calls.Load() != 0 {
 		t.Errorf("expected 0 LLM calls, got %d", mock.calls.Load())
 	}
 
-	// Session should remain untouched (no title, no metadata).
+	// The session now carries the empty-session marker so the
+	// next scan cycle won't pick it up again.
 	got, err := store.GetSession(sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != "" {
-		t.Errorf("title = %q, want empty (session should be untouched)", got.Title)
+	if got.Title == "" {
+		t.Error("title should be set by markEmpty so the session is excluded from future scans")
 	}
 }
 
@@ -695,4 +708,130 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
+}
+
+// TestWorker_CuratorWakeShortCircuitsLLM verifies the #989
+// transformation: when the worker has a curator-wake function set,
+// real sessions fire the wake instead of calling the LLM. The wake
+// becomes the backstop delivery channel; the LLM path is gone.
+// markEmpty still runs for zero-message sessions (SQL-only, no
+// model needed regardless of mode).
+func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// One real session (with messages) + one empty session.
+	real := createUnsummarizedSession(t, store, "conv-real")
+	empty, err := store.StartSession("conv-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(empty.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		mu            sync.Mutex
+		wakedSessions []string
+	)
+	cfg := SummarizerConfig{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
+	w.SetCuratorWake(func(_ context.Context, sessionID, _ string) error {
+		mu.Lock()
+		wakedSessions = append(wakedSessions, sessionID)
+		mu.Unlock()
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+
+	// Give the startup scan time to process both sessions.
+	waitFor(t, 5*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(wakedSessions) >= 1
+	})
+	time.Sleep(50 * time.Millisecond) // settle any further work
+
+	cancel()
+	w.Stop()
+
+	// Real session: wake fired, LLM NOT called.
+	if mock.calls.Load() != 0 {
+		t.Errorf("expected 0 LLM calls when curator wake is set, got %d", mock.calls.Load())
+	}
+	mu.Lock()
+	snapshot := append([]string(nil), wakedSessions...)
+	mu.Unlock()
+	realWakes := 0
+	for _, id := range snapshot {
+		if id == real.ID {
+			realWakes++
+		}
+	}
+	if realWakes == 0 {
+		t.Errorf("real session %s never fired curator wake; waked=%v", ShortID(real.ID), snapshot)
+	}
+	// Regression guard for the tight-loop bug (Copilot review on
+	// #994): the wake doesn't mark the row summarized, so without
+	// the "wake counts as work" signal the scan() batch loop would
+	// re-fetch the same UnsummarizedSessions and re-fire the same
+	// wake up to maxBatchesPerScan times per tick. With the fix one
+	// scan tick fires exactly once per session.
+	if realWakes > 1 {
+		t.Errorf("real session %s waked %d times in a single scan tick; expected 1 (scan tight-loop regression)", ShortID(real.ID), realWakes)
+	}
+
+	// Empty session: markEmpty ran (SQL-only path), so it should not
+	// be in the unsummarized list anymore.
+	remaining, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range remaining {
+		if sess.ID == empty.ID {
+			t.Error("empty session should have been markEmpty'd, still in queue")
+		}
+	}
+}
+
+// TestWorker_CuratorWakeFailureFallsBackToLLM — when the wake hook
+// returns an error (curator down, queue full), the worker falls
+// through to the direct LLM path so the session still gets
+// summarized one way or the other.
+func TestWorker_CuratorWakeFailureFallsBackToLLM(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+	createUnsummarizedSession(t, store, "conv-fallback")
+
+	cfg := SummarizerConfig{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
+	w.SetCuratorWake(func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("simulated curator unavailable")
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Start(ctx)
+	waitFor(t, 5*time.Second, func() bool {
+		return mock.calls.Load() >= 1
+	})
+	cancel()
+	w.Stop()
+
+	if mock.calls.Load() == 0 {
+		t.Error("expected LLM fallback when curator wake fails, got 0 calls")
+	}
 }

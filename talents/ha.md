@@ -68,6 +68,26 @@ The fastest path when the entity_id is already in hand. Returns the
 state value plus all attributes (brightness, color, last_changed,
 etc.).
 
+Add `include` when physical-world metadata would improve reasoning:
+
+```json
+{
+  "entity_id": "sensor.office_temperature",
+  "include": {"area": true, "device": true, "labels": true, "description": true}
+}
+```
+
+The same `include` shape works on `ha_find_entity`, `ha_list_entities`,
+and entity subscriptions. `all: true` enables every supported metadata
+projection. Metadata can include resolved area, owning device, HA
+labels from the entity/device/area, aliases, category, platform, device
+class, floor/building hierarchy, visibility/enabled status, and human
+descriptions when HA has them. Hidden-but-enabled entities are still
+available for focused research; treat HA visibility as a default-context
+salience hint, not as proof the data is unimportant. `visibility.context_role`
+summarizes the model-facing role as `default`, `hidden`, `diagnostic`,
+`config`, or `disabled`.
+
 ## I know the description but not the entity_id
 
 `ha_find_entity` does fuzzy lookup by description, optionally narrowed
@@ -77,13 +97,16 @@ by area or domain:
 {
   "description": "ceiling light",
   "area": "office",
-  "domain": "light"
+  "domain": "light",
+  "include": {"all": true}
 }
 ```
 
 Returns the best match with a confidence score, or candidate
 entity_ids when the description is ambiguous. The natural precursor
-to `ha_get_state` or `ha_control_device`.
+to `ha_get_state` or `ha_control_device`. Area filters use the HA
+registry, including device-inherited area, instead of only blending the
+area words into the fuzzy query.
 
 ## I want everything in a domain
 
@@ -91,14 +114,15 @@ to `ha_get_state` or `ha_control_device`.
 
 ```json
 {
-  "domain": "light"
+  "domain": "light",
+  "include": {"area": true, "labels": true}
 }
 ```
 
 Right for discovery ("what lights exist?") or for iterating over a
-set ("check every door sensor"). Returns entity_ids and friendly
-names — read these, then `ha_get_state` the specific ones you care
-about.
+set ("check every door sensor"). Returns structured entity rows; add
+metadata when the model needs room, device, label, or description
+context to choose the right follow-up.
 
 ## I want richer search across the registry
 

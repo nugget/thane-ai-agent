@@ -102,7 +102,7 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 	}
 	state = p.stateWithForecast(ctx, sub, state)
 
-	content := formatEntityContext(state, now)
+	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(sub.EntityID, state, sub.Include))
 	content = enrichWithLastKnownGood(ctx, p.ha, content, state, now)
 	content = enrichUnavailable(content, state, registries)
 	if len(sub.History) == 0 {

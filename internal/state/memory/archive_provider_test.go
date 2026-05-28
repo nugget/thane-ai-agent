@@ -12,28 +12,45 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 )
 
-// mockArchiveSearcher implements ArchiveSearcher for testing.
+// mockArchiveSearcher implements [MemorySearcher] for testing. Most
+// existing tests set only `results` (raw-message hits) — Search
+// wraps that into a SearchBundle so the prewarm provider's
+// multi-surface contract is satisfied. Tests that exercise the
+// distilled surfaces set `sessions` and `workingMemory` directly.
 type mockArchiveSearcher struct {
-	results   []SearchResult
-	err       error
-	lastQuery string
-	lastLimit int
-	callCount int
+	results       []SearchResult
+	sessions      []SessionMatch
+	workingMemory []WorkingMemoryMatch
+	err           error
+	lastQuery     string
+	lastLimit     int
+	callCount     int
 }
 
-func (m *mockArchiveSearcher) Search(opts SearchOptions) ([]SearchResult, error) {
+func (m *mockArchiveSearcher) Search(opts SearchOptions) (*SearchBundle, error) {
 	m.callCount++
 	m.lastQuery = opts.Query
 	m.lastLimit = opts.Limit
-	return m.results, m.err
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &SearchBundle{
+		Messages:      m.results,
+		Sessions:      m.sessions,
+		WorkingMemory: m.workingMemory,
+	}, nil
 }
 
 // archivePayload is the projection produced under the "### Past
-// Experience" heading. Mirrors the shape of FormatSearchResults so the
-// tests can decode without depending on json tags directly.
+// Experience" heading. Mirrors the multi-surface envelope shape so
+// the tests can decode without depending on json tags directly. The
+// raw-message hits live under `messages`; the two distilled
+// surfaces (sessions, working_memory) sit alongside.
 type archivePayload struct {
-	Results   []map[string]any `json:"results"`
-	Truncated bool             `json:"truncated"`
+	Messages      []map[string]any `json:"messages"`
+	Sessions      []map[string]any `json:"sessions"`
+	WorkingMemory []map[string]any `json:"working_memory"`
+	Truncated     bool             `json:"truncated"`
 }
 
 // parseArchiveBody extracts the JSON body that follows the
@@ -91,10 +108,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			t.Errorf("output should start with '### Past Experience' heading, got:\n%s", got)
 		}
 		payload := parseArchiveBody(t, got)
-		if len(payload.Results) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(payload.Results))
+		if len(payload.Messages) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Messages))
 		}
-		match := payload.Results[0]["match"].(map[string]any)
+		match := payload.Messages[0]["match"].(map[string]any)
 		if !strings.Contains(match["content"].(string), "pool heater") {
 			t.Errorf("match content should mention pool heater, got %q", match["content"])
 		}
@@ -220,10 +237,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			t.Errorf("output length %d exceeds budget 900", len(got))
 		}
 		payload := parseArchiveBody(t, got)
-		if len(payload.Results) == 0 {
+		if len(payload.Messages) == 0 {
 			t.Fatal("expected at least one result to fit")
 		}
-		if len(payload.Results) == 3 {
+		if len(payload.Messages) == 3 {
 			t.Error("expected truncation to drop at least one result")
 		}
 		if !payload.Truncated {
@@ -265,18 +282,18 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			t.Errorf("output length %d exceeds budget 4000", len(got))
 		}
 		payload := parseArchiveBody(t, got)
-		if len(payload.Results) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(payload.Results))
+		if len(payload.Messages) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Messages))
 		}
 		// Match content is clipped to the prewarm cap.
-		match := payload.Results[0]["match"].(map[string]any)
+		match := payload.Messages[0]["match"].(map[string]any)
 		matchContent := match["content"].(string)
 		if len(matchContent) > prewarmMessageContentMax {
 			t.Errorf("match.content length %d exceeds prewarm cap %d", len(matchContent), prewarmMessageContentMax)
 		}
 		// Context is narrowed to prewarmContextPerSide on each side.
-		before, _ := payload.Results[0]["context_before"].([]any)
-		after, _ := payload.Results[0]["context_after"].([]any)
+		before, _ := payload.Messages[0]["context_before"].([]any)
+		after, _ := payload.Messages[0]["context_after"].([]any)
 		if len(before) > prewarmContextPerSide {
 			t.Errorf("context_before len %d exceeds prewarm cap %d", len(before), prewarmContextPerSide)
 		}
@@ -314,7 +331,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		})
 		_, _ = p.TagContext(ctx, agentctx.ContextRequest{UserMessage: ""})
 
-		// Verify all prefixes are stripped.
+		// Content-shaped prefixes are stripped and their values
+		// become query terms. Identity-shaped prefixes (contact:)
+		// are dropped entirely — their values are stable handles
+		// that pollute the FTS query (see #979).
 		q := mock.lastQuery
 		if strings.Contains(q, "entity:") {
 			t.Errorf("query %q should not contain 'entity:' prefix", q)
@@ -331,8 +351,8 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		if !strings.Contains(q, "kitchen") {
 			t.Errorf("query %q should contain 'kitchen'", q)
 		}
-		if !strings.Contains(q, "dan@example.com") {
-			t.Errorf("query %q should contain 'dan@example.com'", q)
+		if strings.Contains(q, "dan@example.com") {
+			t.Errorf("query %q should NOT contain 'dan@example.com' — contact subjects are identity-shaped, dropped from FTS", q)
 		}
 	})
 
@@ -384,10 +404,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			t.Fatalf("TagContext: %v", err)
 		}
 		payload := parseArchiveBody(t, got)
-		if len(payload.Results) != 1 {
-			t.Fatalf("expected 1 result, got %d", len(payload.Results))
+		if len(payload.Messages) != 1 {
+			t.Fatalf("expected 1 result, got %d", len(payload.Messages))
 		}
-		hit := payload.Results[0]
+		hit := payload.Messages[0]
 		before, _ := hit["context_before"].([]any)
 		after, _ := hit["context_after"].([]any)
 		if len(before) != 1 || len(after) != 1 {
@@ -421,7 +441,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 			t.Errorf("output should use deltas, not RFC3339\nGot:\n%s", got)
 		}
 		payload := parseArchiveBody(t, got)
-		match := payload.Results[0]["match"].(map[string]any)
+		match := payload.Messages[0]["match"].(map[string]any)
 		tField, _ := match["t"].(string)
 		if !strings.HasPrefix(tField, "-") {
 			t.Errorf("match.t should be a negative delta like '-Ns', got %q", tField)
@@ -468,6 +488,38 @@ func TestBuildQuery(t *testing.T) {
 			subjects:   []string{"bare_subject"},
 			wantQuery:  "bare_subject",
 			wantSource: "subjects",
+		},
+		{
+			// Channel-binding subjects (sender handle + contact UUID)
+			// must not become the FTS query — they either match
+			// nothing or match every message from that sender. With
+			// only identity subjects and a user message present, the
+			// provider must fall through to message_fallback.
+			name:       "contact_subjects_dropped_falls_through_to_message",
+			subjects:   []string{"contact:019c76e4-2ff1-7918-8d6f-6c2488f5098d", "contact:+15124232707"},
+			message:    "why don't you use the game room door after a shower",
+			wantQuery:  "why don't you use the game room door after a shower",
+			wantSource: "message_fallback",
+		},
+		{
+			// Identity subjects coexisting with a content subject:
+			// the content subject still drives the query; identity
+			// values are dropped silently.
+			name:       "contact_subjects_dropped_alongside_content",
+			subjects:   []string{"contact:+15124232707", "entity:binary_sensor.game_room_door"},
+			message:    "fallback that should not be used",
+			wantQuery:  "binary_sensor.game_room_door",
+			wantSource: "subjects",
+		},
+		{
+			// Identity-only subjects with no user message → no query.
+			// The "" / "" return tells the caller to skip the prewarm
+			// pass entirely; emitting an FTS-poisoning query would
+			// be worse.
+			name:       "contact_subjects_only_no_message",
+			subjects:   []string{"contact:+15124232707"},
+			wantQuery:  "",
+			wantSource: "",
 		},
 	}
 

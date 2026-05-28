@@ -14,16 +14,24 @@ import (
 // relationship temperature, and unresolved threads. The table lives in
 // archive.db alongside session transcripts.
 type WorkingMemoryStore struct {
-	db *sql.DB
+	db         *sql.DB
+	ftsEnabled bool
 }
 
 // NewWorkingMemoryStore creates a working memory store using the given
-// database connection (typically from [ArchiveStore.DB]). It creates the
-// working_memory table if it does not already exist.
-func NewWorkingMemoryStore(db *sql.DB) (*WorkingMemoryStore, error) {
+// database connection (typically from [ArchiveStore.DB]). It creates
+// the working_memory table if it does not already exist. ftsEnabled
+// should be the value returned by [ArchiveStore.FTSEnabled] on the
+// archive store sharing this connection — when true, the constructor
+// also sets up working_memory_fts with sync triggers and backfills
+// any existing rows.
+func NewWorkingMemoryStore(db *sql.DB, ftsEnabled bool) (*WorkingMemoryStore, error) {
 	s := &WorkingMemoryStore{db: db}
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("working memory migration: %w", err)
+	}
+	if ftsEnabled {
+		s.ftsEnabled = trySetupWorkingMemoryFTS(db, ftsEnabled)
 	}
 	return s, nil
 }
@@ -38,6 +46,12 @@ func (s *WorkingMemoryStore) migrate() error {
 		)
 	`)
 	return err
+}
+
+// FTSEnabled reports whether the working_memory_fts virtual table
+// was successfully created at startup.
+func (s *WorkingMemoryStore) FTSEnabled() bool {
+	return s.ftsEnabled
 }
 
 // Get returns the working memory content and last-updated timestamp for
@@ -90,4 +104,58 @@ func (s *WorkingMemoryStore) Delete(conversationID string) error {
 		return fmt.Errorf("delete working memory: %w", err)
 	}
 	return nil
+}
+
+// Search runs an FTS5 query against working_memory_fts and returns
+// the highest-ranking working-memory snapshots by BM25. Query is
+// wrapped as a phrase token for the same precision reasons the raw
+// archive search uses [phraseFTS5Query].
+//
+// Returns an empty slice when FTS5 isn't available, the query is
+// blank, or no rows match. The shape mirrors [SessionMatch]: caller
+// gets the conversation_id (which doubles as a foreign key into
+// [WorkingMemoryStore.Get] for the full content), an updated_at
+// timestamp, the content, and the snippet highlight.
+func (s *WorkingMemoryStore) Search(query string, limit int) ([]WorkingMemoryMatch, error) {
+	if !s.ftsEnabled {
+		return nil, nil
+	}
+	q := phraseFTS5Query(query)
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT w.conversation_id, w.content, w.updated_at,
+		       snippet(%s, 0, '**', '**', '...', 32) AS highlight
+		FROM %s
+		JOIN working_memory w ON w.rowid = %s.rowid
+		WHERE %s MATCH ?
+		ORDER BY rank
+		LIMIT ?
+	`, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable, workingMemoryFTSTable), q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search working memory: %w", err)
+	}
+	defer rows.Close()
+
+	var out []WorkingMemoryMatch
+	for rows.Next() {
+		var m WorkingMemoryMatch
+		var updatedStr string
+		if err := rows.Scan(&m.ConversationID, &m.Content, &updatedStr, &m.Highlight); err != nil {
+			return nil, fmt.Errorf("scan working memory match: %w", err)
+		}
+		if m.UpdatedAt, err = database.ParseTimestamp(updatedStr); err != nil {
+			return nil, fmt.Errorf("parse working memory updated_at: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate working memory matches: %w", err)
+	}
+	return out, nil
 }

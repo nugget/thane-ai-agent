@@ -75,11 +75,13 @@ const physics = {
 };
 
 function buildLoopBranchLoads() {
+  const registryCoreID = getRegistryCoreID();
   const childrenByParent = new Map();
   for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
-    childrenByParent.get(loop.parent_id).push(loop.id);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (!parentID) continue;
+    if (!childrenByParent.has(parentID)) childrenByParent.set(parentID, []);
+    childrenByParent.get(parentID).push(loop.id);
   }
 
   const cache = new Map();
@@ -150,11 +152,13 @@ function compareLoopsForLayout(a, b) {
 }
 
 function buildSiblingIndex() {
+  const registryCoreID = getRegistryCoreID();
   const siblings = new Map();
   for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    if (!siblings.has(loop.parent_id)) siblings.set(loop.parent_id, []);
-    siblings.get(loop.parent_id).push(loop);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (!parentID) continue;
+    if (!siblings.has(parentID)) siblings.set(parentID, []);
+    siblings.get(parentID).push(loop);
   }
   for (const list of siblings.values()) {
     list.sort(compareLoopsForLayout);
@@ -260,8 +264,17 @@ function normalizeAngle(angle) {
 
 function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
   const targets = new Map();
+  const registryCoreID = getRegistryCoreID();
+  // Roots: genuine orphans plus loops re-rooted off the collapsed
+  // registry core. The core itself is excluded — it has no visual node
+  // (the __system__ pin owns its slot), so giving it an orbit target
+  // would reserve a phantom gap on the root ring and pull its adopted
+  // children toward an off-center point their edges never connect to.
   const roots = Array.from(state.loops.values())
-    .filter(loop => !loop.parent_id)
+    .filter(loop => {
+      if (registryCoreID && isRegistryCoreLoop(loop)) return false;
+      return !getEffectiveParentID(loop, registryCoreID);
+    })
     .sort(compareLoopsForLayout);
 
   const aspect = (vw && vh && vh > 0) ? (vw / vh) : 1;
@@ -432,6 +445,66 @@ function updatePinnedAnchorPositions() {
   }
 }
 
+// isRegistryCoreLoop reports whether a loop in state.loops is the
+// well-known structural-root container the runtime auto-creates as
+// the singleton "core" loop. The dashboard already represents that
+// role via the pinned __system__ pseudo-node (rendered as a labeled
+// square), so we hide the loop's own graph node to avoid two nodes
+// both labeled "core" — one square, one round, both labeled "core,"
+// with a single connection between them and every other loop hanging
+// off the round one.
+//
+// The loop itself stays in state.loops so detail panels and API
+// consumers continue to see its data.
+//
+// Predicate matches the backend's Loop.IsCore: name == "core" and
+// the config Operation is "container." Falling back on name alone
+// would misfire for unrelated loops a user might name "core."
+function isRegistryCoreLoop(loop) {
+  if (!loop) return false;
+  if (loop.name !== 'core') return false;
+  const op = loop.config && loop.config.Operation;
+  return op === 'container';
+}
+
+// getRegistryCoreID returns the id of the collapsed registry-core loop
+// when one is present and the __system__ node is active, otherwise null.
+// Returns null whenever state.system is absent so that, before system
+// status arrives, the registry core lays out as an ordinary root (the
+// same boot-order gating syncPhysicsNodes/renderNodes use).
+//
+// Each layout builder (buildLoopBranchLoads, buildSiblingIndex,
+// buildOrbitTargets) calls this once at its top — and physicsStep once
+// more for the spring pass — then threads the result into
+// [getEffectiveParentID] so the per-loop parent lookup stays O(1). The
+// scan here is O(loops): run a small constant number of times per tick
+// over a Map of at most a few dozen loops, it's negligible and not
+// worth threading a shared value through every builder's signature.
+function getRegistryCoreID() {
+  if (!state.system) return null;
+  for (const loop of state.loops.values()) {
+    if (isRegistryCoreLoop(loop)) return loop.id;
+  }
+  return null;
+}
+
+// getEffectiveParentID is the layout-layer counterpart to the edge
+// re-rooting in renderLinkingLines: a loop that named the collapsed
+// registry core as its parent is treated as a root (parent = none),
+// because its visual slot — node, drawn edge, and spring anchor — is
+// the centered __system__ node, not the hidden core's phantom
+// position on the root ring. Every orbit/branch/sibling builder must
+// agree on this; if buildOrbitTargets re-roots a child to center but
+// buildSiblingIndex still files it under the core (or vice versa) the
+// orbit-attraction force and the spring force pull in different
+// directions and the layout never settles. Pass the precomputed
+// registryCoreID from [getRegistryCoreID] to avoid an O(n) scan per loop.
+function getEffectiveParentID(loop, registryCoreID) {
+  if (!loop || !loop.parent_id) return null;
+  if (registryCoreID && loop.parent_id === registryCoreID) return null;
+  return loop.parent_id;
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -460,6 +533,11 @@ function syncPhysicsNodes(cx, cy) {
 
   // Loop nodes.
   for (const loop of state.loops.values()) {
+    // Skip the registry's structural-root core loop — it shares its
+    // visual slot with __system__ and rendering both produces the
+    // duplicate "core" node operators see in the graph. See
+    // [isRegistryCoreLoop] for the predicate's reasoning.
+    if (state.system && isRegistryCoreLoop(loop)) continue;
     if (physics.nodes.has(loop.id)) continue;
     let sx, sy;
     const target = orbitTargets.get(loop.id);
@@ -490,8 +568,17 @@ function syncPhysicsNodes(cx, cy) {
 
   // Remove physics nodes for loops that no longer exist (and aren't system).
   // Exiting nodes stay until their DOM animationend handler cleans them up.
+  // Also handles the boot-order race: an initial render may complete before
+  // /api/system returns, in which case the registry core gets a physics
+  // node like any other loop. When system status later arrives, suppress
+  // the registry core's physics node so it stops participating in layout.
   for (const id of physics.nodes.keys()) {
     if (id === '__system__') continue;
+    const loop = state.loops.get(id);
+    if (state.system && loop && isRegistryCoreLoop(loop)) {
+      physics.nodes.delete(id);
+      continue;
+    }
     if (!state.loops.has(id) && !canvasWorld.querySelector(`[data-loop-id="${id}"].loop-node--exiting`)) {
       physics.nodes.delete(id);
     }
@@ -593,6 +680,7 @@ function physicsStep(cx, cy, vw, vh) {
   const branchLoads = buildLoopBranchLoads();
   const siblingIndex = buildSiblingIndex();
   const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
+  const registryCoreID = getRegistryCoreID();
   const motionScale = getGraphMotionScale(n);
   const edges = [];
 
@@ -610,11 +698,16 @@ function physicsStep(cx, cy, vw, vh) {
   }
 
   // 2. Edge springs — keep the rendered connectors taut without letting them
-  // dominate the structure.
+  // dominate the structure. Spring to the EFFECTIVE parent so adopted
+  // children of the collapsed registry core spring to __system__ (their
+  // orbit target's center) rather than to the hidden core's phantom slot.
+  // This must match buildOrbitTargets' re-rooting or the spring and the
+  // orbit-attraction force pull in different directions.
   for (const loop of state.loops.values()) {
     if (!P.nodes.has(loop.id)) continue;
-    if (loop.parent_id && P.nodes.has(loop.parent_id)) {
-      const source = P.nodes.get(loop.parent_id);
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    if (parentID && P.nodes.has(parentID)) {
+      const source = P.nodes.get(parentID);
       const target = P.nodes.get(loop.id);
       const targetSpec = orbitTargets.get(loop.id);
       const restLength = targetSpec ? targetSpec.radius : P.childRestLength;
@@ -624,7 +717,7 @@ function physicsStep(cx, cy, vw, vh) {
         P.childSpringStrength,
         restLength,
       );
-      edges.push({ sourceId: loop.parent_id, targetId: loop.id, source, target });
+      edges.push({ sourceId: parentID, targetId: loop.id, source, target });
     } else if (P.nodes.has('__system__')) {
       const source = P.nodes.get('__system__');
       const target = P.nodes.get(loop.id);
@@ -2867,6 +2960,9 @@ function renderNodes() {
 
   // Create/update DOM nodes (no position-setting — physics handles that).
   for (const loop of loops) {
+    // Same registry-core suppression as syncPhysicsNodes: the loop
+    // exists in state, but its visual slot is the __system__ node.
+    if (hasSystem && isRegistryCoreLoop(loop)) continue;
     renderNode(loop);
   }
 
@@ -2880,6 +2976,19 @@ function renderNodes() {
     inner.addEventListener('animationend', () => {
       inner.classList.remove('node-inner--entering');
     }, { once: true });
+  }
+
+  // Boot-order race cleanup: if /api/system arrived after a first
+  // paint that already rendered the registry-core loop, drop the
+  // stale SVG group and knownLoopIds entry immediately (no exit
+  // animation — the node was a visual error, not a graceful exit).
+  if (hasSystem) {
+    for (const loop of loops) {
+      if (!isRegistryCoreLoop(loop)) continue;
+      const stale = canvasNodeLayer.querySelector(`[data-loop-id="${loop.id}"]`);
+      if (stale) stale.remove();
+      state.knownLoopIds.delete(loop.id);
+    }
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
@@ -2921,25 +3030,65 @@ function renderNodes() {
 // Manage linking line DOM lifecycle — create/remove elements and apply
 // state classes. Positions (x1/y1/x2/y2) are set by updateNodePositions().
 function renderLinkingLines(hasSystem, loops) {
-  // Top-level loops are those without a parent_id.
-  const topLevel = loops.filter(l => !l.parent_id);
+  // When the registry's core loop is present, its loop node is hidden
+  // (see isRegistryCoreLoop) and its visual slot is the __system__
+  // node. Any loop that named the registry core as its parent gets
+  // re-rooted to __system__ for edge-drawing purposes; the registry
+  // core itself is excluded from both top-level and children sets.
+  const registryCore = hasSystem ? loops.find(isRegistryCoreLoop) : null;
+  const registryCoreID = registryCore ? registryCore.id : null;
+  const adoptedBySystem = (loop) => loop.parent_id === registryCoreID;
+
+  // Top-level loops: genuine orphans plus loops adopted from the
+  // hidden registry core. The registry core itself does not appear.
+  const topLevel = loops.filter(l => {
+    if (isRegistryCoreLoop(l)) return false;
+    if (!l.parent_id) return true;
+    return adoptedBySystem(l);
+  });
   const activeIds = new Set(topLevel.map(l => l.id));
 
-  // Child loops are those with a parent_id.
-  const children = loops.filter(l => l.parent_id);
+  // Child loops: anything with a parent_id that is NOT the registry
+  // core. Their edges go to the named parent normally.
+  const children = loops.filter(l => {
+    if (isRegistryCoreLoop(l)) return false;
+    if (!l.parent_id) return false;
+    return !adoptedBySystem(l);
+  });
   const childKeys = new Set(children.map(l => l.id));
 
   // Build a set of all valid link targets.
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
-  // Remove stale link lines for loops that no longer exist.
+  // Remove stale link lines. Three cases require cleanup, not just one:
+  //
+  //   1. system→child line whose target no longer exists OR system is gone
+  //   2. parent→child line whose target loop is gone
+  //   3. parent→child line whose *parent* has gone away (this catches the
+  //      registry-core-adoption case: a child that previously listed the
+  //      registry core as its parent now belongs to __system__, but the
+  //      old child-of-core line wasn't being pruned because the child
+  //      itself still existed)
   const existing = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const el of existing) {
     const target = el.dataset.targetLoop;
-    const isSystemLink = !el.dataset.parentLoop;
-    if (isSystemLink && (!hasSystem || !activeIds.has(target))) {
+    const parentLoop = el.dataset.parentLoop || '';
+    const isSystemLink = !parentLoop;
+    if (isSystemLink) {
+      if (!hasSystem || !activeIds.has(target)) {
+        el.remove();
+      }
+      continue;
+    }
+    if (!allValidTargets.has(target)) {
       el.remove();
-    } else if (!isSystemLink && !allValidTargets.has(target)) {
+      continue;
+    }
+    // Re-rooting check: if the declared parent is no longer a valid
+    // parent for the current target (target moved, was adopted, or
+    // the parent is the now-hidden registry core), drop the line.
+    const targetLoop = state.loops.get(target);
+    if (!targetLoop || targetLoop.parent_id !== parentLoop || parentLoop === registryCoreID) {
       el.remove();
     }
   }

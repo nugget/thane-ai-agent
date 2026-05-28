@@ -28,6 +28,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 // Tool represents a callable tool.
@@ -55,26 +56,27 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools           map[string]*Tool
-	tagIndex        map[string][]string // tag → tool names
-	ha              *homeassistant.Client
-	scheduler       *scheduler.Scheduler
-	factTools       *knowledge.Tools
-	contactTools    *contacts.Tools
-	emailTools      *email.Tools
-	notifier        *notifications.Sender
-	notifRecords    *notifications.RecordStore
-	notifRouter     *notifications.NotificationRouter
-	notifDispatcher CallbackDispatcher
-	companionCaller companionCallFunc
-	forgeTools      forgeHandler
-	fileTools       *FileTools
-	shellExec       *ShellExec
-	attachmentTools *attachments.Tools
-	tempFileStore   *TempFileStore
-	usageStore      *usage.Store
-	lensStore       *LensStore
-	logIndexDB      *sql.DB
+	tools              map[string]*Tool
+	tagIndex           map[string][]string // tag → tool names
+	ha                 *homeassistant.Client
+	scheduler          *scheduler.Scheduler
+	factTools          *knowledge.Tools
+	contactTools       *contacts.Tools
+	emailTools         *email.Tools
+	notifier           *notifications.Sender
+	notifRecords       *notifications.RecordStore
+	notifRouter        *notifications.NotificationRouter
+	notifDispatcher    CallbackDispatcher
+	companionCaller    companionCallFunc
+	forgeTools         forgeHandler
+	fileTools          *FileTools
+	shellExec          *ShellExec
+	attachmentTools    *attachments.Tools
+	tempFileStore      *TempFileStore
+	usageStore         *usage.Store
+	lensStore          *LensStore
+	logIndexDB         *sql.DB
+	workingMemoryStore *memory.WorkingMemoryStore
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 
@@ -275,8 +277,15 @@ func (r *Registry) registerFactTools() {
 	}
 
 	r.Register(&Tool{
-		Name:        "remember_fact",
-		Description: "Store a discrete, stable piece of information for later recall. Best for user preferences, home layout, device mappings, routines, or observed patterns. Each fact should be a single, self-contained piece of knowledge — not a project spec or design document. Do NOT store complex/evolving knowledge here — use workspace files instead. Do NOT store person-specific attributes — use contact_save instead.",
+		Name: "remember_fact",
+		Description: "Write a stable, compact truth into long-term memory so it survives this conversation. " +
+			"Call this the moment the owner reveals a preference, a household layout fact, a device mapping, " +
+			"a routine, or corrects something past you got wrong — store, don't just acknowledge. " +
+			"Saying 'noted' or 'got it' without calling this tool is the bug. " +
+			"Duplicates overwrite cleanly; missed facts disappear and you'll meet the same surprise next week. " +
+			"Each fact is a single self-contained key+value. " +
+			"Do NOT use for project specs or design docs (use workspace files); " +
+			"do NOT use for person-specific attributes (use contact_save).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -710,6 +719,7 @@ func (r *Registry) registerBuiltins() {
 					"type":        "string",
 					"description": "The entity ID (e.g., light.living_room, sensor.temperature, binary_sensor.front_door)",
 				},
+				"include": EntityMetadataIncludeParameter(),
 			},
 			"required": []string{"entity_id"},
 		},
@@ -729,8 +739,9 @@ func (r *Registry) registerBuiltins() {
 				},
 				"limit": map[string]any{
 					"type":        "integer",
-					"description": "Maximum number of entities to return (default 20)",
+					"description": "Maximum number of entities to return (default 20, max 100)",
 				},
+				"include": EntityMetadataIncludeParameter(),
 			},
 			"required": []string{"domain"},
 		},
@@ -1187,7 +1198,20 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 		return "", err
 	}
 
-	return FormatEntityState(state), nil
+	include, err := ParseEntityMetadataIncludesArg(args["include"], "include")
+	if err != nil {
+		return "", err
+	}
+	var metadata *homeassistant.EntityMetadata
+	if include.Any() {
+		bundle, err := fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, include, []string{entityID})
+		if err != nil {
+			return "", err
+		}
+		metadata = bundle.metadata(entityID, state)
+	}
+
+	return FormatEntityStateWithMetadata(state, metadata), nil
 }
 
 // FormatEntityState formats a Home Assistant entity state for LLM
@@ -1195,6 +1219,13 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 // and context injection.
 func FormatEntityState(state *homeassistant.State) string {
 	return contextfmt.Format(state, time.Now())
+}
+
+// FormatEntityStateWithMetadata formats a Home Assistant entity state
+// through the same context renderer used by watched-entity injection,
+// attaching resolved HA registry metadata when present.
+func FormatEntityStateWithMetadata(state *homeassistant.State, metadata *homeassistant.EntityMetadata) string {
+	return contextfmt.FormatWithMetadata(state, time.Now(), metadata)
 }
 
 func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) (string, error) {
@@ -1210,9 +1241,13 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		return "", fmt.Errorf("domain is required")
 	}
 
-	limit := 20
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
+	limit, err := boundedIntArg(args, "limit", 20, maxHAListEntitiesLimit)
+	if err != nil {
+		return "", err
+	}
+	include, err := ParseEntityMetadataIncludesArg(args["include"], "include")
+	if err != nil {
+		return "", err
 	}
 
 	states, err := r.ha.GetStates(ctx)
@@ -1220,26 +1255,47 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		return "", err
 	}
 
-	var matches []string
+	var matches []haListEntityItem
+	var matchEntityIDs []string
+	var matchStates []homeassistant.State
+	total := 0
 	prefix := domain + "."
 	for _, s := range states {
 		if strings.HasPrefix(s.EntityID, prefix) {
-			name := s.EntityID
-			if friendly, ok := s.Attributes["friendly_name"].(string); ok {
-				name = fmt.Sprintf("%s (%s)", s.EntityID, friendly)
-			}
-			matches = append(matches, fmt.Sprintf("- %s: %s", name, s.State))
+			total++
 			if len(matches) >= limit {
-				break
+				continue
 			}
+			item := haListEntityItem{
+				EntityID: s.EntityID,
+				State:    s.State,
+			}
+			if friendly, ok := s.Attributes["friendly_name"].(string); ok {
+				item.FriendlyName = friendly
+			}
+			matches = append(matches, item)
+			matchEntityIDs = append(matchEntityIDs, s.EntityID)
+			matchStates = append(matchStates, s)
+		}
+	}
+	if include.Any() && len(matches) > 0 {
+		bundle, err := fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, include, matchEntityIDs)
+		if err != nil {
+			return "", err
+		}
+		for i := range matches {
+			matches[i].Metadata = bundle.metadata(matches[i].EntityID, &matchStates[i])
 		}
 	}
 
-	if len(matches) == 0 {
-		return fmt.Sprintf("No entities found in domain '%s'", domain), nil
+	result := haListEntitiesResult{
+		Domain:    domain,
+		Count:     len(matches),
+		Total:     total,
+		Truncated: total > len(matches),
+		Items:     matches,
 	}
-
-	return fmt.Sprintf("Found %d %s entities:\n%s", len(matches), domain, strings.Join(matches, "\n")), nil
+	return toIndentedJSONWithTruncationNote(result, haListEntitiesTruncationNote), nil
 }
 
 func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (string, error) {
