@@ -166,6 +166,28 @@ threshold questions. This is the right reach instead of fanning out
 many `ha_get_state` calls or listing a whole domain and eyeballing it.
 Add `include` for area/device/label/visibility metadata on each match.
 
+## I want everything in a room
+
+`get_area_activity` is the whole-area perception view — the native
+answer to "what's in the office" or "is everything okay in the
+kitchen":
+
+```json
+{
+  "area": "office",
+  "include": {"device": true, "labels": true}
+}
+```
+
+Returns the area with its floor/building context and its entities
+grouped by salience — anomalies (offline / alarm) first, then active
+devices, recent changes, ambient sensors, and the stable remainder —
+plus a transition timeline and counts of what was filtered out
+(disabled/hidden/diagnostic/config). Default-context entities only;
+pass `include_hidden` or `include_diagnostic` for a forensic pass. Reach
+for this instead of listing a domain and cross-referencing rooms by
+hand.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities

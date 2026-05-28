@@ -374,6 +374,19 @@ func (r EntityMetadataResolver) areaForEntity(entry *EntityRegistryEntry, device
 	return r.areasByID[areaID]
 }
 
+// AreaMetadata projects model-facing metadata for a single area —
+// name, aliases, icon, climate sensors, and the resolved floor/building
+// hierarchy. It exposes the same area projection the per-entity resolver
+// uses, for surfaces (e.g. the area-activity snapshot) that describe an
+// area directly rather than an entity within it. Returns nil for a nil
+// area.
+func (r EntityMetadataResolver) AreaMetadata(area *Area) *EntityAreaMetadata {
+	if area == nil {
+		return nil
+	}
+	return r.areaMetadata(area)
+}
+
 func (r EntityMetadataResolver) areaMetadata(area *Area) *EntityAreaMetadata {
 	out := &EntityAreaMetadata{
 		ID:                  area.AreaID,
