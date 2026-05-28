@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -727,16 +728,20 @@ func (r *Registry) registerBuiltins() {
 		Handler: r.handleGetState,
 	})
 
-	// List entities by domain
+	// List entities by domain or entity_id glob
 	r.Register(&Tool{
 		Name:        "ha_list_entities",
-		Description: "List all entities in a domain (e.g., all lights, all sensors). Use this to discover what's available.",
+		Description: "List Home Assistant entities by domain and/or an entity_id glob. Use domain for a whole domain (all lights); use pattern for substring/cross-domain matching (e.g. binary_sensor.*door*, *_temperature). At least one of domain or pattern is required; when both are given they combine (AND).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"domain": map[string]any{
 					"type":        "string",
-					"description": "The domain to list (e.g., light, switch, sensor, binary_sensor, climate, cover)",
+					"description": "List every entity in this exact domain (e.g., light, switch, sensor, binary_sensor, climate, cover). Optional when pattern is supplied.",
+				},
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Glob over the full entity_id (path.Match syntax, '*' matches any run of characters): binary_sensor.*door*, *_temperature, light.office_*. Optional when domain is supplied; combined with domain as an AND.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -744,7 +749,6 @@ func (r *Registry) registerBuiltins() {
 				},
 				"include": EntityMetadataIncludeParameter(),
 			},
-			"required": []string{"domain"},
 		},
 		Handler: r.handleListEntities,
 	})
@@ -1237,9 +1241,18 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		return "", fmt.Errorf("home assistant is currently unreachable (reconnecting in background)")
 	}
 
-	domain, _ := args["domain"].(string)
-	if domain == "" {
-		return "", fmt.Errorf("domain is required")
+	domain := strings.TrimSpace(stringArgValue(args, "domain"))
+	pattern := strings.TrimSpace(stringArgValue(args, "pattern"))
+	if domain == "" && pattern == "" {
+		return "", fmt.Errorf("at least one of domain or pattern is required")
+	}
+	// Validate the glob up-front so a malformed pattern is a clear error
+	// rather than a silent no-match. path.Match only errors on bad
+	// syntax, so once this passes the per-entity calls below cannot.
+	if pattern != "" {
+		if _, err := path.Match(pattern, "domain.entity"); err != nil {
+			return "", fmt.Errorf("invalid pattern %q: %w", pattern, err)
+		}
 	}
 
 	limit, err := boundedIntArg(args, "limit", 20, maxHAListEntitiesLimit)
@@ -1260,24 +1273,33 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	var matchEntityIDs []string
 	var matchStates []homeassistant.State
 	total := 0
-	prefix := domain + "."
+	prefix := ""
+	if domain != "" {
+		prefix = domain + "."
+	}
 	for _, s := range states {
-		if strings.HasPrefix(s.EntityID, prefix) {
-			total++
-			if len(matches) >= limit {
+		if prefix != "" && !strings.HasPrefix(s.EntityID, prefix) {
+			continue
+		}
+		if pattern != "" {
+			if ok, _ := path.Match(pattern, s.EntityID); !ok {
 				continue
 			}
-			item := haListEntityItem{
-				EntityID: s.EntityID,
-				State:    s.State,
-			}
-			if friendly, ok := s.Attributes["friendly_name"].(string); ok {
-				item.FriendlyName = friendly
-			}
-			matches = append(matches, item)
-			matchEntityIDs = append(matchEntityIDs, s.EntityID)
-			matchStates = append(matchStates, s)
 		}
+		total++
+		if len(matches) >= limit {
+			continue
+		}
+		item := haListEntityItem{
+			EntityID: s.EntityID,
+			State:    s.State,
+		}
+		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
+			item.FriendlyName = friendly
+		}
+		matches = append(matches, item)
+		matchEntityIDs = append(matchEntityIDs, s.EntityID)
+		matchStates = append(matchStates, s)
 	}
 	if include.Any() && len(matches) > 0 {
 		bundle, err := fetchHAEntityMetadataBundleForEntityIDs(ctx, r.ha, include, matchEntityIDs)
@@ -1291,6 +1313,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 
 	result := haListEntitiesResult{
 		Domain:    domain,
+		Pattern:   pattern,
 		Count:     len(matches),
 		Total:     total,
 		Truncated: total > len(matches),
