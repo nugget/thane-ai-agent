@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 	"time"
@@ -1247,10 +1246,10 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		return "", fmt.Errorf("at least one of domain or pattern is required")
 	}
 	// Validate the glob up-front so a malformed pattern is a clear error
-	// rather than a silent no-match. path.Match only errors on bad
-	// syntax, so once this passes the per-entity calls below cannot.
+	// rather than a silent no-match. Once this passes the per-entity
+	// matches below cannot error.
 	if pattern != "" {
-		if _, err := path.Match(pattern, "domain.entity"); err != nil {
+		if err := homeassistant.ValidateEntityGlob(pattern); err != nil {
 			return "", fmt.Errorf("invalid pattern %q: %w", pattern, err)
 		}
 	}
@@ -1282,7 +1281,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 			continue
 		}
 		if pattern != "" {
-			if ok, _ := path.Match(pattern, s.EntityID); !ok {
+			if ok, _ := homeassistant.MatchEntityGlob(pattern, s.EntityID); !ok {
 				continue
 			}
 		}

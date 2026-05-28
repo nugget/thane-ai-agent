@@ -29,7 +29,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -39,6 +38,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -2955,7 +2955,7 @@ func (c *Config) validateMCP() error {
 // for consistency.
 func (c *Config) validateSubscribe() error {
 	for i, glob := range c.HomeAssistant.Subscribe.EntityGlobs {
-		if _, err := path.Match(glob, ""); err != nil {
+		if err := homeassistant.ValidateEntityGlob(glob); err != nil {
 			return fmt.Errorf("homeassistant.subscribe.entity_globs[%d] %q: invalid glob pattern: %w", i, glob, err)
 		}
 	}
