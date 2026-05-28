@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
@@ -61,26 +60,23 @@ type ControlDeviceNoMatchResult struct {
 }
 
 // SuggestEntityNotFound builds the not-found envelope for a missing
-// entity_id, fuzzy-matching it against the live entity set (scoped to the
-// id's own domain when it carries one) so the result surfaces plausible
-// corrections for a typo'd or stale id. It is the shared recovery path for
-// the native HA tools that take an exact entity_id.
+// entity_id, fuzzy-matching it against the live entity set so the result
+// surfaces plausible corrections for a typo'd or stale id. It is the
+// shared recovery path for the native HA tools that take an exact
+// entity_id.
+//
+// The full set is fetched once and matched across all domains: GetEntities
+// pulls the entire state machine regardless of any domain filter (it
+// filters in-process), so domain-scoping would not save a fetch, and the
+// requested id's own domain token already steers the fuzzy ranking toward
+// same-domain candidates. This keeps the tool to a single bulk GetStates
+// per call, per the #1002 performance doctrine.
 //
 // It never returns an error: a discovery failure degrades to an empty
 // candidate list with a note pointing at ha_find_entity, which is still
 // strictly more useful to the model than a raw 404 or a silent no-op.
 func SuggestEntityNotFound(ctx context.Context, ha EntityLister, requested string) string {
-	domain := ""
-	if i := strings.IndexByte(requested, '.'); i > 0 {
-		domain = requested[:i]
-	}
-
-	entities, err := ha.GetEntities(ctx, domain)
-	if (err != nil || len(entities) == 0) && domain != "" {
-		// The domain itself may be the typo (e.g. lights.x vs light.x).
-		// Fall back to the full set so we can still suggest neighbors.
-		entities, err = ha.GetEntities(ctx, "")
-	}
+	entities, err := ha.GetEntities(ctx, "")
 
 	var candidates []EntitySuggestion
 	if err == nil {

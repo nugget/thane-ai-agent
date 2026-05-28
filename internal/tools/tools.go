@@ -1409,10 +1409,23 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 		domain = "lock"
 	}
 
-	// Find the entity
-	entities, err := r.ha.GetEntities(ctx, domain)
+	// Fetch the full entity set once. GetEntities pulls the entire state
+	// machine regardless of any domain filter (it filters in-process), so
+	// fetching all and deriving the domain slice locally keeps this to a
+	// single bulk GetStates — the inferred-domain match and the broaden-on-
+	// miss suggestion both read from the same payload.
+	allEntities, err := r.ha.GetEntities(ctx, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to get entities: %w", err)
+	}
+	entities := allEntities
+	if domain != "" {
+		entities = entities[:0:0]
+		for _, e := range allEntities {
+			if e.Domain == domain {
+				entities = append(entities, e)
+			}
+		}
 	}
 
 	// Build search string
@@ -1426,19 +1439,18 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	if len(matches) == 0 {
 		// The inferred domain may be wrong, so broaden to all domains to
 		// suggest candidates — but do not act on a low-confidence
-		// cross-domain guess. Return them for the model to confirm.
+		// cross-domain guess. Return them for the model to confirm. Reuse
+		// the already-fetched full set rather than fetching again.
 		var candidates []EntitySuggestion
-		if all, aerr := r.ha.GetEntities(ctx, ""); aerr == nil {
-			for i, m := range fuzzyMatchEntityInfos(searchStr, all) {
-				if i >= maxEntitySuggestions {
-					break
-				}
-				candidates = append(candidates, EntitySuggestion{
-					EntityID:     m.EntityID,
-					FriendlyName: m.FriendlyName,
-					Score:        m.Score,
-				})
+		for i, m := range fuzzyMatchEntityInfos(searchStr, allEntities) {
+			if i >= maxEntitySuggestions {
+				break
 			}
+			candidates = append(candidates, EntitySuggestion{
+				EntityID:     m.EntityID,
+				FriendlyName: m.FriendlyName,
+				Score:        m.Score,
+			})
 		}
 		note := "No device matched and nothing was changed. Confirm one of the candidates, or use ha_find_entity to locate the entity_id, then retry."
 		if len(candidates) == 0 {
