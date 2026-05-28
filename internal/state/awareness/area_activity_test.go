@@ -29,7 +29,8 @@ type fakeAreaClient struct {
 	logbookErr error
 	floorsErr  error
 
-	floorCalls int // how many times GetFloorRegistry was invoked
+	floorCalls  int // how many times GetFloorRegistry was invoked
+	deviceCalls int // how many times GetDeviceRegistry was invoked
 }
 
 func (f *fakeAreaClient) GetAreas(_ context.Context) ([]homeassistant.Area, error) {
@@ -39,6 +40,7 @@ func (f *fakeAreaClient) GetEntityRegistry(_ context.Context) ([]homeassistant.E
 	return f.entities, nil
 }
 func (f *fakeAreaClient) GetDeviceRegistry(_ context.Context) ([]homeassistant.DeviceRegistryEntry, error) {
+	f.deviceCalls++
 	return f.devices, nil
 }
 func (f *fakeAreaClient) GetFloorRegistry(_ context.Context) ([]homeassistant.FloorRegistryEntry, error) {

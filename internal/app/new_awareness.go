@@ -117,6 +117,10 @@ func (a *App) initAwareness(s *newState) error {
 			Client: a.ha,
 			Logger: logger,
 		}))
+		a.loop.Tools().RegisterProvider(awareness.NewHomeSnapshotTools(awareness.HomeSnapshotToolsConfig{
+			Client: a.ha,
+			Logger: logger,
+		}))
 	}
 
 	// --- State change window ---

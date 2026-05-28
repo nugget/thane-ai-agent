@@ -365,26 +365,36 @@ func selectAreaMembers(
 		}
 		counts.TotalMatched++
 
-		if entry.DisabledBy != "" {
-			counts.Disabled++
-			continue
-		}
-		if entry.HiddenBy != "" && !includeHidden {
-			counts.Hidden++
-			continue
-		}
-		if !includeDiagnostic && entry.EntityCategory == "diagnostic" {
-			counts.Diagnostic++
-			continue
-		}
-		if !includeDiagnostic && entry.EntityCategory == "config" {
-			counts.Config++
+		if !keepAfterSalienceFilter(entry, includeDiagnostic, includeHidden, &counts) {
 			continue
 		}
 
 		members = append(members, areaMember{entry: entry, device: device})
 	}
 	return members, counts
+}
+
+// keepAfterSalienceFilter reports whether an entity entry survives the
+// default salience filter applied by the area and home snapshots, and
+// bumps the relevant filtered-count bucket when it doesn't. Disabled
+// entities are always dropped (HA isn't loading them); hidden,
+// diagnostic, and config entities are dropped unless the caller opts
+// into a forensic pass. Shared so the two snapshots apply identical
+// visibility rules rather than each carrying its own copy.
+func keepAfterSalienceFilter(entry homeassistant.EntityRegistryEntry, includeDiagnostic, includeHidden bool, counts *areaFilterCounts) bool {
+	switch {
+	case entry.DisabledBy != "":
+		counts.Disabled++
+	case entry.HiddenBy != "" && !includeHidden:
+		counts.Hidden++
+	case !includeDiagnostic && entry.EntityCategory == "diagnostic":
+		counts.Diagnostic++
+	case !includeDiagnostic && entry.EntityCategory == "config":
+		counts.Config++
+	default:
+		return true
+	}
+	return false
 }
 
 func indexDevices(devices []homeassistant.DeviceRegistryEntry) map[string]*homeassistant.DeviceRegistryEntry {

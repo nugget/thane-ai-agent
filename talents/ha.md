@@ -234,6 +234,27 @@ For *sustained*, every-turn attention to an entity, don't poll this from
 a loop's turn budget — subscribe via `awareness` with history windows
 and let the trend stay current between turns for free.
 
+## I want the whole house at a glance
+
+`ha_home_snapshot` is the curated "how's the house right now" overview —
+the native answer to "what's going on at home", "is the house buttoned
+up", or "who's home":
+
+```json
+{
+  "include_energy": true
+}
+```
+
+Leads with what's actionable: anomalies (offline / in alarm), then
+security/openings (open doors and windows, unlocked locks, armed or
+triggered alarm panels), then presence (who's home vs away), then
+climate. A top-level `summary` gives the counts at a glance, and
+`status: "quiet"` means nothing is offline, open, unlocked, or armed.
+Pass `include_energy` for a power/energy section and `include` for
+per-entity metadata. This is the home-wide view; for one room reach for
+`get_area_activity`, for one device `ha_device`.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities
