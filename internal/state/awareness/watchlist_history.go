@@ -39,9 +39,20 @@ func buildWatchlistHistorySummaries(
 		return nil, truncated, err
 	}
 
+	return summarizeHistorySeries(states, current, windows, now), truncated, nil
+}
+
+// summarizeHistorySeries is the post-fetch half of the history pipeline:
+// it normalizes an already-fetched state series, then produces one
+// numeric-or-discrete summary per lookback window. Split out so the
+// on-demand ha_history tool and the always-on watchlist injection share
+// exactly one summarization implementation rather than diverging copies.
+// windows must already be normalized (positive, deduped, sorted
+// ascending); callers get that from [normalizeHistoryOffsets].
+func summarizeHistorySeries(states []homeassistant.State, current *homeassistant.State, windows []int, now time.Time) []map[string]any {
 	series := normalizeHistoryStates(states, current)
 	if len(series) == 0 {
-		return nil, truncated, nil
+		return nil
 	}
 
 	summaries := make([]map[string]any, 0, len(windows))
@@ -55,8 +66,7 @@ func buildWatchlistHistorySummaries(
 			summaries = append(summaries, summary)
 		}
 	}
-
-	return summaries, truncated, nil
+	return summaries
 }
 
 func mergeHistoryIntoEntityContext(base string, summaries []map[string]any, truncated bool) string {

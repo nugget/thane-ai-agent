@@ -189,7 +189,27 @@ func (c *Client) GetState(ctx context.Context, entityID string) (*State, error) 
 // GetStateHistory retrieves recorder-backed state history for one entity across
 // a time window. The result is sorted in Home Assistant's returned order, which
 // is typically chronological.
+//
+// This is the lean path: it requests no_attributes, so each sample carries only
+// the state value (not its attribute map). It is the right default for the
+// always-on watchlist injection, which trends the state value itself. To trend
+// a value carried in an attribute (e.g. a climate entity's current_temperature),
+// use [Client.GetStateHistoryWithAttributes].
 func (c *Client) GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]State, error) {
+	return c.stateHistory(ctx, entityID, startTime, endTime, false)
+}
+
+// GetStateHistoryWithAttributes retrieves recorder-backed state history for one
+// entity across a time window with each sample's attribute map intact. It is the
+// attributes-enabled counterpart to [Client.GetStateHistory] for callers that
+// need to trend a value living in an attribute rather than the state string.
+// The richer payload is heavier on the recorder, so prefer the lean
+// GetStateHistory unless attributes are actually needed.
+func (c *Client) GetStateHistoryWithAttributes(ctx context.Context, entityID string, startTime, endTime time.Time) ([]State, error) {
+	return c.stateHistory(ctx, entityID, startTime, endTime, true)
+}
+
+func (c *Client) stateHistory(ctx context.Context, entityID string, startTime, endTime time.Time, includeAttributes bool) ([]State, error) {
 	if entityID == "" {
 		return nil, nil
 	}
@@ -197,7 +217,9 @@ func (c *Client) GetStateHistory(ctx context.Context, entityID string, startTime
 	query := url.Values{}
 	query.Set("filter_entity_id", entityID)
 	query.Set("end_time", endTime.UTC().Format(time.RFC3339))
-	query.Set("no_attributes", "1")
+	if !includeAttributes {
+		query.Set("no_attributes", "1")
+	}
 	query.Set("significant_changes_only", "0")
 
 	path := "/api/history/period/" + startTime.UTC().Format(time.RFC3339)

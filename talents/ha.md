@@ -210,6 +210,30 @@ registry name, with a substring fallback, returning candidates when a
 name is ambiguous. Reach for this instead of discovering a device's
 child entities one `ha_get_state` at a time.
 
+## I want to know how something has trended
+
+`ha_history` summarizes one entity's recorder history over a lookback
+window — the native answer to "how has the office temperature moved over
+the last 24h" or "how many times did the front door open today":
+
+```json
+{
+  "entity_id": "sensor.office_temperature",
+  "lookback_seconds": 86400
+}
+```
+
+Returns a numeric trend (min/max/start/end/delta + rising/falling/flat)
+for numeric entities, or a discrete change summary (change count +
+recent states) for non-numeric ones. To trend a value that lives in an
+attribute rather than the state — a `climate` entity's
+`current_temperature`, say — pass `attribute`. Defaults to a 24h window,
+clamped to 30 days.
+
+For *sustained*, every-turn attention to an entity, don't poll this from
+a loop's turn budget — subscribe via `awareness` with history windows
+and let the trend stay current between turns for free.
+
 ## I want richer search across the registry
 
 `ha_registry_search` searches areas, labels, devices, and entities
