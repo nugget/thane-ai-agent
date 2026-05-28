@@ -54,6 +54,7 @@ func TestIntOK(t *testing.T) {
 		{"float64 integral", float64(8), 8, true},
 		{"float64 fractional rejected", 8.5, 0, false},
 		{"json.Number integral", json.Number("9"), 9, true},
+		{"json.Number decimal-integral", json.Number("9.0"), 9, true},
 		{"json.Number fractional rejected", json.Number("9.5"), 0, false},
 		{"string decimal", "395", 395, true},
 		{"string padded", "  42 ", 42, true},

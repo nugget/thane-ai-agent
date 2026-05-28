@@ -89,11 +89,16 @@ func IntOK(args map[string]any, key string) (int, bool) {
 		}
 		return int(v), true
 	case json.Number:
-		n, err := v.Int64()
-		if err != nil {
-			return 0, false
+		if n, err := v.Int64(); err == nil {
+			return int(n), true
 		}
-		return int(n), true
+		// Decimal-form integral values (e.g. "9.0") fail Int64 but still
+		// satisfy the integer contract; parse as float and apply the
+		// same integrality check as the float64 case.
+		if f, err := v.Float64(); err == nil && f == float64(int(f)) {
+			return int(f), true
+		}
+		return 0, false
 	case string:
 		n, err := strconv.Atoi(strings.TrimSpace(v))
 		if err != nil {
