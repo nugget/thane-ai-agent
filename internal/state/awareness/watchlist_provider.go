@@ -113,7 +113,11 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	if body.Len() == 0 {
 		return "", nil
 	}
-	return "### Watched Entities\n\n" + body.String(), nil
+	return "### Watched Entities\n\n" +
+		"_This is a keyhole onto a few subscribed entities, not the house. " +
+		"For anything wider — another room, a device, live state, history, " +
+		"control, or automations — activate the `ha` capability tag._\n\n" +
+		body.String(), nil
 }
 
 func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
