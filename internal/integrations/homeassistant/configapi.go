@@ -1,6 +1,7 @@
 package homeassistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -61,8 +62,8 @@ type DeviceRegistryEntry struct {
 	ModelID               string               `json:"model_id"`
 	Name                  string               `json:"name"`
 	Labels                []string             `json:"labels"`
-	SWVersion             string               `json:"sw_version"`
-	HWVersion             string               `json:"hw_version"`
+	SWVersion             flexString           `json:"sw_version"`
+	HWVersion             flexString           `json:"hw_version"`
 	SerialNumber          string               `json:"serial_number"`
 	ViaDeviceID           string               `json:"via_device_id"`
 	AreaID                string               `json:"area_id"`
@@ -71,6 +72,35 @@ type DeviceRegistryEntry struct {
 	DisabledBy            string               `json:"disabled_by"`
 	ConfigurationURL      string               `json:"configuration_url"`
 	PrimaryConfigEntry    string               `json:"primary_config_entry"`
+}
+
+// flexString is a string field that tolerates a JSON value that is a string,
+// number, boolean, or null. Home Assistant lets integrations report device
+// fields such as sw_version / hw_version as either a string ("1.2.3") or a
+// bare number (e.g. 2 or 2.3); a single numeric value would otherwise fail
+// the entire device_registry/list unmarshal and take down every
+// device-level lookup.
+type flexString string
+
+// UnmarshalJSON accepts a JSON string, number, boolean, or null. Strings
+// decode normally, any other scalar is kept as its raw literal, and null
+// becomes the empty string — so one oddly-typed field never fails the
+// surrounding decode.
+func (s *flexString) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	switch {
+	case len(data) == 0 || string(data) == "null":
+		*s = ""
+	case data[0] == '"':
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		*s = flexString(str)
+	default:
+		*s = flexString(data)
+	}
+	return nil
 }
 
 // ConfigValidationResult mirrors Home Assistant's validate_config response.
