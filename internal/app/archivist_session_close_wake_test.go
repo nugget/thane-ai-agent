@@ -31,8 +31,9 @@ func newQueueTestApp(t *testing.T) (*App, *loopqueue.Store) {
 func TestEnqueueSessionCloseWork(t *testing.T) {
 	a, store := newQueueTestApp(t)
 	const sessionID = "019e6867-00fc-7d6d-88be-58fab5c173c4"
+	const convID = "signal-15125551234" // interactive origin → archivable
 
-	if err := a.enqueueSessionCloseWork(context.Background(), sessionID, "idle_timeout"); err != nil {
+	if err := a.enqueueSessionCloseWork(context.Background(), sessionID, convID, "idle_timeout"); err != nil {
 		t.Fatalf("enqueueSessionCloseWork: %v", err)
 	}
 
@@ -52,7 +53,7 @@ func TestEnqueueSessionCloseWork(t *testing.T) {
 	}
 
 	// Re-enqueue of the same session coalesces (dedup), not duplicates.
-	if err := a.enqueueSessionCloseWork(context.Background(), sessionID, "again"); err != nil {
+	if err := a.enqueueSessionCloseWork(context.Background(), sessionID, convID, "again"); err != nil {
 		t.Fatalf("re-enqueue: %v", err)
 	}
 	if n, _ := store.PendingCount(context.Background(), archivist.DefinitionName); n != 1 {
@@ -62,7 +63,57 @@ func TestEnqueueSessionCloseWork(t *testing.T) {
 
 func TestEnqueueSessionCloseWork_EmptySessionID(t *testing.T) {
 	a, _ := newQueueTestApp(t)
-	if err := a.enqueueSessionCloseWork(context.Background(), "", "x"); err == nil {
+	if err := a.enqueueSessionCloseWork(context.Background(), "", "signal-x", "x"); err == nil {
 		t.Fatal("enqueueSessionCloseWork with empty session_id should error")
+	}
+}
+
+// TestEnqueueSessionCloseWork_SkipsAutomationOrigins verifies the archival
+// policy (issue #1024): sessions from autonomous/automation/auxiliary origins
+// are not enqueued for the archivist, so it isn't drowned in service-loop and
+// scheduled-task bookkeeping — while an interactive origin still enqueues.
+func TestEnqueueSessionCloseWork_SkipsAutomationOrigins(t *testing.T) {
+	a, store := newQueueTestApp(t)
+	for _, convID := range []string{
+		"loop-metacognitive-3-1780000000000",
+		"sched-019c8366-b115-7203-88f7-b765f7c068be-019d6487",
+		"metacog-abc",
+		"owu-auxiliary",
+	} {
+		if err := a.enqueueSessionCloseWork(context.Background(), "sess-"+convID, convID, "idle_timeout"); err != nil {
+			t.Fatalf("enqueue %s: %v", convID, err)
+		}
+	}
+	if n, _ := store.PendingCount(context.Background(), archivist.DefinitionName); n != 0 {
+		t.Errorf("automation-origin sessions enqueued %d items, want 0", n)
+	}
+
+	if err := a.enqueueSessionCloseWork(context.Background(), "sess-real", "signal-15125551234", "idle_timeout"); err != nil {
+		t.Fatalf("enqueue interactive: %v", err)
+	}
+	if n, _ := store.PendingCount(context.Background(), archivist.DefinitionName); n != 1 {
+		t.Errorf("after interactive enqueue, pending = %d, want 1", n)
+	}
+}
+
+func TestIsArchivableSession(t *testing.T) {
+	cases := []struct {
+		conv string
+		want bool
+	}{
+		{"signal-15125551234", true},
+		{"email-handler-1", true},
+		{"delegate-abc", true},
+		{"media-feed-1", true},
+		{"", true}, // unknown/empty origin defaults archivable (don't drop substance)
+		{"loop-metacognitive-1-2", false},
+		{"sched-task-exec", false},
+		{"metacog-1", false},
+		{"owu-auxiliary", false},
+	}
+	for _, tc := range cases {
+		if got := isArchivableSession(tc.conv); got != tc.want {
+			t.Errorf("isArchivableSession(%q) = %v, want %v", tc.conv, got, tc.want)
+		}
 	}
 }

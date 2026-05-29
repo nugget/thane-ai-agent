@@ -43,7 +43,7 @@ func TestArchivistPrompt_SingleDrainMode(t *testing.T) {
 	}
 	for _, phrase := range []string{
 		"Pull your queue",
-		"Ack what you finished",
+		"Ack every item you handle",
 		"summarizer owns",
 		"do NOT spawn loops",
 	} {

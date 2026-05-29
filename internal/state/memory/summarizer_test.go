@@ -742,7 +742,7 @@ func TestWorker_ArchivistEnqueueStillSummarizes(t *testing.T) {
 		BatchSize:    10,
 	}
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
-	w.SetArchivistEnqueue(func(_ context.Context, sessionID, _ string) error {
+	w.SetArchivistEnqueue(func(_ context.Context, sessionID, _, _ string) error {
 		mu.Lock()
 		enqueued = append(enqueued, sessionID)
 		mu.Unlock()
@@ -809,7 +809,7 @@ func TestWorker_ArchivistEnqueueFailureStillSummarizes(t *testing.T) {
 		BatchSize:    10,
 	}
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
-	w.SetArchivistEnqueue(func(_ context.Context, _, _ string) error {
+	w.SetArchivistEnqueue(func(_ context.Context, _, _, _ string) error {
 		return fmt.Errorf("simulated archivist queue unavailable")
 	})
 
