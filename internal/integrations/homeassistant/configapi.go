@@ -55,19 +55,19 @@ type DeviceRegistryEntry struct {
 	ID                    string               `json:"id"`
 	ConfigEntries         []string             `json:"config_entries"`
 	ConfigEntriesSubentry map[string][]*string `json:"config_entries_subentries"`
-	Connections           [][]string           `json:"connections"`
-	Identifiers           [][]string           `json:"identifiers"`
-	Manufacturer          string               `json:"manufacturer"`
-	Model                 string               `json:"model"`
-	ModelID               string               `json:"model_id"`
-	Name                  string               `json:"name"`
+	Connections           [][]flexString       `json:"connections"`
+	Identifiers           [][]flexString       `json:"identifiers"`
+	Manufacturer          flexString           `json:"manufacturer"`
+	Model                 flexString           `json:"model"`
+	ModelID               flexString           `json:"model_id"`
+	Name                  flexString           `json:"name"`
 	Labels                []string             `json:"labels"`
 	SWVersion             flexString           `json:"sw_version"`
 	HWVersion             flexString           `json:"hw_version"`
-	SerialNumber          string               `json:"serial_number"`
+	SerialNumber          flexString           `json:"serial_number"`
 	ViaDeviceID           string               `json:"via_device_id"`
 	AreaID                string               `json:"area_id"`
-	NameByUser            string               `json:"name_by_user"`
+	NameByUser            flexString           `json:"name_by_user"`
 	EntryType             string               `json:"entry_type"`
 	DisabledBy            string               `json:"disabled_by"`
 	ConfigurationURL      string               `json:"configuration_url"`

@@ -68,3 +68,94 @@ func TestDeviceRegistryEntry_NumericVersionDoesNotFailDecode(t *testing.T) {
 		t.Errorf("device[2].SWVersion = %q, want empty", got)
 	}
 }
+
+// TestDeviceRegistryEntry_AllIntegrationFieldsTolerateNumbers is the broad
+// guarantee behind this hardening: HA does not strictly validate integration
+// input, so every integration-supplied device field can arrive as a number —
+// and none of them may fail the device_registry/list decode. Each numeric
+// value is coerced to its string form, including elements nested inside the
+// identifiers/connections tuples.
+func TestDeviceRegistryEntry_AllIntegrationFieldsTolerateNumbers(t *testing.T) {
+	raw := `[{
+		"id":"a",
+		"manufacturer":3,
+		"model":650,
+		"model_id":42,
+		"name":12345,
+		"name_by_user":99,
+		"serial_number":1234567890,
+		"sw_version":2,
+		"hw_version":1.5,
+		"identifiers":[["mqtt",42],["hue","light-1"]],
+		"connections":[["mac",112233]]
+	}]`
+
+	var devices []DeviceRegistryEntry
+	if err := json.Unmarshal([]byte(raw), &devices); err != nil {
+		t.Fatalf("decode device list with all-numeric fields: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("decoded %d devices, want 1", len(devices))
+	}
+	d := devices[0]
+
+	got := map[string]string{
+		"manufacturer":  string(d.Manufacturer),
+		"model":         string(d.Model),
+		"model_id":      string(d.ModelID),
+		"name":          string(d.Name),
+		"name_by_user":  string(d.NameByUser),
+		"serial_number": string(d.SerialNumber),
+		"sw_version":    string(d.SWVersion),
+		"hw_version":    string(d.HWVersion),
+	}
+	want := map[string]string{
+		"manufacturer":  "3",
+		"model":         "650",
+		"model_id":      "42",
+		"name":          "12345",
+		"name_by_user":  "99",
+		"serial_number": "1234567890",
+		"sw_version":    "2",
+		"hw_version":    "1.5",
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q", k, got[k], w)
+		}
+	}
+
+	if len(d.Identifiers) != 2 || string(d.Identifiers[0][1]) != "42" {
+		t.Errorf("numeric identifier element not coerced: %+v", d.Identifiers)
+	}
+	if len(d.Connections) != 1 || string(d.Connections[0][1]) != "112233" {
+		t.Errorf("numeric connection element not coerced: %+v", d.Connections)
+	}
+}
+
+// TestEntityRegistryEntry_NumericFieldsTolerated covers the entity-registry
+// counterpart: a numeric unique_id (common — integrations use raw device IDs)
+// or original_name must not fail the entity_registry/list decode. unique_id
+// has no readers, but the decode still crashed on it before this fix.
+func TestEntityRegistryEntry_NumericFieldsTolerated(t *testing.T) {
+	raw := `[
+		{"entity_id":"sensor.a","unique_id":1234567890,"original_name":42},
+		{"entity_id":"sensor.b","unique_id":"abc-123","original_name":"Temp"}
+	]`
+	var entries []EntityRegistryEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("decode entity list: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("decoded %d entities, want 2", len(entries))
+	}
+	if got := string(entries[0].UniqueID); got != "1234567890" {
+		t.Errorf("entries[0].UniqueID = %q, want \"1234567890\"", got)
+	}
+	if got := string(entries[0].OriginalName); got != "42" {
+		t.Errorf("entries[0].OriginalName = %q, want \"42\"", got)
+	}
+	if got := string(entries[1].UniqueID); got != "abc-123" {
+		t.Errorf("entries[1].UniqueID = %q, want \"abc-123\"", got)
+	}
+}

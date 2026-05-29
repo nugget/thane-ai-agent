@@ -353,7 +353,7 @@ type EntityRegistryEntry struct {
 	ID                  string            `json:"id"`
 	EntityID            string            `json:"entity_id"`
 	Name                string            `json:"name"`
-	OriginalName        string            `json:"original_name"`
+	OriginalName        flexString        `json:"original_name"`
 	Description         string            `json:"description"`
 	Aliases             []string          `json:"aliases"`
 	AreaID              string            `json:"area_id"`
@@ -368,7 +368,7 @@ type EntityRegistryEntry struct {
 	DeviceClass         string            `json:"device_class"`
 	OriginalDeviceClass string            `json:"original_device_class"`
 	HasEntityName       bool              `json:"has_entity_name"`
-	UniqueID            string            `json:"unique_id"`
+	UniqueID            flexString        `json:"unique_id"`
 	TranslationKey      string            `json:"translation_key"`
 	Options             map[string]any    `json:"options"`
 	Categories          map[string]string `json:"categories"`
