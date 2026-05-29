@@ -4,34 +4,68 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 )
 
-// sessionCloseEnqueueTimeout caps how long the ArchiveStore.EndSession
-// callback waits to enqueue archivist work. The callback runs
-// synchronously in the goroutine that closed the session, so it must not
-// block forever if the queue store is locked or shutting down.
-const sessionCloseEnqueueTimeout = 2 * time.Second
-
-// enqueueSessionCloseWork records a closed session as a pending work item
-// in the archivist's durable queue, keyed dedup on "session:<id>" so the
-// same session can't pile up. It does NOT wake the archivist — the
-// archivist is a self-paced consumer that drains its queue on its own
-// cadence (issue #1024). This is wired into both the real-time
-// EndSession callback and the summarizer's backstop scan; sharing it
-// keeps the enqueue shape identical on both paths.
+// archivistAutomationOrigins are conversation-id prefixes whose sessions
+// carry no dossier-worthy evidence: autonomous service-loop iterations,
+// scheduled-task runs, metacognitive bookkeeping, and auxiliary utility
+// traffic. Sessions from these origins are never enqueued for the archivist.
 //
-// Signature matches the summarizer's wake-callback type so it can be
-// registered there unchanged.
-func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, reason string) error {
+// This is a denylist on purpose — any origin NOT named here (interactive
+// channels like signal-/email-, delegate work, external events) is treated
+// as archivable, so the rare substantive case is never silently dropped.
+// The archivist-queue flood that motivated this (issue #1024) was exactly
+// these: loop- service iterations, sched- automation, metacog- bookkeeping.
+var archivistAutomationOrigins = []string{
+	"loop-",         // self-paced service loops (metacognitive, pollers, HA automations)
+	"sched-",        // scheduled tasks
+	"metacog-",      // metacognitive bookkeeping
+	"owu-auxiliary", // open-webui auxiliary requests ONLY — real OWU chats are owu-<hash> and stay archivable
+}
+
+// isArchivableSession reports whether a closed session is worth folding into
+// dossiers, judged solely from its conversation origin — a deterministic
+// property, no LLM call or content scan. Automation/auxiliary origins are
+// skipped; everything else is archivable.
+func isArchivableSession(conversationID string) bool {
+	for _, prefix := range archivistAutomationOrigins {
+		if strings.HasPrefix(conversationID, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+// enqueueSessionCloseWork records a closed session as a pending work item in
+// the archivist's durable queue, keyed dedup on "session:<id>" so the same
+// session can't pile up. It does NOT wake the archivist — the archivist is a
+// self-paced consumer that drains its queue on its own cadence (issue #1024).
+//
+// Only sessions with conversational substance are enqueued: autonomous,
+// scheduled, and auxiliary origins are filtered out by [isArchivableSession]
+// so the archivist isn't drowned in automation bookkeeping. The signature
+// matches the summarizer's enqueue hook, which is the single enqueue gate
+// (it processes every closed session and carries the conversation origin).
+func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, conversationID, reason string) error {
 	if a.loopQueue == nil {
 		return fmt.Errorf("loop queue not configured")
 	}
 	if sessionID == "" {
 		return fmt.Errorf("empty session_id")
+	}
+	if !isArchivableSession(conversationID) {
+		if a.logger != nil {
+			a.logger.Debug("archivist: skipping non-archival session origin",
+				"session_id", sessionID,
+				"conversation_id", conversationID,
+			)
+		}
+		return nil
 	}
 	payload := messages.LoopNotifyPayload{
 		Events: []messages.LoopEventPayload{{
@@ -40,8 +74,9 @@ func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, reason str
 			ID:         sessionID,
 			ObservedAt: time.Now().UTC(),
 			Metadata: map[string]string{
-				"session_id": sessionID,
-				"reason":     reason,
+				"session_id":      sessionID,
+				"conversation_id": conversationID,
+				"reason":          reason,
 			},
 		}},
 	}
@@ -55,17 +90,19 @@ func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, reason str
 	return nil
 }
 
-// wireSessionCloseToArchivistQueue installs the [memory.ArchiveStore]
-// session-close callback that enqueues archivist work every time a
-// session ends, AND the equivalent backstop on the SummarizerWorker scan
-// path. The EndSession callback is real-time; the summarizer scan catches
-// any session whose real-time enqueue was dropped (queue locked, restart
-// mid-callback). Both paths enqueue — neither wakes the archivist.
+// wireSessionCloseToArchivistQueue makes the SummarizerWorker the single gate
+// that enqueues archivist work. The summarizer already processes every closed
+// session (to stamp its title/tags) and has the full session context —
+// including the conversation origin the archival filter keys on — so it is the
+// natural and only place to decide what becomes dossier work.
 //
-// Skipped when archivist.enabled is false or the queue is absent: there
-// is no consumer, so don't accumulate work. The summarizer still stamps
-// session metadata itself either way (it no longer defers that to the
-// archivist — see [memory.SummarizerWorker.summarizeSession]).
+// The former real-time EndSession callback was dropped: it saw only
+// sessionID/reason, so it could not apply the origin filter, and its
+// few-minutes latency advantage is irrelevant to the hourly, self-paced
+// archivist. One gate, not two (issue #1024).
+//
+// Skipped when archivist.enabled is false or the queue is absent: there is no
+// consumer, so don't accumulate work.
 func (a *App) wireSessionCloseToArchivistQueue() {
 	if a == nil || a.archiveStore == nil || a.loopQueue == nil {
 		return
@@ -73,37 +110,18 @@ func (a *App) wireSessionCloseToArchivistQueue() {
 	if a.cfg == nil || !a.cfg.Archivist.Enabled {
 		return
 	}
-
-	logger := a.logger
-
-	// Real-time path: EndSession callback.
-	a.archiveStore.SetSessionCloseCallback(func(sessionID, reason string) {
-		ctx, cancel := context.WithTimeout(context.Background(), sessionCloseEnqueueTimeout)
-		defer cancel()
-		if err := a.enqueueSessionCloseWork(ctx, sessionID, reason); err != nil {
-			// The summarizer scan re-enqueues anything the real-time
-			// path missed on its next pass; no further action here.
-			if logger != nil {
-				logger.Debug("archivist session-close enqueue failed (summarizer backstop will handle)",
-					"session_id", sessionID,
-					"reason", reason,
-					"error", err,
-				)
-			}
+	if a.summaryWorker == nil {
+		if a.logger != nil {
+			a.logger.Warn("archivist enabled but summarizer worker absent; no session-close enqueue path")
 		}
-	})
-
-	// Backstop path: summarizer scan re-enqueues anything the real-time
-	// path missed. The summarizer stamps metadata regardless.
-	if a.summaryWorker != nil {
-		a.summaryWorker.SetArchivistEnqueue(a.enqueueSessionCloseWork)
+		return
 	}
 
-	if logger != nil {
-		logger.Info("archivist session-close queue wired",
+	a.summaryWorker.SetArchivistEnqueue(a.enqueueSessionCloseWork)
+
+	if a.logger != nil {
+		a.logger.Info("archivist session-close queue wired (summarizer gate)",
 			"loop", archivist.DefinitionName,
-			"timeout", sessionCloseEnqueueTimeout,
-			"backstop", a.summaryWorker != nil,
 		)
 	}
 }

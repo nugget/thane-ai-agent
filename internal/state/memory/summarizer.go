@@ -98,7 +98,7 @@ type SummarizerWorker struct {
 	// session's own metadata. Wired by the app when the archivist loop is
 	// enabled (#989, #1024). When unset, the enqueue is simply skipped;
 	// metadata generation is unaffected either way.
-	archivistEnqueue func(ctx context.Context, sessionID, reason string) error
+	archivistEnqueue func(ctx context.Context, sessionID, conversationID, reason string) error
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -128,7 +128,7 @@ func NewSummarizerWorker(store *ArchiveStore, llmClient llm.Client, rtr *router.
 // disables the enqueue side effect.
 //
 // Called from the app wiring whenever the archivist loop is enabled.
-func (w *SummarizerWorker) SetArchivistEnqueue(cb func(ctx context.Context, sessionID, reason string) error) {
+func (w *SummarizerWorker) SetArchivistEnqueue(cb func(ctx context.Context, sessionID, conversationID, reason string) error) {
 	w.archivistEnqueue = cb
 }
 
@@ -366,7 +366,7 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 	// session forever; generating metadata unconditionally fixes that
 	// and removes the wake-amplification that DoSed the loop.)
 	if w.archivistEnqueue != nil {
-		if err := w.archivistEnqueue(ctx, sess.ID, sess.EndReason); err != nil {
+		if err := w.archivistEnqueue(ctx, sess.ID, sess.ConversationID, sess.EndReason); err != nil {
 			w.logger.Debug("archivist enqueue failed (session still summarized here)",
 				"session", ShortID(sess.ID),
 				"error", err,

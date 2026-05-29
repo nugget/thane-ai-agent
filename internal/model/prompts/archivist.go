@@ -62,9 +62,13 @@ and notes — NOT the work queue (the durable queue holds that).
    Structure each claim with an evidence citation — an archive session
    ID, a fact category+key, a document ref, or a working-memory
    conversation ID — so a reader can check any claim against its source.
-4. **Ack what you finished** — Call ` + "`queue_ack`" + ` with each item's subject
-   once its evidence is folded in. Unacked items return next iteration,
-   so an interrupted pass is safe.
+4. **Ack every item you handle** — Call ` + "`queue_ack`" + ` with each item's
+   subject once you have handled it, whether or not it produced a dossier.
+   Acking means "I am done with this item," not "I created a dossier": a
+   session with nothing worth folding is still acked — read it, decide there
+   is nothing, ack it. Unacked items return every iteration forever and
+   starve the queue (an empty item at the head blocks everything behind it),
+   so never leave a handled item unacked.
 5. **Enqueue what you discovered** — When folding a subject in surfaces
    a related subject worth its own dossier (a connected entity, a sibling
    area), call ` + "`queue_enqueue`" + ` to add it to your queue for a future
