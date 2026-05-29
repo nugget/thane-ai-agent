@@ -105,11 +105,12 @@ func TestIsArchivableSession(t *testing.T) {
 		{"email-handler-1", true},
 		{"delegate-abc", true},
 		{"media-feed-1", true},
-		{"", true}, // unknown/empty origin defaults archivable (don't drop substance)
+		{"owu-a1b2c3d4e5f6a7b8", true}, // real OWU chat (owu-<hash>) is substantive
+		{"", true},                     // unknown/empty origin defaults archivable (don't drop substance)
 		{"loop-metacognitive-1-2", false},
 		{"sched-task-exec", false},
 		{"metacog-1", false},
-		{"owu-auxiliary", false},
+		{"owu-auxiliary", false}, // only the fixed auxiliary id is skipped
 	}
 	for _, tc := range cases {
 		if got := isArchivableSession(tc.conv); got != tc.want {

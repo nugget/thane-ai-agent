@@ -22,10 +22,10 @@ import (
 // The archivist-queue flood that motivated this (issue #1024) was exactly
 // these: loop- service iterations, sched- automation, metacog- bookkeeping.
 var archivistAutomationOrigins = []string{
-	"loop-",    // self-paced service loops (metacognitive, pollers, HA automations)
-	"sched-",   // scheduled tasks
-	"metacog-", // metacognitive bookkeeping
-	"owu-",     // open-webui auxiliary requests
+	"loop-",         // self-paced service loops (metacognitive, pollers, HA automations)
+	"sched-",        // scheduled tasks
+	"metacog-",      // metacognitive bookkeeping
+	"owu-auxiliary", // open-webui auxiliary requests ONLY — real OWU chats are owu-<hash> and stay archivable
 }
 
 // isArchivableSession reports whether a closed session is worth folding into
