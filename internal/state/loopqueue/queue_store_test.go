@@ -25,10 +25,10 @@ func newTestStore(t *testing.T) *Store {
 func TestStore_EnqueuePeekAck(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.Enqueue("archivist", "session:abc", 0, []byte(`{"kind":"k"}`)); err != nil {
+	if err := s.Enqueue(t.Context(), "archivist", "session:abc", 0, []byte(`{"kind":"k"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	items, err := s.Peek("archivist", 10)
+	items, err := s.Peek(t.Context(), "archivist", 10)
 	if err != nil {
 		t.Fatalf("peek: %v", err)
 	}
@@ -45,14 +45,14 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 		t.Errorf("enqueued_at not parsed")
 	}
 
-	if err := s.Ack("archivist", "session:abc"); err != nil {
+	if err := s.Ack(t.Context(), "archivist", "session:abc"); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
-	if n, _ := s.PendingCount("archivist"); n != 0 {
+	if n, _ := s.PendingCount(t.Context(), "archivist"); n != 0 {
 		t.Errorf("pending after ack = %d, want 0", n)
 	}
 	// Ack of a missing key is a no-op, not an error.
-	if err := s.Ack("archivist", "session:gone"); err != nil {
+	if err := s.Ack(t.Context(), "archivist", "session:gone"); err != nil {
 		t.Errorf("ack missing: %v", err)
 	}
 }
@@ -60,22 +60,22 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	s := newTestStore(t)
 
-	if err := s.Enqueue("archivist", "entity:foo", 1, []byte(`{"v":1}`)); err != nil {
+	if err := s.Enqueue(t.Context(), "archivist", "entity:foo", 1, []byte(`{"v":1}`)); err != nil {
 		t.Fatalf("enqueue 1: %v", err)
 	}
 	// Re-enqueue same key with higher priority + new payload: coalesce.
-	if err := s.Enqueue("archivist", "entity:foo", 5, []byte(`{"v":2}`)); err != nil {
+	if err := s.Enqueue(t.Context(), "archivist", "entity:foo", 5, []byte(`{"v":2}`)); err != nil {
 		t.Fatalf("enqueue 2: %v", err)
 	}
 	// Re-enqueue with lower priority must not demote.
-	if err := s.Enqueue("archivist", "entity:foo", 2, []byte(`{"v":3}`)); err != nil {
+	if err := s.Enqueue(t.Context(), "archivist", "entity:foo", 2, []byte(`{"v":3}`)); err != nil {
 		t.Fatalf("enqueue 3: %v", err)
 	}
 
-	if n, _ := s.PendingCount("archivist"); n != 1 {
+	if n, _ := s.PendingCount(t.Context(), "archivist"); n != 1 {
 		t.Fatalf("pending = %d, want 1 (coalesced)", n)
 	}
-	items, err := s.Peek("archivist", 10)
+	items, err := s.Peek(t.Context(), "archivist", 10)
 	if err != nil {
 		t.Fatalf("peek: %v", err)
 	}
@@ -93,11 +93,11 @@ func TestStore_PriorityOrdering(t *testing.T) {
 		key  string
 		prio int
 	}{{"a", 0}, {"b", 5}, {"c", 2}} {
-		if err := s.Enqueue("archivist", tc.key, tc.prio, nil); err != nil {
+		if err := s.Enqueue(t.Context(), "archivist", tc.key, tc.prio, nil); err != nil {
 			t.Fatalf("enqueue %s: %v", tc.key, err)
 		}
 	}
-	items, err := s.Peek("archivist", 10)
+	items, err := s.Peek(t.Context(), "archivist", 10)
 	if err != nil {
 		t.Fatalf("peek: %v", err)
 	}
@@ -113,24 +113,24 @@ func TestStore_PriorityOrdering(t *testing.T) {
 
 func TestStore_PartitionIsolation(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Enqueue("archivist", "session:1", 0, nil); err != nil {
+	if err := s.Enqueue(t.Context(), "archivist", "session:1", 0, nil); err != nil {
 		t.Fatalf("enqueue archivist: %v", err)
 	}
-	if err := s.Enqueue("mqtt-sec", "topic:alarm", 0, nil); err != nil {
+	if err := s.Enqueue(t.Context(), "mqtt-sec", "topic:alarm", 0, nil); err != nil {
 		t.Fatalf("enqueue mqtt: %v", err)
 	}
 	// Same dedup_key in a different partition is a distinct item.
-	if err := s.Enqueue("mqtt-sec", "session:1", 0, nil); err != nil {
+	if err := s.Enqueue(t.Context(), "mqtt-sec", "session:1", 0, nil); err != nil {
 		t.Fatalf("enqueue mqtt dup-key: %v", err)
 	}
 
-	if n, _ := s.PendingCount("archivist"); n != 1 {
+	if n, _ := s.PendingCount(t.Context(), "archivist"); n != 1 {
 		t.Errorf("archivist pending = %d, want 1", n)
 	}
-	if n, _ := s.PendingCount("mqtt-sec"); n != 2 {
+	if n, _ := s.PendingCount(t.Context(), "mqtt-sec"); n != 2 {
 		t.Errorf("mqtt-sec pending = %d, want 2", n)
 	}
-	items, _ := s.Peek("archivist", 10)
+	items, _ := s.Peek(t.Context(), "archivist", 10)
 	if len(items) != 1 || items[0].DedupKey != "session:1" {
 		t.Errorf("archivist peek leaked another partition: %+v", items)
 	}

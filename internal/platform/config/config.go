@@ -2015,6 +2015,8 @@ func rejectRetiredKeys(data []byte) error {
 		switch keyNode.Value {
 		case "platform":
 			return fmt.Errorf("config has top-level platform: section, which was renamed to companion: in v0.9.x. Rename it (the field shape is unchanged) and re-load")
+		case "curator":
+			return fmt.Errorf("config has top-level curator: section, which was renamed to archivist: when the loop became a self-paced queue consumer. Rename it (the field shape is unchanged) and re-load")
 		case "capability_tags":
 			if err := rejectRetiredCapabilityTagKeys(valueNode); err != nil {
 				return err

@@ -148,6 +148,29 @@ platform:
 	}
 }
 
+// TestLoad_RetiredTopLevelCuratorIsRejected guards the curator -> archivist
+// rename (#1024): yaml.v3 silently ignores the now-unknown curator: key, so
+// an operator who forgets to rename the section would get a silently
+// un-configured archivist (defaults only). Load must fail fast pointing at
+// the new key — the same protection as the platform: -> companion: case.
+func TestLoad_RetiredTopLevelCuratorIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+curator:
+  enabled: true
+  min_sleep: 15m
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject top-level curator: section")
+	}
+	if !strings.Contains(err.Error(), "curator:") || !strings.Contains(err.Error(), "archivist:") {
+		t.Errorf("error %q should mention both curator: and archivist:", err)
+	}
+}
+
 // TestLoad_RetiredCapabilityToolsKeyRejected guards the capability_tag
 // schema redesign: the legacy tools: replace-list was retired in favor
 // of the additive include:/exclude: pair. Load must fail with an

@@ -36,7 +36,7 @@ func TestEnqueueSessionCloseWork(t *testing.T) {
 		t.Fatalf("enqueueSessionCloseWork: %v", err)
 	}
 
-	items, err := store.Peek(archivist.DefinitionName, 10)
+	items, err := store.Peek(context.Background(), archivist.DefinitionName, 10)
 	if err != nil {
 		t.Fatalf("peek: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestEnqueueSessionCloseWork(t *testing.T) {
 	if err := a.enqueueSessionCloseWork(context.Background(), sessionID, "again"); err != nil {
 		t.Fatalf("re-enqueue: %v", err)
 	}
-	if n, _ := store.PendingCount(archivist.DefinitionName); n != 1 {
+	if n, _ := store.PendingCount(context.Background(), archivist.DefinitionName); n != 1 {
 		t.Errorf("pending after re-enqueue = %d, want 1 (coalesced)", n)
 	}
 }

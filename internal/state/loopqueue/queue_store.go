@@ -11,6 +11,7 @@
 package loopqueue
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -61,7 +62,7 @@ func NewStore(db *sql.DB, logger *slog.Logger) (*Store, error) {
 // can't starve older work; priority is raised to MAX(old, new) so a
 // high-priority re-enqueue can promote but a low-priority duplicate
 // can't silently demote.
-func (s *Store) Enqueue(consumerLoop, dedupKey string, priority int, payload []byte) error {
+func (s *Store) Enqueue(ctx context.Context, consumerLoop, dedupKey string, priority int, payload []byte) error {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	dedupKey = strings.TrimSpace(dedupKey)
 	if consumerLoop == "" {
@@ -73,7 +74,7 @@ func (s *Store) Enqueue(consumerLoop, dedupKey string, priority int, payload []b
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at)
 		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(consumer_loop, dedup_key) DO UPDATE SET
@@ -93,7 +94,7 @@ func (s *Store) Enqueue(consumerLoop, dedupKey string, priority int, payload []b
 // state: the single-consumer model acks on completion, so a crash mid-
 // iteration simply leaves the item pending for the next drain
 // (at-least-once). limit <= 0 is treated as 1.
-func (s *Store) Peek(consumerLoop string, limit int) ([]Item, error) {
+func (s *Store) Peek(ctx context.Context, consumerLoop string, limit int) ([]Item, error) {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	if consumerLoop == "" {
 		return nil, fmt.Errorf("loopqueue: consumer_loop is required")
@@ -101,7 +102,7 @@ func (s *Store) Peek(consumerLoop string, limit int) ([]Item, error) {
 	if limit <= 0 {
 		limit = 1
 	}
-	rows, err := s.db.Query(`
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT dedup_key, priority, attempts, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
@@ -137,13 +138,13 @@ func (s *Store) Peek(consumerLoop string, limit int) ([]Item, error) {
 
 // Ack removes a completed item from consumerLoop's partition. A missing
 // (consumerLoop, dedupKey) is a no-op (idempotent).
-func (s *Store) Ack(consumerLoop, dedupKey string) error {
+func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	dedupKey = strings.TrimSpace(dedupKey)
 	if consumerLoop == "" || dedupKey == "" {
 		return fmt.Errorf("loopqueue: consumer_loop and dedup_key are required")
 	}
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
 		consumerLoop, dedupKey,
 	)
@@ -152,9 +153,9 @@ func (s *Store) Ack(consumerLoop, dedupKey string) error {
 
 // PendingCount returns the number of pending items in consumerLoop's
 // partition. Useful for queue-health observability and tests.
-func (s *Store) PendingCount(consumerLoop string) (int, error) {
+func (s *Store) PendingCount(ctx context.Context, consumerLoop string) (int, error) {
 	var n int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM loop_queue WHERE consumer_loop = ? AND status = ?`,
 		strings.TrimSpace(consumerLoop), StatusPending,
 	).Scan(&n)

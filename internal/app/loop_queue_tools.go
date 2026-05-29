@@ -47,7 +47,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 					},
 				},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				limit, err := intFromMap(args, "limit")
 				if err != nil {
 					return "", fmt.Errorf("limit: %w", err)
@@ -58,7 +58,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				if limit > queuePullMaxLimit {
 					limit = queuePullMaxLimit
 				}
-				items, err := store.Peek(loopName, limit)
+				items, err := store.Peek(ctx, loopName, limit)
 				if err != nil {
 					return "", err
 				}
@@ -93,12 +93,12 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				},
 				"required": []string{"subject"},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				subject := strings.TrimSpace(stringMapValue(args, "subject"))
 				if subject == "" {
 					return "", fmt.Errorf("subject is required")
 				}
-				if err := store.Ack(loopName, subject); err != nil {
+				if err := store.Ack(ctx, loopName, subject); err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil
@@ -127,7 +127,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				},
 				"required": []string{"subject"},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				subject := strings.TrimSpace(stringMapValue(args, "subject"))
 				if subject == "" {
 					return "", fmt.Errorf("subject is required")
@@ -150,7 +150,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 				if err != nil {
 					return "", fmt.Errorf("marshal payload: %w", err)
 				}
-				if err := store.Enqueue(loopName, subject, priority, raw); err != nil {
+				if err := store.Enqueue(ctx, loopName, subject, priority, raw); err != nil {
 					return "", err
 				}
 				return fmt.Sprintf(`{"status":"ok","subject":%q}`, subject), nil

@@ -26,7 +26,7 @@ const sessionCloseEnqueueTimeout = 2 * time.Second
 //
 // Signature matches the summarizer's wake-callback type so it can be
 // registered there unchanged.
-func (a *App) enqueueSessionCloseWork(_ context.Context, sessionID, reason string) error {
+func (a *App) enqueueSessionCloseWork(ctx context.Context, sessionID, reason string) error {
 	if a.loopQueue == nil {
 		return fmt.Errorf("loop queue not configured")
 	}
@@ -49,7 +49,7 @@ func (a *App) enqueueSessionCloseWork(_ context.Context, sessionID, reason strin
 	if err != nil {
 		return fmt.Errorf("marshal session-close payload: %w", err)
 	}
-	if err := a.loopQueue.Enqueue(archivist.DefinitionName, "session:"+sessionID, 0, raw); err != nil {
+	if err := a.loopQueue.Enqueue(ctx, archivist.DefinitionName, "session:"+sessionID, 0, raw); err != nil {
 		return fmt.Errorf("enqueue session-close work: %w", err)
 	}
 	return nil
