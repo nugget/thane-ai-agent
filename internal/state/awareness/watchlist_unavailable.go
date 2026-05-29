@@ -114,7 +114,7 @@ func compactDeviceInfo(d *homeassistant.DeviceRegistryEntry) map[string]any {
 		info["model"] = d.Model
 	}
 	if d.SWVersion != "" {
-		info["sw_version"] = d.SWVersion
+		info["sw_version"] = string(d.SWVersion)
 	}
 	return info
 }
