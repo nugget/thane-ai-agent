@@ -125,6 +125,15 @@ func TestUpdateEntitySubscriptions_UnknownLoop(t *testing.T) {
 	if !strings.Contains(err.Error(), "no_such_loop") {
 		t.Errorf("error %q should name the missing loop", err)
 	}
+	// The error must teach the next move (docs/model-facing-tools.md §4):
+	// point to the always-visible tool for own-context watches and to the
+	// loop lister for targeting a real loop — the fork the model took wrong
+	// when it passed a conversation id as the loop name.
+	for _, want := range []string{"add_entity_subscription", "loop_definition_list"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unknown-loop error %q should mention %q to teach the next move", err, want)
+		}
+	}
 }
 
 // TestUpdateEntitySubscriptions_AppliesToTaglessLoop covers the

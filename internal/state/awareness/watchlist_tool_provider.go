@@ -58,8 +58,8 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 		{
 			Name: "add_entity_subscription",
 			Description: "Subscribe to a Home Assistant entity so its live state is injected into the model's context. " +
-				"This tool adds always-visible subscriptions: the entity appears in every turn, regardless of which loop or capability tags are active. " +
-				"For loop-scoped subscriptions, use update_entity_subscriptions (by name) or watch_entity (from inside the loop's own turn). " +
+				"This tool adds always-visible subscriptions: the entity appears on every turn regardless of which loop or capability tags are active — this is how you, or a conversation, watch an entity in your own field of view. " +
+				"For a specific named loop's view use update_entity_subscriptions; from inside a loop's own turn use watch_entity. " +
 				"Optional tags carry lens-style classifiers on the subscription itself for future filtering; they no longer act as a scope binding. " +
 				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed.",
 			Parameters: map[string]any{
