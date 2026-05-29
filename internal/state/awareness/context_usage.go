@@ -13,7 +13,7 @@ import (
 // pre-computed by the caller so that formatting is deterministic
 // and free of I/O.
 type ContextUsageInfo struct {
-	// Model is the default model name (e.g., "claude-opus-4-20250514").
+	// Model is the default model name (e.g., "claude-opus-4-8").
 	// The "(routed)" suffix is appended when Routed is true, signaling
 	// that the router may select a different model for this turn.
 	Model string
