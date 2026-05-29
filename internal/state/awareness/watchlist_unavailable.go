@@ -100,18 +100,18 @@ func applyIntegrationContext(payload map[string]any, platform string, registries
 // row does not leak empty keys into the payload.
 func compactDeviceInfo(d *homeassistant.DeviceRegistryEntry) map[string]any {
 	info := map[string]any{}
-	name := d.NameByUser
+	name := string(d.NameByUser)
 	if name == "" {
-		name = d.Name
+		name = string(d.Name)
 	}
 	if name != "" {
 		info["name"] = name
 	}
 	if d.Manufacturer != "" {
-		info["manufacturer"] = d.Manufacturer
+		info["manufacturer"] = string(d.Manufacturer)
 	}
 	if d.Model != "" {
-		info["model"] = d.Model
+		info["model"] = string(d.Model)
 	}
 	if d.SWVersion != "" {
 		info["sw_version"] = string(d.SWVersion)
