@@ -20,6 +20,13 @@ const (
 	defaultWSBackoffInitial    = 2 * time.Second
 	defaultWSBackoffMax        = 60 * time.Second
 	defaultWSBackoffMultiplier = 2.0
+
+	// defaultWSHandshakeTimeout bounds the WS opening handshake and the
+	// subsequent HA auth exchange. DialContext only covers the dial itself,
+	// so without this a connection that is accepted but never completes the
+	// auth_required/auth_ok exchange would block Connect — and the whole
+	// supervisor — forever.
+	defaultWSHandshakeTimeout = 15 * time.Second
 )
 
 // WSClient manages a self-healing WebSocket connection to Home Assistant.
@@ -65,6 +72,7 @@ type WSClient struct {
 	backoffInitial    time.Duration
 	backoffMax        time.Duration
 	backoffMultiplier float64
+	handshakeTimeout  time.Duration
 
 	logger *slog.Logger
 }
@@ -122,6 +130,7 @@ func NewWSClient(baseURL, token string, logger *slog.Logger) *WSClient {
 		backoffInitial:    defaultWSBackoffInitial,
 		backoffMax:        defaultWSBackoffMax,
 		backoffMultiplier: defaultWSBackoffMultiplier,
+		handshakeTimeout:  defaultWSHandshakeTimeout,
 		logger:            logger,
 	}
 }
@@ -137,6 +146,15 @@ func (c *WSClient) SetReconnectBackoff(initial, max time.Duration, multiplier fl
 	}
 	if multiplier >= 1 {
 		c.backoffMultiplier = multiplier
+	}
+}
+
+// SetHandshakeTimeout overrides how long the WS opening handshake and HA
+// auth exchange may take before the attempt is abandoned (and retried by the
+// supervisor). Intended for tests and tuning; call before Start.
+func (c *WSClient) SetHandshakeTimeout(d time.Duration) {
+	if d > 0 {
+		c.handshakeTimeout = d
 	}
 }
 
@@ -221,11 +239,14 @@ func (c *WSClient) NotifyReachable() {
 // (called by applyDesiredSubscriptions → sendSubscribe) which also takes
 // connMu.
 func (c *WSClient) Connect(ctx context.Context) error {
-	// Close any stale connection before dialing a new one.
+	// Tear down any stale connection and mark the client disconnected for
+	// the duration of the (re)connect, so IsConnected reflects reality and
+	// NotifyReachable can still nudge a retry while we dial and handshake.
 	c.connMu.Lock()
 	old := c.conn
 	c.conn = nil
 	c.connMu.Unlock()
+	c.connected.Store(false)
 	if old != nil {
 		old.Close()
 	}
@@ -248,8 +269,9 @@ func (c *WSClient) Connect(ctx context.Context) error {
 
 	// Use custom dialer with larger buffer for big responses (entity registry can be huge).
 	dialer := websocket.Dialer{
-		ReadBufferSize:  1024 * 1024, // 1MB
-		WriteBufferSize: 64 * 1024,   // 64KB
+		ReadBufferSize:   1024 * 1024, // 1MB
+		WriteBufferSize:  64 * 1024,   // 64KB
+		HandshakeTimeout: c.handshakeTimeout,
 	}
 
 	conn, _, err := dialer.DialContext(ctx, u.String(), nil)
@@ -259,6 +281,14 @@ func (c *WSClient) Connect(ctx context.Context) error {
 
 	// Set read limit for large responses (HA can have 12000+ entities).
 	conn.SetReadLimit(100 * 1024 * 1024) // 100MB max message size
+
+	// Bound the auth handshake itself: the dialer's HandshakeTimeout covers
+	// only the WS upgrade, so a connection that upgrades but then never
+	// sends auth_required/auth_ok would block these reads forever. Cleared
+	// right after auth_ok (below), before the long-lived readLoop starts.
+	handshakeDeadline := time.Now().Add(c.handshakeTimeout)
+	_ = conn.SetReadDeadline(handshakeDeadline)
+	_ = conn.SetWriteDeadline(handshakeDeadline)
 
 	// Auth handshake uses the local conn directly — no concurrent readers yet.
 
@@ -300,6 +330,12 @@ func (c *WSClient) Connect(ctx context.Context) error {
 	}
 
 	c.logger.Info("WebSocket authenticated")
+
+	// Clear the handshake deadlines before the long-lived readLoop takes
+	// over: an idle but healthy socket must not inherit a fixed deadline,
+	// or it would trip it and force a needless reconnect.
+	_ = conn.SetReadDeadline(time.Time{})
+	_ = conn.SetWriteDeadline(time.Time{})
 
 	// Publish the authenticated connection so sendAndWait can use it.
 	c.connMu.Lock()

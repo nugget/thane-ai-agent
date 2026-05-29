@@ -18,12 +18,13 @@ import (
 // a test push events, force-drop the live connection, or refuse the first N
 // connections — enough to exercise the self-healing supervisor.
 type fakeHA struct {
-	upgrader   websocket.Upgrader
-	mu         sync.Mutex // guards conns/cur and serializes server-side writes
-	conns      int
-	cur        *websocket.Conn
-	failFirst  int         // close the first N connections right after upgrade
-	subscribed chan string // event_type of each acked subscribe
+	upgrader       websocket.Upgrader
+	mu             sync.Mutex // guards conns/cur and serializes server-side writes
+	conns          int
+	cur            *websocket.Conn
+	failFirst      int         // close the first N connections right after upgrade
+	stallHandshake bool        // upgrade, then never send auth_required (hang)
+	subscribed     chan string // event_type of each acked subscribe
 }
 
 func newFakeHA() *fakeHA {
@@ -50,11 +51,21 @@ func (f *fakeHA) handle(w http.ResponseWriter, r *http.Request) {
 	n := f.conns
 	f.cur = conn
 	fail := n <= f.failFirst
+	stall := f.stallHandshake
 	f.mu.Unlock()
 
 	if fail {
 		conn.Close()
 		return
+	}
+	if stall {
+		// Upgrade succeeds, but auth_required is never sent. Block until the
+		// client abandons the handshake (its deadline) and closes the conn.
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
 	}
 
 	if err := f.write(conn, map[string]any{"type": "auth_required"}); err != nil {
@@ -284,4 +295,56 @@ func TestWSClient_StopsOnContextCancel(t *testing.T) {
 
 	cancel()
 	waitUntil(t, func() bool { return !ws.IsConnected() }, "should disconnect on ctx cancel")
+}
+
+// TestWSClient_HandshakeTimeoutDoesNotHang verifies that a connection which
+// upgrades but never completes the HA auth handshake cannot block Connect
+// forever: the attempt times out and the supervisor keeps retrying. If
+// Connect hung, connCount would stay at 1 and this would never reach 2.
+func TestWSClient_HandshakeTimeoutDoesNotHang(t *testing.T) {
+	f := newFakeHA()
+	f.stallHandshake = true // upgrade succeeds, but auth_required never arrives
+	srv := f.start(t)
+	ws := newFastWS(t, srv.URL)
+	ws.SetHandshakeTimeout(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ws.Start(ctx)
+
+	waitUntil(t, func() bool { return f.connCount() >= 2 },
+		"supervisor should time out the stalled handshake and retry")
+	if ws.IsConnected() {
+		t.Fatal("must not report connected to a server that never completes the auth handshake")
+	}
+}
+
+// TestWSClient_HealthyIdleConnectionStaysUp verifies the handshake deadline
+// is cleared before the long-lived readLoop: a healthy but idle socket must
+// not trip the deadline and force a reconnect. With the deadline leaked, the
+// connection would drop ~one handshake-timeout after connecting.
+func TestWSClient_HealthyIdleConnectionStaysUp(t *testing.T) {
+	f := newFakeHA()
+	srv := f.start(t)
+	ws := newFastWS(t, srv.URL)
+	ws.SetHandshakeTimeout(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := ws.Subscribe(ctx, "state_changed"); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	ws.Start(ctx)
+	waitSubscribe(t, f, "state_changed")
+	waitUntil(t, ws.IsConnected, "initial connect")
+
+	// Stay idle well past the handshake timeout.
+	time.Sleep(150 * time.Millisecond)
+
+	if got := f.connCount(); got != 1 {
+		t.Fatalf("idle healthy connection reconnected (connCount=%d); handshake deadline leaked into readLoop", got)
+	}
+	if !ws.IsConnected() {
+		t.Fatal("idle healthy connection should still be connected")
+	}
 }
