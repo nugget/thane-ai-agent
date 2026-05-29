@@ -117,7 +117,12 @@ func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map
 		// for targeting a real loop, instead of a bare "unknown definition".
 		var unknown *looppkg.UnknownDefinitionError
 		if errors.As(err, &unknown) {
-			return "", fmt.Errorf("no loop definition named %q; update_entity_subscriptions targets a specific named loop's watch set, not your own context (a conversation is not a loop); for an always-visible subscription that follows you every turn use add_entity_subscription, or pick a real loop name from loop_definition_list", name)
+			// Wrap the source error with %w so the causal chain survives for
+			// any future errors.As/Is, while the message still teaches the
+			// next move. The wrapped error leads — it already names the loop
+			// (`loop: unknown definition "X"`) — so the guidance follows
+			// without duplicating it.
+			return "", fmt.Errorf("%w; update_entity_subscriptions targets a specific named loop's watch set, not your own context (a conversation is not a loop); for an always-visible subscription that follows you every turn use add_entity_subscription, or pick a real loop name from loop_definition_list", err)
 		}
 		return "", err
 	}
