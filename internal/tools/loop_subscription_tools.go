@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -25,8 +26,9 @@ import (
 func (r *Registry) registerUpdateEntitySubscriptions() {
 	r.Register(&Tool{
 		Name: "update_entity_subscriptions",
-		Description: "Add or remove Home Assistant entities from a running loop's subscription set. " +
-			"Use this when you want a peer loop or conversation to start (or stop) seeing specific entities in its context every iteration — for example, when the core loop learns that a curate loop should also watch a newly-relevant sensor. " +
+		Description: "Add or remove Home Assistant entities from a specific named loop's subscription set. " +
+			"Use this to make a peer loop start (or stop) seeing specific entities in its context every iteration — for example, when the core loop learns that a curate loop should also watch a newly-relevant sensor. " +
+			"Scope: this targets a NAMED loop only. To watch an entity in your own always-visible context (what a conversation uses for itself), use add_entity_subscription instead — a conversation is not a loop and cannot be named here. " +
 			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because it is baked in. " +
 			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
 			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
@@ -108,6 +110,15 @@ func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map
 		return applySubscriptionDelta(current, addList, removeList, time.Now().UTC()), nil
 	})
 	if err != nil {
+		// Teach the next move (docs/model-facing-tools.md §4): the most
+		// common miss is aiming this loop-scoped tool at a conversation
+		// (passing a conversation/session id as name). Point at the
+		// always-visible tool for own-context watches and the loop lister
+		// for targeting a real loop, instead of a bare "unknown definition".
+		var unknown *looppkg.UnknownDefinitionError
+		if errors.As(err, &unknown) {
+			return "", fmt.Errorf("no loop definition named %q; update_entity_subscriptions targets a specific named loop's watch set, not your own context (a conversation is not a loop); for an always-visible subscription that follows you every turn use add_entity_subscription, or pick a real loop name from loop_definition_list", name)
+		}
 		return "", err
 	}
 
