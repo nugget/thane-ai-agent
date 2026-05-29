@@ -975,7 +975,7 @@ type ModelsConfig struct {
 // The model router uses these fields to select the best model for each
 // request.
 type ModelConfig struct {
-	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-20250514")
+	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-8")
 	Provider          string `yaml:"provider"`           // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
 	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
 	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
@@ -2293,6 +2293,13 @@ func (c *Config) applyDefaults() {
 
 	if c.Pricing == nil {
 		c.Pricing = map[string]PricingEntry{
+			// Current models (per-million USD, input/output).
+			"claude-opus-4-8":   {InputPerMillion: 5.0, OutputPerMillion: 25.0},
+			"claude-sonnet-4-6": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
+			"claude-haiku-4-5":  {InputPerMillion: 1.0, OutputPerMillion: 5.0},
+			// Deprecated models kept for pricing historical usage records
+			// (retire 2026-06-15 / 2026-04-19); note Opus 4 was $15/$75,
+			// far above Opus 4.8's $5/$25.
 			"claude-opus-4-20250514":   {InputPerMillion: 15.0, OutputPerMillion: 75.0},
 			"claude-sonnet-4-20250514": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 			"claude-haiku-3-20240307":  {InputPerMillion: 0.25, OutputPerMillion: 1.25},

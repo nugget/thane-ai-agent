@@ -460,9 +460,17 @@ func ExampleConfig() *Config {
 		},
 
 		Pricing: map[string]PricingEntry{
-			"claude-opus-4-20250514": {
-				InputPerMillion:  15.0,
-				OutputPerMillion: 75.0,
+			"claude-opus-4-8": {
+				InputPerMillion:  5.0,
+				OutputPerMillion: 25.0,
+			},
+			"claude-sonnet-4-6": {
+				InputPerMillion:  3.0,
+				OutputPerMillion: 15.0,
+			},
+			"claude-haiku-4-5": {
+				InputPerMillion:  1.0,
+				OutputPerMillion: 5.0,
 			},
 		},
 
