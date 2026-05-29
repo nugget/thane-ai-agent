@@ -710,13 +710,13 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Fatal("condition not met within timeout")
 }
 
-// TestWorker_CuratorWakeShortCircuitsLLM verifies the #989
-// transformation: when the worker has a curator-wake function set,
-// real sessions fire the wake instead of calling the LLM. The wake
-// becomes the backstop delivery channel; the LLM path is gone.
-// markEmpty still runs for zero-message sessions (SQL-only, no
-// model needed regardless of mode).
-func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
+// TestWorker_ArchivistEnqueueStillSummarizes verifies the #1024
+// decoupling: when the worker has an archivist-enqueue hook set, a real
+// session is BOTH enqueued for the archivist AND summarized here (the
+// LLM metadata path always runs — the enqueue is a fire-and-forget side
+// effect, not a short-circuit). markEmpty still runs for zero-message
+// sessions (SQL-only, no model needed).
+func TestWorker_ArchivistEnqueueStillSummarizes(t *testing.T) {
 	store := newTestStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
@@ -732,8 +732,8 @@ func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
 	}
 
 	var (
-		mu            sync.Mutex
-		wakedSessions []string
+		mu       sync.Mutex
+		enqueued []string
 	)
 	cfg := SummarizerConfig{
 		Interval:     time.Hour,
@@ -742,9 +742,9 @@ func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
 		BatchSize:    10,
 	}
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
-	w.SetCuratorWake(func(_ context.Context, sessionID, _ string) error {
+	w.SetArchivistEnqueue(func(_ context.Context, sessionID, _ string) error {
 		mu.Lock()
-		wakedSessions = append(wakedSessions, sessionID)
+		enqueued = append(enqueued, sessionID)
 		mu.Unlock()
 		return nil
 	})
@@ -752,41 +752,31 @@ func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
 
-	// Give the startup scan time to process both sessions.
+	// The LLM metadata path now ALWAYS runs for the real session.
 	waitFor(t, 5*time.Second, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(wakedSessions) >= 1
+		return mock.calls.Load() >= 1
 	})
 	time.Sleep(50 * time.Millisecond) // settle any further work
 
 	cancel()
 	w.Stop()
 
-	// Real session: wake fired, LLM NOT called.
-	if mock.calls.Load() != 0 {
-		t.Errorf("expected 0 LLM calls when curator wake is set, got %d", mock.calls.Load())
+	// Real session: metadata generated here (LLM called) — not skipped.
+	if mock.calls.Load() == 0 {
+		t.Error("expected an LLM metadata call for the real session, got 0 (enqueue must not short-circuit summarization)")
 	}
+	// Real session was ALSO enqueued for the archivist.
 	mu.Lock()
-	snapshot := append([]string(nil), wakedSessions...)
+	snapshot := append([]string(nil), enqueued...)
 	mu.Unlock()
-	realWakes := 0
+	enqueuedReal := false
 	for _, id := range snapshot {
 		if id == real.ID {
-			realWakes++
+			enqueuedReal = true
 		}
 	}
-	if realWakes == 0 {
-		t.Errorf("real session %s never fired curator wake; waked=%v", ShortID(real.ID), snapshot)
-	}
-	// Regression guard for the tight-loop bug (Copilot review on
-	// #994): the wake doesn't mark the row summarized, so without
-	// the "wake counts as work" signal the scan() batch loop would
-	// re-fetch the same UnsummarizedSessions and re-fire the same
-	// wake up to maxBatchesPerScan times per tick. With the fix one
-	// scan tick fires exactly once per session.
-	if realWakes > 1 {
-		t.Errorf("real session %s waked %d times in a single scan tick; expected 1 (scan tight-loop regression)", ShortID(real.ID), realWakes)
+	if !enqueuedReal {
+		t.Errorf("real session %s never enqueued for archivist; enqueued=%v", ShortID(real.ID), snapshot)
 	}
 
 	// Empty session: markEmpty ran (SQL-only path), so it should not
@@ -802,11 +792,11 @@ func TestWorker_CuratorWakeShortCircuitsLLM(t *testing.T) {
 	}
 }
 
-// TestWorker_CuratorWakeFailureFallsBackToLLM — when the wake hook
-// returns an error (curator down, queue full), the worker falls
-// through to the direct LLM path so the session still gets
-// summarized one way or the other.
-func TestWorker_CuratorWakeFailureFallsBackToLLM(t *testing.T) {
+// TestWorker_ArchivistEnqueueFailureStillSummarizes — when the enqueue
+// hook returns an error (archivist disabled, queue locked), the worker
+// still generates the session's metadata. The enqueue is best-effort;
+// it must never block summarization (#1024).
+func TestWorker_ArchivistEnqueueFailureStillSummarizes(t *testing.T) {
 	store := newTestStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
@@ -819,8 +809,8 @@ func TestWorker_CuratorWakeFailureFallsBackToLLM(t *testing.T) {
 		BatchSize:    10,
 	}
 	w := NewSummarizerWorker(store, mock, rtr, slog.Default(), cfg)
-	w.SetCuratorWake(func(_ context.Context, _, _ string) error {
-		return fmt.Errorf("simulated curator unavailable")
+	w.SetArchivistEnqueue(func(_ context.Context, _, _ string) error {
+		return fmt.Errorf("simulated archivist queue unavailable")
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -832,6 +822,6 @@ func TestWorker_CuratorWakeFailureFallsBackToLLM(t *testing.T) {
 	w.Stop()
 
 	if mock.calls.Load() == 0 {
-		t.Error("expected LLM fallback when curator wake fails, got 0 calls")
+		t.Error("enqueue failure must not block metadata generation; expected an LLM call, got 0")
 	}
 }

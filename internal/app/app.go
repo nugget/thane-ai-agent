@@ -39,7 +39,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
-	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -51,6 +51,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -95,6 +96,7 @@ type App struct {
 	documentTools             *documents.Tools
 	contactStore              *contacts.Store
 	watchlistStore            *awareness.WatchlistStore
+	loopQueue                 *loopqueue.Store
 	opStore                   *opstate.Store
 	modelPolicyStore          *modelPolicyStore
 	modelResourcePolicyStore  *modelResourcePolicyStore
@@ -189,8 +191,8 @@ type App struct {
 	// Ego loop config (stored for loop-definition hydration)
 	egoCfg *ego.Config
 
-	// Curator loop config (stored for loop-definition hydration)
-	curatorCfg *curator.Config
+	// Archivist loop config (stored for loop-definition hydration)
+	archivistCfg *archivist.Config
 
 	// Event bus
 	eventBus *events.Bus
