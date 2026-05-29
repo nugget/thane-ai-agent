@@ -1423,12 +1423,12 @@ func TestApplyDefaults_MetacognitiveZeroFloatsArePreserved(t *testing.T) {
 	}
 }
 
-// curatorBaseConfig returns a Config with a valid enabled curator loop
+// archivistBaseConfig returns a Config with a valid enabled archivist loop
 // for the validation-path tests below. Mirrors [egoBaseConfig].
-func curatorBaseConfig() *Config {
+func archivistBaseConfig() *Config {
 	cfg := Default()
 	cfg.Workspace.Path = "/tmp/thane-test-workspace"
-	cfg.Curator = CuratorConfig{
+	cfg.Archivist = ArchivistConfig{
 		Enabled:      true,
 		MinSleep:     "15m",
 		MaxSleep:     "12h",
@@ -1438,18 +1438,18 @@ func curatorBaseConfig() *Config {
 	return cfg
 }
 
-func TestValidateCurator_Disabled_NoOp(t *testing.T) {
+func TestValidateArchivist_Disabled_NoOp(t *testing.T) {
 	cfg := Default()
-	cfg.Curator = CuratorConfig{Enabled: false, MinSleep: "junk"} // would fail if enabled
-	if err := cfg.validateCurator(); err != nil {
-		t.Fatalf("validateCurator with Enabled=false should be a no-op, got: %v", err)
+	cfg.Archivist = ArchivistConfig{Enabled: false, MinSleep: "junk"} // would fail if enabled
+	if err := cfg.validateArchivist(); err != nil {
+		t.Fatalf("validateArchivist with Enabled=false should be a no-op, got: %v", err)
 	}
 }
 
-func TestValidateCurator_RequiresWorkspace(t *testing.T) {
-	cfg := curatorBaseConfig()
+func TestValidateArchivist_RequiresWorkspace(t *testing.T) {
+	cfg := archivistBaseConfig()
 	cfg.Workspace.Path = ""
-	err := cfg.validateCurator()
+	err := cfg.validateArchivist()
 	if err == nil {
 		t.Fatal("expected error when workspace.path is unset")
 	}
@@ -1458,21 +1458,21 @@ func TestValidateCurator_RequiresWorkspace(t *testing.T) {
 	}
 }
 
-func TestValidateCurator_DurationParsing(t *testing.T) {
+func TestValidateArchivist_DurationParsing(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(c *Config)
 		expect string
 	}{
-		{"min_sleep", func(c *Config) { c.Curator.MinSleep = "junk" }, "curator.min_sleep"},
-		{"max_sleep", func(c *Config) { c.Curator.MaxSleep = "junk" }, "curator.max_sleep"},
-		{"default_sleep", func(c *Config) { c.Curator.DefaultSleep = "junk" }, "curator.default_sleep"},
+		{"min_sleep", func(c *Config) { c.Archivist.MinSleep = "junk" }, "archivist.min_sleep"},
+		{"max_sleep", func(c *Config) { c.Archivist.MaxSleep = "junk" }, "archivist.max_sleep"},
+		{"default_sleep", func(c *Config) { c.Archivist.DefaultSleep = "junk" }, "archivist.default_sleep"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := curatorBaseConfig()
+			cfg := archivistBaseConfig()
 			tc.mutate(cfg)
-			err := cfg.validateCurator()
+			err := cfg.validateArchivist()
 			if err == nil {
 				t.Fatalf("expected error for invalid %s", tc.name)
 			}
@@ -1483,11 +1483,11 @@ func TestValidateCurator_DurationParsing(t *testing.T) {
 	}
 }
 
-func TestValidateCurator_MinExceedsMax(t *testing.T) {
-	cfg := curatorBaseConfig()
-	cfg.Curator.MinSleep = "2h"
-	cfg.Curator.MaxSleep = "1h"
-	err := cfg.validateCurator()
+func TestValidateArchivist_MinExceedsMax(t *testing.T) {
+	cfg := archivistBaseConfig()
+	cfg.Archivist.MinSleep = "2h"
+	cfg.Archivist.MaxSleep = "1h"
+	err := cfg.validateArchivist()
 	if err == nil {
 		t.Fatal("expected error when min_sleep exceeds max_sleep")
 	}
@@ -1496,10 +1496,10 @@ func TestValidateCurator_MinExceedsMax(t *testing.T) {
 	}
 }
 
-func TestValidateCurator_DefaultOutOfRange(t *testing.T) {
-	cfg := curatorBaseConfig()
-	cfg.Curator.DefaultSleep = "24h" // exceeds max
-	err := cfg.validateCurator()
+func TestValidateArchivist_DefaultOutOfRange(t *testing.T) {
+	cfg := archivistBaseConfig()
+	cfg.Archivist.DefaultSleep = "24h" // exceeds max
+	err := cfg.validateArchivist()
 	if err == nil {
 		t.Fatal("expected error when default_sleep is outside [min_sleep, max_sleep]")
 	}
@@ -1508,45 +1508,45 @@ func TestValidateCurator_DefaultOutOfRange(t *testing.T) {
 	}
 }
 
-func TestValidateCurator_JitterOutOfRange(t *testing.T) {
+func TestValidateArchivist_JitterOutOfRange(t *testing.T) {
 	cases := []float64{-0.1, 1.5}
 	for _, v := range cases {
-		cfg := curatorBaseConfig()
-		cfg.Curator.Jitter = &v
-		err := cfg.validateCurator()
+		cfg := archivistBaseConfig()
+		cfg.Archivist.Jitter = &v
+		err := cfg.validateArchivist()
 		if err == nil {
 			t.Fatalf("expected error for jitter=%v", v)
 		}
-		if !strings.Contains(err.Error(), "curator.jitter") {
-			t.Errorf("error should mention curator.jitter, got: %v", err)
+		if !strings.Contains(err.Error(), "archivist.jitter") {
+			t.Errorf("error should mention archivist.jitter, got: %v", err)
 		}
 	}
 }
 
-func TestValidateCurator_SupervisorProbabilityOutOfRange(t *testing.T) {
+func TestValidateArchivist_SupervisorProbabilityOutOfRange(t *testing.T) {
 	cases := []float64{-0.1, 1.5}
 	for _, v := range cases {
-		cfg := curatorBaseConfig()
-		cfg.Curator.SupervisorProbability = &v
-		err := cfg.validateCurator()
+		cfg := archivistBaseConfig()
+		cfg.Archivist.SupervisorProbability = &v
+		err := cfg.validateArchivist()
 		if err == nil {
 			t.Fatalf("expected error for supervisor_probability=%v", v)
 		}
-		if !strings.Contains(err.Error(), "curator.supervisor_probability") {
-			t.Errorf("error should mention curator.supervisor_probability, got: %v", err)
+		if !strings.Contains(err.Error(), "archivist.supervisor_probability") {
+			t.Errorf("error should mention archivist.supervisor_probability, got: %v", err)
 		}
 	}
 }
 
-// TestApplyDefaults_CuratorZeroFloatsArePreserved — same regression
+// TestApplyDefaults_ArchivistZeroFloatsArePreserved — same regression
 // guard as the ego and metacognitive variants. Explicit 0.0 for
 // Jitter or SupervisorProbability must survive applyDefaults rather
 // than being silently overwritten by the package default.
-func TestApplyDefaults_CuratorZeroFloatsArePreserved(t *testing.T) {
+func TestApplyDefaults_ArchivistZeroFloatsArePreserved(t *testing.T) {
 	zero := 0.0
 	cfg := Default()
 	cfg.Workspace.Path = "/tmp/thane-test-workspace"
-	cfg.Curator = CuratorConfig{
+	cfg.Archivist = ArchivistConfig{
 		Enabled:               true,
 		MinSleep:              "15m",
 		MaxSleep:              "12h",
@@ -1555,10 +1555,10 @@ func TestApplyDefaults_CuratorZeroFloatsArePreserved(t *testing.T) {
 		SupervisorProbability: &zero,
 	}
 	cfg.applyDefaults()
-	if cfg.Curator.Jitter == nil || *cfg.Curator.Jitter != 0.0 {
-		t.Errorf("Jitter = %v, want explicit 0.0 to survive applyDefaults", cfg.Curator.Jitter)
+	if cfg.Archivist.Jitter == nil || *cfg.Archivist.Jitter != 0.0 {
+		t.Errorf("Jitter = %v, want explicit 0.0 to survive applyDefaults", cfg.Archivist.Jitter)
 	}
-	if cfg.Curator.SupervisorProbability == nil || *cfg.Curator.SupervisorProbability != 0.0 {
-		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Curator.SupervisorProbability)
+	if cfg.Archivist.SupervisorProbability == nil || *cfg.Archivist.SupervisorProbability != 0.0 {
+		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Archivist.SupervisorProbability)
 	}
 }

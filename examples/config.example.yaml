@@ -965,15 +965,15 @@ ego:
     # selection. Built-in service defaults: metacognitive uses 3
     # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 8
-# Curator configures the memory curator loop. When enabled, a
+# Archivist configures the memory archivist loop. When enabled, a
 # self-paced service loop tends thane's understanding across the
 # memory silos by authoring dossiers — long-lived synthesis
-# documents keyed by subject. Unlike the Go-side session
-# summarizer worker (event-triggered on session close), the
-# curator picks its own targets each iteration. Maintains
-# core/curator.md as its working state.
-curator:
-  # Enabled controls whether the curator loop starts. Default: false.
+# documents keyed by subject. It drains a durable work queue that
+# producers (session close, frontier expansion) enqueue into; it is
+# never event-woken, so a burst of activity can't amplify into a
+# burst of work. Maintains core/archivist.md as its working state.
+archivist:
+  # Enabled controls whether the archivist loop starts. Default: false.
   enabled: false
   # MinSleep is the minimum allowed sleep duration between iterations.
   # Default: "15m". Parsed as a Go duration string.
@@ -989,7 +989,7 @@ curator:
   jitter: 0.2
   # SupervisorProbability is the per-wake chance (0.0–1.0) that
   # this iteration runs as a supervisor turn — a frontier model
-  # with the augmented prompt produced by [prompts.CuratorPrompt].
+  # with the augmented prompt produced by [prompts.ArchivistPrompt].
   # Default: 0.1. Set to 0.0 to disable supervisor turns entirely.
   supervisor_probability: 0.1
   # Router configures model routing for normal iterations.

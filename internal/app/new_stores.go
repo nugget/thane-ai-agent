@@ -20,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -118,6 +119,17 @@ func (a *App) initStores(s *newState) error {
 		return fmt.Errorf("watchlist store: %w", err)
 	}
 	a.watchlistStore = watchlistStore
+
+	// --- Loop work queue ---
+	// Durable, deduped, per-consumer-loop work queue. Constructed before
+	// wireSessionCloseToArchivistQueue so the session-close producer can
+	// capture a non-nil store. Shares the main thane.db connection; no
+	// separate close hook (mem owns the DB).
+	loopQueue, err := loopqueue.NewStore(a.mem.DB(), logger)
+	if err != nil {
+		return fmt.Errorf("loop queue store: %w", err)
+	}
+	a.loopQueue = loopQueue
 
 	// --- Home Assistant client ---
 	// Optional but central. Without it, HA-related tools are unavailable
@@ -503,11 +515,11 @@ func (a *App) initStores(s *newState) error {
 		return nil
 	})
 
-	// Hook EndSession → curator wake. Must come after archiveStore is
-	// constructed and the loop registry exists (both are guaranteed at
-	// this point in initStores). No-op when curator is disabled in
-	// config. See issue #989.
-	a.wireSessionCloseToCuratorWake()
+	// Hook EndSession → archivist work queue. Must come after
+	// archiveStore and the loop queue are constructed (both are
+	// guaranteed at this point in initStores). No-op when the archivist
+	// is disabled in config. See issues #989, #1024.
+	a.wireSessionCloseToArchivistQueue()
 
 	return nil
 }

@@ -19,7 +19,7 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	for _, spec := range builtInServiceDefinitionSpecs(a.cfg) {
 		baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 	}
-	// Core model-facing service loops (ego, metacognitive, curator)
+	// Core model-facing service loops (ego, metacognitive, archivist)
 	// share a parse-cache-emit shape captured by [coreServiceLoops].
 	// Parse+cache whenever the loop is enabled OR an operator declared
 	// its definition (so an override still gets a config to hydrate

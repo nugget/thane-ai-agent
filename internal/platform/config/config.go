@@ -315,14 +315,14 @@ type Config struct {
 	// output, with supervisor randomization for periodic frontier review.
 	Ego EgoConfig `yaml:"ego"`
 
-	// Curator configures the memory curator loop. When enabled, a
+	// Archivist configures the memory archivist loop. When enabled, a
 	// self-paced service loop tends thane's understanding across the
 	// memory silos by authoring dossiers — long-lived synthesis
-	// documents keyed by subject. Unlike the Go-side session
-	// summarizer worker (event-triggered on session close), the
-	// curator picks its own targets each iteration. Maintains
-	// core/curator.md as its working state.
-	Curator CuratorConfig `yaml:"curator"`
+	// documents keyed by subject. It drains a durable work queue that
+	// producers (session close, frontier expansion) enqueue into; it is
+	// never event-woken, so a burst of activity can't amplify into a
+	// burst of work. Maintains core/archivist.md as its working state.
+	Archivist ArchivistConfig `yaml:"archivist"`
 
 	// Loops configures immutable loop definitions loaded from the config
 	// file. These definitions become the base layer for the loop
@@ -1850,20 +1850,21 @@ type EgoConfig struct {
 	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
 }
 
-// CuratorConfig configures the memory curator loop. The loop runs as
+// ArchivistConfig configures the memory archivist loop. The loop runs as
 // a service loop: bounded voluntary sleep, supervisor randomization,
-// and a declared maintained-document output at core/curator.md.
+// and a declared maintained-document output at core/archivist.md.
 // Where ego maintains self-reflection and metacognitive watches
-// in-flight behavior, the curator synthesizes durable knowledge
+// in-flight behavior, the archivist synthesizes durable knowledge
 // across the memory silos into long-lived dossiers keyed by subject.
 //
-// Self-paced by design: each iteration picks its own subject rather
-// than reacting to events. The Go-side session summarizer worker
-// still fires on session close and stamps session metadata; the
-// curator works above that layer, turning session summaries (and
-// the rest of the corpus) into per-subject dossiers.
-type CuratorConfig struct {
-	// Enabled controls whether the curator loop starts. Default: false.
+// Self-paced and pull-based by design: each iteration drains a durable
+// work queue (subjects and closed sessions enqueued by producers) at
+// the loop's own cadence rather than being woken per event. The Go-side
+// session summarizer still fires on session close and stamps session
+// metadata; it also enqueues the closed session for the archivist, which
+// works above that layer, turning the corpus into per-subject dossiers.
+type ArchivistConfig struct {
+	// Enabled controls whether the archivist loop starts. Default: false.
 	Enabled bool `yaml:"enabled"`
 
 	// MinSleep is the minimum allowed sleep duration between iterations.
@@ -1884,7 +1885,7 @@ type CuratorConfig struct {
 
 	// SupervisorProbability is the per-wake chance (0.0–1.0) that
 	// this iteration runs as a supervisor turn — a frontier model
-	// with the augmented prompt produced by [prompts.CuratorPrompt].
+	// with the augmented prompt produced by [prompts.ArchivistPrompt].
 	// Default: 0.1. Set to 0.0 to disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
@@ -1897,7 +1898,7 @@ type CuratorConfig struct {
 }
 
 // RouterConfig holds routing hints used by the built-in services
-// (metacognitive, ego, curator) for both normal and supervisor
+// (metacognitive, ego, archivist) for both normal and supervisor
 // turns. It is deliberately narrow — operator-tunable knobs only —
 // and gets translated into the spec-level [router.LoopProfile] /
 // [router.LoopProfile.QualityFloor] at hydration time. Replaces
@@ -2360,32 +2361,32 @@ func (c *Config) applyDefaults() {
 		c.Ego.SupervisorRouter.QualityFloor = 8
 	}
 
-	// Curator loop defaults. Sleep envelope: wider than metacog (which
+	// Archivist loop defaults. Sleep envelope: wider than metacog (which
 	// runs minutes apart), narrower than ego (which runs hours apart).
 	// One hour as the default cadence gives the corpus time to
 	// accumulate new evidence between passes without going stale.
-	if c.Curator.MinSleep == "" {
-		c.Curator.MinSleep = "15m"
+	if c.Archivist.MinSleep == "" {
+		c.Archivist.MinSleep = "15m"
 	}
-	if c.Curator.MaxSleep == "" {
-		c.Curator.MaxSleep = "12h"
+	if c.Archivist.MaxSleep == "" {
+		c.Archivist.MaxSleep = "12h"
 	}
-	if c.Curator.DefaultSleep == "" {
-		c.Curator.DefaultSleep = "1h"
+	if c.Archivist.DefaultSleep == "" {
+		c.Archivist.DefaultSleep = "1h"
 	}
-	if c.Curator.Jitter == nil {
+	if c.Archivist.Jitter == nil {
 		v := 0.2
-		c.Curator.Jitter = &v
+		c.Archivist.Jitter = &v
 	}
-	if c.Curator.SupervisorProbability == nil {
+	if c.Archivist.SupervisorProbability == nil {
 		v := 0.1
-		c.Curator.SupervisorProbability = &v
+		c.Archivist.SupervisorProbability = &v
 	}
-	if c.Curator.Router.QualityFloor == 0 {
-		c.Curator.Router.QualityFloor = 5
+	if c.Archivist.Router.QualityFloor == 0 {
+		c.Archivist.Router.QualityFloor = 5
 	}
-	if c.Curator.SupervisorRouter.QualityFloor == 0 {
-		c.Curator.SupervisorRouter.QualityFloor = 8
+	if c.Archivist.SupervisorRouter.QualityFloor == 0 {
+		c.Archivist.SupervisorRouter.QualityFloor = 8
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
@@ -2662,7 +2663,7 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
-	if err := c.validateCurator(); err != nil {
+	if err := c.validateArchivist(); err != nil {
 		return err
 	}
 	if err := c.validateEgo(); err != nil {
@@ -2819,39 +2820,39 @@ func (c *Config) validateEgo() error {
 	return nil
 }
 
-// validateCurator checks curator loop configuration for internal
+// validateArchivist checks archivist loop configuration for internal
 // consistency. No-op when the loop is disabled.
-func (c *Config) validateCurator() error {
-	if !c.Curator.Enabled {
+func (c *Config) validateArchivist() error {
+	if !c.Archivist.Enabled {
 		return nil
 	}
 	if c.Workspace.Path == "" {
-		return fmt.Errorf("curator requires workspace.path (state file lives under workspace/core)")
+		return fmt.Errorf("archivist requires workspace.path (state file lives under workspace/core)")
 	}
-	minSleep, err := time.ParseDuration(c.Curator.MinSleep)
+	minSleep, err := time.ParseDuration(c.Archivist.MinSleep)
 	if err != nil {
-		return fmt.Errorf("curator.min_sleep %q: %w", c.Curator.MinSleep, err)
+		return fmt.Errorf("archivist.min_sleep %q: %w", c.Archivist.MinSleep, err)
 	}
-	maxSleep, err := time.ParseDuration(c.Curator.MaxSleep)
+	maxSleep, err := time.ParseDuration(c.Archivist.MaxSleep)
 	if err != nil {
-		return fmt.Errorf("curator.max_sleep %q: %w", c.Curator.MaxSleep, err)
+		return fmt.Errorf("archivist.max_sleep %q: %w", c.Archivist.MaxSleep, err)
 	}
-	defaultSleep, err := time.ParseDuration(c.Curator.DefaultSleep)
+	defaultSleep, err := time.ParseDuration(c.Archivist.DefaultSleep)
 	if err != nil {
-		return fmt.Errorf("curator.default_sleep %q: %w", c.Curator.DefaultSleep, err)
+		return fmt.Errorf("archivist.default_sleep %q: %w", c.Archivist.DefaultSleep, err)
 	}
 	if minSleep > maxSleep {
-		return fmt.Errorf("curator.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
+		return fmt.Errorf("archivist.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
 	}
 	if defaultSleep < minSleep || defaultSleep > maxSleep {
-		return fmt.Errorf("curator.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+		return fmt.Errorf("archivist.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
 			defaultSleep, minSleep, maxSleep)
 	}
-	if c.Curator.Jitter != nil && (*c.Curator.Jitter < 0 || *c.Curator.Jitter > 1.0) {
-		return fmt.Errorf("curator.jitter %.2f must be in [0.0, 1.0]", *c.Curator.Jitter)
+	if c.Archivist.Jitter != nil && (*c.Archivist.Jitter < 0 || *c.Archivist.Jitter > 1.0) {
+		return fmt.Errorf("archivist.jitter %.2f must be in [0.0, 1.0]", *c.Archivist.Jitter)
 	}
-	if c.Curator.SupervisorProbability != nil && (*c.Curator.SupervisorProbability < 0 || *c.Curator.SupervisorProbability > 1.0) {
-		return fmt.Errorf("curator.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Curator.SupervisorProbability)
+	if c.Archivist.SupervisorProbability != nil && (*c.Archivist.SupervisorProbability < 0 || *c.Archivist.SupervisorProbability > 1.0) {
+		return fmt.Errorf("archivist.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Archivist.SupervisorProbability)
 	}
 	return nil
 }

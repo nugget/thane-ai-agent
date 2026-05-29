@@ -2274,9 +2274,9 @@ func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
 }
 
 // TestEndSession_FiresCloseCallback verifies the post-commit
-// notification hook that the curator wake event (issue #989) is built
-// on. After EndSession returns successfully, any registered callback
-// runs synchronously with the closed session's ID and reason.
+// notification hook that the archivist work-enqueue (issues #989, #1024)
+// is built on. After EndSession returns successfully, any registered
+// callback runs synchronously with the closed session's ID and reason.
 func TestEndSession_FiresCloseCallback(t *testing.T) {
 	store := newTestArchiveStore(t)
 	sess, err := store.StartSession("conv-callback")

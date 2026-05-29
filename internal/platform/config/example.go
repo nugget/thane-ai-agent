@@ -396,7 +396,7 @@ func ExampleConfig() *Config {
 			SupervisorRouter:      RouterConfig{QualityFloor: 8},
 		},
 
-		Curator: CuratorConfig{
+		Archivist: ArchivistConfig{
 			Enabled:               false,
 			MinSleep:              "15m",
 			MaxSleep:              "12h",
