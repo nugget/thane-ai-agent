@@ -83,6 +83,8 @@ type Server struct {
 	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
+	loopRegistry                       LoopStatusReader
+	logQuerier                         LogQuerier
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
@@ -455,6 +457,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/loop-definitions/policy", s.handleLoopDefinitionPolicySet)
 	mux.HandleFunc("DELETE /v1/loop-definitions/policy", s.handleLoopDefinitionPolicyDelete)
 	mux.HandleFunc("POST /v1/loop-definitions/{name}/launch", s.handleLoopDefinitionLaunch)
+
+	// Running loops (the loops-first protagonist), consolidated from the
+	// dashboard's former /api/loops surface in the web package.
+	mux.HandleFunc("GET /v1/loops", s.handleLoops)
+	mux.HandleFunc("GET /v1/loops/events", s.handleLoopEvents)
+	mux.HandleFunc("GET /v1/loops/{id}", s.handleLoop)
+	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)

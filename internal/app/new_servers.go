@@ -61,6 +61,10 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.ConfigureChatLoopLauncher(a.launchLoop)
 	server.SetEventBus(a.eventBus)
+	server.UseLoopRegistry(a.loopRegistry)
+	if a.indexDB != nil {
+		server.UseLogQuerier(&logQueryAdapter{db: a.indexDB})
+	}
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
 		result := make(map[string]api.DependencyStatus, len(status))
