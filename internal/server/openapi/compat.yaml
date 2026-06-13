@@ -1,0 +1,240 @@
+openapi: 3.1.0
+info:
+  title: Thane Compatibility API
+  version: 1.0.0
+  summary: Frozen OpenAI- and Ollama-compatible surfaces for foreign clients.
+  description: |
+    The **Thane Compatibility API** lets external, non-Thane clients talk to
+    Thane as if it were OpenAI or Ollama. It is a **frozen service promise**:
+    the paths and shapes are dictated by the clients that depend on them —
+    Home Assistant's conversation/voice integration and open-webui — not by
+    Thane. They are documented here for reference and are deliberately **out of
+    scope** for the loops-first reshape. For Thane's own management surface,
+    see the Thane Native API.
+
+    Two foreign shapes are served, on different ports:
+    - **OpenAI-compatible** (`/v1/chat/completions`, `/v1/models`) — default port 8080.
+    - **Ollama-compatible** (`/api/*`) — default port 11434.
+
+    AuthN is a per-client bearer API key (`Authorization: Bearer <key>`);
+    authorization is coarse (inference access), intentionally distinct from the
+    native API's granular `resource:action` scopes.
+
+servers:
+  - url: http://localhost:8080
+    description: OpenAI-compatible surface
+  - url: http://localhost:11434
+    description: Ollama-compatible surface
+
+security:
+  - apiKey: []
+
+tags:
+  - name: openai
+    description: OpenAI-compatible endpoints — HA voice backend, open-webui chat.
+  - name: ollama
+    description: Ollama-compatible endpoints — HA integration, model listing.
+
+paths:
+  /v1/chat/completions:
+    post:
+      tags: [openai]
+      operationId: openaiChatCompletions
+      summary: Chat completions (OpenAI shape)
+      servers:
+        - url: http://localhost:8080
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatCompletionRequest" }
+      responses:
+        "200":
+          description: A chat completion, or an SSE stream when `stream` is true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCompletionResponse" }
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of completion chunks (OpenAI delta format).
+  /v1/models:
+    get:
+      tags: [openai]
+      operationId: openaiListModels
+      summary: List models (OpenAI shape)
+      description: |
+        OpenAI-shaped model list. Entries include Thane routing aliases
+        (e.g. `thane:latest`, `thane:premium`) so OpenAI clients can target a
+        routing profile by model id.
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: Model list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+
+  /api/chat:
+    post:
+      tags: [ollama]
+      operationId: ollamaChat
+      summary: Chat (Ollama shape)
+      servers:
+        - url: http://localhost:11434
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OllamaChatRequest" }
+      responses:
+        "200":
+          description: Chat response; an NDJSON stream unless `stream` is false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
+  /api/generate:
+    post:
+      tags: [ollama]
+      operationId: ollamaGenerate
+      summary: Generate from a prompt (Ollama shape)
+      servers:
+        - url: http://localhost:11434
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OllamaGenerateRequest" }
+      responses:
+        "200":
+          description: Generation response; an NDJSON stream unless `stream` is false.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/tags:
+    get:
+      tags: [ollama]
+      operationId: ollamaTags
+      summary: List local models (Ollama shape)
+      servers:
+        - url: http://localhost:11434
+      responses:
+        "200":
+          description: Installed/served models.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OllamaTags" }
+  /api/version:
+    get:
+      tags: [ollama]
+      operationId: ollamaVersion
+      summary: Version (Ollama shape)
+      servers:
+        - url: http://localhost:11434
+      responses:
+        "200":
+          description: Reported Ollama-compatible version string.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: Per-client API key. Coarse inference access (no granular scopes).
+  schemas:
+    ChatMessage:
+      type: object
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
+        content: { type: string }
+      required: [role, content]
+    ChatCompletionRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: Model id or a Thane routing alias (e.g. `thane:latest`).
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        stream: { type: boolean, default: false }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+      required: [model, messages]
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, examples: [chat.completion] }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: "#/components/schemas/ChatMessage" }
+              finish_reason: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            completion_tokens: { type: integer }
+            total_tokens: { type: integer }
+    ModelList:
+      type: object
+      properties:
+        object: { type: string, examples: [list] }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              object: { type: string, examples: [model] }
+              owned_by: { type: string }
+    OllamaChatRequest:
+      type: object
+      properties:
+        model: { type: string }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        stream: { type: boolean }
+      required: [model, messages]
+    OllamaChatResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        model: { type: string }
+        created_at: { type: string }
+        message: { $ref: "#/components/schemas/ChatMessage" }
+        done: { type: boolean }
+    OllamaGenerateRequest:
+      type: object
+      properties:
+        model: { type: string }
+        prompt: { type: string }
+        stream: { type: boolean }
+      required: [model, prompt]
+    OllamaTags:
+      type: object
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              model: { type: string }
+              size: { type: integer }
