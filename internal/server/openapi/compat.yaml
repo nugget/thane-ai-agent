@@ -94,26 +94,33 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OllamaChatResponse" }
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
   /api/generate:
     post:
       tags: [ollama]
       operationId: ollamaGenerate
-      summary: Generate from a prompt (Ollama shape)
+      summary: Generate (Ollama shape) — currently a single-turn chat alias
+      description: |
+        Thane implements `/api/generate` by delegating to the same handler as
+        `/api/chat`, so it accepts the **chat** request shape (messages) and
+        returns the chat response — not Ollama's prompt-based generate format.
+        Documented as the frozen reality of the endpoint.
       servers:
         - url: http://localhost:11434
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/OllamaGenerateRequest" }
+            schema: { $ref: "#/components/schemas/OllamaChatRequest" }
       responses:
         "200":
-          description: Generation response; an NDJSON stream unless `stream` is false.
+          description: Chat response; an NDJSON stream unless `stream` is false.
           content:
             application/json:
-              schema:
-                type: object
-                additionalProperties: true
+              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
   /api/tags:
     get:
       tags: [ollama]
@@ -220,13 +227,6 @@ components:
         created_at: { type: string }
         message: { $ref: "#/components/schemas/ChatMessage" }
         done: { type: boolean }
-    OllamaGenerateRequest:
-      type: object
-      properties:
-        model: { type: string }
-        prompt: { type: string }
-        stream: { type: boolean }
-      required: [model, prompt]
     OllamaTags:
       type: object
       properties:

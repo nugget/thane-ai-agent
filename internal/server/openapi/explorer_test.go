@@ -6,12 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestRegisterRoutes verifies the explorer harness serves each asset with the
-// right status and content type, and that the embedded specs are well-formed
-// OpenAPI 3.1 documents. It does not assert how Scalar renders them in a
-// browser — only that the bytes are served correctly.
+// right status and content type. It only checks the served bytes (status,
+// Content-Type, a marker substring); spec well-formedness is validated in
+// TestSpecsEmbedded, and Scalar's browser rendering is out of scope.
 func TestRegisterRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
@@ -47,16 +49,24 @@ func TestRegisterRoutes(t *testing.T) {
 	}
 }
 
-// TestSpecsEmbedded guards against an empty or misnamed embed: both specs must
-// be present and non-trivial.
+// TestSpecsEmbedded validates that both specs are present, parse as YAML, and
+// declare OpenAPI 3.1 with a paths object — so a malformed or truncated spec
+// fails here in CI rather than only breaking the explorer in a browser.
 func TestSpecsEmbedded(t *testing.T) {
 	for _, name := range []string{"native.yaml", "compat.yaml"} {
 		data, err := files.ReadFile(name)
 		if err != nil {
 			t.Fatalf("embed missing %s: %v", name, err)
 		}
-		if len(data) < 200 {
-			t.Errorf("%s embedded but only %d bytes", name, len(data))
+		var doc map[string]any
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("%s is not valid YAML: %v", name, err)
+		}
+		if doc["openapi"] != "3.1.0" {
+			t.Errorf("%s openapi = %v, want \"3.1.0\"", name, doc["openapi"])
+		}
+		if _, ok := doc["paths"].(map[string]any); !ok {
+			t.Errorf("%s has no paths object", name)
 		}
 	}
 }

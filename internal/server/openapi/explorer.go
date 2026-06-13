@@ -7,6 +7,7 @@ package openapi
 
 import (
 	"embed"
+	"fmt"
 	"net/http"
 )
 
@@ -59,15 +60,18 @@ func handleIndex(w http.ResponseWriter, _ *http.Request) {
 }
 
 // serveEmbedded returns a handler that writes one embedded file with a fixed
-// Content-Type. Missing files 404 rather than panicking, so a bad embed path
-// fails loudly in tests instead of at request time in production.
+// Content-Type. The bytes are read once when the handler is built (at route
+// registration) and reused for every request, so serving the multi-megabyte
+// Scalar bundle never re-reads the embed FS or re-allocates per request. A
+// missing name is a build-time error — //go:embed guarantees the files exist
+// (TestSpecsEmbedded asserts it) — so it panics at registration rather than
+// 404ing on every request forever.
 func serveEmbedded(name, contentType string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		data, err := files.ReadFile(name)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
+	data, err := files.ReadFile(name)
+	if err != nil {
+		panic(fmt.Sprintf("openapi: embedded asset %q: %v", name, err))
+	}
+	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		_, _ = w.Write(data)
 	}
