@@ -1,6 +1,6 @@
 # Tools Reference
 
-Thane provides ~150 native tools organized by tag. A tool is available
+Thane's native tools are organized by tag. A tool is available
 to a given turn only when one of its default tags is active — see
 [The Agent Loop](../understanding/agent-loop.md) for how tags flip on
 and off, and [Prompt Caching](../prompt-caching.md) for how tag choices
@@ -472,7 +472,7 @@ overrides; they do not have a compiled-in entry in
 
 The primary MCP server in typical deployments is
 [`ha-mcp`](https://github.com/karimkhaleel/ha-mcp), which exposes
-90+ Home Assistant tools beyond Thane's native set. `include_tools`
+a broad set of Home Assistant tools beyond Thane's native set. `include_tools`
 filtering in the config narrows the bridged surface.
 
 See [Delegation & MCP](../understanding/delegation.md) for

@@ -9,7 +9,7 @@ companion (file naming, frontmatter shape, what kinds exist, regression
 tests). This page is about craft: how to mark a good trail.
 
 The mental model is trail marking. The model has access to a sprawling
-tool surface — somewhere between 130 and 200 native tools depending on
+tool surface — a large native tool set that varies by
 configuration, plus MCP additions. Talents are the trail blazes that
 say "this way for that kind of work" without trying to be the whole
 map. A good talent lowers the cost of finding the right tool in the
