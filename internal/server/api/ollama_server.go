@@ -55,7 +55,7 @@ func NewOllamaServer(address string, port int, loop *agent.Loop, logger *slog.Lo
 // The server listens on the address and port specified during creation.
 // It implements the following Ollama API endpoints:
 //   - POST /api/chat - Main conversation endpoint
-//   - POST /api/generate - Simple completion endpoint
+//   - POST /api/generate - Not implemented; returns 501 (use /api/chat)
 //   - GET /api/tags - List available models
 //   - GET /api/version - Get server version
 //   - GET / and HEAD / - Health check endpoints
@@ -146,12 +146,29 @@ func (s *OllamaServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
 }
 
-// handleGenerate handles POST /api/generate (simple completion).
-// This endpoint provides single-turn text completion for compatibility.
-// Currently implemented as a single-turn chat for simplicity.
+// handleGenerate handles POST /api/generate.
+//
+// Ollama's generate endpoint takes a prompt-based body ({model, prompt, ...})
+// and returns a generation-shaped response (a top-level "response" string, not
+// a "message" object). Thane does not implement that path: the only foreign
+// clients on this frozen compat surface — Home Assistant's Ollama integration
+// and open-webui — drive Thane exclusively through POST /api/chat, so generate
+// has no consumer.
+//
+// Decoding a prompt body as a chat request yields an empty messages slice and a
+// blank turn, which reads as "the model said nothing" rather than "this endpoint
+// is unsupported". Reject it honestly with 501 and point callers at /api/chat
+// instead. The hit is logged at Warn so that a real generate consumer, should
+// one ever appear, surfaces in the logs and can justify implementing the
+// prompt-based path.
 func (s *OllamaServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
-	// For now, treat generate like a single-turn chat
-	handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
+	s.logger.Warn("ollama /api/generate is not implemented; rejecting request",
+		"remote_addr", r.RemoteAddr,
+		"x_forwarded_for", r.Header.Get("X-Forwarded-For"),
+		"user_agent", r.Header.Get("User-Agent"),
+	)
+	ollamaError(w, http.StatusNotImplemented,
+		"/api/generate is not implemented; use POST /api/chat with a messages array")
 }
 
 // handleTags handles GET /api/tags (list models).

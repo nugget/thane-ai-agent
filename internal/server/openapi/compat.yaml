@@ -100,27 +100,23 @@ paths:
     post:
       tags: [ollama]
       operationId: ollamaGenerate
-      summary: Generate (Ollama shape) — currently a single-turn chat alias
+      deprecated: true
+      summary: Generate (Ollama shape) — not implemented
       description: |
-        Thane implements `/api/generate` by delegating to the same handler as
-        `/api/chat`, so it accepts the **chat** request shape (messages) and
-        returns the chat response — not Ollama's prompt-based generate format.
-        Documented as the frozen reality of the endpoint.
+        **Not implemented — always returns `501`.** Ollama's prompt-based
+        generate endpoint has no consumer on this frozen surface: Home
+        Assistant's Ollama integration and open-webui both drive Thane through
+        `POST /api/chat`. Rather than misdecode a `{model, prompt}` body as an
+        empty chat request and hand back a blank turn, the server rejects the
+        call with `501` and points the client at `/api/chat`.
       servers:
         - url: http://localhost:11434
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/OllamaChatRequest" }
       responses:
-        "200":
-          description: Chat response; an NDJSON stream unless `stream` is false.
+        "501":
+          description: Not implemented. Use `POST /api/chat` with a `messages` array.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
-            application/x-ndjson:
-              schema: { $ref: "#/components/schemas/OllamaChatResponse" }
+              schema: { $ref: "#/components/schemas/OllamaError" }
   /api/tags:
     get:
       tags: [ollama]
@@ -227,6 +223,11 @@ components:
         created_at: { type: string }
         message: { $ref: "#/components/schemas/ChatMessage" }
         done: { type: boolean }
+    OllamaError:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
     OllamaTags:
       type: object
       properties:
