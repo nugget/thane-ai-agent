@@ -195,6 +195,14 @@ func (a *App) initServers(s *newState) error {
 		a.ollamaServer.SetOWUTracker(owuTracker)
 	}
 
+	// --- OpenAI-compatible API server ---
+	// Optional second HTTP server that serves the frozen OpenAI shim
+	// (/v1/chat/completions, /v1/models) on its own port, keeping the
+	// Thane-native /v1 API on the primary port free of foreign shapes.
+	if cfg.OpenAIAPI.Enabled {
+		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, a.server, logger)
+	}
+
 	// --- Companion app endpoint ---
 	// Optional: WebSocket endpoint for native companion apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.

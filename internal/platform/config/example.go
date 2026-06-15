@@ -53,6 +53,11 @@ func ExampleConfig() *Config {
 			Port:    11434,
 		},
 
+		OpenAIAPI: OpenAIAPIConfig{
+			Enabled: true,
+			Port:    8081,
+		},
+
 		HomeAssistant: HomeAssistantConfig{
 			URL:   "https://your-homeassistant.local:8123",
 			Token: "your-long-lived-access-token",

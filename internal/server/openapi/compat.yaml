@@ -13,7 +13,7 @@ info:
     see the Thane Native API.
 
     Two foreign shapes are served, on different ports:
-    - **OpenAI-compatible** (`/v1/chat/completions`, `/v1/models`) — default port 8080.
+    - **OpenAI-compatible** (`/v1/chat/completions`, `/v1/models`) — default port 8081.
     - **Ollama-compatible** (`/api/*`) — default port 11434.
 
     AuthN is a per-client bearer API key (`Authorization: Bearer <key>`);
@@ -21,7 +21,7 @@ info:
     native API's granular `resource:action` scopes.
 
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:8081
     description: OpenAI-compatible surface
   - url: http://localhost:11434
     description: Ollama-compatible surface
@@ -42,7 +42,7 @@ paths:
       operationId: openaiChatCompletions
       summary: Chat completions (OpenAI shape)
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8081
       requestBody:
         required: true
         content:
@@ -68,7 +68,7 @@ paths:
         (e.g. `thane:latest`, `thane:premium`) so OpenAI clients can target a
         routing profile by model id.
       servers:
-        - url: http://localhost:8080
+        - url: http://localhost:8081
       responses:
         "200":
           description: Model list.

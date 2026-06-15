@@ -420,10 +420,6 @@ func (s *Server) SetArchiveStore(as *memory.ArchiveStore) {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// OpenAI-compatible endpoints
-	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
-	mux.HandleFunc("GET /v1/models", s.handleModels)
-
 	// Simplified chat endpoint (easier testing)
 	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
 
@@ -441,7 +437,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/requests/{id}/tools", s.handleRequestTools)
 
 	// Model registry endpoints
-	mux.HandleFunc("GET /v1/models/fleet", s.handleModelFleet)
+	mux.HandleFunc("GET /v1/models", s.handleModelFleet)
 	mux.HandleFunc("GET /v1/models/registry", s.handleModelRegistry)
 	mux.HandleFunc("PUT /v1/models/registry/policy", s.handleModelRegistryPolicySet)
 	mux.HandleFunc("DELETE /v1/models/registry/policy", s.handleModelRegistryPolicyDelete)
@@ -1072,8 +1068,8 @@ func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
 
 // handleModelFleet returns the native fleet view: the deployable models with
 // their resource, provider, capabilities, and routability, as a bare array.
-// This is the richer native list for UIs; the OpenAI-shaped list lives at
-// /v1/models (Compatibility API). [GET /v1/models/fleet]
+// The OpenAI-shaped list lives on the separate OpenAI-compatible server.
+// [GET /v1/models]
 func (s *Server) handleModelFleet(w http.ResponseWriter, r *http.Request) {
 	if s.modelRegistry == nil {
 		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")

@@ -496,7 +496,7 @@ func TestHandleModelFleet(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/models/fleet", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	server.handleModelFleet(rec, req)
 

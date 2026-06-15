@@ -26,6 +26,13 @@ ollama_api:
   enabled: true
   address: ""
   port: 11434
+# OpenAIAPI configures the optional OpenAI-compatible API server,
+# serving the frozen OpenAI shim on its own port (separate from the
+# Thane-native /v1 API on the primary listen port).
+openai_api:
+  enabled: true
+  address: ""
+  port: 8081
 #
 # (optional) CardDAV configures the optional CardDAV server for native
 # carddav:

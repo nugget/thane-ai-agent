@@ -1,20 +1,18 @@
 # API & Endpoints
 
-Thane serves three network listeners simultaneously from a single binary.
+Thane serves four network listeners simultaneously from a single binary.
 
 ## Port 8080 — Native API
 
-Port 8080 serves the OpenAI-compatible native API and the embedded Cognition
-Engine dashboard. The dashboard has no build step and fetches JSON/SSE
-endpoints from the same listener.
+Port 8080 serves the Thane-native API and the embedded Cognition Engine
+dashboard. The dashboard has no build step and fetches JSON/SSE endpoints from
+the same listener. The OpenAI-compatible shim runs on its own port (see below).
 
-### Chat and Models
+### Chat
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. The `model` field selects a [virtual model](../operating/routing-profiles.md), such as `thane:latest` or `thane:premium`. |
 | `POST` | `/v1/chat` | Minimal JSON chat endpoint for simple testing. |
-| `GET` | `/v1/models` | OpenAI-compatible model list. |
 
 ### Runtime and Web Dashboard
 
@@ -37,7 +35,7 @@ endpoints from the same listener.
 | `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
 | `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
 | `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
-| `GET` | `/v1/models/fleet` | Native fleet view: deployable models with resource, provider, and routability (bare array). |
+| `GET` | `/v1/models` | Native fleet view: deployable models with resource, provider, and routability (bare array). |
 | `GET` | `/v1/models/registry` | Effective model registry snapshot. |
 | `PUT` | `/v1/models/registry/policy` | Set a deployment policy. |
 | `DELETE` | `/v1/models/registry/policy?deployment=...` | Clear a deployment policy. |
@@ -87,6 +85,19 @@ endpoints from the same listener.
 | `POST` | `/v1/checkpoint/{id}/restore` | Restore from a checkpoint. |
 | `GET` | `/v1/companion/ws` | Native companion app WebSocket. |
 | `GET` | `/v1/platform/ws` | Legacy companion WebSocket alias. |
+
+## Port 8081 — OpenAI-Compatible API
+
+A dedicated listener for the frozen OpenAI-compatible shim, kept off the native
+`/v1` namespace so the two surfaces don't collide (mirrors the Ollama split).
+Enabled via `openai_api` in config. The `model` field selects a
+[virtual model](../operating/routing-profiles.md) such as `thane:latest` or
+`thane:premium`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. |
+| `GET` | `/v1/models` | OpenAI-compatible model list (routing aliases as model ids). |
 
 ## Port 11434 — Ollama-Compatible API
 

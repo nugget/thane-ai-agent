@@ -555,10 +555,10 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # -------------------------------------------------------- Models & Fleet
-  /v1/models/fleet:
+  /v1/models:
     get:
       tags: [Models & Fleet]
-      operationId: listModelFleet
+      operationId: listModels
       summary: Available models (native fleet view)
       description: |
         The native, richer fleet view (resources, capabilities, health) for
