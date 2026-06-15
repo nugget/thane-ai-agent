@@ -115,8 +115,6 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /static/{file...}", s.handleStatic)
 	mux.HandleFunc("GET /api/system", s.handleSystem)
-	mux.HandleFunc("GET /api/capabilities", s.handleCapabilities)
-	mux.HandleFunc("GET /api/capabilities/{tag}", s.handleCapability)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }
 
@@ -125,17 +123,6 @@ func (s *WebServer) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		s.logger.Debug("failed to write JSON response", "error", err)
-	}
-}
-
-// writeJSONError writes an error response with the given status code
-// and a JSON body of {"error": msg}. Unlike [http.Error], this sets
-// Content-Type to application/json for consistent API responses.
-func (s *WebServer) writeJSONError(w http.ResponseWriter, msg string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
-		s.logger.Debug("failed to write JSON error response", "error", err)
 	}
 }
 

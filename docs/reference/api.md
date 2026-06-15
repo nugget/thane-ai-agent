@@ -23,8 +23,6 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/version` | Build and runtime metadata. |
 | `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, and capability catalog. |
 | `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
-| `GET` | `/api/capabilities` | Resolved capability catalog. Pass `include=excluded` to include operator-excluded tools. |
-| `GET` | `/api/capabilities/{tag}` | Single capability entry. |
 
 ### Router, Registry, and History
 
@@ -61,6 +59,8 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
 | `GET` | `/v1/session/stats` | Current session usage and context stats. |
 | `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24). |
+| `GET` | `/v1/insights/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
+| `GET` | `/v1/insights/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
 | `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |
 | `POST` | `/v1/session/reset` | Reset current session stats. |
 | `POST` | `/v1/session/compact` | Compact current session history. |

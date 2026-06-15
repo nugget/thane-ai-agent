@@ -3,7 +3,9 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -63,4 +65,64 @@ func (s *Server) handleToolInsights(w http.ResponseWriter, r *http.Request) {
 		"stats": s.memoryStore.ToolCallStats(),
 		"calls": map[string]any{"tool_calls": calls, "count": len(calls)},
 	}, s.logger)
+}
+
+// UseCapabilitySurface wires the capability-surface getter that backs the
+// /v1/insights/capabilities endpoints.
+func (s *Server) UseCapabilitySurface(getter func() []toolcatalog.CapabilitySurface) {
+	s.capSurface = getter
+}
+
+// handleCapabilities returns the resolved capability-tag catalog. By default it
+// includes only active tools per tag; ?include=excluded also surfaces
+// operator-disabled tools. [GET /v1/insights/capabilities]
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if s.capSurface == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "capability catalog unavailable")
+		return
+	}
+	surface := s.capSurface()
+	if len(surface) == 0 {
+		s.errorResponse(w, http.StatusServiceUnavailable, "capability catalog unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, toolcatalog.BuildCapabilityCatalogView(surface, parseCapabilityViewOptions(r)), s.logger)
+}
+
+// handleCapability returns the resolved view of one capability tag, 404ing when
+// the tag is absent from the current surface. Honors the same ?include=excluded
+// as the catalog. [GET /v1/insights/capabilities/{tag}]
+func (s *Server) handleCapability(w http.ResponseWriter, r *http.Request) {
+	if s.capSurface == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "capability catalog unavailable")
+		return
+	}
+	tag := strings.TrimSpace(r.PathValue("tag"))
+	if tag == "" {
+		s.errorResponse(w, http.StatusBadRequest, "tag is required")
+		return
+	}
+	opts := parseCapabilityViewOptions(r)
+	for _, entry := range s.capSurface() {
+		if entry.Tag == tag {
+			rendered := toolcatalog.RenderCapabilityCatalogEntry(entry, opts)
+			w.Header().Set("Content-Type", "application/json")
+			writeJSON(w, rendered, s.logger)
+			return
+		}
+	}
+	s.errorResponse(w, http.StatusNotFound, "unknown capability tag")
+}
+
+// parseCapabilityViewOptions interprets the comma-separated ?include= query
+// parameter. Only "excluded" is recognized today; unknown values are ignored.
+func parseCapabilityViewOptions(r *http.Request) toolcatalog.CatalogViewOptions {
+	opts := toolcatalog.CatalogViewOptions{IncludeDelegate: true}
+	for _, token := range strings.Split(strings.ToLower(r.URL.Query().Get("include")), ",") {
+		if strings.TrimSpace(token) == "excluded" {
+			opts.IncludeExcluded = true
+		}
+	}
+	return opts
 }

@@ -62,6 +62,7 @@ func (a *App) initServers(s *newState) error {
 	server.ConfigureChatLoopLauncher(a.launchLoop)
 	server.SetEventBus(a.eventBus)
 	server.UseLoopRegistry(a.loopRegistry)
+	server.UseCapabilitySurface(a.capSurfaceGetter())
 	if a.indexDB != nil {
 		server.UseLogQuerier(&logQueryAdapter{db: a.indexDB})
 	}

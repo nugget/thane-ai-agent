@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -86,6 +87,7 @@ type Server struct {
 	loopRegistry                       LoopStatusReader
 	logQuerier                         LogQuerier
 	requestReader                      RequestReader
+	capSurface                         func() []toolcatalog.CapabilitySurface
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
@@ -431,6 +433,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/insights/router", s.handleRouterInsights)
 	mux.HandleFunc("GET /v1/insights/tools", s.handleToolInsights)
 	mux.HandleFunc("GET /v1/insights/usage", s.handleUsageSummary)
+	mux.HandleFunc("GET /v1/insights/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /v1/insights/capabilities/{tag}", s.handleCapability)
 
 	// Request introspection — detail, routing decision, and tool calls
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
