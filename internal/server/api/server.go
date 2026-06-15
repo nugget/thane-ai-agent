@@ -425,9 +425,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Simplified chat endpoint (easier testing)
 	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
 
-	// Health endpoints
+	// Health and system endpoints
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /v1/system", s.handleSystem)
+	mux.HandleFunc("GET /v1/system/logs", s.handleSystemLogs)
 
 	// Insights — consolidated router, tool, and usage analytics
 	mux.HandleFunc("GET /v1/insights/router", s.handleRouterInsights)
