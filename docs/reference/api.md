@@ -58,7 +58,7 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/conversations/{id}` | Conversation detail. |
 | `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
 | `GET` | `/v1/session/stats` | Current session usage and context stats. |
-| `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24). |
+| `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
 | `GET` | `/v1/insights/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
 | `GET` | `/v1/insights/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
 | `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |

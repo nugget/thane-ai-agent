@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -34,6 +35,9 @@ type OpenAIServer struct {
 //
 // The server is created but not started. Call Start to begin serving requests.
 func NewOpenAIServer(address string, port int, apiServer *Server, logger *slog.Logger) *OpenAIServer {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &OpenAIServer{address: address, port: port, api: apiServer, logger: logger}
 }
 
@@ -60,7 +64,12 @@ func (s *OpenAIServer) Start(ctx context.Context) error {
 		addr = "0.0.0.0"
 	}
 	s.logger.Info("starting OpenAI-compatible API server", "address", addr, "port", s.port)
-	return s.server.ListenAndServe()
+	// ErrServerClosed is the expected return on graceful Shutdown; don't surface
+	// it as an error (App.Serve would log it). Mirrors the other API servers.
+	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // Shutdown gracefully stops the server. Returns nil if it was never started.

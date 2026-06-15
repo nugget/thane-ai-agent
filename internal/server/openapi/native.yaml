@@ -632,8 +632,9 @@ paths:
       x-thane-scope: insights:read
       parameters:
         - { name: hours, in: query, schema: { type: integer, default: 24 } }
+        - { name: group_by, in: query, description: "Break the summary down by a dimension (e.g. model); omit for an ungrouped total.", schema: { type: string } }
       responses:
-        "200": { description: Usage summary., content: { application/json: { schema: { type: object } } } }
+        "200": { description: "Usage summary (grouped when group_by is set).", content: { application/json: { schema: { type: object } } } }
   /v1/insights/capabilities:
     get:
       tags: [Insights]
