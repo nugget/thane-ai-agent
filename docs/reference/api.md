@@ -23,12 +23,8 @@ endpoints from the same listener.
 | `GET` | `/` | Embedded Cognition Engine dashboard. |
 | `GET` | `/health` | Dependency health for service monitoring. |
 | `GET` | `/v1/version` | Build and runtime metadata. |
-| `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, loop definitions, and capability catalog. |
+| `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, and capability catalog. |
 | `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
-| `GET` | `/api/loops` | Live loop status snapshots, including recent iterations, active tags, tooling, and config. |
-| `GET` | `/api/loops/events` | SSE stream. Sends an initial loop snapshot, then loop and delegate events. |
-| `GET` | `/api/loops/{id}/logs` | Structured logs scoped to a loop's recent conversation IDs. |
-| `GET` | `/api/loop-definitions` | Effective durable loop-definition registry view, including runtime state. |
 | `GET` | `/api/capabilities` | Resolved capability catalog. Pass `include=excluded` to include operator-excluded tools. |
 | `GET` | `/api/capabilities/{tag}` | Single capability entry. |
 | `GET` | `/api/request-detail/_probe` | Request-detail availability probe. |
@@ -51,6 +47,10 @@ endpoints from the same listener.
 | `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
 | `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties. |
 | `DELETE` | `/v1/contacts/{id}` | Soft-delete a contact. |
+| `GET` | `/v1/loops` | Running loop status snapshots. Optional `?state=` filter (`pending`, `sleeping`, `waiting`, `processing`, `error`, `stopped`). |
+| `GET` | `/v1/loops/{id}` | One running loop's status. |
+| `GET` | `/v1/loops/{id}/logs` | Structured logs for a running loop's recent conversation IDs (bare array, newest first; `?limit=` default 50, max 200). |
+| `GET` | `/v1/loops/events` | SSE stream: initial loop snapshot, then loop and delegate events. |
 | `GET` | `/v1/loop-definitions` | Effective durable loop-definition registry view. |
 | `GET` | `/v1/loop-definitions/{name}` | One loop definition. |
 | `POST` | `/v1/loop-definitions` | Upsert a mutable overlay loop definition. |

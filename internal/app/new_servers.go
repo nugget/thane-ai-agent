@@ -535,7 +535,6 @@ func (a *App) initServers(s *newState) error {
 				modelRuntime:  a.modelRuntime,
 				router:        a.rtr,
 				capSurface:    a.capSurfaceGetter(),
-				definitions:   a.loopDefinitionView,
 			},
 			Logger: logger,
 		}
