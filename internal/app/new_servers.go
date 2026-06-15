@@ -524,11 +524,11 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	// --- Web dashboard ---
-	// Wire the web dashboard now that the loop registry exists.
+	// Wire the web dashboard's static UI and read-only status endpoints.
+	// Running-loop state now lives on the native API's /v1/loops* surface,
+	// so the dashboard no longer takes the loop registry or event bus.
 	{
 		webCfg := web.Config{
-			LoopRegistry: a.loopRegistry,
-			EventBus:     a.eventBus,
 			SystemStatus: &systemStatusAdapter{
 				connMgr:       a.connMgr,
 				modelRegistry: a.modelRegistry,

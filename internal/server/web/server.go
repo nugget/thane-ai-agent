@@ -1,7 +1,9 @@
 // Package web implements the Cognition Engine dashboard served at the
 // root of the Thane HTTP server. It provides a single-page interface
-// with real-time SSE event streaming, REST endpoints for loop state
-// snapshots, and log drill-down via the SQLite log index.
+// backed by REST endpoints for loop definitions, system health, the
+// capability catalog, request detail, and log drill-down via the SQLite
+// log index. Running-loop state and its live event stream are served by
+// the native API's /v1/loops* surface, not here.
 package web
 
 import (
@@ -16,7 +18,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
-	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -34,14 +35,6 @@ var allowedExtensions = map[string]bool{
 	".png":  true,
 	".ico":  true,
 	".json": true,
-}
-
-// LoopRegistry provides read access to the loop process registry.
-type LoopRegistry interface {
-	// Statuses returns a snapshot of all registered loops.
-	Statuses() []loop.Status
-	// Get returns a single loop by ID, or nil if not found.
-	Get(id string) *loop.Loop
 }
 
 // LogQuerier queries the structured log index. Implementations wrap
@@ -98,10 +91,6 @@ type ServiceHealth struct {
 
 // Config holds dependencies for the web server.
 type Config struct {
-	// LoopRegistry provides loop status snapshots. Required.
-	LoopRegistry LoopRegistry
-	// EventBus delivers real-time loop events via SSE. Required.
-	EventBus *events.Bus
 	// LogQuerier enables log drill-down. Nil disables the feature.
 	LogQuerier LogQuerier
 	// ContentQuerier enables request detail drill-down. Nil disables
@@ -116,8 +105,6 @@ type Config struct {
 
 // WebServer serves the Cognition Engine dashboard and its API endpoints.
 type WebServer struct {
-	registry       LoopRegistry
-	eventBus       *events.Bus
 	logQuerier     LogQuerier
 	contentQuerier ContentQuerier
 	systemStatus   SystemStatusProvider
@@ -131,8 +118,6 @@ func NewWebServer(cfg Config) *WebServer {
 		logger = slog.Default()
 	}
 	return &WebServer{
-		registry:       cfg.LoopRegistry,
-		eventBus:       cfg.EventBus,
 		logQuerier:     cfg.LogQuerier,
 		contentQuerier: cfg.ContentQuerier,
 		systemStatus:   cfg.SystemStatus,
@@ -148,10 +133,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("GET /api/capabilities", s.handleCapabilities)
 	mux.HandleFunc("GET /api/capabilities/{tag}", s.handleCapability)
-	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loop-definitions", s.handleLoopDefinitions)
-	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
-	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
 	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
