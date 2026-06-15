@@ -631,7 +631,7 @@ paths:
       description: Was `/v1/usage/summary`.
       x-thane-scope: insights:read
       parameters:
-        - { name: group_by, in: query, schema: { type: string } }
+        - { name: hours, in: query, schema: { type: integer, default: 24 } }
       responses:
         "200": { description: Usage summary., content: { application/json: { schema: { type: object } } } }
   /v1/insights/capabilities:

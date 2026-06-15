@@ -427,9 +427,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("GET /health", s.handleHealth)
 
-	// Router introspection endpoints
-	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
-	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
+	// Insights — consolidated router, tool, and usage analytics
+	mux.HandleFunc("GET /v1/insights/router", s.handleRouterInsights)
+	mux.HandleFunc("GET /v1/insights/tools", s.handleToolInsights)
+	mux.HandleFunc("GET /v1/insights/usage", s.handleUsageSummary)
 
 	// Request introspection — detail, routing decision, and tool calls
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
@@ -477,12 +478,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// History endpoints
 	mux.HandleFunc("GET /v1/conversations", s.handleConversationList)
 	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
-	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
-	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
 
 	// Session stats
 	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
-	mux.HandleFunc("GET /v1/usage/summary", s.handleUsageSummary)
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
@@ -991,43 +989,6 @@ func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) 
 type routerStatsResponse struct {
 	router.Stats
 	AnthropicRateLimit *fleet.AnthropicRateLimitSnapshot `json:"anthropic_rate_limit,omitempty"`
-}
-
-func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	stats := s.router.GetStats()
-	response := routerStatsResponse{Stats: stats}
-	if s.anthropicRateLimitSnapshot != nil {
-		response.AnthropicRateLimit = s.anthropicRateLimitSnapshot()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, response, s.logger)
-}
-
-func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	// Parse limit from query
-	limit := 20
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-
-	decisions := s.router.GetAuditLog(limit)
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"count":     len(decisions),
-		"decisions": decisions,
-	}, s.logger)
 }
 
 type setModelRegistryPolicyRequest struct {
@@ -1541,53 +1502,6 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, conv, s.logger)
-}
-
-func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
-		return
-	}
-
-	// Parse query params
-	convID := r.URL.Query().Get("conversation_id")
-	toolName := r.URL.Query().Get("tool")
-	limitStr := r.URL.Query().Get("limit")
-
-	limit := 50
-	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
-			limit = n
-		}
-	}
-
-	var calls []memory.ToolCall
-	if toolName != "" {
-		calls = s.memoryStore.GetToolCallsByName(toolName, limit)
-	} else if convID != "" {
-		calls = s.memoryStore.GetToolCalls(convID, limit)
-	} else {
-		// Get all recent (no specific filter)
-		calls = s.memoryStore.GetToolCalls("", limit)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"tool_calls": calls,
-		"count":      len(calls),
-	}, s.logger)
-}
-
-func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
-		return
-	}
-
-	stats := s.memoryStore.ToolCallStats()
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, stats, s.logger)
 }
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {

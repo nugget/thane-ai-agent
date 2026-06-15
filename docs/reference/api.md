@@ -30,8 +30,7 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/router/stats` | Router statistics, including Anthropic rate-limit snapshot when available. |
-| `GET` | `/v1/router/audit` | Recent routing decisions. |
+| `GET` | `/v1/insights/router` | Router stats (with Anthropic rate-limit snapshot) plus the recent routing-audit trail (`?limit`, default 20). |
 | `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
 | `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
 | `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
@@ -59,10 +58,9 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `POST` | `/v1/loop-definitions/{name}/launch` | Launch a stored loop definition. |
 | `GET` | `/v1/conversations` | Conversation summaries. |
 | `GET` | `/v1/conversations/{id}` | Conversation detail. |
-| `GET` | `/v1/tools/calls` | Tool-call history. |
-| `GET` | `/v1/tools/stats` | Tool usage stats. |
+| `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
 | `GET` | `/v1/session/stats` | Current session usage and context stats. |
-| `GET` | `/v1/usage/summary` | Usage summary over a time window. |
+| `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24). |
 | `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |
 | `POST` | `/v1/session/reset` | Reset current session stats. |
 | `POST` | `/v1/session/compact` | Compact current session history. |

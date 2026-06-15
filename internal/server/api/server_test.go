@@ -435,7 +435,7 @@ func TestHandleUsageSummary(t *testing.T) {
 
 	server := NewServer("", 0, nil, nil, nil, nil, store, nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=48&group_by=resource", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?hours=48&group_by=resource", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -471,7 +471,7 @@ func TestHandleUsageSummary(t *testing.T) {
 func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?group_by=bogus", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?group_by=bogus", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -483,7 +483,7 @@ func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=zero", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?hours=zero", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -542,7 +542,7 @@ func TestHandleModelRegistry(t *testing.T) {
 	}
 }
 
-func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
+func TestHandleRouterInsightsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
@@ -562,9 +562,9 @@ func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/router/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/router", nil)
 	rec := httptest.NewRecorder()
-	server.handleRouterStats(rec, req)
+	server.handleRouterInsights(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -574,10 +574,17 @@ func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if _, ok := body["total_requests"]; !ok {
-		t.Fatal("total_requests missing from router stats response")
+	if _, ok := body["audit"]; !ok {
+		t.Fatal("audit missing from router insights response")
 	}
-	limit, ok := body["anthropic_rate_limit"].(map[string]any)
+	stats, ok := body["stats"].(map[string]any)
+	if !ok {
+		t.Fatal("stats missing from router insights response")
+	}
+	if _, ok := stats["total_requests"]; !ok {
+		t.Fatal("total_requests missing from router insights stats")
+	}
+	limit, ok := stats["anthropic_rate_limit"].(map[string]any)
 	if !ok {
 		t.Fatal("anthropic_rate_limit missing or not a map")
 	}
