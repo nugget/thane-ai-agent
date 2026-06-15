@@ -1,24 +1,16 @@
-// Package web implements the Cognition Engine dashboard served at the
-// root of the Thane HTTP server. It provides a single-page interface
-// backed by REST endpoints for loop definitions, system health, the
-// capability catalog, request detail, and log drill-down via the SQLite
-// log index. Running-loop state and its live event stream are served by
-// the native API's /v1/loops* surface, not here.
+// Package web serves the embedded Cognition Engine dashboard — a single-page
+// app — as static files at the root of the Thane HTTP server. All JSON and SSE
+// data the dashboard consumes is served by the native API under /v1; this
+// package is static-file serving only.
 package web
 
 import (
 	"embed"
-	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/nugget/thane-ai-agent/internal/model/fleet"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
-	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 //go:embed static/*
@@ -36,94 +28,40 @@ var allowedExtensions = map[string]bool{
 	".json": true,
 }
 
-// LogQuerier queries the structured log index. Implementations wrap
-// [logging.Query] to decouple the web package from database/sql.
-type LogQuerier interface {
-	Query(params logging.QueryParams) ([]logging.LogEntry, error)
-}
-
-// SystemStatusProvider exposes runtime health and metadata for the
-// system node on the dashboard canvas. Nil disables the system node.
-type SystemStatusProvider interface {
-	// Health returns the current health state of all watched services.
-	Health() map[string]ServiceHealth
-	// Uptime returns how long the process has been running.
-	Uptime() time.Duration
-	// Version returns build and runtime metadata.
-	Version() map[string]string
-	// ModelRegistry returns the current model-registry snapshot.
-	ModelRegistry() *fleet.RegistrySnapshot
-	// RouterStats returns the current router statistics snapshot.
-	RouterStats() *router.Stats
-	// AnthropicRateLimitSnapshot returns the latest Anthropic
-	// rate-limit snapshot, or nil when Anthropic has not been observed.
-	AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot
-	// CapabilityCatalog returns the resolved runtime capability catalog
-	// rendered with the supplied options.
-	CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView
-	// CapabilityEntry returns the resolved view of a single capability
-	// tag, or nil when the tag is unknown.
-	CapabilityEntry(tag string, opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry
-}
-
-// ServiceHealth describes the health of a single watched service.
-type ServiceHealth struct {
-	// Name is the human-readable service name.
-	Name string `json:"name"`
-	// Ready indicates whether the service is currently healthy.
-	Ready bool `json:"ready"`
-	// LastCheck is the RFC3339 timestamp of the last health probe.
-	LastCheck string `json:"last_check,omitempty"`
-	// LastError is the error from the most recent failed probe.
-	LastError string `json:"last_error,omitempty"`
+// init verifies allowedExtensions are normalized at startup.
+func init() {
+	for ext := range allowedExtensions {
+		if ext == "" || ext[0] != '.' || ext != strings.ToLower(ext) {
+			panic(fmt.Sprintf("web: invalid extension in allowedExtensions: %q", ext))
+		}
+	}
 }
 
 // Config holds dependencies for the web server.
 type Config struct {
-	// LogQuerier enables log drill-down. Nil disables the feature.
-	LogQuerier LogQuerier
-	// SystemStatus provides runtime health for the system canvas node.
-	// Nil disables the system node.
-	SystemStatus SystemStatusProvider
 	// Logger for web server operations. Defaults to slog.Default().
 	Logger *slog.Logger
 }
 
-// WebServer serves the Cognition Engine dashboard and its API endpoints.
+// WebServer serves the Cognition Engine dashboard's static assets.
 type WebServer struct {
-	logQuerier   LogQuerier
-	systemStatus SystemStatusProvider
-	logger       *slog.Logger
+	logger *slog.Logger
 }
 
-// NewWebServer creates a web server with the given configuration.
+// NewWebServer creates a static-file web server with the given configuration.
 func NewWebServer(cfg Config) *WebServer {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &WebServer{
-		logQuerier:   cfg.LogQuerier,
-		systemStatus: cfg.SystemStatus,
-		logger:       logger,
-	}
+	return &WebServer{logger: logger}
 }
 
-// RegisterRoutes registers the visualizer routes on the given mux.
+// RegisterRoutes registers the dashboard's static routes on the given mux.
 // This satisfies the [api.WebServerRegistrar] interface.
 func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /static/{file...}", s.handleStatic)
-	mux.HandleFunc("GET /api/system", s.handleSystem)
-	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
-}
-
-// writeJSON encodes v as JSON to w, logging any errors.
-func (s *WebServer) writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		s.logger.Debug("failed to write JSON response", "error", err)
-	}
 }
 
 // handleIndex serves the single-page visualizer.

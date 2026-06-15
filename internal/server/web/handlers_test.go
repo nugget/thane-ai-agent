@@ -1,80 +1,21 @@
 package web
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/nugget/thane-ai-agent/internal/model/fleet"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
-	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
-	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
-// --- Test Doubles ---
-
-// stubLogQuerier implements [LogQuerier] for tests.
-type stubLogQuerier struct {
-	entries []logging.LogEntry
-	err     error
+func newTestServer() *WebServer {
+	return NewWebServer(Config{})
 }
-
-func (q *stubLogQuerier) Query(_ logging.QueryParams) ([]logging.LogEntry, error) {
-	return q.entries, q.err
-}
-
-func newTestServer(lq LogQuerier) *WebServer {
-	return NewWebServer(Config{
-		LogQuerier: lq,
-	})
-}
-
-// stubSystemStatus implements [SystemStatusProvider] for tests.
-type stubSystemStatus struct {
-	health        map[string]ServiceHealth
-	uptime        time.Duration
-	version       map[string]string
-	modelRegistry *fleet.RegistrySnapshot
-	routerStats   *router.Stats
-	rateLimit     *fleet.AnthropicRateLimitSnapshot
-	capCatalog    *toolcatalog.CapabilityCatalogView
-}
-
-func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
-func (s *stubSystemStatus) Uptime() time.Duration            { return s.uptime }
-func (s *stubSystemStatus) Version() map[string]string       { return s.version }
-func (s *stubSystemStatus) ModelRegistry() *fleet.RegistrySnapshot {
-	return s.modelRegistry
-}
-func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
-func (s *stubSystemStatus) AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot {
-	return s.rateLimit
-}
-func (s *stubSystemStatus) CapabilityCatalog(_ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
-	return s.capCatalog
-}
-func (s *stubSystemStatus) CapabilityEntry(tag string, _ toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry {
-	if s.capCatalog == nil {
-		return nil
-	}
-	for _, entry := range s.capCatalog.Capabilities {
-		if entry.Tag == tag {
-			return &entry
-		}
-	}
-	return nil
-}
-
-// --- Tests ---
 
 func TestHandleIndex(t *testing.T) {
 	t.Parallel()
 
-	srv := newTestServer(nil)
+	srv := newTestServer()
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -86,7 +27,6 @@ func TestHandleIndex(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
 	}
-
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "Cognition Engine") {
 		t.Error("GET / response does not contain 'Cognition Engine'")
@@ -99,7 +39,7 @@ func TestHandleIndex(t *testing.T) {
 func TestHandleStatic_CSS(t *testing.T) {
 	t.Parallel()
 
-	srv := newTestServer(nil)
+	srv := newTestServer()
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -119,7 +59,7 @@ func TestHandleStatic_CSS(t *testing.T) {
 func TestHandleStatic_JS(t *testing.T) {
 	t.Parallel()
 
-	srv := newTestServer(nil)
+	srv := newTestServer()
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -139,7 +79,7 @@ func TestHandleStatic_JS(t *testing.T) {
 func TestHandleStatic_Blocked(t *testing.T) {
 	t.Parallel()
 
-	srv := newTestServer(nil)
+	srv := newTestServer()
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -155,7 +95,7 @@ func TestHandleStatic_Blocked(t *testing.T) {
 func TestHandleStatic_NotFound(t *testing.T) {
 	t.Parallel()
 
-	srv := newTestServer(nil)
+	srv := newTestServer()
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
@@ -165,222 +105,5 @@ func TestHandleStatic_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("nonexistent file status = %d, want 404", w.Code)
-	}
-}
-
-func TestHandleSystem_Healthy(t *testing.T) {
-	t.Parallel()
-
-	capturedAt := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
-	sys := &stubSystemStatus{
-		health: map[string]ServiceHealth{
-			"mqtt":          {Name: "MQTT", Ready: true, LastCheck: "2025-01-01T00:00:00Z"},
-			"homeassistant": {Name: "Home Assistant", Ready: true},
-		},
-		uptime:  3*time.Hour + 42*time.Minute,
-		version: map[string]string{"version": "v0.1.0", "git_commit": "abc1234"},
-		modelRegistry: &fleet.RegistrySnapshot{
-			Generation:   2,
-			DefaultModel: "spark/gpt-oss:20b",
-			Resources: []fleet.RegistryResourceSnapshot{
-				{ID: "spark", Provider: "ollama", DiscoveredModels: 14},
-			},
-			Deployments: []fleet.RegistryDeploymentSnapshot{
-				{ID: "spark/gpt-oss:20b", Model: "gpt-oss:20b", Resource: "spark", Source: fleet.DeploymentSourceConfig, Routable: true},
-				{ID: "spark/qwen3:8b", Model: "qwen3:8b", Resource: "spark", Source: fleet.DeploymentSourceDiscovered, Routable: false},
-			},
-		},
-		routerStats: &router.Stats{
-			TotalRequests: 3,
-			DeploymentStats: map[string]router.DeploymentStats{
-				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
-			},
-		},
-		rateLimit: &fleet.AnthropicRateLimitSnapshot{
-			CapturedAt:        capturedAt,
-			UpstreamRequestID: "req_dashboard",
-			Requests: &fleet.AnthropicRateLimitBucket{
-				Limit:     5000,
-				Remaining: 4999,
-			},
-		},
-		capCatalog: &toolcatalog.CapabilityCatalogView{
-			Kind: "capability_catalog",
-			ActivationTools: toolcatalog.CapabilityActionTools{
-				Activate:   "tag_activate",
-				Deactivate: "tag_deactivate",
-			},
-			Capabilities: []toolcatalog.CapabilityCatalogEntry{
-				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 12},
-			},
-		},
-	}
-
-	srv := NewWebServer(Config{
-		SystemStatus: sys,
-	})
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/api/system", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/system status = %d, want 200", resp.StatusCode)
-	}
-
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	if body["status"] != "healthy" {
-		t.Errorf("status = %v, want healthy", body["status"])
-	}
-	if body["uptime"] != "3h42m0s" {
-		t.Errorf("uptime = %v, want 3h42m0s", body["uptime"])
-	}
-	health, ok := body["health"].(map[string]any)
-	if !ok {
-		t.Fatal("health field missing or not a map")
-	}
-	if len(health) != 2 {
-		t.Errorf("got %d services, want 2", len(health))
-	}
-	registry, ok := body["model_registry"].(map[string]any)
-	if !ok {
-		t.Fatal("model_registry field missing or not a map")
-	}
-	if registry["default_model"] != "spark/gpt-oss:20b" {
-		t.Errorf("default_model = %v, want spark/gpt-oss:20b", registry["default_model"])
-	}
-	deployments, ok := registry["deployments"].([]any)
-	if !ok || len(deployments) != 2 {
-		t.Fatalf("deployments = %T len=%d, want 2 entries", registry["deployments"], len(deployments))
-	}
-	routerStats, ok := body["router_stats"].(map[string]any)
-	if !ok {
-		t.Fatal("router_stats field missing or not a map")
-	}
-	if routerStats["total_requests"] != float64(3) {
-		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
-	}
-	rateLimit, ok := body["anthropic_rate_limit"].(map[string]any)
-	if !ok {
-		t.Fatal("anthropic_rate_limit field missing or not a map")
-	}
-	if rateLimit["upstream_request_id"] != "req_dashboard" {
-		t.Errorf("upstream_request_id = %v, want req_dashboard", rateLimit["upstream_request_id"])
-	}
-	capCatalog, ok := body["capability_catalog"].(map[string]any)
-	if !ok {
-		t.Fatal("capability_catalog field missing or not a map")
-	}
-	caps, ok := capCatalog["capabilities"].([]any)
-	if !ok || len(caps) != 1 {
-		t.Fatalf("capability catalog entries = %T len=%d, want 1 entry", capCatalog["capabilities"], len(caps))
-	}
-}
-
-func TestHandleSystem_Degraded(t *testing.T) {
-	t.Parallel()
-
-	sys := &stubSystemStatus{
-		health: map[string]ServiceHealth{
-			"mqtt": {Name: "MQTT", Ready: true},
-			"ha":   {Name: "Home Assistant", Ready: false, LastError: "connection refused"},
-		},
-		uptime:  time.Minute,
-		version: map[string]string{"version": "dev"},
-	}
-
-	srv := NewWebServer(Config{
-		SystemStatus: sys,
-	})
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/api/system", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	var body map[string]any
-	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	if body["status"] != "degraded" {
-		t.Errorf("status = %v, want degraded", body["status"])
-	}
-}
-
-func TestHandleSystem_Nil(t *testing.T) {
-	t.Parallel()
-
-	srv := newTestServer(nil)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/api/system", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404 when SystemStatus is nil", w.Code)
-	}
-}
-
-func TestHandleSystemLogs(t *testing.T) {
-	t.Parallel()
-
-	lq := &stubLogQuerier{
-		entries: []logging.LogEntry{
-			{ID: 1, Level: "INFO", Msg: "startup complete", SourceFile: "cmd/thane/main.go"},
-			{ID: 2, Level: "INFO", Msg: "service connected", SourceFile: "cmd/thane/main.go"},
-		},
-	}
-
-	srv := newTestServer(lq)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/api/system/logs", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/system/logs status = %d, want 200", resp.StatusCode)
-	}
-
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	count, ok := body["count"].(float64)
-	if !ok {
-		t.Fatal("count field missing")
-	}
-	if count != 2 {
-		t.Errorf("count = %v, want 2", count)
-	}
-}
-
-func TestHandleSystemLogs_NoQuerier(t *testing.T) {
-	t.Parallel()
-
-	srv := newTestServer(nil)
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-
-	req := httptest.NewRequest("GET", "/api/system/logs", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 when LogQuerier is nil", w.Code)
 	}
 }

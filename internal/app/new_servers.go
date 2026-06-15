@@ -537,19 +537,7 @@ func (a *App) initServers(s *newState) error {
 	// Running-loop state now lives on the native API's /v1/loops* surface,
 	// so the dashboard no longer takes the loop registry or event bus.
 	{
-		webCfg := web.Config{
-			SystemStatus: &systemStatusAdapter{
-				connMgr:       a.connMgr,
-				modelRegistry: a.modelRegistry,
-				modelRuntime:  a.modelRuntime,
-				router:        a.rtr,
-				capSurface:    a.capSurfaceGetter(),
-			},
-			Logger: logger,
-		}
-		if a.indexDB != nil {
-			webCfg.LogQuerier = &logQueryAdapter{db: a.indexDB}
-		}
+		webCfg := web.Config{Logger: logger}
 		// /v1/requests content source: the live request store, with the
 		// retained-content DB as a fallback when content retention is on.
 		var requestReader api.RequestReader

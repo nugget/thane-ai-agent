@@ -23,8 +23,6 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/version` | Build and runtime metadata. |
 | `GET` | `/v1/system` | Slim system rollup: status, dependency health, `uptime_seconds`, version. |
 | `GET` | `/v1/system/logs` | Structured process-log tail (bare array, newest first; `?level`, `?limit` default 50, max 200). |
-| `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, and capability catalog. |
-| `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
 
 ### Router, Registry, and History
 
