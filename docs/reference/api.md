@@ -1,6 +1,8 @@
 # API & Endpoints
 
-Thane serves four network listeners simultaneously from a single binary.
+Thane can serve up to four network listeners from a single binary. The native
+API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
+(11434), and CardDAV (8843) listeners are each optional, enabled via config.
 
 ## Port 8080 — Native API
 

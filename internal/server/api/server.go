@@ -1,4 +1,7 @@
-// Package api implements the OpenAI-compatible HTTP API.
+// Package api implements Thane's HTTP API surfaces. Server is the Thane-native,
+// loops-first /v1 management and observability API on the primary listen port;
+// OpenAIServer and OllamaServer are the frozen OpenAI- and Ollama-compatible
+// shims, each served on its own port.
 package api
 
 import (
