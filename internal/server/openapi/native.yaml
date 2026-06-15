@@ -132,6 +132,41 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/LogEntry" }
 
+  # -------------------------------------------------------------------- Chat
+  /v1/chat:
+    post:
+      tags: [Loops]
+      operationId: simpleChat
+      summary: Simple synchronous chat (one message in, one reply out)
+      description: |
+        A minimal first-party chat turn: post a message, get the assistant's
+        reply once the agent loop finishes. The richer OpenAI-shaped streaming
+        surface lives in the Compatibility API, not here.
+      x-thane-scope: sessions:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message: { type: string }
+                conversation_id: { type: string }
+              required: [message]
+      responses:
+        "200":
+          description: Assistant reply.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response: { type: string }
+                  model: { type: string }
+                  conversation_id: { type: string }
+                  tool_calls: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   # ------------------------------------------------------------------ Loops
   /v1/loops:
     get:

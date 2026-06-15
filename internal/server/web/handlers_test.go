@@ -107,3 +107,20 @@ func TestHandleStatic_NotFound(t *testing.T) {
 		t.Errorf("nonexistent file status = %d, want 404", w.Code)
 	}
 }
+
+func TestHandleIndex_RetiredPathIs404(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer()
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// Retired /api/* URLs must 404, not return a 200 dashboard shell.
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("GET /api/system status = %d, want 404 (not the dashboard shell)", w.Code)
+	}
+}

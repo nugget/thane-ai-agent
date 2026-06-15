@@ -57,14 +57,14 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/conversations` | Conversation summaries. |
 | `GET` | `/v1/conversations/{id}` | Conversation detail. |
 | `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
-| `GET` | `/v1/session/stats` | Current session usage and context stats. |
+| `GET` | `/v1/sessions/stats` | Current session usage and context stats. |
 | `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
 | `GET` | `/v1/insights/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
 | `GET` | `/v1/insights/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
-| `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |
-| `POST` | `/v1/session/reset` | Reset current session stats. |
-| `POST` | `/v1/session/compact` | Compact current session history. |
-| `GET` | `/v1/session/history` | Current session history. |
+| `POST` | `/v1/sessions/balance` | Set reported balance for session cost tracking. |
+| `POST` | `/v1/sessions/reset` | Reset current session stats. |
+| `POST` | `/v1/sessions/compact` | Compact current session history. |
+| `GET` | `/v1/sessions/history` | Current session history. |
 | `GET` | `/v1/archive/sessions` | Archived session list. |
 | `GET` | `/v1/archive/sessions/{id}` | Archived session detail. |
 | `GET` | `/v1/archive/sessions/{id}/export` | Export one archived session. |
@@ -76,13 +76,14 @@ the same listener. The OpenAI-compatible shim runs on its own port (see below).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v1/checkpoint` | Create a checkpoint. |
+| `POST` | `/v1/checkpoints` | Create a checkpoint. |
 | `GET` | `/v1/checkpoints` | List checkpoints. |
-| `GET` | `/v1/checkpoint/{id}` | Get checkpoint metadata/detail. |
-| `DELETE` | `/v1/checkpoint/{id}` | Delete a checkpoint. |
-| `POST` | `/v1/checkpoint/{id}/restore` | Restore from a checkpoint. |
-| `GET` | `/v1/companion/ws` | Native companion app WebSocket. |
-| `GET` | `/v1/platform/ws` | Legacy companion WebSocket alias. |
+| `GET` | `/v1/checkpoints/{id}` | Get checkpoint metadata/detail. |
+| `DELETE` | `/v1/checkpoints/{id}` | Delete a checkpoint. |
+| `POST` | `/v1/checkpoints/{id}/restore` | Restore from a checkpoint. |
+| `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
+| `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias. |
+| `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias. |
 
 ## Port 8081 — OpenAI-Compatible API
 

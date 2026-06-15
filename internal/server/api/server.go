@@ -475,22 +475,22 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
 
 	// Checkpoint endpoints
-	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
+	mux.HandleFunc("POST /v1/checkpoints", s.handleCheckpointCreate)
 	mux.HandleFunc("GET /v1/checkpoints", s.handleCheckpointList)
-	mux.HandleFunc("GET /v1/checkpoint/{id}", s.handleCheckpointGet)
-	mux.HandleFunc("DELETE /v1/checkpoint/{id}", s.handleCheckpointDelete)
-	mux.HandleFunc("POST /v1/checkpoint/{id}/restore", s.handleCheckpointRestore)
+	mux.HandleFunc("GET /v1/checkpoints/{id}", s.handleCheckpointGet)
+	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.handleCheckpointDelete)
+	mux.HandleFunc("POST /v1/checkpoints/{id}/restore", s.handleCheckpointRestore)
 
 	// History endpoints
 	mux.HandleFunc("GET /v1/conversations", s.handleConversationList)
 	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
 
 	// Session stats
-	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
-	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
-	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
-	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
-	mux.HandleFunc("GET /v1/session/history", s.handleSessionHistory)
+	mux.HandleFunc("GET /v1/sessions/stats", s.handleSessionStats)
+	mux.HandleFunc("POST /v1/sessions/balance", s.handleSetBalance)
+	mux.HandleFunc("POST /v1/sessions/reset", s.handleSessionReset)
+	mux.HandleFunc("POST /v1/sessions/compact", s.handleSessionCompact)
+	mux.HandleFunc("GET /v1/sessions/history", s.handleSessionHistory)
 
 	// Archive endpoints
 	mux.HandleFunc("GET /v1/archive/sessions", s.handleArchiveSessions)
@@ -500,9 +500,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// Companion app WebSocket endpoint. The platform route is a legacy
-	// alias for existing thane-agent-macos installs.
+	// First-party realtime WebSocket. /v1/realtime/ws is the canonical path
+	// (per native.yaml); /v1/companion/ws and /v1/platform/ws are legacy
+	// aliases for existing thane-agent-macos installs.
 	if s.companionHandler != nil {
+		mux.Handle("GET /v1/realtime/ws", s.companionHandler)
 		mux.Handle("GET /v1/companion/ws", s.companionHandler)
 		mux.Handle("GET /v1/platform/ws", s.companionHandler)
 	}
