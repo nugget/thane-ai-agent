@@ -227,6 +227,20 @@ func (r *Registry) Get(id string) *Loop {
 	return r.loops[id]
 }
 
+// StatusByID returns the status snapshot of the loop with the given ID.
+// The bool is false when no loop is registered under that ID. It lets
+// read-only callers (e.g. the /v1/loops API) depend on the snapshot rather
+// than the live *Loop.
+func (r *Registry) StatusByID(id string) (Status, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	l := r.loops[id]
+	if l == nil {
+		return Status{}, false
+	}
+	return l.Status(), true
+}
+
 // GetByName returns the first loop with the given name, or nil if not
 // found. If multiple loops share a name, the result is undefined.
 func (r *Registry) GetByName(name string) *Loop {

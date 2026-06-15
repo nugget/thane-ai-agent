@@ -810,8 +810,8 @@ components:
 
     LoopState:
       type: string
-      enum: [pending, sleeping, running, error, stopped]
-      description: Lifecycle state of a loop.
+      enum: [pending, sleeping, waiting, processing, error, stopped]
+      description: Lifecycle state of a loop (mirrors runtime/loop.State).
     LoopStatus:
       type: object
       description: Snapshot of a loop's state and metrics (mirrors runtime/loop.Status).

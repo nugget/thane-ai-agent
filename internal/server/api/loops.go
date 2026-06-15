@@ -18,9 +18,12 @@ import (
 // /v1/loops endpoints. It is the subset of *loop.Registry the API needs and
 // is satisfied by that registry directly. Consolidates the running-loop
 // surface that previously lived only in the web dashboard's /api/loops.
+//
+// StatusByID returns a Status value (not the live *loop.Loop) so the handlers
+// depend only on the snapshot they render — and can be exercised with a fake.
 type LoopStatusReader interface {
 	Statuses() []looppkg.Status
-	Get(id string) *looppkg.Loop
+	StatusByID(id string) (looppkg.Status, bool)
 }
 
 // LogQuerier queries the structured log index for loop-scoped log retrieval.
@@ -66,17 +69,18 @@ func (s *Server) handleLoop(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	l := s.loopRegistry.Get(id)
-	if l == nil {
+	status, ok := s.loopRegistry.StatusByID(id)
+	if !ok {
 		s.errorResponse(w, http.StatusNotFound, "loop not found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, l.Status(), s.logger)
+	writeJSON(w, status, s.logger)
 }
 
 // handleLoopLogs returns log entries scoped to one loop's recent conversation
-// IDs, newest-last. [GET /v1/loops/{id}/logs]
+// IDs as a bare JSON array, newest first, per the native contract.
+// [GET /v1/loops/{id}/logs]
 func (s *Server) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	if s.logQuerier == nil {
 		s.errorResponse(w, http.StatusServiceUnavailable, "log index not available")
@@ -91,29 +95,43 @@ func (s *Server) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	l := s.loopRegistry.Get(id)
-	if l == nil {
+	status, ok := s.loopRegistry.StatusByID(id)
+	if !ok {
 		s.errorResponse(w, http.StatusNotFound, "loop not found")
 		return
 	}
-	status := l.Status()
-	if len(status.RecentConvIDs) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		writeJSON(w, map[string]any{"entries": []any{}, "count": 0}, s.logger)
-		return
-	}
+	entries := s.mergeLoopLogs(status.RecentConvIDs, r.URL.Query().Get("level"), parseLogLimit(r.URL.Query().Get("limit")))
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, entries, s.logger)
+}
 
-	level := r.URL.Query().Get("level")
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
-	}
+// defaultLogLimit matches the native API's shared Limit parameter and
+// logging.Query's own default (internal/server/openapi/native.yaml).
+const defaultLogLimit = 50
 
-	var allEntries []logging.LogEntry
-	for _, convID := range status.RecentConvIDs {
-		entries, err := s.logQuerier.Query(logging.QueryParams{
+// parseLogLimit reads a ?limit= value, falling back to defaultLogLimit when
+// unset or invalid and capping at 200 to bound a single query.
+func parseLogLimit(v string) int {
+	if v == "" {
+		return defaultLogLimit
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultLogLimit
+	}
+	if n > 200 {
+		return 200
+	}
+	return n
+}
+
+// mergeLoopLogs fans out across a loop's recent conversation IDs, merges the
+// results, sorts newest first, and truncates to limit. The returned slice is
+// always non-nil so callers encode a JSON array, never null.
+func (s *Server) mergeLoopLogs(convIDs []string, level string, limit int) []logging.LogEntry {
+	entries := make([]logging.LogEntry, 0, limit)
+	for _, convID := range convIDs {
+		got, err := s.logQuerier.Query(logging.QueryParams{
 			ConversationID: convID,
 			Level:          level,
 			Limit:          limit,
@@ -122,16 +140,15 @@ func (s *Server) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 			s.logger.Warn("loop log query failed", "conversation_id", convID, "error", err)
 			continue
 		}
-		allEntries = append(allEntries, entries...)
+		entries = append(entries, got...)
 	}
-	sort.Slice(allEntries, func(i, j int) bool {
-		return allEntries[i].Timestamp.Before(allEntries[j].Timestamp)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
-	if len(allEntries) > limit {
-		allEntries = allEntries[len(allEntries)-limit:]
+	if len(entries) > limit {
+		entries = entries[:limit]
 	}
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{"entries": allEntries, "count": len(allEntries)}, s.logger)
+	return entries
 }
 
 // loopEvent wraps an [events.Event] for SSE serialization with a top-level
