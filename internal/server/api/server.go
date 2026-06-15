@@ -441,11 +441,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/requests/{id}/tools", s.handleRequestTools)
 
 	// Model registry endpoints
-	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
-	mux.HandleFunc("POST /v1/model-registry/policy", s.handleModelRegistryPolicySet)
-	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
-	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
-	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
+	mux.HandleFunc("GET /v1/models/fleet", s.handleModelFleet)
+	mux.HandleFunc("GET /v1/models/registry", s.handleModelRegistry)
+	mux.HandleFunc("PUT /v1/models/registry/policy", s.handleModelRegistryPolicySet)
+	mux.HandleFunc("DELETE /v1/models/registry/policy", s.handleModelRegistryPolicyDelete)
+	mux.HandleFunc("PUT /v1/models/registry/resource-policy", s.handleModelRegistryResourcePolicySet)
+	mux.HandleFunc("DELETE /v1/models/registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
 
 	// Contact directory endpoints
 	mux.HandleFunc("GET /v1/contacts", s.handleContactsList)
@@ -1067,6 +1068,23 @@ func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
 	snapshot := s.modelRegistry.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snapshot, s.logger)
+}
+
+// handleModelFleet returns the native fleet view: the deployable models with
+// their resource, provider, capabilities, and routability, as a bare array.
+// This is the richer native list for UIs; the OpenAI-shaped list lives at
+// /v1/models (Compatibility API). [GET /v1/models/fleet]
+func (s *Server) handleModelFleet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+	deployments := s.modelRegistry.Snapshot().Deployments
+	if deployments == nil {
+		deployments = []fleet.RegistryDeploymentSnapshot{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, deployments, s.logger)
 }
 
 func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Request) {

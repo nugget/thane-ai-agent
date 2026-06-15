@@ -37,11 +37,12 @@ endpoints from the same listener.
 | `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
 | `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
 | `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
-| `GET` | `/v1/model-registry` | Effective model registry snapshot. |
-| `POST` | `/v1/model-registry/policy` | Set a deployment policy. |
-| `DELETE` | `/v1/model-registry/policy?deployment=...` | Clear a deployment policy. |
-| `POST` | `/v1/model-registry/resource-policy` | Set a resource policy. |
-| `DELETE` | `/v1/model-registry/resource-policy?resource=...` | Clear a resource policy. |
+| `GET` | `/v1/models/fleet` | Native fleet view: deployable models with resource, provider, and routability (bare array). |
+| `GET` | `/v1/models/registry` | Effective model registry snapshot. |
+| `PUT` | `/v1/models/registry/policy` | Set a deployment policy. |
+| `DELETE` | `/v1/models/registry/policy?deployment=...` | Clear a deployment policy. |
+| `PUT` | `/v1/models/registry/resource-policy` | Set a resource policy. |
+| `DELETE` | `/v1/models/registry/resource-policy?resource=...` | Clear a resource policy. |
 | `GET` | `/v1/contacts` | List or search contacts. Supports `query`, `kind`, `trust_zone`, `property`, `value`, `exact=true`, and `limit` (default 100, max 500). |
 | `GET` | `/v1/contacts/{id}` | Get one contact with structured properties. |
 | `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
