@@ -85,6 +85,7 @@ type Server struct {
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
 	loopRegistry                       LoopStatusReader
 	logQuerier                         LogQuerier
+	requestReader                      RequestReader
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
@@ -433,7 +434,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Router introspection endpoints
 	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
 	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
-	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
+
+	// Request introspection — detail, routing decision, and tool calls
+	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
+	mux.HandleFunc("GET /v1/requests/{id}/routing", s.handleRequestRouting)
+	mux.HandleFunc("GET /v1/requests/{id}/tools", s.handleRequestTools)
 
 	// Model registry endpoints
 	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
@@ -1026,28 +1031,6 @@ func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
 		"count":     len(decisions),
 		"decisions": decisions,
 	}, s.logger)
-}
-
-func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	requestID := r.PathValue("requestId")
-	if requestID == "" {
-		s.errorResponse(w, http.StatusBadRequest, "requestId required")
-		return
-	}
-
-	decision := s.router.Explain(requestID)
-	if decision == nil {
-		s.errorResponse(w, http.StatusNotFound, "decision not found")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, decision, s.logger)
 }
 
 type setModelRegistryPolicyRequest struct {

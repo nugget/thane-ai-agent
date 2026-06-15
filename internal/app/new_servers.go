@@ -538,17 +538,23 @@ func (a *App) initServers(s *newState) error {
 			},
 			Logger: logger,
 		}
-		if a.liveRequestStore != nil {
-			webCfg.ContentQuerier = a.liveRequestStore
-		}
 		if a.indexDB != nil {
 			webCfg.LogQuerier = &logQueryAdapter{db: a.indexDB}
-			if cfg.Logging.RetainContent {
-				webCfg.ContentQuerier = &fallbackContentQuerier{
-					primary:  a.liveRequestStore,
-					fallback: &contentQueryAdapter{db: a.indexDB},
-				}
+		}
+		// /v1/requests content source: the live request store, with the
+		// retained-content DB as a fallback when content retention is on.
+		var requestReader api.RequestReader
+		if a.liveRequestStore != nil {
+			requestReader = a.liveRequestStore
+		}
+		if a.indexDB != nil && cfg.Logging.RetainContent {
+			requestReader = &fallbackContentQuerier{
+				primary:  a.liveRequestStore,
+				fallback: &contentQueryAdapter{db: a.indexDB},
 			}
+		}
+		if requestReader != nil {
+			server.UseRequestReader(requestReader)
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))

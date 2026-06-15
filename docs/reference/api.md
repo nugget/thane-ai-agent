@@ -27,8 +27,6 @@ endpoints from the same listener.
 | `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
 | `GET` | `/api/capabilities` | Resolved capability catalog. Pass `include=excluded` to include operator-excluded tools. |
 | `GET` | `/api/capabilities/{tag}` | Single capability entry. |
-| `GET` | `/api/request-detail/_probe` | Request-detail availability probe. |
-| `GET` | `/api/requests/{id}` | Live or retained request detail: prompt, messages, tool calls, results, and token metadata. |
 
 ### Router, Registry, and History
 
@@ -36,7 +34,9 @@ endpoints from the same listener.
 | --- | --- | --- |
 | `GET` | `/v1/router/stats` | Router statistics, including Anthropic rate-limit snapshot when available. |
 | `GET` | `/v1/router/audit` | Recent routing decisions. |
-| `GET` | `/v1/router/explain/{requestId}` | Routing decision for one request ID. |
+| `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
+| `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
+| `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
 | `GET` | `/v1/model-registry` | Effective model registry snapshot. |
 | `POST` | `/v1/model-registry/policy` | Set a deployment policy. |
 | `DELETE` | `/v1/model-registry/policy?deployment=...` | Clear a deployment policy. |

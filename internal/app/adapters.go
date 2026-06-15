@@ -836,8 +836,8 @@ func (a *logQueryAdapter) Query(params logging.QueryParams) ([]logging.LogEntry,
 	return logging.Query(a.db, params)
 }
 
-// contentQueryAdapter bridges the web package's [web.ContentQuerier]
-// interface to [logging.QueryRequestDetail].
+// contentQueryAdapter bridges [api.RequestReader] to
+// [logging.QueryRequestDetail], backing /v1/requests from the log index.
 type contentQueryAdapter struct {
 	db *sql.DB
 }
@@ -850,8 +850,8 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 // fallbackContentQuerier checks the primary source first, then falls back
 // to a secondary querier when the primary has no matching request detail.
 type fallbackContentQuerier struct {
-	primary  web.ContentQuerier
-	fallback web.ContentQuerier
+	primary  api.RequestReader
+	fallback api.RequestReader
 }
 
 func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {

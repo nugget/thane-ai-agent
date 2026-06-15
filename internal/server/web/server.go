@@ -42,13 +42,6 @@ type LogQuerier interface {
 	Query(params logging.QueryParams) ([]logging.LogEntry, error)
 }
 
-// ContentQuerier fetches live or retained request content (system
-// prompts, tool call details, message bodies). Nil disables the
-// request detail API endpoint.
-type ContentQuerier interface {
-	QueryRequestDetail(requestID string) (*logging.RequestDetail, error)
-}
-
 // SystemStatusProvider exposes runtime health and metadata for the
 // system node on the dashboard canvas. Nil disables the system node.
 type SystemStatusProvider interface {
@@ -89,9 +82,6 @@ type ServiceHealth struct {
 type Config struct {
 	// LogQuerier enables log drill-down. Nil disables the feature.
 	LogQuerier LogQuerier
-	// ContentQuerier enables request detail drill-down. Nil disables
-	// the /api/requests/{id} endpoint.
-	ContentQuerier ContentQuerier
 	// SystemStatus provides runtime health for the system canvas node.
 	// Nil disables the system node.
 	SystemStatus SystemStatusProvider
@@ -101,10 +91,9 @@ type Config struct {
 
 // WebServer serves the Cognition Engine dashboard and its API endpoints.
 type WebServer struct {
-	logQuerier     LogQuerier
-	contentQuerier ContentQuerier
-	systemStatus   SystemStatusProvider
-	logger         *slog.Logger
+	logQuerier   LogQuerier
+	systemStatus SystemStatusProvider
+	logger       *slog.Logger
 }
 
 // NewWebServer creates a web server with the given configuration.
@@ -114,10 +103,9 @@ func NewWebServer(cfg Config) *WebServer {
 		logger = slog.Default()
 	}
 	return &WebServer{
-		logQuerier:     cfg.LogQuerier,
-		contentQuerier: cfg.ContentQuerier,
-		systemStatus:   cfg.SystemStatus,
-		logger:         logger,
+		logQuerier:   cfg.LogQuerier,
+		systemStatus: cfg.SystemStatus,
+		logger:       logger,
 	}
 }
 
@@ -129,8 +117,6 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("GET /api/capabilities", s.handleCapabilities)
 	mux.HandleFunc("GET /api/capabilities/{tag}", s.handleCapability)
-	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)
-	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }
 
