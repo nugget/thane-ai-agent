@@ -51,6 +51,9 @@ OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/loops/{id}` | One running loop's status. |
 | `GET` | `/v1/loops/{id}/logs` | Structured logs for a running loop's recent conversation IDs (bare array, newest first; `?limit=` default 50, max 200). |
 | `GET` | `/v1/loops/events` | SSE stream: initial loop snapshot, then loop and delegate events. |
+| `GET` | `/v1/schedules` | Scheduler tasks (`at`/`every`/`cron`) each with its next fire time. Optional `?enabled=true`. |
+| `GET` | `/v1/schedules/{id}` | One scheduled task. |
+| `GET` | `/v1/schedules/{id}/executions` | A task's execution history (bare array, newest first; `?limit` default 50, max 200). |
 | `GET` | `/v1/loop-definitions` | Effective durable loop-definition registry view. |
 | `GET` | `/v1/loop-definitions/{name}` | One loop definition. |
 | `POST` | `/v1/loop-definitions` | Upsert a mutable overlay loop definition. |

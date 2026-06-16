@@ -90,6 +90,7 @@ type Server struct {
 	loopRegistry                       LoopStatusReader
 	logQuerier                         LogQuerier
 	requestReader                      RequestReader
+	schedulerReader                    SchedulerReader
 	capSurface                         func() []toolcatalog.CapabilitySurface
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
@@ -476,6 +477,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /v1/loops/{id}", s.handleLoop)
 	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
+
+	// Scheduler: durable scheduled tasks and their execution history,
+	// surfacing the previously internal-only scheduler subsystem.
+	mux.HandleFunc("GET /v1/schedules", s.handleSchedules)
+	mux.HandleFunc("GET /v1/schedules/{id}", s.handleSchedule)
+	mux.HandleFunc("GET /v1/schedules/{id}/executions", s.handleScheduleExecutions)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoints", s.handleCheckpointCreate)
