@@ -29,6 +29,13 @@
   <header class="header">
     <div class="header-left">
       <h1 class="header-title">Thane <span class="header-sep">&middot;</span> Cognition Engine</h1>
+      <nav class="nav">
+        <a href="#/" data-route="graph" class="nav-link">Graph</a>
+        <a href="#/models" data-route="models" class="nav-link">Models</a>
+        <a href="#/loop-definitions" data-route="loop-definitions" class="nav-link">Loops</a>
+        <a href="#/usage" data-route="usage" class="nav-link">Usage</a>
+        <a href="#/schedules" data-route="schedules" class="nav-link">Schedule</a>
+      </nav>
     </div>
     <div class="header-right">
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
@@ -77,6 +84,8 @@
       </div>
     </aside>
   </main>
+
+  <section id="view-root" class="view-root" hidden></section>
 
   <div class="resize-handle resize-handle--h" id="resize-h" hidden></div>
   <section class="log-panel" id="log-panel" hidden>
@@ -371,6 +380,6 @@
 
   <script src="/static/shared.js"></script>
   <script type="module" src="/static/theme.js"></script>
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/main.js"></script>
 </body>
 </html>
