@@ -1,7 +1,9 @@
-// Cognition Engine — vanilla JS, no framework, no build step.
+// Cognition Engine — vanilla JS, native ES modules, no build step.
 // Connects to the SSE event stream and renders loop nodes as SVG.
 
-'use strict';
+import * as api from './data/client.js';
+import { subscribe as subscribeLoopEvents } from './data/events.js';
+import { composeSystem } from './data/systemModel.js';
 
 // ---------------------------------------------------------------------------
 // State
@@ -14,7 +16,7 @@ const state = {
   notifications: [],      // active dashboard notifications (newest first)
   sleepTimers: new Map(), // id -> { startedAt: number (ms timestamp), durationMs: number }
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
-  system: null,           // system status object from /api/system
+  system: null,           // system status object from /v1/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
   knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
@@ -569,7 +571,7 @@ function syncPhysicsNodes(cx, cy) {
   // Remove physics nodes for loops that no longer exist (and aren't system).
   // Exiting nodes stay until their DOM animationend handler cleans them up.
   // Also handles the boot-order race: an initial render may complete before
-  // /api/system returns, in which case the registry core gets a physics
+  // /v1/system returns, in which case the registry core gets a physics
   // node like any other loop. When system status later arrives, suppress
   // the registry core's physics node so it stops participating in layout.
   for (const id of physics.nodes.keys()) {
@@ -2485,104 +2487,95 @@ const TRUST_ZONE_COLORS = {
 // SSE Connection
 // ---------------------------------------------------------------------------
 
-let eventSource = null;
-let eventSourceClosing = false;
+let unsubscribeLoopEvents = null;
 
-function disconnectEventStream() {
-  eventSourceClosing = true;
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
+// connect subscribes the graph to the shared /v1/loops/events stream. The
+// stream and its reconnection are owned by data/events.js; this wires the
+// snapshot/loop/delegate payloads into graph state and mirrors the former
+// onopen/onerror connection-status handling.
+function connect() {
+  if (unsubscribeLoopEvents) unsubscribeLoopEvents();
+  setConnState('connecting');
+  unsubscribeLoopEvents = subscribeLoopEvents({
+    onSnapshot: (statuses) => {
+      state.loops.clear();
+      state.iterationHistory.clear();
+      for (const s of statuses) {
+        // Seed iteration history from server-side ring buffer.
+        if (s.recent_iterations && s.recent_iterations.length > 0) {
+          state.iterationHistory.set(s.id, s.recent_iterations.slice());
+        }
+        // Seed live telemetry for loops already in processing state
+        // so the Live Activity section shows immediately on connect.
+        if (s.state === 'processing') {
+          const lastWake = parseTimestamp(s.last_wake_at);
+          s._iterStartTs = lastWake ? lastWake.getTime() : Date.now();
+          s._liveTools = [];
+          s._liveModel = '';
+          // Restore LLM context from snapshot so late-connecting clients
+          // see enrichment data (model, tokens, complexity, etc.) immediately.
+          s._llmContext = s.llm_context || null;
+          if (s._llmContext && s._llmContext.model) {
+            s._liveModel = s._llmContext.model;
+          }
+        }
+        state.loops.set(s.id, s);
+      }
+      renderAll();
+      setConnState('connected');
+    },
+    onLoop: (evt) => handleLoopEvent(evt),
+    onDelegate: (evt) => handleDelegateEvent(evt),
+    onState: (status) => {
+      if (status === 'connected') {
+        handleStreamConnected();
+      } else if (status === 'disconnected') {
+        handleStreamDisconnected();
+      } else {
+        setConnState('connecting');
+      }
+    },
+  });
+}
+
+// handleStreamDisconnected mirrors the former EventSource.onerror: mark the
+// connection degraded once and surface a single notification. The stream
+// auto-reconnects; the snapshot on reconnect restores full state.
+function handleStreamDisconnected() {
+  setConnState('disconnected');
+  if (!connectionWasDegraded) {
+    connectionWasDegraded = true;
+    addNotification({
+      level: 'warn',
+      sourceLabel: 'Connection',
+      title: 'Live event stream disconnected',
+      message: 'Dashboard updates may be stale until the event stream reconnects.',
+      action: () => selectSystem(),
+      actionLabel: 'Inspect core',
+      signature: 'sse-disconnected',
+      cooldownMs: 0,
+    });
   }
 }
 
-function connect() {
-  disconnectEventStream();
-  eventSourceClosing = false;
-  setConnState('connecting');
-  eventSource = new EventSource('/api/loops/events');
-
-  eventSource.addEventListener('snapshot', (e) => {
-    const statuses = JSON.parse(e.data);
-    state.loops.clear();
-    state.iterationHistory.clear();
-    for (const s of statuses) {
-      // Seed iteration history from server-side ring buffer.
-      if (s.recent_iterations && s.recent_iterations.length > 0) {
-        state.iterationHistory.set(s.id, s.recent_iterations.slice());
-      }
-      // Seed live telemetry for loops already in processing state
-      // so the Live Activity section shows immediately on connect.
-      if (s.state === 'processing') {
-        const lastWake = parseTimestamp(s.last_wake_at);
-        s._iterStartTs = lastWake ? lastWake.getTime() : Date.now();
-        s._liveTools = [];
-        s._liveModel = '';
-        // Restore LLM context from snapshot so late-connecting clients
-        // see enrichment data (model, tokens, complexity, etc.) immediately.
-        s._llmContext = s.llm_context || null;
-        if (s._llmContext && s._llmContext.model) {
-          s._liveModel = s._llmContext.model;
-        }
-      }
-      state.loops.set(s.id, s);
-    }
-    renderAll();
-    setConnState('connected');
-  });
-
-  eventSource.addEventListener('loop', (e) => {
-    const evt = JSON.parse(e.data);
-    handleLoopEvent(evt);
-  });
-
-  eventSource.addEventListener('delegate', (e) => {
-    const evt = JSON.parse(e.data);
-    handleDelegateEvent(evt);
-  });
-
-  eventSource.onerror = () => {
-    if (eventSourceClosing) return;
-    setConnState('disconnected');
-    if (!connectionWasDegraded) {
-      connectionWasDegraded = true;
-      addNotification({
-        level: 'warn',
-        sourceLabel: 'Connection',
-        title: 'Live event stream disconnected',
-        message: 'Dashboard updates may be stale until the event stream reconnects.',
-        action: () => selectSystem(),
-        actionLabel: 'Inspect core',
-        signature: 'sse-disconnected',
-        cooldownMs: 0,
-      });
-    }
-    // EventSource auto-reconnects; the snapshot on reconnect
-    // will restore full state.
-  };
-
-  eventSource.onopen = () => {
-    if (eventSourceClosing) return;
-    setConnState('connected');
-    if (connectionWasDegraded) {
-      connectionWasDegraded = false;
-      dismissNotificationBySignature('sse-disconnected');
-      addNotification({
-        level: 'info',
-        sourceLabel: 'Connection',
-        title: 'Live event stream restored',
-        message: 'Dashboard updates are live again.',
-        signature: 'sse-restored',
-        ttlMs: 6000,
-        cooldownMs: 0,
-      });
-    }
-    fetchVersionInfo(); // re-sync uptime on reconnect
-  };
+// handleStreamConnected mirrors the former EventSource.onopen.
+function handleStreamConnected() {
+  setConnState('connected');
+  if (connectionWasDegraded) {
+    connectionWasDegraded = false;
+    dismissNotificationBySignature('sse-disconnected');
+    addNotification({
+      level: 'info',
+      sourceLabel: 'Connection',
+      title: 'Live event stream restored',
+      message: 'Dashboard updates are live again.',
+      signature: 'sse-restored',
+      ttlMs: 6000,
+      cooldownMs: 0,
+    });
+  }
+  fetchVersionInfo(); // re-sync uptime on reconnect
 }
-
-window.addEventListener('pagehide', disconnectEventStream);
-window.addEventListener('beforeunload', disconnectEventStream);
 
 let connState = 'connecting';
 
@@ -2795,9 +2788,7 @@ function removeDelegateNode(syntheticId) {
 
 async function fetchLoops() {
   try {
-    const resp = await fetch('/api/loops');
-    if (!resp.ok) return;
-    const statuses = await resp.json();
+    const statuses = await api.get('/loops');
 
     // Merge server state with existing entries to preserve transient
     // telemetry (_iterStartTs, _liveTools, _liveModel, etc.) that may
@@ -2847,14 +2838,12 @@ async function fetchLogs(loopId) {
     return;
   }
   const level = $('#log-level').value;
-  let url = '/api/loops/' + encodeURIComponent(loopId) + '/logs?limit=100';
-  if (level) url += '&level=' + encodeURIComponent(level);
+  let path = '/loops/' + encodeURIComponent(loopId) + '/logs?limit=100';
+  if (level) path += '&level=' + encodeURIComponent(level);
 
   try {
-    const resp = await fetch(url);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    renderLogs(data.entries || []);
+    const data = await api.get(path);
+    renderLogs(Array.isArray(data) ? data : []);
   } catch (err) {
     console.warn('Failed to fetch logs:', err);
   }
@@ -2865,12 +2854,11 @@ let systemStartTime = null; // derived from system uptime for local ticking
 async function fetchSystemStatus() {
   try {
     const previous = state.system;
-    const resp = await fetch('/api/system');
-    if (resp.status === 404) {
+    const next = await composeSystem();
+    if (!next) {
       state.system = null;
       return;
     }
-    const next = await resp.json();
     state.system = next;
     // Derive start time so we can tick uptime locally.
     if (state.system.uptime) {
@@ -2978,7 +2966,7 @@ function renderNodes() {
     }, { once: true });
   }
 
-  // Boot-order race cleanup: if /api/system arrived after a first
+  // Boot-order race cleanup: if /v1/system arrived after a first
   // paint that already rendered the registry-core loop, drop the
   // stale SVG group and knownLoopIds entry immediately (no exit
   // animation — the node was a visual error, not a graceful exit).
@@ -5246,31 +5234,12 @@ async function showRequestDetail(requestID) {
   requestDetailAbort = controller;
 
   try {
-    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID), {
+    const detail = await api.get('/requests/' + encodeURIComponent(requestID), {
       signal: controller.signal,
     });
 
     // Verify this is still the active request — a newer click may have
     // replaced the controller while we were awaiting the response.
-    if (requestDetailAbort !== controller) return;
-
-    if (!resp.ok) {
-      if (resp.status === 503) {
-        requestDetailAvailable = false;
-        openRequestWindow(requestID);
-        closeRequestDetail();
-        return;
-      }
-      if (resp.status === 404) {
-        console.warn('Request detail not found:', requestID);
-      }
-      // Close the panel so a stale previous request doesn't remain visible.
-      closeRequestDetail();
-      return;
-    }
-    const detail = await resp.json();
-
-    // Re-check after parsing — another click could have landed.
     if (requestDetailAbort !== controller) return;
 
     activeRequestID = requestID;
@@ -5288,6 +5257,13 @@ async function showRequestDetail(requestID) {
     window.location.hash = 'request/' + requestID;
   } catch (err) {
     if (err.name === 'AbortError') return; // Superseded by a newer request.
+    if (requestDetailAbort !== controller) return; // superseded mid-flight
+    if (err instanceof api.ApiError) {
+      // 404 (no retained detail) or 503 (retention disabled): close the panel.
+      if (err.status === 404) console.warn('Request detail not found:', requestID);
+      closeRequestDetail();
+      return;
+    }
     console.warn('Failed to fetch request detail:', err);
   }
 }
@@ -5331,20 +5307,10 @@ renderDetail = function() {
   _origRenderDetail();
 };
 
-// Probe whether content retention is enabled. The callback is only set
-// if the API endpoint reports availability, so request ID chips in
-// shared.js render as plain copy-on-click when retention is disabled.
-async function probeContentRetention() {
-  try {
-    // Use a dedicated probe endpoint shape that always succeeds so
-    // devtools don't fill with intentional 503s when retention is off.
-    const resp = await fetch('/api/request-detail/_probe');
-    requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
-  } catch (_) {
-    requestDetailAvailable = null;
-  }
-  window.onRequestChipClick = inspectRequest;
-}
+// Request ID chips resolve through inspectRequest (assigned to
+// window.onRequestChipClick above). When retained detail is unavailable the
+// native API returns 404/503 and showRequestDetail closes the panel — no
+// separate availability probe is needed.
 
 // ---------------------------------------------------------------------------
 // Deep Link Routing (URL Fragment)
@@ -5387,7 +5353,7 @@ window.addEventListener('hashchange', handleHashRoute);
 connect();
 fetchVersionInfo();
 fetchSystemStatus();
-probeContentRetention().then(handleHashRoute);
+handleHashRoute();
 // Refresh uptime display every second.
 setInterval(updateUptime, 1000);
 // Refresh system status every 10s.
