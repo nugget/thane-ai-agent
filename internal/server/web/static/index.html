@@ -5,6 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thane - Cognition Engine</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // Apply persisted theme before first paint to avoid a flash of the
+    // default look. Mirrors static/theme.js; kept tiny and dependency-free.
+    (function () {
+      try {
+        var root = document.documentElement;
+        var m = localStorage.getItem('thane.theme.mode');
+        if (m === 'light' || m === 'dark') root.dataset.theme = m;
+        var a = localStorage.getItem('thane.theme.accent');
+        if (a && /^#[0-9a-f]{6}$/i.test(a)) {
+          root.style.setProperty('--accent', a);
+          var n = parseInt(a.slice(1), 16);
+          var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+          root.style.setProperty('--accent-text',
+            (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#0a0f14' : '#ffffff');
+        }
+      } catch (e) { /* storage blocked — fall back to defaults */ }
+    })();
+  </script>
 </head>
 <body>
   <header class="header">
@@ -15,6 +34,7 @@
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
       <button id="toggle-logs" class="toggle-btn" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
       <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
+      <button id="toggle-theme" class="toggle-btn" title="Theme &amp; accent color"><span class="toggle-icon"></span> Theme</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
   </header>
@@ -330,7 +350,27 @@
     <ul id="context-menu-items"></ul>
   </div>
 
+  <div id="theme-popover" class="theme-popover" hidden>
+    <div class="theme-row">
+      <span class="theme-label">Mode</span>
+      <div class="theme-modes">
+        <button type="button" class="theme-mode-btn" data-mode="auto">Auto</button>
+        <button type="button" class="theme-mode-btn" data-mode="light">Light</button>
+        <button type="button" class="theme-mode-btn" data-mode="dark">Dark</button>
+      </div>
+    </div>
+    <div class="theme-row">
+      <span class="theme-label">Accent</span>
+      <div class="theme-swatches" id="theme-swatches"></div>
+    </div>
+    <div class="theme-row">
+      <span class="theme-label">Custom</span>
+      <input type="color" id="theme-custom" class="theme-custom" value="#2dd4bf" title="Custom accent color">
+    </div>
+  </div>
+
   <script src="/static/shared.js"></script>
+  <script type="module" src="/static/theme.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

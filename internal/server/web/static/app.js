@@ -2464,13 +2464,9 @@ function withPreservedDetailScroll(renderFn, opts = {}) {
 // Trust Zone Underglow
 // ---------------------------------------------------------------------------
 
-const TRUST_ZONE_COLORS = {
-  admin:     '#26a69a',  // teal
-  household: '#e040fb',  // purple
-  trusted:   '#69f0ae',  // green
-  known:     '#ffd740',  // amber
-  unknown:   '#ff5252',  // red — stranger danger
-};
+// Canonical trust zones. Glow colors live in CSS (.trust-glow--*) so they
+// follow the active theme; this set just gates which zones render a glow.
+const TRUST_ZONES = new Set(['admin', 'household', 'trusted', 'known', 'unknown']);
 
 // Inject SVG defs for the Gaussian blur filter used by trust zone underglow.
 (function initTrustGlowFilter() {
@@ -3189,11 +3185,10 @@ function renderNode(loop) {
 
     // Trust zone underglow — diffused coloured circle behind the node.
     const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
-    if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+    if (trustZone && TRUST_ZONES.has(trustZone)) {
       const glow = createSVG('circle', {
-        class: 'trust-glow',
+        class: 'trust-glow trust-glow--' + trustZone,
         r: nodeR + 3,
-        fill: TRUST_ZONE_COLORS[trustZone],
         filter: 'url(#trust-blur)',
       });
       inner.appendChild(glow);
@@ -3292,17 +3287,16 @@ function renderNode(loop) {
   // Update trust zone underglow colour if it changed or appeared.
   const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
   const glowEl = group.querySelector('.trust-glow');
-  if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+  if (trustZone && TRUST_ZONES.has(trustZone)) {
     if (glowEl) {
-      glowEl.setAttribute('fill', TRUST_ZONE_COLORS[trustZone]);
+      glowEl.setAttribute('class', 'trust-glow trust-glow--' + trustZone);
       glowEl.setAttribute('r', nodeR + 3);
     } else {
       // Trust zone appeared after initial render — insert glow.
       const inner = group.querySelector('.node-inner');
       const glow = createSVG('circle', {
-        class: 'trust-glow',
+        class: 'trust-glow trust-glow--' + trustZone,
         r: nodeR + 3,
-        fill: TRUST_ZONE_COLORS[trustZone],
         filter: 'url(#trust-blur)',
       });
       // Insert after <title> (first child) so it's behind everything.

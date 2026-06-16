@@ -1,5 +1,47 @@
-/* === Theme Variables === */
+/* === Design tokens ===
+ * Three layers: a single operator-chosen accent (its tints derive from
+ * --accent via color-mix, so one value re-themes the chrome), semantic hues
+ * that carry meaning (health, warning, error, trust), and structural neutrals
+ * that swap for light/dark. Light/dark follow the system unless <html
+ * data-theme="light|dark"> forces a mode; the accent is applied inline on
+ * <html> by the theme picker (see static/theme.js). */
 :root {
+  color-scheme: dark;
+
+  /* Accent — the one knob (overridden inline by the theme picker). */
+  --accent: #2dd4bf;
+  --accent-dim:  color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 24%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 42%, transparent);
+  --accent-text: #04201d; /* readable text/icon on the accent; recomputed in theme.js */
+
+  /* Semantic hues — meaning-bearing; tints derive from each base. */
+  --blue: #58a6ff;
+  --blue-dim:  color-mix(in srgb, var(--blue) 15%, transparent);
+  --blue-glow: color-mix(in srgb, var(--blue) 30%, transparent);
+  --green: #3fb950;
+  --green-dim:  color-mix(in srgb, var(--green) 15%, transparent);
+  --green-glow: color-mix(in srgb, var(--green) 42%, transparent);
+  --orange: #d29922;
+  --orange-dim:  color-mix(in srgb, var(--orange) 15%, transparent);
+  --orange-glow: color-mix(in srgb, var(--orange) 30%, transparent);
+  --red: #f85149;
+  --red-dim:  color-mix(in srgb, var(--red) 15%, transparent);
+  --red-glow: color-mix(in srgb, var(--red) 42%, transparent);
+  --purple: #bc8cff;
+  --purple-dim: color-mix(in srgb, var(--purple) 20%, transparent);
+  --cyan: #56d4dd;
+  --cyan-dim:  color-mix(in srgb, var(--cyan) 15%, transparent);
+  --cyan-glow: color-mix(in srgb, var(--cyan) 30%, transparent);
+
+  /* Trust zones — semantic, kept distinct across themes. */
+  --trust-admin:     #26a69a;
+  --trust-household: #e040fb;
+  --trust-trusted:   #69f0ae;
+  --trust-known:     #ffd740;
+  --trust-unknown:   #ff5252;
+
+  /* Structural neutrals (dark defaults; light overrides below). */
   --bg-primary: #0d1117;
   --bg-secondary: #161b22;
   --bg-tertiary: #1c2128;
@@ -11,30 +53,46 @@
   --text-secondary: #8b949e;
   --text-muted: #6e7681;
 
-  --accent: #2dd4bf;
-  --accent-dim: rgba(45, 212, 191, 0.15);
-  --accent-glow: rgba(45, 212, 191, 0.4);
-
-  --blue: #58a6ff;
-  --blue-dim: rgba(88, 166, 255, 0.15);
-  --blue-glow: rgba(88, 166, 255, 0.3);
-  --green: #3fb950;
-  --green-dim: rgba(63, 185, 80, 0.15);
-  --green-glow: rgba(63, 185, 80, 0.4);
-  --orange: #d29922;
-  --orange-dim: rgba(210, 153, 34, 0.15);
-  --orange-glow: rgba(210, 153, 34, 0.3);
-  --red: #f85149;
-  --red-dim: rgba(248, 81, 73, 0.15);
-  --purple: #bc8cff;
-  --purple-dim: rgba(188, 140, 255, 0.2);
-  --cyan: #56d4dd;
-  --cyan-dim: rgba(86, 212, 221, 0.15);
-  --cyan-glow: rgba(86, 212, 221, 0.3);
+  /* Graph neutrals — families read by sigil, not decorative fill color. */
+  --node-fill:   color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  --node-fill-2: color-mix(in srgb, var(--text-secondary) 24%, transparent);
+  --node-stroke: var(--text-muted);
+  --edge:        color-mix(in srgb, var(--text-muted) 55%, transparent);
 
   --radius: 6px;
   --font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+/* Light neutrals — system-preferred (auto) unless dark is forced... */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f6f8fa;
+    --bg-tertiary: #eef1f4;
+    --bg-hover: #eaeef2;
+    --border: #d0d7de;
+    --border-light: #d8dee4;
+    --text-primary: #1f2328;
+    --text-secondary: #59636e;
+    --text-muted: #818b98;
+    --blue: #0969da; --green: #1a7f37; --orange: #9a6700; --red: #cf222e; --purple: #8250df; --cyan: #1b7c83;
+  }
+}
+/* ...or when the operator forces light explicitly. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eef1f4;
+  --bg-hover: #eaeef2;
+  --border: #d0d7de;
+  --border-light: #d8dee4;
+  --text-primary: #1f2328;
+  --text-secondary: #59636e;
+  --text-muted: #818b98;
+  --blue: #0969da; --green: #1a7f37; --orange: #9a6700; --red: #cf222e; --purple: #8250df; --cyan: #1b7c83;
 }
 
 /* === Reset === */
@@ -85,9 +143,74 @@ body {
   letter-spacing: 0.05em;
 }
 
-.conn-badge--connected { background: var(--green-dim); color: var(--green); }
+.conn-badge--connected { background: var(--accent-dim); color: var(--accent); }
 .conn-badge--connecting { background: var(--orange-dim); color: var(--orange); }
 .conn-badge--disconnected { background: var(--red-dim); color: var(--red); }
+
+/* === Theme control === */
+.theme-popover {
+  position: fixed;
+  top: 2.7rem;
+  right: 1rem;
+  z-index: 200;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 230px;
+}
+.theme-popover[hidden] { display: none; }
+.theme-row { display: flex; align-items: center; gap: 0.6rem; }
+.theme-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  width: 3.4rem;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.theme-modes { display: flex; gap: 0.25rem; }
+.theme-mode-btn {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.theme-mode-btn:hover { color: var(--text-primary); }
+.theme-mode-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.theme-swatches { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.theme-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.theme-swatch.is-active {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 6px var(--accent-glow);
+}
+.theme-custom {
+  width: 30px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
 
 /* === Notification Stack === */
 .notification-stack {
@@ -108,7 +231,7 @@ body {
   padding: 0.72rem 0.78rem;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: rgba(13, 17, 23, 0.94);
+  background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(8px);
 }
@@ -481,7 +604,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .schema-card__control {
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(13, 17, 23, 0.68);
+  background: color-mix(in srgb, var(--bg-primary) 68%, transparent);
   color: var(--text-secondary);
   width: 1.6rem;
   height: 1.6rem;
@@ -597,7 +720,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   right: 0;
   bottom: 0;
   height: 1.6rem;
-  background: linear-gradient(180deg, rgba(22, 27, 34, 0), rgba(22, 27, 34, 0.96));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 0%, transparent), color-mix(in srgb, var(--bg-secondary) 96%, transparent));
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.18s ease;
@@ -671,7 +794,7 @@ body.resize-col .schema-card__fade {
 }
 
 .schema-card--hero {
-  background: linear-gradient(180deg, rgba(28, 33, 40, 0.9), rgba(22, 27, 34, 0.98));
+  background: linear-gradient(180deg, rgba(28, 33, 40, 0.9), color-mix(in srgb, var(--bg-secondary) 98%, transparent));
 }
 
 .schema-hero {
@@ -778,7 +901,7 @@ body.resize-col .schema-card__fade {
 .conversation-summary {
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(22, 27, 34, 0.72);
+  background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
   overflow: clip;
 }
 
@@ -1090,13 +1213,13 @@ body.resize-col .schema-card__fade {
   letter-spacing: 0.05em;
 }
 
-.state-badge--sleeping    { background: var(--blue-dim);   color: var(--blue);   }
-.state-badge--waiting     { background: var(--cyan-dim);   color: var(--cyan);   }
-.state-badge--processing  { background: var(--green-dim);  color: var(--green);  }
-.state-badge--error       { background: var(--orange-dim); color: var(--orange); }
-.state-badge--stopped     { background: var(--red-dim);    color: var(--red);    }
-.state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
-.state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
+.state-badge--sleeping    { background: var(--node-fill);  color: var(--text-secondary); }
+.state-badge--waiting     { background: var(--node-fill);  color: var(--text-secondary); }
+.state-badge--processing  { background: var(--accent-dim); color: var(--accent); }
+.state-badge--error       { background: var(--red-dim);    color: var(--red);    }
+.state-badge--stopped     { background: var(--node-fill);  color: var(--text-muted); }
+.state-badge--pending     { background: var(--node-fill);  color: var(--text-muted); }
+.state-badge--supervisor  { background: var(--accent-dim); color: var(--accent); }
 .state-badge--completed  { background: var(--green-dim);  color: var(--green);  }
 
 /* === Context Utilization Meter === */
@@ -1978,6 +2101,12 @@ body.resize-col .schema-card__fade {
   opacity: 0.45;
   pointer-events: none;
 }
+/* Trust zones stay semantically colored across themes (set via class, not JS). */
+.trust-glow--admin     { fill: var(--trust-admin); }
+.trust-glow--household { fill: var(--trust-household); }
+.trust-glow--trusted   { fill: var(--trust-trusted); }
+.trust-glow--known     { fill: var(--trust-known); }
+.trust-glow--unknown   { fill: var(--trust-unknown); }
 
 /* Selection halo */
 .selection-ring {
@@ -1999,7 +2128,7 @@ body.resize-col .schema-card__fade {
 }
 
 .node-occlusion {
-  fill: rgba(13, 17, 23, 0.94);
+  fill: color-mix(in srgb, var(--bg-primary) 94%, transparent);
   stroke: none;
   pointer-events: none;
 }
@@ -2013,21 +2142,25 @@ body.resize-col .schema-card__fade {
 }
 
 /* Category fills */
-.node-shape--category-generic       { fill: rgba(139, 148, 158, 0.24); }
-.node-shape--category-metacognitive { fill: rgba(188, 140, 255, 0.26); }
-.node-shape--category-channel       { fill: rgba(86, 212, 221, 0.26); }
-.node-shape--category-delegate      { fill: rgba(210, 153, 34, 0.26); }
-.node-shape--category-scheduled     { fill: rgba(88, 166, 255, 0.26); }
+/* Families read by sigil, not color — fills are neutral. The reflective
+   (metacognitive) family gets a slightly stronger tone as the one exception. */
+.node-shape--category-generic       { fill: var(--node-fill); }
+.node-shape--category-metacognitive { fill: var(--node-fill-2); }
+.node-shape--category-channel       { fill: var(--node-fill); }
+.node-shape--category-delegate      { fill: var(--node-fill); }
+.node-shape--category-scheduled     { fill: var(--node-fill); }
 
 /* Runtime-state rings */
-.node-ring--sleeping    { stroke: var(--blue);   filter: drop-shadow(0 0 6px var(--blue-glow)); }
-.node-ring--waiting     { stroke: var(--cyan);   filter: drop-shadow(0 0 6px var(--cyan-glow)); }
-.node-ring--processing  { stroke: var(--green);  filter: drop-shadow(0 0 10px var(--green-glow)); }
-.node-ring--supervisor  { stroke: var(--purple); filter: drop-shadow(0 0 14px rgba(188, 140, 255, 0.6)); }
-.node-ring--error       { stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-ring--degraded    { stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-ring--stopped     { stroke: var(--text-muted); filter: none; opacity: 0.5; }
-.node-ring--pending     { stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); opacity: 0.6; }
+/* Active work glows in the agent's accent; idle states are neutral; strong
+   color is reserved for problems (error/degraded) and completion. */
+.node-ring--sleeping    { stroke: var(--node-stroke); filter: none; opacity: 0.55; }
+.node-ring--waiting     { stroke: var(--node-stroke); filter: drop-shadow(0 0 5px var(--node-fill-2)); opacity: 0.78; }
+.node-ring--processing  { stroke: var(--accent);  filter: drop-shadow(0 0 10px var(--accent-glow)); }
+.node-ring--supervisor  { stroke: var(--accent);  filter: drop-shadow(0 0 16px var(--accent-glow)); }
+.node-ring--error       { stroke: var(--red);     filter: drop-shadow(0 0 8px var(--red-glow)); }
+.node-ring--degraded    { stroke: var(--orange);  filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-ring--stopped     { stroke: var(--text-muted); filter: none; opacity: 0.45; }
+.node-ring--pending     { stroke: var(--text-muted); filter: none; opacity: 0.55; }
 .node-ring--completed   { stroke: var(--green); filter: drop-shadow(0 0 6px var(--green-glow)); }
 
 /* Node label */
@@ -2061,7 +2194,7 @@ body.resize-col .schema-card__fade {
 }
 
 .node-rim-badge__body {
-  fill: rgba(13, 17, 23, 0.96);
+  fill: color-mix(in srgb, var(--bg-primary) 96%, transparent);
   stroke: rgba(230, 237, 243, 0.22);
   stroke-width: 1.25;
 }
@@ -2075,7 +2208,7 @@ body.resize-col .schema-card__fade {
 }
 
 .node-rim-badge--context .node-rim-badge__body {
-  stroke: rgba(45, 212, 191, 0.45);
+  stroke: var(--accent-soft);
 }
 
 .node-rim-badge--model .node-rim-badge__body {
@@ -2092,7 +2225,7 @@ body.resize-col .schema-card__fade {
 /* Supervisor indicator ring */
 .supervisor-dot {
   fill: none;
-  stroke: var(--purple);
+  stroke: var(--accent);
   stroke-width: 2;
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -2137,32 +2270,32 @@ body.resize-col .schema-card__fade {
 
 .node-shape--activity-sleeping {
   animation: breathe-idle 5s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 4px rgba(88, 166, 255, 0.18));
+  filter: drop-shadow(0 0 4px var(--node-fill-2));
 }
 
 .node-shape--activity-waiting {
   animation: breathe-idle 7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 4px rgba(86, 212, 221, 0.18));
+  filter: drop-shadow(0 0 4px var(--node-fill-2));
 }
 
 .node-shape--activity-processing {
   animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 8px rgba(63, 185, 80, 0.18));
+  filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 
 .node-shape--activity-supervisor {
   animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.24));
+  filter: drop-shadow(0 0 10px var(--accent-glow));
 }
 
 .node-shape--activity-error {
   animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 6px rgba(210, 153, 34, 0.2));
+  filter: drop-shadow(0 0 6px var(--red-glow));
 }
 
 .node-shape--activity-degraded {
   animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
-  filter: drop-shadow(0 0 6px rgba(210, 153, 34, 0.2));
+  filter: drop-shadow(0 0 6px var(--orange-glow));
 }
 
 /* === System Node === */
@@ -2175,10 +2308,12 @@ body.resize-col .schema-card__fade {
   transition: fill 0.6s ease, filter 0.6s ease;
 }
 
+/* The core node carries the agent's identity — healthy wears the accent so
+   each agent's dashboard reads distinctly; degradation breaks out in warning. */
 .system-rect--healthy {
-  fill: var(--green);
-  stroke: var(--green);
-  filter: drop-shadow(0 0 6px var(--green-glow));
+  fill: var(--accent);
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
 }
 
 .system-rect--degraded {
@@ -2496,12 +2631,12 @@ body.resize-col .schema-card__fade {
 }
 
 .request-page .request-window__sidebar {
-  background: linear-gradient(180deg, rgba(22, 27, 34, 0.98), rgba(13, 17, 23, 0.98));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 98%, transparent), color-mix(in srgb, var(--bg-primary) 98%, transparent));
 }
 
 .request-page .request-window__main {
   background:
-    linear-gradient(180deg, rgba(13, 17, 23, 0.96), rgba(13, 17, 23, 0.99)),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, transparent), color-mix(in srgb, var(--bg-primary) 99%, transparent)),
     var(--bg-primary);
 }
 
@@ -2526,7 +2661,7 @@ body.resize-col .schema-card__fade {
   padding: 1rem 1.05rem;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(28, 33, 40, 0.92), rgba(22, 27, 34, 0.98));
+  background: linear-gradient(180deg, rgba(28, 33, 40, 0.92), color-mix(in srgb, var(--bg-secondary) 98%, transparent));
 }
 
 .registry-hero__copy {
@@ -2670,7 +2805,7 @@ body.resize-col .schema-card__fade {
   max-height: calc(100vh - 6.4rem);
   overflow-y: auto;
   padding: 0.9rem;
-  background: rgba(22, 27, 34, 0.96);
+  background: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
   border: 1px solid var(--border-light);
   border-radius: 14px;
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
@@ -2786,7 +2921,7 @@ body.resize-col .schema-card__fade {
   min-width: 2rem;
   padding: 0.12rem 0.35rem;
   border-radius: 999px;
-  background: rgba(13, 17, 23, 0.96);
+  background: color-mix(in srgb, var(--bg-primary) 96%, transparent);
   border: 1.25px solid rgba(45, 212, 191, 0.45);
   color: var(--text-primary);
   font-family: var(--font-mono);
@@ -2848,7 +2983,7 @@ body.resize-col .schema-card__fade {
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-primary);
-  background: rgba(13, 17, 23, 0.92);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
 }
 
 .legend-marker--fill {
@@ -2909,26 +3044,26 @@ body.resize-col .schema-card__fade {
   border: 1px solid rgba(230, 237, 243, 0.16);
 }
 
-.legend-mini-node--generic       { background: rgba(139, 148, 158, 0.24); }
-.legend-mini-node--metacognitive { background: rgba(188, 140, 255, 0.26); }
-.legend-mini-node--channel       { background: rgba(86, 212, 221, 0.26); }
-.legend-mini-node--delegate      { background: rgba(210, 153, 34, 0.26); }
-.legend-mini-node--scheduled     { background: rgba(88, 166, 255, 0.26); }
+.legend-mini-node--generic       { background: var(--node-fill); }
+.legend-mini-node--metacognitive { background: var(--node-fill-2); }
+.legend-mini-node--channel       { background: var(--node-fill); }
+.legend-mini-node--delegate      { background: var(--node-fill); }
+.legend-mini-node--scheduled     { background: var(--node-fill); }
 
 .legend-state-swatch {
   width: 1.4rem;
   height: 1.4rem;
   border-radius: 50%;
-  background: rgba(13, 17, 23, 0.92);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
   border: 3px solid var(--text-muted);
 }
 
-.legend-state-swatch--sleeping   { border-color: var(--blue); box-shadow: 0 0 6px var(--blue-glow); }
-.legend-state-swatch--waiting    { border-color: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); }
-.legend-state-swatch--processing { border-color: var(--green); box-shadow: 0 0 8px var(--green-glow); }
-.legend-state-swatch--supervisor { border-color: var(--purple); box-shadow: 0 0 12px rgba(188, 140, 255, 0.5); }
+.legend-state-swatch--sleeping   { border-color: var(--node-stroke); opacity: 0.7; }
+.legend-state-swatch--waiting    { border-color: var(--node-stroke); box-shadow: 0 0 5px var(--node-fill-2); }
+.legend-state-swatch--processing { border-color: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.legend-state-swatch--supervisor { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
 .legend-state-swatch--degraded   { border-color: var(--orange); box-shadow: 0 0 8px var(--orange-glow); }
-.legend-state-swatch--stopped    { border-color: var(--text-muted); opacity: 0.65; }
+.legend-state-swatch--stopped    { border-color: var(--text-muted); opacity: 0.55; }
 
 .legend-capacity-row {
   display: flex;
@@ -2944,7 +3079,7 @@ body.resize-col .schema-card__fade {
   min-width: 2.5rem;
   padding: 0.16rem 0.5rem;
   border-radius: 999px;
-  background: rgba(13, 17, 23, 0.92);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 0.68rem;
@@ -2971,7 +3106,7 @@ body.resize-col .schema-card__fade {
   width: 1.2rem;
   height: 1.2rem;
   border-radius: 50%;
-  background: rgba(13, 17, 23, 0.65);
+  background: color-mix(in srgb, var(--bg-primary) 65%, transparent);
 }
 
 .legend-glow-swatch--admin {
