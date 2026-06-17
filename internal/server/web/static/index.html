@@ -16,10 +16,6 @@
         var a = localStorage.getItem('thane.theme.accent');
         if (a && /^#[0-9a-f]{6}$/i.test(a)) {
           root.style.setProperty('--accent', a);
-          var n = parseInt(a.slice(1), 16);
-          var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-          root.style.setProperty('--accent-text',
-            (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#0a0f14' : '#ffffff');
         }
       } catch (e) { /* storage blocked — fall back to defaults */ }
     })();
@@ -85,7 +81,7 @@
     </aside>
   </main>
 
-  <section id="view-root" class="view-root" hidden></section>
+  <section id="view-root" class="view-root" tabindex="-1" hidden></section>
 
   <div class="resize-handle resize-handle--h" id="resize-h" hidden></div>
   <section class="log-panel" id="log-panel" hidden>

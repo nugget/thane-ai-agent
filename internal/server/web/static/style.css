@@ -13,7 +13,6 @@
   --accent-dim:  color-mix(in srgb, var(--accent) 15%, transparent);
   --accent-soft: color-mix(in srgb, var(--accent) 24%, transparent);
   --accent-glow: color-mix(in srgb, var(--accent) 42%, transparent);
-  --accent-text: #04201d; /* readable text/icon on the accent; recomputed in theme.js */
 
   /* Semantic hues — meaning-bearing; tints derive from each base. */
   --blue: #58a6ff;
@@ -76,7 +75,7 @@
     --border-light: #d8dee4;
     --text-primary: #1f2328;
     --text-secondary: #59636e;
-    --text-muted: #818b98;
+    --text-muted: #656d76;
     --blue: #0969da; --green: #1a7f37; --orange: #9a6700; --red: #cf222e; --purple: #8250df; --cyan: #1b7c83;
   }
 }
@@ -91,7 +90,7 @@
   --border-light: #d8dee4;
   --text-primary: #1f2328;
   --text-secondary: #59636e;
-  --text-muted: #818b98;
+  --text-muted: #656d76;
   --blue: #0969da; --green: #1a7f37; --orange: #9a6700; --red: #cf222e; --purple: #8250df; --cyan: #1b7c83;
 }
 
@@ -161,6 +160,9 @@ body {
   overflow: auto;
   background: var(--bg-primary);
 }
+/* Shown via the hidden attribute (router toggles it); this beats the UA
+   [hidden]{display:none} only when not hidden, so the a11y tree stays correct. */
+.view-root:not([hidden]) { display: flex; }
 .surface {
   max-width: 1080px;
   margin: 0 auto;

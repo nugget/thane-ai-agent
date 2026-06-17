@@ -5200,7 +5200,6 @@ let activeRequestID = null;
 
 // Cached raw detail JSON for copy-as-JSON feature.
 let activeRequestJSON = null;
-let requestDetailAvailable = null;
 
 // AbortController for in-flight request detail fetches. Prevents stale
 // data from overwriting the panel when the user clicks rapidly.
@@ -5208,10 +5207,6 @@ let requestDetailAbort = null;
 
 function inspectRequest(requestID) {
   if (!requestID) return;
-  if (requestDetailAvailable === false) {
-    openRequestWindow(requestID);
-    return;
-  }
   void showRequestDetail(requestID);
 }
 

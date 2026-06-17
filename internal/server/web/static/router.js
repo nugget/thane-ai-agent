@@ -42,13 +42,13 @@ function showGraph() {
     if (current.view.unmount) current.view.unmount();
     current = null;
   }
-  if (viewRoot) viewRoot.style.display = 'none';
+  if (viewRoot) viewRoot.hidden = true;
   setGraphVisible(true);
 }
 
 function showSurface(name, params) {
   setGraphVisible(false);
-  viewRoot.style.display = 'flex';
+  viewRoot.hidden = false;
   if (current && current.name === name) {
     if (current.view.update) current.view.update(params);
     return;
@@ -58,6 +58,9 @@ function showSurface(name, params) {
   const view = surfaces.get(name);
   current = { name, view };
   view.mount(viewRoot, params);
+  // Move focus to the freshly mounted surface so keyboard/screen-reader users
+  // land on the new content instead of the now-hidden graph.
+  viewRoot.focus({ preventScroll: true });
 }
 
 function route() {
@@ -69,8 +72,12 @@ function route() {
   }
   const active = surfaces.has(head) ? head : 'graph';
   if (navEl) {
-    navEl.querySelectorAll('[data-route]').forEach((a) =>
-      a.classList.toggle('is-active', a.dataset.route === active));
+    navEl.querySelectorAll('[data-route]').forEach((a) => {
+      const on = a.dataset.route === active;
+      a.classList.toggle('is-active', on);
+      if (on) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    });
   }
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -129,6 +130,15 @@ func TestHandleSchedules_Unconfigured(t *testing.T) {
 	s.handleSchedules(rr, httptest.NewRequest(http.MethodGet, "/v1/schedules", nil))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when scheduler unset", rr.Code)
+	}
+}
+
+func TestHandleSchedules_QueryError(t *testing.T) {
+	s := schedServer(fakeScheduler{listErr: errors.New("boom")})
+	rr := httptest.NewRecorder()
+	s.handleSchedules(rr, httptest.NewRequest(http.MethodGet, "/v1/schedules", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 when ListTasks errors", rr.Code)
 	}
 }
 

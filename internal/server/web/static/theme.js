@@ -13,20 +13,8 @@ const ACCENT_KEY = 'thane.theme.accent';
 const DEFAULT_ACCENT = '#2dd4bf';
 const PRESETS = ['#2dd4bf', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b', '#22c55e', '#06b6d4'];
 
-// contrastText returns a readable text/icon color to sit on the given accent,
-// chosen by perceived luminance so accent-filled chrome stays legible.
-function contrastText(hex) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
-  if (!m) return '#ffffff';
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#0a0f14' : '#ffffff';
-}
-
 function applyAccent(hex) {
-  const el = document.documentElement;
-  el.style.setProperty('--accent', hex);
-  el.style.setProperty('--accent-text', contrastText(hex));
+  document.documentElement.style.setProperty('--accent', hex);
 }
 
 // applyMode: 'auto' clears the override so prefers-color-scheme wins;
