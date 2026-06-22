@@ -40,6 +40,14 @@ ollama_api:
 #   enabled: false
 #   providers: {}
 #
+# MemoryGuard watches process memory and restarts thane before a leak
+# can OOM the host (writing a heap profile first). Opt-in.
+memory_guard:
+  enabled: false
+  soft_limit_mb: 0
+  hard_limit_mb: 0
+  profile_dir: ""
+  interval_seconds: 0
 # HomeAssistant configures the connection to a Home Assistant instance.
 homeassistant:
   url: https://your-homeassistant.local:8123

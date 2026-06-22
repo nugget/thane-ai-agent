@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/memguard"
 )
 
 // Serve starts the API server(s), registers signal handlers for graceful
@@ -42,6 +45,23 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 		}
 	}()
+
+	// Memory guard: write a heap profile and gracefully restart before a
+	// leak can OOM the host. Opt-in; the supervising wrapper relaunches thane
+	// after the graceful exit (internal/platform/memguard).
+	if a.cfg.MemoryGuard.Enabled {
+		profileDir := a.cfg.MemoryGuard.ProfileDir
+		if profileDir == "" {
+			profileDir = filepath.Join(a.cfg.DataDir, "profiles")
+		}
+		guard := memguard.New(memguard.Config{
+			SoftLimitMB: a.cfg.MemoryGuard.SoftLimitMB,
+			HardLimitMB: a.cfg.MemoryGuard.HardLimitMB,
+			ProfileDir:  profileDir,
+			Interval:    time.Duration(a.cfg.MemoryGuard.IntervalSeconds) * time.Second,
+		}, a.logger)
+		go guard.Start(ctx)
+	}
 
 	// Start optional servers before the shutdown goroutine so they are
 	// available to drain when shutdown fires.
