@@ -92,10 +92,14 @@ func New(cfg Config, logger *slog.Logger) *Guard {
 		return m.Sys
 	}
 	g.onHard = func() {
-		// Reuse the existing signal.NotifyContext graceful-shutdown path
-		// rather than wiring a second cancel; the wrapper restarts thane.
+		// Trigger the process's existing graceful-shutdown path: main.go's
+		// signal.Notify handler cancels the root context, which stops all
+		// goroutines (this guard included) and runs shutdown; the wrapper
+		// then restarts thane. A failed signal is logged, not swallowed.
 		if p, err := os.FindProcess(os.Getpid()); err == nil {
-			_ = p.Signal(syscall.SIGTERM)
+			if err := p.Signal(syscall.SIGTERM); err != nil {
+				g.logger.Error("memory guard: failed to signal graceful shutdown", "error", err)
+			}
 		}
 	}
 	return g
@@ -129,7 +133,8 @@ func (g *Guard) check(mem uint64) {
 	if !g.heapDumped && mem >= g.soft {
 		g.heapDumped = true
 		path := filepath.Join(g.profileDir,
-			fmt.Sprintf("heap-%s-%dMB.pprof", g.now().UTC().Format("20060102T150405Z"), mem/mib))
+			fmt.Sprintf("heap-%s-pid%d-%dMB.pprof",
+				g.now().UTC().Format("20060102T150405Z"), os.Getpid(), mem/mib))
 		if err := g.dumpHeap(path); err != nil {
 			g.logger.Warn("memory guard: heap profile failed", "error", err, "mem_mb", mem/mib)
 		} else {
@@ -146,16 +151,22 @@ func (g *Guard) check(mem uint64) {
 }
 
 // writeHeapProfile GCs (for up-to-date stats, per the pprof docs) and writes a
-// heap profile to path, creating the directory if needed.
+// heap profile to path with explicit 0o644 perms, creating the directory if
+// needed. The Close error is surfaced — on some filesystems it is the only
+// sign of a failed flush — unless a profile-write error already takes
+// precedence.
 func writeHeapProfile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	runtime.GC()
-	return pprof.WriteHeapProfile(f)
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		f.Close() // best-effort; don't mask the write error
+		return err
+	}
+	return f.Close()
 }

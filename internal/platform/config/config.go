@@ -640,8 +640,10 @@ type CompanionConfig struct {
 }
 
 // MemoryGuardConfig configures the in-process memory guard
-// (internal/platform/memguard). Opt-in: Enabled defaults false. Numeric
-// fields default to soft 1024 MB / hard 2048 MB / 15s poll when unset.
+// (internal/platform/memguard). Opt-in: Enabled defaults false. Zero-valued
+// numeric fields are defaulted by the guard at startup (memguard.New) —
+// soft 1024 MB / hard 2048 MB / 15s poll — not by config Load, so the Config
+// object does not hold these effective defaults after loading.
 type MemoryGuardConfig struct {
 	Enabled         bool   `yaml:"enabled"`
 	SoftLimitMB     int    `yaml:"soft_limit_mb"`
