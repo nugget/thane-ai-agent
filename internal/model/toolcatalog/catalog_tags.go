@@ -62,8 +62,8 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"home"},
 	},
 	"companion": {
-		Description: "Native macOS companion app integration tools (calendar, contacts, AppleScript bridges).",
-		Parents:     []string{"operations"},
+		Description: "Live tools from a paired macOS companion app (a connected Mac): calendar, contacts, reminders, and whatever else that host currently advertises. Tools are present only while the Mac is online.",
+		Parents:     []string{"operations", "people", "home"},
 	},
 	"contacts": {
 		Description: "Structured contact-directory records and vCard administration tools.",
