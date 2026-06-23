@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
@@ -20,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/scheduler"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -119,6 +119,17 @@ func (a *App) initStores(s *newState) error {
 	}
 	a.watchlistStore = watchlistStore
 
+	// --- Loop work queue ---
+	// Durable, deduped, per-consumer-loop work queue. Constructed before
+	// wireSessionCloseToArchivistQueue so the session-close producer can
+	// capture a non-nil store. Shares the main thane.db connection; no
+	// separate close hook (mem owns the DB).
+	loopQueue, err := loopqueue.NewStore(a.mem.DB(), logger)
+	if err != nil {
+		return fmt.Errorf("loop queue store: %w", err)
+	}
+	a.loopQueue = loopQueue
+
 	// --- Home Assistant client ---
 	// Optional but central. Without it, HA-related tools are unavailable
 	// and Thane operates as a general-purpose agent.
@@ -136,6 +147,17 @@ func (a *App) initStores(s *newState) error {
 		a.haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.ha.UseWSClient(a.haWS)
 		a.onCloseErr("ha-websocket", a.haWS.Close)
+
+		// The WebSocket owns its own reconnect loop: a transient drop (or an
+		// HA restart) recovers on the supervisor's backoff without depending
+		// on the REST health edge. Register state_changed as sticky intent —
+		// the supervisor (re)applies it on every connect, so the subscription
+		// survives a failed attempt. connwatch only nudges recovery faster
+		// (see OnReady → NotifyReachable).
+		a.haWS.Start(s.ctx)
+		if err := a.haWS.Subscribe(s.ctx, "state_changed"); err != nil {
+			logger.Warn("failed to record HA state_changed subscription intent", "error", err)
+		}
 		logger.Debug("Home Assistant configured", "url", cfg.HomeAssistant.URL)
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")
@@ -199,7 +221,6 @@ func (a *App) initStores(s *newState) error {
 
 	// The OnReady callback captures s (pointer) so it sees the
 	// personTracker assigned later in initAwareness.
-	var subscribeOnce sync.Once
 	if a.ha != nil {
 		haWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name:    "homeassistant",
@@ -217,26 +238,13 @@ func (a *App) initStores(s *newState) error {
 					)
 				}
 
-				// Reconnect WebSocket when HA comes back.
+				// REST is reachable again — nudge the WebSocket supervisor so a
+				// down socket shortcuts its backoff and retries immediately.
+				// The WS otherwise self-heals on its own loop (see Start, where
+				// the connection is established and state_changed is registered
+				// as sticky subscription intent).
 				if a.haWS != nil {
-					wsCtx, wsCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer wsCancel()
-					if err := a.haWS.Reconnect(wsCtx); err != nil {
-						logger.Error("WebSocket reconnect failed", "error", err)
-					}
-
-					// Subscribe to state_changed events on first connection.
-					// Subsequent reconnects restore subscriptions automatically
-					// via WSClient.restoreSubscriptions.
-					subscribeOnce.Do(func() {
-						subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer subCancel()
-						if err := a.haWS.Subscribe(subCtx, "state_changed"); err != nil {
-							logger.Error("subscribe to state_changed failed", "error", err)
-						} else {
-							logger.Info("subscribed to state_changed events")
-						}
-					})
+					a.haWS.NotifyReachable()
 				}
 
 				// Initialize (or refresh) person tracker from current HA state.
@@ -503,11 +511,11 @@ func (a *App) initStores(s *newState) error {
 		return nil
 	})
 
-	// Hook EndSession → curator wake. Must come after archiveStore is
-	// constructed and the loop registry exists (both are guaranteed at
-	// this point in initStores). No-op when curator is disabled in
-	// config. See issue #989.
-	a.wireSessionCloseToCuratorWake()
+	// Hook EndSession → archivist work queue. Must come after
+	// archiveStore and the loop queue are constructed (both are
+	// guaranteed at this point in initStores). No-op when the archivist
+	// is disabled in config. See issues #989, #1024.
+	a.wireSessionCloseToArchivistQueue()
 
 	return nil
 }

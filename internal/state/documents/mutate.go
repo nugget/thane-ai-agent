@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,8 +299,46 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 	return mutationResultFromRecord("doc_journal_update", record, existed, windowHeading, windowKind), nil
 }
 
+// maxReadableDocumentBytes caps how much of a managed document Thane will read
+// into memory at once. Documents are markdown meant for LLM context; anything
+// larger is a runaway or corrupt artifact (e.g. a journal window that grew
+// without bound). Reading such a file whole risks OOMing the host — a single
+// 8 GB document did exactly that in 2026-06 — so the store refuses oversized
+// reads instead of allocating gigabytes.
+const maxReadableDocumentBytes = 32 << 20 // 32 MiB
+
+// readDocumentBytes reads a document file into memory, refusing any document
+// larger than maxReadableDocumentBytes so a pathological file cannot exhaust
+// the host's memory. Every document-file read funnels through here.
+//
+// The cap is enforced during the read with io.LimitReader, not just by an
+// upfront stat: a file that grows or is swapped after the stat (TOCTOU) still
+// cannot allocate more than the cap. The stat is kept only as a fast path that
+// refuses an already-oversized file — reporting its actual size — without
+// opening it.
+func readDocumentBytes(absPath string) ([]byte, error) {
+	if info, err := os.Stat(absPath); err == nil && info.Size() > maxReadableDocumentBytes {
+		return nil, fmt.Errorf("document %q is %d bytes, exceeding the maximum readable size of %d bytes; it is likely runaway or corrupt and must be truncated or removed before Thane can read it", filepath.Base(absPath), info.Size(), maxReadableDocumentBytes)
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	// Read at most one byte past the cap so an over-cap file is detected
+	// without allocating the whole of a pathological file.
+	data, err := io.ReadAll(io.LimitReader(f, maxReadableDocumentBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxReadableDocumentBytes {
+		return nil, fmt.Errorf("document %q exceeds the maximum readable size of %d bytes; it is likely runaway or corrupt and must be truncated or removed before Thane can read it", filepath.Base(absPath), maxReadableDocumentBytes)
+	}
+	return data, nil
+}
+
 func (s *Store) readDocumentFile(absPath, root, relPath string) (*DocumentRecord, string, string, error) {
-	rawBytes, err := os.ReadFile(absPath)
+	rawBytes, err := readDocumentBytes(absPath)
 	if err != nil {
 		return nil, "", "", err
 	}

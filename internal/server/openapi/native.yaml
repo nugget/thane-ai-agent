@@ -1,0 +1,925 @@
+openapi: 3.1.0
+info:
+  title: Thane Native API
+  version: 1.0.0-draft
+  summary: First-party management & observability API for Thane's own clients.
+  description: |
+    The **Thane Native API** is the backend for Thane's own user interfaces —
+    the built-in web dashboard today, and a `thane-agent-macos` native app
+    next. It is organized **loops-first**: the agent loop is Thane's universal
+    execution primitive, so the API leads with `/v1/loops` and hangs everything
+    else (requests, conversations, models, telemetry) off that center.
+
+    This is **not** a public or compatibility surface. The OpenAI- and
+    Ollama-compatible endpoints that Home Assistant and open-webui consume are
+    a separate, frozen product (the *Thane Compatibility API*) served on a
+    different host/port. Keeping the two apart lets their security models
+    diverge — see below.
+
+    ## Security model (declared now, enforced in stages)
+
+    Each operation below carries an `x-thane-scope` extension naming the
+    permission it will require once authorization is enforced. Today the API is
+    open behind the network boundary; the contract is declared first so the
+    explorer, the UIs, and the eventual middleware all agree on the shape.
+
+    - **AuthN:** bearer token (`Authorization: Bearer <token>`). The scheme is
+      written OIDC-ready; tokens are minted directly for now.
+    - **AuthZ scopes** are `resource:action`:
+      `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
+      `conversations:read`, `sessions:read`, `sessions:write`, `archive:read`,
+      `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
+      `insights:read`, `contacts:read`, `contacts:write`, `system:read`.
+    - **Roles** bundle scopes: `observer` (all `:read`), `operator`
+      (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
+      `admin` (everything, incl. `models:admin`, `contacts:write`).
+
+    CORS is a per-surface concern: the native API allowlists the UI origins
+    (credentialed, cross-origin since the hosts differ); the compatibility API
+    has its own, narrower policy.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (native API + web UI)
+  # Production native host is fronted separately from the compatibility host
+  # (e.g. thane.hollowoak.net serves compat). Final URL TBD with ops.
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Loops
+    description: Active executions — the universal primitive. Start here.
+  - name: Loop Definitions
+    description: The persisted templates that loops are launched from.
+  - name: Requests
+    description: A single model turn, with its routing and tool-call facets.
+  - name: Conversations & Sessions
+    description: Live dialogue transcripts and context-window management.
+  - name: Archive
+    description: Historical sessions with full-text search and export.
+  - name: Checkpoints
+    description: Conversation state snapshots for restart survival.
+  - name: Models & Fleet
+    description: Available models and the routing/registry policy.
+  - name: Insights
+    description: Read-only aggregate telemetry — routing, tools, usage, capabilities.
+  - name: Contacts
+    description: Address book (also synced via CardDAV on a separate surface).
+  - name: System
+    description: Health, version, and process logs.
+  - name: Realtime
+    description: WebSocket channel for first-party live interaction.
+
+paths:
+  # ----------------------------------------------------------------- System
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Unversioned, unauthenticated liveness check for load balancers.
+      security: []
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+  /v1/version:
+    get:
+      tags: [System]
+      operationId: getVersion
+      summary: Build and runtime metadata
+      x-thane-scope: system:read
+      responses:
+        "200":
+          description: Version info.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionInfo" }
+  /v1/system:
+    get:
+      tags: [System]
+      operationId: getSystem
+      summary: System health, uptime, and version rollup
+      description: Replaces the dashboard-private `/api/system`.
+      x-thane-scope: system:read
+      responses:
+        "200":
+          description: System status snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemStatus" }
+  /v1/system/logs:
+    get:
+      tags: [System]
+      operationId: getSystemLogs
+      summary: Tail the structured process log
+      x-thane-scope: system:read
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - { name: level, in: query, schema: { type: string, enum: [debug, info, warn, error] } }
+      responses:
+        "200":
+          description: Log entries (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LogEntry" }
+
+  # ------------------------------------------------------------------ Loops
+  /v1/loops:
+    get:
+      tags: [Loops]
+      operationId: listLoops
+      summary: List active executions
+      description: |
+        Every loop the registry currently tracks, across all run shapes —
+        autonomous service loops, request/reply, background tasks, and
+        event-driven consumers. Replaces the dashboard-private `/api/loops`.
+      x-thane-scope: loops:read
+      parameters:
+        - { name: state, in: query, description: Filter by lifecycle state.,
+            schema: { $ref: "#/components/schemas/LoopState" } }
+      responses:
+        "200":
+          description: Loop status snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LoopStatus" }
+  /v1/loops/{id}:
+    get:
+      tags: [Loops]
+      operationId: getLoop
+      summary: One execution's detail
+      x-thane-scope: loops:read
+      parameters:
+        - $ref: "#/components/parameters/LoopId"
+      responses:
+        "200":
+          description: Loop status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopStatus" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/loops/{id}/logs:
+    get:
+      tags: [Loops]
+      operationId: getLoopLogs
+      summary: Log entries scoped to this loop
+      description: Replaces `/api/loops/{id}/logs`.
+      x-thane-scope: loops:read
+      parameters:
+        - $ref: "#/components/parameters/LoopId"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Log entries (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LogEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/loops/events:
+    get:
+      tags: [Loops]
+      operationId: streamLoopEvents
+      summary: Live loop lifecycle stream (SSE)
+      description: |
+        Server-Sent Events stream of loop lifecycle changes (started, woke,
+        slept, errored, stopped). Replaces `/api/loops/events`. The response is
+        `text/event-stream`; each event's `data:` is a JSON
+        `LoopEvent`. OpenAPI cannot fully model SSE — treat the schema as the
+        per-event payload.
+      x-thane-scope: loops:read
+      responses:
+        "200":
+          description: An open event stream.
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/LoopEvent" }
+
+  # ----------------------------------------------------- Loop Definitions
+  /v1/loops/definitions:
+    get:
+      tags: [Loop Definitions]
+      operationId: listLoopDefinitions
+      summary: List loop definitions with live runtime state
+      description: |
+        Merges the two pre-reshape surfaces (`/v1/loop-definitions` and the
+        dashboard-private `/api/loop-definitions`) into one. Each entry pairs
+        the stored definition with its eligibility, runtime state, warnings,
+        and post-inheritance effective state.
+      x-thane-scope: definitions:read
+      responses:
+        "200":
+          description: Definition registry view.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DefinitionRegistryView" }
+    post:
+      tags: [Loop Definitions]
+      operationId: createLoopDefinition
+      summary: Create or replace a loop definition
+      x-thane-scope: definitions:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoopDefinitionSpec" }
+      responses:
+        "201":
+          description: Definition stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DefinitionView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /v1/loops/definitions/{name}:
+    get:
+      tags: [Loop Definitions]
+      operationId: getLoopDefinition
+      summary: Fetch one definition
+      x-thane-scope: definitions:read
+      parameters:
+        - $ref: "#/components/parameters/DefinitionName"
+      responses:
+        "200":
+          description: Definition view.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DefinitionView" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Loop Definitions]
+      operationId: deleteLoopDefinition
+      summary: Delete a definition
+      x-thane-scope: definitions:write
+      parameters:
+        - $ref: "#/components/parameters/DefinitionName"
+      responses:
+        "204": { description: Deleted. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/loops/definitions/{name}/launch:
+    post:
+      tags: [Loop Definitions]
+      operationId: launchLoopDefinition
+      summary: Launch a definition into a running loop
+      x-thane-scope: definitions:write
+      parameters:
+        - $ref: "#/components/parameters/DefinitionName"
+      responses:
+        "202":
+          description: Launch accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  loop_id: { type: string }
+                  name: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/loops/definitions/policy:
+    post:
+      tags: [Loop Definitions]
+      operationId: setLoopDefinitionPolicy
+      summary: Set launch policy (e.g. pause a definition)
+      x-thane-scope: definitions:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DefinitionPolicy" }
+      responses:
+        "200": { description: Policy applied. }
+    delete:
+      tags: [Loop Definitions]
+      operationId: clearLoopDefinitionPolicy
+      summary: Clear a launch policy override
+      x-thane-scope: definitions:write
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Cleared. }
+
+  # --------------------------------------------------------------- Requests
+  /v1/requests/{id}:
+    get:
+      tags: [Requests]
+      operationId: getRequest
+      summary: Detail for a single model turn
+      description: Replaces `/api/requests/{id}`.
+      x-thane-scope: requests:read
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Request detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequestDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/requests/{id}/routing:
+    get:
+      tags: [Requests]
+      operationId: getRequestRouting
+      summary: Why this model was chosen
+      description: |
+        The router's decision trace for this request. Replaces
+        `/v1/router/explain/{requestId}` — routing is a facet of the request,
+        not a free-standing subsystem.
+      x-thane-scope: requests:read
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Routing explanation.
+          content:
+            application/json:
+              schema: { type: object, description: "Router decision trace (schema first-pass; tighten against handler)." }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/requests/{id}/tools:
+    get:
+      tags: [Requests]
+      operationId: getRequestTools
+      summary: Tool calls made during this request
+      x-thane-scope: requests:read
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Tool-call records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ToolDetail" }
+
+  # ---------------------------------------------- Conversations & Sessions
+  /v1/conversations:
+    get:
+      tags: [Conversations & Sessions]
+      operationId: listConversations
+      summary: List active conversations
+      x-thane-scope: conversations:read
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Conversation summaries.
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+  /v1/conversations/{id}:
+    get:
+      tags: [Conversations & Sessions]
+      operationId: getConversation
+      summary: Fetch a conversation transcript
+      x-thane-scope: conversations:read
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Conversation transcript.
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/sessions/stats:
+    get:
+      tags: [Conversations & Sessions]
+      operationId: getSessionStats
+      summary: Context / session statistics
+      x-thane-scope: sessions:read
+      responses:
+        "200":
+          description: Session stats.
+          content: { application/json: { schema: { type: object } } }
+  /v1/sessions/history:
+    get:
+      tags: [Conversations & Sessions]
+      operationId: getSessionHistory
+      summary: Session history
+      x-thane-scope: sessions:read
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: History entries.
+          content: { application/json: { schema: { type: array, items: { type: object } } } }
+  /v1/sessions/compact:
+    post:
+      tags: [Conversations & Sessions]
+      operationId: compactSession
+      summary: Compact the active context window
+      x-thane-scope: sessions:write
+      responses:
+        "200": { description: Compaction performed. }
+  /v1/sessions/balance:
+    post:
+      tags: [Conversations & Sessions]
+      operationId: balanceSession
+      summary: Rebalance the active context
+      x-thane-scope: sessions:write
+      responses:
+        "200": { description: Rebalanced. }
+  /v1/sessions/reset:
+    post:
+      tags: [Conversations & Sessions]
+      operationId: resetSession
+      summary: Reset the active session
+      x-thane-scope: sessions:write
+      responses:
+        "200": { description: Reset. }
+
+  # ---------------------------------------------------------------- Archive
+  /v1/archive/sessions:
+    get:
+      tags: [Archive]
+      operationId: listArchivedSessions
+      summary: List archived sessions
+      x-thane-scope: archive:read
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Archived session summaries.
+          content: { application/json: { schema: { type: array, items: { type: object } } } }
+  /v1/archive/sessions/{id}:
+    get:
+      tags: [Archive]
+      operationId: getArchivedSession
+      summary: Fetch one archived session
+      x-thane-scope: archive:read
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Archived session., content: { application/json: { schema: { type: object } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/archive/sessions/{id}/export:
+    get:
+      tags: [Archive]
+      operationId: exportArchivedSession
+      summary: Export an archived session (e.g. Markdown)
+      x-thane-scope: archive:read
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Exported document.
+          content:
+            text/markdown: { schema: { type: string } }
+  /v1/archive/messages:
+    get:
+      tags: [Archive]
+      operationId: listArchivedMessages
+      summary: List archived messages
+      x-thane-scope: archive:read
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: Messages., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /v1/archive/search:
+    get:
+      tags: [Archive]
+      operationId: searchArchive
+      summary: Full-text search across archived sessions
+      x-thane-scope: archive:read
+      parameters:
+        - { name: q, in: query, required: true, description: FTS5 query string., schema: { type: string } }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { description: Search results., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /v1/archive/stats:
+    get:
+      tags: [Archive]
+      operationId: getArchiveStats
+      summary: Archive size and coverage stats
+      x-thane-scope: archive:read
+      responses:
+        "200": { description: Stats., content: { application/json: { schema: { type: object } } } }
+
+  # ------------------------------------------------------------ Checkpoints
+  /v1/checkpoints:
+    get:
+      tags: [Checkpoints]
+      operationId: listCheckpoints
+      summary: List checkpoints
+      x-thane-scope: checkpoints:read
+      responses:
+        "200": { description: Checkpoints., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+    post:
+      tags: [Checkpoints]
+      operationId: createCheckpoint
+      summary: Create a checkpoint
+      x-thane-scope: checkpoints:write
+      responses:
+        "201": { description: Created., content: { application/json: { schema: { type: object } } } }
+  /v1/checkpoints/{id}:
+    get:
+      tags: [Checkpoints]
+      operationId: getCheckpoint
+      summary: Fetch a checkpoint
+      x-thane-scope: checkpoints:read
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Checkpoint., content: { application/json: { schema: { type: object } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Checkpoints]
+      operationId: deleteCheckpoint
+      summary: Delete a checkpoint
+      x-thane-scope: checkpoints:write
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "204": { description: Deleted. }
+  /v1/checkpoints/{id}/restore:
+    post:
+      tags: [Checkpoints]
+      operationId: restoreCheckpoint
+      summary: Restore from a checkpoint
+      x-thane-scope: checkpoints:write
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Restored. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------- Models & Fleet
+  /v1/models:
+    get:
+      tags: [Models & Fleet]
+      operationId: listModels
+      summary: Available models (native fleet view)
+      description: |
+        The native, richer fleet view (resources, capabilities, health) for
+        the UIs. NOT the OpenAI-shaped model list — that lives in the
+        Compatibility API.
+      x-thane-scope: models:read
+      responses:
+        "200": { description: Models., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+  /v1/models/registry:
+    get:
+      tags: [Models & Fleet]
+      operationId: getModelRegistry
+      summary: Model-registry snapshot
+      x-thane-scope: models:read
+      responses:
+        "200": { description: Registry snapshot., content: { application/json: { schema: { type: object } } } }
+  /v1/models/registry/policy:
+    put:
+      tags: [Models & Fleet]
+      operationId: setModelPolicy
+      summary: Set a model routing policy
+      x-thane-scope: models:admin
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Applied. } }
+    delete:
+      tags: [Models & Fleet]
+      operationId: clearModelPolicy
+      summary: Clear a model routing policy
+      x-thane-scope: models:admin
+      responses: { "204": { description: Cleared. } }
+  /v1/models/registry/resource-policy:
+    put:
+      tags: [Models & Fleet]
+      operationId: setResourcePolicy
+      summary: Set a resource (host) policy
+      x-thane-scope: models:admin
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Applied. } }
+    delete:
+      tags: [Models & Fleet]
+      operationId: clearResourcePolicy
+      summary: Clear a resource policy
+      x-thane-scope: models:admin
+      responses: { "204": { description: Cleared. } }
+
+  # ------------------------------------------------------------- Insights
+  /v1/insights/router:
+    get:
+      tags: [Insights]
+      operationId: getRouterInsights
+      summary: Router stats and recent audit
+      description: Consolidates `/v1/router/stats` and `/v1/router/audit`.
+      x-thane-scope: insights:read
+      responses:
+        "200": { description: Router insights., content: { application/json: { schema: { type: object } } } }
+  /v1/insights/tools:
+    get:
+      tags: [Insights]
+      operationId: getToolInsights
+      summary: Tool-call stats and recent calls
+      description: Consolidates `/v1/tools/stats` and `/v1/tools/calls`.
+      x-thane-scope: insights:read
+      responses:
+        "200": { description: Tool insights., content: { application/json: { schema: { type: object } } } }
+  /v1/insights/usage:
+    get:
+      tags: [Insights]
+      operationId: getUsageInsights
+      summary: Token / cost usage summary
+      description: Was `/v1/usage/summary`.
+      x-thane-scope: insights:read
+      parameters:
+        - { name: group_by, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Usage summary., content: { application/json: { schema: { type: object } } } }
+  /v1/insights/capabilities:
+    get:
+      tags: [Insights]
+      operationId: listCapabilities
+      summary: Resolved capability-tag catalog
+      description: Was the dashboard-private `/api/capabilities`.
+      x-thane-scope: insights:read
+      responses:
+        "200": { description: Capability catalog., content: { application/json: { schema: { type: object } } } }
+  /v1/insights/capabilities/{tag}:
+    get:
+      tags: [Insights]
+      operationId: getCapability
+      summary: One capability tag's resolved view
+      x-thane-scope: insights:read
+      parameters: [ { name: tag, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Capability entry., content: { application/json: { schema: { type: object } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------------------------------------------------------------- Contacts
+  /v1/contacts:
+    get:
+      tags: [Contacts]
+      operationId: listContacts
+      summary: List contacts
+      x-thane-scope: contacts:read
+      responses:
+        "200": { description: Contacts., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+    post:
+      tags: [Contacts]
+      operationId: createContact
+      summary: Create a contact
+      x-thane-scope: contacts:write
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "201": { description: Created., content: { application/json: { schema: { type: object } } } }
+  /v1/contacts/{id}:
+    get:
+      tags: [Contacts]
+      operationId: getContact
+      summary: Fetch a contact
+      x-thane-scope: contacts:read
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Contact., content: { application/json: { schema: { type: object } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Contacts]
+      operationId: updateContact
+      summary: Update a contact
+      x-thane-scope: contacts:write
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { description: Updated. }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Contacts]
+      operationId: deleteContact
+      summary: Delete a contact
+      x-thane-scope: contacts:write
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "204": { description: Deleted. }
+
+  # -------------------------------------------------------------- Realtime
+  /v1/realtime/ws:
+    get:
+      tags: [Realtime]
+      operationId: realtimeWebSocket
+      summary: First-party realtime channel (WebSocket upgrade)
+      description: |
+        WebSocket endpoint for live interaction from first-party clients (the
+        web UI and the macOS app). Unifies the pre-reshape `/v1/companion/ws`
+        and `/v1/platform/ws`, which shared one handler. This is a protocol
+        upgrade, not a JSON response — OpenAPI documents it for discovery only.
+      x-thane-scope: loops:read
+      responses:
+        "101": { description: Switching Protocols (WebSocket). }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Bearer token. Written OIDC-ready; minted directly for now. The
+        per-operation `x-thane-scope` extension names the scope the token must
+        carry once authorization is enforced.
+
+  parameters:
+    LoopId:
+      name: id
+      in: path
+      required: true
+      description: Loop ID (e.g. `019e7469-3abf-7e6b-ae38-85b5e34915ac`).
+      schema: { type: string }
+    DefinitionName:
+      name: name
+      in: path
+      required: true
+      description: Loop definition name (e.g. `cota_weekend_observer`).
+      schema: { type: string }
+    RequestId:
+      name: id
+      in: path
+      required: true
+      description: Request ID (e.g. `r_84dc5155c60d97be`).
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: Maximum number of items to return.
+      schema: { type: integer, minimum: 1, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      description: Number of items to skip.
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  responses:
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+
+    VersionInfo:
+      type: object
+      additionalProperties: { type: string }
+      description: Build/runtime key-value metadata (version, commit, go version...).
+
+    LogEntry:
+      type: object
+      description: One structured log row (schema first-pass; tighten against logging.LogEntry).
+      properties:
+        ts: { type: string, format: date-time }
+        level: { type: string }
+        msg: { type: string }
+        request_id: { type: string }
+        conversation_id: { type: string }
+      additionalProperties: true
+
+    SystemStatus:
+      type: object
+      description: Health, uptime, version, and snapshots for the system view.
+      properties:
+        uptime_seconds: { type: integer }
+        version: { $ref: "#/components/schemas/VersionInfo" }
+        health:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ServiceHealth" }
+      additionalProperties: true
+    ServiceHealth:
+      type: object
+      properties:
+        name: { type: string }
+        ready: { type: boolean }
+        last_check: { type: string, format: date-time }
+        last_error: { type: string }
+      required: [name, ready]
+
+    LoopState:
+      type: string
+      enum: [pending, sleeping, running, error, stopped]
+      description: Lifecycle state of a loop.
+    LoopStatus:
+      type: object
+      description: Snapshot of a loop's state and metrics (mirrors runtime/loop.Status).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state: { $ref: "#/components/schemas/LoopState" }
+        parent_id: { type: string }
+        started_at: { type: string, format: date-time }
+        last_wake_at: { type: string, format: date-time }
+        iterations: { type: integer }
+        attempts: { type: integer }
+        total_input_tokens: { type: integer }
+        total_output_tokens: { type: integer }
+        last_input_tokens: { type: integer }
+        last_output_tokens: { type: integer }
+        context_window: { type: integer }
+        last_error: { type: string }
+        consecutive_errors: { type: integer }
+        recent_conv_ids: { type: array, items: { type: string } }
+        handler_only: { type: boolean }
+        event_driven: { type: boolean }
+        recent_iterations:
+          type: array
+          items: { $ref: "#/components/schemas/IterationSnapshot" }
+      required: [id, name, state, started_at, iterations, attempts]
+    IterationSnapshot:
+      type: object
+      description: One completed iteration (schema first-pass; tighten against loop.IterationSnapshot).
+      additionalProperties: true
+    LoopEvent:
+      type: object
+      description: A single SSE loop lifecycle event payload.
+      properties:
+        type: { type: string }
+        loop_id: { type: string }
+        loop_name: { type: string }
+        ts: { type: string, format: date-time }
+      additionalProperties: true
+
+    DefinitionRegistryView:
+      type: object
+      description: Stored loop definitions plus live runtime state (mirrors loop.DefinitionRegistryView).
+      properties:
+        generation: { type: integer }
+        updated_at: { type: string, format: date-time }
+        config_definitions: { type: integer }
+        overlay_definitions: { type: integer }
+        running_definitions: { type: integer }
+        definitions_with_warnings: { type: integer }
+        warning_count: { type: integer }
+        by_policy_state: { type: object, additionalProperties: { type: integer } }
+        by_eligibility_state: { type: object, additionalProperties: { type: integer } }
+        by_runtime_state: { type: object, additionalProperties: { type: integer } }
+        definitions:
+          type: array
+          items: { $ref: "#/components/schemas/DefinitionView" }
+    DefinitionView:
+      type: object
+      description: One stored definition with eligibility, runtime, warnings, and effective state.
+      properties:
+        eligibility: { type: object, additionalProperties: true }
+        runtime: { type: object, additionalProperties: true }
+        warnings: { type: array, items: { type: object } }
+        effective: { type: object, additionalProperties: true }
+      additionalProperties: true
+    LoopDefinitionSpec:
+      type: object
+      description: A persistable loop definition (name, operation, sleep envelope, subscriptions, outputs, tags...). Schema first-pass; tighten against loop.DefinitionSnapshot.
+      properties:
+        name: { type: string }
+        operation: { type: string, enum: [service, event_driven] }
+      required: [name]
+      additionalProperties: true
+    DefinitionPolicy:
+      type: object
+      properties:
+        name: { type: string }
+        state: { type: string, enum: [active, paused] }
+      required: [name, state]
+
+    RequestDetail:
+      type: object
+      description: Detail for one model turn (mirrors logging.RequestDetail).
+      properties:
+        request_id: { type: string }
+        prompt_hash: { type: string }
+        system_prompt: { type: string }
+        messages: { type: array, items: { $ref: "#/components/schemas/MessageDetail" } }
+        user_content: { type: string }
+        assistant_content: { type: string }
+        model: { type: string }
+        iteration_count: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        tools_used: { type: object, additionalProperties: { type: integer } }
+        exhausted: { type: boolean }
+        exhaust_reason: { type: string }
+        created_at: { type: string }
+        tool_calls: { type: array, items: { $ref: "#/components/schemas/ToolDetail" } }
+      required: [request_id, messages, tool_calls]
+    MessageDetail:
+      type: object
+      additionalProperties: true
+    ToolDetail:
+      type: object
+      properties:
+        tool_call_id: { type: string }
+        tool_name: { type: string }
+        arguments: { type: string }
+      required: [tool_name]

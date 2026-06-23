@@ -62,7 +62,7 @@ complete onboarding guide for Home Assistant users.
 
 *What exactly does X do?*
 
-- **[Tools](reference/tools.md)** — All 80+ native tools by category
+- **[Tools](reference/tools.md)** — Native tools by category
 - **[CLI](reference/cli.md)** — Commands, flags, and config discovery
 - **[API & Endpoints](reference/api.md)** — Ports, protocols, web
   dashboard, CardDAV

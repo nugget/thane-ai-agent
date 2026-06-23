@@ -20,7 +20,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Kind:        TagKindMenu,
 	},
 	"home": {
-		Description: "Coarse trailhead for home, device, room, and automation work. Usually leads to ha, awareness, or notifications.",
+		Description: "Coarse trailhead for the physical home — the house, its rooms, devices, presence, and automations. Any curiosity about what's happening at home starts here and almost always leads to ha (the full Home Assistant surface), with awareness for sustained attention and notifications for telling someone.",
 		Kind:        TagKindMenu,
 	},
 	"interactive": {
@@ -94,7 +94,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 		Parents:     []string{"development"},
 	},
 	"ha": {
-		Description: "Home Assistant state, control, registry, and automation tools.",
+		Description: "The whole house, not the keyhole. The watched-entity snapshot you carry by default is a handful of subscribed sensors; this is the full Home Assistant surface — every room and device, live state, history, registry, control, and automations. Activate it whenever the conversation turns toward home and the real picture is wider than what you already hold. Reading is loaded the moment this tag is active.",
 		Parents:     []string{"home"},
 	},
 	"loops": {

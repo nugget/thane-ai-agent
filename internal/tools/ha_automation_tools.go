@@ -509,11 +509,11 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 				continue
 			}
 			score := queryScore(
-				device.NameByUser,
-				device.Name,
-				device.Manufacturer,
-				device.Model,
-				device.SerialNumber,
+				string(device.NameByUser),
+				string(device.Name),
+				string(device.Manufacturer),
+				string(device.Model),
+				string(device.SerialNumber),
 				areaMap[device.AreaID],
 				strings.Join(resolveNames(device.Labels, labelMap), " "),
 			)
@@ -523,10 +523,10 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 			matches = append(matches, scoredDevice{
 				match: haRegistryDeviceMatch{
 					DeviceID:      device.ID,
-					Name:          device.Name,
-					NameByUser:    device.NameByUser,
-					Manufacturer:  device.Manufacturer,
-					Model:         device.Model,
+					Name:          string(device.Name),
+					NameByUser:    string(device.NameByUser),
+					Manufacturer:  string(device.Manufacturer),
+					Model:         string(device.Model),
 					AreaID:        device.AreaID,
 					AreaName:      areaMap[device.AreaID],
 					LabelIDs:      device.Labels,
@@ -568,13 +568,13 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 
 			deviceName := ""
 			if device := deviceMap[entity.DeviceID]; device != nil {
-				deviceName = coalesce(device.NameByUser, device.Name)
+				deviceName = coalesce(string(device.NameByUser), string(device.Name))
 			}
 			friendlyName := friendlyNameForState(stateMap[entity.EntityID])
 			score := queryScore(
 				entity.EntityID,
 				entity.Name,
-				entity.OriginalName,
+				string(entity.OriginalName),
 				strings.Join(entity.Aliases, " "),
 				friendlyName,
 				deviceName,
@@ -593,7 +593,7 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 					EntityID:       entity.EntityID,
 					Domain:         domain,
 					Name:           entity.Name,
-					OriginalName:   entity.OriginalName,
+					OriginalName:   string(entity.OriginalName),
 					FriendlyName:   friendlyName,
 					DeviceID:       entity.DeviceID,
 					DeviceName:     deviceName,
