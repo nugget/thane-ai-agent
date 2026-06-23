@@ -20,6 +20,7 @@ import (
 	cdav "github.com/nugget/thane-ai-agent/internal/server/carddav"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // initServers creates servers, infrastructure services, and background
@@ -196,7 +197,25 @@ func (a *App) initServers(s *newState) error {
 	// to connect and register capabilities for bidirectional service dispatch.
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
+		// Legacy floor: the hand-coded macos_calendar_events tool keeps
+		// working against older Macs that advertise only methods (no
+		// authored tool defs).
 		a.loop.Tools().EnableCompanionTools(a.companionRegistry.Call)
+
+		// macOS-authoritative path: synthesize model-facing tools from the
+		// definitions companion apps author in register_capabilities. The
+		// registrar feeds the per-run dynamic tool overlay and rebuilds
+		// whenever a companion connects, re-registers, or drops — so a
+		// laptop popping on/off line surfaces and retracts its tools
+		// mid-session. A Mac-authored tool shadows the legacy floor by name.
+		registrar := tools.NewCompanionRegistrar(a.companionRegistry, logger)
+		a.loop.SetDynamicToolSource(registrar)
+		a.companionRegistry.SetOnChange(registrar.Rebuild)
+
+		// On companion-tagged turns, tell the model which companions are
+		// connected and what they currently offer (uncached live state).
+		a.loop.RegisterTagContextProvider("companion", companion.NewContextProvider(a.companionRegistry))
+
 		handler := companion.NewHandler(cfg.Companion.TokenIndex(), a.companionRegistry, logger)
 		server.SetCompanionHandler(handler)
 
