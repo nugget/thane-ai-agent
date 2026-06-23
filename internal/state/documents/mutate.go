@@ -298,8 +298,30 @@ func (s *Store) JournalUpdate(ctx context.Context, args JournalUpdateArgs) (*Mut
 	return mutationResultFromRecord("doc_journal_update", record, existed, windowHeading, windowKind), nil
 }
 
+// maxReadableDocumentBytes caps how much of a managed document Thane will read
+// into memory at once. Documents are markdown meant for LLM context; anything
+// larger is a runaway or corrupt artifact (e.g. a journal window that grew
+// without bound). Reading such a file whole risks OOMing the host — a single
+// 8 GB document did exactly that in 2026-06 — so the store refuses oversized
+// reads instead of allocating gigabytes.
+const maxReadableDocumentBytes = 32 << 20 // 32 MiB
+
+// readDocumentBytes reads a document file into memory, refusing any file larger
+// than maxReadableDocumentBytes so a pathological document cannot exhaust the
+// host's memory. Every document-file read funnels through here.
+func readDocumentBytes(absPath string) ([]byte, error) {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxReadableDocumentBytes {
+		return nil, fmt.Errorf("document %q is %d bytes, exceeding the maximum readable size of %d bytes; it is likely runaway or corrupt and must be truncated or removed before Thane can read it", filepath.Base(absPath), info.Size(), maxReadableDocumentBytes)
+	}
+	return os.ReadFile(absPath)
+}
+
 func (s *Store) readDocumentFile(absPath, root, relPath string) (*DocumentRecord, string, string, error) {
-	rawBytes, err := os.ReadFile(absPath)
+	rawBytes, err := readDocumentBytes(absPath)
 	if err != nil {
 		return nil, "", "", err
 	}
