@@ -125,6 +125,10 @@ type Config struct {
 	// Companion configures native companion app connections.
 	Companion CompanionConfig `yaml:"companion"`
 
+	// MemoryGuard watches process memory and restarts thane before a leak
+	// can OOM the host (writing a heap profile first). Opt-in.
+	MemoryGuard MemoryGuardConfig `yaml:"memory_guard"`
+
 	// HomeAssistant configures the connection to a Home Assistant instance.
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 
@@ -648,6 +652,19 @@ func (c CardDAVConfig) Configured() bool {
 type CompanionConfig struct {
 	Enabled   bool                               `yaml:"enabled"`
 	Providers map[string]CompanionProviderConfig `yaml:"providers"`
+}
+
+// MemoryGuardConfig configures the in-process memory guard
+// (internal/platform/memguard). Opt-in: Enabled defaults false. Zero-valued
+// numeric fields are defaulted by the guard at startup (memguard.New) —
+// soft 1024 MB / hard 2048 MB / 15s poll — not by config Load, so the Config
+// object does not hold these effective defaults after loading.
+type MemoryGuardConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	SoftLimitMB     int    `yaml:"soft_limit_mb"`
+	HardLimitMB     int    `yaml:"hard_limit_mb"`
+	ProfileDir      string `yaml:"profile_dir"`
+	IntervalSeconds int    `yaml:"interval_seconds"`
 }
 
 // CompanionProviderConfig defines the tokens for a single account identity.
