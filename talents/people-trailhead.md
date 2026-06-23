@@ -2,7 +2,7 @@
 kind: trailhead
 tags: [people]
 teaser: "Open for identity, relationships, contacts, channels, or audience context."
-next_tags: [contacts, signal, email, message_channel]
+next_tags: [contacts, signal, email, message_channel, companion]
 ---
 
 # People Trailhead
@@ -27,6 +27,9 @@ Choose the next move deliberately:
   and organize (mark/move).
 - If `owner` is already present and authenticated owner identity
   matters, use it as trustworthy ground truth.
+- If the person data you want lives on a paired Mac rather than the
+  structured directory — its Contacts entries reached through a
+  connected macOS companion — activate `companion`.
 
 Prefer stable identifiers like exact names plus durable properties over
 guessing from memory alone. If the task spans contact data plus another

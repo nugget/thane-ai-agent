@@ -2,7 +2,7 @@
 kind: trailhead
 tags: [home]
 teaser: "Open for household state, devices, rooms, automations, or attention."
-next_tags: [ha, awareness, notifications]
+next_tags: [ha, awareness, notifications, companion]
 ---
 
 # Home Trailhead
@@ -20,6 +20,8 @@ Choose the next move deliberately:
   actionable, activate `notifications`.
 - If the question is about who is where or what context is currently
   live, activate `awareness`.
+- If the answer lives on a paired Mac — its calendar or reminders
+  reached through a connected macOS companion — activate `companion`.
 
 Once the real intervention is clear, act. If home work starts mixing
 with chat, code, or research, keep the parent loop narrow and delegate

@@ -1025,6 +1025,66 @@ func (r *Registry) WithRuntimeTools(runtime []*Tool) *Registry {
 	return filtered
 }
 
+// WithDynamicTools creates a shallow registry copy with dynamically-sourced
+// tools layered over the global registry, plus tag→tool-name additions
+// merged into a copied tag index so the new tools resolve under their tags
+// via [Registry.FilterByTags].
+//
+// Unlike [Registry.WithRuntimeTools], dynamic tools are NOT marked Core:
+// they stay tag-gated, so they only reach the model on a turn that has
+// activated their tag. This is what localizes prompt-cache churn when a
+// companion (macOS) source adds or drops tools — turns that have not
+// activated the companion tag are unaffected.
+//
+// The shared registry and its tag index are never mutated (both are
+// lock-free and assumed frozen after startup); a copy is taken only when
+// there is something to add. Returns the receiver unchanged when both
+// inputs are empty.
+func (r *Registry) WithDynamicTools(extra []*Tool, tagAdditions map[string][]string) *Registry {
+	if len(extra) == 0 && len(tagAdditions) == 0 {
+		return r
+	}
+
+	filtered := &Registry{
+		tools:           make(map[string]*Tool, len(r.tools)+len(extra)),
+		contentResolver: r.contentResolver,
+	}
+	for name, t := range r.tools {
+		filtered.tools[name] = t
+	}
+	for _, t := range extra {
+		if t == nil || strings.TrimSpace(t.Name) == "" {
+			continue
+		}
+		cp := *t
+		cp.Name = strings.TrimSpace(cp.Name)
+		// Force non-Core regardless of what the source set: dynamic tools
+		// must stay tag-gated so they never bypass FilterByTags and leak
+		// into turns that haven't activated their tag. This is what keeps
+		// prompt-cache churn isolated to companion-tagged turns.
+		cp.Core = false
+		filtered.Register(&cp)
+	}
+
+	// Carry the tag index forward. Share it when there are no additions
+	// (matching the other shallow-copy helpers); otherwise merge additions
+	// into a fresh map so the shared index is left untouched.
+	if len(tagAdditions) == 0 {
+		filtered.tagIndex = r.tagIndex
+	} else {
+		merged := make(map[string][]string, len(r.tagIndex)+len(tagAdditions))
+		for tag, names := range r.tagIndex {
+			merged[tag] = names
+		}
+		for tag, names := range tagAdditions {
+			merged[tag] = mergeUniqueStrings(merged[tag], names)
+		}
+		filtered.tagIndex = merged
+	}
+
+	return filtered
+}
+
 // MetadataTagIndex builds a tag-to-tool mapping from per-tool default
 // metadata. Tags with no registered tools are omitted.
 func (r *Registry) MetadataTagIndex() map[string][]string {
