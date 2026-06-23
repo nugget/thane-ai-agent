@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -54,6 +55,9 @@ type Guard struct {
 
 	heapDumped bool
 	fired      bool
+	// tripped mirrors a hard-limit firing for cross-goroutine reads: the
+	// poller sets it; Serve reads it after shutdown to pick the exit code.
+	tripped atomic.Bool
 }
 
 // New builds a Guard, applying defaults for any unset numeric fields. Soft
@@ -105,6 +109,12 @@ func New(cfg Config, logger *slog.Logger) *Guard {
 	return g
 }
 
+// Tripped reports whether the guard reached its hard limit and initiated a
+// restart. It is read after graceful shutdown to choose the process exit code:
+// a memory-limit restart is a failure condition even though the shutdown itself
+// is clean, so the supervising wrapper must see a non-zero exit and relaunch.
+func (g *Guard) Tripped() bool { return g.tripped.Load() }
+
 // Start runs the guard until ctx is cancelled. Run it in a goroutine.
 func (g *Guard) Start(ctx context.Context) {
 	g.logger.Info("memory guard active",
@@ -144,6 +154,7 @@ func (g *Guard) check(mem uint64) {
 	}
 	if mem >= g.hard {
 		g.fired = true
+		g.tripped.Store(true)
 		g.logger.Error("memory guard: hard limit reached; triggering graceful restart",
 			"mem_mb", mem/mib, "hard_mb", g.hard/mib)
 		g.onHard()

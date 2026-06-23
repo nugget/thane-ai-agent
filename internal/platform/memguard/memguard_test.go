@@ -22,6 +22,9 @@ func TestCheckThresholds(t *testing.T) {
 	if len(dumps) != 0 || hardCalls != 0 {
 		t.Fatalf("acted below soft: dumps=%d hard=%d", len(dumps), hardCalls)
 	}
+	if g.Tripped() {
+		t.Fatalf("Tripped() reported true before the hard limit")
+	}
 
 	g.check(1200 * mib) // first soft crossing — one dump, no hard
 	if len(dumps) != 1 {
@@ -39,6 +42,9 @@ func TestCheckThresholds(t *testing.T) {
 	g.check(2100 * mib) // hard crossing — fire once
 	if hardCalls != 1 {
 		t.Fatalf("hard hardCalls=%d, want 1", hardCalls)
+	}
+	if !g.Tripped() {
+		t.Fatalf("Tripped() reported false after the hard limit")
 	}
 
 	g.check(3000 * mib) // already fired — no further action
