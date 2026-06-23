@@ -59,8 +59,8 @@ type ArchiveStore struct {
 	sessionsFTSEnabled bool
 
 	// sessionCloseCallback runs after EndSession / EndSessionAt commits.
-	// Used by the app wiring to fire a curator wake event for the just-
-	// closed session — see issue #989. The callback runs synchronously
+	// Used by the app wiring to enqueue archivist work for the just-
+	// closed session — see issues #989, #1024. The callback runs synchronously
 	// in the calling goroutine; implementations MUST be fast and
 	// non-blocking (e.g. enqueue to a channel, return immediately).
 	// Errors are swallowed by the caller: closing a session is the
@@ -1874,8 +1874,8 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 // reason and runs synchronously in the caller's goroutine — keep it
 // fast and non-blocking (channel send, then return).
 //
-// Used by the app wiring to fire a curator wake on session close (see
-// issue #989). Single callback per store; calling this more than once
+// Used by the app wiring to enqueue archivist work on session close (see
+// issues #989, #1024). Single callback per store; calling this more than once
 // replaces the previous callback rather than chaining.
 func (s *ArchiveStore) SetSessionCloseCallback(cb func(sessionID, reason string)) {
 	s.sessionCloseCallback = cb

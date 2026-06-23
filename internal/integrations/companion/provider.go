@@ -91,13 +91,14 @@ func NewRegistry(logger *slog.Logger) *Registry {
 	}
 }
 
-// SetOnChange registers a callback invoked whenever the connected set of
-// providers or their advertised capabilities changes — capability
-// registration (connect / re-register) and disconnect. The callback runs
-// outside the registry lock, so it may safely call back into the registry
-// (e.g. List). Pass nil to clear. This is the seam the tool registrar uses
-// to rebuild its synthesized companion tools when a laptop pops on or off
-// line mid-session.
+// SetOnChange registers a callback invoked when a provider's advertised
+// capabilities change — capability registration and re-registration
+// (RegisterCapabilities) — or when a provider disconnects (Remove). A bare
+// connection (Add, before any capabilities are registered) carries no tools
+// and does NOT fire it. The callback runs outside the registry lock, so it
+// may safely call back into the registry (e.g. List). Pass nil to clear.
+// This is the seam the tool registrar uses to rebuild its synthesized
+// companion tools when a laptop pops on or off line mid-session.
 func (r *Registry) SetOnChange(fn func()) {
 	r.mu.Lock()
 	r.onChange = fn
@@ -374,13 +375,26 @@ func (p *Provider) setCapabilities(capabilities []Capability) {
 
 		methods := make([]string, 0, len(cap.Methods))
 		methodIndex := make(map[string]bool, len(cap.Methods))
-		for _, method := range cap.Methods {
+		addMethod := func(method string) {
 			method = strings.TrimSpace(method)
 			if method == "" || methodIndex[method] {
-				continue
+				return
 			}
 			methodIndex[method] = true
 			methods = append(methods, method)
+		}
+		for _, method := range cap.Methods {
+			addMethod(method)
+		}
+
+		tools := normalizeToolDefinitions(cap.Tools)
+		// A tool definition's method is authoritative for routing: union it
+		// into the method set so a tool whose method the provider forgot to
+		// list in Methods is still routable by Registry.Call / supports().
+		// Without this, a synthesized tool could appear in snapshots yet fail
+		// to dispatch — a likely drift during rollout.
+		for _, def := range tools {
+			addMethod(def.Method)
 		}
 
 		index[name] = capabilityState{
@@ -391,7 +405,7 @@ func (p *Provider) setCapabilities(capabilities []Capability) {
 			Name:    name,
 			Version: strings.TrimSpace(cap.Version),
 			Methods: methods,
-			Tools:   normalizeToolDefinitions(cap.Tools),
+			Tools:   tools,
 		})
 	}
 
@@ -474,9 +488,10 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-// cloneToolDefinitions deep-copies the slice and per-entry Tags so a
-// snapshot caller cannot mutate provider state. InputSchema is treated as
-// immutable after normalization and shared by reference.
+// cloneToolDefinitions deep-copies the slice, per-entry Tags, and the
+// InputSchema map so a snapshot caller (including the tool registrar) cannot
+// mutate provider state and cannot race a concurrent re-registration that
+// rewrites the schema.
 func cloneToolDefinitions(defs []ToolDefinition) []ToolDefinition {
 	if len(defs) == 0 {
 		return nil
@@ -488,10 +503,40 @@ func cloneToolDefinitions(defs []ToolDefinition) []ToolDefinition {
 			Description: def.Description,
 			Method:      def.Method,
 			Tags:        append([]string(nil), def.Tags...),
-			InputSchema: def.InputSchema,
+			InputSchema: deepCopyJSONMap(def.InputSchema),
 		}
 	}
 	return clone
+}
+
+// deepCopyJSONMap recursively copies a JSON-derived schema map so callers
+// can read or rewrite the copy without touching provider state.
+func deepCopyJSONMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyJSONValue(v)
+	}
+	return out
+}
+
+// deepCopyJSONValue recursively copies the value space JSON unmarshals into
+// (objects, arrays, and immutable scalars).
+func deepCopyJSONValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCopyJSONMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = deepCopyJSONValue(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func (p *Provider) supports(capability, method string) bool {

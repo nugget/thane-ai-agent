@@ -318,7 +318,7 @@ func (s *Store) Section(ctx context.Context, ref string, selector string) (*Sect
 		}
 		return nil, fmt.Errorf("resolve document: %w", err)
 	}
-	raw, err := os.ReadFile(absPath)
+	raw, err := readDocumentBytes(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("document not found: %s", ref)

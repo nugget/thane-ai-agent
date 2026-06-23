@@ -284,7 +284,7 @@ func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (h
 	}
 	// Exact (case-insensitive) name or user-assigned name.
 	for i := range devices {
-		if strings.EqualFold(devices[i].NameByUser, q) || strings.EqualFold(devices[i].Name, q) {
+		if strings.EqualFold(string(devices[i].NameByUser), q) || strings.EqualFold(string(devices[i].Name), q) {
 			return devices[i], nil, true
 		}
 	}
@@ -317,10 +317,10 @@ func resolveDevice(devices []homeassistant.DeviceRegistryEntry, query string) (h
 // label.
 func deviceDisplayName(device homeassistant.DeviceRegistryEntry) string {
 	if device.NameByUser != "" {
-		return device.NameByUser
+		return string(device.NameByUser)
 	}
 	if device.Name != "" {
-		return device.Name
+		return string(device.Name)
 	}
 	return device.ID
 }

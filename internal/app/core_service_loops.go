@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
 )
 
 // coreServiceRegistration describes one model-facing core service loop
-// (ego, metacognitive, curator). The three loops share a parallel
+// (ego, metacognitive, archivist). The three loops share a parallel
 // construction shape — parse a config sub-struct, cache it on the App,
 // emit a durable definition spec, and attach runtime hooks at hydration
 // time — that previously lived as repeated three-way blocks across
@@ -21,7 +21,7 @@ import (
 // entry in [coreServiceLoops] rather than an edit to every wiring site.
 //
 // The closures intentionally operate on *App: each loop's config has a
-// distinct type (ego.Config vs metacognitive.Config vs curator.Config),
+// distinct type (ego.Config vs metacognitive.Config vs archivist.Config),
 // so the descriptor can't hold a typed pointer. Instead ParseAndCache
 // writes the typed cache field (a.egoCfg, etc.) and the later closures
 // read it back. Metacognitive's extra hydration input (Opts with the
@@ -55,11 +55,11 @@ type coreServiceRegistration struct {
 
 // coreServiceLoops is the registry of model-facing core service loops.
 // Order matches the historical append/parse sequence (metacognitive,
-// ego, curator) so the resulting base-definition ordering is unchanged.
+// ego, archivist) so the resulting base-definition ordering is unchanged.
 var coreServiceLoops = []coreServiceRegistration{
 	metacognitiveRegistration,
 	egoRegistration,
-	curatorRegistration,
+	archivistRegistration,
 }
 
 // coreServiceLoopByName indexes coreServiceLoops for O(1) hydration
@@ -121,24 +121,33 @@ var egoRegistration = coreServiceRegistration{
 	},
 }
 
-var curatorRegistration = coreServiceRegistration{
-	Name:          curator.DefinitionName,
-	ConfigEnabled: func(c *config.Config) bool { return c.Curator.Enabled },
+var archivistRegistration = coreServiceRegistration{
+	Name:          archivist.DefinitionName,
+	ConfigEnabled: func(c *config.Config) bool { return c.Archivist.Enabled },
 	ParseAndCache: func(a *App, c *config.Config) error {
-		cfg, err := curator.ParseConfig(c.Curator)
+		cfg, err := archivist.ParseConfig(c.Archivist)
 		if err != nil {
 			return err
 		}
-		a.curatorCfg = &cfg
+		a.archivistCfg = &cfg
 		return nil
 	},
 	DefinitionSpec: func(a *App) looppkg.Spec {
-		return curator.DefinitionSpec(*a.curatorCfg)
+		return archivist.DefinitionSpec(*a.archivistCfg)
 	},
 	Hydrate: func(a *App, spec looppkg.Spec) (looppkg.Spec, error) {
-		if a.curatorCfg == nil {
-			return looppkg.Spec{}, fmt.Errorf("curator definition requires curator config")
+		if a.archivistCfg == nil {
+			return looppkg.Spec{}, fmt.Errorf("archivist definition requires archivist config")
 		}
-		return curator.HydrateSpec(spec, *a.curatorCfg), nil
+		spec = archivist.HydrateSpec(spec, *a.archivistCfg)
+		// Attach the work-queue tools as loop-private RuntimeTools,
+		// scoped to this loop's own queue partition (issue #1024). They
+		// are advertised only on the archivist's iterations — never
+		// registered globally — so nothing else can drain or enqueue
+		// into its partition.
+		if a.loopQueue != nil {
+			spec.RuntimeTools = append(spec.RuntimeTools, buildLoopQueueTools(a.loopQueue, spec.Name)...)
+		}
+		return spec, nil
 	},
 }

@@ -334,7 +334,7 @@ func (s *Store) upsertFile(ctx context.Context, root, relPath string) error {
 		return fmt.Errorf("lookup indexed document: %w", err)
 	}
 
-	raw, err := os.ReadFile(absPath)
+	raw, err := readDocumentBytes(absPath)
 	if err != nil {
 		return err
 	}

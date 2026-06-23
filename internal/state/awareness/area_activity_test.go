@@ -60,6 +60,58 @@ func (f *fakeAreaClient) GetLogbookEvents(_ context.Context, _, _ time.Time, _ [
 	return f.logbook, f.logbookErr
 }
 
+func TestComputeAreaActivity_UnknownAreaSuggestsCandidates(t *testing.T) {
+	client := &fakeAreaClient{areas: []homeassistant.Area{
+		{AreaID: "kitchen", Name: "Kitchen"},
+		{AreaID: "living_room", Name: "Living Room"},
+	}}
+
+	out, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "kitch"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if payload["found"] != false {
+		t.Errorf("found = %v, want false", payload["found"])
+	}
+	if payload["reason"] != "not_found" {
+		t.Errorf("reason = %v, want not_found", payload["reason"])
+	}
+	cands, ok := payload["candidates"].([]any)
+	if !ok || len(cands) == 0 {
+		t.Fatalf("expected candidate areas for a near-miss, got %v", payload["candidates"])
+	}
+}
+
+func TestComputeAreaActivity_UnknownAreaListsAvailable(t *testing.T) {
+	client := &fakeAreaClient{areas: []homeassistant.Area{
+		{AreaID: "kitchen", Name: "Kitchen"},
+		{AreaID: "living_room", Name: "Living Room"},
+	}}
+
+	out, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "zzzqqq nowhere"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if payload["found"] != false || payload["reason"] != "not_found" {
+		t.Errorf("expected not_found envelope, got %v", payload)
+	}
+	if _, ok := payload["candidates"]; ok {
+		t.Errorf("did not expect candidates for an unrelated query, got %v", payload["candidates"])
+	}
+	avail, ok := payload["available_areas"].([]any)
+	if !ok || len(avail) == 0 {
+		t.Fatalf("expected available_areas fallback, got %v", payload["available_areas"])
+	}
+}
+
 func TestComputeAreaActivity_BucketsByRelevance(t *testing.T) {
 	now := testNow
 
@@ -335,11 +387,24 @@ func TestComputeAreaActivity_EntityInheritsAreaFromDevice(t *testing.T) {
 	}
 }
 
-func TestComputeAreaActivity_UnknownAreaErrors(t *testing.T) {
+func TestComputeAreaActivity_UnknownAreaReturnsStructuredNotFound(t *testing.T) {
+	// An unresolvable area is a recoverable not-found, not a hard error:
+	// the tool returns a structured envelope so the model can pick a real
+	// area instead of getting a bare failure string.
 	client := &fakeAreaClient{areas: []homeassistant.Area{{AreaID: "kitchen", Name: "Kitchen"}}}
-	_, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "Bathroom"}, testNow)
-	if err == nil {
-		t.Fatal("expected error for unknown area")
+	out, err := ComputeAreaActivity(context.Background(), client, AreaActivityRequest{Area: "Bathroom"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeAreaActivity: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if payload["found"] != false || payload["reason"] != "not_found" {
+		t.Errorf("expected structured not_found, got %v", payload)
+	}
+	if payload["requested_area"] != "Bathroom" {
+		t.Errorf("requested_area = %v, want Bathroom", payload["requested_area"])
 	}
 }
 
