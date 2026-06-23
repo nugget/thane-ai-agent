@@ -145,7 +145,7 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 		}
 		return nil, err
 	}
-	raw, err := os.ReadFile(srcAbsPath)
+	raw, err := readDocumentBytes(srcAbsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)
@@ -157,7 +157,7 @@ func (s *Store) Move(ctx context.Context, args MoveArgs) (*MoveResult, error) {
 	var originalDestinationRaw []byte
 	if _, err := os.Stat(dstAbsPath); err == nil {
 		destinationExists = true
-		originalDestinationRaw, err = os.ReadFile(dstAbsPath)
+		originalDestinationRaw, err = readDocumentBytes(dstAbsPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf("destination document disappeared during move: %s", args.DestinationRef)
@@ -231,7 +231,7 @@ func (s *Store) Copy(ctx context.Context, args CopyArgs) (*CopyResult, error) {
 		}
 		return nil, err
 	}
-	raw, err := os.ReadFile(srcAbsPath)
+	raw, err := readDocumentBytes(srcAbsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("document not found: %s", args.Ref)

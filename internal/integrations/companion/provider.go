@@ -75,6 +75,7 @@ type Registry struct {
 	mu        sync.RWMutex
 	providers map[string]*Provider   // provider ID → Provider
 	byAccount map[string][]*Provider // account name → Providers
+	onChange  func()
 	logger    *slog.Logger
 }
 
@@ -87,6 +88,31 @@ func NewRegistry(logger *slog.Logger) *Registry {
 		providers: make(map[string]*Provider),
 		byAccount: make(map[string][]*Provider),
 		logger:    logger,
+	}
+}
+
+// SetOnChange registers a callback invoked when a provider's advertised
+// capabilities change — capability registration and re-registration
+// (RegisterCapabilities) — or when a provider disconnects (Remove). A bare
+// connection (Add, before any capabilities are registered) carries no tools
+// and does NOT fire it. The callback runs outside the registry lock, so it
+// may safely call back into the registry (e.g. List). Pass nil to clear.
+// This is the seam the tool registrar uses to rebuild its synthesized
+// companion tools when a laptop pops on or off line mid-session.
+func (r *Registry) SetOnChange(fn func()) {
+	r.mu.Lock()
+	r.onChange = fn
+	r.mu.Unlock()
+}
+
+// notifyChange invokes the registered change callback, if any, without
+// holding the registry lock.
+func (r *Registry) notifyChange() {
+	r.mu.RLock()
+	cb := r.onChange
+	r.mu.RUnlock()
+	if cb != nil {
+		cb()
 	}
 }
 
@@ -154,6 +180,8 @@ func (r *Registry) Remove(id string) {
 		"client_name", p.ClientName,
 		"client_id", p.ClientID,
 	)
+
+	r.notifyChange()
 }
 
 // RegisterCapabilities replaces the capability set registered for a provider.
@@ -165,6 +193,7 @@ func (r *Registry) RegisterCapabilities(providerID string, capabilities []Capabi
 		return fmt.Errorf("provider %q not found", providerID)
 	}
 	p.setCapabilities(capabilities)
+	r.notifyChange()
 	return nil
 }
 
@@ -346,13 +375,26 @@ func (p *Provider) setCapabilities(capabilities []Capability) {
 
 		methods := make([]string, 0, len(cap.Methods))
 		methodIndex := make(map[string]bool, len(cap.Methods))
-		for _, method := range cap.Methods {
+		addMethod := func(method string) {
 			method = strings.TrimSpace(method)
 			if method == "" || methodIndex[method] {
-				continue
+				return
 			}
 			methodIndex[method] = true
 			methods = append(methods, method)
+		}
+		for _, method := range cap.Methods {
+			addMethod(method)
+		}
+
+		tools := normalizeToolDefinitions(cap.Tools)
+		// A tool definition's method is authoritative for routing: union it
+		// into the method set so a tool whose method the provider forgot to
+		// list in Methods is still routable by Registry.Call / supports().
+		// Without this, a synthesized tool could appear in snapshots yet fail
+		// to dispatch — a likely drift during rollout.
+		for _, def := range tools {
+			addMethod(def.Method)
 		}
 
 		index[name] = capabilityState{
@@ -363,6 +405,7 @@ func (p *Provider) setCapabilities(capabilities []Capability) {
 			Name:    name,
 			Version: strings.TrimSpace(cap.Version),
 			Methods: methods,
+			Tools:   tools,
 		})
 	}
 
@@ -385,9 +428,115 @@ func (p *Provider) capabilitiesSnapshot() []Capability {
 			Name:    cap.Name,
 			Version: cap.Version,
 			Methods: methods,
+			Tools:   cloneToolDefinitions(cap.Tools),
 		}
 	}
 	return clone
+}
+
+// normalizeToolDefinitions trims and structurally validates
+// companion-authored tool definitions: it drops entries with no name or
+// method and de-duplicates by name (first definition wins). Model-facing
+// hygiene — description limits, default tags, schema defaults — is applied
+// later, where the registrar synthesizes the model-facing tools and has a
+// logger to report on it.
+func normalizeToolDefinitions(defs []ToolDefinition) []ToolDefinition {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]ToolDefinition, 0, len(defs))
+	seen := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		method := strings.TrimSpace(def.Method)
+		if name == "" || method == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, ToolDefinition{
+			Name:        name,
+			Description: strings.TrimSpace(def.Description),
+			Method:      method,
+			Tags:        normalizeTags(def.Tags),
+			InputSchema: def.InputSchema,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// normalizeTags trims, drops empty, and de-duplicates tag names.
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// cloneToolDefinitions deep-copies the slice, per-entry Tags, and the
+// InputSchema map so a snapshot caller (including the tool registrar) cannot
+// mutate provider state and cannot race a concurrent re-registration that
+// rewrites the schema.
+func cloneToolDefinitions(defs []ToolDefinition) []ToolDefinition {
+	if len(defs) == 0 {
+		return nil
+	}
+	clone := make([]ToolDefinition, len(defs))
+	for i, def := range defs {
+		clone[i] = ToolDefinition{
+			Name:        def.Name,
+			Description: def.Description,
+			Method:      def.Method,
+			Tags:        append([]string(nil), def.Tags...),
+			InputSchema: deepCopyJSONMap(def.InputSchema),
+		}
+	}
+	return clone
+}
+
+// deepCopyJSONMap recursively copies a JSON-derived schema map so callers
+// can read or rewrite the copy without touching provider state.
+func deepCopyJSONMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyJSONValue(v)
+	}
+	return out
+}
+
+// deepCopyJSONValue recursively copies the value space JSON unmarshals into
+// (objects, arrays, and immutable scalars).
+func deepCopyJSONValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCopyJSONMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = deepCopyJSONValue(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func (p *Provider) supports(capability, method string) bool {
