@@ -105,22 +105,75 @@ func TestSetCapabilitiesNormalizesTools(t *testing.T) {
 }
 
 // TestCapabilitiesSnapshotIsolation verifies a snapshot caller cannot
-// mutate provider state through the returned tags slice.
+// mutate provider state through the returned tags slice or the (deep-copied)
+// input schema.
 func TestCapabilitiesSnapshotIsolation(t *testing.T) {
 	p := &Provider{done: make(chan struct{})}
 	p.setCapabilities([]Capability{{
 		Name:    "macos.calendar",
 		Methods: []string{"list_events"},
-		Tools:   []ToolDefinition{{Name: "macos_calendar_events", Method: "list_events", Tags: []string{"companion"}}},
+		Tools: []ToolDefinition{{
+			Name:   "macos_calendar_events",
+			Method: "list_events",
+			Tags:   []string{"companion"},
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		}},
 	}})
 
 	snap := p.capabilitiesSnapshot()
 	snap[0].Tools[0].Tags[0] = "mutated"
+	// Mutate the nested schema the caller received.
+	snap[0].Tools[0].InputSchema["type"] = "mutated"
+	snap[0].Tools[0].InputSchema["properties"].(map[string]any)["injected"] = true
 
 	again := p.capabilitiesSnapshot()
 	if again[0].Tools[0].Tags[0] != "companion" {
-		t.Errorf("snapshot mutation leaked into provider state: %q", again[0].Tools[0].Tags[0])
+		t.Errorf("tag mutation leaked into provider state: %q", again[0].Tools[0].Tags[0])
 	}
+	if again[0].Tools[0].InputSchema["type"] != "object" {
+		t.Errorf("schema mutation leaked into provider state: %v", again[0].Tools[0].InputSchema["type"])
+	}
+	props := again[0].Tools[0].InputSchema["properties"].(map[string]any)
+	if _, injected := props["injected"]; injected {
+		t.Error("nested schema mutation leaked into provider state")
+	}
+}
+
+// TestSetCapabilitiesUnionsToolMethods verifies a tool's method is
+// authoritative for routing: even when the provider omits it from Methods,
+// the tool's method becomes routable (supports() true) and is advertised.
+func TestSetCapabilitiesUnionsToolMethods(t *testing.T) {
+	p := &Provider{done: make(chan struct{})}
+	p.setCapabilities([]Capability{{
+		Name:    "macos.contacts",
+		Methods: []string{}, // provider forgot to advertise the method
+		Tools: []ToolDefinition{{
+			Name:   "macos_contacts_search",
+			Method: "search_contacts",
+		}},
+	}})
+
+	if !p.supports("macos.contacts", "search_contacts") {
+		t.Error("tool method should be routable even when omitted from Methods")
+	}
+	snap := p.capabilitiesSnapshot()
+	if len(snap) != 1 || !containsStr(snap[0].Methods, "search_contacts") {
+		t.Errorf("tool method should be unioned into advertised Methods: %v", snap)
+	}
+}
+
+func containsStr(s []string, target string) bool {
+	for _, v := range s {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRegistryOnChangeFires verifies the change hook fires on capability

@@ -38,10 +38,11 @@ type Capability struct {
 // of the contract cannot drift.
 //
 // InputSchema is a JSON Schema object used verbatim as the tool's
-// Anthropic input_schema. Authors must keep composition keywords
-// (oneOf/allOf/anyOf) out of the schema root: the model providers strip
-// top-level composition keywords before dispatch, so a root-level union
-// would be silently rewritten.
+// input_schema. Keep composition keywords (oneOf/allOf/anyOf) out of the
+// schema root: the Anthropic provider conversion strips top-level
+// composition before the request is sent (so a root-level union is silently
+// rewritten there), and other backends may reject it outright. Composition
+// nested below the root — inside a property — is fine.
 type ToolDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
