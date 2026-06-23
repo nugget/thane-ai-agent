@@ -263,6 +263,7 @@ type Loop struct {
 	archiver            SessionArchiver
 	extractor           *memory.Extractor
 	orchestratorTools   []string                       // Restricted tool set for orchestrator mode (nil = all tools)
+	dynamicTools        DynamicToolSource              // nil = no dynamically-sourced tools (e.g. companion)
 	liveRequestRecorder logging.RequestRecordFunc      // nil = no live request detail prefill
 	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
 	usageStore          *usage.Store                   // nil = no usage recording
@@ -664,6 +665,44 @@ func (l *Loop) contextAssemblerForPrompt() *TagContextAssembler {
 // any way to delegate.
 func (l *Loop) SetOrchestratorTools(names []string) {
 	l.orchestratorTools = names
+}
+
+// DynamicToolSource supplies tools that appear and disappear at runtime,
+// outside the startup-static tool registry — companion (macOS) tools that
+// come and go as laptops connect and disconnect are the motivating case.
+//
+// Snapshot returns the current set of tools plus a tag→tool-name map. Both
+// are layered onto the per-run tool registry at the start of every run (see
+// [Loop.Run]); they are NOT registered on the shared registry, so a source
+// that changes between runs never races the lock-free registry. The tag
+// additions feed FilterByTags so the dynamic tools stay tag-gated rather
+// than always-on. Returning empty values is a no-op.
+type DynamicToolSource interface {
+	Snapshot() (tools []*tools.Tool, tagAdditions map[string][]string)
+}
+
+// SetDynamicToolSource installs the runtime tool source consulted at the
+// start of each run. Pass nil to disable. Safe to call during startup
+// wiring; the source's Snapshot must itself be concurrency-safe because it
+// is read from run goroutines while the source mutates from connection
+// goroutines.
+func (l *Loop) SetDynamicToolSource(src DynamicToolSource) {
+	l.dynamicTools = src
+}
+
+// applyDynamicTools layers the current dynamic-source snapshot onto base,
+// returning base unchanged when no source is installed or the snapshot is
+// empty. Extracted from [Loop.Run] so the overlay is unit-testable without
+// driving a full run.
+func (l *Loop) applyDynamicTools(base *tools.Registry) *tools.Registry {
+	if l.dynamicTools == nil {
+		return base
+	}
+	extra, tagAdds := l.dynamicTools.Snapshot()
+	if len(extra) == 0 && len(tagAdds) == 0 {
+		return base
+	}
+	return base.WithDynamicTools(extra, tagAdds)
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -1793,6 +1832,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// before model routing so tool-count-sensitive decisions see the same
 	// effective surface the model will actually get.
 	baseTools := l.tools
+	// Layer in dynamically-sourced tools (e.g. companion/macOS tools that
+	// come and go with laptop connections) before any request-level
+	// filtering, so AllowedTools/ExcludeTools/gating and the per-iteration
+	// currentTools all observe the same surface. The overlay is per-run and
+	// does not touch the shared registry.
+	baseTools = l.applyDynamicTools(baseTools)
 	if len(req.AllowedTools) > 0 {
 		baseTools = baseTools.FilteredCopy(req.AllowedTools)
 	}
