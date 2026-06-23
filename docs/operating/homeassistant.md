@@ -74,7 +74,7 @@ polling.
 
 ### MCP (ha-mcp)
 
-[ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides 90+ HA tools via
+[ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides a broad set of HA tools via
 the Model Context Protocol — search, state queries, service calls, camera
 images, automation traces, area registry, and more. Thane hosts ha-mcp as a
 stdio subprocess and bridges selected tools into the agent loop.

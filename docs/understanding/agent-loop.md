@@ -128,7 +128,7 @@ indexing, provenance, and signature policy.
 ## Capability Tags
 
 Tags are the mechanism that keeps the agent loop efficient. Instead of
-loading 80+ tools on every request, tags gate tools and talents by semantic
+loading every tool on every request, tags gate tools and talents by semantic
 domain.
 
 ### Configuration

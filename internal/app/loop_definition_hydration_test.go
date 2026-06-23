@@ -14,7 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/runtime/curator"
+	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/runtime/ego"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/runtime/metacognitive"
@@ -32,7 +32,7 @@ func coreServiceTestConfig() *config.Config {
 		Ego: config.EgoConfig{
 			Enabled: true, MinSleep: "30m", MaxSleep: "24h", DefaultSleep: "6h",
 		},
-		Curator: config.CuratorConfig{
+		Archivist: config.ArchivistConfig{
 			Enabled: true, MinSleep: "15m", MaxSleep: "12h", DefaultSleep: "1h",
 		},
 	}
@@ -201,7 +201,7 @@ func TestBuildLoopDefinitionBaseSpecs_SkipsDuplicateBuiltinNames(t *testing.T) {
 }
 
 // TestBuildLoopDefinitionBaseSpecs_AppendsCoreServiceLoops covers the
-// coreServiceLoops registration path: enabled ego/metacognitive/curator
+// coreServiceLoops registration path: enabled ego/metacognitive/archivist
 // definitions are appended and their parsed configs cached for later
 // hydration. Replaces the assertions the three hand-written blocks used
 // to carry before #988 collapsed them behind one descriptor slice.
@@ -217,7 +217,7 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsCoreServiceLoops(t *testing.T) {
 	want := map[string]bool{
 		metacognitive.DefinitionName: false,
 		ego.DefinitionName:           false,
-		curator.DefinitionName:       false,
+		archivist.DefinitionName:     false,
 	}
 	for _, spec := range specs {
 		if _, ok := want[spec.Name]; ok {
@@ -238,8 +238,8 @@ func TestBuildLoopDefinitionBaseSpecs_AppendsCoreServiceLoops(t *testing.T) {
 	if a.egoCfg == nil {
 		t.Error("egoCfg not cached after build")
 	}
-	if a.curatorCfg == nil {
-		t.Error("curatorCfg not cached after build")
+	if a.archivistCfg == nil {
+		t.Error("archivistCfg not cached after build")
 	}
 }
 
@@ -262,7 +262,7 @@ func TestCoreServiceLoopByNameMatchesSlice(t *testing.T) {
 			t.Errorf("index[%q].Name = %q", reg.Name, indexed.Name)
 		}
 	}
-	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, curator.DefinitionName} {
+	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName} {
 		if _, ok := coreServiceLoopByName[name]; !ok {
 			t.Errorf("core loop %q not registered in coreServiceLoops", name)
 		}

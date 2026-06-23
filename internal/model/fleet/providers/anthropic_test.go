@@ -374,7 +374,9 @@ func TestMinCacheablePrefixTokens(t *testing.T) {
 	}{
 		{"claude-sonnet-4-5", 1024},
 		{"claude-sonnet-4-20250514", 1024},
+		{"claude-sonnet-4-6", 2048}, // Sonnet 4.6 raised the minimum to 2048
 		{"claude-opus-4-7", 4096},
+		{"claude-opus-4-8", 4096},
 		{"claude-haiku-4-5", 4096},
 		{"unknown-model", 4096},
 	}

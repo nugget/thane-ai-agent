@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/server/openapi"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -498,6 +499,10 @@ func (s *Server) Start(ctx context.Context) error {
 	} else {
 		mux.HandleFunc("GET /", s.handleRoot)
 	}
+
+	// OpenAPI explorer: interactive reference for the native + compat
+	// surfaces, served at /docs from embedded assets (vendored Scalar, no CDN).
+	openapi.RegisterRoutes(mux)
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()

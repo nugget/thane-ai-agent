@@ -264,7 +264,7 @@ func applyEntityDescription(meta *EntityMetadata, entry *EntityRegistryEntry, st
 		return
 	}
 	meta.Name = entry.Name
-	meta.OriginalName = entry.OriginalName
+	meta.OriginalName = string(entry.OriginalName)
 	meta.Aliases = append([]string(nil), entry.Aliases...)
 	if entry.Description != "" {
 		meta.Description = entry.Description
@@ -440,14 +440,14 @@ func (r EntityMetadataResolver) DeviceMetadata(device *DeviceRegistryEntry) *Ent
 func (r EntityMetadataResolver) deviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {
 	out := &EntityDeviceMetadata{
 		ID:               device.ID,
-		Name:             device.Name,
-		NameByUser:       device.NameByUser,
-		Manufacturer:     device.Manufacturer,
-		Model:            device.Model,
-		ModelID:          device.ModelID,
-		SWVersion:        device.SWVersion,
-		HWVersion:        device.HWVersion,
-		SerialNumber:     device.SerialNumber,
+		Name:             string(device.Name),
+		NameByUser:       string(device.NameByUser),
+		Manufacturer:     string(device.Manufacturer),
+		Model:            string(device.Model),
+		ModelID:          string(device.ModelID),
+		SWVersion:        string(device.SWVersion),
+		HWVersion:        string(device.HWVersion),
+		SerialNumber:     string(device.SerialNumber),
 		AreaID:           device.AreaID,
 		ViaDeviceID:      device.ViaDeviceID,
 		EntryType:        device.EntryType,

@@ -93,6 +93,12 @@ func (a *EntityTrendTools) handleHistory(ctx context.Context, args map[string]an
 
 	result, err := ComputeEntityTrend(ctx, a.client, req, time.Now())
 	if err != nil {
+		// A bad or stale entity_id is recoverable: return the shared
+		// "did you mean?" envelope rather than a raw 404 the model can't
+		// act on.
+		if tools.IsHAEntityNotFound(err) {
+			return tools.SuggestEntityNotFound(ctx, a.client, entityID), nil
+		}
 		a.logger.Warn("ha_history failed",
 			"entity_id", entityID,
 			"attribute", req.Attribute,

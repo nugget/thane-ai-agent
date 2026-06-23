@@ -2,61 +2,111 @@
 name: ha
 tags: [ha]
 kind: trailhead
-teaser: "Open for Home Assistant work — reading state, controlling devices, or authoring automations."
-next_tags: [ha_observe, ha_control, ha_automate]
+teaser: "Open for the home — the whole house at a glance, a room, a device, live state, control, or automations."
+next_tags: [ha_control, ha_automate]
 ---
 
 # Home Assistant
 
 The HA surface is the largest lever this agent has on the physical
-world. Reading is cheap and safe; control is fast and stale-ID-prone;
-automation authoring is durable and breakable. Match the shape of
-the work to one of three branches.
+world. The watched-entity snapshot you carry by default is a keyhole —
+a handful of subscribed sensors, not the house. This is the door. Behind
+it: every room, every device, full history and registry, live and
+searchable. When the conversation turns toward home, the real picture
+lives here — open this rather than answering the home from the keyhole.
 
-## Choose by what you're doing
+Reading is cheap, safe, and loaded right here — the tools below are
+available the moment this tag is active. Control is fast and
+stale-ID-prone; automation authoring is durable and breakable. Each of
+those is one deliberate step further in (`ha_control`, `ha_automate`),
+because acting on the home spends trust, not just tokens.
 
-- **You want to know what's happening right now** — activate
-  `ha_observe`. Single-entity state, fuzzy lookup by description,
-  domain enumeration, registry search across areas/labels/devices.
+## Start wide: the whole house at a glance
 
-- **You want to change something** — activate `ha_control`. The
-  find → act → verify pattern, with safety on stale entity IDs.
+`ha_home_snapshot` is the curated "how's the house right now" overview —
+the native answer to "what's going on at home", "is the house buttoned
+up", or "who's home". When home curiosity is broad rather than aimed at
+one thing, start here:
 
-- **You want to manage Home Assistant's own automations** — activate
-  `ha_automate`. List with activity stats, inspect, create, update,
-  delete.
+```json
+{
+  "include_energy": true
+}
+```
 
-## The constants across all three branches
+Leads with what's actionable: anomalies (offline / in alarm), then
+security/openings (open doors and windows, unlocked locks, armed or
+triggered alarm panels), then presence (who's home vs away), then
+climate. A top-level `summary` gives the counts at a glance, and
+`status: "quiet"` means nothing is offline, open, unlocked, or armed.
+Pass `include_energy` for a power/energy section and `include` for
+per-entity metadata.
 
-- **`ha_call_service` does not validate entity IDs.** A typo or stale
-  ID returns success and silently does nothing. This is the single
-  most consequential gotcha in the HA surface; every action-shaped
-  branch carries the verify-after pattern.
-- **`ha_control_device` is the high-level path; `ha_call_service` is the
-  low-level path.** Use `ha_control_device` unless you already have the
-  exact entity_id from a recent lookup *in the same turn*.
-- **Sustained attention is `awareness`'s job, not `ha`'s.** A one-off
-  state check uses `ha_observe`; a loop watching a room subscribes
-  via `awareness` and lets entity state stay current between turns.
-- **Delivery and escalation are `notifications`'s job.** When the
-  next move is "tell someone about this," activate notifications;
-  HA's tools are about state and control, not interruption.
+## Narrow to a room
 
----
-name: ha_observe
-tags: [ha_observe]
-kind: trailhead
-teaser: "Read current state — single entity, fuzzy lookup, domain enum, or registry search."
----
+`get_area_activity` is the whole-area perception view — the native
+answer to "what's in the office" or "is everything okay in the kitchen":
 
-# Observe
+```json
+{
+  "area": "office",
+  "include": {"device": true, "labels": true}
+}
+```
 
-You want to know what's happening. Four tools, picked by how
-specifically you can name what you're looking for.
+Returns the area with its floor/building context and its entities
+grouped by salience — anomalies (offline / alarm) first, then active
+devices, recent changes, ambient sensors, and the stable remainder —
+plus a transition timeline and counts of what was filtered out
+(disabled/hidden/diagnostic/config). Default-context entities only;
+pass `include_hidden` or `include_diagnostic` for a forensic pass.
 
-## I know the exact entity_id
+## Narrow to a device
 
-`ha_get_state` returns the current state and attributes:
+`ha_device` is the whole-device perception view — the native answer to
+"show me the thermostat device", "what does the front-door sensor
+expose", or "is this device healthy":
+
+```json
+{
+  "device": "front door lock",
+  "include": {"labels": true}
+}
+```
+
+Returns the device identity (manufacturer/model/firmware/serial/area/
+integration/via_device) plus every child entity it owns, with semantic
+state grouped by salience (anomalies first, then active, ambient, then
+the rest) and an availability rollup (how many of its entities are
+reporting). Resolves by `device_id` or by name — user-assigned or
+registry name, with a substring fallback, returning candidates when a
+name is ambiguous. Reach for this instead of discovering a device's
+child entities one `ha_get_state` at a time.
+
+## Find one entity by description
+
+`ha_find_entity` does fuzzy lookup by description, optionally narrowed
+by area or domain:
+
+```json
+{
+  "description": "ceiling light",
+  "area": "office",
+  "domain": "light",
+  "include": {"all": true}
+}
+```
+
+Returns the best match with a confidence score, or candidate
+entity_ids when the description is ambiguous. The natural precursor
+to `ha_get_state` or `ha_control_device`. Area filters use the HA
+registry, including device-inherited area, instead of only blending the
+area words into the fuzzy query.
+
+## Read one entity you can already name
+
+`ha_get_state` returns the current state and attributes when the
+entity_id is already in hand:
 
 ```json
 {
@@ -64,7 +114,7 @@ specifically you can name what you're looking for.
 }
 ```
 
-The fastest path when the entity_id is already in hand. Returns the
+The fastest path when the entity_id is already known. Returns the
 state value plus all attributes (brightness, color, last_changed,
 etc.).
 
@@ -88,27 +138,34 @@ salience hint, not as proof the data is unimportant. `visibility.context_role`
 summarizes the model-facing role as `default`, `hidden`, `diagnostic`,
 `config`, or `disabled`.
 
-## I know the description but not the entity_id
+## Find everything matching a live-state condition
 
-`ha_find_entity` does fuzzy lookup by description, optionally narrowed
-by area or domain:
+`ha_search_states` filters by *current state* across all domains —
+the native answer to "what's on right now," "what doors are open,"
+"which sensors are unavailable," "what batteries are low":
 
 ```json
 {
-  "description": "ceiling light",
-  "area": "office",
-  "domain": "light",
-  "include": {"all": true}
+  "state": ["on"],
+  "area": "office"
 }
 ```
 
-Returns the best match with a confidence score, or candidate
-entity_ids when the description is ambiguous. The natural precursor
-to `ha_get_state` or `ha_control_device`. Area filters use the HA
-registry, including device-inherited area, instead of only blending the
-area words into the fuzzy query.
+```json
+{
+  "attribute": "battery",
+  "comparison": "<",
+  "value": 20
+}
+```
 
-## I want everything in a domain
+Filters compose (AND): pair a `state` set with a `domain` or `area`,
+or use a numeric `attribute`/`comparison`/`value` predicate for
+threshold questions. This is the right reach instead of fanning out
+many `ha_get_state` calls or listing a whole domain and eyeballing it.
+Add `include` for area/device/label/visibility metadata on each match.
+
+## Enumerate a domain or name pattern
 
 `ha_list_entities` enumerates by domain:
 
@@ -136,81 +193,9 @@ full entity_id instead of (or alongside) `domain`:
 `*` matches any run of characters, so `*_temperature` spans domains and
 `light.office_*` narrows within one. Domain and pattern combine (AND)
 when both are given. This is for *naming*-shaped discovery; to find
-entities by their live *state* (what's on, what's open, low batteries),
-reach for `ha_search_states` instead.
+entities by their live *state*, reach for `ha_search_states` instead.
 
-## I want everything matching a live-state condition
-
-`ha_search_states` filters by *current state* across all domains —
-the native answer to "what's on right now," "what doors are open,"
-"which sensors are unavailable," "what batteries are low":
-
-```json
-{
-  "state": ["on"],
-  "area": "office"
-}
-```
-
-```json
-{
-  "attribute": "battery",
-  "comparison": "<",
-  "value": 20
-}
-```
-
-Filters compose (AND): pair a `state` set with a `domain` or `area`,
-or use a numeric `attribute`/`comparison`/`value` predicate for
-threshold questions. This is the right reach instead of fanning out
-many `ha_get_state` calls or listing a whole domain and eyeballing it.
-Add `include` for area/device/label/visibility metadata on each match.
-
-## I want everything in a room
-
-`get_area_activity` is the whole-area perception view — the native
-answer to "what's in the office" or "is everything okay in the
-kitchen":
-
-```json
-{
-  "area": "office",
-  "include": {"device": true, "labels": true}
-}
-```
-
-Returns the area with its floor/building context and its entities
-grouped by salience — anomalies (offline / alarm) first, then active
-devices, recent changes, ambient sensors, and the stable remainder —
-plus a transition timeline and counts of what was filtered out
-(disabled/hidden/diagnostic/config). Default-context entities only;
-pass `include_hidden` or `include_diagnostic` for a forensic pass. Reach
-for this instead of listing a domain and cross-referencing rooms by
-hand.
-
-## I want everything one device exposes
-
-`ha_device` is the whole-device perception view — the native answer to
-"show me the thermostat device", "what does the front-door sensor
-expose", or "is this device healthy":
-
-```json
-{
-  "device": "front door lock",
-  "include": {"labels": true}
-}
-```
-
-Returns the device identity (manufacturer/model/firmware/serial/area/
-integration/via_device) plus every child entity it owns, with semantic
-state grouped by salience (anomalies first, then active, ambient, then
-the rest) and an availability rollup (how many of its entities are
-reporting). Resolves by `device_id` or by name — user-assigned or
-registry name, with a substring fallback, returning candidates when a
-name is ambiguous. Reach for this instead of discovering a device's
-child entities one `ha_get_state` at a time.
-
-## I want to know how something has trended
+## See how something has trended
 
 `ha_history` summarizes one entity's recorder history over a lookback
 window — the native answer to "how has the office temperature moved over
@@ -234,28 +219,7 @@ For *sustained*, every-turn attention to an entity, don't poll this from
 a loop's turn budget — subscribe via `awareness` with history windows
 and let the trend stay current between turns for free.
 
-## I want the whole house at a glance
-
-`ha_home_snapshot` is the curated "how's the house right now" overview —
-the native answer to "what's going on at home", "is the house buttoned
-up", or "who's home":
-
-```json
-{
-  "include_energy": true
-}
-```
-
-Leads with what's actionable: anomalies (offline / in alarm), then
-security/openings (open doors and windows, unlocked locks, armed or
-triggered alarm panels), then presence (who's home vs away), then
-climate. A top-level `summary` gives the counts at a glance, and
-`status: "quiet"` means nothing is offline, open, unlocked, or armed.
-Pass `include_energy` for a power/energy section and `include` for
-per-entity metadata. This is the home-wide view; for one room reach for
-`get_area_activity`, for one device `ha_device`.
-
-## I want richer search across the registry
+## Search the registry (areas, labels, devices, entities)
 
 `ha_registry_search` searches areas, labels, devices, and entities
 in one call:
@@ -274,6 +238,33 @@ scores. The right tool when:
   entity IDs — not guesses).
 - Investigating a room ("what's actually in here?").
 - Following a label across categories ("everything tagged security").
+
+## When you need to act, step further in
+
+The read tools above answer "what's happening." Two branches go
+further, and each is its own activation because the cost of a mistake
+rises:
+
+- **Change something** — activate `ha_control`. The find → act → verify
+  pattern, with safety on stale entity IDs.
+- **Manage Home Assistant's own automations** — activate `ha_automate`.
+  List with activity stats, inspect, create, update, delete.
+
+## The constants across every branch
+
+- **`ha_call_service` does not validate entity IDs.** A typo or stale
+  ID returns success and silently does nothing. This is the single
+  most consequential gotcha in the HA surface; every action-shaped
+  branch carries the verify-after pattern.
+- **`ha_control_device` is the high-level path; `ha_call_service` is the
+  low-level path.** Use `ha_control_device` unless you already have the
+  exact entity_id from a recent lookup *in the same turn*.
+- **Sustained attention is `awareness`'s job, not `ha`'s.** A one-off
+  state check uses the read tools here; a loop watching a room subscribes
+  via `awareness` and lets entity state stay current between turns.
+- **Delivery and escalation are `notifications`'s job.** When the
+  next move is "tell someone about this," activate notifications;
+  HA's tools are about state and control, not interruption.
 
 ## Cross-references
 

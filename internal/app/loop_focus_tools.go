@@ -49,7 +49,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 	return []looppkg.RuntimeTool{
 		{
 			Name:               "watch_entity",
-			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart.",
+			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart. Scope: this is the loop you are currently running; for an always-visible subscription in your own field of view use add_entity_subscription, and for a different named loop use update_entity_subscriptions.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",

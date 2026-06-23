@@ -1206,6 +1206,9 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 
 	state, err := r.ha.GetState(ctx, entityID)
 	if err != nil {
+		if IsHAEntityNotFound(err) {
+			return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+		}
 		return "", err
 	}
 
@@ -1344,6 +1347,17 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 		return "", fmt.Errorf("domain, service, and entity_id are required")
 	}
 
+	// HA accepts a service call for an unknown entity_id and silently
+	// no-ops, so a typo'd or stale id otherwise vanishes without feedback.
+	// Probe the entity first (a 404 here is authoritative) and return a
+	// recoverable "did you mean?" suggestion instead of a phantom success.
+	if _, err := r.ha.GetState(ctx, entityID); err != nil {
+		if IsHAEntityNotFound(err) {
+			return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+		}
+		return "", fmt.Errorf("verify entity_id %q before calling %s.%s: %w", entityID, domain, service, err)
+	}
+
 	data := map[string]any{
 		"entity_id": entityID,
 	}
@@ -1395,10 +1409,23 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 		domain = "lock"
 	}
 
-	// Find the entity
-	entities, err := r.ha.GetEntities(ctx, domain)
+	// Fetch the full entity set once. GetEntities pulls the entire state
+	// machine regardless of any domain filter (it filters in-process), so
+	// fetching all and deriving the domain slice locally keeps this to a
+	// single bulk GetStates — the inferred-domain match and the broaden-on-
+	// miss suggestion both read from the same payload.
+	allEntities, err := r.ha.GetEntities(ctx, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to get entities: %w", err)
+	}
+	entities := allEntities
+	if domain != "" {
+		entities = entities[:0:0]
+		for _, e := range allEntities {
+			if e.Domain == domain {
+				entities = append(entities, e)
+			}
+		}
 	}
 
 	// Build search string
@@ -1410,7 +1437,32 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	// Use the fuzzy matching from ha_find_entity
 	matches := fuzzyMatchEntityInfos(searchStr, entities)
 	if len(matches) == 0 {
-		return fmt.Sprintf("Could not find a device matching '%s'", description), nil
+		// The inferred domain may be wrong, so broaden to all domains to
+		// suggest candidates — but do not act on a low-confidence
+		// cross-domain guess. Return them for the model to confirm. Reuse
+		// the already-fetched full set rather than fetching again.
+		var candidates []EntitySuggestion
+		for i, m := range fuzzyMatchEntityInfos(searchStr, allEntities) {
+			if i >= maxEntitySuggestions {
+				break
+			}
+			candidates = append(candidates, EntitySuggestion{
+				EntityID:     m.EntityID,
+				FriendlyName: m.FriendlyName,
+				Score:        m.Score,
+			})
+		}
+		note := "No device matched and nothing was changed. Confirm one of the candidates, or use ha_find_entity to locate the entity_id, then retry."
+		if len(candidates) == 0 {
+			note = "No device matched and nothing was changed. Use ha_find_entity or ha_list_entities to discover the entity_id; nothing similar was found."
+		}
+		return toJSON(ControlDeviceNoMatchResult{
+			Acted:                false,
+			Reason:               "no_match",
+			RequestedDescription: description,
+			Candidates:           candidates,
+			Note:                 note,
+		}), nil
 	}
 
 	best := matches[0]

@@ -447,7 +447,10 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	// Anthropic doesn't have a dedicated health endpoint.
 	// We'll send a minimal request to verify the API key works.
 	req := anthropicRequest{
-		Model:     "claude-sonnet-4-20250514",
+		// Cheapest current model — a liveness probe only needs the API
+		// key to authenticate, not a heavyweight model. Avoids pinning a
+		// deprecated model that would 404 the health check post-retirement.
+		Model:     "claude-haiku-4-5",
 		Messages:  []anthropicMessage{{Role: "user", Content: "ping"}},
 		MaxTokens: 1,
 	}
@@ -705,9 +708,10 @@ const estimatedCharsPerToken = 4
 // indistinguishable from a cache miss in the usage response — hence
 // the guard surfaces them as warnings.
 //
-// Values track the published per-family minimums (Sonnet 1024, Opus
-// 4096, Haiku 4096). Unknown models default to the strictest minimum
-// so we never advertise caching we can't confirm.
+// Values track the published per-family minimums (Opus 4096, Haiku
+// 4096, Sonnet 4.6 2048, earlier Sonnet 1024). Unknown models default
+// to the strictest minimum so we never advertise caching we can't
+// confirm.
 func minCacheablePrefixTokens(model string) int {
 	lower := strings.ToLower(model)
 	switch {
@@ -716,6 +720,11 @@ func minCacheablePrefixTokens(model string) int {
 	case strings.Contains(lower, "haiku"):
 		return 4096
 	case strings.Contains(lower, "sonnet"):
+		// Sonnet 4.6 raised the minimum cacheable prefix to 2048;
+		// Sonnet 4.5 and earlier cache from 1024.
+		if strings.Contains(lower, "sonnet-4-6") {
+			return 2048
+		}
 		return 1024
 	default:
 		return 4096

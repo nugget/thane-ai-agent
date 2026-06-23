@@ -19,12 +19,14 @@ const (
 // tool needs: the current state (for classification, precision, and
 // unit) plus recorder-backed history. The attributes-enabled history
 // path is used only when a specific attribute is being trended, so a
-// plain state trend stays on the lean no_attributes fetch. The concrete
-// homeassistant.Client implements all three.
+// plain state trend stays on the lean no_attributes fetch. GetEntities
+// powers the "did you mean?" suggestion when the requested entity_id
+// isn't found. The concrete homeassistant.Client implements all four.
 type TrendHistoryClient interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 	GetStateHistory(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
 	GetStateHistoryWithAttributes(ctx context.Context, entityID string, startTime, endTime time.Time) ([]homeassistant.State, error)
+	GetEntities(ctx context.Context, domain string) ([]homeassistant.EntityInfo, error)
 }
 
 // TrendRequest describes one ha_history invocation.
