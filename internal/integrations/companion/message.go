@@ -18,10 +18,37 @@ type Message struct {
 
 // Capability describes a companion capability exposed by a connected
 // provider, along with the methods it supports.
+//
+// Tools is optional and additive: a provider that authors its own tool
+// surface ships full tool definitions here, making the companion app
+// authoritative over the schemas the model sees. Providers that only
+// advertise Methods (and older clients that never send Tools) continue
+// to work through the legacy hand-coded tool path on the server.
 type Capability struct {
-	Name    string   `json:"name"`
-	Version string   `json:"version,omitempty"`
-	Methods []string `json:"methods,omitempty"`
+	Name    string           `json:"name"`
+	Version string           `json:"version,omitempty"`
+	Methods []string         `json:"methods,omitempty"`
+	Tools   []ToolDefinition `json:"tools,omitempty"`
+}
+
+// ToolDefinition is a companion-authored LLM tool. The server synthesizes
+// one model-facing tool per definition and dispatches its invocations to
+// Method on the owning capability. Because the provider authors the schema
+// and owns the decode of the resulting params, the Go and provider sides
+// of the contract cannot drift.
+//
+// InputSchema is a JSON Schema object used verbatim as the tool's
+// input_schema. Keep composition keywords (oneOf/allOf/anyOf) out of the
+// schema root: the Anthropic provider conversion strips top-level
+// composition before the request is sent (so a root-level union is silently
+// rewritten there), and other backends may reject it outright. Composition
+// nested below the root — inside a property — is fine.
+type ToolDefinition struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Method      string         `json:"method"`
+	Tags        []string       `json:"tags,omitempty"`
+	InputSchema map[string]any `json:"input_schema,omitempty"`
 }
 
 // Error carries structured error information in message responses.
