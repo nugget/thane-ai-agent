@@ -46,15 +46,17 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}()
 
-	// Memory guard: write a heap profile and gracefully restart before a
-	// leak can OOM the host. Opt-in; the supervising wrapper relaunches thane
-	// after the graceful exit (internal/platform/memguard).
+	// Memory guard: write a heap profile and restart before a leak can OOM the
+	// host. Opt-in. A hard-limit trip makes Serve return an error below so the
+	// process exits non-zero — a memory-limit restart is a failure even though
+	// the shutdown is clean — and the supervising wrapper relaunches thane.
+	var guard *memguard.Guard
 	if a.cfg.MemoryGuard.Enabled {
 		profileDir := a.cfg.MemoryGuard.ProfileDir
 		if profileDir == "" {
 			profileDir = filepath.Join(a.cfg.DataDir, "profiles")
 		}
-		guard := memguard.New(memguard.Config{
+		guard = memguard.New(memguard.Config{
 			SoftLimitMB: a.cfg.MemoryGuard.SoftLimitMB,
 			HardLimitMB: a.cfg.MemoryGuard.HardLimitMB,
 			ProfileDir:  profileDir,
@@ -137,6 +139,9 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 
 	a.logger.Info("Thane stopped")
+	if guard != nil && guard.Tripped() {
+		return fmt.Errorf("memory guard reached its hard limit and triggered a restart")
+	}
 	return nil
 }
 
