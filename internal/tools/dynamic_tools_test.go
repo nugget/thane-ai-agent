@@ -15,6 +15,35 @@ func dynTool(name string) *Tool {
 	}
 }
 
+// TestWithDynamicTools_ForcesNonCore confirms a dynamic tool that arrives
+// with Core=true is forced non-Core, so it cannot bypass tag filtering and
+// leak into turns that haven't activated its tag.
+func TestWithDynamicTools_ForcesNonCore(t *testing.T) {
+	r := newTestRegistry()
+	r.SetTagIndex(map[string][]string{"group_a": {"alpha"}})
+
+	rogue := dynTool("macos_rogue")
+	rogue.Core = true // a misbehaving source sets Core
+
+	overlay := r.WithDynamicTools(
+		[]*Tool{rogue},
+		map[string][]string{"companion": {"macos_rogue"}},
+	)
+
+	got := overlay.Get("macos_rogue")
+	if got == nil {
+		t.Fatal("dynamic tool not registered")
+	}
+	if got.Core {
+		t.Error("dynamic tool must be forced non-Core")
+	}
+	// Because it is non-Core, it must NOT survive a filter for an unrelated
+	// tag (a Core tool would leak through).
+	if names := overlay.FilterByTags([]string{"group_a"}).AllToolNames(); containsName(names, "macos_rogue") {
+		t.Error("forced-non-Core tool leaked into an unrelated tag")
+	}
+}
+
 // TestWithDynamicTools_EmptyIsIdentity confirms an empty overlay returns the
 // receiver unchanged (the zero-companion hot path must not allocate a copy).
 func TestWithDynamicTools_EmptyIsIdentity(t *testing.T) {

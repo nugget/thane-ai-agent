@@ -1058,6 +1058,11 @@ func (r *Registry) WithDynamicTools(extra []*Tool, tagAdditions map[string][]str
 		}
 		cp := *t
 		cp.Name = strings.TrimSpace(cp.Name)
+		// Force non-Core regardless of what the source set: dynamic tools
+		// must stay tag-gated so they never bypass FilterByTags and leak
+		// into turns that haven't activated their tag. This is what keeps
+		// prompt-cache churn isolated to companion-tagged turns.
+		cp.Core = false
 		filtered.Register(&cp)
 	}
 
