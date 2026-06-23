@@ -28,6 +28,12 @@ const (
 	// misbehaving client cannot bloat the prompt. Generous enough that real
 	// descriptions are never truncated.
 	maxCompanionToolDescriptionBytes = 4096
+
+	// maxCompanionToolResultBytes bounds a dispatched tool result so a
+	// high-volume or misbehaving companion (e.g. a full contact dump) can't
+	// blow the model's context/cost budget. Mirrors the ~16KB ceiling other
+	// JSON tool outputs in this package enforce.
+	maxCompanionToolResultBytes = 16_000
 )
 
 // companionProviderLister enumerates the currently-connected providers.
@@ -107,9 +113,17 @@ func (cr *CompanionRegistrar) Snapshot() ([]*Tool, map[string][]string) {
 func (cr *CompanionRegistrar) Rebuild() {
 	infos := cr.list()
 
+	// Resolve cross-provider tool-name collisions deterministically.
+	// Registry.List iterates a map, so provider order is nondeterministic;
+	// sort by provider ID first. Without this, the winning definition for a
+	// collided name (and its capability/method binding) could flip between
+	// rebuilds with no real registry change, breaking the cache-stable
+	// manifest.
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
+
 	// Dedup by tool name across providers (last writer wins, matching
-	// Registry.Register). Order is resolved deterministically below so the
-	// per-run tool list — and thus the Anthropic cache prefix — is stable.
+	// Registry.Register). The sorted provider order above makes "last"
+	// deterministic. Final tool names are sorted below for a stable manifest.
 	byName := make(map[string]*Tool)
 	for _, info := range infos {
 		for _, cap := range info.Capabilities {
@@ -208,7 +222,26 @@ func (cr *CompanionRegistrar) dispatch(ctx context.Context, capability, method s
 	if err != nil {
 		return "", err
 	}
-	return formatter(result)
+	out, err := formatter(result)
+	if err != nil {
+		return "", err
+	}
+	return capCompanionResult(out), nil
+}
+
+// capCompanionResult bounds a formatted tool result, marking truncation
+// explicitly so the model knows to narrow its request rather than assuming
+// it saw everything.
+func capCompanionResult(s string) string {
+	if len(s) <= maxCompanionToolResultBytes {
+		return s
+	}
+	const note = "\n\n[... companion result truncated; narrow the query or limit ...]"
+	allowed := maxCompanionToolResultBytes - len(note)
+	if allowed < 0 {
+		allowed = 0
+	}
+	return truncateUTF8(s, allowed) + note
 }
 
 // augmentSchemaWithRouting returns a copy of the Mac-authored input schema

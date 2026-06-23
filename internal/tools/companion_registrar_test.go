@@ -252,6 +252,73 @@ func TestAugmentSchemaWithRouting_DoesNotMutateSource(t *testing.T) {
 	}
 }
 
+// TestCompanionRegistrar_DeterministicCollisionWinner verifies that when two
+// providers author the same tool name, the winner (and its method binding)
+// is stable regardless of the nondeterministic provider order List() yields.
+func TestCompanionRegistrar_DeterministicCollisionWinner(t *testing.T) {
+	mk := func(id, method string) companion.ProviderInfo {
+		return companion.ProviderInfo{
+			ID: id,
+			Capabilities: []companion.Capability{{
+				Name: "macos.contacts",
+				Tools: []companion.ToolDefinition{{
+					Name: "macos_x", Method: method,
+					InputSchema: map[string]any{"type": "object"},
+				}},
+			}},
+		}
+	}
+	provA := mk("prov_a", "m_a")
+	provB := mk("prov_b", "m_b")
+
+	winningMethod := func(order []companion.ProviderInfo) string {
+		src := &fakeCompanionSource{infos: order, result: json.RawMessage(`{}`)}
+		cr := newCompanionRegistrar(src.List, src.Call, nil)
+		synth, _ := cr.Snapshot()
+		if len(synth) != 1 {
+			t.Fatalf("collision should yield 1 tool, got %d", len(synth))
+		}
+		if _, err := findTool(synth, "macos_x").Handler(context.Background(), nil); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		return src.calls[0].Method
+	}
+
+	// Both input orders must pick the same provider (sorted by ID -> prov_b
+	// is "last" and wins).
+	forward := winningMethod([]companion.ProviderInfo{provA, provB})
+	reversed := winningMethod([]companion.ProviderInfo{provB, provA})
+	if forward != reversed {
+		t.Errorf("collision winner flipped with input order: %q vs %q", forward, reversed)
+	}
+	if forward != "m_b" {
+		t.Errorf("expected deterministic winner m_b (highest provider ID), got %q", forward)
+	}
+}
+
+// TestCompanionRegistrar_DispatchCapsResult verifies an oversized companion
+// result is bounded and marked truncated.
+func TestCompanionRegistrar_DispatchCapsResult(t *testing.T) {
+	huge := `"` + strings.Repeat("x", maxCompanionToolResultBytes*2) + `"`
+	src := &fakeCompanionSource{
+		infos:  []companion.ProviderInfo{contactsProvider()},
+		result: json.RawMessage(huge),
+	}
+	cr := newCompanionRegistrar(src.List, src.Call, nil)
+	synth, _ := cr.Snapshot()
+
+	out, err := findTool(synth, "macos_search_contacts").Handler(context.Background(), map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(out) > maxCompanionToolResultBytes {
+		t.Errorf("result not capped: %d bytes > %d", len(out), maxCompanionToolResultBytes)
+	}
+	if !strings.Contains(out, "truncated") {
+		t.Error("truncation should be marked explicitly")
+	}
+}
+
 func hasString(s []string, target string) bool {
 	for _, v := range s {
 		if v == target {
