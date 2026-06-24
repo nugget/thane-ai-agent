@@ -44,6 +44,12 @@ var schema = database.Schema{
 		database.IndexCreate{Name: "idx_messages_conversation", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp)`},
 		database.IndexCreate{Name: "idx_messages_session", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp)`},
 		database.IndexCreate{Name: "idx_messages_status", SQL: `CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(conversation_id, status)`},
+		// Expression indexes over the normalized (zone-collapsed, lexically
+		// sortable) timestamp form so the conversation-query endpoint's ORDER BY
+		// and keyset seeks are index-driven. They MUST match the strftime
+		// expression used in conversations_query.go verbatim to be usable.
+		database.IndexCreate{Name: "idx_conversations_updated_norm", SQL: `CREATE INDEX IF NOT EXISTS idx_conversations_updated_norm ON conversations(strftime('%Y-%m-%dT%H:%M:%fZ', updated_at), id)`},
+		database.IndexCreate{Name: "idx_conversations_created_norm", SQL: `CREATE INDEX IF NOT EXISTS idx_conversations_created_norm ON conversations(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), id)`},
 		database.TableCreate{
 			Table: "tool_calls",
 			SQL: `CREATE TABLE IF NOT EXISTS tool_calls (

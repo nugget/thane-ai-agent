@@ -1471,39 +1471,9 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 }
 
 // History endpoints
-
-func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
-		return
-	}
-
-	convs := s.memoryStore.GetAllConversations()
-
-	// Return summary without full message content
-	type ConvSummary struct {
-		ID           string    `json:"id"`
-		MessageCount int       `json:"message_count"`
-		CreatedAt    time.Time `json:"created_at"`
-		UpdatedAt    time.Time `json:"updated_at"`
-	}
-
-	summaries := make([]ConvSummary, len(convs))
-	for i, c := range convs {
-		summaries[i] = ConvSummary{
-			ID:           c.ID,
-			MessageCount: len(c.Messages),
-			CreatedAt:    c.CreatedAt,
-			UpdatedAt:    c.UpdatedAt,
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"conversations": summaries,
-		"count":         len(summaries),
-	}, s.logger)
-}
+//
+// handleConversationList lives in conversations.go (the queryable
+// filter/sort/keyset surface); handleConversationGet stays here.
 
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 	if s.memoryStore == nil {

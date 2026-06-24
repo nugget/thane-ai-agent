@@ -460,16 +460,53 @@ paths:
     get:
       tags: [Conversations & Sessions]
       operationId: listConversations
-      summary: List active conversations
+      summary: List, filter, search, and paginate conversation summaries
+      description: >
+        Returns lightweight conversation summaries (no message content),
+        filtered/sorted/keyset-paginated. message_count is the true active
+        message count. q matches conversation metadata only (id, contact name,
+        address) — for message-content search use /v1/archive/search.
       x-thane-scope: conversations:read
       parameters:
-        - $ref: "#/components/parameters/Limit"
+        - { name: ids, in: query, description: "Comma-separated exact conversation ids (max 200).", schema: { type: string } }
+        - { name: kind, in: query, description: "Comma-separated id-prefix families, e.g. signal,sched (matches '<kind>-…').", schema: { type: string } }
+        - { name: channel, in: query, description: "Filter by channel binding channel (e.g. signal).", schema: { type: string } }
+        - { name: contact, in: query, description: "Filter by channel binding contact id.", schema: { type: string } }
+        - { name: address, in: query, description: "Filter by channel binding address.", schema: { type: string } }
+        - { name: q, in: query, description: "Substring match over id, contact name, and address (metadata only).", schema: { type: string } }
+        - { name: updated_after, in: query, description: "RFC3339 timestamp or a duration meaning 'ago' (e.g. 1h, 24h).", schema: { type: string } }
+        - { name: updated_before, in: query, schema: { type: string } }
+        - { name: created_after, in: query, schema: { type: string } }
+        - { name: created_before, in: query, schema: { type: string } }
+        - { name: min_messages, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: max_messages, in: query, schema: { type: integer, minimum: 0 } }
+        - { name: sort, in: query, schema: { type: string, enum: [updated_at, created_at, message_count], default: updated_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - { name: limit, in: query, description: "Page size.", schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, description: "Opaque keyset cursor from a prior next_cursor; valid only for the same sort/order.", schema: { type: string } }
       responses:
         "200":
-          description: Conversation summaries.
+          description: A page of conversation summaries.
           content:
             application/json:
-              schema: { type: array, items: { type: object } }
+              schema:
+                type: object
+                required: [conversations, count, total, next_cursor]
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        message_count: { type: integer }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+                        channel_binding: { type: object, nullable: true }
+                  count: { type: integer }
+                  total: { type: integer }
+                  next_cursor: { type: string, nullable: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /v1/conversations/{id}:
     get:
       tags: [Conversations & Sessions]

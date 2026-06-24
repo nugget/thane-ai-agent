@@ -60,8 +60,8 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 | `POST` | `/v1/loop-definitions/policy` | Set a loop-definition policy. |
 | `DELETE` | `/v1/loop-definitions/policy?name=...` | Clear a loop-definition policy. |
 | `POST` | `/v1/loop-definitions/{name}/launch` | Launch a stored loop definition. |
-| `GET` | `/v1/conversations` | Conversation summaries. |
-| `GET` | `/v1/conversations/{id}` | Conversation detail. |
+| `GET` | `/v1/conversations` | Filter/sort/keyset-paginate conversation summaries. Filters: `ids` (comma-sep, max 200), `kind` (comma-sep id-prefix families), `channel`/`contact`/`address` (channel binding), `updated_after`/`updated_before`/`created_after`/`created_before` (RFC3339 or a duration like `1h` meaning "ago"), `min_messages`/`max_messages`, `q` (metadata substring: id/contact name/address — *not* message content; use `/v1/archive/search` for that). `sort` = `updated_at` (default)\|`created_at`\|`message_count`; `order` = `desc` (default)\|`asc`; `limit` default 50, max 200; `cursor` from `next_cursor`. Returns `{conversations, count, total, next_cursor}`. `message_count` is the true active count (previously capped at the per-conversation working-memory limit). |
+| `GET` | `/v1/conversations/{id}` | Conversation detail (full transcript). |
 | `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
 | `GET` | `/v1/sessions/stats` | Current session usage and context stats. |
 | `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
