@@ -31,7 +31,7 @@ security:
 
 tags:
   - name: openai
-    description: OpenAI-compatible endpoints — HA voice backend and generic OpenAI clients.
+    description: OpenAI-compatible endpoints — generic OpenAI clients only (HA and open-webui use the Ollama surface).
   - name: ollama
     description: Ollama-compatible endpoints — HA integration, open-webui chat, model listing.
 
