@@ -5090,6 +5090,13 @@ let graphBooted = false;
 let graphHandle = null;
 let graphRunning = false;
 
+// getStore exposes the shared loop store (created in connect()) so sibling
+// console views — the process table, future surfaces — read the same live data
+// the graph does, instead of opening a second ingestion of the same stream.
+export function getStore() {
+  return store;
+}
+
 export function createGraph(opts = {}) {
   // Idempotent: a second call (easy in an embed/harness/test) would otherwise
   // start duplicate SSE subscriptions, intervals, and animation loops.

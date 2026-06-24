@@ -6,10 +6,20 @@
 
 import { initRouter, registerSurface } from './router.js';
 import { placeholderView } from './views/placeholder.js';
-import { createGraph } from './app.js';
+import { createGraph, getStore } from './app.js';
+import { createViewState } from './data/viewState.js';
+import { loopTableView } from './views/loopTable.js';
 
 // Boot the node graph on the real /v1 client + SSE stream.
 createGraph();
+
+// Shared interaction state (anchor + selection) for views that read the same
+// store as the graph, so they stay in sync.
+const viewState = createViewState();
+
+// Process table — a flat, sortable view of the same running loops the graph
+// renders, scoped by the shared anchor.
+registerSurface('processes', loopTableView(getStore, viewState));
 
 registerSurface('models', placeholderView('Models & Routing',
   'Fleet, registry, deployment + resource policies, and the routing audit trail.'));

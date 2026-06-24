@@ -3747,3 +3747,87 @@ body.resize-col .schema-card__fade {
     max-height: min(54svh, 34rem);
   }
 }
+
+/* ── Process table (views/loopTable.js) ────────────────────────────────────── */
+.proc-surface .surface-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.proc-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font: 0.8rem/1 var(--font-mono);
+}
+.proc-crumb {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+.proc-crumb:hover { color: var(--text-primary); background: var(--bg-hover); }
+.proc-crumb.is-current { color: var(--accent); cursor: default; }
+.proc-crumb-sep { color: var(--text-muted); }
+
+.proc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 0.82rem/1.4 var(--font-mono);
+  margin-top: 0.6rem;
+}
+.proc-th {
+  padding: 0.4rem 0.6rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.proc-th:hover { color: var(--text-primary); }
+.proc-th.is-sorted { color: var(--accent); }
+.proc-th--right { text-align: right; }
+.proc-td {
+  padding: 0.35rem 0.6rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+.proc-td--right { text-align: right; }
+.proc-name { font-weight: 600; }
+.proc-dim { color: var(--text-muted); }
+.proc-active { color: var(--accent); }
+.proc-err { color: #ef4444; font-weight: 600; }
+
+.proc-row { cursor: pointer; }
+.proc-row:hover { background: var(--bg-hover); }
+.proc-row.is-selected { background: var(--accent-soft); }
+.proc-row.is-selected .proc-name { color: var(--accent); }
+
+.proc-badge {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+.proc-badge--processing { background: var(--accent-soft); color: var(--accent); }
+.proc-badge--error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.proc-badge--sleeping { color: var(--text-muted); }
+
+.proc-anchor-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  padding: 0 0.2rem;
+}
+.proc-anchor-btn:hover { color: var(--accent); }
+.proc-empty { padding: 1.5rem; text-align: center; color: var(--text-muted); }
