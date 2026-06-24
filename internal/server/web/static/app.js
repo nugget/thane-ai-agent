@@ -3,6 +3,7 @@
 
 import * as defaultClient from './data/client.js';
 import { subscribe as defaultSubscribeLoopEvents } from './data/events.js';
+import { createLoopStore } from './data/loops.js';
 
 // Data seams. Default to the real /v1 client and SSE stream, but createGraph()
 // can swap them — a fixture client for tests, or a native bridge for a host
@@ -2489,62 +2490,81 @@ const TRUST_ZONES = new Set(['admin', 'household', 'trusted', 'known', 'unknown'
 // SSE Connection
 // ---------------------------------------------------------------------------
 
-let unsubscribeLoopEvents = null;
+let store = null;
 
-// connect subscribes the graph to the shared /v1/loops/events stream. The
-// stream and its reconnection are owned by data/events.js; this wires the
-// snapshot/loop/delegate payloads into graph state and mirrors the former
-// onopen/onerror connection-status handling.
+// connect creates the shared loop store (data/loops.js), points the graph's
+// working state at the store's canonical structures, wires the graph's
+// reactions to the store's change + lifecycle signals, and starts ingestion.
+// The store owns the loop data — one source of truth for every view (graph,
+// table, forensics) — and the graph only reads it from here on.
 function connect() {
-  if (unsubscribeLoopEvents) unsubscribeLoopEvents();
-  setConnState('connecting');
-  unsubscribeLoopEvents = subscribeLoopEvents({
-    onSnapshot: (statuses) => {
-      state.loops.clear();
-      state.iterationHistory.clear();
-      for (const s of statuses) {
-        // Seed iteration history from server-side ring buffer.
-        if (s.recent_iterations && s.recent_iterations.length > 0) {
-          state.iterationHistory.set(s.id, s.recent_iterations.slice());
-        }
-        // Seed live telemetry for loops already in processing state
-        // so the Live Activity section shows immediately on connect.
-        if (s.state === 'processing') {
-          const lastWake = parseTimestamp(s.last_wake_at);
-          s._iterStartTs = lastWake ? lastWake.getTime() : Date.now();
-          s._liveTools = [];
-          s._liveModel = '';
-          // Restore LLM context from snapshot so late-connecting clients
-          // see enrichment data (model, tokens, complexity, etc.) immediately.
-          s._llmContext = s.llm_context || null;
-          if (s._llmContext && s._llmContext.model) {
-            s._liveModel = s._llmContext.model;
-          }
-        }
-        state.loops.set(s.id, s);
-      }
-      renderAll();
-      setConnState('connected');
-    },
-    onLoop: (evt) => handleLoopEvent(evt),
-    onDelegate: (evt) => handleDelegateEvent(evt),
-    onState: (status) => {
-      if (status === 'connected') {
-        handleStreamConnected();
-      } else if (status === 'disconnected') {
-        handleStreamDisconnected();
-      } else {
-        setConnState('connecting');
-      }
-    },
+  store = createLoopStore({ client: api, events: subscribeLoopEvents });
+
+  // Existing readers (rendering, physics, inspector, timeline) reference these
+  // by name, so pointing them at the store's structures needs no other change.
+  state.loops = store.loops;
+  state.iterationHistory = store.iterationHistory;
+  state.sleepTimers = store.sleepTimers;
+  state.events = store.events;
+
+  // Any data change re-renders.
+  store.subscribe(renderAll);
+
+  // Connection status → badge + degraded/restored notifications.
+  store.on('conn_state', (s) => {
+    setConnState(s);
+    if (s === 'disconnected') onStreamDisconnected();
+    else if (s === 'connected') onStreamConnected();
   });
+
+  store.on('loop_error', ({ loopId, loop, message }) => {
+    addNotification({
+      level: 'error',
+      sourceLabel: 'Loop',
+      title: (loop.name || loopId) + ' failed',
+      message: truncate(message, 220),
+      action: () => selectLoop(loopId),
+      actionLabel: 'Inspect loop',
+      signature: `loop-error:${loopId}:${message}`,
+      cooldownMs: 30000,
+    });
+  });
+
+  store.on('iteration_complete', ({ loopId }) => {
+    // Auto-refresh logs when the selected loop completes an iteration.
+    if (state.selected === loopId) fetchLogs(loopId);
+  });
+
+  store.on('delegate_complete', ({ id, entry, data }) => {
+    if (data.error || data.exhausted) {
+      const targetLoopID = entry ? id : (data.parent_loop_id || '');
+      addNotification({
+        level: data.error ? 'error' : 'warn',
+        sourceLabel: 'Delegate',
+        title: data.error ? 'Background delegate failed' : 'Background delegate exhausted',
+        message: truncate(data.error || data.exhaust_reason || (entry && entry._delegateTask) || 'Delegate did not complete successfully.', 220),
+        action: targetLoopID
+          ? () => { if (state.loops.has(targetLoopID)) selectLoop(targetLoopID); else selectSystem(); }
+          : () => selectSystem(),
+        actionLabel: targetLoopID ? 'Inspect loop' : 'Inspect core',
+        signature: `delegate-failure:${data.delegate_id || id}:${data.error || data.exhaust_reason || ''}`,
+        cooldownMs: 30000,
+      });
+    }
+    // Begin the fade; the node lingers until the store drops it (delegate_remove).
+    const node = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    if (node) node.classList.add('loop-node--fading');
+  });
+
+  store.on('delegate_remove', ({ id }) => animateDelegateRemoval(id));
+
+  store.start();
 }
 
-// handleStreamDisconnected mirrors the former EventSource.onerror: mark the
-// connection degraded once and surface a single notification. The stream
-// auto-reconnects; the snapshot on reconnect restores full state.
-function handleStreamDisconnected() {
-  setConnState('disconnected');
+// onStreamDisconnected mirrors the former EventSource.onerror: surface a single
+// degraded notification. The stream auto-reconnects; the snapshot on reconnect
+// restores full state.
+function onStreamDisconnected() {
   if (!connectionWasDegraded) {
     connectionWasDegraded = true;
     addNotification({
@@ -2560,9 +2580,8 @@ function handleStreamDisconnected() {
   }
 }
 
-// handleStreamConnected mirrors the former EventSource.onopen.
-function handleStreamConnected() {
-  setConnState('connected');
+// onStreamConnected mirrors the former EventSource.onopen.
+function onStreamConnected() {
   if (connectionWasDegraded) {
     connectionWasDegraded = false;
     dismissNotificationBySignature('sse-disconnected');
@@ -2579,6 +2598,22 @@ function handleStreamConnected() {
   fetchVersionInfo(); // re-sync uptime on reconnect
 }
 
+// animateDelegateRemoval plays the exit animation and clears physics/selection
+// for a delegate node the store has dropped from the canonical set.
+function animateDelegateRemoval(id) {
+  const node = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+  if (node) {
+    node.classList.add('loop-node--exiting');
+    node.addEventListener('animationend', () => {
+      node.remove();
+      physics.nodes.delete(id);
+    }, { once: true });
+  } else {
+    physics.nodes.delete(id);
+  }
+  if (state.selected === id) state.selected = null;
+}
+
 let connState = 'connecting';
 
 function setConnState(s) {
@@ -2588,248 +2623,8 @@ function setConnState(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Event Handling
-// ---------------------------------------------------------------------------
-
-// extractDelegateCalls is in shared.js.
-
-function handleLoopEvent(evt) {
-  const loopId = evt.data && evt.data.loop_id;
-  const loopName = evt.data && evt.data.loop_name;
-
-  // Push to event log.
-  state.events.unshift(evt);
-  if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
-
-  // loop_started requires a full fetch — not a per-loop mutation.
-  // Also bootstrap a minimal entry immediately so that in-flight
-  // events arriving before fetchLoops() completes aren't discarded.
-  if (evt.kind === 'loop_started') {
-    if (loopId && !state.loops.has(loopId)) {
-      state.loops.set(loopId, {
-        id: loopId,
-        name: loopName || loopId,
-        state: 'processing',
-        parent_id: evt.data.parent_id || null,
-        iterations: 0,
-        _iterStartTs: Date.now(),
-      });
-    }
-    fetchLoops();
-    renderAll();
-    return;
-  }
-
-  if (!loopId) {
-    renderAll();
-    return;
-  }
-
-  // Create a minimal entry for unknown loops so in-flight events
-  // (e.g. loop_iteration_start arriving before fetchLoops() returns)
-  // aren't silently dropped.
-  if (!state.loops.has(loopId)) {
-    state.loops.set(loopId, {
-      id: loopId,
-      name: loopName || loopId,
-      state: 'processing',
-      iterations: 0,
-      _iterStartTs: Date.now(),
-    });
-  }
-
-  const loop = state.loops.get(loopId);
-  const history = state.iterationHistory.get(loopId) || [];
-  const result = applyLoopEventToLoop(evt, {
-    loop,
-    loopId,
-    sleepTimers: state.sleepTimers,
-    history,
-  });
-
-  if (result && result.snapshot) {
-    prependIterationSnapshot(loopId, result.snapshot);
-    // Auto-refresh logs when the selected loop completes an iteration.
-    if (state.selected === loopId) {
-      fetchLogs(loopId);
-    }
-  }
-
-  if (evt.kind === 'loop_error') {
-    const message = (evt.data && evt.data.error) || loop.last_error || 'Loop iteration failed.';
-    addNotification({
-      level: 'error',
-      sourceLabel: 'Loop',
-      title: (loop.name || loopId) + ' failed',
-      message: truncate(message, 220),
-      action: () => selectLoop(loopId),
-      actionLabel: 'Inspect loop',
-      signature: `loop-error:${loopId}:${message}`,
-      cooldownMs: 30000,
-    });
-  }
-
-  renderAll();
-}
-
-// ---------------------------------------------------------------------------
-// Delegate Events → Ephemeral Nodes
-// ---------------------------------------------------------------------------
-
-// Handle delegate lifecycle events from the SSE stream. Spawn creates
-// a synthetic loop entry; complete removes it (triggering exit animation).
-function handleDelegateEvent(evt) {
-  const did = evt.data && evt.data.delegate_id;
-  if (!did) return;
-
-  switch (evt.kind) {
-    case 'spawn': {
-      // Create a synthetic loop entry so the existing rendering
-      // infrastructure (physics, connectors, icons) works unchanged.
-      const syntheticId = 'delegate-' + did;
-      state.loops.set(syntheticId, {
-        id: syntheticId,
-        name: evt.data.name || syntheticId,
-        state: 'processing',
-        parent_id: evt.data.parent_loop_id || null,
-        config: {
-          Metadata: { category: 'delegate' },
-        },
-        _delegate: true,
-        _delegateId: did,
-        _delegateTask: evt.data.task || '',
-        _delegateProfile: evt.data.profile || '',
-        _delegateGuidance: evt.data.guidance || '',
-        _delegateTags: evt.data.tags || [],
-        _iterStartTs: Date.now(),
-      });
-      renderAll();
-      break;
-    }
-    case 'complete': {
-      const syntheticId = 'delegate-' + did;
-      state.sleepTimers.delete(syntheticId);
-
-      // Update state but keep the node around so it's still clickable.
-      const entry = state.loops.get(syntheticId);
-      if (entry) {
-        entry.state = evt.data.exhausted ? 'error' : 'completed';
-        entry._delegateExhausted = !!evt.data.exhausted;
-        entry._delegateExhaustReason = evt.data.exhaust_reason || '';
-        entry._delegateDurationMs = evt.data.duration_ms || 0;
-        entry._delegateIterations = evt.data.iterations || 0;
-      }
-
-      if (evt.data.error || evt.data.exhausted) {
-        const targetLoopID = entry ? syntheticId : (evt.data.parent_loop_id || '');
-        addNotification({
-          level: evt.data.error ? 'error' : 'warn',
-          sourceLabel: 'Delegate',
-          title: evt.data.error ? 'Background delegate failed' : 'Background delegate exhausted',
-          message: truncate(evt.data.error || evt.data.exhaust_reason || entry?._delegateTask || 'Delegate did not complete successfully.', 220),
-          action: targetLoopID
-            ? () => {
-              if (state.loops.has(targetLoopID)) selectLoop(targetLoopID);
-              else selectSystem();
-            }
-            : () => selectSystem(),
-          actionLabel: targetLoopID ? 'Inspect loop' : 'Inspect core',
-          signature: `delegate-failure:${did}:${evt.data.error || evt.data.exhaust_reason || ''}`,
-          cooldownMs: 30000,
-        });
-      }
-
-      // Fade to translucent, then remove after a linger period.
-      const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
-      if (node) node.classList.add('loop-node--fading');
-
-      setTimeout(() => {
-        // Don't remove if user has it selected — let them inspect.
-        if (state.selected === syntheticId) {
-          // Re-check after another delay.
-          const recheck = () => {
-            if (state.selected !== syntheticId) {
-              removeDelegateNode(syntheticId);
-            } else {
-              setTimeout(recheck, 5000);
-            }
-          };
-          setTimeout(recheck, 5000);
-        } else {
-          removeDelegateNode(syntheticId);
-        }
-      }, 15000); // linger 15s
-
-      renderAll();
-      break;
-    }
-  }
-}
-
-function removeDelegateNode(syntheticId) {
-  const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
-  if (node) {
-    node.classList.add('loop-node--exiting');
-    node.addEventListener('animationend', () => {
-      node.remove();
-      physics.nodes.delete(syntheticId);
-    }, { once: true });
-  } else {
-    physics.nodes.delete(syntheticId);
-  }
-  state.loops.delete(syntheticId);
-  if (state.selected === syntheticId) {
-    state.selected = null;
-  }
-  renderAll();
-}
-
-// ---------------------------------------------------------------------------
 // Data Fetching
 // ---------------------------------------------------------------------------
-
-async function fetchLoops() {
-  try {
-    const statuses = await api.get('/loops');
-
-    // Merge server state with existing entries to preserve transient
-    // telemetry (_iterStartTs, _liveTools, _liveModel, etc.) that may
-    // have been set by in-flight SSE events before this fetch returned.
-    const serverIds = new Set();
-    for (const s of statuses) {
-      serverIds.add(s.id);
-      const existing = state.loops.get(s.id);
-      if (existing) {
-        // Preserve transient fields that the server doesn't track.
-        const transient = [
-          '_iterStartTs', '_liveTools', '_liveModel', '_llmContext',
-          '_supervisor', '_currentConvID', '_lastModel', '_lastSupervisor',
-          '_delegate', '_delegateId', '_delegateTask', '_delegateProfile',
-          '_delegateGuidance', '_delegateTags', '_delegateIterations',
-          '_delegateDurationMs', '_delegateExhausted', '_delegateExhaustReason',
-        ];
-        for (const key of transient) {
-          if (existing[key] !== undefined && s[key] === undefined) {
-            s[key] = existing[key];
-          }
-        }
-      }
-      state.loops.set(s.id, s);
-    }
-
-    // Remove loops that the server no longer reports, but keep
-    // delegate nodes (they're client-only ephemeral entries).
-    for (const id of state.loops.keys()) {
-      if (!serverIds.has(id) && !state.loops.get(id)?._delegate) {
-        state.loops.delete(id);
-      }
-    }
-
-    renderAll();
-  } catch (err) {
-    console.warn('Failed to fetch loops:', err);
-  }
-}
 
 async function fetchLogs(loopId) {
   if (!loopId) return;
@@ -4594,16 +4389,6 @@ function renderDetail(opts = {}) {
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
 // escapeHTML, truncate are in shared.js.
-
-function prependIterationSnapshot(loopId, snap) {
-  let arr = state.iterationHistory.get(loopId);
-  if (!arr) {
-    arr = [];
-    state.iterationHistory.set(loopId, arr);
-  }
-  arr.unshift(snap);
-  if (arr.length > MAX_ITERATION_HISTORY) arr.length = MAX_ITERATION_HISTORY;
-}
 
 // ---------------------------------------------------------------------------
 // Rendering — Log Panel
