@@ -28,11 +28,6 @@ const state = {
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
   knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
   canvasRect: null,          // last observed canvas viewport for responsive graph reflow
-  conversationIndex: {
-    fetchedAt: 0,
-    loading: null,
-    summaries: new Map(),
-  },
   conversationDetails: new Map(), // conversation_id -> derived dashboard summary
   conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
 };
@@ -1838,39 +1833,20 @@ function buildPendingConversationSummary(conversationID) {
   return buildConversationSummary(conversationID, null, [], { loading: true });
 }
 
-async function ensureConversationIndex() {
-  if (state.conversationIndex.summaries.size > 0 &&
-      (Date.now() - state.conversationIndex.fetchedAt) < CONVERSATION_SUMMARY_TTL_MS) {
-    return state.conversationIndex.summaries;
-  }
-  if (state.conversationIndex.loading) return state.conversationIndex.loading;
-
-  state.conversationIndex.loading = fetch('/v1/conversations')
+// fetchConversationSummary resolves a single conversation's summary by id via
+// the queryable list endpoint (?ids=). The inspector already holds the loop's
+// conversation ids, so this is a cheap point lookup — no all-conversations
+// index. Resolves to the summary object, or null when the id is unknown.
+function fetchConversationSummary(conversationID) {
+  return fetch('/v1/conversations?ids=' + encodeURIComponent(conversationID))
     .then((resp) => {
-      if (!resp.ok) throw new Error('conversation index unavailable: ' + resp.status);
+      if (!resp.ok) throw new Error('conversation summary unavailable: ' + resp.status);
       return resp.json();
     })
     .then((body) => {
-      const summaries = new Map();
-      for (const conv of body.conversations || []) {
-        if (conv && conv.id) summaries.set(conv.id, conv);
-      }
-      state.conversationIndex.summaries = summaries;
-      state.conversationIndex.fetchedAt = Date.now();
-      return summaries;
-    })
-    .catch((err) => {
-      console.warn('Failed to load conversation index:', err);
-      if (state.conversationIndex.summaries.size > 0) {
-        return state.conversationIndex.summaries;
-      }
-      throw err;
-    })
-    .finally(() => {
-      state.conversationIndex.loading = null;
+      const list = Array.isArray(body.conversations) ? body.conversations : [];
+      return list.find((conv) => conv && conv.id === conversationID) || null;
     });
-
-  return state.conversationIndex.loading;
 }
 
 function refreshSelectedLoopInspector() {
@@ -1888,7 +1864,7 @@ function ensureConversationSummary(conversationID) {
   if (state.conversationLoads.has(conversationID)) return;
 
   const load = Promise.allSettled([
-    ensureConversationIndex(),
+    fetchConversationSummary(conversationID),
     fetch('/v1/archive/sessions?conversation_id=' + encodeURIComponent(conversationID) + '&limit=' + CONVERSATION_SESSION_LIMIT)
       .then((resp) => {
         if (!resp.ok) throw new Error('archive sessions unavailable: ' + resp.status);
@@ -1896,9 +1872,8 @@ function ensureConversationSummary(conversationID) {
       })
       .then((body) => Array.isArray(body.sessions) ? body.sessions : []),
   ]).then(([conversationResult, sessionsResult]) => {
-    const index = conversationResult.status === 'fulfilled' ? conversationResult.value : new Map();
+    const conversation = conversationResult.status === 'fulfilled' ? conversationResult.value : null;
     const sessions = sessionsResult.status === 'fulfilled' ? sessionsResult.value : [];
-    const conversation = index.get(conversationID) || null;
     const detail = buildConversationSummary(conversationID, conversation, sessions, {
       error: conversationResult.status !== 'fulfilled' && sessionsResult.status !== 'fulfilled',
     });
