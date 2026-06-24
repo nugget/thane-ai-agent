@@ -2198,7 +2198,7 @@ function makeCopyBtn(text, label) {
 
 // renderRequestDetail populates the request detail panel from API data.
 //
-//   detail:    object from GET /api/requests/{id}
+//   detail:    object from GET /v1/requests/{id}
 //   els:       { ids, meta, content, waterfall } — DOM containers
 function renderRequestDetail(detail, els) {
   // IDs section.
