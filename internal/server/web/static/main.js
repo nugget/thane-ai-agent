@@ -10,12 +10,13 @@ import { createGraph, getStore } from './app.js';
 import { createViewState } from './data/viewState.js';
 import { loopTableView } from './views/loopTable.js';
 
-// Boot the node graph on the real /v1 client + SSE stream.
-createGraph();
-
-// Shared interaction state (anchor + selection) for views that read the same
-// store as the graph, so they stay in sync.
+// Shared interaction state (anchor + selection) for the views that read the
+// same store as the graph, so they stay in sync.
 const viewState = createViewState();
+
+// Boot the node graph on the real /v1 client + SSE stream, sharing the
+// view-state so selection syncs with the process table.
+createGraph({ viewState });
 
 // Process table — a flat, sortable view of the same running loops the graph
 // renders, scoped by the shared anchor.

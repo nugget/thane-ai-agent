@@ -4419,6 +4419,7 @@ function selectLoop(loopId) {
     state.selected = loopId;
     fetchLogs(loopId);
   }
+  if (viewState) viewState.setSelection(state.selected);
   renderAll();
 }
 
@@ -4439,6 +4440,8 @@ function selectSystem() {
     state.selected = '__system__';
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   }
+  // The system node isn't a loop; clear any loop selection in the shared state.
+  if (viewState) viewState.setSelection(null);
   renderAll();
 }
 
@@ -5089,6 +5092,7 @@ function handleHashRoute() {
 let graphBooted = false;
 let graphHandle = null;
 let graphRunning = false;
+let viewState = null;
 
 // getStore exposes the shared loop store (created in connect()) so sibling
 // console views — the process table, future surfaces — read the same live data
@@ -5106,6 +5110,7 @@ export function createGraph(opts = {}) {
   }
   graphBooted = true;
   graphRunning = true;
+  viewState = opts.viewState || null;
 
   if (opts.client) api = opts.client;
   if (opts.events) subscribeLoopEvents = opts.events;
@@ -5124,16 +5129,29 @@ export function createGraph(opts = {}) {
   const systemTimer = setInterval(fetchSystemStatus, 10000);
   requestAnimationFrame(tick);
 
+  // Reflect external selection (e.g. from the process table) into the graph, so
+  // selecting a loop in either view highlights it in both. selectLoop() writes
+  // back to viewState (deduped), so this can't loop.
+  let unsubViewState = null;
+  if (viewState) {
+    unsubViewState = viewState.subscribe(({ selection }) => {
+      if (selection === state.selected) return;
+      if (selection) selectLoop(selection);
+      else if (state.selected && state.selected !== '__system__') selectLoop(state.selected);
+    });
+  }
+
   // destroy() stops the graph's ongoing work — the store's SSE, the intervals,
-  // the animation loop, and the hashchange listener — so a host can unmount the
-  // graph cleanly (e.g. a SwiftUI/WebKit embed). After destroy, createGraph()
-  // can boot a fresh instance.
+  // the animation loop, the hashchange listener, and the view-state
+  // subscription — so a host can unmount the graph cleanly (e.g. a SwiftUI/
+  // WebKit embed). After destroy, createGraph() can boot a fresh instance.
   graphHandle = {
     destroy() {
       graphRunning = false; // the rAF loop stops rescheduling on the next frame
       clearInterval(uptimeTimer);
       clearInterval(systemTimer);
       if (hashRouting) window.removeEventListener('hashchange', handleHashRoute);
+      if (unsubViewState) unsubViewState();
       if (store) store.stop();
       graphBooted = false;
       graphHandle = null;
