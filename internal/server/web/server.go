@@ -2,11 +2,9 @@
 // app — as static files at the root of the Thane HTTP server; this package is
 // static-file serving only.
 //
-// The dashboard's JSON/SSE data is meant to come from the native API under /v1,
-// but the static assets shipped here still call the retired /api/* endpoints.
-// With those handlers removed, the embedded dashboard is non-functional until
-// the UI is rebuilt against /v1 (a follow-up). This package serves the assets
-// regardless of their migration state.
+// The dashboard (graph, process table, and forensics views) gets all its JSON
+// and SSE data from the native API under /v1; this package only serves the
+// static assets.
 package web
 
 import (

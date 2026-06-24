@@ -7,10 +7,9 @@ API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine
-dashboard's static assets (no build step). Note: the embedded assets still call
-the retired `/api/*` endpoints, so the bundled dashboard is non-functional
-against this server until the UI is rebuilt against `/v1` (a follow-up). The
-OpenAI-compatible shim runs on its own port (see below).
+dashboard's static assets (no build step). The dashboard consumes its JSON and
+SSE entirely from the native `/v1` API (graph, process table, and forensics
+views). The OpenAI-compatible shim runs on its own port (see below).
 
 ### Chat
 
@@ -51,6 +50,9 @@ OpenAI-compatible shim runs on its own port (see below).
 | `GET` | `/v1/loops/{id}` | One running loop's status. |
 | `GET` | `/v1/loops/{id}/logs` | Structured logs for a running loop's recent conversation IDs (bare array, newest first; `?limit=` default 50, max 200). |
 | `GET` | `/v1/loops/events` | SSE stream: initial loop snapshot, then loop and delegate events. |
+| `GET` | `/v1/schedules` | Scheduler tasks (`at`/`every`/`cron`) each with its next fire time. Optional `?enabled=true`. |
+| `GET` | `/v1/schedules/{id}` | One scheduled task. |
+| `GET` | `/v1/schedules/{id}/executions` | A task's execution history (bare array, newest first; `?limit` default 50, max 200). |
 | `GET` | `/v1/loop-definitions` | Effective durable loop-definition registry view. |
 | `GET` | `/v1/loop-definitions/{name}` | One loop definition. |
 | `POST` | `/v1/loop-definitions` | Upsert a mutable overlay loop definition. |

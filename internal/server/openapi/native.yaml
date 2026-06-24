@@ -242,6 +242,62 @@ paths:
             text/event-stream:
               schema: { $ref: "#/components/schemas/LoopEvent" }
 
+  # --------------------------------------------------------- Scheduler
+  /v1/schedules:
+    get:
+      tags: [Scheduler]
+      operationId: listSchedules
+      summary: Scheduled tasks
+      description: |
+        The durable scheduler's tasks — `at`/`every`/`cron` triggers and their
+        payloads — each augmented with its next computed fire time. Surfaces the
+        previously internal-only scheduler subsystem.
+      x-thane-scope: schedules:read
+      parameters:
+        - { name: enabled, in: query, description: Return only enabled tasks when true.,
+            schema: { type: boolean } }
+      responses:
+        "200":
+          description: Scheduled tasks (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduledTask" }
+  /v1/schedules/{id}:
+    get:
+      tags: [Scheduler]
+      operationId: getSchedule
+      summary: One scheduled task
+      x-thane-scope: schedules:read
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+      responses:
+        "200":
+          description: Scheduled task.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduledTask" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/schedules/{id}/executions:
+    get:
+      tags: [Scheduler]
+      operationId: getScheduleExecutions
+      summary: Execution history for a scheduled task
+      x-thane-scope: schedules:read
+      parameters:
+        - $ref: "#/components/parameters/ScheduleId"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Execution records (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduleExecution" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ----------------------------------------------------- Loop Definitions
   /v1/loop-definitions:
     get:
@@ -781,6 +837,12 @@ components:
       required: true
       description: Request ID (e.g. `r_84dc5155c60d97be`).
       schema: { type: string }
+    ScheduleId:
+      name: id
+      in: path
+      required: true
+      description: Scheduled task ID (UUIDv7).
+      schema: { type: string }
     Limit:
       name: limit
       in: query
@@ -961,3 +1023,51 @@ components:
         tool_name: { type: string }
         arguments: { type: string }
       required: [tool_name]
+
+    ScheduledTask:
+      type: object
+      description: A durable scheduled task plus its next computed fire time (mirrors scheduler.Task).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        schedule: { $ref: "#/components/schemas/Schedule" }
+        payload: { $ref: "#/components/schemas/SchedulePayload" }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string }
+        updated_at: { type: string, format: date-time }
+        next_run:
+          type: string
+          format: date-time
+          description: Next computed fire time; omitted when the task has no future run.
+      required: [id, name, schedule, payload, enabled]
+    Schedule:
+      type: object
+      description: When a task fires (mirrors scheduler.Schedule).
+      properties:
+        kind: { type: string, enum: [at, every, cron] }
+        at: { type: string, format: date-time, description: Fire time for the at kind. }
+        every: { type: string, description: Go duration such as 15m for the every kind. }
+        cron: { type: string, description: Cron expression for the cron kind. }
+        timezone: { type: string, description: IANA timezone. }
+      required: [kind]
+    SchedulePayload:
+      type: object
+      description: What a task does when it fires (mirrors scheduler.Payload).
+      properties:
+        kind: { type: string, enum: [wake, service, automation, webhook] }
+        target: { type: string }
+        data: { type: object, additionalProperties: true }
+      required: [kind]
+    ScheduleExecution:
+      type: object
+      description: One run of a scheduled task (mirrors scheduler.Execution).
+      properties:
+        id: { type: string }
+        task_id: { type: string }
+        scheduled_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        status: { type: string, enum: [pending, running, completed, failed, skipped] }
+        result: { type: string }
+      required: [id, task_id, scheduled_at, status]
