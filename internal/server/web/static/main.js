@@ -1,12 +1,15 @@
 // main.js — console entry point.
 //
-// Loads the node-graph home view (app.js self-boots on import) and wires the
-// hash router with the surface views. theme.js initializes independently from
-// its own script tag. Surface views are placeholders until their step lands.
+// Boots the node-graph home view (createGraph) and wires the hash router with
+// the surface views. theme.js initializes independently from its own script
+// tag. Surface views are placeholders until their step lands.
 
 import { initRouter, registerSurface } from './router.js';
 import { placeholderView } from './views/placeholder.js';
-import './app.js';
+import { createGraph } from './app.js';
+
+// Boot the node graph on the real /v1 client + SSE stream.
+createGraph();
 
 registerSurface('models', placeholderView('Models & Routing',
   'Fleet, registry, deployment + resource policies, and the routing audit trail.'));

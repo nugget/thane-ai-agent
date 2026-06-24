@@ -1,9 +1,15 @@
 // Cognition Engine — vanilla JS, native ES modules, no build step.
 // Connects to the SSE event stream and renders loop nodes as SVG.
 
-import * as api from './data/client.js';
-import { subscribe as subscribeLoopEvents } from './data/events.js';
-import { composeSystem } from './data/systemModel.js';
+import * as defaultClient from './data/client.js';
+import { subscribe as defaultSubscribeLoopEvents } from './data/events.js';
+
+// Data seams. Default to the real /v1 client and SSE stream, but createGraph()
+// can swap them — a fixture client for tests, or a native bridge for a host
+// (e.g. a SwiftUI/WebKit embed). Held in `let` so the override applies before
+// the boot in createGraph() and is seen by every reader through closure.
+let api = defaultClient;
+let subscribeLoopEvents = defaultSubscribeLoopEvents;
 
 // ---------------------------------------------------------------------------
 // State
@@ -1102,7 +1108,7 @@ function getLoopConfiguredModelRef(loop) {
 }
 
 function getSystemDefaultModelRef() {
-  return (((state.system || {}).model_registry || {}).default_model || '').trim();
+  return (((state.system || {}).models || {}).default_model || '').trim();
 }
 
 function deploymentMatchesModelRef(dep, ref) {
@@ -1117,7 +1123,7 @@ function deploymentMatchesModelRef(dep, ref) {
 
 function getRegistryContextWindowForModel(ref) {
   if (!ref) return 0;
-  const registry = (state.system && state.system.model_registry) || null;
+  const registry = (state.system && state.system.models) || null;
   const deployments = registry && Array.isArray(registry.deployments) ? registry.deployments : [];
   let maxWindow = 0;
   for (const dep of deployments) {
@@ -1912,9 +1918,9 @@ function buildSystemEntity(sys) {
   const health = (sys && sys.health) || {};
   const serviceKeys = Object.keys(health);
   const readyCount = serviceKeys.filter((key) => health[key] && health[key].ready).length;
-  const registry = (sys && sys.model_registry) || {};
-  const routerStats = (sys && sys.router_stats) || {};
-  const capabilityCatalog = (sys && sys.capability_catalog) || null;
+  const registry = (sys && sys.models) || {};
+  const routerStats = (sys && sys.router) || {};
+  const capabilityCatalog = (sys && sys.capabilities) || null;
   const capabilityEntries = getCapabilityCatalogEntries(sys);
   const capabilitySummary = summarizeCapabilityCatalog(capabilityEntries);
   const resources = Array.isArray(registry.resources) ? registry.resources : [];
@@ -1927,7 +1933,7 @@ function buildSystemEntity(sys) {
     kind: 'runtime_anchor',
     title: 'Core',
     state: sys.status || 'unknown',
-    uptime: sys.uptime || '',
+    uptime: formatUptime(sys.uptime_seconds),
     version: version.version || '',
     commit: version.git_commit || '',
     goVersion: version.go_version || '',
@@ -2850,16 +2856,32 @@ let systemStartTime = null; // derived from system uptime for local ticking
 async function fetchSystemStatus() {
   try {
     const previous = state.system;
-    const next = await composeSystem();
-    if (!next) {
+    // Reassemble the core's view from the native /v1 resources it draws on.
+    // Each fragment degrades independently: a cold registry or unconfigured
+    // router just leaves that sub-object empty, and every reader null-guards.
+    const [sys, models, router, capabilities] = await Promise.all([
+      api.tryGet('/system'),
+      api.tryGet('/models/registry'),
+      api.tryGet('/insights/router'),
+      api.tryGet('/insights/capabilities'),
+    ]);
+    if (!sys) {
       state.system = null;
       return;
     }
+    const next = {
+      status: sys.status,
+      health: sys.health || {},
+      version: sys.version || {},
+      uptime_seconds: sys.uptime_seconds,
+      models: models || {},
+      router: (router && router.stats) || {},
+      capabilities: capabilities || null,
+    };
     state.system = next;
     // Derive start time so we can tick uptime locally.
-    if (state.system.uptime) {
-      const uptimeMs = parseDuration(state.system.uptime);
-      systemStartTime = Date.now() - uptimeMs;
+    if (next.uptime_seconds != null) {
+      systemStartTime = Date.now() - next.uptime_seconds * 1000;
     }
     emitSystemNotifications(previous, next);
     renderAll();
@@ -3535,7 +3557,7 @@ function updateSystemUptime() {
   const uptimeEl = detailEntity.querySelector('[data-live-system-uptime]');
   if (!uptimeEl) return;
   if (systemStartTime === null) {
-    uptimeEl.textContent = state.system ? (state.system.uptime || '-') : '-';
+    uptimeEl.textContent = state.system ? (formatUptime(state.system.uptime_seconds) || '-') : '-';
     return;
   }
   const ms = Date.now() - systemStartTime;
@@ -4119,10 +4141,7 @@ function renderSystemEntityDetail(sys) {
     registriesList,
     registriesMeta,
     sys,
-    {
-      toolbox: () => openRegistryWindow('toolbox'),
-      models: () => openRegistryWindow('models'),
-    },
+    {},
   );
   detailEntity.appendChild(registries.card);
 
@@ -4495,12 +4514,6 @@ function buildLoopContextMenu(loop) {
     entity.trustZone ? { label: 'trust: ' + entity.trustZone, disabled: true } : null,
     { separator: true },
   ].filter(Boolean);
-  if (!loop.id.startsWith('delegate-')) {
-    items.push({ label: 'Open live forensics', action: () => openDetailWindow('loop', loop.id) });
-  }
-  if (entity.latestRequestID) {
-    items.push({ label: 'Open request window', action: () => openRequestWindow(entity.latestRequestID) });
-  }
   if (entity.parentID && state.loops.has(entity.parentID)) {
     items.push({ label: 'Select parent loop', action: () => selectLoop(entity.parentID) });
   } else if (!entity.parentID && state.system) {
@@ -4545,9 +4558,6 @@ function buildSystemContextMenu(sys) {
     { label: 'services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready', disabled: true },
     { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
     { separator: true },
-    { label: 'Open core window', action: () => openDetailWindow('system') },
-    { label: 'Open toolbox window', action: () => openRegistryWindow('toolbox') },
-    { label: 'Open model registry', action: () => openRegistryWindow('models') },
     { label: 'Inspect core', action: () => selectSystem() },
     { separator: true },
     { label: 'Copy core JSON', action: () => { void copySystemEntityJSON(sys || state.system || {}); } },
@@ -4871,63 +4881,6 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('scroll', hideContextMenu, true);
-
-// ---------------------------------------------------------------------------
-// Popup Detail Window
-// ---------------------------------------------------------------------------
-
-function openDetailWindow(type, id) {
-  const params = type === 'system'
-    ? '?type=system'
-    : '?type=loop&id=' + encodeURIComponent(id);
-  const name = type === 'system'
-    ? 'Core'
-    : (state.loops.get(id)?.name || id?.slice(0, 8) || 'Loop');
-  const title = type === 'system' ? name : name + ' forensics';
-  const w = window.open(
-    '/static/detail.html' + params + '&name=' + encodeURIComponent(name),
-    (type === 'system' ? 'detail-' : 'forensics-') + (id || 'system'),
-    type === 'system'
-      ? 'popup=yes,width=900,height=450'
-      : 'popup=yes,width=1380,height=920'
-  );
-  // Set title once loaded (cross-origin safe since same origin).
-  if (w) {
-    w.addEventListener('load', () => {
-      w.document.title = 'Thane \u00b7 ' + title;
-    });
-  }
-}
-
-function openRegistryWindow(registry) {
-  const key = String(registry || 'toolbox').trim().toLowerCase();
-  const name = key === 'models' ? 'Model Registry' : key === 'scheduled' ? 'Scheduled Loops' : 'Toolbox & Capabilities';
-  const w = window.open(
-    '/static/registry.html?registry=' + encodeURIComponent(key),
-    'registry-' + key,
-    'popup=yes,width=1280,height=920'
-  );
-  if (w) {
-    w.addEventListener('load', () => {
-      w.document.title = 'Thane \u00b7 ' + name;
-    });
-  }
-}
-
-function openRequestWindow(requestID) {
-  if (!requestID) return;
-  const name = 'Request ' + shortID(requestID);
-  const w = window.open(
-    '/static/request.html?id=' + encodeURIComponent(requestID),
-    'request-' + requestID,
-    'popup=yes,width=1180,height=860'
-  );
-  if (w) {
-    w.addEventListener('load', () => {
-      w.document.title = 'Thane \u00b7 ' + name;
-    });
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Keyboard Shortcuts
@@ -5333,18 +5286,36 @@ function handleHashRoute() {
   }
 }
 
-window.addEventListener('hashchange', handleHashRoute);
-
 // ---------------------------------------------------------------------------
-// Boot
+// createGraph — explicit entry point
 // ---------------------------------------------------------------------------
 
-connect();
-fetchVersionInfo();
-fetchSystemStatus();
-handleHashRoute();
-// Refresh uptime display every second.
-setInterval(updateUptime, 1000);
-// Refresh system status every 10s.
-setInterval(fetchSystemStatus, 10000);
-requestAnimationFrame(tick);
+// createGraph boots the cognition graph: it starts the live data streams and
+// the animation loop, and (unless disabled) wires hash-based request deep
+// links. The graph is no longer started on import, so a host controls when it
+// runs and what it talks to.
+//
+// opts:
+//   client      — /v1 data client (default: the real ./data/client.js). Inject
+//                 a fixture client for tests, or a native bridge for an embed.
+//   events      — loop-event subscriber (default: ./data/events.js SSE).
+//   hashRouting — wire window.hashchange for #request/<id> deep links
+//                 (default true; pass false when a host owns the URL).
+export function createGraph(opts = {}) {
+  if (opts.client) api = opts.client;
+  if (opts.events) subscribeLoopEvents = opts.events;
+  const hashRouting = opts.hashRouting !== false;
+
+  connect();
+  fetchVersionInfo();
+  fetchSystemStatus();
+  if (hashRouting) {
+    window.addEventListener('hashchange', handleHashRoute);
+    handleHashRoute();
+  }
+  // Refresh uptime display every second.
+  setInterval(updateUptime, 1000);
+  // Refresh system status every 10s.
+  setInterval(fetchSystemStatus, 10000);
+  requestAnimationFrame(tick);
+}
