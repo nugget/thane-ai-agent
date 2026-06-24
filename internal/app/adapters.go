@@ -13,8 +13,6 @@ import (
 	"github.com/google/uuid"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
-	"github.com/nugget/thane-ai-agent/internal/connwatch"
-	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
@@ -26,7 +24,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/delegate"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
-	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -836,8 +833,8 @@ func (a *logQueryAdapter) Query(params logging.QueryParams) ([]logging.LogEntry,
 	return logging.Query(a.db, params)
 }
 
-// contentQueryAdapter bridges the web package's [web.ContentQuerier]
-// interface to [logging.QueryRequestDetail].
+// contentQueryAdapter bridges [api.RequestReader] to
+// [logging.QueryRequestDetail], backing /v1/requests from the log index.
 type contentQueryAdapter struct {
 	db *sql.DB
 }
@@ -850,8 +847,8 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 // fallbackContentQuerier checks the primary source first, then falls back
 // to a secondary querier when the primary has no matching request detail.
 type fallbackContentQuerier struct {
-	primary  web.ContentQuerier
-	fallback web.ContentQuerier
+	primary  api.RequestReader
+	fallback api.RequestReader
 }
 
 func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
@@ -865,127 +862,6 @@ func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.
 		return nil, nil
 	}
 	return q.fallback.QueryRequestDetail(requestID)
-}
-
-// systemStatusAdapter bridges [connwatch.Manager] and [buildinfo] to the
-// web package's [web.SystemStatusProvider] interface, keeping the web
-// package decoupled from connwatch and buildinfo.
-//
-// capSurface is a getter rather than a captured slice so the adapter
-// sees the current value at call time. The capability surface is
-// finalized in a late init phase (after initServers), so any consumer
-// that captured the slice at construction time would see an empty
-// snapshot.
-type systemStatusAdapter struct {
-	connMgr       *connwatch.Manager
-	modelRegistry *fleet.Registry
-	modelRuntime  *fleet.Runtime
-	router        *router.Router
-	capSurface    func() []toolcatalog.CapabilitySurface
-	definitions   func() *looppkg.DefinitionRegistryView
-}
-
-// Health returns the health state of all watched services.
-func (a *systemStatusAdapter) Health() map[string]web.ServiceHealth {
-	status := a.connMgr.Status()
-	result := make(map[string]web.ServiceHealth, len(status))
-	for name, s := range status {
-		h := web.ServiceHealth{
-			Name:      s.Name,
-			Ready:     s.Ready,
-			LastError: s.LastError,
-		}
-		if !s.LastCheck.IsZero() {
-			h.LastCheck = s.LastCheck.Format(time.RFC3339)
-		}
-		result[name] = h
-	}
-	return result
-}
-
-// Uptime returns how long the process has been running.
-func (a *systemStatusAdapter) Uptime() time.Duration {
-	return buildinfo.Uptime()
-}
-
-// Version returns build and runtime metadata.
-func (a *systemStatusAdapter) Version() map[string]string {
-	return buildinfo.RuntimeInfo()
-}
-
-// ModelRegistry returns the current effective model-registry snapshot.
-func (a *systemStatusAdapter) ModelRegistry() *fleet.RegistrySnapshot {
-	if a.modelRegistry == nil {
-		return nil
-	}
-	return a.modelRegistry.Snapshot()
-}
-
-// RouterStats returns the current router statistics snapshot.
-func (a *systemStatusAdapter) RouterStats() *router.Stats {
-	if a.router == nil {
-		return nil
-	}
-	stats := a.router.GetStats()
-	return &stats
-}
-
-// AnthropicRateLimitSnapshot returns the latest Anthropic rate-limit
-// snapshot captured by the shared model runtime.
-func (a *systemStatusAdapter) AnthropicRateLimitSnapshot() *fleet.AnthropicRateLimitSnapshot {
-	if a.modelRuntime == nil {
-		return nil
-	}
-	return a.modelRuntime.AnthropicRateLimitSnapshot()
-}
-
-// LoopDefinitions returns the effective durable loop-definition view,
-// including live runtime state when the loop-definition runtime is enabled.
-func (a *systemStatusAdapter) LoopDefinitions() *looppkg.DefinitionRegistryView {
-	if a.definitions == nil {
-		return nil
-	}
-	return a.definitions()
-}
-
-// CapabilityCatalog returns the runtime capability catalog used by the
-// agent prompt/tooling layer, rendered with the supplied options. The
-// per-call options struct lets API consumers opt in to surfaces such
-// as operator-excluded tools without changing the underlying surface
-// snapshot. Callers that want the surfaced delegation front door
-// (currently `thane_now`) in the activation tools block must pass
-// IncludeDelegate: true explicitly — the canonical dashboard and
-// /api/capabilities handlers already do.
-func (a *systemStatusAdapter) CapabilityCatalog(opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogView {
-	surface := a.currentCapSurface()
-	if len(surface) == 0 {
-		return nil
-	}
-	view := toolcatalog.BuildCapabilityCatalogView(surface, opts)
-	return &view
-}
-
-// CapabilityEntry returns the resolved view of a single capability
-// tag, or nil when the tag is not present in the current surface
-// snapshot. The same options struct as [CapabilityCatalog] controls
-// optional sections (e.g. excluded tools).
-func (a *systemStatusAdapter) CapabilityEntry(tag string, opts toolcatalog.CatalogViewOptions) *toolcatalog.CapabilityCatalogEntry {
-	surface := a.currentCapSurface()
-	for _, entry := range surface {
-		if entry.Tag != tag {
-			continue
-		}
-		rendered := toolcatalog.RenderCapabilityCatalogEntry(entry, opts)
-		return &rendered
-	}
-	return nil
-}
-
-func (a *systemStatusAdapter) currentCapSurface() []toolcatalog.CapabilitySurface {
-	if a.capSurface == nil {
-		return nil
-	}
-	return a.capSurface()
 }
 
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting

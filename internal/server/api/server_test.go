@@ -435,7 +435,7 @@ func TestHandleUsageSummary(t *testing.T) {
 
 	server := NewServer("", 0, nil, nil, nil, nil, store, nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=48&group_by=resource", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?hours=48&group_by=resource", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -471,7 +471,7 @@ func TestHandleUsageSummary(t *testing.T) {
 func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?group_by=bogus", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?group_by=bogus", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -483,7 +483,7 @@ func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=zero", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/usage?hours=zero", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
 
@@ -492,11 +492,31 @@ func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 	}
 }
 
+func TestHandleModelFleet(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	server.handleModelFleet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var deployments []fleet.RegistryDeploymentSnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&deployments); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(deployments) != 2 {
+		t.Fatalf("fleet len = %d, want 2 (the registry's deployments)", len(deployments))
+	}
+}
+
 func TestHandleModelRegistry(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/model-registry", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models/registry", nil)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistry(rec, req)
 
@@ -522,7 +542,7 @@ func TestHandleModelRegistry(t *testing.T) {
 	}
 }
 
-func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
+func TestHandleRouterInsightsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
@@ -542,9 +562,9 @@ func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/router/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/insights/router", nil)
 	rec := httptest.NewRecorder()
-	server.handleRouterStats(rec, req)
+	server.handleRouterInsights(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -554,10 +574,17 @@ func TestHandleRouterStatsIncludesAnthropicRateLimitSnapshot(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if _, ok := body["total_requests"]; !ok {
-		t.Fatal("total_requests missing from router stats response")
+	if _, ok := body["audit"]; !ok {
+		t.Fatal("audit missing from router insights response")
 	}
-	limit, ok := body["anthropic_rate_limit"].(map[string]any)
+	stats, ok := body["stats"].(map[string]any)
+	if !ok {
+		t.Fatal("stats missing from router insights response")
+	}
+	if _, ok := stats["total_requests"]; !ok {
+		t.Fatal("total_requests missing from router insights stats")
+	}
+	limit, ok := stats["anthropic_rate_limit"].(map[string]any)
 	if !ok {
 		t.Fatal("anthropic_rate_limit missing or not a map")
 	}
@@ -585,7 +612,7 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -607,7 +634,7 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 		t.Fatalf("set policy reason = %q, want %q", setResp.Deployment.PolicyReason, "manual review")
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=spark/gpt-oss:20b", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/models/registry/policy?deployment=spark/gpt-oss:20b", nil)
 	deleteRec := httptest.NewRecorder()
 	server.handleModelRegistryPolicyDelete(deleteRec, deleteReq)
 
@@ -633,7 +660,7 @@ func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"inactive","reason":"drain this node"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -674,7 +701,7 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"mirror/qwen3-vl:latest","routable":true,"reason":"promote vision model"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -712,7 +739,7 @@ func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"bogus"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -726,7 +753,7 @@ func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -740,7 +767,7 @@ func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"missing/model","state":"flagged"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -753,7 +780,7 @@ func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=missing/model", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/models/registry/policy?deployment=missing/model", nil)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicyDelete(rec, req)
 
@@ -790,7 +817,7 @@ func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T
 	)
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -810,7 +837,7 @@ func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T
 		t.Fatal("saved UpdatedAt = zero, want populated timestamp")
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=spark/gpt-oss:20b", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/models/registry/policy?deployment=spark/gpt-oss:20b", nil)
 	deleteRec := httptest.NewRecorder()
 	server.handleModelRegistryPolicyDelete(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
@@ -839,7 +866,7 @@ func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
 	)
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)
 
@@ -863,7 +890,7 @@ func TestHandleModelRegistryResourcePolicySetAndDelete(t *testing.T) {
 	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"resource":"spark","state":"inactive","reason":"office hours"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/resource-policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/resource-policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryResourcePolicySet(rec, req)
 
@@ -890,7 +917,7 @@ func TestHandleModelRegistryResourcePolicySetAndDelete(t *testing.T) {
 		t.Fatalf("router models after resource disable = %+v, want only mirror/gpt-oss:20b", modelsCfg)
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/resource-policy?resource=spark", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/models/registry/resource-policy?resource=spark", nil)
 	deleteRec := httptest.NewRecorder()
 	server.handleModelRegistryResourcePolicyDelete(deleteRec, deleteReq)
 
@@ -928,7 +955,7 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 	)
 
 	body := bytes.NewBufferString(`{"resource":"spark","state":"inactive"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/resource-policy", body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/models/registry/resource-policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryResourcePolicySet(rec, req)
 

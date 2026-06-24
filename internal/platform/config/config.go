@@ -113,6 +113,11 @@ type Config struct {
 	// used for Home Assistant integration.
 	OllamaAPI OllamaAPIConfig `yaml:"ollama_api"`
 
+	// OpenAIAPI configures the optional OpenAI-compatible API server,
+	// serving the frozen OpenAI shim on its own port (separate from the
+	// Thane-native /v1 API on the primary listen port).
+	OpenAIAPI OpenAIAPIConfig `yaml:"openai_api"`
+
 	// CardDAV configures the optional CardDAV server for native
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
 	CardDAV CardDAVConfig `yaml:"carddav"`
@@ -608,6 +613,16 @@ type OllamaAPIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"` // Bind address; empty = all interfaces
 	Port    int    `yaml:"port"`    // Default: 11434
+}
+
+// OpenAIAPIConfig configures the optional OpenAI-compatible API server.
+// When Enabled is true, Thane serves the OpenAI-compatible shim
+// (/v1/chat/completions, /v1/models) on its own port, separate from the
+// Thane-native /v1 API on the primary listen port.
+type OpenAIAPIConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Address string `yaml:"address"` // Bind address; empty = all interfaces
+	Port    int    `yaml:"port"`    // Default: 8081
 }
 
 // CardDAVConfig configures the optional CardDAV server for native
@@ -2229,6 +2244,9 @@ func (c *Config) applyDefaults() {
 	if c.OllamaAPI.Port == 0 {
 		c.OllamaAPI.Port = 11434
 	}
+	if c.OpenAIAPI.Port == 0 {
+		c.OpenAIAPI.Port = 8081
+	}
 	if c.CardDAV.Enabled && len(c.CardDAV.Listen) == 0 {
 		c.CardDAV.Listen = []string{"127.0.0.1:8843"}
 	}
@@ -2488,6 +2506,9 @@ func (c *Config) Validate() error {
 	}
 	if c.OllamaAPI.Enabled && (c.OllamaAPI.Port < 1 || c.OllamaAPI.Port > 65535) {
 		return fmt.Errorf("ollama_api.port %d out of range (1-65535)", c.OllamaAPI.Port)
+	}
+	if c.OpenAIAPI.Enabled && (c.OpenAIAPI.Port < 1 || c.OpenAIAPI.Port > 65535) {
+		return fmt.Errorf("openai_api.port %d out of range (1-65535)", c.OpenAIAPI.Port)
 	}
 	if c.CardDAV.Enabled {
 		if c.CardDAV.Username == "" {
