@@ -37,12 +37,27 @@ func (h harnessLoopReg) StatusByID(id string) (looppkg.Status, bool) {
 	return st, ok
 }
 
-// harnessLogQuerier returns an empty log set for any query — enough to keep the
-// log panel functional without seeding a structured log index.
+// harnessLogQuerier returns a small synthetic log tail for any queried
+// conversation, so the per-loop log views have realistic content.
 type harnessLogQuerier struct{}
 
-func (harnessLogQuerier) Query(logging.QueryParams) ([]logging.LogEntry, error) {
-	return nil, nil
+func (harnessLogQuerier) Query(p logging.QueryParams) ([]logging.LogEntry, error) {
+	if p.ConversationID == "" {
+		return nil, nil
+	}
+	now := time.Now()
+	entries := []logging.LogEntry{
+		{Timestamp: now.Add(-1 * time.Second), Level: "INFO", Msg: "tool ha_get_state completed (light.office: on)", Tool: "ha_get_state", ConversationID: p.ConversationID, Subsystem: "agent"},
+		{Timestamp: now.Add(-2 * time.Second), Level: "INFO", Msg: "tool doc_read completed (1.2KB)", Tool: "doc_read", ConversationID: p.ConversationID, Subsystem: "agent"},
+		{Timestamp: now.Add(-3 * time.Second), Level: "INFO", Msg: "llm response received (in 5400, out 640)", Model: "claude-opus-4-8", ConversationID: p.ConversationID, Subsystem: "agent"},
+		{Timestamp: now.Add(-5 * time.Second), Level: "WARN", Msg: "context window at 78% — consider compaction", ConversationID: p.ConversationID, Subsystem: "session"},
+		{Timestamp: now.Add(-9 * time.Second), Level: "INFO", Msg: "iteration started", ConversationID: p.ConversationID, Subsystem: "loop"},
+		{Timestamp: now.Add(-20 * time.Second), Level: "ERROR", Msg: "transient upstream 529, retrying", ConversationID: p.ConversationID, Subsystem: "router"},
+	}
+	if p.Limit > 0 && len(entries) > p.Limit {
+		entries = entries[:p.Limit]
+	}
+	return entries, nil
 }
 
 // harnessLoops is the synthetic loop tree: a processing supervisor root with a
@@ -59,11 +74,13 @@ func harnessLoops() []looppkg.Status {
 			Iterations: 1423, Attempts: 1440,
 			TotalInputTokens: 9_200_000, TotalOutputTokens: 1_100_000,
 			LastInputTokens: 7400, LastOutputTokens: 820, ContextWindow: 200000,
+			RecentConvIDs: []string{"conv-supervisor"},
 		},
 		{
 			ID: "curator", Name: "curator", State: looppkg.StateSleeping, ParentID: "supervisor",
 			StartedAt: boot, Iterations: 318, Attempts: 320,
 			TotalInputTokens: 5_400_000, TotalOutputTokens: 410_000, ContextWindow: 131072,
+			RecentConvIDs: []string{"conv-curator"},
 		},
 		{
 			ID: "archivist", Name: "archivist", State: looppkg.StateSleeping, ParentID: "supervisor",
@@ -77,6 +94,7 @@ func harnessLoops() []looppkg.Status {
 			ID: "signal/aimee", Name: "signal/aimee", State: looppkg.StateProcessing, ParentID: "signal",
 			StartedAt: now.Add(-90 * time.Minute), LastWakeAt: now.Add(-1 * time.Second),
 			Iterations: 12, Attempts: 12, LastInputTokens: 5200, LastOutputTokens: 640, ContextWindow: 200000,
+			RecentConvIDs: []string{"conv-aimee"},
 		},
 		{
 			ID: "mqtt", Name: "mqtt", State: looppkg.StateError, ParentID: "supervisor",

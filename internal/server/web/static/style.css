@@ -3872,3 +3872,11 @@ body.resize-col .schema-card__fade {
 .fx-iter-tokens { color: var(--text-muted); min-width: 6rem; }
 .fx-iter-tools { display: flex; gap: 0.3rem; flex-wrap: wrap; }
 .fx-chip { font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 4px; background: var(--bg-tertiary); color: var(--text-secondary); }
+
+.fx-logs { display: flex; flex-direction: column; gap: 0.1rem; font: 0.78rem/1.5 var(--font-mono); }
+.fx-log { display: flex; gap: 0.6rem; padding: 0.15rem 0; }
+.fx-log-time { color: var(--text-muted); min-width: 5rem; }
+.fx-log-level { min-width: 3rem; color: var(--text-secondary); }
+.fx-log-msg { color: var(--text-primary); word-break: break-word; }
+.fx-log--warn .fx-log-level { color: #f59e0b; }
+.fx-log--error .fx-log-level, .fx-log--error .fx-log-msg { color: #ef4444; }

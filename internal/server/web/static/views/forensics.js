@@ -6,9 +6,11 @@
 // shared store + /v1. It follows viewState.selection, so selecting a loop in
 // the graph or table focuses it here, live.
 //
-// Everything rendered here comes from the shared store (loop status, live
-// tools, iteration history) — no extra fetches yet; the request-detail
-// waterfall and per-loop logs are a follow-on.
+// The live state comes from the shared store (loop status, live tools, iteration
+// history); the recent-logs tail is fetched from /v1/loops/{id}/logs. The
+// request-detail waterfall is a follow-on.
+
+import { logs as fetchLogTail } from '../data/client.js';
 
 // --- self-contained formatters (no shared.js dependency, for embeddability) ---
 
@@ -76,9 +78,24 @@ export function forensicsView(getStore, viewState) {
   let body = null;
   let unsubStore = null;
   let unsubView = null;
+  let unsubIter = null;
+  let logsEntries = [];
+  let logsFor = null;
 
   function focused() {
     return store ? store.getLoop(viewState.selection) : null;
+  }
+
+  // loadLogs fetches the focused loop's /v1 log tail (async) and re-renders.
+  // logsFor is set synchronously so render() won't re-trigger the fetch.
+  async function loadLogs(id) {
+    logsFor = id;
+    logsEntries = [];
+    if (!id) return;
+    const entries = await fetchLogTail('/loops/' + encodeURIComponent(id) + '/logs?limit=50');
+    if (logsFor !== id) return; // focus changed mid-fetch
+    logsEntries = Array.isArray(entries) ? entries : [];
+    render();
   }
 
   function renderHeader(l) {
@@ -152,6 +169,26 @@ export function forensicsView(getStore, viewState) {
     return section;
   }
 
+  function renderLogs() {
+    const section = el('section', { class: 'fx-section' }, [
+      el('h3', { class: 'fx-section-title', text: 'Recent logs' }),
+    ]);
+    if (!logsEntries.length) {
+      section.appendChild(el('div', { class: 'fx-idle', text: 'No recent log entries.' }));
+      return section;
+    }
+    const list = el('div', { class: 'fx-logs' });
+    for (const e of logsEntries) {
+      list.appendChild(el('div', { class: 'fx-log fx-log--' + (e.Level || 'info').toLowerCase() }, [
+        el('span', { class: 'fx-log-time', text: relTime(e.Timestamp) }),
+        el('span', { class: 'fx-log-level', text: (e.Level || '').toUpperCase() }),
+        el('span', { class: 'fx-log-msg', text: e.Tool ? '[' + e.Tool + '] ' + (e.Msg || '') : (e.Msg || '') }),
+      ]));
+    }
+    section.appendChild(list);
+    return section;
+  }
+
   function render() {
     if (!body) return;
     body.replaceChildren();
@@ -162,9 +199,11 @@ export function forensicsView(getStore, viewState) {
       ]));
       return;
     }
+    if (l.id !== logsFor) loadLogs(l.id); // focus changed → (re)load the log tail
     body.appendChild(renderHeader(l));
     body.appendChild(renderToolFeed(l));
     body.appendChild(renderTimeline(l));
+    body.appendChild(renderLogs());
   }
 
   return {
@@ -180,14 +219,20 @@ export function forensicsView(getStore, viewState) {
       root.appendChild(surface);
 
       render();
-      if (store) unsubStore = store.subscribe(render);
+      if (store) {
+        unsubStore = store.subscribe(render);
+        unsubIter = store.on('iteration_complete', ({ loopId }) => {
+          if (loopId === viewState.selection) loadLogs(loopId);
+        });
+      }
       unsubView = viewState.subscribe(render);
     },
 
     unmount() {
       if (unsubStore) unsubStore();
+      if (unsubIter) unsubIter();
       if (unsubView) unsubView();
-      unsubStore = unsubView = null;
+      unsubStore = unsubIter = unsubView = null;
       root = body = null;
     },
   };
