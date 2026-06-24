@@ -7,10 +7,9 @@ API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
 ## Port 8080 — Native API
 
 Port 8080 serves the Thane-native API and the embedded Cognition Engine
-dashboard's static assets (no build step). Note: the embedded assets still call
-the retired `/api/*` endpoints, so the bundled dashboard is non-functional
-against this server until the UI is rebuilt against `/v1` (a follow-up). The
-OpenAI-compatible shim runs on its own port (see below).
+dashboard's static assets (no build step). The dashboard consumes its JSON and
+SSE entirely from the native `/v1` API (graph, process table, and forensics
+views). The OpenAI-compatible shim runs on its own port (see below).
 
 ### Chat
 
