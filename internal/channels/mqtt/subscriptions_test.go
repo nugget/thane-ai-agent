@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -460,6 +461,48 @@ func TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "typo_handler") {
 		t.Fatalf("error = %v, want mention of typo_handler", err)
+	}
+}
+
+// TestSubscriptionStoreVerifyTargetsSkipsOrphanedRuntime pins the prod
+// outage fix: a runtime subscription can outlive its target loop (the loop
+// was deleted/disabled after the subscription was persisted). That orphan
+// must be warned-and-skipped, not crash startup the way a config typo does.
+func TestSubscriptionStoreVerifyTargetsSkipsOrphanedRuntime(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	// Bootstrap the schema.
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("schema bootstrap: %v", err)
+	}
+
+	// Insert a runtime subscription targeting a loop nobody runs. Add()
+	// validates targets at add-time, so an orphan can only arise from the
+	// loop being removed later — simulated here by a direct insert.
+	wtJSON, err := json.Marshal(wakeTarget("deleted_loop"))
+	if err != nil {
+		t.Fatalf("marshal target: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at) VALUES (?, ?, '{}', '[]', ?, 'runtime', ?)`,
+		"rt-orphan-1", "presence/zone_change", string(wtJSON), "2026-01-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("insert orphan: %v", err)
+	}
+
+	// Reconstruct so the store hydrates the orphaned row.
+	s, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+
+	resolver := stubResolver{known: map[string]bool{"some_other_loop": true}}
+	if err := s.VerifyTargets(resolver); err != nil {
+		t.Fatalf("orphaned runtime subscription must be skipped, not fatal: %v", err)
 	}
 }
 

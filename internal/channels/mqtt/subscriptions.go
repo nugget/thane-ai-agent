@@ -388,6 +388,11 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 // closes the gap on config-defined entries, which load before any loop
 // is registered. A nil resolver is a no-op so test wiring without a
 // registry stays simple.
+//
+// Only config-declared targets are fatal. A runtime subscription whose
+// target loop has since been deleted or disabled is an orphaned-data
+// condition: it is warned and skipped, never fatal, so one stale row
+// can't keep the agent from booting.
 func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error {
 	if resolver == nil {
 		return nil
@@ -398,9 +403,23 @@ func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error 
 	s.mu.RUnlock()
 
 	for _, ws := range subs {
-		if err := messages.VerifyLoopWakeTarget(ws.WakeTarget, resolver); err != nil {
+		err := messages.VerifyLoopWakeTarget(ws.WakeTarget, resolver)
+		if err == nil {
+			continue
+		}
+		// Config-declared targets are operator-authored, so an unresolved
+		// one is a config error worth failing startup loudly — that's the
+		// gap this pass exists to close.
+		if ws.Source == "config" {
 			return fmt.Errorf("mqtt subscription %q (topic %q, source=%s) wake_loop unresolved: %w", ws.ID, ws.Topic, ws.Source, err)
 		}
+		// A runtime subscription can outlive its target loop: the loop was
+		// deleted or disabled after the subscription was persisted. That is
+		// an orphaned-data condition, not a config error, and must not crash
+		// the whole agent at startup. Warn and skip — it simply won't
+		// dispatch, and self-heals if the loop comes back.
+		s.logger.Warn("mqtt wake subscription targets a loop that is not running; skipping",
+			"id", ws.ID, "topic", ws.Topic, "source", ws.Source, "error", err.Error())
 	}
 	return nil
 }
