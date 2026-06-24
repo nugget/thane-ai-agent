@@ -9,6 +9,7 @@ import { placeholderView } from './views/placeholder.js';
 import { createGraph, getStore } from './app.js';
 import { createViewState } from './data/viewState.js';
 import { loopTableView } from './views/loopTable.js';
+import { forensicsView } from './views/forensics.js';
 
 // Shared interaction state (anchor + selection) for the views that read the
 // same store as the graph, so they stay in sync.
@@ -21,6 +22,10 @@ createGraph({ viewState });
 // Process table — a flat, sortable view of the same running loops the graph
 // renders, scoped by the shared anchor.
 registerSurface('processes', loopTableView(getStore, viewState));
+
+// Forensics — single-loop live deep view (status, live tool feed, iteration
+// timeline) of the selected loop.
+registerSurface('forensics', forensicsView(getStore, viewState));
 
 registerSurface('models', placeholderView('Models & Routing',
   'Fleet, registry, deployment + resource policies, and the routing audit trail.'));
