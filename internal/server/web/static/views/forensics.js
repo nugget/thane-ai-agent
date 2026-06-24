@@ -10,7 +10,7 @@
 // history); the recent-logs tail is fetched from /v1/loops/{id}/logs. The
 // request-detail waterfall is a follow-on.
 
-import { logs as fetchLogTail } from '../data/client.js';
+import { logs as fetchLogTail, tryGet as apiTryGet } from '../data/client.js';
 
 // --- self-contained formatters (no shared.js dependency, for embeddability) ---
 
@@ -81,6 +81,8 @@ export function forensicsView(getStore, viewState) {
   let unsubIter = null;
   let logsEntries = [];
   let logsFor = null;
+  let reqDetail = null;
+  let reqFor = null;
 
   function focused() {
     return store ? store.getLoop(viewState.selection) : null;
@@ -95,6 +97,21 @@ export function forensicsView(getStore, viewState) {
     const entries = await fetchLogTail('/loops/' + encodeURIComponent(id) + '/logs?limit=50');
     if (logsFor !== id) return; // focus changed mid-fetch
     logsEntries = Array.isArray(entries) ? entries : [];
+    render();
+  }
+
+  // loadRequest fetches the focused loop's most recent request detail (the
+  // tool-call waterfall) from /v1/requests/{id}. Same async-guard pattern.
+  async function loadRequest(id) {
+    reqFor = id;
+    reqDetail = null;
+    const l = store && store.getLoop(id);
+    const history = (store && store.iterationHistory.get(id)) || [];
+    const reqId = (l && l._currentRequestID) || (history[0] && history[0].request_id) || '';
+    if (!reqId) return;
+    const detail = await apiTryGet('/requests/' + encodeURIComponent(reqId));
+    if (reqFor !== id) return; // focus changed mid-fetch
+    reqDetail = detail || null;
     render();
   }
 
@@ -189,6 +206,29 @@ export function forensicsView(getStore, viewState) {
     return section;
   }
 
+  function renderWaterfall() {
+    const section = el('section', { class: 'fx-section' }, [
+      el('h3', { class: 'fx-section-title', text: 'Last request — tool calls' }),
+    ]);
+    const calls = reqDetail && Array.isArray(reqDetail.tool_calls) ? reqDetail.tool_calls : [];
+    if (!calls.length) {
+      section.appendChild(el('div', { class: 'fx-idle', text: 'No completed request detail yet.' }));
+      return section;
+    }
+    for (const tc of calls) {
+      const card = el('div', { class: 'fx-tool' }, [
+        el('div', { class: 'fx-tool-head' }, [
+          el('span', { class: 'fx-tool-name', text: tc.tool_name || '?' }),
+          el('span', { class: 'fx-tool-status fx-tool-status--done', text: 'done' }),
+        ]),
+      ]);
+      if (tc.arguments) card.appendChild(el('pre', { class: 'fx-tool-args', text: String(tc.arguments).slice(0, 800) }));
+      if (tc.result) card.appendChild(el('pre', { class: 'fx-tool-result', text: String(tc.result).slice(0, 800) }));
+      section.appendChild(card);
+    }
+    return section;
+  }
+
   function render() {
     if (!body) return;
     body.replaceChildren();
@@ -200,8 +240,10 @@ export function forensicsView(getStore, viewState) {
       return;
     }
     if (l.id !== logsFor) loadLogs(l.id); // focus changed → (re)load the log tail
+    if (l.id !== reqFor) loadRequest(l.id); // and the latest request's waterfall
     body.appendChild(renderHeader(l));
     body.appendChild(renderToolFeed(l));
+    body.appendChild(renderWaterfall());
     body.appendChild(renderTimeline(l));
     body.appendChild(renderLogs());
   }
@@ -222,7 +264,10 @@ export function forensicsView(getStore, viewState) {
       if (store) {
         unsubStore = store.subscribe(render);
         unsubIter = store.on('iteration_complete', ({ loopId }) => {
-          if (loopId === viewState.selection) loadLogs(loopId);
+          if (loopId === viewState.selection) {
+            loadLogs(loopId);
+            loadRequest(loopId);
+          }
         });
       }
       unsubView = viewState.subscribe(render);

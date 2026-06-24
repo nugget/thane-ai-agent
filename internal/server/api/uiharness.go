@@ -60,6 +60,29 @@ func (harnessLogQuerier) Query(p logging.QueryParams) ([]logging.LogEntry, error
 	return entries, nil
 }
 
+// harnessRequestReader returns a synthetic request detail (a tool-call
+// waterfall) for any request id, so the forensics request view has content.
+type harnessRequestReader struct{}
+
+func (harnessRequestReader) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
+	if requestID == "" {
+		return nil, nil
+	}
+	return &logging.RequestDetail{
+		RequestID:      requestID,
+		Model:          "claude-opus-4-8",
+		IterationCount: 1,
+		InputTokens:    5400,
+		OutputTokens:   640,
+		CreatedAt:      time.Now().Add(-4 * time.Second).Format(time.RFC3339),
+		ToolsUsed:      map[string]int{"ha_get_state": 1, "doc_read": 1},
+		ToolCalls: []logging.ToolDetail{
+			{ToolCallID: "call_1", ToolName: "ha_get_state", Arguments: `{"entity_id":"light.office"}`, Result: `{"state":"on","brightness":180,"color_temp":3000}`, IterationIndex: 0},
+			{ToolCallID: "call_2", ToolName: "doc_read", Arguments: `{"path":"/notes/office.md"}`, Result: "Office automation notes: lights on motion, blinds at sunset, thermostat 21°C 8a–6p.", IterationIndex: 0},
+		},
+	}, nil
+}
+
 // harnessLoops is the synthetic loop tree: a processing supervisor root with a
 // mix of sleeping, event-driven, and errored children, plus a parent/child
 // channel pair — enough to exercise the graph's hierarchy, state styling, and
@@ -130,11 +153,12 @@ func RunUIHarness(addr, staticDir string) error {
 
 	bus := events.New()
 	s := &Server{
-		logger:       logger,
-		loopRegistry: harnessLoopReg{statuses: loops, byID: byID},
-		logQuerier:   harnessLogQuerier{},
-		eventBus:     bus,
-		healthDeps:   harnessHealth,
+		logger:        logger,
+		loopRegistry:  harnessLoopReg{statuses: loops, byID: byID},
+		logQuerier:    harnessLogQuerier{},
+		requestReader: harnessRequestReader{},
+		eventBus:      bus,
+		healthDeps:    harnessHealth,
 	}
 
 	// Drive synthetic live activity so the console shows iteration / LLM /
@@ -151,6 +175,7 @@ func RunUIHarness(addr, staticDir string) error {
 	mux.HandleFunc("GET /v1/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /v1/loops/{id}", s.handleLoop)
 	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
+	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
 
 	// Console static assets, served live from staticDir.
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
@@ -196,6 +221,7 @@ func emitSyntheticActivity(bus *events.Bus) {
 		pub("loop_llm_response", map[string]any{"model": "claude-opus-4-8", "input_tokens": 5400, "output_tokens": 640})
 		pub("loop_iteration_complete", map[string]any{
 			"model": "claude-opus-4-8", "input_tokens": 5400, "output_tokens": 640, "duration_ms": 4200,
+			"request_id": fmt.Sprintf("req-aimee-%d", turn), "conversation_id": "conv-aimee",
 		})
 		pub("loop_state_change", map[string]any{"from": "processing", "to": "sleeping"})
 		time.Sleep(3 * time.Second)
