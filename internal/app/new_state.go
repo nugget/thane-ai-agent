@@ -38,9 +38,4 @@ type newState struct {
 
 	// Built in initChannels, used by initDelegation.
 	forgeOpLog *forge.OperationLog
-
-	// Tools registered by deferred workers (e.g., Signal tools). The
-	// capability-tag validation in initDelegation skips these names so
-	// it doesn't warn about tools that will appear after StartWorkers.
-	deferredTools map[string]bool
 }

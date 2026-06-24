@@ -55,11 +55,13 @@ import (
 //   - Subsystems whose backing runtime starts asynchronously (Signal)
 //     declare their tools up front via tools.Provider and return
 //     tools.ErrUnavailable from the handler until Bind is called. Those
-//     tools DO appear in the snapshot; they are not in s.deferredTools.
-//   - s.deferredTools is a narrow remaining escape hatch for tool
-//     families whose handler is still registered inside a deferWorker
-//     closure (today: macos_calendar_events). New subsystems should use
-//     Provider + declared-but-unavailable instead of adding entries here.
+//     tools DO appear in the snapshot.
+//   - The legacy macos_calendar_events companion tool is registered
+//     synchronously in initServers via Tools().EnableCompanionTools
+//     (which calls registerCompanionTools → Register), exactly like
+//     mqtt_wake_*, so it is in the registry before the finalizer runs.
+//     No deferred-registration escape hatch remains; new subsystems use
+//     Provider + declared-but-unavailable.
 //   - initDelegation no longer takes a capability-tag snapshot; it
 //     creates the delegate executor without tag state and leaves
 //     coreTags / SetTagContextFunc to the finalizer.
