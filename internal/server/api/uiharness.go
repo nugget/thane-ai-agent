@@ -12,6 +12,7 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -109,13 +110,18 @@ func RunUIHarness(addr, staticDir string) error {
 		byID[l.ID] = l
 	}
 
+	bus := events.New()
 	s := &Server{
 		logger:       logger,
 		loopRegistry: harnessLoopReg{statuses: loops, byID: byID},
 		logQuerier:   harnessLogQuerier{},
-		eventBus:     events.New(),
+		eventBus:     bus,
 		healthDeps:   harnessHealth,
 	}
+
+	// Drive synthetic live activity so the console shows iteration / LLM /
+	// mid-flight tool events (args in, result out) without a real Thane.
+	go emitSyntheticActivity(bus)
 
 	mux := http.NewServeMux()
 
@@ -136,4 +142,45 @@ func RunUIHarness(addr, staticDir string) error {
 
 	logger.Warn("ui harness listening", "addr", addr, "static", staticDir)
 	return http.ListenAndServe(addr, mux)
+}
+
+// emitSyntheticActivity drives the "signal/aimee" loop through repeating turns
+// — iteration start, LLM call, two mid-flight tool calls (args in, result out),
+// then completion and sleep — publishing the same event kinds the runtime does.
+// Subscribers that join mid-stream simply pick up from the next event (the bus
+// drops to absent subscribers); the snapshot on connect seeds current state.
+func emitSyntheticActivity(bus *events.Bus) {
+	const id, name = "signal/aimee", "signal/aimee"
+	turn := 0
+	pub := func(kind string, data map[string]any) {
+		data["loop_id"] = id
+		data["loop_name"] = name
+		bus.Publish(events.Event{Timestamp: time.Now(), Source: events.SourceLoop, Kind: kind, Data: data})
+	}
+	for {
+		turn++
+		pub("loop_iteration_start", map[string]any{
+			"attempt": turn, "conversation_id": "conv-aimee", "request_id": fmt.Sprintf("req-aimee-%d", turn),
+		})
+		time.Sleep(500 * time.Millisecond)
+		pub("loop_llm_start", map[string]any{
+			"model": "claude-opus-4-8", "est_tokens": 5200, "intent": "respond", "complexity": "medium",
+		})
+		time.Sleep(700 * time.Millisecond)
+		pub("loop_tool_start", map[string]any{"tool": "ha_get_state", "args": `{"entity_id":"light.office"}`})
+		time.Sleep(900 * time.Millisecond)
+		pub("loop_tool_done", map[string]any{"tool": "ha_get_state", "result": `{"state":"on","brightness":180}`})
+		time.Sleep(400 * time.Millisecond)
+		pub("loop_tool_start", map[string]any{"tool": "doc_read", "args": `{"path":"/notes/office.md"}`})
+		time.Sleep(900 * time.Millisecond)
+		pub("loop_tool_done", map[string]any{"tool": "doc_read", "result": "Office automation notes: lights, blinds, thermostat schedule…"})
+		time.Sleep(500 * time.Millisecond)
+		pub("loop_llm_response", map[string]any{"model": "claude-opus-4-8", "input_tokens": 5400, "output_tokens": 640})
+		pub("loop_iteration_complete", map[string]any{
+			"model": "claude-opus-4-8", "input_tokens": 5400, "output_tokens": 640, "duration_ms": 4200,
+		})
+		pub("loop_state_change", map[string]any{"from": "processing", "to": "sleeping"})
+		time.Sleep(3 * time.Second)
+		pub("loop_state_change", map[string]any{"from": "sleeping", "to": "processing"})
+	}
 }
