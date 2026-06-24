@@ -28,9 +28,11 @@ type LoopDefinitionToolDeps struct {
 	// CascadeWakeSubscriptions removes runtime MQTT wake subscriptions that
 	// target a just-deleted loop and returns short descriptions of what was
 	// removed, plus any config-sourced subscriptions that still target it
-	// (those are reported, not removed — config is the source of truth).
-	// Optional; nil disables the cascade.
-	CascadeWakeSubscriptions func(loopName string) (removed, configRefs []string)
+	// (those are reported, not removed — config is the source of truth). A
+	// non-nil err means some targeted runtime subscriptions could not be
+	// deleted; the caller surfaces it as a tool-level warning so the operator
+	// can follow up. Optional; nil disables the cascade.
+	CascadeWakeSubscriptions func(loopName string) (removed, configRefs []string, err error)
 }
 
 // ConfigureLoopDefinitionTools stores the runtime dependencies needed by

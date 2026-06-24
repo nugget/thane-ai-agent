@@ -420,7 +420,7 @@ func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error 
 		// the whole agent at startup. Warn and skip — it simply won't
 		// dispatch, and self-heals if the loop comes back.
 		s.logger.Warn("mqtt wake subscription targets a loop that is not running; skipping",
-			"id", ws.ID, "topic", ws.Topic, "source", ws.Source, "error", err.Error())
+			"id", ws.ID, "topic", ws.Topic, "source", ws.Source, "error", err)
 	}
 	return nil
 }
