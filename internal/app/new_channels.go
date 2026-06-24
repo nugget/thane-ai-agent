@@ -414,6 +414,23 @@ func (a *App) initChannels(s *newState) error {
 		DeletePolicy:     a.deletePersistedLoopDefinitionPolicy,
 		Reconcile:        a.reconcileLoopDefinition,
 		LaunchDefinition: a.launchLoopDefinition,
+		CascadeWakeSubscriptions: func(loopName string) (removed, configRefs []string, err error) {
+			if a.mqttSubStore == nil {
+				return nil, nil, nil
+			}
+			rm, cfg, rerr := a.mqttSubStore.RemoveByWakeLoop(loopName)
+			if rerr != nil {
+				a.logger.Warn("cascade wake-subscription cleanup had errors",
+					"loop", loopName, "error", rerr)
+			}
+			for _, ws := range rm {
+				removed = append(removed, fmt.Sprintf("%s (topic %q)", ws.ID, ws.Topic))
+			}
+			for _, ws := range cfg {
+				configRefs = append(configRefs, fmt.Sprintf("%s (topic %q)", ws.ID, ws.Topic))
+			}
+			return removed, configRefs, rerr
+		},
 	})
 	if a.documentTools != nil {
 		a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{

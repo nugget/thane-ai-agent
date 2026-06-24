@@ -94,6 +94,7 @@ type Registry struct {
 	persistLoopDefinitionPolicy                func(string, looppkg.DefinitionPolicy) error
 	deletePersistedLoopDefinitionPolicy        func(string) error
 	reconcileLoopDefinition                    func(context.Context, string) error
+	cascadeWakeOnLoopDelete                    func(string) (removed, configRefs []string, err error)
 	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	liveLoopRegistry                           *looppkg.Registry
 	launchLoop                                 func(context.Context, looppkg.Launch) (looppkg.LaunchResult, error)
