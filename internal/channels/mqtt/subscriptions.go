@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -510,6 +511,51 @@ func (s *SubscriptionStore) Remove(id string) error {
 	s.subs = append(s.subs[:idx], s.subs[idx+1:]...)
 	s.logger.Info("mqtt wake subscription removed", "id", id)
 	return nil
+}
+
+// RemoveByWakeLoop deletes every runtime subscription whose wake target
+// names the given loop, so deleting a loop doesn't leave orphaned wake
+// rows that would later fail (or, before that resilience landed, crash)
+// startup verification. It returns the removed runtime subscriptions and,
+// separately, any config-sourced subscriptions that also target the loop —
+// those are NOT deleted (config is the source of truth), but the caller can
+// warn that config still references a now-deleted loop.
+//
+// Matching is by wake-target name, the durable key a subscription uses to
+// reach a loop definition; loop_id targets an ephemeral instance and is not
+// matched here.
+func (s *SubscriptionStore) RemoveByWakeLoop(loopName string) (removed, configRefs []WakeSubscription, err error) {
+	loopName = strings.TrimSpace(loopName)
+	if loopName == "" {
+		return nil, nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	kept := make([]WakeSubscription, 0, len(s.subs))
+	for _, ws := range s.subs {
+		if strings.TrimSpace(ws.WakeTarget.Name) != loopName {
+			kept = append(kept, ws)
+			continue
+		}
+		if ws.Source == "config" {
+			// Config owns this row; surface it but leave it in place.
+			configRefs = append(configRefs, ws)
+			kept = append(kept, ws)
+			continue
+		}
+		if _, derr := s.db.Exec(`DELETE FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID); derr != nil {
+			err = errors.Join(err, fmt.Errorf("delete subscription %q: %w", ws.ID, derr))
+			kept = append(kept, ws)
+			continue
+		}
+		removed = append(removed, ws)
+		s.logger.Info("removed orphaned mqtt wake subscription on loop delete",
+			"id", ws.ID, "topic", ws.Topic, "loop", loopName)
+	}
+	s.subs = kept
+	return removed, configRefs, err
 }
 
 // List returns all wake subscriptions (config + runtime).

@@ -110,11 +110,29 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	return ldMarshalToolJSON(map[string]any{
+	result := map[string]any{
 		"status":     "ok",
 		"generation": view.Generation,
 		"name":       name,
-	})
+	}
+	// Cascade: a runtime MQTT wake subscription can target this loop and
+	// would be orphaned by the delete (it isn't part of the loop's spec).
+	// Remove those and tell the model what got caught, so it isn't
+	// surprised later and so a stale row can't fail a future startup.
+	if r.cascadeWakeOnLoopDelete != nil {
+		removed, configRefs := r.cascadeWakeOnLoopDelete(name)
+		if len(removed) > 0 {
+			result["removed_wake_subscriptions"] = removed
+			result["notice"] = fmt.Sprintf("Also removed %d MQTT wake subscription(s) that targeted this loop.", len(removed))
+		}
+		if len(configRefs) > 0 {
+			// Config subs are not auto-removed — flag them so the operator
+			// updates config before the next restart treats it as fatal.
+			result["config_wake_subscriptions_still_targeting"] = configRefs
+			result["warning"] = fmt.Sprintf("%d config-defined MQTT wake subscription(s) still target this now-deleted loop; update config or startup will fail.", len(configRefs))
+		}
+	}
+	return ldMarshalToolJSON(result)
 }
 
 func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[string]any) (string, error) {
