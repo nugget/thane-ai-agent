@@ -2,7 +2,8 @@
 //
 // Boots the node-graph home view (createGraph) and wires the hash router with
 // the surface views. theme.js initializes independently from its own script
-// tag. Surface views are placeholders until their step lands.
+// tag. The Processes and Forensics surfaces are real views; the rest (Models,
+// Loop Definitions, Usage, Schedule) are placeholders until their step lands.
 
 import { initRouter, registerSurface } from './router.js';
 import { placeholderView } from './views/placeholder.js';

@@ -52,7 +52,7 @@ function activeToolNames(l) {
   return (l._liveTools || []).filter((t) => t && t.status === 'running').map((t) => t.tool);
 }
 
-// --- columns: value() drives sorting, cell() renders the <td> content ---
+// --- columns: value() drives sorting; setCell() renders the <td> content (switched on col.key) ---
 
 const COLUMNS = [
   { key: 'name', label: 'Loop', align: 'left', value: (l) => (l.name || l.id).toLowerCase() },

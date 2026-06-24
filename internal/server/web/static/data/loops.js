@@ -1,9 +1,9 @@
 // data/loops.js — the shared running-loop data layer.
 //
 // One source of truth for the running-loop set behind every view (the node
-// graph, the process table, the forensics window). It will grow to own the
-// SSE ingestion + canonical loop map + change subscription; this first piece
-// is the view-agnostic *anchor math* every consumer needs.
+// graph, the process table, the forensics window). It owns the SSE ingestion,
+// the canonical loop map, and change subscription (createLoopStore, below);
+// the view-agnostic *anchor math* every consumer needs lives up top.
 //
 // Anchoring operates on the REAL loop hierarchy (`parent_id`) — "show node X
 // and everything downstream of it." That is deliberately distinct from the

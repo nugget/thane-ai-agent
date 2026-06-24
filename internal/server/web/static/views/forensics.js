@@ -8,7 +8,8 @@
 //
 // The live state comes from the shared store (loop status, live tools, iteration
 // history); the recent-logs tail is fetched from /v1/loops/{id}/logs. The
-// request-detail waterfall is a follow-on.
+// request-detail waterfall (the focused loop's most recent request, with its
+// completed tool calls) is fetched from /v1/requests/{id}.
 
 import { logs as fetchLogTail, tryGet as apiTryGet } from '../data/client.js';
 

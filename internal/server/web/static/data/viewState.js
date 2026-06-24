@@ -41,8 +41,9 @@ export function createViewState() {
       emit();
     },
 
-    // reset returns to the unanchored whole tree and clears selection — the
-    // "recenter to core" affordance.
+    // resetAnchor returns to the unanchored whole tree — the "recenter to
+    // core" affordance. Selection is left untouched (anchor and selection are
+    // orthogonal).
     resetAnchor() {
       if (anchor === null) return;
       anchor = null;
