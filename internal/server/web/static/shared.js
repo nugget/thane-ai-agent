@@ -98,6 +98,20 @@ function formatUptimeLong(ms) {
   return parts.join(' ');
 }
 
+// formatUptime renders whole seconds as a compact duration (e.g. "3h12m4s"),
+// the form the core inspector shows. Takes the native /v1/system uptime_seconds
+// directly — no duration-string round-trip.
+function formatUptime(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return '';
+  let s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  let out = '';
+  if (h) out += h + 'h';
+  if (h || m) out += m + 'm';
+  return out + s + 's';
+}
+
 // ---------------------------------------------------------------------------
 // String Helpers
 // ---------------------------------------------------------------------------
@@ -599,7 +613,7 @@ function renderSystemRegistries(summaryEl, listEl, metaEl, sys, actions = {}) {
 
   const capabilities = getCapabilityCatalogEntries(sys);
   const capabilitySummary = summarizeCapabilityCatalog(capabilities);
-  const registry = (sys && sys.model_registry) || {};
+  const registry = (sys && sys.models) || {};
   const resources = Array.isArray(registry.resources) ? registry.resources : [];
   const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
   const readyActions = [
@@ -743,17 +757,17 @@ function renderSystemInspector(sys, els) {
   if (els.overview) {
     els.overview.innerHTML = '';
     const ver = sys.version || {};
-    const totalRequests = Number((sys.router_stats && sys.router_stats.total_requests) || 0);
-    const generation = Number((sys.model_registry && sys.model_registry.generation) || 0);
+    const totalRequests = Number((sys.router && sys.router.total_requests) || 0);
+    const generation = Number((sys.models && sys.models.generation) || 0);
 
-    els.overview.appendChild(buildSystemStat('Uptime', sys.uptime || '-', { id: 'system-uptime' }));
+    els.overview.appendChild(buildSystemStat('Uptime', formatUptime(sys.uptime_seconds) || '-', { id: 'system-uptime' }));
     els.overview.appendChild(buildSystemStat('Version', ver.version || '-', { id: 'system-version' }));
     els.overview.appendChild(buildSystemStat('Commit', ver.git_commit ? ver.git_commit.slice(0, 7) : '-', { id: 'system-commit', title: ver.git_commit || '' }));
     els.overview.appendChild(buildSystemStat('Go', ver.go_version || '-', { id: 'system-go' }));
     els.overview.appendChild(buildSystemStat('Arch', ((ver.os || '') && (ver.arch || '')) ? (ver.os + '/' + ver.arch) : '-', { id: 'system-arch' }));
     els.overview.appendChild(buildSystemStat('Requests', formatNumber(totalRequests), { emphasis: totalRequests > 0 }));
     els.overview.appendChild(buildSystemStat('Generation', formatNumber(generation)));
-    els.overview.appendChild(buildSystemStat('Routing', sys.model_registry ? (sys.model_registry.local_first ? 'local-first' : 'policy') : '-', { title: sys.model_registry ? 'default ' + (sys.model_registry.default_model || '-') : '' }));
+    els.overview.appendChild(buildSystemStat('Routing', sys.models ? (sys.models.local_first ? 'local-first' : 'policy') : '-', { title: sys.models ? 'default ' + (sys.models.default_model || '-') : '' }));
   }
 
   renderSystemServices(els.services, sys.health || {});
@@ -762,8 +776,8 @@ function renderSystemInspector(sys, els) {
     els.registryResources,
     els.registryDeployments,
     els.registryMeta,
-    sys.model_registry,
-    sys.router_stats,
+    sys.models,
+    sys.router,
   );
 
   if (els.capabilitySummary || els.capabilityList || els.capabilityMeta) {
@@ -773,7 +787,7 @@ function renderSystemInspector(sys, els) {
       els.capabilityList,
       els.capabilityMeta,
       capabilities,
-      (sys.capability_catalog && sys.capability_catalog.activation_tools) || null,
+      (sys.capabilities && sys.capabilities.activation_tools) || null,
     );
   }
 
@@ -912,7 +926,7 @@ function normalizeTooling(raw, fallback = {}) {
 }
 
 function getCapabilityCatalogEntries(system) {
-  const catalog = system && system.capability_catalog;
+  const catalog = system && system.capabilities;
   if (!catalog || !Array.isArray(catalog.capabilities)) return [];
   return catalog.capabilities
     .map((entry) => normalizeCapabilityCatalogEntry(entry))
@@ -2184,7 +2198,7 @@ function makeCopyBtn(text, label) {
 
 // renderRequestDetail populates the request detail panel from API data.
 //
-//   detail:    object from GET /api/requests/{id}
+//   detail:    object from GET /v1/requests/{id}
 //   els:       { ids, meta, content, waterfall } — DOM containers
 function renderRequestDetail(detail, els) {
   // IDs section.

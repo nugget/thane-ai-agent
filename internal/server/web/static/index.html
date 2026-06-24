@@ -5,16 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Thane - Cognition Engine</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // Apply persisted theme before first paint to avoid a flash of the
+    // default look. Mirrors static/theme.js; kept tiny and dependency-free.
+    (function () {
+      try {
+        var root = document.documentElement;
+        var m = localStorage.getItem('thane.theme.mode');
+        if (m === 'light' || m === 'dark') root.dataset.theme = m;
+        var a = localStorage.getItem('thane.theme.accent');
+        if (a && /^#[0-9a-f]{6}$/i.test(a)) {
+          root.style.setProperty('--accent', a);
+        }
+      } catch (e) { /* storage blocked — fall back to defaults */ }
+    })();
+  </script>
 </head>
 <body>
   <header class="header">
     <div class="header-left">
       <h1 class="header-title">Thane <span class="header-sep">&middot;</span> Cognition Engine</h1>
+      <nav class="nav">
+        <a href="#/" data-route="graph" class="nav-link">Graph</a>
+        <a href="#/processes" data-route="processes" class="nav-link">Processes</a>
+        <a href="#/forensics" data-route="forensics" class="nav-link">Forensics</a>
+        <a href="#/models" data-route="models" class="nav-link">Models</a>
+        <a href="#/loop-definitions" data-route="loop-definitions" class="nav-link">Loops</a>
+        <a href="#/usage" data-route="usage" class="nav-link">Usage</a>
+        <a href="#/schedules" data-route="schedules" class="nav-link">Schedule</a>
+      </nav>
     </div>
     <div class="header-right">
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
       <button id="toggle-logs" class="toggle-btn" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
       <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
+      <button id="toggle-theme" class="toggle-btn" title="Theme &amp; accent color"><span class="toggle-icon"></span> Theme</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
   </header>
@@ -57,6 +82,8 @@
       </div>
     </aside>
   </main>
+
+  <section id="view-root" class="view-root" tabindex="-1" hidden></section>
 
   <div class="resize-handle resize-handle--h" id="resize-h" hidden></div>
   <section class="log-panel" id="log-panel" hidden>
@@ -330,7 +357,27 @@
     <ul id="context-menu-items"></ul>
   </div>
 
+  <div id="theme-popover" class="theme-popover" hidden>
+    <div class="theme-row">
+      <span class="theme-label">Mode</span>
+      <div class="theme-modes">
+        <button type="button" class="theme-mode-btn" data-mode="auto">Auto</button>
+        <button type="button" class="theme-mode-btn" data-mode="light">Light</button>
+        <button type="button" class="theme-mode-btn" data-mode="dark">Dark</button>
+      </div>
+    </div>
+    <div class="theme-row">
+      <span class="theme-label">Accent</span>
+      <div class="theme-swatches" id="theme-swatches"></div>
+    </div>
+    <div class="theme-row">
+      <span class="theme-label">Custom</span>
+      <input type="color" id="theme-custom" class="theme-custom" value="#2dd4bf" title="Custom accent color">
+    </div>
+  </div>
+
   <script src="/static/shared.js"></script>
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/theme.js"></script>
+  <script type="module" src="/static/main.js"></script>
 </body>
 </html>

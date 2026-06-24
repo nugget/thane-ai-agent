@@ -75,6 +75,14 @@ func (a *App) Serve(ctx context.Context) error {
 		}()
 	}
 
+	if a.openaiServer != nil {
+		go func() {
+			if err := a.openaiServer.Start(ctx); err != nil {
+				a.logger.Error("openai API server failed", "error", err)
+			}
+		}()
+	}
+
 	if a.carddavServer != nil {
 		if err := a.carddavServer.Start(ctx); err != nil {
 			a.logger.Error("carddav server failed to start", "error", err)
@@ -93,6 +101,11 @@ func (a *App) Serve(ctx context.Context) error {
 		if a.ollamaServer != nil {
 			if err := a.ollamaServer.Shutdown(shutdownCtx); err != nil {
 				a.logger.Error("ollama server shutdown failed", "error", err)
+			}
+		}
+		if a.openaiServer != nil {
+			if err := a.openaiServer.Shutdown(shutdownCtx); err != nil {
+				a.logger.Error("openai server shutdown failed", "error", err)
 			}
 		}
 		if a.carddavServer != nil {

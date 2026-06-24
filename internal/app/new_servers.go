@@ -62,6 +62,14 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.ConfigureChatLoopLauncher(a.launchLoop)
 	server.SetEventBus(a.eventBus)
+	server.UseLoopRegistry(a.loopRegistry)
+	if a.sched != nil {
+		server.UseScheduler(a.sched)
+	}
+	server.UseCapabilitySurface(a.capSurfaceGetter())
+	if a.indexDB != nil {
+		server.UseLogQuerier(&logQueryAdapter{db: a.indexDB})
+	}
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
 		result := make(map[string]api.DependencyStatus, len(status))
@@ -190,6 +198,14 @@ func (a *App) initServers(s *newState) error {
 	if cfg.OllamaAPI.Enabled {
 		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, a.loop, logger)
 		a.ollamaServer.SetOWUTracker(owuTracker)
+	}
+
+	// --- OpenAI-compatible API server ---
+	// Optional second HTTP server that serves the frozen OpenAI shim
+	// (/v1/chat/completions, /v1/models) on its own port, keeping the
+	// Thane-native /v1 API on the primary port free of foreign shapes.
+	if cfg.OpenAIAPI.Enabled {
+		a.openaiServer = api.NewOpenAIServer(cfg.OpenAIAPI.Address, cfg.OpenAIAPI.Port, a.server, logger)
 	}
 
 	// --- Companion app endpoint ---
@@ -539,32 +555,27 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	// --- Web dashboard ---
-	// Wire the web dashboard now that the loop registry exists.
+	// Serve the embedded dashboard's static assets and wire the request-content
+	// source that backs the native API's /v1/requests endpoints. The web package
+	// is static-file serving only now; running-loop state and all other JSON/SSE
+	// live on the native /v1 surface, so the dashboard no longer takes the loop
+	// registry or event bus.
 	{
-		webCfg := web.Config{
-			LoopRegistry: a.loopRegistry,
-			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{
-				connMgr:       a.connMgr,
-				modelRegistry: a.modelRegistry,
-				modelRuntime:  a.modelRuntime,
-				router:        a.rtr,
-				capSurface:    a.capSurfaceGetter(),
-				definitions:   a.loopDefinitionView,
-			},
-			Logger: logger,
-		}
+		webCfg := web.Config{Logger: logger}
+		// /v1/requests content source: the live request store, with the
+		// retained-content DB as a fallback when content retention is on.
+		var requestReader api.RequestReader
 		if a.liveRequestStore != nil {
-			webCfg.ContentQuerier = a.liveRequestStore
+			requestReader = a.liveRequestStore
 		}
-		if a.indexDB != nil {
-			webCfg.LogQuerier = &logQueryAdapter{db: a.indexDB}
-			if cfg.Logging.RetainContent {
-				webCfg.ContentQuerier = &fallbackContentQuerier{
-					primary:  a.liveRequestStore,
-					fallback: &contentQueryAdapter{db: a.indexDB},
-				}
+		if a.indexDB != nil && cfg.Logging.RetainContent {
+			requestReader = &fallbackContentQuerier{
+				primary:  a.liveRequestStore,
+				fallback: &contentQueryAdapter{db: a.indexDB},
 			}
+		}
+		if requestReader != nil {
+			server.UseRequestReader(requestReader)
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))

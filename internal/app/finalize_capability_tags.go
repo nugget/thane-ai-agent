@@ -25,14 +25,14 @@ import (
 // Subsystems whose backing runtime binds asynchronously (Signal is
 // the canonical example) declare their tools up front via
 // tools.Provider and return tools.ErrUnavailable from the handler
-// until Bind is called. Those tools ARE in the snapshot and do NOT
-// belong in s.deferredTools — the registry sees them from initChannels
-// onwards.
+// until Bind is called. Those tools ARE in the snapshot — the registry
+// sees them from initChannels onwards.
 //
-// s.deferredTools is a narrow remaining exemption for tool families
-// whose handler is still registered inside a deferWorker closure
-// (today: macos_calendar_events). See the doc comment in new.go for
-// the ordering rules.
+// Tools registered synchronously by an earlier init phase (the
+// macos_calendar_events companion tool and mqtt_wake_* in initServers,
+// watchlist tools in initAwareness) are likewise present here, because
+// the finalizer runs last. See the doc comment in new.go for the
+// ordering rules.
 func (a *App) finalizeCapabilityTags(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -68,15 +68,16 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	// config (e.g., shell_exec disabled). Non-fatal: skip the missing
 	// tool.
 	//
-	// Tools in s.deferredTools are registered by a deferWorker closure
-	// that runs after New() completes — today only macos_calendar_events.
-	// Provider-migrated subsystems (Signal, watchlist, mqtt_wake) are
-	// declared up front and never appear in deferredTools; their tools
-	// are visible here and only invocation would surface
-	// tools.ErrUnavailable until Bind supplies the runtime.
+	// Every tool a config tag can reference is registered by an init
+	// phase before this finalizer runs: synchronously (e.g.
+	// macos_calendar_events and mqtt_wake_* in initServers) or declared
+	// up front via tools.Provider (Signal, watchlist). Provider tools
+	// whose runtime has not bound yet are still present here; only
+	// invocation surfaces tools.ErrUnavailable until Bind supplies the
+	// runtime.
 	for tag, tagCfg := range resolvedCapTags {
 		for _, toolName := range tagCfg.Tools {
-			if a.loop.Tools().Get(toolName) == nil && !s.deferredTools[toolName] {
+			if a.loop.Tools().Get(toolName) == nil {
 				logger.Warn("capability tag references unregistered tool",
 					"tag", tag, "tool", toolName)
 			}

@@ -1,4 +1,7 @@
-// Package api implements the OpenAI-compatible HTTP API.
+// Package api implements Thane's HTTP API surfaces. Server is the Thane-native,
+// loops-first /v1 management and observability API on the primary listen port;
+// OpenAIServer and OllamaServer are the frozen OpenAI- and Ollama-compatible
+// shims, each served on its own port.
 package api
 
 import (
@@ -16,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -83,6 +87,11 @@ type Server struct {
 	contactStore                       *contacts.Store
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
+	loopRegistry                       LoopStatusReader
+	logQuerier                         LogQuerier
+	requestReader                      RequestReader
+	schedulerReader                    SchedulerReader
+	capSurface                         func() []toolcatalog.CapabilitySurface
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, fleet.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
@@ -417,28 +426,34 @@ func (s *Server) SetArchiveStore(as *memory.ArchiveStore) {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// OpenAI-compatible endpoints
-	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
-	mux.HandleFunc("GET /v1/models", s.handleModels)
-
 	// Simplified chat endpoint (easier testing)
 	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
 
-	// Health endpoints
+	// Health and system endpoints
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /v1/system", s.handleSystem)
+	mux.HandleFunc("GET /v1/system/logs", s.handleSystemLogs)
 
-	// Router introspection endpoints
-	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
-	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
-	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
+	// Insights — consolidated router, tool, and usage analytics
+	mux.HandleFunc("GET /v1/insights/router", s.handleRouterInsights)
+	mux.HandleFunc("GET /v1/insights/tools", s.handleToolInsights)
+	mux.HandleFunc("GET /v1/insights/usage", s.handleUsageSummary)
+	mux.HandleFunc("GET /v1/insights/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /v1/insights/capabilities/{tag}", s.handleCapability)
+
+	// Request introspection — detail, routing decision, and tool calls
+	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)
+	mux.HandleFunc("GET /v1/requests/{id}/routing", s.handleRequestRouting)
+	mux.HandleFunc("GET /v1/requests/{id}/tools", s.handleRequestTools)
 
 	// Model registry endpoints
-	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
-	mux.HandleFunc("POST /v1/model-registry/policy", s.handleModelRegistryPolicySet)
-	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
-	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
-	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
+	mux.HandleFunc("GET /v1/models", s.handleModelFleet)
+	mux.HandleFunc("GET /v1/models/registry", s.handleModelRegistry)
+	mux.HandleFunc("PUT /v1/models/registry/policy", s.handleModelRegistryPolicySet)
+	mux.HandleFunc("DELETE /v1/models/registry/policy", s.handleModelRegistryPolicyDelete)
+	mux.HandleFunc("PUT /v1/models/registry/resource-policy", s.handleModelRegistryResourcePolicySet)
+	mux.HandleFunc("DELETE /v1/models/registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
 
 	// Contact directory endpoints
 	mux.HandleFunc("GET /v1/contacts", s.handleContactsList)
@@ -456,26 +471,36 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("DELETE /v1/loop-definitions/policy", s.handleLoopDefinitionPolicyDelete)
 	mux.HandleFunc("POST /v1/loop-definitions/{name}/launch", s.handleLoopDefinitionLaunch)
 
+	// Running loops (the loops-first protagonist), consolidated from the
+	// dashboard's former /api/loops surface in the web package.
+	mux.HandleFunc("GET /v1/loops", s.handleLoops)
+	mux.HandleFunc("GET /v1/loops/events", s.handleLoopEvents)
+	mux.HandleFunc("GET /v1/loops/{id}", s.handleLoop)
+	mux.HandleFunc("GET /v1/loops/{id}/logs", s.handleLoopLogs)
+
+	// Scheduler: durable scheduled tasks and their execution history,
+	// surfacing the previously internal-only scheduler subsystem.
+	mux.HandleFunc("GET /v1/schedules", s.handleSchedules)
+	mux.HandleFunc("GET /v1/schedules/{id}", s.handleSchedule)
+	mux.HandleFunc("GET /v1/schedules/{id}/executions", s.handleScheduleExecutions)
+
 	// Checkpoint endpoints
-	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
+	mux.HandleFunc("POST /v1/checkpoints", s.handleCheckpointCreate)
 	mux.HandleFunc("GET /v1/checkpoints", s.handleCheckpointList)
-	mux.HandleFunc("GET /v1/checkpoint/{id}", s.handleCheckpointGet)
-	mux.HandleFunc("DELETE /v1/checkpoint/{id}", s.handleCheckpointDelete)
-	mux.HandleFunc("POST /v1/checkpoint/{id}/restore", s.handleCheckpointRestore)
+	mux.HandleFunc("GET /v1/checkpoints/{id}", s.handleCheckpointGet)
+	mux.HandleFunc("DELETE /v1/checkpoints/{id}", s.handleCheckpointDelete)
+	mux.HandleFunc("POST /v1/checkpoints/{id}/restore", s.handleCheckpointRestore)
 
 	// History endpoints
 	mux.HandleFunc("GET /v1/conversations", s.handleConversationList)
 	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
-	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
-	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
 
 	// Session stats
-	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
-	mux.HandleFunc("GET /v1/usage/summary", s.handleUsageSummary)
-	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
-	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
-	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
-	mux.HandleFunc("GET /v1/session/history", s.handleSessionHistory)
+	mux.HandleFunc("GET /v1/sessions/stats", s.handleSessionStats)
+	mux.HandleFunc("POST /v1/sessions/balance", s.handleSetBalance)
+	mux.HandleFunc("POST /v1/sessions/reset", s.handleSessionReset)
+	mux.HandleFunc("POST /v1/sessions/compact", s.handleSessionCompact)
+	mux.HandleFunc("GET /v1/sessions/history", s.handleSessionHistory)
 
 	// Archive endpoints
 	mux.HandleFunc("GET /v1/archive/sessions", s.handleArchiveSessions)
@@ -485,9 +510,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// Companion app WebSocket endpoint. The platform route is a legacy
-	// alias for existing thane-agent-macos installs.
+	// First-party realtime WebSocket. /v1/realtime/ws is the canonical path
+	// (per native.yaml); /v1/companion/ws and /v1/platform/ws are legacy
+	// aliases for existing thane-agent-macos installs.
 	if s.companionHandler != nil {
+		mux.Handle("GET /v1/realtime/ws", s.companionHandler)
 		mux.Handle("GET /v1/companion/ws", s.companionHandler)
 		mux.Handle("GET /v1/platform/ws", s.companionHandler)
 	}
@@ -982,65 +1009,6 @@ type routerStatsResponse struct {
 	AnthropicRateLimit *fleet.AnthropicRateLimitSnapshot `json:"anthropic_rate_limit,omitempty"`
 }
 
-func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	stats := s.router.GetStats()
-	response := routerStatsResponse{Stats: stats}
-	if s.anthropicRateLimitSnapshot != nil {
-		response.AnthropicRateLimit = s.anthropicRateLimitSnapshot()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, response, s.logger)
-}
-
-func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	// Parse limit from query
-	limit := 20
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-
-	decisions := s.router.GetAuditLog(limit)
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"count":     len(decisions),
-		"decisions": decisions,
-	}, s.logger)
-}
-
-func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
-	if s.router == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
-		return
-	}
-
-	requestID := r.PathValue("requestId")
-	if requestID == "" {
-		s.errorResponse(w, http.StatusBadRequest, "requestId required")
-		return
-	}
-
-	decision := s.router.Explain(requestID)
-	if decision == nil {
-		s.errorResponse(w, http.StatusNotFound, "decision not found")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, decision, s.logger)
-}
-
 type setModelRegistryPolicyRequest struct {
 	Deployment string `json:"deployment"`
 	State      string `json:"state"`
@@ -1075,6 +1043,23 @@ func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
 	snapshot := s.modelRegistry.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snapshot, s.logger)
+}
+
+// handleModelFleet returns the native fleet view: the deployable models with
+// their resource, provider, capabilities, and routability, as a bare array.
+// The OpenAI-shaped list lives on the separate OpenAI-compatible server.
+// [GET /v1/models]
+func (s *Server) handleModelFleet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+	deployments := s.modelRegistry.Snapshot().Deployments
+	if deployments == nil {
+		deployments = []fleet.RegistryDeploymentSnapshot{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, deployments, s.logger)
 }
 
 func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Request) {
@@ -1535,53 +1520,6 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, conv, s.logger)
-}
-
-func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
-		return
-	}
-
-	// Parse query params
-	convID := r.URL.Query().Get("conversation_id")
-	toolName := r.URL.Query().Get("tool")
-	limitStr := r.URL.Query().Get("limit")
-
-	limit := 50
-	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
-			limit = n
-		}
-	}
-
-	var calls []memory.ToolCall
-	if toolName != "" {
-		calls = s.memoryStore.GetToolCallsByName(toolName, limit)
-	} else if convID != "" {
-		calls = s.memoryStore.GetToolCalls(convID, limit)
-	} else {
-		// Get all recent (no specific filter)
-		calls = s.memoryStore.GetToolCalls("", limit)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]any{
-		"tool_calls": calls,
-		"count":      len(calls),
-	}, s.logger)
-}
-
-func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
-	if s.memoryStore == nil {
-		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
-		return
-	}
-
-	stats := s.memoryStore.ToolCallStats()
-
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, stats, s.logger)
 }
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {

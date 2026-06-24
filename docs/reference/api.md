@@ -1,20 +1,21 @@
 # API & Endpoints
 
-Thane serves three network listeners simultaneously from a single binary.
+Thane can serve up to four network listeners from a single binary. The native
+API (port 8080) is always on; the OpenAI-compatible (8081), Ollama-compatible
+(11434), and CardDAV (8843) listeners are each optional, enabled via config.
 
 ## Port 8080 — Native API
 
-Port 8080 serves the OpenAI-compatible native API and the embedded Cognition
-Engine dashboard. The dashboard has no build step and fetches JSON/SSE
-endpoints from the same listener.
+Port 8080 serves the Thane-native API and the embedded Cognition Engine
+dashboard's static assets (no build step). The dashboard consumes its JSON and
+SSE entirely from the native `/v1` API (graph, process table, and forensics
+views). The OpenAI-compatible shim runs on its own port (see below).
 
-### Chat and Models
+### Chat
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. The `model` field selects a [virtual model](../operating/routing-profiles.md), such as `thane:latest` or `thane:premium`. |
 | `POST` | `/v1/chat` | Minimal JSON chat endpoint for simple testing. |
-| `GET` | `/v1/models` | OpenAI-compatible model list. |
 
 ### Runtime and Web Dashboard
 
@@ -23,34 +24,35 @@ endpoints from the same listener.
 | `GET` | `/` | Embedded Cognition Engine dashboard. |
 | `GET` | `/health` | Dependency health for service monitoring. |
 | `GET` | `/v1/version` | Build and runtime metadata. |
-| `GET` | `/api/system` | Dashboard aggregate: health, uptime, version, model registry, router stats, Anthropic rate limits, loop definitions, and capability catalog. |
-| `GET` | `/api/system/logs` | Structured log tail across the runtime, excluding API/web feedback noise. |
-| `GET` | `/api/loops` | Live loop status snapshots, including recent iterations, active tags, tooling, and config. |
-| `GET` | `/api/loops/events` | SSE stream. Sends an initial loop snapshot, then loop and delegate events. |
-| `GET` | `/api/loops/{id}/logs` | Structured logs scoped to a loop's recent conversation IDs. |
-| `GET` | `/api/loop-definitions` | Effective durable loop-definition registry view, including runtime state. |
-| `GET` | `/api/capabilities` | Resolved capability catalog. Pass `include=excluded` to include operator-excluded tools. |
-| `GET` | `/api/capabilities/{tag}` | Single capability entry. |
-| `GET` | `/api/request-detail/_probe` | Request-detail availability probe. |
-| `GET` | `/api/requests/{id}` | Live or retained request detail: prompt, messages, tool calls, results, and token metadata. |
+| `GET` | `/v1/system` | Slim system rollup: status, dependency health, `uptime_seconds`, version. |
+| `GET` | `/v1/system/logs` | Structured process-log tail (bare array, newest first; `?level`, `?limit` default 50, max 200). |
 
 ### Router, Registry, and History
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/router/stats` | Router statistics, including Anthropic rate-limit snapshot when available. |
-| `GET` | `/v1/router/audit` | Recent routing decisions. |
-| `GET` | `/v1/router/explain/{requestId}` | Routing decision for one request ID. |
-| `GET` | `/v1/model-registry` | Effective model registry snapshot. |
-| `POST` | `/v1/model-registry/policy` | Set a deployment policy. |
-| `DELETE` | `/v1/model-registry/policy?deployment=...` | Clear a deployment policy. |
-| `POST` | `/v1/model-registry/resource-policy` | Set a resource policy. |
-| `DELETE` | `/v1/model-registry/resource-policy?resource=...` | Clear a resource policy. |
+| `GET` | `/v1/insights/router` | Router stats (with Anthropic rate-limit snapshot) plus the recent routing-audit trail (`?limit`, default 20). |
+| `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
+| `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
+| `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
+| `GET` | `/v1/models` | Native fleet view: deployable models with resource, provider, and routability (bare array). |
+| `GET` | `/v1/models/registry` | Effective model registry snapshot. |
+| `PUT` | `/v1/models/registry/policy` | Set a deployment policy. |
+| `DELETE` | `/v1/models/registry/policy?deployment=...` | Clear a deployment policy. |
+| `PUT` | `/v1/models/registry/resource-policy` | Set a resource policy. |
+| `DELETE` | `/v1/models/registry/resource-policy?resource=...` | Clear a resource policy. |
 | `GET` | `/v1/contacts` | List or search contacts. Supports `query`, `kind`, `trust_zone`, `property`, `value`, `exact=true`, and `limit` (default 100, max 500). |
 | `GET` | `/v1/contacts/{id}` | Get one contact with structured properties. |
 | `POST` | `/v1/contacts` | Create a contact with optional vCard-style `properties`. |
 | `PUT` | `/v1/contacts/{id}` | Replace a contact and its structured properties. |
 | `DELETE` | `/v1/contacts/{id}` | Soft-delete a contact. |
+| `GET` | `/v1/loops` | Running loop status snapshots. Optional `?state=` filter (`pending`, `sleeping`, `waiting`, `processing`, `error`, `stopped`). |
+| `GET` | `/v1/loops/{id}` | One running loop's status. |
+| `GET` | `/v1/loops/{id}/logs` | Structured logs for a running loop's recent conversation IDs (bare array, newest first; `?limit=` default 50, max 200). |
+| `GET` | `/v1/loops/events` | SSE stream: initial loop snapshot, then loop and delegate events. |
+| `GET` | `/v1/schedules` | Scheduler tasks (`at`/`every`/`cron`) each with its next fire time. Optional `?enabled=true`. |
+| `GET` | `/v1/schedules/{id}` | One scheduled task. |
+| `GET` | `/v1/schedules/{id}/executions` | A task's execution history (bare array, newest first; `?limit` default 50, max 200). |
 | `GET` | `/v1/loop-definitions` | Effective durable loop-definition registry view. |
 | `GET` | `/v1/loop-definitions/{name}` | One loop definition. |
 | `POST` | `/v1/loop-definitions` | Upsert a mutable overlay loop definition. |
@@ -60,14 +62,15 @@ endpoints from the same listener.
 | `POST` | `/v1/loop-definitions/{name}/launch` | Launch a stored loop definition. |
 | `GET` | `/v1/conversations` | Conversation summaries. |
 | `GET` | `/v1/conversations/{id}` | Conversation detail. |
-| `GET` | `/v1/tools/calls` | Tool-call history. |
-| `GET` | `/v1/tools/stats` | Tool usage stats. |
-| `GET` | `/v1/session/stats` | Current session usage and context stats. |
-| `GET` | `/v1/usage/summary` | Usage summary over a time window. |
-| `POST` | `/v1/session/balance` | Set reported balance for session cost tracking. |
-| `POST` | `/v1/session/reset` | Reset current session stats. |
-| `POST` | `/v1/session/compact` | Compact current session history. |
-| `GET` | `/v1/session/history` | Current session history. |
+| `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
+| `GET` | `/v1/sessions/stats` | Current session usage and context stats. |
+| `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
+| `GET` | `/v1/insights/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
+| `GET` | `/v1/insights/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
+| `POST` | `/v1/sessions/balance` | Set reported balance for session cost tracking. |
+| `POST` | `/v1/sessions/reset` | Reset current session stats. |
+| `POST` | `/v1/sessions/compact` | Compact current session history. |
+| `GET` | `/v1/sessions/history` | Current session history. |
 | `GET` | `/v1/archive/sessions` | Archived session list. |
 | `GET` | `/v1/archive/sessions/{id}` | Archived session detail. |
 | `GET` | `/v1/archive/sessions/{id}/export` | Export one archived session. |
@@ -79,13 +82,27 @@ endpoints from the same listener.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v1/checkpoint` | Create a checkpoint. |
+| `POST` | `/v1/checkpoints` | Create a checkpoint. |
 | `GET` | `/v1/checkpoints` | List checkpoints. |
-| `GET` | `/v1/checkpoint/{id}` | Get checkpoint metadata/detail. |
-| `DELETE` | `/v1/checkpoint/{id}` | Delete a checkpoint. |
-| `POST` | `/v1/checkpoint/{id}/restore` | Restore from a checkpoint. |
-| `GET` | `/v1/companion/ws` | Native companion app WebSocket. |
-| `GET` | `/v1/platform/ws` | Legacy companion WebSocket alias. |
+| `GET` | `/v1/checkpoints/{id}` | Get checkpoint metadata/detail. |
+| `DELETE` | `/v1/checkpoints/{id}` | Delete a checkpoint. |
+| `POST` | `/v1/checkpoints/{id}/restore` | Restore from a checkpoint. |
+| `GET` | `/v1/realtime/ws` | First-party realtime WebSocket (canonical). |
+| `GET` | `/v1/companion/ws` | Realtime WebSocket — legacy alias. |
+| `GET` | `/v1/platform/ws` | Realtime WebSocket — legacy alias. |
+
+## Port 8081 — OpenAI-Compatible API
+
+A dedicated listener for the frozen OpenAI-compatible shim, kept off the native
+`/v1` namespace so the two surfaces don't collide (mirrors the Ollama split).
+Enabled via `openai_api` in config. The `model` field selects a
+[virtual model](../operating/routing-profiles.md) such as `thane:latest` or
+`thane:premium`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions with streaming support. |
+| `GET` | `/v1/models` | OpenAI-compatible model list (routing aliases as model ids). |
 
 ## Port 11434 — Ollama-Compatible API
 

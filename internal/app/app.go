@@ -133,6 +133,7 @@ type App struct {
 	// Servers
 	server        *api.Server
 	ollamaServer  *api.OllamaServer
+	openaiServer  *api.OpenAIServer
 	carddavServer *cdav.Server
 
 	// MQTT
