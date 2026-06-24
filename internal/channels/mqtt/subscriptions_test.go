@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -460,6 +461,118 @@ func TestSubscriptionStoreVerifyTargetsFailsLoudOnUnregistered(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "typo_handler") {
 		t.Fatalf("error = %v, want mention of typo_handler", err)
+	}
+}
+
+// TestSubscriptionStoreVerifyTargetsSkipsOrphanedRuntime pins the prod
+// outage fix: a runtime subscription can outlive its target loop (the loop
+// was deleted/disabled after the subscription was persisted). That orphan
+// must be warned-and-skipped, not crash startup the way a config typo does.
+func TestSubscriptionStoreVerifyTargetsSkipsOrphanedRuntime(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	defer db.Close()
+
+	// Bootstrap the schema.
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("schema bootstrap: %v", err)
+	}
+
+	// Insert a runtime subscription targeting a loop nobody runs. Add()
+	// validates targets at add-time, so an orphan can only arise from the
+	// loop being removed later — simulated here by a direct insert.
+	wtJSON, err := json.Marshal(wakeTarget("deleted_loop"))
+	if err != nil {
+		t.Fatalf("marshal target: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at) VALUES (?, ?, '{}', '[]', ?, 'runtime', ?)`,
+		"rt-orphan-1", "presence/zone_change", string(wtJSON), "2026-01-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("insert orphan: %v", err)
+	}
+
+	// Reconstruct so the store hydrates the orphaned row.
+	s, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+
+	resolver := stubResolver{known: map[string]bool{"some_other_loop": true}}
+	if err := s.VerifyTargets(resolver); err != nil {
+		t.Fatalf("orphaned runtime subscription must be skipped, not fatal: %v", err)
+	}
+}
+
+// TestSubscriptionStoreRemoveByWakeLoop covers the cascade that prevents
+// orphans at the source: deleting a loop removes runtime subscriptions that
+// target it, reports (but keeps) config-sourced ones, and leaves
+// subscriptions for other loops untouched.
+func TestSubscriptionStoreRemoveByWakeLoop(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	if _, err := NewSubscriptionStore(db, nil); err != nil {
+		t.Fatalf("schema bootstrap: %v", err)
+	}
+
+	insert := func(id, topic, loop, source string) {
+		t.Helper()
+		wt, err := json.Marshal(wakeTarget(loop))
+		if err != nil {
+			t.Fatalf("marshal target: %v", err)
+		}
+		if _, err := db.Exec(
+			`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, initial_tags_json, wake_target_json, source, created_at) VALUES (?, ?, '{}', '[]', ?, ?, ?)`,
+			id, topic, string(wt), source, "2026-01-01T00:00:00Z",
+		); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	insert("rt-x", "x/topic", "loop_x", "runtime")
+	insert("cfg-x", "xc/topic", "loop_x", "config")
+	insert("rt-y", "y/topic", "loop_y", "runtime")
+
+	s, err := NewSubscriptionStore(db, nil)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+
+	removed, configRefs, err := s.RemoveByWakeLoop("loop_x")
+	if err != nil {
+		t.Fatalf("RemoveByWakeLoop: %v", err)
+	}
+	if len(removed) != 1 || removed[0].ID != "rt-x" {
+		t.Errorf("removed = %+v, want one entry rt-x", removed)
+	}
+	if len(configRefs) != 1 || configRefs[0].ID != "cfg-x" {
+		t.Errorf("configRefs = %+v, want one entry cfg-x", configRefs)
+	}
+
+	ids := map[string]bool{}
+	for _, ws := range s.List() {
+		ids[ws.ID] = true
+	}
+	if ids["rt-x"] {
+		t.Error("rt-x (runtime, loop_x) should have been removed")
+	}
+	if !ids["cfg-x"] {
+		t.Error("cfg-x (config, loop_x) must NOT be removed — config is source of truth")
+	}
+	if !ids["rt-y"] {
+		t.Error("rt-y (different loop) must be untouched")
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM mqtt_wake_subscriptions WHERE id='rt-x'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Error("rt-x row should be deleted from the database")
 	}
 }
 

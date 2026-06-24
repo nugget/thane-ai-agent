@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -388,6 +389,11 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 // closes the gap on config-defined entries, which load before any loop
 // is registered. A nil resolver is a no-op so test wiring without a
 // registry stays simple.
+//
+// Only config-declared targets are fatal. A runtime subscription whose
+// target loop has since been deleted or disabled is an orphaned-data
+// condition: it is warned and skipped, never fatal, so one stale row
+// can't keep the agent from booting.
 func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error {
 	if resolver == nil {
 		return nil
@@ -398,9 +404,23 @@ func (s *SubscriptionStore) VerifyTargets(resolver messages.LoopResolver) error 
 	s.mu.RUnlock()
 
 	for _, ws := range subs {
-		if err := messages.VerifyLoopWakeTarget(ws.WakeTarget, resolver); err != nil {
+		err := messages.VerifyLoopWakeTarget(ws.WakeTarget, resolver)
+		if err == nil {
+			continue
+		}
+		// Config-declared targets are operator-authored, so an unresolved
+		// one is a config error worth failing startup loudly — that's the
+		// gap this pass exists to close.
+		if ws.Source == "config" {
 			return fmt.Errorf("mqtt subscription %q (topic %q, source=%s) wake_loop unresolved: %w", ws.ID, ws.Topic, ws.Source, err)
 		}
+		// A runtime subscription can outlive its target loop: the loop was
+		// deleted or disabled after the subscription was persisted. That is
+		// an orphaned-data condition, not a config error, and must not crash
+		// the whole agent at startup. Warn and skip — it simply won't
+		// dispatch, and self-heals if the loop comes back.
+		s.logger.Warn("mqtt wake subscription targets a loop that is not running; skipping",
+			"id", ws.ID, "topic", ws.Topic, "source", ws.Source, "error", err)
 	}
 	return nil
 }
@@ -491,6 +511,51 @@ func (s *SubscriptionStore) Remove(id string) error {
 	s.subs = append(s.subs[:idx], s.subs[idx+1:]...)
 	s.logger.Info("mqtt wake subscription removed", "id", id)
 	return nil
+}
+
+// RemoveByWakeLoop deletes every runtime subscription whose wake target
+// names the given loop, so deleting a loop doesn't leave orphaned wake
+// rows that would later fail (or, before that resilience landed, crash)
+// startup verification. It returns the removed runtime subscriptions and,
+// separately, any config-sourced subscriptions that also target the loop —
+// those are NOT deleted (config is the source of truth), but the caller can
+// warn that config still references a now-deleted loop.
+//
+// Matching is by wake-target name, the durable key a subscription uses to
+// reach a loop definition; loop_id targets an ephemeral instance and is not
+// matched here.
+func (s *SubscriptionStore) RemoveByWakeLoop(loopName string) (removed, configRefs []WakeSubscription, err error) {
+	loopName = strings.TrimSpace(loopName)
+	if loopName == "" {
+		return nil, nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	kept := make([]WakeSubscription, 0, len(s.subs))
+	for _, ws := range s.subs {
+		if strings.TrimSpace(ws.WakeTarget.Name) != loopName {
+			kept = append(kept, ws)
+			continue
+		}
+		if ws.Source == "config" {
+			// Config owns this row; surface it but leave it in place.
+			configRefs = append(configRefs, ws)
+			kept = append(kept, ws)
+			continue
+		}
+		if _, derr := s.db.Exec(`DELETE FROM mqtt_wake_subscriptions WHERE id = ?`, ws.ID); derr != nil {
+			err = errors.Join(err, fmt.Errorf("delete subscription %q: %w", ws.ID, derr))
+			kept = append(kept, ws)
+			continue
+		}
+		removed = append(removed, ws)
+		s.logger.Info("removed orphaned mqtt wake subscription on loop delete",
+			"id", ws.ID, "topic", ws.Topic, "loop", loopName)
+	}
+	s.subs = kept
+	return removed, configRefs, err
 }
 
 // List returns all wake subscriptions (config + runtime).
