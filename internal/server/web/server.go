@@ -1,7 +1,12 @@
 // Package web serves the embedded Cognition Engine dashboard — a single-page
-// app — as static files at the root of the Thane HTTP server. All JSON and SSE
-// data the dashboard consumes is served by the native API under /v1; this
-// package is static-file serving only.
+// app — as static files at the root of the Thane HTTP server; this package is
+// static-file serving only.
+//
+// The dashboard's JSON/SSE data is meant to come from the native API under /v1,
+// but the static assets shipped here still call the retired /api/* endpoints.
+// With those handlers removed, the embedded dashboard is non-functional until
+// the UI is rebuilt against /v1 (a follow-up). This package serves the assets
+// regardless of their migration state.
 package web
 
 import (

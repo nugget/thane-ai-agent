@@ -552,9 +552,11 @@ func (a *App) initServers(s *newState) error {
 	}
 
 	// --- Web dashboard ---
-	// Wire the web dashboard's static UI and read-only status endpoints.
-	// Running-loop state now lives on the native API's /v1/loops* surface,
-	// so the dashboard no longer takes the loop registry or event bus.
+	// Serve the embedded dashboard's static assets and wire the request-content
+	// source that backs the native API's /v1/requests endpoints. The web package
+	// is static-file serving only now; running-loop state and all other JSON/SSE
+	// live on the native /v1 surface, so the dashboard no longer takes the loop
+	// registry or event bus.
 	{
 		webCfg := web.Config{Logger: logger}
 		// /v1/requests content source: the live request store, with the
