@@ -25,8 +25,8 @@ import (
 
 // initServers creates servers, infrastructure services, and background
 // publisher loops. This covers the API server, checkpointer, OWU tracker,
-// Ollama-compatible server, CardDAV, MQTT publishing, the web dashboard,
-// and durable loop-definition services.
+// Ollama-compatible server, companion app endpoint, CardDAV, MQTT
+// publishing, the web dashboard, and durable loop-definition services.
 func (a *App) initServers(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
