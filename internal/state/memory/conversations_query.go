@@ -17,11 +17,13 @@ import (
 // silently wrong across zones. These strftime expressions collapse every
 // shape to one fixed-width, millisecond-precision, UTC, lexically-sortable
 // form; the matching expression indexes (idx_conversations_{updated,created}_norm
-// in schema.go) make ORDER BY + keyset seeks index-driven. normConvTime
-// renders a Go bound in the byte-identical form so cursor comparisons round-trip.
+// in schema.go) make ORDER BY + keyset seeks index-driven. The column names are
+// UNQUALIFIED (no table alias) so they byte-match the index definitions exactly
+// — the query's single FROM table makes them unambiguous. normConvTime renders
+// a Go bound in the byte-identical form so cursor comparisons round-trip.
 const (
-	convUpdatedNorm = `strftime('%Y-%m-%dT%H:%M:%fZ', c.updated_at)`
-	convCreatedNorm = `strftime('%Y-%m-%dT%H:%M:%fZ', c.created_at)`
+	convUpdatedNorm = `strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)`
+	convCreatedNorm = `strftime('%Y-%m-%dT%H:%M:%fZ', created_at)`
 	convCountExpr   = `(SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.status = 'active')`
 
 	// convSummarySelect is the inner column list shared by both query forms
@@ -215,6 +217,16 @@ func (s *SQLiteStore) QueryConversations(q ConversationQuery) (*ConversationPage
 	}
 
 	f := s.conversationFilters(q)
+
+	// A row whose timestamp strftime cannot parse yields a NULL sort value: it
+	// has no valid position in a time ordering and would produce an unusable
+	// empty keyset cursor at a page boundary. Exclude such rows from time-sorted
+	// views (they stay reachable via ids/kind/message_count). Applied to the
+	// shared filter so the page and the total agree. message_count sort is
+	// unaffected — its cursor value is the count, not the timestamp.
+	if !sortIsCount {
+		f.inner = append(f.inner, innerSortExpr+" IS NOT NULL")
+	}
 
 	total, err := s.countConversations(f)
 	if err != nil {

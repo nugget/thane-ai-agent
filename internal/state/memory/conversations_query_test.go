@@ -317,22 +317,37 @@ func TestQueryConversationsFiltersAndEmpty(t *testing.T) {
 	})
 }
 
-// TestQueryConversationsUnparseableTimestamp guards against a single row with
-// a timestamp strftime cannot parse (→ NULL) crashing the whole page: it must
-// degrade to a zero timestamp and still be returned, like GetAllConversations.
+// TestQueryConversationsUnparseableTimestamp covers a row whose timestamp
+// strftime cannot parse (→ NULL). It must never crash the page; it is excluded
+// from TIME-sorted views (no valid position in a time ordering, and it would
+// otherwise yield an empty keyset cursor), but still surfaces under a
+// non-time sort with a tolerated zero timestamp.
 func TestQueryConversationsUnparseableTimestamp(t *testing.T) {
 	s := newConvQueryStore(t, 100)
 	seedConv(t, s, "ok", "2026-06-24T10:00:00Z", "2026-06-24T10:00:00Z", "")
 	seedConv(t, s, "garbage", "not-a-timestamp", "not-a-timestamp", "")
 
-	page, err := s.QueryConversations(ConversationQuery{Limit: 10})
+	// Time sort (the default): garbage row excluded, no error, total agrees.
+	timeSorted, err := s.QueryConversations(ConversationQuery{Sort: "updated_at", Limit: 10})
 	if err != nil {
-		t.Fatalf("query errored on unparseable timestamp (should tolerate): %v", err)
+		t.Fatalf("time-sorted query errored on unparseable timestamp: %v", err)
 	}
-	if len(page.Conversations) != 2 {
-		t.Fatalf("len = %d, want 2 (garbage row tolerated)", len(page.Conversations))
+	if got := convIDs(timeSorted); !equalSlice(got, []string{"ok"}) {
+		t.Fatalf("updated_at sort = %v, want [ok] (garbage excluded)", got)
 	}
-	for _, c := range page.Conversations {
+	if timeSorted.Total != 1 {
+		t.Fatalf("time-sorted total = %d, want 1", timeSorted.Total)
+	}
+
+	// Non-time sort: garbage surfaces, with a tolerated zero timestamp.
+	countSorted, err := s.QueryConversations(ConversationQuery{Sort: "message_count", Limit: 10})
+	if err != nil {
+		t.Fatalf("count-sorted query: %v", err)
+	}
+	if len(countSorted.Conversations) != 2 {
+		t.Fatalf("message_count sort len = %d, want 2 (garbage included)", len(countSorted.Conversations))
+	}
+	for _, c := range countSorted.Conversations {
 		if c.ID == "garbage" && !c.UpdatedAt.IsZero() {
 			t.Fatalf("garbage row UpdatedAt = %v, want zero", c.UpdatedAt)
 		}
