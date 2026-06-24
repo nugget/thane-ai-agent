@@ -4495,7 +4495,7 @@ function tick() {
     if (group) updateSleepRing(group, loopId);
   }
 
-  requestAnimationFrame(tick);
+  if (graphRunning) requestAnimationFrame(tick);
 }
 
 // ---------------------------------------------------------------------------
@@ -5086,7 +5086,20 @@ function handleHashRoute() {
 //   events      — loop-event subscriber (default: ./data/events.js SSE).
 //   hashRouting — wire window.hashchange for #request/<id> deep links
 //                 (default true; pass false when a host owns the URL).
+let graphBooted = false;
+let graphHandle = null;
+let graphRunning = false;
+
 export function createGraph(opts = {}) {
+  // Idempotent: a second call (easy in an embed/harness/test) would otherwise
+  // start duplicate SSE subscriptions, intervals, and animation loops.
+  if (graphBooted) {
+    console.warn('createGraph() called more than once; returning the existing instance.');
+    return graphHandle;
+  }
+  graphBooted = true;
+  graphRunning = true;
+
   if (opts.client) api = opts.client;
   if (opts.events) subscribeLoopEvents = opts.events;
   const hashRouting = opts.hashRouting !== false;
@@ -5099,8 +5112,25 @@ export function createGraph(opts = {}) {
     handleHashRoute();
   }
   // Refresh uptime display every second.
-  setInterval(updateUptime, 1000);
+  const uptimeTimer = setInterval(updateUptime, 1000);
   // Refresh system status every 10s.
-  setInterval(fetchSystemStatus, 10000);
+  const systemTimer = setInterval(fetchSystemStatus, 10000);
   requestAnimationFrame(tick);
+
+  // destroy() stops the graph's ongoing work — the store's SSE, the intervals,
+  // the animation loop, and the hashchange listener — so a host can unmount the
+  // graph cleanly (e.g. a SwiftUI/WebKit embed). After destroy, createGraph()
+  // can boot a fresh instance.
+  graphHandle = {
+    destroy() {
+      graphRunning = false; // the rAF loop stops rescheduling on the next frame
+      clearInterval(uptimeTimer);
+      clearInterval(systemTimer);
+      if (hashRouting) window.removeEventListener('hashchange', handleHashRoute);
+      if (store) store.stop();
+      graphBooted = false;
+      graphHandle = null;
+    },
+  };
+  return graphHandle;
 }

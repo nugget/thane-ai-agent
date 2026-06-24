@@ -13,6 +13,25 @@ const ACCENT_KEY = 'thane.theme.accent';
 const DEFAULT_ACCENT = '#2dd4bf';
 const PRESETS = ['#2dd4bf', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b', '#22c55e', '#06b6d4'];
 
+// localStorage can throw (private mode, storage disabled, quota). Treat it as
+// best-effort: reads fall back to defaults, writes are swallowed — theming
+// still applies in-memory either way, so the console boots and the picker works
+// even when persistence is blocked.
+function readStored(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeStored(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* persistence unavailable; in-memory state already applied */
+  }
+}
+
 function applyAccent(hex) {
   document.documentElement.style.setProperty('--accent', hex);
 }
@@ -28,11 +47,11 @@ function applyMode(mode) {
 }
 
 function loadMode() {
-  const m = localStorage.getItem(MODE_KEY);
+  const m = readStored(MODE_KEY);
   return m === 'light' || m === 'dark' ? m : 'auto';
 }
 function loadAccent() {
-  return localStorage.getItem(ACCENT_KEY) || DEFAULT_ACCENT;
+  return readStored(ACCENT_KEY) || DEFAULT_ACCENT;
 }
 
 function initTheme() {
@@ -62,7 +81,7 @@ function initTheme() {
   pop.querySelectorAll('[data-mode]').forEach((el) => {
     el.addEventListener('click', () => {
       mode = el.dataset.mode;
-      localStorage.setItem(MODE_KEY, mode);
+      writeStored(MODE_KEY, mode);
       applyMode(mode);
       sync();
     });
@@ -72,7 +91,7 @@ function initTheme() {
 
   function setAccent(color) {
     accent = color;
-    localStorage.setItem(ACCENT_KEY, color);
+    writeStored(ACCENT_KEY, color);
     applyAccent(color);
     sync();
   }

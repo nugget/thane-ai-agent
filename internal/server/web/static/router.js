@@ -28,9 +28,20 @@ export function link(name, param) {
   return '#/' + name + (param != null && param !== '' ? '/' + encodeURIComponent(param) : '');
 }
 
+// safeDecode tolerates malformed percent-encoding in the hash (e.g. a pasted
+// `#/models/%`): decodeURIComponent throws on those, which would otherwise take
+// routing down entirely. Fall back to the raw segment instead.
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 function parseHash() {
   const seg = location.hash.replace(/^#\/?/, '').split('/');
-  return { head: seg[0] || '', rest: seg.slice(1).map((s) => decodeURIComponent(s)) };
+  return { head: seg[0] || '', rest: seg.slice(1).map(safeDecode) };
 }
 
 function setGraphVisible(visible) {
