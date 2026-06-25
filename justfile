@@ -116,7 +116,9 @@ lint-openapi:
                 --timeout 120 --lookup-timeout 10000 "$spec"; then
                 return 0
             fi
-            echo "lint-openapi: ${spec} failed (attempt ${attempt}/3); retrying" >&2
+            if [ "$attempt" -lt 3 ]; then
+                echo "lint-openapi: ${spec} failed (attempt ${attempt}/3); retrying" >&2
+            fi
         done
         echo "lint-openapi: ${spec} still failing after 3 attempts" >&2
         return 1
