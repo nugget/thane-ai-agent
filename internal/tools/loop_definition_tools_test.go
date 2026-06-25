@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -143,6 +145,72 @@ func schemaObjectProperty(t *testing.T, schema map[string]any, key string) map[s
 		t.Fatalf("schema property %q = %#v, want map[string]any", key, raw)
 	}
 	return child
+}
+
+func TestLoopDefinitionSetStoresOutputRefLiterally(t *testing.T) {
+	// #1068 regression: loop_definition_set must NOT run its spec through
+	// prefix-to-content resolution. An output ref pointing at an existing
+	// document must be stored verbatim, never replaced by that document's
+	// body (which would die at wake with "unknown document root").
+	deps := newTestLoopDefinitionDeps(t)
+	cr, _, kbDir := testContentResolver(t)
+	deps.reg.SetContentResolver(cr)
+
+	// The referenced document exists and is non-empty, so a regression
+	// that drops SkipContentResolve would pull this content into the ref.
+	poison := "---\ntitle: poison\n---\n\nbody that must never become a ref"
+	if err := os.WriteFile(filepath.Join(kbDir, "dash.md"), []byte(poison), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	spec := looppkg.Spec{
+		Name:       "test_curator",
+		Enabled:    true,
+		Task:       "Maintain the dashboard.",
+		Operation:  looppkg.OperationService,
+		Completion: looppkg.CompletionNone,
+		Outputs: []looppkg.OutputSpec{{
+			Name: "dash",
+			Type: looppkg.OutputTypeMaintainedDocument,
+			Mode: looppkg.OutputModeReplace,
+			Ref:  "kb:dash.md",
+		}},
+	}
+	argsJSON, err := json.Marshal(map[string]any{"spec": spec})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	if _, err := deps.reg.Execute(context.Background(), "loop_definition_set", string(argsJSON)); err != nil {
+		t.Fatalf("Execute loop_definition_set: %v", err)
+	}
+
+	stored, ok := deps.persisted["test_curator"]
+	if !ok {
+		t.Fatal("spec was not persisted")
+	}
+	if len(stored.Outputs) != 1 {
+		t.Fatalf("stored outputs = %d, want 1", len(stored.Outputs))
+	}
+	if got := stored.Outputs[0].Ref; got != "kb:dash.md" {
+		t.Errorf("stored output ref = %q, want literal %q (content resolution leaked into the ref)", got, "kb:dash.md")
+	}
+}
+
+func TestLoopDefinitionAuthoringToolsSkipContentResolve(t *testing.T) {
+	// The declarative authoring tools must opt out of prefix-to-content
+	// resolution so nested spec.outputs[].ref values are stored verbatim
+	// (#1068).
+	deps := newTestLoopDefinitionDeps(t)
+	for _, name := range []string{"loop_definition_set", "loop_definition_lint"} {
+		tool := deps.reg.Get(name)
+		if tool == nil {
+			t.Fatalf("%s not registered", name)
+		}
+		if !tool.SkipContentResolve {
+			t.Errorf("%s must set SkipContentResolve (#1068)", name)
+		}
+	}
 }
 
 func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {

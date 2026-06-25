@@ -132,6 +132,13 @@ func (r *Registry) registerLoopDefinitionTools() {
 	r.Register(&Tool{
 		Name:        "loop_definition_lint",
 		Description: "Lint one candidate persistent loop definition without saving it. Returns whether the spec is persistable, the effective runtime defaults that would apply, and non-fatal warnings for common service-loop authoring mistakes such as omitted sleep envelope fields or delegation-first gating.",
+		// The spec is a declarative authoring payload: every string in it
+		// (notably outputs[].ref) is a literal to store verbatim, never a
+		// content reference to expand. Universal prefix-to-content
+		// resolution would otherwise rewrite a real ref like
+		// projects:foo/bar.md into that document's body, and lint would
+		// then green-light the corrupted spec. See #1068.
+		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -148,6 +155,13 @@ func (r *Registry) registerLoopDefinitionTools() {
 	r.Register(&Tool{
 		Name:        "loop_definition_set",
 		Description: "Create or replace one dynamic loop definition in the persistent loops overlay. This cannot modify config-owned definitions. The saved definition view includes warnings for common service-loop authoring mistakes. The spec uses human-facing strings for durations and retrigger mode.",
+		// Declarative spec — store its strings verbatim. Without this,
+		// universal prefix-to-content resolution recurses into
+		// spec.outputs[].ref and silently replaces a real document ref
+		// with the document's body, which then dies at wake time with
+		// `unknown document root`. This was the live prod corruption
+		// vector. See #1068.
+		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

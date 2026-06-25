@@ -81,6 +81,13 @@ func TestConfigureLoopRuntimeTools_RegistersTools(t *testing.T) {
 			t.Fatalf("%s tool not registered", name)
 		}
 	}
+	// spawn_loop accepts a declarative launch.spec whose outputs[].ref must
+	// be stored verbatim. Content resolution would otherwise rewrite a ref
+	// into document content and the ad-hoc loop would die at its first wake
+	// (#1068).
+	if spawn := deps.reg.Get("spawn_loop"); spawn == nil || !spawn.SkipContentResolve {
+		t.Error("spawn_loop must set SkipContentResolve so launch.spec.outputs[].ref is not content-expanded (#1068)")
+	}
 }
 
 func TestSpawnLoopSchemaExposesSharedLaunchFields(t *testing.T) {

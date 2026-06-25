@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
@@ -121,5 +122,87 @@ func TestLoopDefinitionStoreLoadIntoSkipsInvalidEntries(t *testing.T) {
 	snap := registry.Snapshot()
 	if snap.OverlayDefinitions != 0 {
 		t.Fatalf("OverlayDefinitions = %d, want 0", snap.OverlayDefinitions)
+	}
+}
+
+func TestLoopDefinitionStoreLoadIntoSkipsUnpersistableSpec(t *testing.T) {
+	t.Parallel()
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	op, err := opstate.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("opstate.NewStore: %v", err)
+	}
+	store := newLoopDefinitionStore(op)
+
+	// One healthy overlay definition.
+	if err := store.Save(looppkg.Spec{
+		Name:       "good_loop",
+		Task:       "Maintain the dashboard.",
+		Operation:  looppkg.OperationService,
+		Completion: looppkg.CompletionNone,
+		Outputs: []looppkg.OutputSpec{{
+			Name: "dash",
+			Type: looppkg.OutputTypeMaintainedDocument,
+			Mode: looppkg.OutputModeReplace,
+			Ref:  "core:good.md",
+		}},
+	}, time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Save good_loop: %v", err)
+	}
+
+	// One already-persisted record corrupted exactly as #1068 left prod:
+	// the output ref holds the document body instead of a ref. It is valid
+	// JSON (so it decodes), but ValidatePersistable rejects it. Written
+	// straight through op.Set to bypass Save's validation, mirroring a row
+	// persisted before the grammar check existed.
+	corrupt, err := json.Marshal(looppkg.DefinitionRecord{
+		Spec: looppkg.Spec{
+			Name:       "bad_loop",
+			Task:       "Maintain.",
+			Operation:  looppkg.OperationService,
+			Completion: looppkg.CompletionNone,
+			Outputs: []looppkg.OutputSpec{{
+				Name: "doc",
+				Type: looppkg.OutputTypeMaintainedDocument,
+				Mode: looppkg.OutputModeReplace,
+				Ref:  "---\ntitle: \"corrupt\"\n---\n\nbody",
+			}},
+		},
+		UpdatedAt: time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Marshal corrupt record: %v", err)
+	}
+	if err := op.Set(loopDefinitionRegistryNamespace, "bad_loop", string(corrupt)); err != nil {
+		t.Fatalf("op.Set: %v", err)
+	}
+
+	// LoadInto must NOT fail the whole batch on the one bad record:
+	// ReplaceOverlay is all-or-nothing and this error is fatal at startup
+	// (new_stores.go), so without the per-record skip a single corrupt
+	// definition would block every healthy overlay loop from loading.
+	registry := testLoopDefinitionRegistry(t)
+	if err := store.LoadInto(registry, slog.Default()); err != nil {
+		t.Fatalf("LoadInto returned error (one bad record bricked the batch): %v", err)
+	}
+
+	snap := registry.Snapshot()
+	if snap.OverlayDefinitions != 1 {
+		t.Fatalf("OverlayDefinitions = %d, want 1 (healthy loads, corrupt skipped)", snap.OverlayDefinitions)
+	}
+	var overlayNames []string
+	for _, def := range snap.Definitions {
+		if def.Source == looppkg.DefinitionSourceOverlay {
+			overlayNames = append(overlayNames, def.Name)
+		}
+	}
+	if len(overlayNames) != 1 || overlayNames[0] != "good_loop" {
+		t.Fatalf("overlay definitions = %v, want [good_loop]", overlayNames)
 	}
 }

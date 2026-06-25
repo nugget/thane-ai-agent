@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 const maxOutputToolNameLength = 64
@@ -115,6 +116,9 @@ func (o OutputSpec) Validate() error {
 	if strings.TrimSpace(o.Ref) == "" {
 		return fmt.Errorf("ref is required")
 	}
+	if err := validateOutputRefGrammar(o.Ref); err != nil {
+		return err
+	}
 	switch o.Type {
 	case OutputTypeMaintainedDocument, OutputTypeJournalDocument:
 	default:
@@ -199,6 +203,45 @@ func safeOutputToolSuffix(name string) string {
 	}
 	out := strings.Trim(b.String(), "_")
 	return out
+}
+
+// validateOutputRefGrammar rejects an output ref that is not a literal
+// root:path document reference. The signature failure it guards against
+// is #1068: universal prefix-to-content resolution silently replacing a
+// real ref (e.g. projects:foo/bar.md) with that document's body, leaving
+// a multi-line markdown blob in Ref. That value passes the non-empty
+// check above but is not a reference — it only fails much later at wake
+// time with "unknown document root". A real ref is a single-line
+// root:path token, so any control character (newlines, NUL, and the rest
+// of the C0/C1 range) is an unambiguous tell that content leaked into the
+// ref. This check stays syntactic (root membership is enforced at
+// hydration, where the document store's configured roots are available)
+// so the loop package keeps no dependency on the documents store.
+func validateOutputRefGrammar(ref string) error {
+	trimmed := strings.TrimSpace(ref)
+	if i := strings.IndexFunc(trimmed, unicode.IsControl); i >= 0 {
+		return fmt.Errorf("ref must be a single root:path reference, not document content (got a control character at offset %d in a value beginning %q); a ref holding document text is the #1068 content-resolution corruption signature", i, outputRefFirstLine(trimmed))
+	}
+	root, relPath, ok := strings.Cut(trimmed, ":")
+	root = strings.TrimSpace(root)
+	relPath = strings.TrimSpace(relPath)
+	if !ok || root == "" || relPath == "" {
+		return fmt.Errorf("ref %q must be a document reference of the form root:path (for example core:notes.md)", outputRefFirstLine(trimmed))
+	}
+	if strings.ContainsAny(root, " \t") {
+		return fmt.Errorf("ref root %q must be a single identifier; expected root:path like core:notes.md", root)
+	}
+	return nil
+}
+
+// outputRefFirstLine returns the first line of s, trimmed, so error
+// messages about a content-corrupted ref stay to one line instead of
+// dumping an entire markdown document.
+func outputRefFirstLine(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 func firstUnsupportedOutputNameRune(name string) (rune, bool) {
