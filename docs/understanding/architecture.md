@@ -81,7 +81,7 @@ window.
 
 Talent files bridge the knowledge gap. The orchestrator doesn't see
 delegate tool schemas directly (they're gated by tags), but
-`delegation.md` teaches it what tools exist, what patterns work,
+the `talents/delegation.md` talent teaches it what tools exist, what patterns work,
 and what anti-patterns to avoid. The frontier model writes precise
 delegation prompts without ever seeing the tool definitions.
 See [Delegation](delegation.md).

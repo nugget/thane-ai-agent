@@ -81,7 +81,7 @@ workflow and credential requirements.
 ### Extend It
 
 - [Delegation & MCP](docs/understanding/delegation.md) — Orchestrator/delegate pattern and MCP tool servers
-- [Tools Reference](docs/reference/tools.md) — All 150+ native tools
+- [Tools Reference](docs/reference/tools.md) — Reference for all native tools
 - [Full Documentation](docs/) — Guided tour of all docs
 
 ## Name
