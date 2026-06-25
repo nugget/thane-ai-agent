@@ -615,8 +615,8 @@ func TestTagContextAssembler_BuildSectionsBuckets(t *testing.T) {
 		if sections[i].Bucket != want.bucket {
 			t.Fatalf("section %d bucket = %q, want %q", i, sections[i].Bucket, want.bucket)
 		}
-		if sections[i].Title != want.title {
-			t.Fatalf("section %d title = %q, want %q", i, sections[i].Title, want.title)
+		if sections[i].Bucket.Title() != want.title {
+			t.Fatalf("section %d title = %q, want %q", i, sections[i].Bucket.Title(), want.title)
 		}
 		if !strings.Contains(sections[i].Content, want.content) {
 			t.Fatalf("section %d content = %q, want marker %q", i, sections[i].Content, want.content)

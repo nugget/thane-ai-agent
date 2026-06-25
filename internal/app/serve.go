@@ -11,7 +11,10 @@ import (
 
 // Serve starts the API server(s), registers signal handlers for graceful
 // shutdown, and blocks until the server stops. It returns nil on clean
-// shutdown and a non-nil error only when the server fails unexpectedly.
+// shutdown. A non-nil error means one of two things: the server failed
+// unexpectedly, or the memory guard tripped its hard limit and triggered
+// an intentional restart so the supervising wrapper relaunches the
+// process. The latter is a deliberate self-restart, not a failure.
 //
 // Cleanup of all resources opened during [New] is handled by
 // [App.shutdown], which Serve defers at entry.

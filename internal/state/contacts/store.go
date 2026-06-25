@@ -392,13 +392,14 @@ func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
-// ListAll returns all active contacts.
+// ListAll returns up to 100 active contacts (use [Store.ListAllLimit]
+// for a different cap).
 func (s *Store) ListAll() ([]*Contact, error) {
 	return s.ListAllLimit(100)
 }
 
-// ListAllLimit returns up to limit active contacts. Values less than
-// one use the same 100-contact cap as [Store.ListAll].
+// ListAllLimit returns up to limit active contacts. A limit less than
+// one is clamped to a default of 100.
 func (s *Store) ListAllLimit(limit int) ([]*Contact, error) {
 	if limit <= 0 {
 		limit = 100
@@ -872,10 +873,10 @@ func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 }
 
 // FindByTrustZoneLimit returns up to limit active contacts in the given
-// trust zone. Values less than one return all active contacts in that zone.
+// trust zone. A limit less than one is clamped to a default of 100.
 func (s *Store) FindByTrustZoneLimit(zone string, limit int) ([]*Contact, error) {
 	if limit <= 0 {
-		return s.FindByTrustZone(zone)
+		limit = 100
 	}
 	rows, err := s.db.Query(
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY formatted_name LIMIT ?`,

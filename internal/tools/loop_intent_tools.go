@@ -123,15 +123,15 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 		return "", fmt.Errorf("thane_create_container not configured: ConfigureLoopIntentTools must be called at startup")
 	}
 
-	name := strings.TrimSpace(toolargs.TrimmedString(args, "name"))
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	intent := strings.TrimSpace(toolargs.TrimmedString(args, "intent"))
+	intent := toolargs.TrimmedString(args, "intent")
 	if intent == "" {
 		return "", fmt.Errorf("intent is required")
 	}
-	parentName := strings.TrimSpace(toolargs.TrimmedString(args, "parent_name"))
+	parentName := toolargs.TrimmedString(args, "parent_name")
 	replace, _ := args["replace"].(bool)
 
 	var tags []string

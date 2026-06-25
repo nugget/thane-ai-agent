@@ -315,7 +315,7 @@ func filterEntityInfosByArea(area string, entities []homeassistant.EntityInfo, b
 	if bundle == nil {
 		return entities
 	}
-	needle := strings.ToLower(strings.TrimSpace(area))
+	needle := strings.TrimSpace(area)
 	if needle == "" {
 		return entities
 	}
@@ -325,12 +325,12 @@ func filterEntityInfosByArea(area string, entities []homeassistant.EntityInfo, b
 		if meta == nil || meta.Area == nil {
 			continue
 		}
-		if strings.EqualFold(meta.Area.ID, needle) || strings.EqualFold(meta.Area.Name, area) {
+		if strings.EqualFold(meta.Area.ID, needle) || strings.EqualFold(meta.Area.Name, needle) {
 			out = append(out, entity)
 			continue
 		}
 		for _, alias := range meta.Area.Aliases {
-			if strings.EqualFold(alias, area) {
+			if strings.EqualFold(alias, needle) {
 				out = append(out, entity)
 				break
 			}

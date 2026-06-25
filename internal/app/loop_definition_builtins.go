@@ -22,11 +22,6 @@ const (
 	telemetryDefinitionName       = "telemetry"
 )
 
-// mqttDefaultHandlerName is the in-app alias for the mqtt package's
-// built-in default-handler loop name. Aliased here so the builtin
-// spec literal reads cleanly alongside the other naming constants.
-var mqttDefaultHandlerName = mqtt.DefaultHandlerLoopName
-
 func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	if cfg == nil {
 		return nil
@@ -197,7 +192,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		// model decides what to do based on the topic + payload — no
 		// hardcoded routing, no inline-Profile spawn.
 		specs = append(specs, looppkg.Spec{
-			Name:       mqttDefaultHandlerName,
+			Name:       mqtt.DefaultHandlerLoopName,
 			Enabled:    true,
 			Task:       "Triage MQTT wake events: inspect topic and payload, then act or escalate.",
 			Operation:  looppkg.OperationEventDriven,

@@ -79,7 +79,8 @@ func (t LoopWakeTarget) Destination() (Destination, error) {
 
 // ParseLoopWakeTarget decodes the wake_loop tool argument shape used by
 // source-specific subscription tools. A string is treated as a loop name; an
-// object accepts loop_id, name, force_supervisor, priority, and instructions.
+// object accepts loop_id, name, force_supervisor, priority, instructions, and
+// tags.
 func ParseLoopWakeTarget(raw any) (LoopWakeTarget, bool, error) {
 	switch v := raw.(type) {
 	case nil:

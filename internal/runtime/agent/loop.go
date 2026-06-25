@@ -1162,7 +1162,8 @@ func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMes
 			IncludeAlways: !taskPrompt && !tools.SuppressAlwaysContextFromContext(ctx),
 		}
 		for _, contextSection := range assembler.BuildSections(haCtx, req) {
-			appendTrackedMarkdown(strings.ToUpper(contextSection.Title), 2, contextSection.Title, contextSection.Content)
+			title := contextSection.Bucket.Title()
+			appendTrackedMarkdown(strings.ToUpper(title), 2, title, contextSection.Content)
 		}
 	}
 

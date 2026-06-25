@@ -72,7 +72,6 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 						Summary:  summary,
 						Priority: it.Priority,
 						Age:      promptfmt.FormatDeltaOnly(it.EnqueuedAt, now),
-						Attempts: it.Attempts,
 					})
 				}
 				return toQueueJSON(queuePullResult{Count: len(views), Items: views})
@@ -165,7 +164,6 @@ type queueItemView struct {
 	Summary  string `json:"summary,omitempty"`
 	Priority int    `json:"priority"`
 	Age      string `json:"age,omitempty"`
-	Attempts int    `json:"attempts"`
 }
 
 type queuePullResult struct {

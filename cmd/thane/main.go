@@ -45,8 +45,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
-
-	_ "modernc.org/sqlite" // SQLite driver for database/sql
 )
 
 // main is intentionally minimal. It constructs the OS-level environment

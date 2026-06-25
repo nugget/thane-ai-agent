@@ -101,9 +101,9 @@ const maxMessageMetadataKeyBytes = 64
 // stable schema across calls. ContentTruncated signals when Content was
 // clipped to [maxMessageContentBytes]. Metadata carries transport
 // provenance separated from the literal message body when a known channel
-// envelope is detected. Metadata keys and string values are individually
-// capped so one malformed envelope cannot force byte-capped tools to
-// drop all messages.
+// envelope is detected. Metadata string values are individually capped
+// so one malformed envelope cannot force byte-capped tools to drop all
+// messages; keys in this projection are fixed literals, not capped.
 //
 // Metadata is map[string]any so nested objects can appear under
 // metadata.sender for Signal-like envelopes that resolve a structured
@@ -220,9 +220,6 @@ func FormatSearchResults(results []SearchResult, now time.Time, truncated bool) 
 	return data
 }
 
-// buildSearchResultViews is the projection step shared by the
-// single-surface and multi-surface formatters. Keeps the sender-
-// projection / context-trimming logic in one place.
 // roundScoreSignificant rounds a relevance score to sigFigs significant
 // figures so the signal survives regardless of magnitude. BM25 values
 // can be tiny on small or sparse indexes (a one-row exact phrase scores
@@ -238,6 +235,9 @@ func roundScoreSignificant(v float64, sigFigs int) float64 {
 	return math.Round(v*mag) / mag
 }
 
+// buildSearchResultViews is the projection step shared by the
+// single-surface and multi-surface formatters. Keeps the sender-
+// projection / context-trimming logic in one place.
 func buildSearchResultViews(results []SearchResult, now time.Time) []SearchResultView {
 	views := make([]SearchResultView, 0, len(results))
 	for _, r := range results {

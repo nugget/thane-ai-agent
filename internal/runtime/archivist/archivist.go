@@ -188,8 +188,9 @@ func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 }
 
 // BuildSpec returns a [loop.Spec] that implements the archivist loop as
-// a service loop. The returned spec declares the durable output document
-// and uses runtime hooks to build prompts.
+// a service loop. The per-iteration prompt is the spec Task
+// ([prompts.ArchivistBaseTemplate]) and the supervisor-turn prefix is the
+// declarative SupervisorProfile.Instructions.
 func BuildSpec(cfg Config) loop.Spec {
 	return HydrateSpec(DefinitionSpec(cfg), cfg)
 }
