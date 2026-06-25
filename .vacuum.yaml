@@ -14,7 +14,11 @@
 # content rules (missing descriptions/examples) ride at vacuum's default `warn`
 # so each stacked PR stays green while the backfill lands. The capstone PR flips
 # the content rules to `error`, making the gate real at the atomic merge.
-extends: [[spectral:oas, recommended]]
+#
+# `extends` uses the nested-list form `[[ruleset, level]]` (level is one of
+# all | recommended | off) — this enables vacuum's built-in OpenAPI ruleset at
+# its `recommended` subset. `vacuum:oas` is vacuum's native ruleset identifier.
+extends: [[vacuum:oas, recommended]]
 
 rules:
   # snake_case is the deliberate, API-wide wire convention — it matches the
