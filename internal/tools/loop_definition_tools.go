@@ -145,10 +145,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"spec": map[string]any{
-					"type":        "object",
-					"description": "Candidate loop definition spec to validate and inspect before saving.",
-				},
+				"spec": loopSpecSchema("Candidate loop definition spec to validate and inspect before saving."),
 			},
 			"required": []string{"spec"},
 		},
@@ -168,10 +165,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"spec": map[string]any{
-					"type":        "object",
-					"description": "Loop definition spec to persist into the overlay.",
-				},
+				"spec": loopSpecSchema("Loop definition spec to persist into the overlay."),
 			},
 			"required": []string{"spec"},
 		},

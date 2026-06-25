@@ -116,10 +116,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 	})
 
 	spawnLoopLaunchProperties := loopLaunchOverrideProperties()
-	spawnLoopLaunchProperties["spec"] = map[string]any{
-		"type":        "object",
-		"description": "Ad-hoc loop spec (name, task, operation, completion, sleep settings, etc.). Required.",
-	}
+	spawnLoopLaunchProperties["spec"] = loopSpecSchema("Ad-hoc loop spec (name, task, operation, completion, sleep settings, etc.). Required.")
 
 	r.Register(&Tool{
 		Name:        "spawn_loop",
