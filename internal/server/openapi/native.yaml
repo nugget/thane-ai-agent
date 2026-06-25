@@ -46,10 +46,14 @@ info:
     identifier: Apache-2.0
 
 servers:
-  - url: http://localhost:8080
-    description: Local development (native API + web UI)
-  # In production the native API is fronted by a reverse proxy on its own host,
-  # separate from the compatibility API; each deployment sets its public URL.
+  # Relative to the origin that serves /docs, so "Try it" targets the same host
+  # the explorer was loaded from: http://localhost:8080 in local dev and the
+  # public reverse-proxy host (e.g. https://pocket.hollowoak.net) in production —
+  # with no per-deployment edit. OpenAPI 3.1 permits a document-relative server
+  # URL, and Scalar resolves "/" against the page origin. The compatibility API
+  # lives on its own host/port, so compat.yaml keeps absolute servers.
+  - url: /
+    description: This Thane instance (same origin as the docs)
 
 security:
   - bearerAuth: []
@@ -69,10 +73,10 @@ tags:
     description: Conversation state snapshots for restart survival.
   - name: Scheduler
     description: Durable scheduled tasks and their execution history.
-  - name: Models & Fleet
-    description: Available models and the routing/registry policy.
-  - name: Insights
-    description: Read-only aggregate telemetry — routing, tools, usage, capabilities.
+  - name: Model Routing
+    description: Available models, plus the registry and routing/resource policies that decide which model runs where.
+  - name: Telemetry
+    description: Read-only aggregate measurements — routing, tool calls, usage, and capabilities.
   - name: Contacts
     description: Address book (also synced via CardDAV on a separate surface).
   - name: System
@@ -85,16 +89,20 @@ externalDocs:
   url: https://github.com/nugget/thane-ai-agent/tree/main/docs
 
 # Sidebar grouping for the Scalar explorer. Every tag above belongs to exactly
-# one group; the groups order the /docs navigation by domain.
+# one group; the groups order the /docs navigation by domain. New native
+# subsystems (e.g. a future Documents suite) add a tag under "Integrations &
+# Data"; "Runtime" stays the host/process surface and doesn't grow with them.
 x-tagGroups:
   - name: Execution
     tags: [Loops, Loop Definitions, Requests, Scheduler]
   - name: Memory & History
     tags: [Conversations & Sessions, Archive, Checkpoints]
-  - name: Models & Insights
-    tags: [Models & Fleet, Insights]
-  - name: Platform
-    tags: [Contacts, System, Realtime]
+  - name: Routing & Telemetry
+    tags: [Model Routing, Telemetry]
+  - name: Integrations & Data
+    tags: [Contacts]
+  - name: Runtime
+    tags: [System, Realtime]
 
 paths:
   # ----------------------------------------------------------------- System
@@ -780,10 +788,10 @@ paths:
               schema: { $ref: "#/components/schemas/CheckpointRestoreAck" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  # -------------------------------------------------------- Models & Fleet
+  # --------------------------------------------------------- Model Routing
   /v1/models:
     get:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: listModels
       summary: Available models (native fleet view)
       description: |
@@ -804,7 +812,7 @@ paths:
                   - { name: gpt-oss:120b, context_window: 131072, capabilities: [messaging], healthy: true, resource: spark }
   /v1/models/registry:
     get:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: getModelRegistry
       summary: Model-registry snapshot
       x-thane-scope: models:read
@@ -825,7 +833,7 @@ paths:
                     - { name: spark, host: "spark.hollowoak.net", available: true }
   /v1/models/registry/policy:
     put:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: setModelPolicy
       summary: Set a model routing policy
       x-thane-scope: models:admin
@@ -843,14 +851,14 @@ paths:
                 tags: [messaging, retrospection]
       responses: { "200": { description: Applied. } }
     delete:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: clearModelPolicy
       summary: Clear a model routing policy
       x-thane-scope: models:admin
       responses: { "204": { description: Cleared. } }
   /v1/models/registry/resource-policy:
     put:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: setResourcePolicy
       summary: Set a resource (host) policy
       x-thane-scope: models:admin
@@ -868,16 +876,16 @@ paths:
                 max_concurrent: 4
       responses: { "200": { description: Applied. } }
     delete:
-      tags: [Models & Fleet]
+      tags: [Model Routing]
       operationId: clearResourcePolicy
       summary: Clear a resource policy
       x-thane-scope: models:admin
       responses: { "204": { description: Cleared. } }
 
-  # ------------------------------------------------------------- Insights
+  # ------------------------------------------------------------ Telemetry
   /v1/insights/router:
     get:
-      tags: [Insights]
+      tags: [Telemetry]
       operationId: getRouterInsights
       summary: Router stats and recent audit
       description: Consolidates `/v1/router/stats` and `/v1/router/audit`.
@@ -897,7 +905,7 @@ paths:
                     - { request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", selected_model: thane:latest, ts: "2026-06-24T14:31:07Z" }
   /v1/insights/tools:
     get:
-      tags: [Insights]
+      tags: [Telemetry]
       operationId: getToolInsights
       summary: Tool-call stats and recent calls
       description: Consolidates `/v1/tools/stats` and `/v1/tools/calls`.
@@ -917,7 +925,7 @@ paths:
                     - { tool_name: ha_get_state, request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", ts: "2026-06-24T14:31:09Z" }
   /v1/insights/usage:
     get:
-      tags: [Insights]
+      tags: [Telemetry]
       operationId: getUsageInsights
       summary: Token / cost usage summary
       description: Was `/v1/usage/summary`.
@@ -942,7 +950,7 @@ paths:
                     "gpt-oss:120b": { input_tokens: 302392, output_tokens: 77201 }
   /v1/insights/capabilities:
     get:
-      tags: [Insights]
+      tags: [Telemetry]
       operationId: listCapabilities
       summary: Resolved capability-tag catalog
       description: Was the dashboard-private `/api/capabilities`.
@@ -961,7 +969,7 @@ paths:
                   count: 2
   /v1/insights/capabilities/{tag}:
     get:
-      tags: [Insights]
+      tags: [Telemetry]
       operationId: getCapability
       summary: One capability tag's resolved view
       x-thane-scope: insights:read
