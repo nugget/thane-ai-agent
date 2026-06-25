@@ -9,9 +9,12 @@ import (
 // relationships should be included with an entity representation.
 // Zero value means "state only."
 type EntityMetadataIncludes struct {
-	Area        bool `yaml:"area,omitempty" json:"area,omitempty"`
-	Device      bool `yaml:"device,omitempty" json:"device,omitempty"`
-	Labels      bool `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Area   bool `yaml:"area,omitempty" json:"area,omitempty"`
+	Device bool `yaml:"device,omitempty" json:"device,omitempty"`
+	Labels bool `yaml:"labels,omitempty" json:"labels,omitempty"`
+	// Description gates the whole human-facing identity projection
+	// (friendly/registry names, aliases, icon, device class, entity
+	// category, capabilities), not just the description text.
 	Description bool `yaml:"description,omitempty" json:"description,omitempty"`
 	Visibility  bool `yaml:"visibility,omitempty" json:"visibility,omitempty"`
 }

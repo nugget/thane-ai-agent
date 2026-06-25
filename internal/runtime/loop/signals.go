@@ -415,7 +415,8 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 // cancelled. The notification path used by event-driven loops
 // (operation=event_driven without a [Config.WaitFunc]) — these loops
 // have no periodic timer to wake on, so they wait indefinitely on
-// the notification channel that [Loop.Notify] writes into.
+// the wakeCh that [Loop.enqueueNotify] writes into (reached via the
+// [Registry.NotifyLoop] delivery path).
 //
 // Returns true on wake (a notification arrived; the caller should
 // continue to the iteration phase, where consumePendingNotifies

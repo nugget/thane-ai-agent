@@ -89,7 +89,7 @@ func (r *Registry) handleUpdateEntitySubscriptions(ctx context.Context, args map
 		return "", fmt.Errorf("update_entity_subscriptions not configured: requires loop definition registry")
 	}
 
-	name := strings.TrimSpace(toolargs.TrimmedString(args, "name"))
+	name := toolargs.TrimmedString(args, "name")
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}

@@ -22,9 +22,10 @@ type StateGetter interface {
 }
 
 // WatchlistProvider implements [agent.TagContextProvider] by fetching
-// live state for all watched entities and formatting them as a
-// markdown block for system prompt injection. Registered via
-// [agent.Loop.RegisterAlwaysContextProvider].
+// live state for the always-visible (untagged) watchlist only and
+// formatting it as a markdown block for system prompt injection.
+// Loop-scoped subscriptions are handled by LoopSubscriptionProvider.
+// Registered via [agent.Loop.RegisterAlwaysContextProvider].
 type WatchlistProvider struct {
 	store            *WatchlistStore
 	ha               StateGetter

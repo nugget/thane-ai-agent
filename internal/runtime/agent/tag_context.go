@@ -487,7 +487,6 @@ func (a *contextAccumulator) sections() []agentctx.ContextSection {
 		}
 		sections = append(sections, agentctx.ContextSection{
 			Bucket:  bucket,
-			Title:   bucket.Title(),
 			Content: buf.String(),
 		})
 	}

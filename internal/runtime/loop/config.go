@@ -618,7 +618,9 @@ type Status struct {
 	// when the loop is queried in isolation (tests that build a
 	// Status manually) AND when the loop is registered but has no
 	// effective tags to report — readers can't distinguish the two
-	// from this field alone.
+	// from this field alone. This nil-conflation is ambiguous by
+	// design and is an accepted v0.10.0 trade-off; the same applies
+	// to the sibling Effective* fields below.
 	EffectiveTags []EffectiveTag `json:"effective_tags,omitempty"`
 	// EffectiveSubscriptions is the post-ancestor-merge view of this
 	// loop's entity subscriptions, with provenance on each entry.

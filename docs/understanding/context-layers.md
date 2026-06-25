@@ -41,15 +41,13 @@ interaction styles.
 
 **Does NOT contain:** Identity statements, personal history, factual knowledge.
 
-**Shipped talents:**
-- `channel-awareness.md` — adapt output to the communication channel
-- `conversational.md` — natural dialogue patterns
-- `engagement-mirroring.md` — match the user's energy level
-- `judicious-presence.md` — know when to speak vs stay silent
-- `proactive-curiosity.md` — take initiative, explore, suggest
-- `spatial-reasoning.md` — understand physical spaces and locations
-- `time-awareness.md` — reason about time, schedules, urgency
-- `tool-guidance.md` — when and how to use tools
+**Shipped talents:** a growing, tag-organized set under `talents/`.
+Foundation talents load on every turn; domain talents load only when
+their capability tags are active. A few examples:
+- `foundation.md` — baseline behavioral patterns loaded always
+- `communication.md` — how to phrase and shape output
+- `presence.md` — when to speak vs stay silent
+- `awareness.md` — situational and contextual reasoning
 
 Custom talents: add `.md` files to the talents directory. They're loaded
 alphabetically and injected into the system prompt. Talents are tag-filtered
@@ -117,7 +115,7 @@ conversation history.
 
 | Anti-Pattern | Problem | Fix |
 |---|---|---|
-| Tool rules in persona | Suppresses personality (e.g., "only use tools when asked" kills proactive behavior) | Move to `tool-guidance.md` talent |
+| Tool rules in persona | Suppresses personality (e.g., "only use tools when asked" kills proactive behavior) | Move to a behavioral talent |
 | Identity in talents | Confusing — talent says "you are X" but persona says "you are Y" | Keep identity in persona only |
 | Behavioral directives in core context | Core context is knowledge, not instructions | Move directives to talents |
 | Static time in build info | Model treats version metadata as ignorable | Use Current Conditions section |

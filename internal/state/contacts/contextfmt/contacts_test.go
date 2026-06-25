@@ -33,8 +33,8 @@ func TestFormat_JSONIsParseable(t *testing.T) {
 			TrustZone: "trusted",
 			Score:     0.92,
 			Properties: []Property{
-				{Label: "EMAIL", Type: "INTERNET", Value: "alice@techco.com"},
-				{Label: "timezone", Value: "America/Chicago"},
+				{Kind: "EMAIL", Type: "INTERNET", Value: "alice@techco.com"},
+				{Kind: "timezone", Value: "America/Chicago"},
 			},
 		},
 	})

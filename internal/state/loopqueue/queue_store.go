@@ -32,7 +32,6 @@ const StatusPending = "pending"
 type Item struct {
 	DedupKey   string
 	Priority   int
-	Attempts   int
 	EnqueuedAt time.Time
 	Payload    []byte
 }
@@ -103,7 +102,7 @@ func (s *Store) Peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 		limit = 1
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT dedup_key, priority, attempts, payload, enqueued_at
+		SELECT dedup_key, priority, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
 		ORDER BY priority DESC, enqueued_at ASC
@@ -121,7 +120,7 @@ func (s *Store) Peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 			payload     string
 			enqueuedRaw string
 		)
-		if err := rows.Scan(&it.DedupKey, &it.Priority, &it.Attempts, &payload, &enqueuedRaw); err != nil {
+		if err := rows.Scan(&it.DedupKey, &it.Priority, &payload, &enqueuedRaw); err != nil {
 			return nil, err
 		}
 		it.Payload = []byte(payload)

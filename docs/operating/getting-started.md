@@ -92,8 +92,9 @@ just serve
 ~/Thane/bin/thane ask "Hello!"
 ```
 
-The server starts three listeners:
-- `http://localhost:8080` — Native API (OpenAI-compatible) + operational dashboard
+The server starts these listeners:
+- `http://localhost:8080` — Native Thane /v1 API + operational dashboard
+- `http://localhost:8081` — OpenAI-compatible API (optional)
 - `http://localhost:11434` — Ollama-compatible API (for Home Assistant)
 - `http://localhost:8843` — CardDAV server (for contact sync)
 

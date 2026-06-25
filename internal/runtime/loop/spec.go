@@ -29,8 +29,8 @@ const (
 	// used to group related loops and hold inheritable state (tags,
 	// entity subscriptions) that descendants pick up at iteration
 	// time. Container loops occupy registry entries, take a
-	// parent_id, carry metadata and a scope_tag, but never wake and
-	// never run a Task. See [Spec.Validate] for the shape contract.
+	// parent_id, carry metadata, but never wake and never run a Task.
+	// See [Spec.Validate] for the shape contract.
 	//
 	// The container with the well-known name [CoreLoopName] is the
 	// graph's structural root — pid-0 equivalent. Core is not a

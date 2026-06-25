@@ -183,6 +183,15 @@ service loop with bounded voluntary sleep, supervisor randomization,
 and a declared maintained-document output. The interactive agent reads
 `ego.md` every turn; the ego loop is the sole writer.
 
+### Archivist Loop
+
+The third peer service loop introduced in v0.10.0. A self-paced,
+queue-driven loop that synthesizes durable knowledge across the memory
+silos into per-subject dossiers and maintains `core/archivist.md` via a
+declared maintained-document output. Rather than waking on every event,
+it consumes work from a queue at its own pace, keeping synthesis steady
+without saturating the model.
+
 ### Orchestrator
 
 The primary model in a delegation interaction. Plans the approach,

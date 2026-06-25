@@ -8,7 +8,7 @@ came from.
 ## API Requests
 
 The most direct path. A user types in the web dashboard, a client calls the
-OpenAI-compatible API on port 8080, or Home Assistant sends a conversation
+OpenAI-compatible API on port 8081, or Home Assistant sends a conversation
 through the Ollama-compatible API on port 11434.
 
 API requests carry a conversation ID for session continuity and can specify

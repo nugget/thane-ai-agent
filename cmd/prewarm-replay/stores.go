@@ -26,9 +26,11 @@ type stores struct {
 }
 
 // openStores opens the prod databases under dataDir in read-only
-// mode. Returns a stores struct with both raw *sql.DB handles (so
-// the harness can run ad-hoc queries against conversations metadata)
-// and the high-level wrapper stores that the providers expect.
+// mode. Returns a stores struct holding the raw thane *sql.DB handle
+// (which backs the harness's ad-hoc conversations-metadata and search
+// queries) alongside the high-level wrapper stores that the providers
+// expect. The raw knowledge handle is retained only for lifecycle
+// cleanup; knowledge access goes through its wrapper store.
 //
 // modernc.org/sqlite respects URI query parameters when the DSN begins
 // with "file:". `mode=ro` opens read-only,

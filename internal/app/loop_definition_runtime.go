@@ -363,7 +363,7 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 	// with no inheritance. Order them by ancestry depth (roots first,
 	// nested second) before spawning. Services come last because they
 	// can sit under containers but never the other way around.
-	containerSpecs, serviceSpecs := splitContainerSpecs(snap.Definitions, r.nowTime)
+	containerSpecs, serviceSpecs := splitContainerSpecs(snap.Definitions)
 	// Count non-durable definitions (request_reply, background_task)
 	// up front so the accounting still matches the pre-refactor
 	// behavior. Partitioning silently drops them, so we surface them
@@ -428,9 +428,8 @@ func (r *loopDefinitionRuntime) bootstrapDefinitionSpawn(ctx context.Context, de
 // second pass — both are persistent and may sit under containers but
 // never the other way around. Non-durable operations (request_reply,
 // background_task) are dropped — they're transient and shouldn't be
-// hydrated at startup at all. nowTime is unused today but threaded
-// through so future condition-driven ordering doesn't reshape the API.
-func splitContainerSpecs(defs []looppkg.DefinitionSnapshot, _ func() time.Time) (containers, services []looppkg.DefinitionSnapshot) {
+// hydrated at startup at all.
+func splitContainerSpecs(defs []looppkg.DefinitionSnapshot) (containers, services []looppkg.DefinitionSnapshot) {
 	byName := make(map[string]looppkg.DefinitionSnapshot, len(defs))
 	for _, def := range defs {
 		byName[def.Spec.Name] = def

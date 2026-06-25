@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
-	_ "modernc.org/sqlite"
 )
 
 // Store handles task and execution persistence.
