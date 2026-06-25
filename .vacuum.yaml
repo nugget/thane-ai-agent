@@ -42,8 +42,10 @@ rules:
       field: description
       function: truthy
 
-  # Operations and parameters are now ENFORCED at error (#1060): every operation
-  # requestBody and every parameter must carry a description. Response examples
-  # (oas3-missing-example) remain the last content rule still at the default warn.
+  # Operation requestBodies and parameters are now ENFORCED at error (#1060):
+  # each must carry a description. (vacuum's operation-description rule gates the
+  # requestBody description specifically — verified by removing one and watching
+  # the error-gate fail — not only the operation-level description.) Response
+  # examples (oas3-missing-example) remain the last content rule at warn.
   operation-description: error
   oas3-parameter-description: error

@@ -147,7 +147,7 @@ paths:
       x-thane-scope: system:read
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - { name: level, in: query, description: "Minimum log level to include (debug, info, warn, error).", schema: { type: string, enum: [debug, info, warn, error] } }
+        - { name: level, in: query, description: "Minimum log level to include (trace, debug, info, warn, error).", schema: { type: string, enum: [trace, debug, info, warn, error] } }
       responses:
         "200":
           description: Log entries (newest first).
@@ -687,7 +687,7 @@ paths:
       operationId: getCheckpoint
       summary: Fetch a checkpoint
       x-thane-scope: checkpoints:read
-      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: Checkpoint., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -696,7 +696,7 @@ paths:
       operationId: deleteCheckpoint
       summary: Delete a checkpoint
       x-thane-scope: checkpoints:write
-      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
         "204": { description: Deleted. }
   /v1/checkpoints/{id}/restore:
@@ -705,7 +705,7 @@ paths:
       operationId: restoreCheckpoint
       summary: Restore from a checkpoint
       x-thane-scope: checkpoints:write
-      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: Restored. }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -787,7 +787,7 @@ paths:
       description: Was `/v1/usage/summary`.
       x-thane-scope: insights:read
       parameters:
-        - { name: hours, in: query, description: "Lookback window in hours (default 24).", schema: { type: integer, default: 24 } }
+        - { name: hours, in: query, description: "Lookback window in hours (default 24).", schema: { type: integer, minimum: 1, default: 24 } }
         - { name: group_by, in: query, description: "Break the summary down by a dimension (e.g. model); omit for an ungrouped total.", schema: { type: string } }
       responses:
         "200": { description: "Usage summary (grouped when group_by is set).", content: { application/json: { schema: { type: object } } } }
@@ -834,7 +834,7 @@ paths:
       operationId: getContact
       summary: Fetch a contact
       x-thane-scope: contacts:read
-      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string, format: uuid } } ]
       responses:
         "200": { description: Contact., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -843,7 +843,7 @@ paths:
       operationId: updateContact
       summary: Update a contact
       x-thane-scope: contacts:write
-      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string, format: uuid } } ]
       requestBody: { required: true, description: "The updated contact fields.", content: { application/json: { schema: { type: object } } } }
       responses:
         "200": { description: Updated. }
@@ -853,7 +853,7 @@ paths:
       operationId: deleteContact
       summary: Delete a contact
       x-thane-scope: contacts:write
-      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string, format: uuid } } ]
       responses:
         "204": { description: Deleted. }
 
