@@ -36,7 +36,7 @@ const (
 	// Qualified columns for FTS5 JOIN queries where facts and facts_fts
 	// share column names (key, value, source). Without table prefixes,
 	// SQLite raises "ambiguous column name" errors.
-	factColumnsFTS = "id, category, key, value, source, confidence, subjects, created_at, updated_at, accessed_at, ref"
+	factColumnsFTS = "facts.id, facts.category, facts.key, facts.value, facts.source, facts.confidence, facts.subjects, facts.created_at, facts.updated_at, facts.accessed_at, facts.ref"
 	// Filter for active facts (currently: not soft-deleted).
 	activeFilter = "deleted_at IS NULL"
 )
@@ -309,7 +309,7 @@ func (s *Store) searchFTS(query string) ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT `+factColumnsFTS+`
 		FROM facts_fts
-		JOIN facts ON facts_fts.rowid = rowid
+		JOIN facts ON facts_fts.rowid = facts.rowid
 		WHERE facts_fts MATCH ? AND `+activeFilter+`
 		ORDER BY rank
 		LIMIT 50
