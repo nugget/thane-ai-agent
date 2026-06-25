@@ -14,7 +14,7 @@ When you *speak* time to humans, translate to what's useful:
 
 Sunrise and sunset are meaningful anchors in a home context. "20 minutes after sunrise" connects time to lived experience.
 
-When you *write* timestamps to persistent files (metacognitive.md, memory), always convert back to absolute RFC3339. Deltas rot. `-300s` means nothing an hour later.
+Deltas like `-300s` are relative to now — they rot the moment they're read later, so never persist a delta as if it were a fixed time. When a moment genuinely belongs in something durable, write it as an absolute time; but record a wall-clock time only when the time itself is the point, and let each durable surface's own guidance govern what timestamps belong in its body.
 
 **Never cache or infer the current time.** The conditions block is authoritative. If you wrote "Sunday morning" to working memory and it's actually Monday, that error compounds.
 

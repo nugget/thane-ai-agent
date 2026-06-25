@@ -31,11 +31,12 @@ type Match struct {
 	Properties []Property `json:"properties,omitempty"`
 }
 
-// Property is one vCard-style property of a contact (email, phone,
-// timezone, etc.). Type carries the vCard subtype when present
-// (e.g., "INTERNET", "HOME").
+// Property is one vCard-style property of a contact. Kind is the vCard
+// property name (e.g. "EMAIL", "TEL", "URL", "IMPP"); Type carries the
+// vCard subtype when present (e.g. "INTERNET", "HOME"); Value is the
+// property value.
 type Property struct {
-	Label string `json:"label"`
+	Kind  string `json:"kind"`
 	Type  string `json:"type,omitempty"`
 	Value string `json:"value"`
 }

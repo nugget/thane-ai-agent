@@ -205,7 +205,7 @@ func TestSetMaxContacts_ClampsToMin(t *testing.T) {
 func propsByLabel(props []contextfmt.Property) map[string]contextfmt.Property {
 	m := make(map[string]contextfmt.Property, len(props))
 	for _, p := range props {
-		m[p.Label] = p
+		m[p.Kind] = p
 	}
 	return m
 }
