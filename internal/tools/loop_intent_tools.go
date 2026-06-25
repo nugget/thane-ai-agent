@@ -230,9 +230,10 @@ func (r *Registry) registerThaneCurate() {
 			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
 			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
 			"Tags scope the loop's tools; omit to inherit the core tag set. " +
+			"Optional quality_floor sets the loop's minimum model quality rating; exclude_tools adds tool denials on top of the always-denied human-egress set; metadata attaches opaque string labels. " +
 			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted on the loop's own spec and surfaced into the loop's prompt automatically. Container ancestors' subscriptions also cascade in. " +
 			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the count of declared entity subscriptions, and the resolved sleep envelope.",
-		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "output", "entities", "replace"},
+		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "quality_floor", "exclude_tools", "metadata", "output", "entities", "replace"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -318,6 +319,20 @@ func (r *Registry) registerThaneCurate() {
 					"type":        "string",
 					"description": "Optional steering text prepended to every iteration's task (output format guidance, what to focus on, what to skip). Persists on the spec's Profile and shows up in loop_definition_get.",
 				},
+				"quality_floor": map[string]any{
+					"type":        "integer",
+					"description": "Optional minimum model quality rating (1–10) for the loop's iterations. Omit to let the router choose; raise it for loops whose synthesis needs a stronger model.",
+				},
+				"exclude_tools": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional additional tool names to deny this loop. These layer on top of the always-denied direct human-egress tools (signal/email/notify) — they extend the denylist, they do not replace the egress floor.",
+				},
+				"metadata": map[string]any{
+					"type":                 "object",
+					"additionalProperties": map[string]any{"type": "string"},
+					"description":          "Optional opaque string-keyed metadata stored on the loop definition (surfaced by loop_definition_get).",
+				},
 				"replace": map[string]any{
 					"type":        "boolean",
 					"description": "When true, overwrite an existing definition or document of the same name/ref. Default false; the tool refuses to clobber existing artifacts.",
@@ -376,6 +391,52 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	instructions, _ := args["instructions"].(string)
 	replace, _ := args["replace"].(bool)
+	// quality_floor: fail fast when present-but-invalid rather than silently
+	// coercing to 0 (which would drop the floor the caller asked for). Absent
+	// is fine — the router uses its default.
+	qualityFloor := 0
+	if raw, present := args["quality_floor"]; present && raw != nil {
+		n, ok := toolargs.IntOK(args, "quality_floor")
+		if !ok {
+			return "", fmt.Errorf("quality_floor must be an integer, got %v", raw)
+		}
+		qualityFloor = n
+	}
+
+	// Operator-provided tool exclusions layer ON TOP of the always-denied
+	// human-egress baseline (#696): a true union — trimmed, de-duplicated, and
+	// never shrinking the egress floor.
+	excludeTools := DirectHumanEgressToolNames()
+	seenExclude := make(map[string]bool, len(excludeTools))
+	for _, t := range excludeTools {
+		seenExclude[t] = true
+	}
+	for _, t := range toolargs.StringSlice(args, "exclude_tools") {
+		if t = strings.TrimSpace(t); t != "" && !seenExclude[t] {
+			seenExclude[t] = true
+			excludeTools = append(excludeTools, t)
+		}
+	}
+
+	// metadata: fail fast on a non-object, or non-string values, rather than
+	// silently dropping them so partial caller intent can't slip through.
+	var metadata map[string]string
+	if raw, present := args["metadata"]; present && raw != nil {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("metadata must be an object with string values")
+		}
+		if len(m) > 0 {
+			metadata = make(map[string]string, len(m))
+			for k, v := range m {
+				s, ok := v.(string)
+				if !ok {
+					return "", fmt.Errorf("metadata[%q] must be a string, got %T", k, v)
+				}
+				metadata[k] = s
+			}
+		}
+	}
 
 	entities, err := parseEntityList("entities", args["entities"])
 	if err != nil {
@@ -419,13 +480,15 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		// request_core_attention rather than contact a person directly. This
 		// matches the ego/metacognitive/archivist exclusion baseline; without
 		// it a wrong-tagged curate loop could acquire signal_send_message /
-		// email_send / ha_notify. (An operator-facing exclude_tools knob layers
-		// on top of this default in a later change.)
-		ExcludeTools: DirectHumanEgressToolNames(),
+		// email_send / ha_notify. The operator-facing exclude_tools knob
+		// (parsed above) extends this floor — it can only add denials.
+		ExcludeTools: excludeTools,
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
+			QualityFloor:     qualityFloor,
 			Instructions:     strings.TrimSpace(instructions),
 		},
+		Metadata: metadata,
 	}
 	if err := spec.ValidatePersistable(); err != nil {
 		return "", fmt.Errorf("derived spec invalid: %w", err)
