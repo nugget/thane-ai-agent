@@ -105,7 +105,7 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	if m.TrustZone != "known" {
 		t.Errorf("trust_zone = %q, want %q", m.TrustZone, "known")
 	}
-	props := propsByLabel(m.Properties)
+	props := propsByKind(m.Properties)
 	if _, ok := props["EMAIL"]; !ok {
 		t.Errorf("expected EMAIL property, got %+v", m.Properties)
 	}
@@ -202,7 +202,7 @@ func TestSetMaxContacts_ClampsToMin(t *testing.T) {
 	}
 }
 
-func propsByLabel(props []contextfmt.Property) map[string]contextfmt.Property {
+func propsByKind(props []contextfmt.Property) map[string]contextfmt.Property {
 	m := make(map[string]contextfmt.Property, len(props))
 	for _, p := range props {
 		m[p.Kind] = p
