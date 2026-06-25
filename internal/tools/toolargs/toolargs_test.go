@@ -200,6 +200,40 @@ func TestUint32Slice(t *testing.T) {
 	}
 }
 
+func TestUint32AndUint32OK(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		args   map[string]any
+		want   uint32
+		wantOK bool
+	}{
+		{"float64", map[string]any{"uid": float64(395)}, 395, true},
+		{"go int", map[string]any{"uid": 42}, 42, true},
+		{"numeric string trimmed", map[string]any{"uid": " 12 "}, 12, true},
+		{"at ceiling", map[string]any{"uid": float64(maxUint32)}, maxUint32, true},
+		{"zero rejected", map[string]any{"uid": float64(0)}, 0, false},
+		{"negative rejected (no wrap)", map[string]any{"uid": float64(-1)}, 0, false},
+		{"fractional rejected", map[string]any{"uid": 2.5}, 0, false},
+		{"above ceiling rejected", map[string]any{"uid": float64(maxUint32) + 1}, 0, false},
+		{"absent key", map[string]any{}, 0, false},
+		{"nil value", map[string]any{"uid": nil}, 0, false},
+		{"wrong type", map[string]any{"uid": true}, 0, false},
+		{"nil map", nil, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := Uint32OK(tt.args, "uid")
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("Uint32OK = (%d, %v), want (%d, %v)", got, ok, tt.want, tt.wantOK)
+			}
+			if v := Uint32(tt.args, "uid"); v != tt.want {
+				t.Errorf("Uint32 = %d, want %d", v, tt.want)
+			}
+		})
+	}
+}
+
 func TestCoerceUint32RangeCeiling(t *testing.T) {
 	t.Parallel()
 	// Above the uint32 ceiling must be rejected.
