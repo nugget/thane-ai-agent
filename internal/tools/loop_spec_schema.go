@@ -115,7 +115,7 @@ func loopSpecSchema(description string) map[string]any {
 					"properties": map[string]any{
 						"entity_id": map[string]any{"type": "string", "description": "Subscribed entity id (e.g. a Home Assistant entity)."},
 						"history":   map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Optional history windows to include."},
-						"forecast":  map[string]any{"type": "string", "description": "Optional forecast horizon to include."},
+						"forecast":  map[string]any{"type": "string", "enum": []string{"daily", "hourly", "twice_daily", "none"}, "description": "For weather.* entities, the Home Assistant forecast type to include."},
 						"ttl_seconds": map[string]any{
 							"type":        "integer",
 							"description": "Optional time-to-live; the subscription is dropped after this many seconds.",
