@@ -162,7 +162,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	return loop.Spec{
 		Name:       DefinitionName,
 		Enabled:    cfg.Enabled,
-		Task:       "Observe the system, reason about its recent behavior, and update metacognitive state when needed.",
+		Task:       prompts.MetacognitiveBaseTemplate,
 		Operation:  loop.OperationService,
 		Completion: loop.CompletionNone,
 		Outputs: []loop.OutputSpec{
@@ -197,28 +197,29 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	}
 }
 
-// supervisorProfile builds the metacognitive service's per-turn-
-// mode overrides from the supervisor router config. Returns nil
-// when no overrides are declared, signaling the loop runtime to
-// reuse the normal Profile during supervisor turns.
+// supervisorProfile builds the metacognitive service's supervisor-turn
+// overlay: the frontier-review prompt prefix (always) plus a higher
+// quality floor when one is configured. Unset fields fall back to the
+// normal Profile during supervisor turns; the prefix is prepended to the
+// Task.
 func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	if qualityFloor <= 0 {
-		return nil
+	p := &router.LoopProfile{Instructions: prompts.MetacognitiveSupervisorInstructions}
+	if qualityFloor > 0 {
+		p.QualityFloor = qualityFloor
 	}
-	return &router.LoopProfile{
-		QualityFloor: qualityFloor,
-	}
+	return p
 }
 
-// HydrateSpec attaches the runtime-only hooks needed to execute the
-// metacognitive service from a durable loop definition.
+// HydrateSpec attaches the one remaining runtime-only hook the
+// metacognitive service needs from a durable loop definition: the
+// PostIterate iteration-log writer, which appends a provenance-signed
+// telemetry block to the state document each cycle and needs the
+// resolved state-file path from opts. The prompt itself is declarative
+// (the spec Task and SupervisorProfile.Instructions).
 func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 	spec = loop.Spec(spec)
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
-	}
-	spec.TaskBuilder = func(ctx context.Context, isSupervisor bool) (string, error) {
-		return prompts.MetacognitivePrompt("", isSupervisor), nil
 	}
 	spec.PostIterate = func(ctx context.Context, result loop.IterationResult) error {
 		log := logging.Logger(ctx)
@@ -229,14 +230,11 @@ func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
 }
 
 // BuildSpec returns a [loop.Spec] that implements the metacognitive
-// loop as a service loop. The returned spec declares the durable
-// output document and uses runtime hooks to build prompts and
-// append iteration logs.
+// loop as a service loop. The per-iteration prompt is the spec Task
+// ([prompts.MetacognitiveBaseTemplate]) and the supervisor-turn prefix
+// is the declarative SupervisorProfile.Instructions; HydrateSpec adds
+// the PostIterate iteration-log writer.
 func BuildSpec(cfg Config, opts Opts) loop.Spec {
-	// TaskBuilder handles supervisor augmentation itself via
-	// prompts.MetacognitivePrompt, so SupervisorProfile.Instructions
-	// is left unset; the per-turn prompt prefix comes from the
-	// prompts package rather than the spec-level overlay.
 	return HydrateSpec(DefinitionSpec(cfg), cfg, opts)
 }
 

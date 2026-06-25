@@ -1,9 +1,10 @@
 package prompts
 
-// archivistBaseTemplate is the prompt for each archivist loop iteration.
-// Current archivist.md state is injected by the loop-declared output
-// context provider as the "Declared Durable Outputs" block.
-const archivistBaseTemplate = `Archivist loop iteration.
+// ArchivistBaseTemplate is the per-iteration prompt for the archivist
+// loop, set as the loop definition's Task. Current archivist.md state is
+// injected by the loop-declared output context provider as the "Declared
+// Durable Outputs" block.
+const ArchivistBaseTemplate = `Archivist loop iteration.
 
 You are running as a background memory archivist. You tend thane's
 accumulated understanding across the memory silos — archive (past
@@ -150,10 +151,10 @@ generating plausible-sounding text.
 - Quiet is a valid outcome. If the queue is empty and nothing feels worth
   a fresh pass, note that in your state file and sleep long.`
 
-// archivistSupervisorAugmentation is appended for frontier/supervisor turns.
-const archivistSupervisorAugmentation = `
-
-## Supervisor Review (Frontier Iteration)
+// ArchivistSupervisorInstructions is the supervisor-turn prompt prefix,
+// applied declaratively via SupervisorProfile.Instructions on frontier
+// iterations (prepended to ArchivistBaseTemplate).
+const ArchivistSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
 
 This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal pass, critically evaluate:
@@ -175,16 +176,3 @@ frontier model. In addition to the normal pass, critically evaluate:
 
 Be honest. Use this supervisor pass to catch drift the cheaper model
 would miss consistently.`
-
-// ArchivistPrompt returns the prompt for one archivist loop iteration.
-// When isSupervisor is true, additional self-review instructions are
-// appended for frontier-model iterations. The current archivist.md
-// content is injected by the loop's declared output context, not this
-// prompt.
-func ArchivistPrompt(isSupervisor bool) string {
-	prompt := archivistBaseTemplate
-	if isSupervisor {
-		prompt += archivistSupervisorAugmentation
-	}
-	return prompt
-}

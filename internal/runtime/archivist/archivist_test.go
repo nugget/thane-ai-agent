@@ -148,23 +148,24 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 	}
 }
 
-func TestHydrateSpec_AttachesTaskBuilder(t *testing.T) {
-	cfg := Config{Enabled: true}
+func TestSpec_DeclarativePrompt(t *testing.T) {
+	cfg := Config{Enabled: true, SupervisorProbability: 0.1}
 	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
 
-	if spec.TaskBuilder == nil {
-		t.Fatal("TaskBuilder should be attached after HydrateSpec")
+	// The archivist loop is declarative: no TaskBuilder closure (its one
+	// genuine runtime hook, the work-queue tools, is attached at app
+	// hydration, not here).
+	if spec.TaskBuilder != nil {
+		t.Error("archivist loop is declarative; HydrateSpec should attach no TaskBuilder")
 	}
-	prompt, err := spec.TaskBuilder(nil, false)
-	if err != nil {
-		t.Fatalf("TaskBuilder returned error: %v", err)
+	if !strings.Contains(spec.Task, "Archivist loop iteration") {
+		t.Errorf("spec.Task should be the archivist base prompt, got %q", spec.Task)
 	}
-	if prompt == "" {
-		t.Error("TaskBuilder returned empty prompt")
+	if strings.Contains(spec.Task, "Supervisor Review") {
+		t.Error("base Task should not include the supervisor section")
 	}
-	supervisorPrompt, _ := spec.TaskBuilder(nil, true)
-	if len(supervisorPrompt) <= len(prompt) {
-		t.Error("supervisor prompt should be longer than normal prompt")
+	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "Supervisor Review") {
+		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
 	}
 }
 
