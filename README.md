@@ -31,7 +31,7 @@ Everything runs on your hardware, behind your firewall. Thane works with any mod
 git clone https://github.com/nugget/thane-ai-agent.git
 cd thane-ai-agent
 just build && just init
-# Edit ~/Thane/config.yaml with your HA token, Ollama URL, and MQTT broker
+# Edit ./Thane/config.yaml with your HA token, Ollama URL, and MQTT broker
 just serve
 ```
 
@@ -81,7 +81,7 @@ workflow and credential requirements.
 ### Extend It
 
 - [Delegation & MCP](docs/understanding/delegation.md) — Orchestrator/delegate pattern and MCP tool servers
-- [Tools Reference](docs/reference/tools.md) — All 80+ native tools
+- [Tools Reference](docs/reference/tools.md) — Reference for all native tools
 - [Full Documentation](docs/) — Guided tour of all docs
 
 ## Name

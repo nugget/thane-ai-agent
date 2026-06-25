@@ -66,7 +66,7 @@ The orchestrator model doesn't see tool definitions directly (they're gated).
 Instead, **talent files** teach it what's available and how to write effective
 delegation prompts.
 
-`delegate-hints.md` contains:
+The `talents/delegation.md` talent contains:
 - Which capability tags and tool families exist
 - Patterns to follow (search, act, verify for HA)
 - Anti-patterns to avoid (multi-entity delegations, `ha_list_entities` abuse)
@@ -169,5 +169,5 @@ specific the prompt, the fewer iterations wasted:
 
 **Bad:** "Find the Hue Go light in the office and make it teal."
 
-The delegate-hints talent teaches the orchestrator these patterns. Over
+The `talents/delegation.md` talent teaches the orchestrator these patterns. Over
 time, as delegation successes and failures are observed, the talent evolves.

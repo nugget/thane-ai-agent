@@ -114,12 +114,12 @@ running as a daemon with JSON-RPC over Unix socket.
 ## Contacts & CardDAV
 
 ```yaml
-contacts:
-  carddav:
-    enabled: true
-    port: 8843
-    username: thane
-    password: your_password
+carddav:
+  enabled: true
+  listen:
+    - 127.0.0.1:8843
+  username: thane
+  password: your_password
 ```
 
 The contact directory is always active. The CardDAV server is optional —
@@ -139,8 +139,9 @@ companion:
 Optional. Companion apps connect inward to Thane and expose local host
 capabilities, such as macOS Calendar access from
 [thane-agent-macos](https://github.com/nugget/thane-agent-macos).
-Use `companion:` for new configs. Older `platform:` configs still load as
-a compatibility alias.
+Use `companion:`. A top-level `platform:` section is rejected at config
+load with an actionable error and must be renamed to `companion:` (the
+field shape is unchanged).
 
 ## Capability Tags
 
@@ -148,7 +149,7 @@ a compatibility alias.
 capability_tags:
   project_ops:
     description: "Project-specific research and archive tools"
-    tools: [archive_search, web_search]
+    include: [archive_search, web_search]
 ```
 
 Thane ships with a compiled-in capability-tag catalog for native and
@@ -368,8 +369,20 @@ See [Delegation](../understanding/delegation.md).
 listen:
   address: "0.0.0.0"
   port: 8080
-  ollama_port: 11434
+
+ollama_api:
+  enabled: true
+  address: ""
+  port: 11434
+
+openai_api:
+  enabled: true
+  address: ""
+  port: 8081
 ```
 
-Network binding for the API servers. Default is localhost-only; set to
-`0.0.0.0` to accept connections from other hosts.
+Network binding for the API servers. `listen:` binds the native Thane
+/v1 API and web dashboard (default port 8080). The optional
+Ollama-compatible (port 11434) and OpenAI-compatible (port 8081) shims
+bind separately under their own blocks. Default is localhost-only; set
+`address` to `0.0.0.0` to accept connections from other hosts.
