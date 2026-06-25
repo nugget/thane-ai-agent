@@ -176,9 +176,12 @@ paths:
             schema:
               type: object
               properties:
-                message: { type: string }
-                conversation_id: { type: string }
+                message: { type: string, example: "Hey Bob, can you check the front door?" }
+                conversation_id: { type: string, example: conv-aimee }
               required: [message]
+              example:
+                message: "Hey Bob, can you check the front door?"
+                conversation_id: conv-aimee
       responses:
         "200":
           description: Assistant reply.
@@ -187,10 +190,15 @@ paths:
               schema:
                 type: object
                 properties:
-                  response: { type: string }
-                  model: { type: string }
-                  conversation_id: { type: string }
-                  tool_calls: { type: array, items: { type: string } }
+                  response: { type: string, example: "I've checked the front door and it's locked." }
+                  model: { type: string, example: thane:latest }
+                  conversation_id: { type: string, example: conv-aimee }
+                  tool_calls: { type: array, items: { type: string }, example: ["ha_get_state"] }
+                example:
+                  response: "I've checked the front door and it's locked."
+                  model: thane:latest
+                  conversation_id: conv-aimee
+                  tool_calls: ["ha_get_state"]
         "400": { $ref: "#/components/responses/BadRequest" }
 
   # ------------------------------------------------------------------ Loops
@@ -403,8 +411,11 @@ paths:
               schema:
                 type: object
                 properties:
-                  loop_id: { type: string }
-                  name: { type: string }
+                  loop_id: { type: string, example: 019e7469-3abf-7e6b-ae38-85b5e34915ac }
+                  name: { type: string, example: cota_weekend_observer }
+                example:
+                  loop_id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+                  name: cota_weekend_observer
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/loop-definitions/policy:
     post:
@@ -464,7 +475,16 @@ paths:
           description: Routing explanation.
           content:
             application/json:
-              schema: { type: object, description: "Router decision trace (schema first-pass; tighten against handler)." }
+              schema:
+                type: object
+                description: "Router decision trace (schema first-pass; tighten against handler)."
+                example:
+                  request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
+                  selected_model: thane:latest
+                  reason: "highest-scoring eligible model for tags [messaging, retrospection]"
+                  candidates:
+                    - { model: thane:latest, score: 0.92 }
+                    - { model: gpt-oss:120b, score: 0.71 }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/requests/{id}/tools:
     get:
@@ -526,14 +546,35 @@ paths:
                     items:
                       type: object
                       properties:
-                        id: { type: string }
-                        message_count: { type: integer }
-                        created_at: { type: string, format: date-time }
-                        updated_at: { type: string, format: date-time }
-                        channel_binding: { type: [object, "null"] }
-                  count: { type: integer }
-                  total: { type: integer }
-                  next_cursor: { type: [string, "null"] }
+                        id: { type: string, example: signal-alice }
+                        message_count: { type: integer, example: 42 }
+                        created_at: { type: string, format: date-time, example: "2026-06-20T08:15:00Z" }
+                        updated_at: { type: string, format: date-time, example: "2026-06-24T14:31:07Z" }
+                        channel_binding: { type: [object, "null"], example: { channel: signal, contact: alice, address: "+15551234567" } }
+                    example:
+                      - id: signal-alice
+                        message_count: 42
+                        created_at: "2026-06-20T08:15:00Z"
+                        updated_at: "2026-06-24T14:31:07Z"
+                        channel_binding: { channel: signal, contact: alice, address: "+15551234567" }
+                  count: { type: integer, example: 2 }
+                  total: { type: integer, example: 138 }
+                  next_cursor: { type: [string, "null"], example: "eyJ1cGRhdGVkX2F0IjoiMjAyNi0wNi0yNFQxNDozMTowN1oifQ" }
+                example:
+                  conversations:
+                    - id: signal-alice
+                      message_count: 42
+                      created_at: "2026-06-20T08:15:00Z"
+                      updated_at: "2026-06-24T14:31:07Z"
+                      channel_binding: { channel: signal, contact: alice, address: "+15551234567" }
+                    - id: sched-morning-briefing
+                      message_count: 7
+                      created_at: "2026-06-22T08:15:00Z"
+                      updated_at: "2026-06-24T08:15:03Z"
+                      channel_binding: null
+                  count: 2
+                  total: 138
+                  next_cursor: "eyJ1cGRhdGVkX2F0IjoiMjAyNi0wNi0yNFQxNDozMTowN1oifQ"
         "400": { $ref: "#/components/responses/BadRequest" }
   /v1/conversations/{id}:
     get:
@@ -548,7 +589,13 @@ paths:
           description: Conversation transcript.
           content:
             application/json:
-              schema: { type: object }
+              schema:
+                type: object
+                example:
+                  id: signal-alice
+                  messages:
+                    - { role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
+                    - { role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/sessions/stats:
     get:
@@ -559,7 +606,15 @@ paths:
       responses:
         "200":
           description: Session stats.
-          content: { application/json: { schema: { type: object } } }
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  active_messages: 312
+                  context_window: 200000
+                  input_tokens: 148213
+                  utilization: 0.74
   /v1/sessions/history:
     get:
       tags: [Conversations & Sessions]
@@ -571,7 +626,14 @@ paths:
       responses:
         "200":
           description: History entries.
-          content: { application/json: { schema: { type: array, items: { type: object } } } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { id: session-7f3a9c, started_at: "2026-06-24T08:15:01Z", message_count: 312, model: thane:latest }
+                  - { id: session-3b1e7d, started_at: "2026-06-23T19:02:44Z", message_count: 87, model: gpt-oss:120b }
   /v1/sessions/compact:
     post:
       tags: [Conversations & Sessions]
@@ -610,7 +672,14 @@ paths:
       responses:
         "200":
           description: Archived session summaries.
-          content: { application/json: { schema: { type: array, items: { type: object } } } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { id: session-7f3a9c, started_at: "2026-06-24T08:15:01Z", ended_at: "2026-06-24T09:42:00Z", message_count: 312, conversation_id: signal-alice }
+                  - { id: session-3b1e7d, started_at: "2026-06-23T19:02:44Z", ended_at: "2026-06-23T19:48:10Z", message_count: 87, conversation_id: sched-morning-briefing }
   /v1/archive/sessions/{id}:
     get:
       tags: [Archive]
@@ -620,7 +689,20 @@ paths:
       parameters:
         - { name: id, in: path, required: true, description: "Archived session ID.", schema: { type: string } }
       responses:
-        "200": { description: Archived session., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Archived session.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  id: session-7f3a9c
+                  conversation_id: signal-alice
+                  started_at: "2026-06-24T08:15:01Z"
+                  ended_at: "2026-06-24T09:42:00Z"
+                  messages:
+                    - { role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
+                    - { role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/archive/sessions/{id}/export:
     get:
@@ -644,7 +726,16 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
       responses:
-        "200": { description: Messages., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        "200":
+          description: Messages.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { id: 184213, conversation_id: signal-alice, role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
+                  - { id: 184214, conversation_id: signal-alice, role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
   /v1/archive/search:
     get:
       tags: [Archive]
@@ -655,7 +746,16 @@ paths:
         - { name: q, in: query, required: true, description: FTS5 query string., schema: { type: string } }
         - $ref: "#/components/parameters/Limit"
       responses:
-        "200": { description: Search results., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        "200":
+          description: Search results.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { session_id: session-7f3a9c, conversation_id: signal-alice, snippet: "...check the front door...", ts: "2026-06-24T14:30:55Z", rank: 0.92 }
+                  - { session_id: session-3b1e7d, conversation_id: sched-morning-briefing, snippet: "...morning briefing delivered...", ts: "2026-06-23T08:15:03Z", rank: 0.71 }
   /v1/archive/stats:
     get:
       tags: [Archive]
@@ -663,7 +763,18 @@ paths:
       summary: Archive size and coverage stats
       x-thane-scope: archive:read
       responses:
-        "200": { description: Stats., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Stats.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  total_sessions: 1842
+                  total_messages: 318204
+                  oldest_session_at: "2025-11-02T03:14:00Z"
+                  newest_session_at: "2026-06-24T14:31:11Z"
+                  index_size_bytes: 524288000
 
   # ------------------------------------------------------------ Checkpoints
   /v1/checkpoints:
@@ -673,14 +784,33 @@ paths:
       summary: List checkpoints
       x-thane-scope: checkpoints:read
       responses:
-        "200": { description: Checkpoints., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        "200":
+          description: Checkpoints.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { id: 019e7469-3abf-7e6b-ae38-85b5e34915ac, label: pre-compaction, created_at: "2026-06-24T09:42:00Z", message_count: 312 }
+                  - { id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f, label: nightly, created_at: "2026-06-24T03:00:00Z", message_count: 198 }
     post:
       tags: [Checkpoints]
       operationId: createCheckpoint
       summary: Create a checkpoint
       x-thane-scope: checkpoints:write
       responses:
-        "201": { description: Created., content: { application/json: { schema: { type: object } } } }
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+                  label: pre-compaction
+                  created_at: "2026-06-24T09:42:00Z"
+                  message_count: 312
   /v1/checkpoints/{id}:
     get:
       tags: [Checkpoints]
@@ -689,7 +819,18 @@ paths:
       x-thane-scope: checkpoints:read
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "200": { description: Checkpoint., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Checkpoint.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+                  label: pre-compaction
+                  created_at: "2026-06-24T09:42:00Z"
+                  message_count: 312
+                  conversation_id: signal-alice
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Checkpoints]
@@ -722,7 +863,16 @@ paths:
         Compatibility API.
       x-thane-scope: models:read
       responses:
-        "200": { description: Models., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        "200":
+          description: Models.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { name: thane:latest, context_window: 200000, capabilities: [messaging, retrospection, vision], healthy: true, resource: spark }
+                  - { name: gpt-oss:120b, context_window: 131072, capabilities: [messaging], healthy: true, resource: spark }
   /v1/models/registry:
     get:
       tags: [Models & Fleet]
@@ -730,14 +880,38 @@ paths:
       summary: Model-registry snapshot
       x-thane-scope: models:read
       responses:
-        "200": { description: Registry snapshot., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Registry snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  generation: 42
+                  updated_at: "2026-06-24T18:57:13Z"
+                  models:
+                    - { name: thane:latest, resource: spark, weight: 1.0 }
+                    - { name: gpt-oss:120b, resource: spark, weight: 0.5 }
+                  resources:
+                    - { name: spark, host: "spark.hollowoak.net", available: true }
   /v1/models/registry/policy:
     put:
       tags: [Models & Fleet]
       operationId: setModelPolicy
       summary: Set a model routing policy
       x-thane-scope: models:admin
-      requestBody: { required: true, description: "The model routing policy to apply.", content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        description: "The model routing policy to apply."
+        content:
+          application/json:
+            schema:
+              type: object
+              example:
+                model: thane:latest
+                weight: 1.0
+                pinned: true
+                tags: [messaging, retrospection]
       responses: { "200": { description: Applied. } }
     delete:
       tags: [Models & Fleet]
@@ -751,7 +925,18 @@ paths:
       operationId: setResourcePolicy
       summary: Set a resource (host) policy
       x-thane-scope: models:admin
-      requestBody: { required: true, description: "The resource (host) policy to apply.", content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        description: "The resource (host) policy to apply."
+        content:
+          application/json:
+            schema:
+              type: object
+              example:
+                resource: spark
+                host: "spark.hollowoak.net"
+                enabled: true
+                max_concurrent: 4
       responses: { "200": { description: Applied. } }
     delete:
       tags: [Models & Fleet]
@@ -769,7 +954,18 @@ paths:
       description: Consolidates `/v1/router/stats` and `/v1/router/audit`.
       x-thane-scope: insights:read
       responses:
-        "200": { description: Router insights., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Router insights.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  stats:
+                    total_decisions: 14082
+                    by_model: { "thane:latest": 9871, "gpt-oss:120b": 4211 }
+                  recent:
+                    - { request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", selected_model: thane:latest, ts: "2026-06-24T14:31:07Z" }
   /v1/insights/tools:
     get:
       tags: [Insights]
@@ -778,7 +974,18 @@ paths:
       description: Consolidates `/v1/tools/stats` and `/v1/tools/calls`.
       x-thane-scope: insights:read
       responses:
-        "200": { description: Tool insights., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Tool insights.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  stats:
+                    total_calls: 8421
+                    by_tool: { ha_get_state: 3120, send_message: 2841, log_search: 1204 }
+                  recent:
+                    - { tool_name: ha_get_state, request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", ts: "2026-06-24T14:31:09Z" }
   /v1/insights/usage:
     get:
       tags: [Insights]
@@ -790,7 +997,20 @@ paths:
         - { name: hours, in: query, description: "Lookback window in hours (default 24).", schema: { type: integer, minimum: 1, default: 24 } }
         - { name: group_by, in: query, description: "Break the summary down by a dimension (e.g. model); omit for an ungrouped total.", schema: { type: string } }
       responses:
-        "200": { description: "Usage summary (grouped when group_by is set).", content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: "Usage summary (grouped when group_by is set)."
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  window_hours: 24
+                  input_tokens: 1284532
+                  output_tokens: 318204
+                  estimated_cost_usd: 12.47
+                  by_model:
+                    "thane:latest": { input_tokens: 982140, output_tokens: 241003 }
+                    "gpt-oss:120b": { input_tokens: 302392, output_tokens: 77201 }
   /v1/insights/capabilities:
     get:
       tags: [Insights]
@@ -799,7 +1019,17 @@ paths:
       description: Was the dashboard-private `/api/capabilities`.
       x-thane-scope: insights:read
       responses:
-        "200": { description: Capability catalog., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Capability catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  tags:
+                    - { tag: messaging, models: ["thane:latest", "gpt-oss:120b"], tools: [send_message] }
+                    - { tag: vision, models: ["thane:latest"], tools: [image_describe] }
+                  count: 2
   /v1/insights/capabilities/{tag}:
     get:
       tags: [Insights]
@@ -808,7 +1038,17 @@ paths:
       x-thane-scope: insights:read
       parameters: [ { name: tag, in: path, required: true, description: "Capability tag.", schema: { type: string } } ]
       responses:
-        "200": { description: Capability entry., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Capability entry.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  tag: messaging
+                  models: ["thane:latest", "gpt-oss:120b"]
+                  tools: [send_message]
+                  active: true
         "404": { $ref: "#/components/responses/NotFound" }
 
   # -------------------------------------------------------------- Contacts
@@ -819,15 +1059,44 @@ paths:
       summary: List contacts
       x-thane-scope: contacts:read
       responses:
-        "200": { description: Contacts., content: { application/json: { schema: { type: array, items: { type: object } } } } }
+        "200":
+          description: Contacts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object }
+                example:
+                  - { id: 019e7469-3abf-7e6b-ae38-85b5e34915ac, name: Alice, email: alice@example.com, phone: "+15551234567" }
+                  - { id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f, name: Bob, email: bob@example.com, phone: "+15557654321" }
     post:
       tags: [Contacts]
       operationId: createContact
       summary: Create a contact
       x-thane-scope: contacts:write
-      requestBody: { required: true, description: "The contact to create.", content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        description: "The contact to create."
+        content:
+          application/json:
+            schema:
+              type: object
+              example:
+                name: Alice
+                email: alice@example.com
+                phone: "+15551234567"
       responses:
-        "201": { description: Created., content: { application/json: { schema: { type: object } } } }
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+                  name: Alice
+                  email: alice@example.com
+                  phone: "+15551234567"
   /v1/contacts/{id}:
     get:
       tags: [Contacts]
@@ -836,7 +1105,17 @@ paths:
       x-thane-scope: contacts:read
       parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "200": { description: Contact., content: { application/json: { schema: { type: object } } } }
+        "200":
+          description: Contact.
+          content:
+            application/json:
+              schema:
+                type: object
+                example:
+                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+                  name: Alice
+                  email: alice@example.com
+                  phone: "+15551234567"
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [Contacts]
@@ -844,7 +1123,17 @@ paths:
       summary: Update a contact
       x-thane-scope: contacts:write
       parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string, format: uuid } } ]
-      requestBody: { required: true, description: "The updated contact fields.", content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        description: "The updated contact fields."
+        content:
+          application/json:
+            schema:
+              type: object
+              example:
+                name: Alice
+                email: alice@example.com
+                phone: "+15559998888"
       responses:
         "200": { description: Updated. }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1036,6 +1325,20 @@ components:
           readOnly: true
           description: Line number within source_file.
           example: 412
+      example:
+        id: 184213
+        ts: "2026-06-24T14:31:07Z"
+        level: INFO
+        msg: loop iteration complete
+        request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
+        conversation_id: conv-aimee
+        subsystem: scheduler
+        tool: ha_get_state
+        model: claude-opus-4-8
+        loop_name: signal/aimee
+        attrs: '{"input_tokens":9123,"output_tokens":2048}'
+        source_file: internal/runtime/loop/loop.go
+        source_line: 412
 
     SystemStatus:
       type: object
@@ -1054,7 +1357,21 @@ components:
           readOnly: true
           description: Per-service readiness, keyed by service name.
           additionalProperties: { $ref: "#/components/schemas/ServiceHealth" }
+          example:
+            home_assistant: { name: Home Assistant, ready: true, last_check: "2026-06-24T14:30:55Z" }
+            signal: { name: Signal, ready: true, last_check: "2026-06-24T14:30:55Z" }
       additionalProperties: true
+      example:
+        uptime_seconds: 480600
+        version:
+          version: v0.9.2-596-gf92a9208
+          git_commit: f92a9208
+          git_branch: main
+          go_version: go1.26.1
+          uptime: 133h30m0s
+        health:
+          home_assistant: { name: Home Assistant, ready: true, last_check: "2026-06-24T14:30:55Z" }
+          signal: { name: Signal, ready: true, last_check: "2026-06-24T14:30:55Z" }
 
     ServiceHealth:
       type: object
@@ -1194,6 +1511,24 @@ components:
           description: Up to 10 completed iteration snapshots (newest first), used by the dashboard timeline.
           readOnly: true
       required: [id, name, state, started_at, iterations, attempts, total_input_tokens, total_output_tokens, consecutive_errors]
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        name: signal-interactive
+        state: processing
+        parent_id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f
+        started_at: "2026-06-24T14:03:21Z"
+        last_wake_at: "2026-06-24T14:31:07Z"
+        iterations: 142
+        attempts: 145
+        total_input_tokens: 1284532
+        total_output_tokens: 318204
+        last_input_tokens: 9123
+        last_output_tokens: 2048
+        context_window: 200000
+        consecutive_errors: 0
+        recent_conv_ids: ["019e7469-3abf-7e6b-ae38-85b5e34915ac", "019e7469-1a2b-7c3d-9e4f-0a1b2c3d4e5f"]
+        handler_only: false
+        event_driven: false
     IterationSnapshot:
       type: object
       description: Serializable summary of a single completed loop iteration, retained in a ring buffer for the dashboard timeline.
@@ -1406,6 +1741,27 @@ components:
           type: array
           description: Per-definition combined stored-and-runtime views.
           items: { $ref: "#/components/schemas/DefinitionView" }
+          example:
+            - eligibility: { eligible: true }
+              runtime: { running: true, state: processing, iterations: 142 }
+              warnings: []
+              effective: { tags: [messaging, retrospection] }
+      example:
+        generation: 42
+        updated_at: "2026-06-24T18:57:13Z"
+        config_definitions: 7
+        overlay_definitions: 3
+        running_definitions: 2
+        definitions_with_warnings: 1
+        warning_count: 3
+        by_policy_state: { active: 8, inactive: 2 }
+        by_eligibility_state: { eligible: 9, ineligible: 1 }
+        by_runtime_state: { running: 2, not_running: 8 }
+        definitions:
+          - eligibility: { eligible: true }
+            runtime: { running: true, state: processing, iterations: 142 }
+            warnings: []
+            effective: { tags: [messaging, retrospection] }
     DefinitionView:
       type: object
       description: One stored definition combined with its eligibility, live runtime status, warnings, and effective post-merge state.
@@ -1415,6 +1771,7 @@ components:
           additionalProperties: true
           description: Effective eligibility evaluation for this definition, including whether it may run and why.
           readOnly: true
+          example: { eligible: true, reason: "all subscriptions satisfied" }
         runtime:
           type: object
           additionalProperties: true
@@ -1431,6 +1788,13 @@ components:
           description: Post-ancestor-merge state for inheritable fields (tags, subscriptions, exclude_tools, routing factors, delegation gating); absent when there is nothing meaningful to report.
           readOnly: true
       additionalProperties: true
+      example:
+        name: cota_weekend_observer
+        operation: service
+        eligibility: { eligible: true, reason: "all subscriptions satisfied" }
+        runtime: { running: true, state: processing, iterations: 142 }
+        warnings: []
+        effective: { tags: [messaging, retrospection] }
     LoopDefinitionSpec:
       type: object
       description: Persistable loop definition payload (name, operation, sleep envelope, subscriptions, tags, profile, ...). First-pass permissive schema; tighten against loop.Spec / loop.DefinitionSnapshot.
@@ -1484,6 +1848,9 @@ components:
           items: { $ref: "#/components/schemas/MessageDetail" }
           description: Provider-neutral chat messages sent to the model for this request.
           readOnly: true
+          example:
+            - { index: 0, role: user, content: "What's the weather like today?", content_truncated: false }
+            - { index: 1, role: assistant, content: "It's currently 72 degrees and sunny.", content_truncated: false }
         user_content:
           type: string
           description: Flattened user-authored content extracted from the request.
@@ -1545,6 +1912,24 @@ components:
           description: Tool invocations performed while handling the request.
           readOnly: true
       required: [request_id, messages, iteration_count, input_tokens, output_tokens, exhausted, created_at, tool_calls]
+      example:
+        request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
+        prompt_hash: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        system_prompt: "You are Thane, a helpful home assistant."
+        messages:
+          - { index: 0, role: user, content: "What's the weather like today?", content_truncated: false }
+          - { index: 1, role: assistant, content: "It's currently 72 degrees and sunny.", content_truncated: false }
+        user_content: "What's the weather like today?"
+        assistant_content: "It's currently 72 degrees and sunny."
+        model: "claude-opus-4-8"
+        iteration_count: 3
+        input_tokens: 4215
+        output_tokens: 318
+        tools_used: { "weather_lookup": 1, "macos_calendar_events": 2 }
+        exhausted: false
+        created_at: "2026-06-24T18:57:13Z"
+        tool_calls:
+          - { tool_call_id: "call_019e7469", tool_name: "weather_lookup", arguments: "{\"location\":\"Austin, TX\"}", result: "72F, sunny, wind 5mph", iteration_index: 1 }
     MessageDetail:
       type: object
       description: One retained chat message from the provider-neutral payload sent to the model; image bytes are omitted and only media metadata is retained.
@@ -1688,6 +2073,22 @@ components:
           description: Next computed fire time; omitted when the task has no future run.
           example: "2026-06-25T08:15:00Z"
       required: [id, name, schedule, payload, enabled, created_at, created_by, updated_at]
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        name: Morning briefing
+        schedule:
+          kind: every
+          every: 15m0s
+          timezone: America/New_York
+        payload:
+          kind: wake
+          target: session-7f3a9c
+          data: { message: "Time for your morning briefing" }
+        enabled: true
+        created_at: "2026-06-24T08:15:00Z"
+        created_by: session-7f3a9c
+        updated_at: "2026-06-24T09:42:00Z"
+        next_run: "2026-06-25T08:15:00Z"
     Schedule:
       type: object
       description: When a task fires.
@@ -1779,4 +2180,12 @@ components:
           readOnly: true
           description: Output or error message produced by the run.
           example: Briefing delivered
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        task_id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f
+        scheduled_at: "2026-06-24T08:15:00Z"
+        started_at: "2026-06-24T08:15:01Z"
+        completed_at: "2026-06-24T08:15:03Z"
+        status: completed
+        result: Briefing delivered
       required: [id, task_id, scheduled_at, status]

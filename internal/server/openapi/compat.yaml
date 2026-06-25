@@ -156,8 +156,10 @@ paths:
             application/json:
               schema:
                 type: object
+                example:
+                  version: 0.6.8
                 properties:
-                  version: { type: string }
+                  version: { type: string, example: 0.6.8 }
 
 components:
   securitySchemes:
@@ -184,6 +186,16 @@ components:
       type: object
       description: OpenAI-compatible chat completion request.
       required: [model, messages]
+      example:
+        model: thane:latest
+        messages:
+          - role: system
+            content: You are a helpful home assistant.
+          - role: user
+            content: Turn on the office lights.
+        stream: false
+        temperature: 0.7
+        max_tokens: 1024
       properties:
         model:
           type: string
@@ -193,6 +205,11 @@ components:
           type: array
           description: The conversation messages, in order.
           items: { $ref: "#/components/schemas/ChatMessage" }
+          example:
+            - role: system
+              content: You are a helpful home assistant.
+            - role: user
+              content: Turn on the office lights.
         stream:
           type: boolean
           default: false
@@ -208,6 +225,21 @@ components:
     ChatCompletionResponse:
       type: object
       description: OpenAI-compatible chat completion response.
+      example:
+        id: chatcmpl-abc123
+        object: chat.completion
+        created: 1782735600
+        model: thane:latest
+        choices:
+          - index: 0
+            message:
+              role: assistant
+              content: The office lights are on.
+            finish_reason: stop
+        usage:
+          prompt_tokens: 412
+          completion_tokens: 96
+          total_tokens: 508
       properties:
         id:
           type: string
@@ -259,6 +291,15 @@ components:
     ModelList:
       type: object
       description: OpenAI-compatible list of available models.
+      example:
+        object: list
+        data:
+          - id: thane:latest
+            object: model
+            owned_by: thane
+          - id: thane:premium
+            object: model
+            owned_by: thane
       properties:
         object:
           type: string
@@ -286,6 +327,14 @@ components:
       type: object
       description: Ollama-compatible chat request.
       required: [model, messages]
+      example:
+        model: thane:latest
+        messages:
+          - role: system
+            content: You are a helpful home assistant.
+          - role: user
+            content: Turn on the office lights.
+        stream: true
       properties:
         model:
           type: string
@@ -295,6 +344,11 @@ components:
           type: array
           description: The conversation messages, in order.
           items: { $ref: "#/components/schemas/ChatMessage" }
+          example:
+            - role: system
+              content: You are a helpful home assistant.
+            - role: user
+              content: Turn on the office lights.
         stream:
           type: boolean
           description: Stream the response as newline-delimited JSON objects.
@@ -302,6 +356,13 @@ components:
       type: object
       description: Ollama-compatible chat response (one object per stream chunk).
       additionalProperties: true
+      example:
+        model: thane:latest
+        created_at: "2026-06-24T14:31:11Z"
+        message:
+          role: assistant
+          content: The office lights are on.
+        done: true
       properties:
         model:
           type: string
@@ -320,6 +381,8 @@ components:
       type: object
       description: Ollama-compatible error envelope.
       required: [error]
+      example:
+        error: model not found
       properties:
         error:
           type: string
@@ -328,6 +391,14 @@ components:
     OllamaTags:
       type: object
       description: Ollama-compatible list of locally available models (the /api/tags response).
+      example:
+        models:
+          - name: thane:latest
+            model: thane:latest
+            size: 4709611008
+          - name: thane:premium
+            model: thane:premium
+            size: 4709611008
       properties:
         models:
           type: array

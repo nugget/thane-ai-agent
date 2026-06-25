@@ -45,7 +45,12 @@ rules:
   # Operation requestBodies and parameters are now ENFORCED at error (#1060):
   # each must carry a description. (vacuum's operation-description rule gates the
   # requestBody description specifically — verified by removing one and watching
-  # the error-gate fail — not only the operation-level description.) Response
-  # examples (oas3-missing-example) remain the last content rule at warn.
+  # the error-gate fail — not only the operation-level description.)
   operation-description: error
   oas3-parameter-description: error
+
+  # Response examples ENFORCED at error (#1060 capstone): every operation
+  # response (and request body / schema) must carry an example. This was the
+  # last content rule — all four (property/operation/parameter descriptions +
+  # examples) are now gated, completing #1060's Godoc-parity enforcement goal.
+  oas3-missing-example: error
