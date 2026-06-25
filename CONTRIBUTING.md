@@ -27,9 +27,16 @@ Thank you for your interest in contributing to Thane!
 
 ### Prerequisites
 
-- [Go](https://go.dev/) 1.24+
+- [Go](https://go.dev/) 1.25+
 - [just](https://just.systems/) (command runner)
-- [golangci-lint](https://golangci-lint.run/) v2.x
+- [lychee](https://github.com/lycheeverse/lychee) — optional; only the
+  markdown link check needs it. `just ci` skips link-check locally when
+  it's absent (CI always installs a pinned build and enforces it).
+
+`golangci-lint` and `vacuum` are **not** host prerequisites — they're
+pinned in [`tools/go.mod`](tools/go.mod) and run via `go run`, so `just ci`
+builds and caches them automatically. Dependabot tracks their versions
+through that module.
 
 ### Workflow
 
