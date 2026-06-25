@@ -16,6 +16,21 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
+// upsertCommitSpec builds a CommitSpec stand-in for tests that only need
+// the overlay effect of a commit: it upserts the definition into the
+// given registry so downstream lookups see it. It deliberately does NOT
+// simulate the persist or reconcile stages of the production chokepoint —
+// these tests don't assert on those — so it is not a faithful stand-in,
+// just enough to keep the registry populated.
+func upsertCommitSpec(reg *looppkg.DefinitionRegistry) func(context.Context, looppkg.Spec, time.Time) error {
+	return func(_ context.Context, spec looppkg.Spec, updatedAt time.Time) error {
+		if reg == nil {
+			return nil
+		}
+		return reg.Upsert(spec, updatedAt)
+	}
+}
+
 // mkdirAllForTest is a tiny helper used by the thane_curate tests to
 // pre-create the document root directory before invoking the document
 // store, which refuses to write into a non-existent root.
@@ -178,9 +193,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error {
 			return nil
 		},
-		Reconcile: func(_ context.Context, _ string) error {
-			return nil
-		},
+		CommitSpec:       upsertCommitSpec(defRegistry),
 		LaunchDefinition: launchFn,
 	})
 
@@ -370,7 +383,7 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{}, nil
 		},
@@ -441,7 +454,7 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "should-not-fire"}, nil
 		},
@@ -508,7 +521,7 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-journal-1"}, nil
 		},
@@ -604,7 +617,7 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-inst-1"}, nil
 		},
@@ -684,7 +697,7 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-inst-2"}, nil
 		},
@@ -762,7 +775,7 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 		DocTools:    docTools,
 		Registry:    defRegistry,
 		PersistSpec: func(_ looppkg.Spec, _ time.Time) error { return nil },
-		Reconcile:   func(_ context.Context, _ string) error { return nil },
+		CommitSpec:  upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, name string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
 			return looppkg.LaunchResult{LoopID: "loop-test-" + name}, nil
 		},

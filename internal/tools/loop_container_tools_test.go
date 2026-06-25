@@ -73,10 +73,12 @@ func newContainerTestRig(t *testing.T) *containerTestRig {
 		return looppkg.LaunchResult{LoopID: l.ID(), Operation: cfg.Operation, Detached: true}, nil
 	}
 	rig.reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
-		DocTools:         nil, // not needed for container tool
-		Registry:         defs,
-		PersistSpec:      func(spec looppkg.Spec, _ time.Time) error { rig.persisted[spec.Name] = spec; return nil },
-		Reconcile:        func(_ context.Context, _ string) error { return nil },
+		DocTools: nil, // not needed for container tool
+		Registry: defs,
+		CommitSpec: func(_ context.Context, spec looppkg.Spec, updatedAt time.Time) error {
+			rig.persisted[spec.Name] = spec
+			return defs.Upsert(spec, updatedAt)
+		},
 		LaunchDefinition: launchDef,
 		LiveRegistry:     loops,
 	})
