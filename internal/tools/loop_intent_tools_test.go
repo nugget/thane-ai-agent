@@ -16,10 +16,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
-// upsertCommitSpec builds a LoopIntentToolDeps.CommitSpec /
-// LoopDefinitionToolDeps.CommitSpec stand-in for tests: it commits a
-// definition by upserting it into the given registry, mirroring the
-// production chokepoint's persist→upsert→reconcile without a real store.
+// upsertCommitSpec builds a CommitSpec stand-in for tests that only need
+// the overlay effect of a commit: it upserts the definition into the
+// given registry so downstream lookups see it. It deliberately does NOT
+// simulate the persist or reconcile stages of the production chokepoint —
+// these tests don't assert on those — so it is not a faithful stand-in,
+// just enough to keep the registry populated.
 func upsertCommitSpec(reg *looppkg.DefinitionRegistry) func(context.Context, looppkg.Spec, time.Time) error {
 	return func(_ context.Context, spec looppkg.Spec, updatedAt time.Time) error {
 		if reg == nil {
