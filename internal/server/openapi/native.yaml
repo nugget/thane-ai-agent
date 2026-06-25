@@ -30,7 +30,7 @@ info:
       `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
       `archive:read`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
-      `insights:read`, `contacts:read`, `contacts:write`, `system:read`.
+      `telemetry:read`, `contacts:read`, `contacts:write`, `system:read`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
       (observer + `definitions:write`, `sessions:write`, `checkpoints:write`),
       `admin` (everything, incl. `models:admin`, `contacts:write`).
@@ -883,16 +883,16 @@ paths:
       responses: { "204": { description: Cleared. } }
 
   # ------------------------------------------------------------ Telemetry
-  /v1/insights/router:
+  /v1/telemetry/router:
     get:
       tags: [Telemetry]
-      operationId: getRouterInsights
+      operationId: getRouterTelemetry
       summary: Router stats and recent audit
       description: Consolidates `/v1/router/stats` and `/v1/router/audit`.
-      x-thane-scope: insights:read
+      x-thane-scope: telemetry:read
       responses:
         "200":
-          description: Router insights.
+          description: Router telemetry.
           content:
             application/json:
               schema:
@@ -903,16 +903,16 @@ paths:
                     by_model: { "thane:latest": 9871, "gpt-oss:120b": 4211 }
                   recent:
                     - { request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", selected_model: thane:latest, ts: "2026-06-24T14:31:07Z" }
-  /v1/insights/tools:
+  /v1/telemetry/tools:
     get:
       tags: [Telemetry]
-      operationId: getToolInsights
+      operationId: getToolTelemetry
       summary: Tool-call stats and recent calls
       description: Consolidates `/v1/tools/stats` and `/v1/tools/calls`.
-      x-thane-scope: insights:read
+      x-thane-scope: telemetry:read
       responses:
         "200":
-          description: Tool insights.
+          description: Tool telemetry.
           content:
             application/json:
               schema:
@@ -923,13 +923,13 @@ paths:
                     by_tool: { ha_get_state: 3120, send_message: 2841, log_search: 1204 }
                   recent:
                     - { tool_name: ha_get_state, request_id: "019e7469-3abf-7e6b-ae38-85b5e34915ac", ts: "2026-06-24T14:31:09Z" }
-  /v1/insights/usage:
+  /v1/telemetry/usage:
     get:
       tags: [Telemetry]
-      operationId: getUsageInsights
+      operationId: getUsageTelemetry
       summary: Token / cost usage summary
       description: Was `/v1/usage/summary`.
-      x-thane-scope: insights:read
+      x-thane-scope: telemetry:read
       parameters:
         - { name: hours, in: query, description: "Lookback window in hours (default 24).", schema: { type: integer, minimum: 1, default: 24 } }
         - { name: group_by, in: query, description: "Break the summary down by a dimension (e.g. model); omit for an ungrouped total.", schema: { type: string } }
@@ -948,13 +948,13 @@ paths:
                   by_model:
                     "thane:latest": { input_tokens: 982140, output_tokens: 241003 }
                     "gpt-oss:120b": { input_tokens: 302392, output_tokens: 77201 }
-  /v1/insights/capabilities:
+  /v1/telemetry/capabilities:
     get:
       tags: [Telemetry]
       operationId: listCapabilities
       summary: Resolved capability-tag catalog
       description: Was the dashboard-private `/api/capabilities`.
-      x-thane-scope: insights:read
+      x-thane-scope: telemetry:read
       responses:
         "200":
           description: Capability catalog.
@@ -967,12 +967,12 @@ paths:
                     - { tag: messaging, models: ["thane:latest", "gpt-oss:120b"], tools: [send_message] }
                     - { tag: vision, models: ["thane:latest"], tools: [image_describe] }
                   count: 2
-  /v1/insights/capabilities/{tag}:
+  /v1/telemetry/capabilities/{tag}:
     get:
       tags: [Telemetry]
       operationId: getCapability
       summary: One capability tag's resolved view
-      x-thane-scope: insights:read
+      x-thane-scope: telemetry:read
       parameters: [ { name: tag, in: path, required: true, description: "Capability tag.", schema: { type: string } } ]
       responses:
         "200":

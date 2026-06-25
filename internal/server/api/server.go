@@ -445,12 +445,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/system", s.handleSystem)
 	mux.HandleFunc("GET /v1/system/logs", s.handleSystemLogs)
 
-	// Insights — consolidated router, tool, and usage analytics
-	mux.HandleFunc("GET /v1/insights/router", s.handleRouterInsights)
-	mux.HandleFunc("GET /v1/insights/tools", s.handleToolInsights)
-	mux.HandleFunc("GET /v1/insights/usage", s.handleUsageSummary)
-	mux.HandleFunc("GET /v1/insights/capabilities", s.handleCapabilities)
-	mux.HandleFunc("GET /v1/insights/capabilities/{tag}", s.handleCapability)
+	// Telemetry — consolidated router, tool, and usage analytics
+	mux.HandleFunc("GET /v1/telemetry/router", s.handleRouterTelemetry)
+	mux.HandleFunc("GET /v1/telemetry/tools", s.handleToolTelemetry)
+	mux.HandleFunc("GET /v1/telemetry/usage", s.handleUsageSummary)
+	mux.HandleFunc("GET /v1/telemetry/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /v1/telemetry/capabilities/{tag}", s.handleCapability)
 
 	// Request introspection — detail, routing decision, and tool calls
 	mux.HandleFunc("GET /v1/requests/{id}", s.handleRequest)

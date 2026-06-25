@@ -2664,8 +2664,8 @@ async function fetchSystemStatus() {
     const [sys, models, router, capabilities] = await Promise.all([
       api.tryGet('/system'),
       api.tryGet('/models/registry'),
-      api.tryGet('/insights/router'),
-      api.tryGet('/insights/capabilities'),
+      api.tryGet('/telemetry/router'),
+      api.tryGet('/telemetry/capabilities'),
     ]);
     if (!sys) {
       state.system = null;

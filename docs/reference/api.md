@@ -31,7 +31,7 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/insights/router` | Router stats (with Anthropic rate-limit snapshot) plus the recent routing-audit trail (`?limit`, default 20). |
+| `GET` | `/v1/telemetry/router` | Router stats (with Anthropic rate-limit snapshot) plus the recent routing-audit trail (`?limit`, default 20). |
 | `GET` | `/v1/requests/{id}` | Detail for one model turn: prompt, messages, tool calls, token metadata. |
 | `GET` | `/v1/requests/{id}/routing` | Router decision trace for the request (replaces `/v1/router/explain`). |
 | `GET` | `/v1/requests/{id}/tools` | Tool calls made during the request (bare array). |
@@ -62,11 +62,11 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 | `POST` | `/v1/loop-definitions/{name}/launch` | Launch a stored loop definition. |
 | `GET` | `/v1/conversations` | Filter/sort/keyset-paginate conversation summaries. Filters: `ids` (comma-sep, max 200), `kind` (comma-sep id-prefix families), `channel`/`contact`/`address` (channel binding), `updated_after`/`updated_before`/`created_after`/`created_before` (RFC3339 or a duration like `1h` meaning "ago"), `min_messages`/`max_messages`, `q` (metadata substring: id/contact name/address — *not* message content; use `/v1/archive/search` for that). `sort` = `updated_at` (default)\|`created_at`\|`message_count`; `order` = `desc` (default)\|`asc`; `limit` default 50, max 200; `cursor` from `next_cursor`. Returns `{conversations, count, total, next_cursor}`. `message_count` is the true active count (previously capped at the per-conversation working-memory limit). |
 | `GET` | `/v1/conversations/{id}` | Conversation detail (full transcript). |
-| `GET` | `/v1/insights/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
+| `GET` | `/v1/telemetry/tools` | Tool-call stats plus recent tool calls (`?tool`, `?conversation_id`, `?limit` default 50). |
 | `GET` | `/v1/sessions/stats` | Current session usage and context stats. |
-| `GET` | `/v1/insights/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
-| `GET` | `/v1/insights/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
-| `GET` | `/v1/insights/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
+| `GET` | `/v1/telemetry/usage` | Token/cost usage summary over a time window (`?hours`, default 24; `?group_by` to break down by a dimension, e.g. model). |
+| `GET` | `/v1/telemetry/capabilities` | Resolved capability-tag catalog (`?include=excluded` to surface operator-disabled tools). |
+| `GET` | `/v1/telemetry/capabilities/{tag}` | One capability tag's resolved view (404 when absent). |
 | `POST` | `/v1/sessions/balance` | Set reported balance for session cost tracking. |
 | `POST` | `/v1/sessions/reset` | Reset current session stats. |
 | `POST` | `/v1/sessions/compact` | Compact current session history. |
