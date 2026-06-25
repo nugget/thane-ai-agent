@@ -9,11 +9,12 @@
 #   2. a property-level description rule (`thane-property-description`) — the
 #      Godoc-parity rule: every documented field carries a description.
 #
-# Severity strategy during the #1060 stack: structural problems (invalid
-# schemas, undefined tags, etc.) stay at `error` and fail `just ci` now; the
-# content rules (missing descriptions/examples) ride at vacuum's default `warn`
-# so each stacked PR stays green while the backfill lands. The capstone PR flips
-# the content rules to `error`, making the gate real at the atomic merge.
+# Severity strategy (#1060): structural problems (invalid schemas, undefined
+# tags) fail `just ci` at `error`. Content rules are flipped to `error` one at a
+# time as each backfill completes: thane-property-description is now ENFORCED
+# (the Execution + System component schemas are fully documented); the remaining
+# content rules (response examples, etc.) ride at vacuum's default `warn` until
+# their backfills land.
 #
 # `extends` uses the nested-list form `[[ruleset, level]]` (level is one of
 # all | recommended | off) — this enables vacuum's built-in OpenAPI ruleset at
@@ -28,13 +29,13 @@ rules:
   # so this rule is disabled by decision (#1060), not worked around.
   camel-case-properties: false
 
-  # Godoc parity: every component-schema property should be documented.
-  # Advisory now (warn); flipped to error at the #1060 capstone once the
-  # backfill phases land. ($ref properties inherit their description from the
-  # referenced schema and are refined out of the path when this goes to error.)
+  # Godoc parity: every component-schema property MUST be documented. Enforced
+  # at `error` as of the Execution + System backfills (#1060) — a missing
+  # property description now fails `just ci`. ($ref properties inherit their
+  # description from the referenced schema and are not flagged.)
   thane-property-description:
-    description: Schema properties should carry a description (Godoc parity).
-    severity: warn
+    description: Schema properties must carry a description (Godoc parity).
+    severity: error
     recommended: true
     given: "$.components.schemas[*].properties[*]"
     then:

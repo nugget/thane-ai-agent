@@ -931,44 +931,153 @@ components:
   schemas:
     Error:
       type: object
-      properties:
-        error: { type: string }
+      description: Standard error envelope returned for any 4xx/5xx response.
       required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable message describing what went wrong.
+          example: resource not found
 
     VersionInfo:
       type: object
       additionalProperties: { type: string }
-      description: Build/runtime key-value metadata (version, commit, go version...).
+      description: >-
+        Build and runtime metadata as flat string key/value pairs (version,
+        commit, branch, go_version, build_time, ...). Keys are open, not fixed.
+      example:
+        version: v0.9.2-596-gf92a9208
+        git_commit: f92a9208
+        git_branch: main
+        go_version: go1.26.1
+        uptime: 133h30m0s
 
     LogEntry:
       type: object
-      description: One structured log row (schema first-pass; tighten against logging.LogEntry).
+      description: One structured log row from the process log index, as returned by the system and per-loop log endpoints.
+      required: [id, ts, level, msg]
       properties:
-        ts: { type: string, format: date-time }
-        level: { type: string }
-        msg: { type: string }
-        request_id: { type: string }
-        conversation_id: { type: string }
-      additionalProperties: true
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Monotonic row identifier in the log index.
+          example: 184213
+        ts:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Time the log record was emitted.
+          example: "2026-06-24T14:31:07Z"
+        level:
+          type: string
+          readOnly: true
+          description: Severity level.
+          enum: [TRACE, DEBUG, INFO, WARN, ERROR]
+          example: INFO
+        msg:
+          type: string
+          readOnly: true
+          description: The log message.
+          example: loop iteration complete
+        request_id:
+          type: string
+          readOnly: true
+          description: Request this record is associated with, when emitted during a model turn.
+          example: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
+        session_id:
+          type: string
+          readOnly: true
+          description: Session this record belongs to, when applicable.
+        conversation_id:
+          type: string
+          readOnly: true
+          description: Conversation this record belongs to, when applicable.
+          example: conv-aimee
+        subsystem:
+          type: string
+          readOnly: true
+          description: Originating subsystem / component tag.
+          example: scheduler
+        tool:
+          type: string
+          readOnly: true
+          description: Tool name, for tool-call log records.
+          example: ha_get_state
+        model:
+          type: string
+          readOnly: true
+          description: Model name, for model-turn log records.
+          example: claude-opus-4-8
+        loop_id:
+          type: string
+          readOnly: true
+          description: Loop that emitted the record, when applicable.
+        loop_name:
+          type: string
+          readOnly: true
+          description: Human label of the emitting loop.
+          example: signal/aimee
+        attrs:
+          type: string
+          readOnly: true
+          description: Additional structured attributes, as a JSON-encoded string.
+          example: '{"input_tokens":9123,"output_tokens":2048}'
+        source_file:
+          type: string
+          readOnly: true
+          description: Source file that emitted the log record.
+          example: internal/runtime/loop/loop.go
+        source_line:
+          type: integer
+          readOnly: true
+          description: Line number within source_file.
+          example: 412
 
     SystemStatus:
       type: object
-      description: Health, uptime, version, and snapshots for the system view.
+      description: Aggregate system view — uptime, build version, and per-service health — backing the dashboard's system panel.
       properties:
-        uptime_seconds: { type: integer }
-        version: { $ref: "#/components/schemas/VersionInfo" }
+        uptime_seconds:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Seconds since the process started.
+          example: 480600
+        version:
+          $ref: "#/components/schemas/VersionInfo"
         health:
           type: object
+          readOnly: true
+          description: Per-service readiness, keyed by service name.
           additionalProperties: { $ref: "#/components/schemas/ServiceHealth" }
       additionalProperties: true
+
     ServiceHealth:
       type: object
-      properties:
-        name: { type: string }
-        ready: { type: boolean }
-        last_check: { type: string, format: date-time }
-        last_error: { type: string }
+      description: Readiness snapshot for one wired service (Home Assistant, MQTT, Signal, ...).
       required: [name, ready]
+      properties:
+        name:
+          type: string
+          readOnly: true
+          description: Human-readable service display name (the service identifier is the key in the surrounding health map).
+          example: Home Assistant
+        ready:
+          type: boolean
+          readOnly: true
+          description: Whether the service is currently reachable and healthy.
+          example: true
+        last_check:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Time of the most recent health probe.
+          example: "2026-06-24T14:30:55Z"
+        last_error:
+          type: string
+          readOnly: true
+          description: Error from the most recent failed probe, if any.
 
     LoopState:
       type: string

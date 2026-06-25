@@ -166,86 +166,183 @@ components:
   schemas:
     ChatMessage:
       type: object
-      properties:
-        role: { type: string, enum: [system, user, assistant, tool] }
-        content: { type: string }
+      description: One message in a chat exchange (OpenAI/Ollama shape).
       required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+          description: The role of the message author.
+          example: user
+        content:
+          type: string
+          description: The message text content.
+          example: Turn on the office lights.
     ChatCompletionRequest:
       type: object
+      description: OpenAI-compatible chat completion request.
+      required: [model, messages]
       properties:
         model:
           type: string
           description: Model id or a Thane routing alias (e.g. `thane:latest`).
+          example: thane:latest
         messages:
           type: array
+          description: The conversation messages, in order.
           items: { $ref: "#/components/schemas/ChatMessage" }
-        stream: { type: boolean, default: false }
-        temperature: { type: number }
-        max_tokens: { type: integer }
-      required: [model, messages]
+        stream:
+          type: boolean
+          default: false
+          description: Stream the response as Server-Sent Events instead of one JSON body.
+        temperature:
+          type: number
+          description: Sampling temperature requested by the client.
+          example: 0.7
+        max_tokens:
+          type: integer
+          description: Maximum number of tokens to generate.
+          example: 1024
     ChatCompletionResponse:
       type: object
+      description: OpenAI-compatible chat completion response.
       properties:
-        id: { type: string }
-        object: { type: string, examples: [chat.completion] }
-        created: { type: integer }
-        model: { type: string }
+        id:
+          type: string
+          description: Unique completion identifier.
+          example: chatcmpl-abc123
+        object:
+          type: string
+          description: Object type — always `chat.completion`.
+          examples: [chat.completion]
+        created:
+          type: integer
+          description: Unix timestamp (seconds) when the completion was created.
+          example: 1782735600
+        model:
+          type: string
+          description: Model that produced the completion.
+          example: thane:latest
         choices:
           type: array
+          description: The generated completion choices (Thane returns a single choice).
           items:
             type: object
             properties:
-              index: { type: integer }
+              index:
+                type: integer
+                description: Position of this choice in the list.
+                example: 0
               message: { $ref: "#/components/schemas/ChatMessage" }
-              finish_reason: { type: string }
+              finish_reason:
+                type: string
+                description: Why generation stopped (e.g. stop, length).
+                example: stop
         usage:
           type: object
+          description: Token usage for the request.
           properties:
-            prompt_tokens: { type: integer }
-            completion_tokens: { type: integer }
-            total_tokens: { type: integer }
+            prompt_tokens:
+              type: integer
+              description: Tokens in the prompt.
+              example: 412
+            completion_tokens:
+              type: integer
+              description: Tokens in the generated completion.
+              example: 96
+            total_tokens:
+              type: integer
+              description: Total tokens (prompt + completion).
+              example: 508
     ModelList:
       type: object
+      description: OpenAI-compatible list of available models.
       properties:
-        object: { type: string, examples: [list] }
+        object:
+          type: string
+          description: Object type — always `list`.
+          examples: [list]
         data:
           type: array
+          description: The available models.
           items:
             type: object
             properties:
-              id: { type: string }
-              object: { type: string, examples: [model] }
-              owned_by: { type: string }
+              id:
+                type: string
+                description: Model identifier.
+                example: thane:latest
+              object:
+                type: string
+                description: Object type — always `model`.
+                examples: [model]
+              owned_by:
+                type: string
+                description: Owner of the model.
+                example: thane
     OllamaChatRequest:
       type: object
+      description: Ollama-compatible chat request.
+      required: [model, messages]
       properties:
-        model: { type: string }
+        model:
+          type: string
+          description: Model id or a Thane routing alias.
+          example: thane:latest
         messages:
           type: array
+          description: The conversation messages, in order.
           items: { $ref: "#/components/schemas/ChatMessage" }
-        stream: { type: boolean }
-      required: [model, messages]
+        stream:
+          type: boolean
+          description: Stream the response as newline-delimited JSON objects.
     OllamaChatResponse:
       type: object
+      description: Ollama-compatible chat response (one object per stream chunk).
       additionalProperties: true
       properties:
-        model: { type: string }
-        created_at: { type: string }
+        model:
+          type: string
+          description: Model that produced the reply.
+          example: thane:latest
+        created_at:
+          type: string
+          description: RFC3339 timestamp when the reply was created.
+          example: "2026-06-24T14:31:11Z"
         message: { $ref: "#/components/schemas/ChatMessage" }
-        done: { type: boolean }
+        done:
+          type: boolean
+          description: Whether this is the final chunk of the streamed reply.
+          example: true
     OllamaError:
       type: object
-      properties:
-        error: { type: string }
+      description: Ollama-compatible error envelope.
       required: [error]
+      properties:
+        error:
+          type: string
+          description: Error message.
+          example: model not found
     OllamaTags:
       type: object
+      description: Ollama-compatible list of locally available models (the /api/tags response).
       properties:
         models:
           type: array
+          description: The available models.
           items:
             type: object
             properties:
-              name: { type: string }
-              model: { type: string }
-              size: { type: integer }
+              name:
+                type: string
+                description: Model name (e.g. `thane:latest`).
+                example: thane:latest
+              model:
+                type: string
+                description: Model identifier.
+                example: thane:latest
+              size:
+                type: integer
+                format: int64
+                description: Model size in bytes.
+                example: 4709611008

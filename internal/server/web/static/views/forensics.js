@@ -197,10 +197,10 @@ export function forensicsView(getStore, viewState) {
     }
     const list = el('div', { class: 'fx-logs' });
     for (const e of logsEntries) {
-      list.appendChild(el('div', { class: 'fx-log fx-log--' + (e.Level || 'info').toLowerCase() }, [
-        el('span', { class: 'fx-log-time', text: relTime(e.Timestamp) }),
-        el('span', { class: 'fx-log-level', text: (e.Level || '').toUpperCase() }),
-        el('span', { class: 'fx-log-msg', text: e.Tool ? '[' + e.Tool + '] ' + (e.Msg || '') : (e.Msg || '') }),
+      list.appendChild(el('div', { class: 'fx-log fx-log--' + (e.level || 'info').toLowerCase() }, [
+        el('span', { class: 'fx-log-time', text: relTime(e.ts) }),
+        el('span', { class: 'fx-log-level', text: (e.level || '').toUpperCase() }),
+        el('span', { class: 'fx-log-msg', text: e.tool ? '[' + e.tool + '] ' + (e.msg || '') : (e.msg || '') }),
       ]));
     }
     section.appendChild(list);

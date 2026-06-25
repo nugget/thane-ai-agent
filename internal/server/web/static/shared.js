@@ -1107,24 +1107,24 @@ function renderLogRows(entries, els) {
 
     const tdTime = document.createElement('td');
     tdTime.className = 'log-time';
-    tdTime.textContent = entry.Timestamp
-      ? formatTime(new Date(entry.Timestamp))
+    tdTime.textContent = entry.ts
+      ? formatTime(new Date(entry.ts))
       : '';
 
     const tdLevel = document.createElement('td');
     const levelSpan = document.createElement('span');
-    levelSpan.className = 'level-badge level-badge--' + (entry.Level || 'INFO');
-    levelSpan.textContent = entry.Level || '?';
+    levelSpan.className = 'level-badge level-badge--' + (entry.level || 'INFO');
+    levelSpan.textContent = entry.level || '?';
     tdLevel.appendChild(levelSpan);
 
     const tdSub = document.createElement('td');
     tdSub.className = 'log-subsystem';
-    tdSub.textContent = entry.Subsystem || '';
+    tdSub.textContent = entry.subsystem || '';
 
     const tdMsg = document.createElement('td');
     tdMsg.className = 'log-msg';
-    tdMsg.textContent = entry.Msg || '';
-    tdMsg.title = entry.Msg || '';
+    tdMsg.textContent = entry.msg || '';
+    tdMsg.title = entry.msg || '';
 
     const tdDetail = document.createElement('td');
     tdDetail.className = 'log-detail';
@@ -1148,17 +1148,17 @@ function renderLogRows(entries, els) {
 function buildLogDetail(td, entry) {
   const parts = [];
 
-  if (entry.Model) {
-    parts.push({ key: 'model', val: entry.Model, cls: 'model' });
+  if (entry.model) {
+    parts.push({ key: 'model', val: entry.model, cls: 'model' });
   }
-  if (entry.Tool) {
-    parts.push({ key: 'tool', val: entry.Tool, cls: 'tool' });
+  if (entry.tool) {
+    parts.push({ key: 'tool', val: entry.tool, cls: 'tool' });
   }
 
   // Parse Attrs JSON for extra instrumentation.
   let attrs = null;
-  if (entry.Attrs) {
-    try { attrs = JSON.parse(entry.Attrs); } catch (_) { /* ignore */ }
+  if (entry.attrs) {
+    try { attrs = JSON.parse(entry.attrs); } catch (_) { /* ignore */ }
   }
   if (attrs) {
     // Duration fields (various naming conventions).
@@ -1220,9 +1220,9 @@ function buildLogDetail(td, entry) {
   // Copy-clickable ID chips for tracing IDs. Request ID chips are also
   // clickable to open the request detail waterfall view.
   const ids = [
-    { label: 'req', full: entry.RequestID, inspectable: typeof window.onRequestChipClick === 'function' },
-    { label: 'conv', full: entry.ConversationID },
-    { label: 'sess', full: entry.SessionID },
+    { label: 'req', full: entry.request_id, inspectable: typeof window.onRequestChipClick === 'function' },
+    { label: 'conv', full: entry.conversation_id },
+    { label: 'sess', full: entry.session_id },
   ];
   for (const { label, full, inspectable } of ids) {
     if (!full) continue;
