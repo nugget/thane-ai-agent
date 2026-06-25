@@ -148,7 +148,7 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 	// rather than abstracted because the surrounding handler shape is
 	// shallow and an extracted helper would obscure the refusal flow.
 	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := findLoopDefinition(snap, name); ok {
+		if existing, ok := looppkg.FindDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
 				return "", (&looppkg.ImmutableDefinitionError{Name: name})
 			}
@@ -388,7 +388,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
 	// rather than the registry handle this tool was configured with.
 	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := findLoopDefinition(snap, name); ok {
+		if existing, ok := looppkg.FindDefinition(snap, name); ok {
 			if existing.Source == looppkg.DefinitionSourceConfig {
 				return "", (&looppkg.ImmutableDefinitionError{Name: name})
 			}
@@ -507,7 +507,7 @@ func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string,
 		return nil, fmt.Errorf("loop definition registry not configured")
 	}
 	snap := deps.Registry.Snapshot()
-	existing, ok := findLoopDefinition(snap, loopName)
+	existing, ok := looppkg.FindDefinition(snap, loopName)
 	if !ok {
 		return nil, (&looppkg.UnknownDefinitionError{Name: loopName})
 	}

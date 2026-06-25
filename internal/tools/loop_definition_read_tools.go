@@ -152,7 +152,7 @@ func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]an
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	def, ok := findLoopDefinitionView(view, name)
+	def, ok := looppkg.FindDefinitionView(view, name)
 	if !ok {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
@@ -173,7 +173,7 @@ func (r *Registry) handleLoopDefinitionLint(_ context.Context, args map[string]a
 		errText string
 	)
 	if snapshot, snapErr := currentLoopDefinitionSnapshot(r); snapErr == nil {
-		if existing, ok := findLoopDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
+		if existing, ok := looppkg.FindDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
 			valid = false
 			errText = (&looppkg.ImmutableDefinitionError{Name: spec.Name}).Error()
 		}

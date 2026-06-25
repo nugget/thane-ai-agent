@@ -71,7 +71,7 @@ func (s *Server) handleLoopDefinitionGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: name}).Error())
 		return
@@ -96,7 +96,7 @@ func (s *Server) handleLoopDefinitionSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	snapshot := s.loopDefinitionRegistry.Snapshot()
-	if existing, found := findAPILoopDefinition(snapshot, req.Spec.Name); found && existing.Source == looppkg.DefinitionSourceConfig {
+	if existing, found := looppkg.FindDefinition(snapshot, req.Spec.Name); found && existing.Source == looppkg.DefinitionSourceConfig {
 		s.errorResponse(w, http.StatusConflict, (&looppkg.ImmutableDefinitionError{Name: req.Spec.Name}).Error())
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleLoopDefinitionSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, req.Spec.Name)
+	def, found := looppkg.FindDefinitionView(view, req.Spec.Name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition stored but snapshot is unavailable")
 		return
@@ -159,7 +159,7 @@ func (s *Server) handleLoopDefinitionDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	snapshot := s.loopDefinitionRegistry.Snapshot()
-	if existing, found := findAPILoopDefinition(snapshot, name); found && existing.Source == looppkg.DefinitionSourceConfig {
+	if existing, found := looppkg.FindDefinition(snapshot, name); found && existing.Source == looppkg.DefinitionSourceConfig {
 		s.errorResponse(w, http.StatusConflict, (&looppkg.ImmutableDefinitionError{Name: name}).Error())
 		return
 	} else if !found {
@@ -217,7 +217,7 @@ func (s *Server) handleLoopDefinitionPolicySet(w http.ResponseWriter, r *http.Re
 		s.errorResponse(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), req.Name); !found {
+	if _, found := looppkg.FindDefinition(s.loopDefinitionRegistry.Snapshot(), req.Name); !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: req.Name}).Error())
 		return
 	}
@@ -256,7 +256,7 @@ func (s *Server) handleLoopDefinitionPolicySet(w http.ResponseWriter, r *http.Re
 		}
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, req.Name)
+	def, found := looppkg.FindDefinitionView(view, req.Name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy applied but snapshot is unavailable")
 		return
@@ -279,7 +279,7 @@ func (s *Server) handleLoopDefinitionPolicyDelete(w http.ResponseWriter, r *http
 		s.errorResponse(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), name); !found {
+	if _, found := looppkg.FindDefinition(s.loopDefinitionRegistry.Snapshot(), name); !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: name}).Error())
 		return
 	}
@@ -307,7 +307,7 @@ func (s *Server) handleLoopDefinitionPolicyDelete(w http.ResponseWriter, r *http
 		}
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy cleared but snapshot is unavailable")
 		return
@@ -358,7 +358,7 @@ func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition launched but snapshot is unavailable")
 		return
@@ -370,28 +370,4 @@ func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Reque
 		Definition: def,
 		Result:     result,
 	}, s.logger)
-}
-
-func findAPILoopDefinition(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
-	if snapshot == nil {
-		return looppkg.DefinitionSnapshot{}, false
-	}
-	for _, def := range snapshot.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionSnapshot{}, false
-}
-
-func findAPILoopDefinitionView(view *looppkg.DefinitionRegistryView, name string) (looppkg.DefinitionView, bool) {
-	if view == nil {
-		return looppkg.DefinitionView{}, false
-	}
-	for _, def := range view.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionView{}, false
 }

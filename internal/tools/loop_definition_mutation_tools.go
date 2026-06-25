@@ -21,7 +21,7 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if err != nil {
 		return "", err
 	}
-	if existing, ok := findLoopDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
+	if existing, ok := looppkg.FindDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
 		return "", (&looppkg.ImmutableDefinitionError{Name: spec.Name})
 	}
 	updatedAt := time.Now().UTC()
@@ -39,7 +39,7 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if err != nil {
 		return "", err
 	}
-	def, ok := findLoopDefinitionView(view, spec.Name)
+	def, ok := looppkg.FindDefinitionView(view, spec.Name)
 	if !ok {
 		return "", fmt.Errorf("loop definition stored but snapshot is unavailable")
 	}
@@ -62,7 +62,7 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	existing, ok := findLoopDefinition(snapshot, name)
+	existing, ok := looppkg.FindDefinition(snapshot, name)
 	if ok && existing.Source == looppkg.DefinitionSourceConfig {
 		return "", (&looppkg.ImmutableDefinitionError{Name: name})
 	} else if !ok {
@@ -148,7 +148,7 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	if _, found := findLoopDefinition(snapshot, name); !found {
+	if _, found := looppkg.FindDefinition(snapshot, name); !found {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 	clearOverride, _ := args["clear_override"].(bool)
@@ -198,7 +198,7 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 	if err != nil {
 		return "", err
 	}
-	def, found := findLoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		return "", fmt.Errorf("definition policy updated but snapshot is unavailable")
 	}
@@ -225,7 +225,7 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	def, found := findLoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
@@ -238,7 +238,7 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	def, found = findLoopDefinitionView(view, name)
+	def, found = looppkg.FindDefinitionView(view, name)
 	if !found {
 		return "", fmt.Errorf("definition launched but snapshot is unavailable")
 	}
