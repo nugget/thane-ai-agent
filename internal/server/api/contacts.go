@@ -10,8 +10,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
+	sqlite3 "modernc.org/sqlite"
+	sqlite3lib "modernc.org/sqlite/lib"
 )
 
 const (
@@ -342,8 +343,8 @@ func (s *Server) writeContactStoreError(w http.ResponseWriter, err error, fallba
 }
 
 func isSQLiteConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrConstraint {
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3lib.SQLITE_CONSTRAINT {
 		return true
 	}
 	lower := strings.ToLower(err.Error())
@@ -351,9 +352,9 @@ func isSQLiteConstraint(err error) bool {
 }
 
 func contactConstraintMessage(err error) string {
-	var sqliteErr sqlite3.Error
+	var sqliteErr *sqlite3.Error
 	if errors.As(err, &sqliteErr) {
-		if sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+		if sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_UNIQUE {
 			return "formatted_name must be unique"
 		}
 	}

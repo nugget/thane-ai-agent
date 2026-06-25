@@ -226,7 +226,7 @@ func TestResolveCapabilityTags_SortsBaselineTools(t *testing.T) {
 func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestResolveCapabilityTags_IncludesWatchlistToolsAfterProvider(t *testing.T)
 func TestResolveCapabilityTags_IncludesMQTTWakeToolsAfterSetSubscriptionTools(t *testing.T) {
 	reg := tools.NewEmptyRegistry()
 
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

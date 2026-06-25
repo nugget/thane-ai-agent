@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -31,8 +31,8 @@ type stores struct {
 // the harness can run ad-hoc queries against conversations metadata)
 // and the high-level wrapper stores that the providers expect.
 //
-// The mattn/go-sqlite3 driver respects URI query parameters when the
-// DSN begins with "file:". `mode=ro` opens read-only,
+// modernc.org/sqlite respects URI query parameters when the DSN begins
+// with "file:". `mode=ro` opens read-only,
 // `immutable=1` short-circuits journal recovery and lets multiple
 // readers race, `nolock=1` skips POSIX advisory locks (required for
 // SMB-mounted databases).
@@ -94,7 +94,7 @@ func (s *stores) searcher() memory.MemorySearcher {
 
 func openReadOnly(path string) (*sql.DB, error) {
 	dsn := "file:" + path + "?mode=ro&immutable=1&nolock=1"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite-thane", dsn)
 	if err != nil {
 		return nil, err
 	}

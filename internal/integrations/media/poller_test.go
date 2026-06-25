@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	_ "modernc.org/sqlite"
 )
 
 // newTestStore creates a temporary opstate store for testing.

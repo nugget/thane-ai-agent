@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func TestParseTimestamp(t *testing.T) {
@@ -112,10 +112,14 @@ func TestFormatTimestamp_RoundTrip(t *testing.T) {
 }
 
 func TestFormatTimestamp_MatchesDriverBinding(t *testing.T) {
-	// Pin FormatTimestamp to go-sqlite3's actual binding output. If the
-	// driver ever changes its time.Time → TEXT serialization, this test
-	// fails immediately rather than silently rotting the helper.
-	db, err := sql.Open("sqlite3", ":memory:")
+	// Pin FormatTimestamp to the driver's actual binding output under
+	// thane's configuration — the DriverName wrapper forces modernc's
+	// _time_format=sqlite. If the driver (or that wrapper) ever changes
+	// its time.Time → TEXT serialization, this test fails immediately
+	// rather than silently rotting the helper. Opening via the wrapper
+	// name (not bare "sqlite") is essential: the raw modernc default
+	// serializes as time.Time.String() and would not match.
+	db, err := sql.Open(DriverName, ":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

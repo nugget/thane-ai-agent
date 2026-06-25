@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func newTestWorkingMemoryStore(t *testing.T) *WorkingMemoryStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite-thane", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

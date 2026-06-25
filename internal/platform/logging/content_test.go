@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	_ "modernc.org/sqlite"
 )
 
 func TestContentWriter_WriteRequest(t *testing.T) {

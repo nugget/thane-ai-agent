@@ -213,15 +213,16 @@ type IdleSessionInfo struct {
 }
 
 // timestampFormats lists formats tried when parsing SQLite timestamp strings,
-// ordered from most specific to least. The mattn/go-sqlite3 driver stores
-// time.Time as RFC3339Nano by default, but other paths (or direct SQL
-// inserts) may produce different layouts.
+// ordered from most specific to least. time.Time is commonly stored as
+// RFC3339Nano, but other paths (or direct SQL inserts) may produce
+// different layouts, so parsing tries each in turn.
 var timestampFormats = []string{
 	time.RFC3339Nano,
 	time.RFC3339,
 	"2006-01-02 15:04:05.999999999-07:00",
 	"2006-01-02 15:04:05.999999999",
 	"2006-01-02 15:04:05",
+	"2006-01-02 15:04:05.999999999 -0700 MST", // modernc default (time.Time.String); salvages migration-era rows
 }
 
 // parseTimestamp attempts to parse a SQLite timestamp string using the
@@ -331,7 +332,7 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 		cfg = &defaults
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive database: %w", err)
 	}

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	_ "modernc.org/sqlite"
 )
 
 func testContentResolver(t *testing.T) (*ContentResolver, *TempFileStore, string) {

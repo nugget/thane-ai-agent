@@ -13,7 +13,7 @@ import (
 
 func setupTestStore(t *testing.T) *WatchlistStore {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

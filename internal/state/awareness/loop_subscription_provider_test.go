@@ -18,7 +18,7 @@ import (
 // fakeHA stub used by the rest of the awareness tests.
 func setupLoopSubProvider(t *testing.T) (*LoopSubscriptionProvider, *WatchlistStore, *looppkg.Registry, *fakeHA) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

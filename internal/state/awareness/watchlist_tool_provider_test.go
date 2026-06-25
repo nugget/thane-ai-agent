@@ -15,7 +15,7 @@ import (
 
 func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/runtime/archivist"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func newQueueTestApp(t *testing.T) (*App, *loopqueue.Store) {

@@ -291,7 +291,7 @@ func TestMutateLoopSubscriptionsWritesPersistedAndLive(t *testing.T) {
 	// persistLoopDefinition is not a no-op and a future
 	// refactor that drops the persist call would leave the
 	// disk-side assertion below empty.
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

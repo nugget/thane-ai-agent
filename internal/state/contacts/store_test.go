@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) *Store {
