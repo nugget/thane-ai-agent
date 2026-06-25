@@ -65,6 +65,12 @@ func TestCommitLoopDefinitionPropagatesImmutableError(t *testing.T) {
 	if !errors.As(err, &immutable) {
 		t.Fatalf("error = %v, want it to unwrap to *ImmutableDefinitionError", err)
 	}
+	// The failure must be tagged as the register stage so transport layers
+	// can map it to a 409 without re-running the sequence.
+	var commit *looppkg.CommitError
+	if !errors.As(err, &commit) || commit.Stage != looppkg.CommitStageRegister {
+		t.Fatalf("error = %v, want a CommitError at the register stage", err)
+	}
 }
 
 func TestCommitLoopDefinitionRejectsInvalidSpec(t *testing.T) {

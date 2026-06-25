@@ -97,7 +97,7 @@ type Server struct {
 	deleteModelRegistryPolicy          func(string) error
 	persistModelRegistryResourcePolicy func(string, fleet.ResourcePolicy) error
 	deleteModelRegistryResourcePolicy  func(string) error
-	persistLoopDefinition              func(looppkg.Spec, time.Time) error
+	commitLoopDefinition               func(context.Context, looppkg.Spec, time.Time) error
 	deleteLoopDefinition               func(string) error
 	persistLoopDefinitionPolicy        func(string, looppkg.DefinitionPolicy) error
 	deleteLoopDefinitionPolicy         func(string) error
@@ -167,13 +167,16 @@ func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegist
 	s.loopDefinitionView = fn
 }
 
-// ConfigureLoopDefinitionPersistence configures persistence callbacks for
-// dynamic loop-definition overlay mutations.
+// ConfigureLoopDefinitionPersistence configures the durable-commit and
+// delete callbacks for dynamic loop-definition overlay mutations. commit
+// runs the full persist → overlay upsert → reconcile sequence (the same
+// chokepoint the loop-authoring tools use) so the HTTP write path cannot
+// drift from them.
 func (s *Server) ConfigureLoopDefinitionPersistence(
-	save func(looppkg.Spec, time.Time) error,
+	commit func(context.Context, looppkg.Spec, time.Time) error,
 	remove func(string) error,
 ) {
-	s.persistLoopDefinition = save
+	s.commitLoopDefinition = commit
 	s.deleteLoopDefinition = remove
 }
 

@@ -54,7 +54,7 @@ func (a *App) initServers(s *newState) error {
 	server.UseContactStore(a.contactStore)
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
 	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
-	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
+	server.ConfigureLoopDefinitionPersistence(a.commitLoopDefinition, a.deletePersistedLoopDefinition)
 	server.ConfigureLoopDefinitionLifecycle(
 		a.persistLoopDefinitionPolicy,
 		a.deletePersistedLoopDefinitionPolicy,
