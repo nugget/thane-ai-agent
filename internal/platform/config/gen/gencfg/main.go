@@ -351,7 +351,7 @@ func buildValueNode(v reflect.Value, t reflect.Type, comments commentMap) *yaml.
 	// path emits "null". In a commented-out section the caller already
 	// has a non-nil value from ExampleConfig, but if somehow we reach nil
 	// here, synthesize a zero value so the YAML block is still meaningful.
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			zv := reflect.New(t.Elem()).Elem()
 			return buildValueNode(zv, t.Elem(), comments)

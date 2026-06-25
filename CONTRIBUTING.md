@@ -30,6 +30,8 @@ Thank you for your interest in contributing to Thane!
 - [Go](https://go.dev/) 1.24+
 - [just](https://just.systems/) (command runner)
 - [golangci-lint](https://golangci-lint.run/) v2.x
+- [vacuum](https://github.com/daveshanley/vacuum) (OpenAPI spec linter — `go install github.com/daveshanley/vacuum@v0.29.5`)
+- [lychee](https://github.com/lycheeverse/lychee) (markdown link checker)
 
 ### Workflow
 

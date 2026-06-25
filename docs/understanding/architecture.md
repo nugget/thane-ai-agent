@@ -81,7 +81,7 @@ window.
 
 Talent files bridge the knowledge gap. The orchestrator doesn't see
 delegate tool schemas directly (they're gated by tags), but
-`delegate-hints.md` teaches it what tools exist, what patterns work,
+`delegation.md` teaches it what tools exist, what patterns work,
 and what anti-patterns to avoid. The frontier model writes precise
 delegation prompts without ever seeing the tool definitions.
 See [Delegation](delegation.md).
@@ -212,7 +212,7 @@ native Ollama integration connects without modification. From HA's
 perspective, Thane *is* an Ollama instance. No custom integration, no
 HACS, no protocol adapters.
 
-The **OpenAI-compatible API** on port 8080 means any client that speaks
+The **OpenAI-compatible API** on port 8081 means any client that speaks
 the chat completions API works out of the box. Open WebUI, custom
 scripts, other agents.
 

@@ -22,6 +22,7 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/` | Embedded Cognition Engine dashboard. |
+| `GET` | `/docs` | Interactive OpenAPI explorer (Scalar) for the API. |
 | `GET` | `/health` | Dependency health for service monitoring. |
 | `GET` | `/v1/version` | Build and runtime metadata. |
 | `GET` | `/v1/system` | Slim system rollup: status, dependency health, `uptime_seconds`, version. |

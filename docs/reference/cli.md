@@ -1,6 +1,6 @@
 # CLI Reference
 
-Thane ships as a single binary with seven commands.
+Thane ships as a single binary with eight commands.
 
 ```
 $ thane --help
@@ -15,6 +15,7 @@ Commands:
   ask          Ask a single question (for testing)
   ingest       Import markdown docs into fact store
   caps         Show resolved capability tags from a running daemon
+  health [url] Probe a running daemon's /health endpoint (exit 0 if healthy)
   version      Show version information
 
 Flags:
@@ -30,8 +31,9 @@ Start the API server. This is the primary runtime mode — Thane runs as a
 long-lived process serving APIs, processing events, and managing scheduled
 tasks.
 
-Starts three listeners:
-- **Port 8080** — Native API (OpenAI-compatible) + web dashboard
+Starts these listeners:
+- **Port 8080** — Native Thane /v1 API + web dashboard
+- **Port 8081** — OpenAI-compatible API (optional)
 - **Port 11434** — Ollama-compatible API (for Home Assistant)
 - **Port 8843** — CardDAV server (for contact sync)
 
@@ -99,6 +101,18 @@ the daemon to be running.
 thane caps
 thane caps -x          # include tags the operator overlay excluded
 thane -o json caps     # structured output
+```
+
+### `thane health`
+
+Probe a running daemon's `/health` endpoint and exit 0 if it reports
+healthy, non-zero otherwise. Useful as a liveness check in scripts,
+supervisors, or container health probes. Takes an optional URL; defaults
+to the local daemon if omitted.
+
+```bash
+thane health
+thane health http://127.0.0.1:8080/health
 ```
 
 ### `thane version`
