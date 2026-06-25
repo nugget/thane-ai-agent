@@ -106,6 +106,47 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 	}
 }
 
+func TestOutputSpecValidateRefGrammar(t *testing.T) {
+	// Guards #1068: content resolution could replace a real ref with the
+	// referenced document's body, leaving a multi-line markdown blob in
+	// Ref. Validate must reject that while accepting every well-formed ref.
+	tests := []struct {
+		name    string
+		ref     string
+		wantErr bool
+	}{
+		{name: "simple core ref", ref: "core:metacognitive.md"},
+		{name: "nested path ref", ref: "projects:ranch-operations/ranch-climate-watch.md"},
+		{name: "kb ref", ref: "kb:dashboards/pr-watchlist.md"},
+		{name: "generated ref", ref: "generated:daily/digest.md"},
+		// The production corruption signature: a whole document, frontmatter
+		// and all, sitting where the ref should be.
+		{name: "frontmatter blob rejected", ref: "---\ntitle: \"Ranch Climate Watch\"\ncreated: \"2026-06-25T03:45:49Z\"\n---\n\n# body", wantErr: true},
+		{name: "embedded newline rejected", ref: "core:state.md\nextra", wantErr: true},
+		{name: "carriage return rejected", ref: "core:state.md\r\nmore", wantErr: true},
+		{name: "no root separator rejected", ref: "metacognitive.md", wantErr: true},
+		{name: "empty root rejected", ref: ":state.md", wantErr: true},
+		{name: "empty path rejected", ref: "core:", wantErr: true},
+		{name: "root with whitespace rejected", ref: "--- title:state.md", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := OutputSpec{Name: "doc", Type: OutputTypeMaintainedDocument, Ref: tt.ref}
+			err := out.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Validate() error = nil for ref %q, want error", tt.ref)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() error = %v for ref %q, want nil", err, tt.ref)
+			}
+		})
+	}
+}
+
 func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	spec := Spec{
 		Name:       "writer",

@@ -101,6 +101,23 @@ func (s *loopDefinitionStore) LoadInto(registry *looppkg.DefinitionRegistry, log
 					"name", key, "tags", legacy)
 			}
 		}
+		// Validate before adding to the batch. ReplaceOverlay is
+		// all-or-nothing: it returns on the first ValidatePersistable
+		// failure, and this error is fatal at startup (new_stores.go), so
+		// a single corrupt persisted definition would otherwise block
+		// every healthy overlay loop from loading. Mirror the bad-JSON
+		// skip above — warn and drop the offender, keep the rest. This is
+		// the safety net that lets OutputSpec.Validate tighten (#1068)
+		// without bricking boot while already-corrupt overlays still
+		// exist on disk; the dropped record stays persisted for later
+		// repair.
+		if err := record.Spec.ValidatePersistable(); err != nil {
+			if logger != nil {
+				logger.Warn("skipping invalid persisted loop definition",
+					"name", key, "error", err)
+			}
+			continue
+		}
 		records[key] = record
 	}
 	if len(records) == 0 {
