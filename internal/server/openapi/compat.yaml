@@ -54,6 +54,7 @@ paths:
       servers:
         - url: http://localhost:8081
       requestBody:
+        description: The chat completion request — messages, model, and sampling options.
         required: true
         content:
           application/json:
@@ -94,6 +95,7 @@ paths:
       servers:
         - url: http://localhost:11434
       requestBody:
+        description: The Ollama chat request — model and messages.
         required: true
         content:
           application/json:
@@ -214,7 +216,7 @@ components:
         object:
           type: string
           description: Object type — always `chat.completion`.
-          examples: [chat.completion]
+          example: chat.completion
         created:
           type: integer
           description: Unix timestamp (seconds) when the completion was created.
@@ -261,7 +263,7 @@ components:
         object:
           type: string
           description: Object type — always `list`.
-          examples: [list]
+          example: list
         data:
           type: array
           description: The available models.
@@ -275,7 +277,7 @@ components:
               object:
                 type: string
                 description: Object type — always `model`.
-                examples: [model]
+                example: model
               owned_by:
                 type: string
                 description: Owner of the model.
