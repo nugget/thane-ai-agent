@@ -19,6 +19,14 @@ codesign-options := env("THANE_CODESIGN_OPTIONS", "runtime")
 codesign-timestamp := env("THANE_CODESIGN_TIMESTAMP", "true")
 notary-profile := env("THANE_NOTARY_PROFILE", "")
 
+# Hermetic dev tools. golangci-lint and vacuum are pinned in tools/go.mod
+# and run via `go run`, so no host install is needed (the toolchain builds
+# and caches them) and Dependabot tracks their versions through the gomod
+# ecosystem (.github/dependabot.yml, directory: /tools). Their large
+# dependency trees live in tools/go.mod and never touch the main module.
+golangci := "go run -modfile=tools/go.mod github.com/golangci/golangci-lint/v2/cmd/golangci-lint"
+vacuum := "go run -modfile=tools/go.mod github.com/daveshanley/vacuum"
+
 # List available recipes
 default:
     @echo "Common workflows:"
@@ -83,6 +91,12 @@ clean:
 test: generate
     go test -race ./...
 
+# Race tests + coverage in a single pass (CI uses this so it never runs the
+# suite twice). Writes coverage.out for the coverage uploader.
+[group('test')]
+cover: generate
+    go test -race -coverprofile=coverage.out ./...
+
 # Check formatting
 [group('test')]
 fmt-check:
@@ -91,12 +105,13 @@ fmt-check:
 # Run linter
 [group('test')]
 lint: generate
-    golangci-lint run ./...
+    {{golangci}} run ./...
 
 # Lint the OpenAPI specs against the Thane ruleset (.vacuum.yaml). Structural
 # errors fail the build; content gaps (missing descriptions/examples) ride at
-# `warn` during the #1060 stack and become errors at its capstone. Install:
-# `go install github.com/daveshanley/vacuum@v0.29.5` (CI does this).
+# `warn` during the #1060 stack and become errors at its capstone. vacuum is
+# hermetic (pinned in tools/go.mod, run via the {{vacuum}} `go run` wrapper) —
+# no host install needed.
 #
 # Flake guard (#1078): vacuum's schema rules (oas-schema-check, oas-missing-type)
 # nondeterministically collapse — emitting wholesale spurious errors with varying
@@ -112,7 +127,7 @@ lint-openapi:
     lint_spec() {
         local spec="$1" attempt
         for attempt in 1 2 3; do
-            if vacuum lint -r .vacuum.yaml --fail-severity error \
+            if {{vacuum}} lint -r .vacuum.yaml --fail-severity error \
                 --timeout 120 --lookup-timeout 10000 "$spec"; then
                 return 0
             fi
@@ -150,9 +165,18 @@ architecture:
 architecture-check:
     @bash scripts/architecture.sh check
 
-# Check internal markdown links (no network requests)
+# Check internal markdown links (no network requests). lychee is a Rust
+# tool, so unlike golangci-lint/vacuum it can't be vendored via go.mod;
+# locally it's skipped-with-notice when absent (CI always installs a pinned
+# build and enforces it).
 [group('test')]
 link-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v lychee >/dev/null 2>&1; then
+        echo "link-check: lychee not on PATH — skipping locally (CI enforces it). Install: brew install lychee" >&2
+        exit 0
+    fi
     lychee --offline --no-progress '**/*.md'
 
 # CI: format check, lint, and tests

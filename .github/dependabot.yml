@@ -6,6 +6,15 @@ updates:
       interval: weekly
     commit-message:
       prefix: "chore"
+  # Hermetic dev tools (golangci-lint, vacuum) are pinned in tools/go.mod via
+  # the Go tool directive. Tracking that module is what turns their version
+  # bumps into Dependabot PRs.
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
   - package-ecosystem: github-actions
     directory: /
     schedule:

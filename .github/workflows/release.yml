@@ -14,8 +14,9 @@ permissions:
 
 env:
   GO_VERSION: '1.25'
-  GOLANGCI_LINT_VERSION: 'v2.9.0'
-  VACUUM_VERSION: 'v0.29.5'
+  # golangci-lint and vacuum are pinned in tools/go.mod and run via `go run`
+  # (see the just recipes) — no install step here. lychee is a Rust tool and
+  # has no go.mod home, so it stays a pinned download.
   LYCHEE_VERSION: '0.23.0'
 
 jobs:
@@ -35,20 +36,20 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+          # setup-go@v6 enables caching by default; set it explicitly so the
+          # intent (and that cache-dependency-path is honored) is unambiguous.
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Install just
         uses: extractions/setup-just@v4
 
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
-
-      - name: Install vacuum (OpenAPI linter)
-        run: go install github.com/daveshanley/vacuum@${{ env.VACUUM_VERSION }}
-
       - name: Install lychee
-        run: |
-          curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v${{ env.LYCHEE_VERSION }}/lychee-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar xz -C /usr/local/bin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
 
       - name: Run CI gate
         run: just ci

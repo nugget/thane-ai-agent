@@ -6,42 +6,102 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# Split the gate into independent jobs so wall-clock is the slowest job, not
+# the sum. golangci-lint and vacuum are hermetic (tools/go.mod, run via
+# `go run` inside the just recipes) — no install steps. lychee is the one
+# non-Go tool and is installed only where link-check runs.
+#
+# Caching: the downloaded module cache is shared (identical across jobs), but
+# the build cache (~/.cache/go-build) is keyed PER JOB. Each job compiles a
+# different set of artifacts (test -> race objects, lint -> golangci-lint,
+# checks -> vacuum + gencfg); a single shared build-cache key would let the
+# jobs race and each restore a cache missing its own artifacts, forcing a
+# recompile every run. Per-job keys keep each job's warm cache intact.
+env:
+  LYCHEE_VERSION: '0.23.0'
+  GO_VERSION: '1.25'
+
 jobs:
-  ci:
+  test:
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
-
-      - name: Install just
-        uses: extractions/setup-just@v4
-
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0
-
-      - name: Install vacuum (OpenAPI linter)
-        run: go install github.com/daveshanley/vacuum@v0.29.5
-
-      - name: Install lychee
-        run: |
-          curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v0.23.0/lychee-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar xz -C /usr/local/bin
-
-      - name: Run CI checks
-        run: just ci
-        # Runs: fmt-check, lint, test
-
-      - name: Generate coverage
-        run: just generate && go test -coverprofile=coverage.out ./...
-
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-test-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-build-test-${{ runner.os }}-
+      - uses: extractions/setup-just@v4
+      - name: Test (race) + coverage
+        run: just cover
       - name: Upload coverage
         uses: codecov/codecov-action@v7
         with:
           files: coverage.out
           fail_ci_if_error: false
         continue-on-error: true
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-build-lint-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('tools/go.sum', '.golangci.yml') }}
+          restore-keys: golangci-lint-${{ runner.os }}-
+      - uses: extractions/setup-just@v4
+      - name: Lint
+        run: just lint
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-checks-${{ runner.os }}-${{ hashFiles('go.sum', 'tools/go.sum') }}
+          restore-keys: go-build-checks-${{ runner.os }}-
+      - uses: extractions/setup-just@v4
+      - name: Install lychee
+        uses: taiki-e/install-action@v2
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
+      - name: Static checks
+        run: just generate && just fmt-check mod-tidy-check config-generate-check architecture-check lint-openapi link-check
