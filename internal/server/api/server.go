@@ -172,6 +172,13 @@ func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegist
 // runs the full persist → overlay upsert → reconcile sequence (the same
 // chokepoint the loop-authoring tools use) so the HTTP write path cannot
 // drift from them.
+//
+// Contract: commit must tag its failures with *looppkg.CommitError (stage
+// persist/register/reconcile) — that is what handleLoopDefinitionSet's
+// respondLoopCommitError uses to map a register failure to 400 and a
+// persist/reconcile failure to 500. A commit that returns a raw error
+// instead silently collapses every failure to 500. App.commitLoopDefinition
+// satisfies this; alternative wiring (tests, custom setups) must too.
 func (s *Server) ConfigureLoopDefinitionPersistence(
 	commit func(context.Context, looppkg.Spec, time.Time) error,
 	remove func(string) error,

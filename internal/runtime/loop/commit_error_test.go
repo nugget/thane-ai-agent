@@ -25,6 +25,17 @@ func TestCommitErrorErrorText(t *testing.T) {
 	}
 }
 
+func TestCommitErrorErrorTextNilErr(t *testing.T) {
+	// Error() must not panic on a nil Err at any stage — it runs on every
+	// logging/formatting path that touches a commit failure.
+	for _, stage := range []CommitStage{CommitStagePersist, CommitStageRegister, CommitStageReconcile} {
+		ce := &CommitError{Stage: stage}
+		if got, want := ce.Error(), string(stage)+" loop definition: <nil>"; got != want {
+			t.Errorf("stage %q: Error() = %q, want %q", stage, got, want)
+		}
+	}
+}
+
 func TestCommitErrorUnwrapsTypedErrors(t *testing.T) {
 	immutable := &ImmutableDefinitionError{Name: "metacog_like"}
 	ce := &CommitError{Stage: CommitStageRegister, Err: immutable}

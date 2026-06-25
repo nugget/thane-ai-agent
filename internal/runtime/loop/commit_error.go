@@ -35,6 +35,11 @@ func (e *CommitError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
+	// Guard a nil Err: Error() must never panic, since it runs on every
+	// logging/formatting path that touches a commit failure.
+	if e.Err == nil {
+		return fmt.Sprintf("%s loop definition: <nil>", e.Stage)
+	}
 	if e.Stage == CommitStageRegister {
 		return e.Err.Error()
 	}
