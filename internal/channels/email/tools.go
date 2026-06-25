@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // Tools holds email tool dependencies. Each handler takes the raw
@@ -30,10 +30,10 @@ func NewTools(mgr *Manager, contacts ContactResolver) *Tools {
 // HandleList lists recent emails in a folder.
 func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, error) {
 	opts := ListOptions{
-		Folder:  stringArg(args, "folder"),
-		Limit:   intArg(args, "limit"),
-		Unseen:  boolArg(args, "unseen"),
-		Account: stringArg(args, "account"),
+		Folder:  toolargs.String(args, "folder"),
+		Limit:   toolargs.Int(args, "limit"),
+		Unseen:  toolargs.Bool(args, "unseen"),
+		Account: toolargs.String(args, "account"),
 	}
 
 	client, err := t.manager.Account(opts.Account)
@@ -59,9 +59,9 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 
 // HandleRead reads a single email by UID.
 func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, error) {
-	uid := uint32(intArg(args, "uid"))
-	folder := stringArg(args, "folder")
-	account := stringArg(args, "account")
+	uid := uint32(toolargs.Int(args, "uid"))
+	folder := toolargs.String(args, "folder")
+	account := toolargs.String(args, "account")
 
 	if uid == 0 {
 		return "", fmt.Errorf("uid is required")
@@ -82,7 +82,7 @@ func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, er
 
 // HandleFolders lists all folders with message counts.
 func (t *Tools) HandleFolders(ctx context.Context, args map[string]any) (string, error) {
-	account := stringArg(args, "account")
+	account := toolargs.String(args, "account")
 
 	client, err := t.manager.Account(account)
 	if err != nil {
@@ -104,19 +104,19 @@ func (t *Tools) HandleFolders(ctx context.Context, args map[string]any) (string,
 // HandleSearch searches for emails matching the given criteria.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
 	opts := SearchOptions{
-		Folder:  stringArg(args, "folder"),
-		Query:   stringArg(args, "query"),
-		From:    stringArg(args, "from"),
-		Limit:   intArg(args, "limit"),
-		Account: stringArg(args, "account"),
+		Folder:  toolargs.String(args, "folder"),
+		Query:   toolargs.String(args, "query"),
+		From:    toolargs.String(args, "from"),
+		Limit:   toolargs.Int(args, "limit"),
+		Account: toolargs.String(args, "account"),
 	}
 
-	if s := stringArg(args, "since"); s != "" {
+	if s := toolargs.String(args, "since"); s != "" {
 		if t, err := time.Parse("2006-01-02", s); err == nil {
 			opts.Since = t
 		}
 	}
-	if s := stringArg(args, "before"); s != "" {
+	if s := toolargs.String(args, "before"); s != "" {
 		if t, err := time.Parse("2006-01-02", s); err == nil {
 			opts.Before = t
 		}
@@ -179,14 +179,14 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 //     caller (HandleMark) surfaces "uids is required" to the model.
 func parseMarkAction(args map[string]any) MarkAction {
 	action := MarkAction{
-		Folder:  stringArg(args, "folder"),
-		Flag:    stringArg(args, "flag"),
-		Add:     boolArgDefault(args, "add", true),
-		Account: stringArg(args, "account"),
+		Folder:  toolargs.String(args, "folder"),
+		Flag:    toolargs.String(args, "flag"),
+		Add:     toolargs.BoolOr(args, "add", true),
+		Account: toolargs.String(args, "account"),
 	}
-	action.UIDs = uint32SliceArg(args, "uids")
+	action.UIDs = toolargs.Uint32Slice(args, "uids")
 	if len(action.UIDs) == 0 {
-		if uid := uint32(intArg(args, "uid")); uid != 0 {
+		if uid := uint32(toolargs.Int(args, "uid")); uid != 0 {
 			action.UIDs = []uint32{uid}
 		}
 	}
@@ -196,11 +196,11 @@ func parseMarkAction(args map[string]any) MarkAction {
 // HandleSend composes and sends a new email.
 func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, error) {
 	opts := SendOptions{
-		To:      stringSliceArg(args, "to"),
-		Cc:      stringSliceArg(args, "cc"),
-		Subject: stringArg(args, "subject"),
-		Body:    stringArg(args, "body"),
-		Account: stringArg(args, "account"),
+		To:      toolargs.StringSlice(args, "to"),
+		Cc:      toolargs.StringSlice(args, "cc"),
+		Subject: toolargs.String(args, "subject"),
+		Body:    toolargs.String(args, "body"),
+		Account: toolargs.String(args, "account"),
 	}
 
 	if len(opts.To) == 0 {
@@ -219,11 +219,11 @@ func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, er
 // HandleReply replies to an existing message with threading headers.
 func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, error) {
 	opts := ReplyOptions{
-		UID:      uint32(intArg(args, "uid")),
-		Folder:   stringArg(args, "folder"),
-		Body:     stringArg(args, "body"),
-		ReplyAll: boolArg(args, "reply_all"),
-		Account:  stringArg(args, "account"),
+		UID:      uint32(toolargs.Int(args, "uid")),
+		Folder:   toolargs.String(args, "folder"),
+		Body:     toolargs.String(args, "body"),
+		ReplyAll: toolargs.Bool(args, "reply_all"),
+		Account:  toolargs.String(args, "account"),
 	}
 
 	if opts.UID == 0 {
@@ -291,9 +291,9 @@ func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, e
 // HandleMove moves messages between folders.
 func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, error) {
 	opts := MoveOptions{
-		Folder:      stringArg(args, "folder"),
-		Destination: stringArg(args, "destination"),
-		Account:     stringArg(args, "account"),
+		Folder:      toolargs.String(args, "folder"),
+		Destination: toolargs.String(args, "destination"),
+		Account:     toolargs.String(args, "account"),
 	}
 
 	// Models sometimes pass "folder" meaning the destination (e.g.,
@@ -308,9 +308,9 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	}
 
 	// Parse UIDs — accept "uids" array or singular "uid".
-	opts.UIDs = uint32SliceArg(args, "uids")
+	opts.UIDs = toolargs.Uint32Slice(args, "uids")
 	if len(opts.UIDs) == 0 {
-		if uid := uint32(intArg(args, "uid")); uid != 0 {
+		if uid := uint32(toolargs.Int(args, "uid")); uid != 0 {
 			opts.UIDs = []uint32{uid}
 		}
 	}
@@ -493,130 +493,4 @@ func formatFolderList(folders []Folder) string {
 	}
 
 	return sb.String()
-}
-
-// --- Argument extraction helpers ---
-
-func stringArg(args map[string]any, key string) string {
-	if v, ok := args[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-// intArg extracts an integer from args. JSON numbers arrive as float64,
-// but LLMs sometimes send numeric strings ("395") or Go-native ints.
-// Non-numeric strings log a warning and return 0.
-func intArg(args map[string]any, key string) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case string:
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			slog.Warn("failed to parse int argument", "key", key, "value", v)
-			return 0
-		}
-		return n
-	}
-	return 0
-}
-
-func boolArg(args map[string]any, key string) bool {
-	if v, ok := args[key].(bool); ok {
-		return v
-	}
-	return false
-}
-
-// boolArgDefault resolves the omitted-bool ambiguity that bit
-// email_mark in #930: when a tool schema documents `default: true`
-// for a boolean argument, the calling model often omits the field
-// entirely rather than sending `true` explicitly — and Go's zero
-// value for the missing key is `false`, the opposite of what the
-// schema promised. boolArgDefault returns the documented fallback
-// when the key is absent or wrong-typed, so runtime behavior matches
-// the schema regardless of how the model encodes the call. Use it
-// for any tool argument whose schema documents a non-false default;
-// use boolArg directly when false-when-omitted is the intended
-// semantic.
-func boolArgDefault(args map[string]any, key string, fallback bool) bool {
-	if v, ok := args[key].(bool); ok {
-		return v
-	}
-	return fallback
-}
-
-// uint32SliceArg extracts a slice of uint32 values from args. Handles
-// JSON arrays (elements may be float64, int, or string) and single
-// values. This consolidates the UID parsing that was duplicated across
-// HandleMark and HandleMove. Invalid or out-of-range elements are
-// logged and skipped.
-func uint32SliceArg(args map[string]any, key string) []uint32 {
-	switch v := args[key].(type) {
-	case []any:
-		var out []uint32
-		for _, el := range v {
-			if uid, ok := coerceUint32(el); ok {
-				out = append(out, uid)
-			} else {
-				slog.Warn("skipped invalid UID element", "key", key, "value", el)
-			}
-		}
-		return out
-	default:
-		if uid, ok := coerceUint32(v); ok {
-			return []uint32{uid}
-		}
-	}
-	return nil
-}
-
-// coerceUint32 attempts to convert a value to a valid uint32 UID.
-// Returns (0, false) for nil, negative, non-integer, or out-of-range values.
-func coerceUint32(v any) (uint32, bool) {
-	switch n := v.(type) {
-	case float64:
-		if n != float64(int64(n)) || n < 1 || n > float64(maxUint32) {
-			return 0, false
-		}
-		return uint32(n), true
-	case int:
-		if n < 1 || int64(n) > int64(maxUint32) {
-			return 0, false
-		}
-		return uint32(n), true
-	case string:
-		parsed, err := strconv.Atoi(n)
-		if err != nil || parsed < 1 || int64(parsed) > int64(maxUint32) {
-			return 0, false
-		}
-		return uint32(parsed), true
-	}
-	return 0, false
-}
-
-// maxUint32 is the largest valid uint32 value, used for range checks.
-const maxUint32 = 1<<32 - 1
-
-// stringSliceArg extracts a string slice from args. The value may be
-// a []any (from JSON) or a single string.
-func stringSliceArg(args map[string]any, key string) []string {
-	switch v := args[key].(type) {
-	case []any:
-		result := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	case string:
-		if v != "" {
-			return []string{v}
-		}
-	}
-	return nil
 }
