@@ -213,7 +213,10 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 			"document": "kb:dashboards/pr-watchlist.md",
 			"title":    "PR Watchlist",
 		},
-		"tags": []any{"forge"},
+		"tags":          []any{"forge"},
+		"quality_floor": float64(7),
+		"exclude_tools": []any{"exec"},
+		"metadata":      map[string]any{"team": "release"},
 	})
 	if err != nil {
 		t.Fatalf("thane_curate handler: %v", err)
@@ -274,6 +277,17 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		if !slices.Contains(found.Spec.ExcludeTools, egress) {
 			t.Errorf("curate spec ExcludeTools missing egress tool %q; got %v", egress, found.Spec.ExcludeTools)
 		}
+	}
+	// Operator declarative knobs land on the spec, with exclude_tools layered
+	// on top of the egress floor (extending it, not replacing it).
+	if found.Spec.Profile.QualityFloor != 7 {
+		t.Errorf("Profile.QualityFloor = %d, want 7", found.Spec.Profile.QualityFloor)
+	}
+	if !slices.Contains(found.Spec.ExcludeTools, "exec") {
+		t.Errorf("exclude_tools knob: expected \"exec\" in ExcludeTools, got %v", found.Spec.ExcludeTools)
+	}
+	if found.Spec.Metadata["team"] != "release" {
+		t.Errorf("Metadata[team] = %q, want release", found.Spec.Metadata["team"])
 	}
 	if _, ok := found.Spec.Metadata["scope_tag"]; ok {
 		t.Errorf("scope_tag metadata should be gone, found %v", found.Spec.Metadata["scope_tag"])
