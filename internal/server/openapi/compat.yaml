@@ -216,7 +216,7 @@ components:
         object:
           type: string
           description: Object type — always `chat.completion`.
-          examples: [chat.completion]
+          example: chat.completion
         created:
           type: integer
           description: Unix timestamp (seconds) when the completion was created.
@@ -263,7 +263,7 @@ components:
         object:
           type: string
           description: Object type — always `list`.
-          examples: [list]
+          example: list
         data:
           type: array
           description: The available models.
@@ -277,7 +277,7 @@ components:
               object:
                 type: string
                 description: Object type — always `model`.
-                examples: [model]
+                example: model
               owned_by:
                 type: string
                 description: Owner of the model.
