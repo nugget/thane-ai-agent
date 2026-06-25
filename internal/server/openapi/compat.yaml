@@ -19,6 +19,12 @@ info:
     AuthN is a per-client bearer API key (`Authorization: Bearer <key>`);
     authorization is coarse (inference access), intentionally distinct from the
     native API's granular `resource:action` scopes.
+  contact:
+    name: Thane — nugget/thane-ai-agent
+    url: https://github.com/nugget/thane-ai-agent
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
 
 servers:
   - url: http://localhost:8081
@@ -34,6 +40,10 @@ tags:
     description: OpenAI-compatible endpoints — generic OpenAI clients only (HA and open-webui use the Ollama surface).
   - name: ollama
     description: Ollama-compatible endpoints — HA integration, open-webui chat, model listing.
+
+externalDocs:
+  description: Source, architecture, and contributor guides on GitHub.
+  url: https://github.com/nugget/thane-ai-agent/tree/main/docs
 
 paths:
   /v1/chat/completions:

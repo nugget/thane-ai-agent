@@ -27,7 +27,8 @@ info:
       written OIDC-ready; tokens are minted directly for now.
     - **AuthZ scopes** are `resource:action`:
       `loops:read`, `definitions:read`, `definitions:write`, `requests:read`,
-      `conversations:read`, `sessions:read`, `sessions:write`, `archive:read`,
+      `schedules:read`, `conversations:read`, `sessions:read`, `sessions:write`,
+      `archive:read`,
       `checkpoints:read`, `checkpoints:write`, `models:read`, `models:admin`,
       `insights:read`, `contacts:read`, `contacts:write`, `system:read`.
     - **Roles** bundle scopes: `observer` (all `:read`), `operator`
@@ -37,12 +38,18 @@ info:
     CORS is a per-surface concern: the native API allowlists the UI origins
     (credentialed, cross-origin since the hosts differ); the compatibility API
     has its own, narrower policy.
+  contact:
+    name: Thane — nugget/thane-ai-agent
+    url: https://github.com/nugget/thane-ai-agent
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
 
 servers:
   - url: http://localhost:8080
     description: Local development (native API + web UI)
-  # Production native host is fronted separately from the compatibility host
-  # (e.g. thane.hollowoak.net serves compat). Final URL TBD with ops.
+  # In production the native API is fronted by a reverse proxy on its own host,
+  # separate from the compatibility API; each deployment sets its public URL.
 
 security:
   - bearerAuth: []
@@ -72,6 +79,22 @@ tags:
     description: Health, version, and process logs.
   - name: Realtime
     description: WebSocket channel for first-party live interaction.
+
+externalDocs:
+  description: Source, architecture, and contributor guides on GitHub.
+  url: https://github.com/nugget/thane-ai-agent/tree/main/docs
+
+# Sidebar grouping for the Scalar explorer. Every tag above belongs to exactly
+# one group; the groups order the /docs navigation by domain.
+x-tagGroups:
+  - name: Execution
+    tags: [Loops, Loop Definitions, Requests, Scheduler]
+  - name: Memory & History
+    tags: [Conversations & Sessions, Archive, Checkpoints]
+  - name: Models & Insights
+    tags: [Models & Fleet, Insights]
+  - name: Platform
+    tags: [Contacts, System, Realtime]
 
 paths:
   # ----------------------------------------------------------------- System

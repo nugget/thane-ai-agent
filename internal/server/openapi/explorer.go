@@ -37,6 +37,9 @@ const indexHTML = `<!doctype html>
           { url: '/docs/openapi/native.yaml', title: 'Thane Native API', slug: 'native' },
           { url: '/docs/openapi/compat.yaml', title: 'Compatibility API', slug: 'compat' },
         ],
+        // Default the "Try it" code samples to curl — the operator's lingua
+        // franca for a self-hosted API.
+        defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },
       })
     </script>
   </body>
