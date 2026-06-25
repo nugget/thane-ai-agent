@@ -41,8 +41,7 @@ generate:
 [group('build')]
 build target_os=host_os target_arch=host_arch cc="": generate
     @mkdir -p dist
-    @if [ -n "{{cc}}" ]; then export CC="{{cc}}"; fi; \
-    CGO_ENABLED=1 GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    CGO_ENABLED=0 GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
     @if [ "{{target_os}}" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
@@ -55,8 +54,10 @@ build-all:
     just build-linux-docker amd64
     just build-linux-docker arm64
 
-# Build a Linux binary through Docker Buildx so CGO-backed SQLite builds
-# stay usable even on non-Linux hosts without local cross-compilers.
+# Build a Linux binary through Docker Buildx in a clean Linux toolchain.
+# Since the SQLite driver is now pure Go (modernc), `just build linux
+# <arch>` also cross-compiles natively (CGO_ENABLED=0); this recipe
+# remains for reproducible container-based release artifacts.
 [group('build')]
 build-linux-docker target_arch:
     #!/usr/bin/env bash

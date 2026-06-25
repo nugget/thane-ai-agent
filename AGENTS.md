@@ -31,8 +31,12 @@ on GitHub Actions to catch what you could have caught locally.
 
 ## Code Conventions
 
-- **Go 1.24+** required. Build requires `-tags "sqlite_fts5"` (the
-  justfile handles this).
+- **Go 1.24+** required. SQLite is the pure-Go `modernc.org/sqlite`
+  driver (CGO-free; FTS5 is built in, so no build tag is needed). Open
+  databases via `database.Open`/`database.OpenMemory` or the
+  `database.DriverName` constant — never `sql.Open("sqlite", …)` directly
+  (a guard test enforces this), so every connection gets the forced
+  `_time_format=sqlite` that keeps timestamp serialization byte-stable.
 - **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`,
   `test:`, `chore:`.
 - **All HTTP clients** must use `httpkit.NewClient()` /
