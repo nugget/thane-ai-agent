@@ -60,6 +60,8 @@ tags:
     description: Historical sessions with full-text search and export.
   - name: Checkpoints
     description: Conversation state snapshots for restart survival.
+  - name: Scheduler
+    description: Durable scheduled tasks and their execution history.
   - name: Models & Fleet
     description: Available models and the routing/registry policy.
   - name: Insights
@@ -502,10 +504,10 @@ paths:
                         message_count: { type: integer }
                         created_at: { type: string, format: date-time }
                         updated_at: { type: string, format: date-time }
-                        channel_binding: { type: object, nullable: true }
+                        channel_binding: { type: [object, "null"] }
                   count: { type: integer }
                   total: { type: integer }
-                  next_cursor: { type: string, nullable: true }
+                  next_cursor: { type: [string, "null"] }
         "400": { $ref: "#/components/responses/BadRequest" }
   /v1/conversations/{id}:
     get:

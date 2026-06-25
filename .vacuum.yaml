@@ -1,0 +1,38 @@
+# Vacuum ruleset for Thane's OpenAPI specs — issue #1060 (Godoc parity for /docs/).
+#
+# Extends vacuum's recommended OpenAPI ruleset, with two Thane-specific changes:
+#
+#   1. snake_case property names are deliberate — they are the JSON wire
+#      convention for the whole API — so the built-in camelCase rule (which
+#      fired 61 false positives) is disabled.
+#
+#   2. a property-level description rule (`thane-property-description`) — the
+#      Godoc-parity rule: every documented field carries a description.
+#
+# Severity strategy during the #1060 stack: structural problems (invalid
+# schemas, undefined tags, etc.) stay at `error` and fail `just ci` now; the
+# content rules (missing descriptions/examples) ride at vacuum's default `warn`
+# so each stacked PR stays green while the backfill lands. The capstone PR flips
+# the content rules to `error`, making the gate real at the atomic merge.
+extends: [[spectral:oas, recommended]]
+
+rules:
+  # snake_case is the deliberate, API-wide wire convention — it matches the
+  # frozen OpenAI/Ollama compat surfaces (completion_tokens, finish_reason),
+  # Home Assistant, the shared Go json tags, and the persisted message/archive
+  # shapes. camelCase would split native from the unchangeable compat protocols,
+  # so this rule is disabled by decision (#1060), not worked around.
+  camel-case-properties: false
+
+  # Godoc parity: every component-schema property should be documented.
+  # Advisory now (warn); flipped to error at the #1060 capstone once the
+  # backfill phases land. ($ref properties inherit their description from the
+  # referenced schema and are refined out of the path when this goes to error.)
+  thane-property-description:
+    description: Schema properties should carry a description (Godoc parity).
+    severity: warn
+    recommended: true
+    given: "$.components.schemas[*].properties[*]"
+    then:
+      field: description
+      function: truthy
