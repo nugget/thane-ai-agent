@@ -124,6 +124,12 @@ func (r *Registry) registerLoopRuntimeTools() {
 	r.Register(&Tool{
 		Name:        "spawn_loop",
 		Description: "Launch an ad hoc loop immediately using the loops launch contract without persisting a loop definition. Use this for temporary services, detached background research that should report back later, or one-shot request/reply runs that do not belong in the durable loop-definition registry. For async work, prefer operation=background_task. If completion is omitted there, the runtime infers the most natural detached delivery target from the current origin context. Tool filtering goes in the top-level launch fields (allowed_tools, etc.) — NOT inside launch.metadata. To pin a model, set spec.profile.model inside the spec object; per-launch model overrides are rejected.",
+		// The launch carries a declarative spec; its strings (notably
+		// spec.outputs[].ref) must be stored verbatim, not expanded.
+		// Universal prefix-to-content resolution would otherwise rewrite a
+		// real ref into document content, and the ad-hoc loop would die at
+		// its first wake with `unknown document root`. See #1068.
+		SkipContentResolve: true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
