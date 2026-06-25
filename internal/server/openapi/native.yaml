@@ -1081,7 +1081,7 @@ components:
           items: { $ref: "#/components/schemas/IterationSnapshot" }
           description: Up to 10 completed iteration snapshots (newest first), used by the dashboard timeline.
           readOnly: true
-      required: [id, name, state, started_at, iterations, attempts]
+      required: [id, name, state, started_at, iterations, attempts, total_input_tokens, total_output_tokens, consecutive_errors]
     IterationSnapshot:
       type: object
       description: Serializable summary of a single completed loop iteration, retained in a ring buffer for the dashboard timeline.
@@ -1354,8 +1354,7 @@ components:
       properties:
         request_id:
           type: string
-          format: uuid
-          description: Unique identifier of the request this detail belongs to.
+          description: Opaque identifier of the request this detail belongs to (a UUIDv7 in the common path; not guaranteed to be a UUID).
           readOnly: true
           example: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
         prompt_hash:
@@ -1576,7 +1575,7 @@ components:
           readOnly: true
           description: Next computed fire time; omitted when the task has no future run.
           example: "2026-06-25T08:15:00Z"
-      required: [id, name, schedule, payload, enabled]
+      required: [id, name, schedule, payload, enabled, created_at, created_by, updated_at]
     Schedule:
       type: object
       description: When a task fires.
