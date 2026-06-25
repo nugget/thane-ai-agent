@@ -7,8 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -94,7 +93,7 @@ func (s *stores) searcher() memory.MemorySearcher {
 
 func openReadOnly(path string) (*sql.DB, error) {
 	dsn := "file:" + path + "?mode=ro&immutable=1&nolock=1"
-	db, err := sql.Open("sqlite-thane", dsn)
+	db, err := sql.Open(database.DriverName, dsn)
 	if err != nil {
 		return nil, err
 	}

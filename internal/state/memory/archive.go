@@ -791,8 +791,11 @@ func (s *ArchiveStore) migrateSchema() {
 	}
 }
 
-// tryEnableFTS attempts to create the FTS5 virtual table.
-// Returns true if FTS5 is available, false otherwise.
+// tryEnableFTS attempts to create the FTS5 virtual table. Returns true if
+// FTS5 is available and, in unified mode, its sync triggers were installed
+// — i.e. searchFTS can be trusted to return complete results. Returns
+// false otherwise so the store falls back to the LIKE path rather than
+// querying an index that cannot stay in sync.
 func (s *ArchiveStore) tryEnableFTS() bool {
 	ftsTable := s.msgFTSName
 	contentTable := s.msgTableName
@@ -815,17 +818,29 @@ func (s *ArchiveStore) tryEnableFTS() bool {
 	// Search returns nothing (the consolidated-mode production path).
 	// Legacy mode keeps its explicit-insert path in ArchiveMessages;
 	// installing triggers there would double-index every row.
+	//
+	// If the triggers cannot be installed, sync cannot be established:
+	// disable FTS so Search uses the LIKE fallback instead of silently
+	// querying a stale/empty index.
 	if s.messagesDB != nil {
-		s.setupMessagesFTSSync(db, ftsTable, contentTable)
+		if err := s.setupMessagesFTSSync(db, ftsTable, contentTable); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("messages_fts sync unavailable; using LIKE fallback", "error", err)
+			}
+			return false
+		}
 	}
 	return true
 }
 
-// setupMessagesFTSSync installs AFTER INSERT/DELETE/UPDATE sync triggers
-// on the unified messages table and backfills the external-content FTS
-// index. Degrades gracefully: failures are logged, never fatal, and the
-// next startup retries the backfill against the same shortfall signal.
-func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable string) {
+// setupMessagesFTSSync installs AFTER INSERT/DELETE/UPDATE sync triggers on
+// the unified messages table and backfills the external-content FTS index.
+// It returns a non-nil error only when the triggers cannot be installed —
+// i.e. ongoing sync cannot be established, so the caller must not trust the
+// index. Backfill (rebuild) failure is non-fatal: the triggers keep the
+// index growing for new writes and the next startup retries the rebuild
+// against the same docsize-shortfall signal.
+func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable string) error {
 	stmts := []string{
 		fmt.Sprintf(`
 			CREATE TRIGGER IF NOT EXISTS %s_ai AFTER INSERT ON %s BEGIN
@@ -854,10 +869,7 @@ func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable s
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("messages_fts trigger setup failed", "error", err)
-			}
-			return
+			return fmt.Errorf("install messages_fts trigger: %w", err)
 		}
 	}
 
@@ -866,18 +878,19 @@ func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable s
 	// rebuild. Probe the _docsize shadow table, not COUNT(*) on the FTS
 	// table: external-content FTS5 proxies COUNT(*) through to the source
 	// table, which would always self-equal and suppress the rebuild.
+	// Backfill problems below are non-fatal — triggers are already in place.
 	var docCount, srcCount int
 	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s_docsize`, ftsTable)).Scan(&docCount); err != nil {
 		if s.logger != nil {
-			s.logger.Warn("messages_fts docsize probe failed", "error", err)
+			s.logger.Warn("messages_fts docsize probe failed; skipping backfill", "error", err)
 		}
-		return
+		return nil
 	}
 	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, contentTable)).Scan(&srcCount); err != nil {
 		if s.logger != nil {
-			s.logger.Warn("messages count probe failed", "error", err)
+			s.logger.Warn("messages count probe failed; skipping backfill", "error", err)
 		}
-		return
+		return nil
 	}
 	if docCount < srcCount {
 		if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
@@ -887,6 +900,7 @@ func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable s
 			}
 		}
 	}
+	return nil
 }
 
 // ArchiveMessages copies messages to the immutable archive.

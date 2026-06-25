@@ -193,7 +193,7 @@ func runHealth(ctx context.Context, w io.Writer, args []string) error {
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
