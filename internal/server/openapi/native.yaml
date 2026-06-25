@@ -947,8 +947,10 @@ components:
         commit, branch, go_version, build_time, ...). Keys are open, not fixed.
       example:
         version: v0.9.2-596-gf92a9208
-        commit: f92a9208
+        git_commit: f92a9208
+        git_branch: main
         go_version: go1.26.1
+        uptime: 133h30m0s
 
     LogEntry:
       type: object
@@ -971,7 +973,7 @@ components:
           type: string
           readOnly: true
           description: Severity level.
-          enum: [DEBUG, INFO, WARN, ERROR]
+          enum: [TRACE, DEBUG, INFO, WARN, ERROR]
           example: INFO
         msg:
           type: string
@@ -1059,8 +1061,8 @@ components:
         name:
           type: string
           readOnly: true
-          description: Service identifier.
-          example: home_assistant
+          description: Human-readable service display name (the service identifier is the key in the surrounding health map).
+          example: Home Assistant
         ready:
           type: boolean
           readOnly: true

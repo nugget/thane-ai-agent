@@ -832,7 +832,7 @@ function normalizeCapabilityCatalogEntry(entry) {
   const status = String(entry.status || entry.Status || 'available').trim() || 'available';
   const description = String(entry.description || entry.Description || '').trim();
   const toolCount = Number(entry.tool_count || entry.toolCount || 0);
-  const tools = cloneTokenList(entry.tools || entry.tools || []);
+  const tools = cloneTokenList(entry.tools || entry.Tools || []);
   const context = entry.context || entry.Context || null;
   return {
     tag,
