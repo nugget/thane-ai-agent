@@ -906,26 +906,26 @@ talents_dir: ./talents
 #
 # (optional) Metacognitive configures the perpetual metacognitive attention loop.
 # metacognitive:
-#   Enabled controls whether the metacognitive loop starts. Default: false.
+#   Enabled controls whether the loop starts. Default: false.
 #   enabled: false
-#   MinSleep is the minimum allowed sleep duration between iterations.
-#   The LLM cannot request a shorter sleep via set_next_sleep.
-#   Default: "2m". Parsed as a Go duration string.
+#   MinSleep is the minimum allowed sleep duration between iterations;
+#   the loop cannot request a shorter sleep via set_next_sleep. Parsed
+#   as a Go duration string. Default is per-loop (see the loop's section).
 #   min_sleep: 2m
-#   MaxSleep is the maximum allowed sleep duration between iterations.
-#   Default: "30m".
+#   MaxSleep is the maximum allowed sleep duration between iterations, a
+#   Go duration string. Default is per-loop.
 #   max_sleep: 30m
-#   DefaultSleep is used when the LLM does not call set_next_sleep.
-#   Default: "10m".
+#   DefaultSleep is used when the LLM does not call set_next_sleep, a Go
+#   duration string. Default is per-loop.
 #   default_sleep: 10m
-#   Jitter is the sleep randomization factor (0.0–1.0). A value of
-#   0.2 means the actual sleep varies by ±20% of the computed
-#   duration. Default: 0.2. Set to 0.0 for deterministic timing.
+#   Jitter is the sleep randomization factor (0.0–1.0). A value of 0.2
+#   means the actual sleep varies by ±20% of the computed duration.
+#   Default: 0.2. Set to 0.0 for deterministic timing.
 #   jitter: 0.2
-#   SupervisorProbability is the per-wake chance (0.0–1.0) that
-#   this iteration runs as a supervisor turn — a more capable
-#   model with the loop's supervisor-turn prompt prefix. Default: 0.1.
-#   Set to 0.0 to disable supervisor turns entirely.
+#   SupervisorProbability is the per-wake chance (0.0–1.0) that this
+#   iteration runs as a supervisor turn — a more capable model with the
+#   loop's supervisor-turn prompt prefix. Default is per-loop. Set to 0.0
+#   to disable supervisor turns entirely.
 #   supervisor_probability: 0.1
 #   Router configures model routing for normal (non-supervisor)
 #   iterations.
@@ -934,8 +934,8 @@ talents_dir: ./talents
 #     selection. Built-in service defaults: metacognitive uses 3
 #     (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
 #     quality_floor: 3
-#   SupervisorRouter configures model routing for supervisor
-#   turns (frontier model with augmented prompt).
+#   SupervisorRouter configures model routing for supervisor turns
+#   (frontier model with the augmented prompt).
 #   supervisor_router:
 #     QualityFloor is the minimum quality rating (1–10) for model
 #     selection. Built-in service defaults: metacognitive uses 3
@@ -945,34 +945,39 @@ talents_dir: ./talents
 # Ego configures the self-reflection loop. When enabled, a long-cycle
 # service loop maintains core/ego.md via a declared maintained-document
 # output, with supervisor randomization for periodic frontier review.
+# Defaults: min_sleep 30m, max_sleep 24h, default_sleep 6h, jitter 0.2,
+# supervisor_probability 0.2, router.quality_floor 5 (supervisor 8).
 ego:
-  # Enabled controls whether the ego loop starts. Default: false.
+  # Enabled controls whether the loop starts. Default: false.
   enabled: false
-  # MinSleep is the minimum allowed sleep duration between iterations.
-  # Default: "30m". Parsed as a Go duration string.
+  # MinSleep is the minimum allowed sleep duration between iterations;
+  # the loop cannot request a shorter sleep via set_next_sleep. Parsed
+  # as a Go duration string. Default is per-loop (see the loop's section).
   min_sleep: 30m
-  # MaxSleep is the maximum allowed sleep duration between iterations.
-  # Default: "24h".
+  # MaxSleep is the maximum allowed sleep duration between iterations, a
+  # Go duration string. Default is per-loop.
   max_sleep: 24h
-  # DefaultSleep is used when the LLM does not call set_next_sleep.
-  # Default: "6h".
+  # DefaultSleep is used when the LLM does not call set_next_sleep, a Go
+  # duration string. Default is per-loop.
   default_sleep: 6h
-  # Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
-  # Set to 0.0 for deterministic timing.
+  # Jitter is the sleep randomization factor (0.0–1.0). A value of 0.2
+  # means the actual sleep varies by ±20% of the computed duration.
+  # Default: 0.2. Set to 0.0 for deterministic timing.
   jitter: 0.2
-  # SupervisorProbability is the per-wake chance (0.0–1.0) that
-  # this iteration runs as a supervisor turn — a more capable
-  # model with the loop's supervisor-turn prompt prefix. Default: 0.2.
-  # Set to 0.0 to disable supervisor turns entirely.
+  # SupervisorProbability is the per-wake chance (0.0–1.0) that this
+  # iteration runs as a supervisor turn — a more capable model with the
+  # loop's supervisor-turn prompt prefix. Default is per-loop. Set to 0.0
+  # to disable supervisor turns entirely.
   supervisor_probability: 0.2
-  # Router configures model routing for normal iterations.
+  # Router configures model routing for normal (non-supervisor)
+  # iterations.
   router:
     # QualityFloor is the minimum quality rating (1–10) for model
     # selection. Built-in service defaults: metacognitive uses 3
     # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 5
-  # SupervisorRouter configures model routing for supervisor
-  # turns (frontier model with augmented prompt).
+  # SupervisorRouter configures model routing for supervisor turns
+  # (frontier model with the augmented prompt).
   supervisor_router:
     # QualityFloor is the minimum quality rating (1–10) for model
     # selection. Built-in service defaults: metacognitive uses 3
@@ -985,34 +990,39 @@ ego:
 # producers (session close, frontier expansion) enqueue into; it is
 # never event-woken, so a burst of activity can't amplify into a
 # burst of work. Maintains core/archivist.md as its working state.
+# Defaults: min_sleep 15m, max_sleep 12h, default_sleep 1h, jitter 0.2,
+# supervisor_probability 0.1, router.quality_floor 5 (supervisor 8).
 archivist:
-  # Enabled controls whether the archivist loop starts. Default: false.
+  # Enabled controls whether the loop starts. Default: false.
   enabled: false
-  # MinSleep is the minimum allowed sleep duration between iterations.
-  # Default: "15m". Parsed as a Go duration string.
+  # MinSleep is the minimum allowed sleep duration between iterations;
+  # the loop cannot request a shorter sleep via set_next_sleep. Parsed
+  # as a Go duration string. Default is per-loop (see the loop's section).
   min_sleep: 15m
-  # MaxSleep is the maximum allowed sleep duration between iterations.
-  # Default: "12h".
+  # MaxSleep is the maximum allowed sleep duration between iterations, a
+  # Go duration string. Default is per-loop.
   max_sleep: 12h
-  # DefaultSleep is used when the LLM does not call set_next_sleep.
-  # Default: "1h".
+  # DefaultSleep is used when the LLM does not call set_next_sleep, a Go
+  # duration string. Default is per-loop.
   default_sleep: 1h
-  # Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
-  # Set to 0.0 for deterministic timing.
+  # Jitter is the sleep randomization factor (0.0–1.0). A value of 0.2
+  # means the actual sleep varies by ±20% of the computed duration.
+  # Default: 0.2. Set to 0.0 for deterministic timing.
   jitter: 0.2
-  # SupervisorProbability is the per-wake chance (0.0–1.0) that
-  # this iteration runs as a supervisor turn — a frontier model
-  # with the loop's supervisor-turn prompt prefix. Default: 0.1.
-  # Set to 0.0 to disable supervisor turns entirely.
+  # SupervisorProbability is the per-wake chance (0.0–1.0) that this
+  # iteration runs as a supervisor turn — a more capable model with the
+  # loop's supervisor-turn prompt prefix. Default is per-loop. Set to 0.0
+  # to disable supervisor turns entirely.
   supervisor_probability: 0.1
-  # Router configures model routing for normal iterations.
+  # Router configures model routing for normal (non-supervisor)
+  # iterations.
   router:
     # QualityFloor is the minimum quality rating (1–10) for model
     # selection. Built-in service defaults: metacognitive uses 3
     # (normal) / 8 (supervisor); ego uses 5 (normal) / 8 (supervisor).
     quality_floor: 5
-  # SupervisorRouter configures model routing for supervisor
-  # turns (frontier model with augmented prompt).
+  # SupervisorRouter configures model routing for supervisor turns
+  # (frontier model with the augmented prompt).
   supervisor_router:
     # QualityFloor is the minimum quality rating (1–10) for model
     # selection. Built-in service defaults: metacognitive uses 3
