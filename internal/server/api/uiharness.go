@@ -124,6 +124,21 @@ func harnessLoops() []looppkg.Status {
 			StartedAt: boot, EventDriven: true,
 			LastError: "connection refused: broker unreachable", ConsecutiveErrors: 4,
 		},
+		// A non-executing container (semantic grouping) holding a child loop —
+		// mirrors prod's "temporal" → "hor_conditions". Named NOT "core" so it
+		// exercises the general container render path (small/dimmed), not the
+		// __system__-collapsed core special case.
+		{
+			ID: "temporal", Name: "temporal", State: looppkg.StatePending, ParentID: "supervisor",
+			StartedAt: boot,
+			Config:    looppkg.Config{Name: "temporal", Operation: looppkg.OperationContainer},
+		},
+		{
+			ID: "hor_conditions", Name: "hor_conditions", State: looppkg.StateSleeping, ParentID: "temporal",
+			StartedAt: boot, Iterations: 2, Attempts: 2,
+			TotalInputTokens: 309_853, TotalOutputTokens: 5_252, LastInputTokens: 29_702,
+			ContextWindow: 131072, RecentConvIDs: []string{"conv-hor"},
+		},
 	}
 }
 

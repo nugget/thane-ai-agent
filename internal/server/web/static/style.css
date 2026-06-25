@@ -55,6 +55,9 @@
   /* Graph neutrals — families read by sigil, not decorative fill color. */
   --node-fill:   color-mix(in srgb, var(--text-secondary) 16%, transparent);
   --node-fill-2: color-mix(in srgb, var(--text-secondary) 24%, transparent);
+  /* Containers are structural groupings, not workers — a fainter fill so they
+     recede behind executing loops. Theme-controllable independently. */
+  --node-fill-container: color-mix(in srgb, var(--text-secondary) 9%, transparent);
   --node-stroke: var(--text-muted);
   --edge:        color-mix(in srgb, var(--text-muted) 55%, transparent);
 
@@ -2198,6 +2201,22 @@ body.resize-col .schema-card__fade {
 .node-shape--category-channel       { fill: var(--node-fill); }
 .node-shape--category-delegate      { fill: var(--node-fill); }
 .node-shape--category-scheduled     { fill: var(--node-fill); }
+.node-shape--category-container     { fill: var(--node-fill-container); }
+
+/* Container loops — semantic groupings, not executing entities. Rendered
+   small (16px, set in app.js), dimmed, and stripped of activity affordances
+   (sleep ring, capacity badge, supervisor dot). Routed off the projected
+   data-operation attribute so themes/skins/layers can override per-attribute
+   without touching render code — the first consumer of the projection seam. */
+.loop-node[data-operation="container"] .node-shape { opacity: 0.6; animation: none; }
+.loop-node[data-operation="container"] .node-ring {
+  stroke: var(--border-light);
+  filter: none;
+  opacity: 0.3;
+}
+.loop-node[data-operation="container"] .sleep-ring,
+.loop-node[data-operation="container"] .node-rim-badge,
+.loop-node[data-operation="container"] .supervisor-dot { display: none; }
 
 /* Runtime-state rings */
 /* Active work glows in the agent's accent; idle states are neutral; strong

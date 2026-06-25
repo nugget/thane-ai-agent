@@ -471,6 +471,16 @@ function isRegistryCoreLoop(loop) {
   return op === 'container';
 }
 
+// isContainerLoop reports whether a loop is a non-executing container — a
+// semantic grouping node (config.Operation === "container") that holds child
+// loops but never runs iterations itself. Distinct from isRegistryCoreLoop,
+// which is the name-bound special case for the singleton "core" container
+// (collapsed into __system__). Containers are rendered as small, dimmed nodes
+// with no activity affordances; see projectLoopCharacteristics + style.css.
+function isContainerLoop(loop) {
+  return !!(loop && loop.config && loop.config.Operation === 'container');
+}
+
 // getRegistryCoreID returns the id of the collapsed registry-core loop
 // when one is present and the __system__ node is active, otherwise null.
 // Returns null whenever state.system is absent so that, before system
@@ -944,6 +954,7 @@ const CATEGORY_LABELS = {
   delegate: 'delegate',
   scheduled: 'scheduled',
   generic: 'generic',
+  container: 'container',
 };
 
 const NODE_LABEL_GAP = 24;
@@ -951,6 +962,9 @@ const SYSTEM_LABEL_GAP = 20;
 
 // Derive a visual category from loop data. Drives fill tone and sigil.
 function getLoopCategoryInfo(loop) {
+  if (isContainerLoop(loop)) {
+    return { category: 'container', source: 'config.Operation=container' };
+  }
   const hints = loop.config && loop.config.Hints;
   if (hints && hints.source === 'metacognitive') {
     return { category: 'metacognitive', source: 'hint source=metacognitive' };
@@ -988,10 +1002,19 @@ const CATEGORY_SIGILS = {
   delegate:      '↗',
   scheduled:     '◷',
   generic:       '•',
+  container:     '', // semantic grouping — empty center, no sigil
 };
 
+// categorySigil returns the center glyph for a category, preserving an
+// intentional empty sigil (e.g. containers) instead of falling back to the
+// generic dot.
+function categorySigil(category) {
+  const sigil = CATEGORY_SIGILS[category];
+  return sigil != null ? sigil : CATEGORY_SIGILS.generic;
+}
+
 function normalizeVisualCategory(category) {
-  return CATEGORY_SIGILS[category] ? category : 'generic';
+  return CATEGORY_LABELS[category] ? category : 'generic';
 }
 
 // Context-window tiers drive node radius. The steps are intentionally
@@ -1064,6 +1087,9 @@ function getModelParams(modelName) {
 const MIN_NODE_R = 22;
 const MAX_NODE_R = 50;
 const DEFAULT_NODE_R = 32;
+// Containers are semantic groupings, not executing entities — rendered small,
+// just large enough to be a comfortable context-menu click target.
+const CONTAINER_NODE_R = 16;
 
 function getModelRadiusFromParams(params) {
   if (params === null) return DEFAULT_NODE_R;
@@ -1147,6 +1173,11 @@ function getContextTier(contextWindow) {
 }
 
 function getLoopVisualCapacity(loop) {
+  // Containers don't execute, so context capacity is meaningless for them:
+  // fixed small radius, no tier label/badge.
+  if (isContainerLoop(loop)) {
+    return { radius: CONTAINER_NODE_R, label: '', key: 'container', basis: 'container', contextWindow: 0 };
+  }
   const contextWindow = getLoopContextWindow(loop);
   if (contextWindow > 0) {
     const tier = getContextTier(contextWindow);
@@ -1413,6 +1444,7 @@ function getLoopLatestSnapshot(loop) {
 }
 
 function describeLoopExecutionMode(loop) {
+  if (isContainerLoop(loop)) return 'container';
   if (loop.handler_only) return 'handler';
   if (loop.event_driven) return 'event-driven llm';
   return 'timer-driven llm';
@@ -2935,6 +2967,39 @@ function flashLinkingLine(loopId) {
   }
 }
 
+// setNodeData writes a data-* attribute only when it changed, keeping the
+// per-frame projection cheap (no redundant attribute churn).
+function setNodeData(dataset, key, value) {
+  if (dataset[key] !== value) dataset[key] = value;
+}
+
+// projectLoopCharacteristics is the single seam between loop data and node
+// styling: it projects a loop's semantic characteristics onto the outer <g>
+// as data-* attributes so CSS — and future themes/skins/layers — drive fill,
+// ring, sigil visibility, animation, etc. off the cascade rather than off
+// imperative branches here. Geometry (r/cx/cy) stays imperative in renderNode
+// because SVG cannot read CSS custom properties for layout. We project only
+// facts already on the wire; owner/sigil await dedicated spec fields.
+function projectLoopCharacteristics(loop, capacity, visualState, group) {
+  const d = group.dataset;
+  setNodeData(d, 'operation',
+    isContainerLoop(loop) ? 'container'
+      : loop.handler_only ? 'handler'
+      : loop.event_driven ? 'event'
+      : 'timer');
+  setNodeData(d, 'category', normalizeVisualCategory(getLoopCategory(loop)));
+  setNodeData(d, 'state', visualState);
+  setNodeData(d, 'contextTier', capacity.key);
+  setNodeData(d, 'contextWindow', String(capacity.contextWindow || 0));
+  setNodeData(d, 'relation', loop.parent_id ? 'child' : 'root');
+  const tz = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
+  if (tz && TRUST_ZONES.has(tz)) {
+    setNodeData(d, 'trustZone', tz);
+  } else if (d.trustZone !== undefined) {
+    delete d.trustZone;
+  }
+}
+
 function renderNode(loop) {
   const category = normalizeVisualCategory(getLoopCategory(loop));
   const capacity = getLoopVisualCapacity(loop);
@@ -2946,7 +3011,6 @@ function renderNode(loop) {
     group = createSVG('g', {
       class: 'loop-node',
       'data-loop-id': loop.id,
-      'data-category': category,
     });
     group.addEventListener('click', () => {
       if (Date.now() < suppressNextNodeClickUntil) return;
@@ -3024,7 +3088,7 @@ function renderNode(loop) {
       'dominant-baseline': 'central',
       'font-size': Math.round(nodeR * 0.5),
     });
-    icon.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
+    icon.textContent = categorySigil(category);
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -3130,13 +3194,15 @@ function renderNode(loop) {
     group.querySelector('.node-label').setAttribute('y', nodeR + NODE_LABEL_GAP);
   }
   group.dataset.nodeR = nodeR;
-  group.setAttribute('data-category', category);
 
   const shapeEl = group.querySelector('.node-shape');
   const iconEl = group.querySelector('.node-icon');
   const visualState = getLoopVisualState(loop);
+  // Project semantic characteristics onto the node (data-* attrs) — the single
+  // seam CSS/themes drive visuals from. Owns data-category and data-state.
+  projectLoopCharacteristics(loop, capacity, visualState, group);
   shapeEl.setAttribute('class', 'node-shape node-shape--category-' + category + ' node-shape--activity-' + visualState);
-  iconEl.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
+  iconEl.textContent = categorySigil(category);
   iconEl.setAttribute('class', 'node-icon node-icon--' + category);
 
   const ring = group.querySelector('.node-ring');
@@ -3224,6 +3290,9 @@ function renderNode(loop) {
 }
 
 function updateSleepRing(group, loopId) {
+  // Containers never sleep; their ring is hidden in CSS — skip the per-tick
+  // offset math entirely.
+  if (group.dataset.operation === 'container') return;
   const sleepRing = group.querySelector('.sleep-ring');
   const timer = state.sleepTimers.get(loopId);
   const r = parseFloat(sleepRing.getAttribute('r'));
