@@ -673,6 +673,31 @@ func (a *App) reconcileLoopDefinition(ctx context.Context, name string) error {
 	return a.loopDefinitionRuntime.ReconcileDefinition(ctx, name)
 }
 
+// commitLoopDefinition is the single durable-commit chokepoint for a loop
+// definition: persist it, upsert it into the live overlay registry, then
+// reconcile the running loop against it. Every model-facing authoring
+// surface (loop_definition_set, thane_curate, thane_create_container)
+// routes through here instead of open-coding the same three steps, so a
+// guard added once (validation, audit, signing) protects all of them and
+// the surfaces cannot drift in commit semantics. Error wrapping matches
+// the previous hand-rolled sequences: persist and reconcile failures are
+// prefixed, while the Upsert error is returned bare so callers that
+// inspect it (errors.As for ImmutableDefinitionError) keep working.
+func (a *App) commitLoopDefinition(ctx context.Context, spec looppkg.Spec, updatedAt time.Time) error {
+	if err := a.persistLoopDefinition(spec, updatedAt); err != nil {
+		return fmt.Errorf("persist loop definition: %w", err)
+	}
+	if a.loopDefinitionRegistry != nil {
+		if err := a.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
+			return err
+		}
+	}
+	if err := a.reconcileLoopDefinition(ctx, spec.Name); err != nil {
+		return fmt.Errorf("reconcile loop definition: %w", err)
+	}
+	return nil
+}
+
 func (a *App) launchLoopDefinition(ctx context.Context, name string, launch looppkg.Launch) (looppkg.LaunchResult, error) {
 	if a == nil || a.loopDefinitionRuntime == nil {
 		return looppkg.LaunchResult{}, fmt.Errorf("loop definition runtime is not configured")

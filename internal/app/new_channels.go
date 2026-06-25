@@ -408,7 +408,7 @@ func (a *App) initChannels(s *newState) error {
 	a.loop.Tools().ConfigureLoopDefinitionTools(tools.LoopDefinitionToolDeps{
 		Registry:         a.loopDefinitionRegistry,
 		View:             a.loopDefinitionView,
-		PersistSpec:      a.persistLoopDefinition,
+		CommitSpec:       a.commitLoopDefinition,
 		DeleteSpec:       a.deletePersistedLoopDefinition,
 		PersistPolicy:    a.persistLoopDefinitionPolicy,
 		DeletePolicy:     a.deletePersistedLoopDefinitionPolicy,
@@ -437,7 +437,7 @@ func (a *App) initChannels(s *newState) error {
 			DocTools:         a.documentTools,
 			Registry:         a.loopDefinitionRegistry,
 			PersistSpec:      a.persistLoopDefinition,
-			Reconcile:        a.reconcileLoopDefinition,
+			CommitSpec:       a.commitLoopDefinition,
 			LaunchDefinition: a.launchLoopDefinition,
 			LiveRegistry:     a.loopRegistry,
 		})

@@ -37,10 +37,16 @@ import (
 // reconcile + launch path used by loop_definition_set and
 // loop_definition_launch.
 type LoopIntentToolDeps struct {
-	DocTools         *documents.Tools
-	Registry         *looppkg.DefinitionRegistry
-	PersistSpec      func(looppkg.Spec, time.Time) error
-	Reconcile        func(context.Context, string) error
+	DocTools *documents.Tools
+	Registry *looppkg.DefinitionRegistry
+	// PersistSpec persists a spec without upsert/reconcile. Used by the
+	// subscription-mutation path, which propagates to the live loop itself
+	// rather than reconciling.
+	PersistSpec func(looppkg.Spec, time.Time) error
+	// CommitSpec durably commits a definition (persist + overlay upsert +
+	// reconcile) in one step. thane_curate and thane_create_container route
+	// through it instead of sequencing the steps by hand.
+	CommitSpec       func(context.Context, looppkg.Spec, time.Time) error
 	LaunchDefinition func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	// LiveRegistry resolves container parent names to live loop IDs and
 	// propagates subscription mutations to running loops. Optional but
@@ -179,18 +185,12 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 	}
 
 	updatedAt := time.Now().UTC()
-	if deps.PersistSpec != nil {
-		if err := deps.PersistSpec(spec, updatedAt); err != nil {
-			return "", fmt.Errorf("persist container definition: %w", err)
+	if deps.CommitSpec != nil {
+		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
+			return "", err
 		}
-	}
-	if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
+	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
 		return "", err
-	}
-	if deps.Reconcile != nil {
-		if err := deps.Reconcile(ctx, name); err != nil {
-			return "", fmt.Errorf("reconcile container definition: %w", err)
-		}
 	}
 
 	// Launch with an empty Launch so a retry of this tool against an
@@ -455,22 +455,16 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	_ = docResult // discard structured result; we surface the ref directly
 
-	// Persist + reconcile + launch. Mirrors handleLoopDefinitionSet +
-	// handleLoopDefinitionLaunch; collapsed here so the model only sees
-	// one round-trip for the intent.
+	// Commit (persist + upsert + reconcile) then launch. Mirrors
+	// handleLoopDefinitionSet + handleLoopDefinitionLaunch; collapsed here
+	// so the model only sees one round-trip for the intent.
 	updatedAt := now
-	if deps.PersistSpec != nil {
-		if err := deps.PersistSpec(spec, updatedAt); err != nil {
-			return "", fmt.Errorf("persist loop definition: %w", err)
+	if deps.CommitSpec != nil {
+		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
+			return "", err
 		}
-	}
-	if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
+	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
 		return "", err
-	}
-	if deps.Reconcile != nil {
-		if err := deps.Reconcile(ctx, name); err != nil {
-			return "", fmt.Errorf("reconcile loop definition: %w", err)
-		}
 	}
 
 	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{})
