@@ -821,9 +821,9 @@ func resolveSignalContact(store *contacts.Store, phone string) string {
 	return ""
 }
 
-// logQueryAdapter bridges the web package's [web.LogQuerier] interface
-// to the [logging.Query] function, keeping the web package decoupled
-// from database/sql.
+// logQueryAdapter bridges [logging.Query] to the api server's log-query
+// seam (server.UseLogQuerier), keeping the api package decoupled from
+// database/sql.
 type logQueryAdapter struct {
 	db *sql.DB
 }

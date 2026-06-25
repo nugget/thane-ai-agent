@@ -11,11 +11,13 @@
 // model's consistent reasoning patterns miss. The per-wake
 // probability is driven by [Config.SupervisorProbability]; when a
 // supervisor turn fires, the loop overlays
-// [Spec.SupervisorProfile] on its normal routing.
+// [loop.Spec.SupervisorProfile] on its normal routing.
 //
-// The loop lifecycle is managed by the [loop] package. This package
-// provides [BuildLoopConfig] to assemble a [loop.Config] with the
-// correct TaskBuilder, PostIterate, and tool exclusions.
+// The loop lifecycle is managed by the [loop] package. This loop is
+// declarative: the per-iteration prompt is the spec Task plus the
+// supervisor-turn [loop.Spec.SupervisorProfile] Instructions. The only
+// runtime-only hook is the PostIterate iteration-log writer, which
+// [HydrateSpec] attaches to a durable loop definition.
 package metacognitive
 
 import (
@@ -216,8 +218,7 @@ func supervisorProfile(qualityFloor int) *router.LoopProfile {
 // telemetry block to the state document each cycle and needs the
 // resolved state-file path from opts. The prompt itself is declarative
 // (the spec Task and SupervisorProfile.Instructions).
-func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
-	spec = loop.Spec(spec)
+func HydrateSpec(spec loop.Spec, _ Config, opts Opts) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
 	}

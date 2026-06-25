@@ -77,11 +77,10 @@ type BuiltinTagSpec struct {
 	// the tag menu and tag_inspect output.
 	Description string
 
-	// Core tags are pinned in every scope by operator configuration.
-	// Survives capability-tag filtering; cannot be deactivated by the
-	// model. Re-seeded each run from config — not a property of
-	// individual built-in tags, but operators can set it via the
-	// capability_tags YAML overlay.
+	// Core marks a tag as pinned in every scope — it survives
+	// capability-tag filtering and cannot be deactivated by the model.
+	// Re-seeded each run from operator configuration; operators set it
+	// via the capability_tags YAML overlay.
 	Core bool
 
 	// Kind classifies the tag's surface role. Zero value is treated

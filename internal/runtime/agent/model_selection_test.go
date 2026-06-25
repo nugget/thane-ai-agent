@@ -1160,22 +1160,6 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 	}
 }
 
-func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
-	got := estimateRequestContextTokens("abcd", []Message{{
-		Role:    "user",
-		Content: "abcdefgh",
-		Images: []llm.ImageContent{
-			{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"},
-			{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"},
-		},
-	}})
-
-	want := 1 + 2 + (2 * estimatedImageContextTokens)
-	if got != want {
-		t.Fatalf("estimateRequestContextTokens() = %d, want %d", got, want)
-	}
-}
-
 func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
 	cat, err := fleet.BuildCatalog(&config.Config{
 		Models: config.ModelsConfig{

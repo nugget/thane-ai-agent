@@ -19,7 +19,6 @@ import (
 // methods out of the box.
 type AreaActivityClient interface {
 	HARegistryClient
-	GetAreas(ctx context.Context) ([]homeassistant.Area, error)
 	GetLogbookEvents(ctx context.Context, startTime, endTime time.Time, entityIDs []string) ([]homeassistant.LogbookEntry, error)
 }
 

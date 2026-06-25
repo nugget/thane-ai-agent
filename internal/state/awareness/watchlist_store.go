@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -232,9 +231,9 @@ func (s *WatchlistStore) UntaggedEntityIDSet(candidates []string) (map[string]st
 	return out, nil
 }
 
-// ListByTag returns watched entity subscriptions for the given capability
-// tag. Used by the tag context assembler to inject entity context only when a
-// tag is active.
+// ListByTag returns subscription rows for a given legacy scope tag.
+// Consumed by the one-shot startup migration that lifts legacy
+// scope_tag rows onto Spec.Subscriptions.
 func (s *WatchlistStore) ListByTag(tag string) ([]WatchedSubscription, error) {
 	return s.listScopedSubscriptions(tag)
 }
@@ -250,30 +249,6 @@ func (s *WatchlistStore) ListSubscriptions(scope string) ([]WatchedSubscription,
 	}
 	query += ` ORDER BY added_at ASC`
 	return s.scanActiveSubscriptions(query, args...)
-}
-
-// DistinctTags returns all unique active scopes across watched entities.
-// Used at startup to register tag-scoped watchlist providers.
-func (s *WatchlistStore) DistinctTags() ([]string, error) {
-	subs, err := s.ListSubscriptions("")
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
-	for _, sub := range subs {
-		if sub.Scope == "" {
-			continue
-		}
-		seen[sub.Scope] = true
-	}
-
-	tags := make([]string, 0, len(seen))
-	for tag := range seen {
-		tags = append(tags, tag)
-	}
-	sort.Strings(tags)
-	return tags, nil
 }
 
 func (s *WatchlistStore) listScopedSubscriptions(scope string) ([]WatchedSubscription, error) {

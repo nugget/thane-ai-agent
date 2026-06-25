@@ -35,7 +35,7 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 		{
 			Name: "queue_pull",
 			Description: "Pull a batch of pending work items from your queue, highest priority first then oldest. " +
-				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, age, and attempts — not the full payload. " +
+				"Each item gives a subject (the key you pass to queue_ack), its source, a short summary, priority, and age — not the full payload. " +
 				"Items stay queued until you queue_ack them, so an interrupted iteration just re-serves them next time. This is your inbox: drain it; you are never paged.",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
@@ -72,7 +72,6 @@ func buildLoopQueueTools(store *loopqueue.Store, loopName string) []looppkg.Runt
 						Summary:  summary,
 						Priority: it.Priority,
 						Age:      promptfmt.FormatDeltaOnly(it.EnqueuedAt, now),
-						Attempts: it.Attempts,
 					})
 				}
 				return toQueueJSON(queuePullResult{Count: len(views), Items: views})
@@ -165,7 +164,6 @@ type queueItemView struct {
 	Summary  string `json:"summary,omitempty"`
 	Priority int    `json:"priority"`
 	Age      string `json:"age,omitempty"`
-	Attempts int    `json:"attempts"`
 }
 
 type queuePullResult struct {

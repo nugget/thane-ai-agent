@@ -14,7 +14,7 @@ import (
 //
 // Each field maps to a well-known routing hint or agent.Request
 // property. Zero-value fields are omitted during serialization and
-// ignored by [LoopProfile.Hints].
+// ignored by [LoopProfile.RoutingFactors].
 type LoopProfile struct {
 	// Model sets an explicit model, bypassing the router. When empty,
 	// the router selects based on the other hint fields.

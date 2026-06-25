@@ -119,7 +119,6 @@ func (b ContextBucket) OrDefault(fallback ContextBucket) ContextBucket {
 // placement and retained section metadata.
 type ContextSection struct {
 	Bucket  ContextBucket
-	Title   string
 	Content string
 }
 

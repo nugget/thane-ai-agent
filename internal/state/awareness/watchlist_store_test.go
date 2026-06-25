@@ -134,14 +134,6 @@ func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 		t.Fatalf("ListUntagged() = %v, want empty", untagged)
 	}
 
-	tags, err := store.DistinctTags()
-	if err != nil {
-		t.Fatalf("DistinctTags: %v", err)
-	}
-	if !slices.Equal(tags, []string{"interactive", "weather_focus"}) {
-		t.Fatalf("DistinctTags() = %v, want [interactive weather_focus]", tags)
-	}
-
 	weatherFocus, err := store.ListByTag("weather_focus")
 	if err != nil {
 		t.Fatalf("ListByTag(weather_focus): %v", err)

@@ -86,7 +86,7 @@ func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[stri
 	if r.messageBus == nil {
 		return "", fmt.Errorf("message bus is not configured")
 	}
-	concern := strings.TrimSpace(toolargs.TrimmedString(args, "concern"))
+	concern := toolargs.TrimmedString(args, "concern")
 	if concern == "" {
 		return "", fmt.Errorf("concern is required")
 	}
@@ -98,8 +98,8 @@ func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[stri
 	payload := messages.LoopNotifyPayload{
 		Kind:            "core_attention_request",
 		Concern:         concern,
-		SuggestedAction: strings.TrimSpace(toolargs.TrimmedString(args, "suggested_action")),
-		Context:         strings.TrimSpace(toolargs.TrimmedString(args, "context")),
+		SuggestedAction: toolargs.TrimmedString(args, "suggested_action"),
+		Context:         toolargs.TrimmedString(args, "context"),
 		ForceSupervisor: true,
 	}
 
@@ -227,7 +227,7 @@ func senderIdentityFromContext(ctx context.Context) messages.Identity {
 }
 
 func messagePriorityArg(args map[string]any) messages.Priority {
-	switch strings.TrimSpace(toolargs.TrimmedString(args, "priority")) {
+	switch toolargs.TrimmedString(args, "priority") {
 	case "", "normal":
 		return messages.PriorityNormal
 	case "low":
