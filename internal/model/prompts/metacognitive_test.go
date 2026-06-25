@@ -5,122 +5,56 @@ import (
 	"testing"
 )
 
-func TestMetacognitivePrompt_Normal(t *testing.T) {
-	state := "## Current Sense\nAll quiet."
-	result := MetacognitivePrompt(state, false)
+func TestMetacognitiveBaseTemplate(t *testing.T) {
+	got := MetacognitiveBaseTemplate
 
-	if strings.Contains(result, "All quiet.") {
-		t.Error("prompt should not inline state file content")
+	for _, phrase := range []string{
+		"Metacognitive loop iteration",
+		"Declared Durable",
+		"replace_output_metacognitive_state",
+		"set_next_sleep",
+		"exactly two special tools",
+		"File tools, exec, and session management",
+		"sanctioned interface",
+		"how recently metacognitive.md was",
+		"Do not copy raw sensor timestamps",
+	} {
+		if !strings.Contains(got, phrase) {
+			t.Errorf("base template missing expected phrase %q", phrase)
+		}
 	}
-	if !strings.Contains(result, "Declared Durable") {
-		t.Error("prompt should point to declared output context")
-	}
-	if !strings.Contains(result, "Metacognitive loop iteration") {
-		t.Error("prompt should contain base template header")
-	}
-	if strings.Contains(result, "Supervisor Review") {
-		t.Error("normal prompt should not contain supervisor augmentation")
-	}
-}
-
-func TestMetacognitivePrompt_Supervisor(t *testing.T) {
-	state := "## Current Sense\nMonitoring garage."
-	result := MetacognitivePrompt(state, true)
-
-	if strings.Contains(result, "Monitoring garage.") {
-		t.Error("supervisor prompt should not inline state file content")
-	}
-	if !strings.Contains(result, "Supervisor Review") {
-		t.Error("supervisor prompt should contain supervisor augmentation")
-	}
-	if !strings.Contains(result, "Blind spots") {
-		t.Error("supervisor prompt should contain blind spots instruction")
-	}
-	if !strings.Contains(result, "Drift detection") {
-		t.Error("supervisor prompt should contain drift detection instruction")
-	}
-	// append_ego_observation was removed in #575 — ego updates belong
-	// in the interactive agent context, not the metacog loop.
-	if strings.Contains(result, "append_ego_observation") {
-		t.Error("supervisor prompt should not reference removed append_ego_observation tool")
-	}
-}
-
-func TestMetacognitivePrompt_EmptyState(t *testing.T) {
-	result := MetacognitivePrompt("", false)
-
-	if !strings.Contains(result, "Declared Durable") {
-		t.Error("empty state prompt should rely on declared output context")
-	}
-	if !strings.Contains(result, "replace_output_metacognitive_state") {
-		t.Error("prompt should mention generated output tool")
-	}
-}
-
-func TestMetacognitivePrompt_SetNextSleepMentioned(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
-
-	if !strings.Contains(result, "set_next_sleep") {
-		t.Error("prompt should mention set_next_sleep tool")
-	}
-}
-
-func TestMetacognitivePrompt_MentionsUpdateTool(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
-
-	if !strings.Contains(result, "replace_output_metacognitive_state") {
-		t.Error("prompt should mention generated output tool")
-	}
-	if strings.Contains(result, "file_write") {
-		t.Error("prompt should not mention file_write")
-	}
-}
-
-func TestMetacognitivePrompt_FileToolsNotAvailable(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
-
-	if !strings.Contains(result, "File tools, exec, and session management") {
-		t.Error("prompt should explicitly state file tools are not available")
-	}
-	if strings.Contains(result, "Read it carefully") {
-		t.Error("prompt should not contain ambiguous 'Read it carefully' phrasing")
-	}
-}
-
-func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
-
-	if !strings.Contains(result, "exactly two special tools") {
-		t.Error("prompt should state the two special tools available")
-	}
-	if strings.Contains(result, "append_ego_observation") {
-		t.Error("prompt should not mention removed append_ego_observation tool")
-	}
-	if !strings.Contains(result, "File tools, exec,") {
-		t.Error("prompt should explicitly list unavailable tool categories")
-	}
-}
-
-func TestMetacognitivePrompt_AvoidsRawTimestampPersistence(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
-
-	if !strings.Contains(result, "how recently metacognitive.md was") {
-		t.Error("prompt should point to generated freshness context")
-	}
-	if !strings.Contains(result, "Do not copy raw sensor timestamps") {
-		t.Error("prompt should discourage raw timestamp persistence")
-	}
-	for _, unwanted := range []string{"absolute format (RFC3339", "Deltas become meaningless"} {
-		if strings.Contains(result, unwanted) {
-			t.Fatalf("prompt should not preserve old timestamp guidance %q", unwanted)
+	for _, unwanted := range []string{
+		"Supervisor Review",         // supervisor content lives in the instructions const
+		"file_write",                // file tools are excluded
+		"append_ego_observation",    // removed in #575
+		"Read it carefully",         // ambiguous phrasing, removed
+		"absolute format (RFC3339",  // old timestamp guidance, removed
+		"Deltas become meaningless", // old timestamp guidance, removed
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("base template should not contain %q", unwanted)
 		}
 	}
 }
 
-func TestMetacognitivePrompt_OnlyWriteMechanism(t *testing.T) {
-	result := MetacognitivePrompt("some state", false)
+func TestMetacognitiveSupervisorInstructions(t *testing.T) {
+	got := MetacognitiveSupervisorInstructions
 
-	if !strings.Contains(result, "sanctioned interface") {
-		t.Error("prompt should clarify the generated output tool is the only write mechanism")
+	for _, phrase := range []string{
+		"Supervisor Review",
+		"Blind spots",
+		"Drift detection",
+	} {
+		if !strings.Contains(got, phrase) {
+			t.Errorf("supervisor instructions missing expected phrase %q", phrase)
+		}
+	}
+	if strings.Contains(got, "append_ego_observation") {
+		t.Error("supervisor instructions should not reference removed append_ego_observation tool")
+	}
+	// Applied as a prepended prompt prefix via SupervisorProfile.Instructions,
+	// so it must carry no surrounding blank lines.
+	if got != strings.TrimSpace(got) {
+		t.Error("supervisor instructions must not have leading/trailing whitespace")
 	}
 }

@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestEgoPrompt_NormalIteration(t *testing.T) {
-	got := EgoPrompt(false)
+func TestEgoBaseTemplate(t *testing.T) {
+	got := EgoBaseTemplate
 
 	for _, phrase := range []string{
 		"Ego loop iteration",
@@ -17,27 +17,30 @@ func TestEgoPrompt_NormalIteration(t *testing.T) {
 		"durable output contract",
 	} {
 		if !strings.Contains(got, phrase) {
-			t.Errorf("prompt missing expected phrase %q", phrase)
+			t.Errorf("base template missing expected phrase %q", phrase)
 		}
 	}
 	if strings.Contains(got, "Supervisor Review") {
-		t.Error("normal iteration should not include supervisor section")
+		t.Error("base template should not include the supervisor section")
 	}
 	if strings.Contains(got, "Use ISO 8601 timestamps") {
-		t.Error("prompt should not ask ego loop to persist raw timestamps by default")
+		t.Error("base template should not ask ego loop to persist raw timestamps by default")
 	}
 	if !strings.Contains(got, "how recently ego.md was updated") {
-		t.Error("prompt should point to generated freshness context")
+		t.Error("base template should point to generated freshness context")
 	}
 }
 
-func TestEgoPrompt_SupervisorTurn(t *testing.T) {
-	got := EgoPrompt(true)
+func TestEgoSupervisorInstructions(t *testing.T) {
+	got := EgoSupervisorInstructions
 
 	if !strings.Contains(got, "Supervisor Review") {
-		t.Error("supervisor turn should include supervisor review section")
+		t.Error("supervisor instructions should include the supervisor review section")
 	}
-	if !strings.Contains(got, "Ego loop iteration") {
-		t.Error("supervisor turn should still include base prompt")
+	// Applied as a prepended prompt prefix via SupervisorProfile.Instructions,
+	// so unlike the old appended augmentation it must carry no surrounding
+	// blank lines.
+	if got != strings.TrimSpace(got) {
+		t.Error("supervisor instructions must not have leading/trailing whitespace")
 	}
 }

@@ -1,9 +1,10 @@
 package prompts
 
-// egoBaseTemplate is the prompt for each ego loop iteration. Current
-// ego.md content is injected by the loop-declared output context
-// provider as the "Declared Durable Outputs" block.
-const egoBaseTemplate = `Ego loop iteration.
+// EgoBaseTemplate is the per-iteration prompt for the ego loop, set as
+// the loop definition's Task. Current ego.md content is injected by the
+// loop-declared output context provider as the "Declared Durable
+// Outputs" block.
+const EgoBaseTemplate = `Ego loop iteration.
 
 You are running as a background self-reflection process. Your job is to
 maintain ego.md — your own self-reflection document, written BY you, FOR
@@ -71,10 +72,10 @@ If it reads like something you'd put in a ticket, it doesn't belong here.
 - Quality of thought matters more than coverage. Quiet observation and
   a long sleep beats a manufactured update.`
 
-// egoSupervisorAugmentation is appended for frontier/supervisor turns.
-const egoSupervisorAugmentation = `
-
-## Supervisor Review (Frontier Iteration)
+// EgoSupervisorInstructions is the supervisor-turn prompt prefix, applied
+// declaratively via SupervisorProfile.Instructions on frontier iterations
+// (prepended to EgoBaseTemplate by the loop runtime).
+const EgoSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
 
 This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to normal reflection, critically evaluate:
@@ -93,15 +94,3 @@ frontier model. In addition to normal reflection, critically evaluate:
 
 Be candid. Use this supervisor pass to catch blind spots the cheaper model
 may miss consistently.`
-
-// EgoPrompt returns the prompt for one ego loop iteration. When
-// isSupervisor is true, additional self-review instructions are
-// appended for frontier-model iterations. Current ego.md content is
-// injected by the loop's declared output context, not this prompt.
-func EgoPrompt(isSupervisor bool) string {
-	prompt := egoBaseTemplate
-	if isSupervisor {
-		prompt += egoSupervisorAugmentation
-	}
-	return prompt
-}

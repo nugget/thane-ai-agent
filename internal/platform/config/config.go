@@ -1829,9 +1829,8 @@ type MetacognitiveConfig struct {
 
 	// SupervisorProbability is the per-wake chance (0.0–1.0) that
 	// this iteration runs as a supervisor turn — a more capable
-	// model with the augmented prompt produced by
-	// [prompts.MetacognitivePrompt]. Default: 0.1. Set to 0.0 to
-	// disable supervisor turns entirely.
+	// model with the loop's supervisor-turn prompt prefix. Default: 0.1.
+	// Set to 0.0 to disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
@@ -1869,9 +1868,8 @@ type EgoConfig struct {
 
 	// SupervisorProbability is the per-wake chance (0.0–1.0) that
 	// this iteration runs as a supervisor turn — a more capable
-	// model with the augmented prompt produced by
-	// [prompts.EgoPrompt]. Default: 0.2. Set to 0.0 to disable
-	// supervisor turns entirely.
+	// model with the loop's supervisor-turn prompt prefix. Default: 0.2.
+	// Set to 0.0 to disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal iterations.
@@ -1917,8 +1915,8 @@ type ArchivistConfig struct {
 
 	// SupervisorProbability is the per-wake chance (0.0–1.0) that
 	// this iteration runs as a supervisor turn — a frontier model
-	// with the augmented prompt produced by [prompts.ArchivistPrompt].
-	// Default: 0.1. Set to 0.0 to disable supervisor turns entirely.
+	// with the loop's supervisor-turn prompt prefix. Default: 0.1.
+	// Set to 0.0 to disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal iterations.

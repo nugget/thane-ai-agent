@@ -23,7 +23,6 @@
 package archivist
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -118,7 +117,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	return loop.Spec{
 		Name:       DefinitionName,
 		Enabled:    cfg.Enabled,
-		Task:       "Tend thane's understanding across memory silos. Drain your work queue and refine the dossiers each item touches.",
+		Task:       prompts.ArchivistBaseTemplate,
 		Operation:  loop.OperationService,
 		Completion: loop.CompletionNone,
 		Outputs: []loop.OutputSpec{
@@ -165,30 +164,25 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	}
 }
 
-// supervisorProfile builds the archivist's per-turn-mode overrides from
-// the supervisor router config. Returns nil when no overrides are
-// declared, signaling the loop runtime to reuse the normal Profile
-// during supervisor turns.
+// supervisorProfile builds the archivist's supervisor-turn overlay: the
+// frontier-review prompt prefix (always) plus a higher quality floor when
+// one is configured. Unset fields fall back to the normal Profile during
+// supervisor turns; the prefix is prepended to the Task.
 func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	if qualityFloor <= 0 {
-		return nil
+	p := &router.LoopProfile{Instructions: prompts.ArchivistSupervisorInstructions}
+	if qualityFloor > 0 {
+		p.QualityFloor = qualityFloor
 	}
-	return &router.LoopProfile{
-		QualityFloor: qualityFloor,
-	}
+	return p
 }
 
-// HydrateSpec attaches the runtime-only hooks needed to execute the
-// archivist service from a durable loop definition. The TaskBuilder
-// emits the archivist prompt for each iteration; the prior state file
-// content is injected via the managed-output context provider, not this
-// prompt. The work-queue tools are attached separately at app hydration.
+// HydrateSpec defaults the definition name. The archivist's prompt is
+// declarative (the spec Task and SupervisorProfile.Instructions); its one
+// genuine runtime-only dependency — the loop-private work-queue tools — is
+// attached separately at app hydration, not here.
 func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
-	}
-	spec.TaskBuilder = func(_ context.Context, isSupervisor bool) (string, error) {
-		return prompts.ArchivistPrompt(isSupervisor), nil
 	}
 	return spec
 }
