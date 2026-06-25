@@ -317,11 +317,15 @@ type Config struct {
 	// Metacognitive configures the perpetual metacognitive attention loop.
 	// When enabled, a background goroutine monitors the environment,
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
+	// Defaults: min_sleep 2m, max_sleep 30m, default_sleep 10m, jitter 0.2,
+	// supervisor_probability 0.1, router.quality_floor 3 (supervisor 8).
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
 
 	// Ego configures the self-reflection loop. When enabled, a long-cycle
 	// service loop maintains core/ego.md via a declared maintained-document
 	// output, with supervisor randomization for periodic frontier review.
+	// Defaults: min_sleep 30m, max_sleep 24h, default_sleep 6h, jitter 0.2,
+	// supervisor_probability 0.2, router.quality_floor 5 (supervisor 8).
 	Ego EgoConfig `yaml:"ego"`
 
 	// Archivist configures the memory archivist loop. When enabled, a
@@ -331,6 +335,8 @@ type Config struct {
 	// producers (session close, frontier expansion) enqueue into; it is
 	// never event-woken, so a burst of activity can't amplify into a
 	// burst of work. Maintains core/archivist.md as its working state.
+	// Defaults: min_sleep 15m, max_sleep 12h, default_sleep 1h, jitter 0.2,
+	// supervisor_probability 0.1, router.quality_floor 5 (supervisor 8).
 	Archivist ArchivistConfig `yaml:"archivist"`
 
 	// Loops configures immutable loop definitions loaded from the config
@@ -1801,131 +1807,85 @@ type AnalysisConfig struct {
 	DatabasePath string `yaml:"database_path"`
 }
 
-// MetacognitiveConfig configures the self-regulating metacognitive loop.
-// The loop runs perpetually in a background goroutine, using LLM calls to
-// reason about the environment and self-determine its sleep duration
-// between iterations. See issue #319.
-type MetacognitiveConfig struct {
-	// Enabled controls whether the metacognitive loop starts. Default: false.
+// ServiceLoopConfig is the shared configuration shape for thane's three
+// model-facing core service loops — metacognitive, ego, and archivist.
+// The three expose structurally identical operator-tunable knobs (the
+// sleep envelope, jitter, supervisor odds, and routing floors) and differ
+// only in their default values — seeded per loop by [Config.applyDefaults]
+// — and in their documentation. Each loop keeps a distinct config key (see
+// [MetacognitiveConfig], [EgoConfig], [ArchivistConfig]) so operator config
+// is unchanged; the single type collapses what were three byte-identical
+// structs plus three parallel applyDefaults/validate blocks (#999).
+type ServiceLoopConfig struct {
+	// Enabled controls whether the loop starts. Default: false.
 	Enabled bool `yaml:"enabled"`
 
-	// MinSleep is the minimum allowed sleep duration between iterations.
-	// The LLM cannot request a shorter sleep via set_next_sleep.
-	// Default: "2m". Parsed as a Go duration string.
+	// MinSleep is the minimum allowed sleep duration between iterations;
+	// the loop cannot request a shorter sleep via set_next_sleep. Parsed
+	// as a Go duration string. Default is per-loop (see the loop's section).
 	MinSleep string `yaml:"min_sleep"`
 
-	// MaxSleep is the maximum allowed sleep duration between iterations.
-	// Default: "30m".
+	// MaxSleep is the maximum allowed sleep duration between iterations, a
+	// Go duration string. Default is per-loop.
 	MaxSleep string `yaml:"max_sleep"`
 
-	// DefaultSleep is used when the LLM does not call set_next_sleep.
-	// Default: "10m".
+	// DefaultSleep is used when the LLM does not call set_next_sleep, a Go
+	// duration string. Default is per-loop.
 	DefaultSleep string `yaml:"default_sleep"`
 
-	// Jitter is the sleep randomization factor (0.0–1.0). A value of
-	// 0.2 means the actual sleep varies by ±20% of the computed
-	// duration. Default: 0.2. Set to 0.0 for deterministic timing.
+	// Jitter is the sleep randomization factor (0.0–1.0). A value of 0.2
+	// means the actual sleep varies by ±20% of the computed duration.
+	// Default: 0.2. Set to 0.0 for deterministic timing.
 	Jitter *float64 `yaml:"jitter,omitempty"`
 
-	// SupervisorProbability is the per-wake chance (0.0–1.0) that
-	// this iteration runs as a supervisor turn — a more capable
-	// model with the loop's supervisor-turn prompt prefix. Default: 0.1.
-	// Set to 0.0 to disable supervisor turns entirely.
+	// SupervisorProbability is the per-wake chance (0.0–1.0) that this
+	// iteration runs as a supervisor turn — a more capable model with the
+	// loop's supervisor-turn prompt prefix. Default is per-loop. Set to 0.0
+	// to disable supervisor turns entirely.
 	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
 
 	// Router configures model routing for normal (non-supervisor)
 	// iterations.
 	Router RouterConfig `yaml:"router"`
 
-	// SupervisorRouter configures model routing for supervisor
-	// turns (frontier model with augmented prompt).
+	// SupervisorRouter configures model routing for supervisor turns
+	// (frontier model with the augmented prompt).
 	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
 }
+
+// MetacognitiveConfig configures the self-regulating metacognitive loop.
+// The loop runs perpetually in a background goroutine, using LLM calls to
+// reason about the environment and self-determine its sleep duration
+// between iterations. See issue #319. Defaults: min_sleep 2m, max_sleep
+// 30m, default_sleep 10m, jitter 0.2, supervisor_probability 0.1,
+// router.quality_floor 3 (supervisor 8).
+type MetacognitiveConfig = ServiceLoopConfig
 
 // EgoConfig configures the self-reflection ego loop. The loop runs as a
-// service loop: bounded voluntary sleep, supervisor randomization, and
-// a declared maintained-document output at core/ego.md. Replaces the
-// legacy periodic_reflection scheduled task.
-type EgoConfig struct {
-	// Enabled controls whether the ego loop starts. Default: false.
-	Enabled bool `yaml:"enabled"`
+// service loop: bounded voluntary sleep, supervisor randomization, and a
+// declared maintained-document output at core/ego.md. Replaces the legacy
+// periodic_reflection scheduled task. Defaults: min_sleep 30m, max_sleep
+// 24h, default_sleep 6h, jitter 0.2, supervisor_probability 0.2,
+// router.quality_floor 5 (supervisor 8).
+type EgoConfig = ServiceLoopConfig
 
-	// MinSleep is the minimum allowed sleep duration between iterations.
-	// Default: "30m". Parsed as a Go duration string.
-	MinSleep string `yaml:"min_sleep"`
-
-	// MaxSleep is the maximum allowed sleep duration between iterations.
-	// Default: "24h".
-	MaxSleep string `yaml:"max_sleep"`
-
-	// DefaultSleep is used when the LLM does not call set_next_sleep.
-	// Default: "6h".
-	DefaultSleep string `yaml:"default_sleep"`
-
-	// Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
-	// Set to 0.0 for deterministic timing.
-	Jitter *float64 `yaml:"jitter,omitempty"`
-
-	// SupervisorProbability is the per-wake chance (0.0–1.0) that
-	// this iteration runs as a supervisor turn — a more capable
-	// model with the loop's supervisor-turn prompt prefix. Default: 0.2.
-	// Set to 0.0 to disable supervisor turns entirely.
-	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
-
-	// Router configures model routing for normal iterations.
-	Router RouterConfig `yaml:"router"`
-
-	// SupervisorRouter configures model routing for supervisor
-	// turns (frontier model with augmented prompt).
-	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
-}
-
-// ArchivistConfig configures the memory archivist loop. The loop runs as
-// a service loop: bounded voluntary sleep, supervisor randomization,
-// and a declared maintained-document output at core/archivist.md.
-// Where ego maintains self-reflection and metacognitive watches
-// in-flight behavior, the archivist synthesizes durable knowledge
-// across the memory silos into long-lived dossiers keyed by subject.
+// ArchivistConfig configures the memory archivist loop. The loop runs as a
+// service loop: bounded voluntary sleep, supervisor randomization, and a
+// declared maintained-document output at core/archivist.md. Where ego
+// maintains self-reflection and metacognitive watches in-flight behavior,
+// the archivist synthesizes durable knowledge across the memory silos into
+// long-lived dossiers keyed by subject.
 //
 // Self-paced and pull-based by design: each iteration drains a durable
-// work queue (subjects and closed sessions enqueued by producers) at
-// the loop's own cadence rather than being woken per event. The Go-side
+// work queue (subjects and closed sessions enqueued by producers) at the
+// loop's own cadence rather than being woken per event. The Go-side
 // session summarizer still fires on session close and stamps session
 // metadata; it also enqueues the closed session for the archivist, which
 // works above that layer, turning the corpus into per-subject dossiers.
-type ArchivistConfig struct {
-	// Enabled controls whether the archivist loop starts. Default: false.
-	Enabled bool `yaml:"enabled"`
-
-	// MinSleep is the minimum allowed sleep duration between iterations.
-	// Default: "15m". Parsed as a Go duration string.
-	MinSleep string `yaml:"min_sleep"`
-
-	// MaxSleep is the maximum allowed sleep duration between iterations.
-	// Default: "12h".
-	MaxSleep string `yaml:"max_sleep"`
-
-	// DefaultSleep is used when the LLM does not call set_next_sleep.
-	// Default: "1h".
-	DefaultSleep string `yaml:"default_sleep"`
-
-	// Jitter is the sleep randomization factor (0.0–1.0). Default: 0.2.
-	// Set to 0.0 for deterministic timing.
-	Jitter *float64 `yaml:"jitter,omitempty"`
-
-	// SupervisorProbability is the per-wake chance (0.0–1.0) that
-	// this iteration runs as a supervisor turn — a frontier model
-	// with the loop's supervisor-turn prompt prefix. Default: 0.1.
-	// Set to 0.0 to disable supervisor turns entirely.
-	SupervisorProbability *float64 `yaml:"supervisor_probability,omitempty"`
-
-	// Router configures model routing for normal iterations.
-	Router RouterConfig `yaml:"router"`
-
-	// SupervisorRouter configures model routing for supervisor
-	// turns (frontier model with augmented prompt).
-	SupervisorRouter RouterConfig `yaml:"supervisor_router"`
-}
+//
+// Defaults: min_sleep 15m, max_sleep 12h, default_sleep 1h, jitter 0.2,
+// supervisor_probability 0.1, router.quality_floor 5 (supervisor 8).
+type ArchivistConfig = ServiceLoopConfig
 
 // RouterConfig holds routing hints used by the built-in services
 // (metacognitive, ego, archivist) for both normal and supervisor
@@ -2197,6 +2157,33 @@ func entryHasPolicy(entry RootEntry) bool {
 		g.RepoPath != "" || g.SigningKey != ""
 }
 
+// applyServiceLoopDefaults fills the unset fields of one core service-loop
+// config with that loop's per-loop defaults. Only zero-valued fields are
+// touched, so an operator-set value always wins. See [ServiceLoopConfig].
+func applyServiceLoopDefaults(cfg *ServiceLoopConfig, minSleep, maxSleep, defaultSleep string, jitter, supervisorProb float64, floor, supervisorFloor int) {
+	if cfg.MinSleep == "" {
+		cfg.MinSleep = minSleep
+	}
+	if cfg.MaxSleep == "" {
+		cfg.MaxSleep = maxSleep
+	}
+	if cfg.DefaultSleep == "" {
+		cfg.DefaultSleep = defaultSleep
+	}
+	if cfg.Jitter == nil {
+		cfg.Jitter = &jitter
+	}
+	if cfg.SupervisorProbability == nil {
+		cfg.SupervisorProbability = &supervisorProb
+	}
+	if cfg.Router.QualityFloor == 0 {
+		cfg.Router.QualityFloor = floor
+	}
+	if cfg.SupervisorRouter.QualityFloor == 0 {
+		cfg.SupervisorRouter.QualityFloor = supervisorFloor
+	}
+}
+
 // applyDefaults fills zero-value fields with sensible defaults. It is
 // called automatically by [Load] and [Default]. After this method
 // returns, callers can read any field without conditional fallbacks.
@@ -2353,82 +2340,23 @@ func (c *Config) applyDefaults() {
 		c.Prewarm.Archive.MaxBytes = 4000
 	}
 
-	// Metacognitive loop defaults.
-	if c.Metacognitive.MinSleep == "" {
-		c.Metacognitive.MinSleep = "2m"
-	}
-	if c.Metacognitive.MaxSleep == "" {
-		c.Metacognitive.MaxSleep = "30m"
-	}
-	if c.Metacognitive.DefaultSleep == "" {
-		c.Metacognitive.DefaultSleep = "10m"
-	}
-	if c.Metacognitive.Jitter == nil {
-		v := 0.2
-		c.Metacognitive.Jitter = &v
-	}
-	if c.Metacognitive.SupervisorProbability == nil {
-		v := 0.1
-		c.Metacognitive.SupervisorProbability = &v
-	}
-	if c.Metacognitive.Router.QualityFloor == 0 {
-		c.Metacognitive.Router.QualityFloor = 3
-	}
-	if c.Metacognitive.SupervisorRouter.QualityFloor == 0 {
-		c.Metacognitive.SupervisorRouter.QualityFloor = 8
-	}
-
-	// Ego loop defaults.
-	if c.Ego.MinSleep == "" {
-		c.Ego.MinSleep = "30m"
-	}
-	if c.Ego.MaxSleep == "" {
-		c.Ego.MaxSleep = "24h"
-	}
-	if c.Ego.DefaultSleep == "" {
-		c.Ego.DefaultSleep = "6h"
-	}
-	if c.Ego.Jitter == nil {
-		v := 0.2
-		c.Ego.Jitter = &v
-	}
-	if c.Ego.SupervisorProbability == nil {
-		v := 0.2
-		c.Ego.SupervisorProbability = &v
-	}
-	if c.Ego.Router.QualityFloor == 0 {
-		c.Ego.Router.QualityFloor = 5
-	}
-	if c.Ego.SupervisorRouter.QualityFloor == 0 {
-		c.Ego.SupervisorRouter.QualityFloor = 8
-	}
-
-	// Archivist loop defaults. Sleep envelope: wider than metacog (which
-	// runs minutes apart), narrower than ego (which runs hours apart).
-	// One hour as the default cadence gives the corpus time to
+	// Core service-loop defaults. The three loops share one config shape
+	// ([ServiceLoopConfig]); only their default sleep envelope, supervisor
+	// odds, and routing floors differ. The archivist envelope is wider than
+	// metacog (which runs minutes apart) and narrower than ego (which runs
+	// hours apart): a one-hour default cadence gives the corpus time to
 	// accumulate new evidence between passes without going stale.
-	if c.Archivist.MinSleep == "" {
-		c.Archivist.MinSleep = "15m"
-	}
-	if c.Archivist.MaxSleep == "" {
-		c.Archivist.MaxSleep = "12h"
-	}
-	if c.Archivist.DefaultSleep == "" {
-		c.Archivist.DefaultSleep = "1h"
-	}
-	if c.Archivist.Jitter == nil {
-		v := 0.2
-		c.Archivist.Jitter = &v
-	}
-	if c.Archivist.SupervisorProbability == nil {
-		v := 0.1
-		c.Archivist.SupervisorProbability = &v
-	}
-	if c.Archivist.Router.QualityFloor == 0 {
-		c.Archivist.Router.QualityFloor = 5
-	}
-	if c.Archivist.SupervisorRouter.QualityFloor == 0 {
-		c.Archivist.SupervisorRouter.QualityFloor = 8
+	for _, d := range []struct {
+		cfg                              *ServiceLoopConfig
+		minSleep, maxSleep, defaultSleep string
+		jitter, supervisorProb           float64
+		floor, supervisorFloor           int
+	}{
+		{&c.Metacognitive, "2m", "30m", "10m", 0.2, 0.1, 3, 8},
+		{&c.Ego, "30m", "24h", "6h", 0.2, 0.2, 5, 8},
+		{&c.Archivist, "15m", "12h", "1h", 0.2, 0.1, 5, 8},
+	} {
+		applyServiceLoopDefaults(d.cfg, d.minSleep, d.maxSleep, d.defaultSleep, d.jitter, d.supervisorProb, d.floor, d.supervisorFloor)
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
@@ -2791,116 +2719,53 @@ func (c *Config) validateDocRoots() error {
 	return nil
 }
 
-// validateMetacognitive checks metacognitive loop configuration for
-// consistency. Only checked when the loop is enabled.
+// validateServiceLoop checks one core service-loop config for internal
+// consistency. It is a no-op when the loop is disabled. name prefixes the
+// error messages (e.g. "metacognitive.min_sleep") so a failure points at
+// the operator's config key.
+func (c *Config) validateServiceLoop(name string, cfg ServiceLoopConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	if c.Workspace.Path == "" {
+		return fmt.Errorf("%s requires workspace.path (state file lives under workspace/core)", name)
+	}
+	minSleep, err := time.ParseDuration(cfg.MinSleep)
+	if err != nil {
+		return fmt.Errorf("%s.min_sleep %q: %w", name, cfg.MinSleep, err)
+	}
+	maxSleep, err := time.ParseDuration(cfg.MaxSleep)
+	if err != nil {
+		return fmt.Errorf("%s.max_sleep %q: %w", name, cfg.MaxSleep, err)
+	}
+	defaultSleep, err := time.ParseDuration(cfg.DefaultSleep)
+	if err != nil {
+		return fmt.Errorf("%s.default_sleep %q: %w", name, cfg.DefaultSleep, err)
+	}
+	if minSleep > maxSleep {
+		return fmt.Errorf("%s.min_sleep (%s) exceeds max_sleep (%s)", name, minSleep, maxSleep)
+	}
+	if defaultSleep < minSleep || defaultSleep > maxSleep {
+		return fmt.Errorf("%s.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+			name, defaultSleep, minSleep, maxSleep)
+	}
+	if cfg.Jitter != nil && (*cfg.Jitter < 0 || *cfg.Jitter > 1.0) {
+		return fmt.Errorf("%s.jitter %.2f must be in [0.0, 1.0]", name, *cfg.Jitter)
+	}
+	if cfg.SupervisorProbability != nil && (*cfg.SupervisorProbability < 0 || *cfg.SupervisorProbability > 1.0) {
+		return fmt.Errorf("%s.supervisor_probability %.2f must be in [0.0, 1.0]", name, *cfg.SupervisorProbability)
+	}
+	return nil
+}
+
+// validateMetacognitive, validateEgo, and validateArchivist validate each
+// core service loop. They delegate to [Config.validateServiceLoop]; the
+// per-loop wrappers keep the call sites and tests stable.
 func (c *Config) validateMetacognitive() error {
-	if !c.Metacognitive.Enabled {
-		return nil
-	}
-	if c.Workspace.Path == "" {
-		return fmt.Errorf("metacognitive requires workspace.path (state file lives under workspace/core)")
-	}
-	minSleep, err := time.ParseDuration(c.Metacognitive.MinSleep)
-	if err != nil {
-		return fmt.Errorf("metacognitive.min_sleep %q: %w", c.Metacognitive.MinSleep, err)
-	}
-	maxSleep, err := time.ParseDuration(c.Metacognitive.MaxSleep)
-	if err != nil {
-		return fmt.Errorf("metacognitive.max_sleep %q: %w", c.Metacognitive.MaxSleep, err)
-	}
-	defaultSleep, err := time.ParseDuration(c.Metacognitive.DefaultSleep)
-	if err != nil {
-		return fmt.Errorf("metacognitive.default_sleep %q: %w", c.Metacognitive.DefaultSleep, err)
-	}
-	if minSleep > maxSleep {
-		return fmt.Errorf("metacognitive.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
-	}
-	if defaultSleep < minSleep || defaultSleep > maxSleep {
-		return fmt.Errorf("metacognitive.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
-			defaultSleep, minSleep, maxSleep)
-	}
-	if c.Metacognitive.Jitter != nil && (*c.Metacognitive.Jitter < 0 || *c.Metacognitive.Jitter > 1.0) {
-		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", *c.Metacognitive.Jitter)
-	}
-	if c.Metacognitive.SupervisorProbability != nil && (*c.Metacognitive.SupervisorProbability < 0 || *c.Metacognitive.SupervisorProbability > 1.0) {
-		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Metacognitive.SupervisorProbability)
-	}
-	return nil
+	return c.validateServiceLoop("metacognitive", c.Metacognitive)
 }
-
-// validateEgo checks ego loop configuration for internal consistency.
-// No-op when the loop is disabled.
-func (c *Config) validateEgo() error {
-	if !c.Ego.Enabled {
-		return nil
-	}
-	if c.Workspace.Path == "" {
-		return fmt.Errorf("ego requires workspace.path (state file lives under workspace/core)")
-	}
-	minSleep, err := time.ParseDuration(c.Ego.MinSleep)
-	if err != nil {
-		return fmt.Errorf("ego.min_sleep %q: %w", c.Ego.MinSleep, err)
-	}
-	maxSleep, err := time.ParseDuration(c.Ego.MaxSleep)
-	if err != nil {
-		return fmt.Errorf("ego.max_sleep %q: %w", c.Ego.MaxSleep, err)
-	}
-	defaultSleep, err := time.ParseDuration(c.Ego.DefaultSleep)
-	if err != nil {
-		return fmt.Errorf("ego.default_sleep %q: %w", c.Ego.DefaultSleep, err)
-	}
-	if minSleep > maxSleep {
-		return fmt.Errorf("ego.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
-	}
-	if defaultSleep < minSleep || defaultSleep > maxSleep {
-		return fmt.Errorf("ego.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
-			defaultSleep, minSleep, maxSleep)
-	}
-	if c.Ego.Jitter != nil && (*c.Ego.Jitter < 0 || *c.Ego.Jitter > 1.0) {
-		return fmt.Errorf("ego.jitter %.2f must be in [0.0, 1.0]", *c.Ego.Jitter)
-	}
-	if c.Ego.SupervisorProbability != nil && (*c.Ego.SupervisorProbability < 0 || *c.Ego.SupervisorProbability > 1.0) {
-		return fmt.Errorf("ego.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Ego.SupervisorProbability)
-	}
-	return nil
-}
-
-// validateArchivist checks archivist loop configuration for internal
-// consistency. No-op when the loop is disabled.
-func (c *Config) validateArchivist() error {
-	if !c.Archivist.Enabled {
-		return nil
-	}
-	if c.Workspace.Path == "" {
-		return fmt.Errorf("archivist requires workspace.path (state file lives under workspace/core)")
-	}
-	minSleep, err := time.ParseDuration(c.Archivist.MinSleep)
-	if err != nil {
-		return fmt.Errorf("archivist.min_sleep %q: %w", c.Archivist.MinSleep, err)
-	}
-	maxSleep, err := time.ParseDuration(c.Archivist.MaxSleep)
-	if err != nil {
-		return fmt.Errorf("archivist.max_sleep %q: %w", c.Archivist.MaxSleep, err)
-	}
-	defaultSleep, err := time.ParseDuration(c.Archivist.DefaultSleep)
-	if err != nil {
-		return fmt.Errorf("archivist.default_sleep %q: %w", c.Archivist.DefaultSleep, err)
-	}
-	if minSleep > maxSleep {
-		return fmt.Errorf("archivist.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
-	}
-	if defaultSleep < minSleep || defaultSleep > maxSleep {
-		return fmt.Errorf("archivist.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
-			defaultSleep, minSleep, maxSleep)
-	}
-	if c.Archivist.Jitter != nil && (*c.Archivist.Jitter < 0 || *c.Archivist.Jitter > 1.0) {
-		return fmt.Errorf("archivist.jitter %.2f must be in [0.0, 1.0]", *c.Archivist.Jitter)
-	}
-	if c.Archivist.SupervisorProbability != nil && (*c.Archivist.SupervisorProbability < 0 || *c.Archivist.SupervisorProbability > 1.0) {
-		return fmt.Errorf("archivist.supervisor_probability %.2f must be in [0.0, 1.0]", *c.Archivist.SupervisorProbability)
-	}
-	return nil
-}
+func (c *Config) validateEgo() error       { return c.validateServiceLoop("ego", c.Ego) }
+func (c *Config) validateArchivist() error { return c.validateServiceLoop("archivist", c.Archivist) }
 
 // CoreRoot returns the fixed high-integrity core document root derived
 // from [Workspace.Path]. When workspace.path is unset, CoreRoot returns
