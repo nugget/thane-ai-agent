@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/opstate"
+	_ "modernc.org/sqlite"
 )
 
 // newTestAnalysisTools creates AnalysisTools backed by temp directories.

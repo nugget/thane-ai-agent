@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	_ "modernc.org/sqlite"
 )
 
 func newTestWorkingMemoryProvider(t *testing.T, convID string) (*WorkingMemoryProvider, *WorkingMemoryStore) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite-thane", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func TestGetStartupStatus_Empty(t *testing.T) {
@@ -19,7 +19,7 @@ func TestGetStartupStatus_Empty(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	db, err := sql.Open("sqlite3", tmpDB.Name())
+	db, err := sql.Open("sqlite-thane", tmpDB.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestGetStartupStatus_WithData(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	db, err := sql.Open("sqlite3", tmpDB.Name())
+	db, err := sql.Open("sqlite-thane", tmpDB.Name())
 	if err != nil {
 		t.Fatal(err)
 	}

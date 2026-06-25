@@ -24,10 +24,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/app"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
@@ -38,12 +40,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
+	_ "modernc.org/sqlite" // SQLite driver for database/sql
 )
 
 // main is intentionally minimal. It constructs the OS-level environment
@@ -141,6 +144,8 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
 	case "version":
 		return runVersion(stdout, outputFmt)
+	case "health":
+		return runHealth(ctx, stdout, cmdArgs)
 	case "caps":
 		return runCaps(ctx, stdout, configPath, outputFmt, cmdArgs)
 	case "":
@@ -168,6 +173,35 @@ func runVersion(w io.Writer, outputFmt string) error {
 	return nil
 }
 
+// runHealth probes a running daemon's /health endpoint and returns a
+// non-nil error (non-zero exit) when it is unreachable or unhealthy. It
+// is the container HEALTHCHECK entrypoint: the distroless runtime image
+// has no shell or wget, so the binary checks itself. The target URL
+// defaults to the local server and may be overridden by the first arg.
+func runHealth(ctx context.Context, w io.Writer, args []string) error {
+	url := "http://127.0.0.1:8080/health"
+	if len(args) > 0 && args[0] != "" {
+		url = args[0]
+	}
+
+	client := httpkit.NewClient(httpkit.WithTimeout(3 * time.Second))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build health request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("health check failed: %w", err)
+	}
+	defer httpkit.DrainAndClose(resp.Body, 4096)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
+	}
+	fmt.Fprintln(w, "ok")
+	return nil
+}
+
 // printUsage writes the top-level help text to w. It is called when
 // thane is invoked with no arguments, or with -h / --help.
 func printUsage(w io.Writer) error {
@@ -182,6 +216,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  ask          Ask a single question (for testing)")
 	fmt.Fprintln(w, "  ingest       Import markdown docs into fact store")
 	fmt.Fprintln(w, "  caps         Show resolved capability tags from a running daemon")
+	fmt.Fprintln(w, "  health [url] Probe a running daemon's /health endpoint (exit 0 if healthy)")
 	fmt.Fprintln(w, "  version      Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")

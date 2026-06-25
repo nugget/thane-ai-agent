@@ -14,7 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func newTestWakeStore(t *testing.T) *mqtt.SubscriptionStore {

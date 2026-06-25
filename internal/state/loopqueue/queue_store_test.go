@@ -5,7 +5,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) *Store {

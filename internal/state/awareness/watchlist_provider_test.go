@@ -66,7 +66,7 @@ func (f *fakeHA) GetWeatherForecasts(_ context.Context, entityID, forecastType s
 
 func setupTestProvider(t *testing.T, ha StateGetter) (*WatchlistProvider, *WatchlistStore) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

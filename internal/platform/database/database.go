@@ -10,12 +10,13 @@ import (
 )
 
 // Open opens a SQLite database at the given path with standard
-// production settings: WAL journal mode and a 5-second busy timeout.
-// Callers must ensure the github.com/mattn/go-sqlite3 driver is
-// registered (typically via a blank import in the binary's main
-// package or test file).
+// production settings: WAL journal mode and a 5-second busy timeout. It
+// uses the DriverName wrapper so time.Time values serialize to the
+// canonical SQLiteTimestampLayout. The file: URI scheme is required for
+// the _pragma query parameters to be parsed rather than treated as part
+// of the filename.
 func Open(path string) (*sql.DB, error) {
-	return sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	return sql.Open(DriverName, "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 }
 
 // memoryDBSeq generates unique names for in-memory test databases.
@@ -28,8 +29,8 @@ var memoryDBSeq uint64
 // connection and silently losing the in-memory state.
 func OpenMemory() (*sql.DB, error) {
 	id := atomic.AddUint64(&memoryDBSeq, 1)
-	dsn := fmt.Sprintf("file:thane_test_%d?mode=memory&cache=shared&_busy_timeout=5000", id)
-	db, err := sql.Open("sqlite3", dsn)
+	dsn := fmt.Sprintf("file:thane_test_%d?mode=memory&cache=shared&_pragma=busy_timeout(5000)", id)
+	db, err := sql.Open(DriverName, dsn)
 	if err != nil {
 		return nil, err
 	}

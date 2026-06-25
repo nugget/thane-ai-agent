@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	_ "modernc.org/sqlite"
 )
 
 func testStore(t *testing.T) *Store {

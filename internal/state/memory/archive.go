@@ -212,30 +212,6 @@ type IdleSessionInfo struct {
 	LastActivity   time.Time
 }
 
-// timestampFormats lists formats tried when parsing SQLite timestamp strings,
-// ordered from most specific to least. The mattn/go-sqlite3 driver stores
-// time.Time as RFC3339Nano by default, but other paths (or direct SQL
-// inserts) may produce different layouts.
-var timestampFormats = []string{
-	time.RFC3339Nano,
-	time.RFC3339,
-	"2006-01-02 15:04:05.999999999-07:00",
-	"2006-01-02 15:04:05.999999999",
-	"2006-01-02 15:04:05",
-}
-
-// parseTimestamp attempts to parse a SQLite timestamp string using the
-// known formats in timestampFormats. Returns zero time and false if none
-// match.
-func parseTimestamp(s string) (time.Time, bool) {
-	for _, layout := range timestampFormats {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
 // ArchivedToolCall represents a tool call preserved in the archive.
 type ArchivedToolCall struct {
 	ID             string     `json:"id"`
@@ -331,7 +307,7 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 		cfg = &defaults
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open archive database: %w", err)
 	}
@@ -790,21 +766,116 @@ func (s *ArchiveStore) migrateSchema() {
 	}
 }
 
-// tryEnableFTS attempts to create the FTS5 virtual table.
-// Returns true if FTS5 is available, false otherwise.
+// tryEnableFTS attempts to create the FTS5 virtual table. Returns true if
+// FTS5 is available and, in unified mode, its sync triggers were installed
+// — i.e. searchFTS can be trusted to return complete results. Returns
+// false otherwise so the store falls back to the LIKE path rather than
+// querying an index that cannot stay in sync.
 func (s *ArchiveStore) tryEnableFTS() bool {
 	ftsTable := s.msgFTSName
 	contentTable := s.msgTableName
 	db := s.msgDB()
 
-	_, err := db.Exec(fmt.Sprintf(`
+	if _, err := db.Exec(fmt.Sprintf(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
 			content,
 			content=%s,
 			content_rowid=rowid
 		)
-	`, ftsTable, contentTable))
-	return err == nil
+	`, ftsTable, contentTable)); err != nil {
+		return false
+	}
+
+	// In unified mode the messages are written by SQLiteStore, which knows
+	// nothing about this external-content FTS index — so it can only stay
+	// in sync via triggers plus a one-time backfill, mirroring
+	// trySetupSessionsFTS. Without this the index is created empty and
+	// Search returns nothing (the consolidated-mode production path).
+	// Legacy mode keeps its explicit-insert path in ArchiveMessages;
+	// installing triggers there would double-index every row.
+	//
+	// If the triggers cannot be installed, sync cannot be established:
+	// disable FTS so Search uses the LIKE fallback instead of silently
+	// querying a stale/empty index.
+	if s.messagesDB != nil {
+		if err := s.setupMessagesFTSSync(db, ftsTable, contentTable); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("messages_fts sync unavailable; using LIKE fallback", "error", err)
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// setupMessagesFTSSync installs AFTER INSERT/DELETE/UPDATE sync triggers on
+// the unified messages table and backfills the external-content FTS index.
+// It returns a non-nil error only when the triggers cannot be installed —
+// i.e. ongoing sync cannot be established, so the caller must not trust the
+// index. Backfill (rebuild) failure is non-fatal: the triggers keep the
+// index growing for new writes and the next startup retries the rebuild
+// against the same docsize-shortfall signal.
+func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable string) error {
+	stmts := []string{
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_ai AFTER INSERT ON %s BEGIN
+				INSERT INTO %s(rowid, content) VALUES (new.rowid, COALESCE(new.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable),
+		// DELETE/UPDATE use the FTS5 'delete' command to tombstone the old
+		// row — external-content tables cannot do partial-column updates.
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_ad AFTER DELETE ON %s BEGIN
+				INSERT INTO %s(%s, rowid, content) VALUES ('delete', old.rowid, COALESCE(old.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable, ftsTable),
+		// Re-index only when content actually changes. Messages are updated
+		// frequently for status/archived_at, which leave content untouched;
+		// the WHEN guard avoids needless index churn on those writes. (A
+		// deliberate refinement over the sessions_fts triggers, where the
+		// indexed columns change together and no guard is warranted.)
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_au AFTER UPDATE ON %s
+			WHEN old.content IS NOT new.content BEGIN
+				INSERT INTO %s(%s, rowid, content) VALUES ('delete', old.rowid, COALESCE(old.content, ''));
+				INSERT INTO %s(rowid, content) VALUES (new.rowid, COALESCE(new.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable, ftsTable, ftsTable),
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("install messages_fts trigger: %w", err)
+		}
+	}
+
+	// Idempotent backfill: rebuild when the inverted index holds fewer docs
+	// than the source table — covering first creation and a prior failed
+	// rebuild. Probe the _docsize shadow table, not COUNT(*) on the FTS
+	// table: external-content FTS5 proxies COUNT(*) through to the source
+	// table, which would always self-equal and suppress the rebuild.
+	// Backfill problems below are non-fatal — triggers are already in place.
+	var docCount, srcCount int
+	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s_docsize`, ftsTable)).Scan(&docCount); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("messages_fts docsize probe failed; skipping backfill", "error", err)
+		}
+		return nil
+	}
+	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, contentTable)).Scan(&srcCount); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("messages count probe failed; skipping backfill", "error", err)
+		}
+		return nil
+	}
+	if docCount < srcCount {
+		if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("messages_fts backfill failed; next startup will retry",
+					"docsize", docCount, "messages", srcCount, "error", err)
+			}
+		}
+	}
+	return nil
 }
 
 // ArchiveMessages copies messages to the immutable archive.
@@ -2074,8 +2145,8 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 			return nil, fmt.Errorf("scan active session: %w", err)
 		}
 
-		startedAt, ok := parseTimestamp(startedAtStr)
-		if !ok {
+		startedAt, err := database.ParseTimestamp(startedAtStr)
+		if err != nil {
 			// Skip sessions with unparseable timestamps rather than
 			// risk closing them due to a zero-time default.
 			continue
@@ -2089,7 +2160,6 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 		// (archive_messages table), session_id is always set and
 		// there's no status column.
 		var maxTS sql.NullString
-		var err error
 		if s.messagesDB != nil {
 			err = db.QueryRow(
 				fmt.Sprintf(`SELECT MAX(timestamp) FROM %s
@@ -2111,7 +2181,7 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 		}
 
 		if maxTS.Valid {
-			if parsed, ok := parseTimestamp(maxTS.String); ok {
+			if parsed, err := database.ParseTimestamp(maxTS.String); err == nil {
 				info.LastActivity = parsed
 			}
 		}

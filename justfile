@@ -39,47 +39,22 @@ generate:
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
-build target_os=host_os target_arch=host_arch cc="": generate
+build target_os=host_os target_arch=host_arch: generate
     @mkdir -p dist
-    @if [ -n "{{cc}}" ]; then export CC="{{cc}}"; fi; \
-    CGO_ENABLED=1 GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    CGO_ENABLED=0 GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
     @if [ "{{target_os}}" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
 
-# Build for all release targets
+# Build for all release targets. The pure-Go SQLite driver (modernc)
+# makes every target a CGO-free cross-compile, so Linux builds run
+# natively here too — no Docker/Buildx round-trip required.
 [group('build')]
 build-all:
     just build darwin amd64
     just build darwin arm64
-    just build-linux-docker amd64
-    just build-linux-docker arm64
-
-# Build a Linux binary through Docker Buildx so CGO-backed SQLite builds
-# stay usable even on non-Linux hosts without local cross-compilers.
-[group('build')]
-build-linux-docker target_arch:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    target_arch="{{target_arch}}"
-    export_dir="dist/docker-export/linux-${target_arch}"
-    binary="dist/thane-linux-${target_arch}"
-
-    rm -rf "$export_dir"
-    mkdir -p "$export_dir" dist
-
-    docker buildx build \
-        --platform "linux/${target_arch}" \
-        --target artifact \
-        --build-arg THANE_VERSION="{{version}}" \
-        --build-arg BUILD_COMMIT="{{git_commit}}" \
-        --build-arg BUILD_BRANCH="{{git_branch}}" \
-        --build-arg BUILD_TIME="{{build_time}}" \
-        --output "type=local,dest=${export_dir}" \
-        .
-
-    install -m 755 "$export_dir/thane" "$binary"
-    echo "Built $binary via Docker Buildx"
+    just build linux amd64
+    just build linux arm64
 
 # Build a local container image for the current checkout
 [group('build')]
@@ -337,34 +312,25 @@ deploy:
 
 # Build, optionally sign/notarize, and atomically copy a binary to a remote host
 [group('deploy')]
-deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_arch cc="" restart_cmd="":
+deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_arch restart_cmd="":
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{host}}"
     remote_bin="{{remote_bin}}"
     target_os="{{target_os}}"
     target_arch="{{target_arch}}"
-    cc="{{cc}}"
     restart_cmd="{{restart_cmd}}"
     binary="dist/thane-${target_os}-${target_arch}"
     version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 
     test -n "$host" || { echo "host is required"; exit 1; }
 
-    if [ -n "$cc" ]; then
-        THANE_VERSION="$version" just build "$target_os" "$target_arch" "$cc"
-    else
-        THANE_VERSION="$version" just build "$target_os" "$target_arch"
-    fi
+    THANE_VERSION="$version" just build "$target_os" "$target_arch"
 
     if [ "$target_os" = "darwin" ] && [ "{{host_os}}" = "darwin" ]; then
         just release-sign-macos "$binary"
         if [ -n "${THANE_NOTARY_PROFILE:-}" ]; then
-            if [ -n "$cc" ]; then
-                archive="$(just release-build-archive "$version" "$target_os" "$target_arch" "$cc" | tail -n 1)"
-            else
-                archive="$(just release-build-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
-            fi
+            archive="$(just release-build-archive "$version" "$target_os" "$target_arch" | tail -n 1)"
             test -n "$archive" || { echo "release-build-archive did not report an artifact path" >&2; exit 1; }
             echo "Notarized archive ready: $archive"
         fi
@@ -534,21 +500,16 @@ release-staple-macos archive:
 
 [doc("Building block: build one release artifact for a target")]
 [group('release-engineering')]
-release-build-archive version target_os=host_os target_arch=host_arch cc="":
+release-build-archive version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
     target_os="{{target_os}}"
     target_arch="{{target_arch}}"
-    cc="{{cc}}"
     binary="dist/thane-${target_os}-${target_arch}"
 
     version="${version#v}"
-    if [ -n "$cc" ]; then
-        THANE_VERSION="v${version}" just build "$target_os" "$target_arch" "$cc"
-    else
-        THANE_VERSION="v${version}" just build "$target_os" "$target_arch"
-    fi
+    THANE_VERSION="v${version}" just build "$target_os" "$target_arch"
 
     if [ "$target_os" = "darwin" ]; then
         test "{{host_os}}" = "darwin" || { echo "release-build-archive for darwin targets requires a macOS host"; exit 1; }
@@ -604,17 +565,13 @@ release-write-checksums version:
 
 [doc("Building block: build one local snapshot archive")]
 [group('release-engineering')]
-release-build-snapshot version target_os=host_os target_arch=host_arch cc="":
+release-build-snapshot version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{cc}}" ]; then
-        just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
-    else
-        just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
-    fi
+    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
     just release-write-checksums "{{version}}"
 
-[doc("Building block: build one Linux archive via Docker Buildx")]
+[doc("Building block: build one Linux archive (CGO-free native cross-compile)")]
 [group('release-engineering')]
 release-build-linux-archive version target_arch:
     #!/usr/bin/env bash
@@ -623,7 +580,7 @@ release-build-linux-archive version target_arch:
     target_arch="{{target_arch}}"
 
     version="${version#v}"
-    THANE_VERSION="v${version}" just build-linux-docker "$target_arch"
+    THANE_VERSION="v${version}" just build linux "$target_arch"
 
     archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
@@ -971,19 +928,19 @@ macos-staple archive:
     just release-staple-macos "{{archive}}"
 
 [private]
-release-archive version target_os=host_os target_arch=host_arch cc="":
-    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+release-archive version target_os=host_os target_arch=host_arch:
+    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
 
 [private]
 release-checksums version:
     just release-write-checksums "{{version}}"
 
 [private]
-release-snapshot version target_os=host_os target_arch=host_arch cc="":
-    just release-build-snapshot "{{version}}" "{{target_os}}" "{{target_arch}}" "{{cc}}"
+release-snapshot version target_os=host_os target_arch=host_arch:
+    just release-build-snapshot "{{version}}" "{{target_os}}" "{{target_arch}}"
 
 [private]
-release-archive-linux-docker version target_arch:
+release-archive-linux version target_arch:
     just release-build-linux-archive "{{version}}" "{{target_arch}}"
 
 [private]

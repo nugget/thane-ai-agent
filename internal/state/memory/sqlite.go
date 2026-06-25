@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	_ "modernc.org/sqlite"
 )
 
 // SQLiteStore is a SQLite-backed memory store.
