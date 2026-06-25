@@ -149,6 +149,74 @@ func TestParseSleepEnvelope_Rejections(t *testing.T) {
 	}
 }
 
+// TestThaneCurate_RejectsInvalidKnobs verifies the declarative knobs fail
+// fast on malformed input rather than silently coercing or dropping it: a
+// present-but-non-integer quality_floor, and a metadata value that is not a
+// string object. Failing fast gives the model an actionable error instead
+// of a loop quietly missing the floor/labels it asked for.
+func TestThaneCurate_RejectsInvalidKnobs(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	kbDir := filepath.Join(tempDir, "kb")
+	if err := mkdirAllForTest(kbDir); err != nil {
+		t.Fatalf("mkdir kb: %v", err)
+	}
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	docStore, err := documents.NewStore(db, map[string]string{"kb": kbDir}, nil)
+	if err != nil {
+		t.Fatalf("documents.NewStore: %v", err)
+	}
+	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
+		DocTools:   documents.NewTools(docStore),
+		Registry:   defRegistry,
+		CommitSpec: upsertCommitSpec(defRegistry),
+		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: "x"}, nil
+		},
+	})
+	tool := reg.Get("thane_curate")
+	if tool == nil {
+		t.Fatal("thane_curate not registered")
+	}
+
+	base := func() map[string]any {
+		return map[string]any{
+			"name": "knob_test", "intent": "track stuff",
+			"sleep_min": "5m", "sleep_max": "30m",
+			"output": map[string]any{"mode": "maintain", "document": "kb:knob.md"},
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(map[string]any)
+		wantMsg string
+	}{
+		{"fractional quality_floor", func(a map[string]any) { a["quality_floor"] = 7.2 }, "quality_floor must be an integer"},
+		{"non-numeric quality_floor", func(a map[string]any) { a["quality_floor"] = "high" }, "quality_floor must be an integer"},
+		{"metadata not an object", func(a map[string]any) { a["metadata"] = "nope" }, "metadata must be an object"},
+		{"metadata non-string value", func(a map[string]any) { a["metadata"] = map[string]any{"k": 1} }, "must be a string"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := base()
+			tc.mutate(args)
+			if _, err := tool.Handler(context.Background(), args); err == nil || !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("err = %v, want substring %q", err, tc.wantMsg)
+			}
+		})
+	}
+}
+
 // TestThaneCurate_EndToEnd exercises the full happy path: scaffold
 // the output document with frontmatter recording loop ownership,
 // register and reconcile a service-loop definition, and launch it.
@@ -215,7 +283,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		},
 		"tags":          []any{"forge"},
 		"quality_floor": float64(7),
-		"exclude_tools": []any{"exec"},
+		"exclude_tools": []any{"exec", "exec", "  email_send  "},
 		"metadata":      map[string]any{"team": "release"},
 	})
 	if err != nil {
@@ -283,8 +351,27 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Profile.QualityFloor != 7 {
 		t.Errorf("Profile.QualityFloor = %d, want 7", found.Spec.Profile.QualityFloor)
 	}
-	if !slices.Contains(found.Spec.ExcludeTools, "exec") {
-		t.Errorf("exclude_tools knob: expected \"exec\" in ExcludeTools, got %v", found.Spec.ExcludeTools)
+	// exclude_tools is a trimmed, de-duplicated union over the egress floor:
+	// the duplicate "exec" collapses to one entry, and the whitespace-padded
+	// "  email_send  " trims and folds into the existing egress entry rather
+	// than adding a second (or a whitespace) copy.
+	countExclude := func(name string) int {
+		n := 0
+		for _, e := range found.Spec.ExcludeTools {
+			if e == name {
+				n++
+			}
+		}
+		return n
+	}
+	if countExclude("exec") != 1 {
+		t.Errorf("exclude_tools: want exactly one \"exec\", got %d in %v", countExclude("exec"), found.Spec.ExcludeTools)
+	}
+	if countExclude("email_send") != 1 {
+		t.Errorf("exclude_tools: \"email_send\" must not duplicate the egress floor, got %d", countExclude("email_send"))
+	}
+	if slices.Contains(found.Spec.ExcludeTools, "  email_send  ") {
+		t.Error("exclude_tools: surrounding whitespace must be trimmed")
 	}
 	if found.Spec.Metadata["team"] != "release" {
 		t.Errorf("Metadata[team] = %q, want release", found.Spec.Metadata["team"])

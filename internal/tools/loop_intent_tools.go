@@ -391,15 +391,48 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 	}
 	instructions, _ := args["instructions"].(string)
 	replace, _ := args["replace"].(bool)
-	qualityFloor := toolargs.Int(args, "quality_floor")
+	// quality_floor: fail fast when present-but-invalid rather than silently
+	// coercing to 0 (which would drop the floor the caller asked for). Absent
+	// is fine — the router uses its default.
+	qualityFloor := 0
+	if raw, present := args["quality_floor"]; present && raw != nil {
+		n, ok := toolargs.IntOK(args, "quality_floor")
+		if !ok {
+			return "", fmt.Errorf("quality_floor must be an integer, got %v", raw)
+		}
+		qualityFloor = n
+	}
+
 	// Operator-provided tool exclusions layer ON TOP of the always-denied
-	// human-egress baseline (#696): they extend the denylist, never shrink it.
-	excludeTools := append(DirectHumanEgressToolNames(), toolargs.StringSlice(args, "exclude_tools")...)
+	// human-egress baseline (#696): a true union — trimmed, de-duplicated, and
+	// never shrinking the egress floor.
+	excludeTools := DirectHumanEgressToolNames()
+	seenExclude := make(map[string]bool, len(excludeTools))
+	for _, t := range excludeTools {
+		seenExclude[t] = true
+	}
+	for _, t := range toolargs.StringSlice(args, "exclude_tools") {
+		if t = strings.TrimSpace(t); t != "" && !seenExclude[t] {
+			seenExclude[t] = true
+			excludeTools = append(excludeTools, t)
+		}
+	}
+
+	// metadata: fail fast on a non-object, or non-string values, rather than
+	// silently dropping them so partial caller intent can't slip through.
 	var metadata map[string]string
-	if raw, ok := args["metadata"].(map[string]any); ok && len(raw) > 0 {
-		metadata = make(map[string]string, len(raw))
-		for k, v := range raw {
-			if s, ok := v.(string); ok {
+	if raw, present := args["metadata"]; present && raw != nil {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("metadata must be an object with string values")
+		}
+		if len(m) > 0 {
+			metadata = make(map[string]string, len(m))
+			for k, v := range m {
+				s, ok := v.(string)
+				if !ok {
+					return "", fmt.Errorf("metadata[%q] must be a string, got %T", k, v)
+				}
 				metadata[k] = s
 			}
 		}
