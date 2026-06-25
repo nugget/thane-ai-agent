@@ -537,44 +537,7 @@ paths:
           description: A page of conversation summaries.
           content:
             application/json:
-              schema:
-                type: object
-                required: [conversations, count, total, next_cursor]
-                properties:
-                  conversations:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: string, example: signal-alice }
-                        message_count: { type: integer, example: 42 }
-                        created_at: { type: string, format: date-time, example: "2026-06-20T08:15:00Z" }
-                        updated_at: { type: string, format: date-time, example: "2026-06-24T14:31:07Z" }
-                        channel_binding: { type: [object, "null"], example: { channel: signal, contact: alice, address: "+15551234567" } }
-                    example:
-                      - id: signal-alice
-                        message_count: 42
-                        created_at: "2026-06-20T08:15:00Z"
-                        updated_at: "2026-06-24T14:31:07Z"
-                        channel_binding: { channel: signal, contact: alice, address: "+15551234567" }
-                  count: { type: integer, example: 2 }
-                  total: { type: integer, example: 138 }
-                  next_cursor: { type: [string, "null"], example: "eyJ1cGRhdGVkX2F0IjoiMjAyNi0wNi0yNFQxNDozMTowN1oifQ" }
-                example:
-                  conversations:
-                    - id: signal-alice
-                      message_count: 42
-                      created_at: "2026-06-20T08:15:00Z"
-                      updated_at: "2026-06-24T14:31:07Z"
-                      channel_binding: { channel: signal, contact: alice, address: "+15551234567" }
-                    - id: sched-morning-briefing
-                      message_count: 7
-                      created_at: "2026-06-22T08:15:00Z"
-                      updated_at: "2026-06-24T08:15:03Z"
-                      channel_binding: null
-                  count: 2
-                  total: 138
-                  next_cursor: "eyJ1cGRhdGVkX2F0IjoiMjAyNi0wNi0yNFQxNDozMTowN1oifQ"
+              schema: { $ref: "#/components/schemas/ConversationPage" }
         "400": { $ref: "#/components/responses/BadRequest" }
   /v1/conversations/{id}:
     get:
@@ -589,13 +552,7 @@ paths:
           description: Conversation transcript.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  id: signal-alice
-                  messages:
-                    - { role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
-                    - { role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
+              schema: { $ref: "#/components/schemas/Conversation" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/sessions/stats:
     get:
@@ -605,16 +562,10 @@ paths:
       x-thane-scope: sessions:read
       responses:
         "200":
-          description: Session stats.
+          description: Token-usage, cost, and context-window stats for the active session.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  active_messages: 312
-                  context_window: 200000
-                  input_tokens: 148213
-                  utilization: 0.74
+              schema: { $ref: "#/components/schemas/SessionStats" }
   /v1/sessions/history:
     get:
       tags: [Conversations & Sessions]
@@ -625,15 +576,10 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: History entries.
+          description: User and assistant messages from the active conversation, oldest first.
           content:
             application/json:
-              schema:
-                type: array
-                items: { type: object }
-                example:
-                  - { id: session-7f3a9c, started_at: "2026-06-24T08:15:01Z", message_count: 312, model: thane:latest }
-                  - { id: session-3b1e7d, started_at: "2026-06-23T19:02:44Z", message_count: 87, model: gpt-oss:120b }
+              schema: { $ref: "#/components/schemas/SessionHistory" }
   /v1/sessions/compact:
     post:
       tags: [Conversations & Sessions]
@@ -641,15 +587,29 @@ paths:
       summary: Compact the active context window
       x-thane-scope: sessions:write
       responses:
-        "200": { description: Compaction performed. }
+        "200":
+          description: Compaction performed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionActionAck" }
   /v1/sessions/balance:
     post:
       tags: [Conversations & Sessions]
       operationId: balanceSession
-      summary: Rebalance the active context
+      summary: Set the reported account balance
       x-thane-scope: sessions:write
+      requestBody:
+        required: true
+        description: The account balance to record, in USD.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionBalanceRequest" }
       responses:
-        "200": { description: Rebalanced. }
+        "200":
+          description: Balance recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionBalanceAck" }
   /v1/sessions/reset:
     post:
       tags: [Conversations & Sessions]
@@ -657,7 +617,11 @@ paths:
       summary: Reset the active session
       x-thane-scope: sessions:write
       responses:
-        "200": { description: Reset. }
+        "200":
+          description: Conversation cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionActionAck" }
 
   # ---------------------------------------------------------------- Archive
   /v1/archive/sessions:
@@ -671,15 +635,10 @@ paths:
         - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: Archived session summaries.
+          description: Archived session summaries with the count returned.
           content:
             application/json:
-              schema:
-                type: array
-                items: { type: object }
-                example:
-                  - { id: session-7f3a9c, started_at: "2026-06-24T08:15:01Z", ended_at: "2026-06-24T09:42:00Z", message_count: 312, conversation_id: signal-alice }
-                  - { id: session-3b1e7d, started_at: "2026-06-23T19:02:44Z", ended_at: "2026-06-23T19:48:10Z", message_count: 87, conversation_id: sched-morning-briefing }
+              schema: { $ref: "#/components/schemas/ArchivedSessionList" }
   /v1/archive/sessions/{id}:
     get:
       tags: [Archive]
@@ -690,33 +649,34 @@ paths:
         - { name: id, in: path, required: true, description: "Archived session ID.", schema: { type: string } }
       responses:
         "200":
-          description: Archived session.
+          description: The archived session with its full transcript and tool calls.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  id: session-7f3a9c
-                  conversation_id: signal-alice
-                  started_at: "2026-06-24T08:15:01Z"
-                  ended_at: "2026-06-24T09:42:00Z"
-                  messages:
-                    - { role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
-                    - { role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
+              schema: { $ref: "#/components/schemas/ArchivedSessionDetail" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/archive/sessions/{id}/export:
     get:
       tags: [Archive]
       operationId: exportArchivedSession
-      summary: Export an archived session (e.g. Markdown)
+      summary: Export an archived session (Markdown or JSON)
       x-thane-scope: archive:read
       parameters:
         - { name: id, in: path, required: true, description: "Archived session ID.", schema: { type: string } }
+        - name: format
+          in: query
+          description: Export format; "markdown" (default) returns a text/markdown document, "json" returns the session and transcript as JSON.
+          schema: { type: string, enum: [markdown, md, json], default: markdown }
       responses:
         "200":
-          description: Exported document.
+          description: Exported document — text/markdown by default, or JSON when format=json.
           content:
-            text/markdown: { schema: { type: string } }
+            text/markdown:
+              schema:
+                type: string
+                description: The session rendered as a Markdown document.
+                example: "# Evening house check-in\n\n**Alice:** Hey, can you check the front door?\n\n**Thane:** I've checked the front door and it's locked.\n"
+            application/json:
+              schema: { $ref: "#/components/schemas/ArchivedSessionExport" }
   /v1/archive/messages:
     get:
       tags: [Archive]
@@ -727,15 +687,10 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: Messages.
+          description: Archived messages within the requested time range, with the count and echoed bounds.
           content:
             application/json:
-              schema:
-                type: array
-                items: { type: object }
-                example:
-                  - { id: 184213, conversation_id: signal-alice, role: user, content: "Hey Bob, can you check the front door?", ts: "2026-06-24T14:30:55Z" }
-                  - { id: 184214, conversation_id: signal-alice, role: assistant, content: "I've checked the front door and it's locked.", ts: "2026-06-24T14:31:11Z" }
+              schema: { $ref: "#/components/schemas/ArchivedMessageList" }
   /v1/archive/search:
     get:
       tags: [Archive]
@@ -747,15 +702,10 @@ paths:
         - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: Search results.
+          description: Search hits with surrounding context, plus the count and echoed query.
           content:
             application/json:
-              schema:
-                type: array
-                items: { type: object }
-                example:
-                  - { session_id: session-7f3a9c, conversation_id: signal-alice, snippet: "...check the front door...", ts: "2026-06-24T14:30:55Z", rank: 0.92 }
-                  - { session_id: session-3b1e7d, conversation_id: sched-morning-briefing, snippet: "...morning briefing delivered...", ts: "2026-06-23T08:15:03Z", rank: 0.71 }
+              schema: { $ref: "#/components/schemas/ArchiveSearchResults" }
   /v1/archive/stats:
     get:
       tags: [Archive]
@@ -764,17 +714,10 @@ paths:
       x-thane-scope: archive:read
       responses:
         "200":
-          description: Stats.
+          description: Archive totals, captured time span, and per-role/status breakdowns.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  total_sessions: 1842
-                  total_messages: 318204
-                  oldest_session_at: "2025-11-02T03:14:00Z"
-                  newest_session_at: "2026-06-24T14:31:11Z"
-                  index_size_bytes: 524288000
+              schema: { $ref: "#/components/schemas/ArchiveStats" }
 
   # ------------------------------------------------------------ Checkpoints
   /v1/checkpoints:
@@ -785,15 +728,10 @@ paths:
       x-thane-scope: checkpoints:read
       responses:
         "200":
-          description: Checkpoints.
+          description: A page of checkpoint metadata (newest first); each entry carries metadata only, with state null.
           content:
             application/json:
-              schema:
-                type: array
-                items: { type: object }
-                example:
-                  - { id: 019e7469-3abf-7e6b-ae38-85b5e34915ac, label: pre-compaction, created_at: "2026-06-24T09:42:00Z", message_count: 312 }
-                  - { id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f, label: nightly, created_at: "2026-06-24T03:00:00Z", message_count: 198 }
+              schema: { $ref: "#/components/schemas/CheckpointList" }
     post:
       tags: [Checkpoints]
       operationId: createCheckpoint
@@ -801,16 +739,10 @@ paths:
       x-thane-scope: checkpoints:write
       responses:
         "201":
-          description: Created.
+          description: The created checkpoint, with its captured state.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-                  label: pre-compaction
-                  created_at: "2026-06-24T09:42:00Z"
-                  message_count: 312
+              schema: { $ref: "#/components/schemas/Checkpoint" }
   /v1/checkpoints/{id}:
     get:
       tags: [Checkpoints]
@@ -820,17 +752,10 @@ paths:
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
         "200":
-          description: Checkpoint.
+          description: The requested checkpoint, with its captured state.
           content:
             application/json:
-              schema:
-                type: object
-                example:
-                  id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
-                  label: pre-compaction
-                  created_at: "2026-06-24T09:42:00Z"
-                  message_count: 312
-                  conversation_id: signal-alice
+              schema: { $ref: "#/components/schemas/Checkpoint" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Checkpoints]
@@ -839,7 +764,7 @@ paths:
       x-thane-scope: checkpoints:write
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "204": { description: Deleted. }
+        "204": { description: Deleted; no response body. }
   /v1/checkpoints/{id}/restore:
     post:
       tags: [Checkpoints]
@@ -848,7 +773,11 @@ paths:
       x-thane-scope: checkpoints:write
       parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string, format: uuid } } ]
       responses:
-        "200": { description: Restored. }
+        "200":
+          description: Acknowledgement that the checkpoint was restored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckpointRestoreAck" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   # -------------------------------------------------------- Models & Fleet
@@ -2189,3 +2118,1789 @@ components:
         status: completed
         result: Briefing delivered
       required: [id, task_id, scheduled_at, status]
+
+    ChannelBinding:
+      type: object
+      description: >-
+        Runtime identity of a channel-backed conversation, linking a live
+        channel/address pair to any known contact record. Present only when the
+        conversation carries meaningful channel metadata. All fields are omitted
+        when empty.
+      properties:
+        channel:
+          type: string
+          readOnly: true
+          description: Transport the conversation is bound to (e.g. signal, email, owu).
+          example: signal
+        address:
+          type: string
+          readOnly: true
+          description: Channel-specific address of the remote party.
+          example: "+15551234567"
+        contact_id:
+          type: string
+          readOnly: true
+          description: Identifier of the resolved contact record, when one is linked.
+          example: contact-alice
+        contact_name:
+          type: string
+          readOnly: true
+          description: Display name of the resolved contact, when known.
+          example: Alice
+        trust_zone:
+          type: string
+          readOnly: true
+          description: Trust zone the bound party falls into for gating decisions.
+          example: trusted
+        link_source:
+          type: string
+          readOnly: true
+          description: How the contact link was established (e.g. exact, fuzzy, manual).
+          example: exact
+        is_owner:
+          type: boolean
+          readOnly: true
+          description: Whether the bound party is the system owner.
+          example: false
+      example:
+        channel: signal
+        address: "+15551234567"
+        contact_id: contact-alice
+        contact_name: Alice
+        trust_zone: trusted
+        link_source: exact
+        is_owner: false
+
+    ConversationMetadata:
+      type: object
+      description: >-
+        Typed metadata associated with a conversation. Stored as JSON so new
+        fields can be added without schema churn; present only when it carries
+        meaningful content.
+      properties:
+        channel_binding:
+          $ref: "#/components/schemas/ChannelBinding"
+          description: Channel identity bound to this conversation, when channel-backed.
+      example:
+        channel_binding:
+          channel: signal
+          address: "+15551234567"
+          contact_id: contact-alice
+          contact_name: Alice
+          trust_zone: trusted
+          link_source: exact
+          is_owner: false
+
+    ConversationSummary:
+      type: object
+      description: >-
+        Lightweight conversation descriptor — identity, active message count,
+        timestamps, and channel binding — with no message content. message_count
+        is the true active count (uncapped).
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Conversation identifier (the kind prefix names its producer family).
+          example: signal-alice
+        message_count:
+          type: integer
+          readOnly: true
+          description: Number of active (non-compacted) messages in the conversation.
+          example: 42
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the conversation was first created.
+          example: "2026-06-20T08:15:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for the conversation's most recent activity.
+          example: "2026-06-24T14:31:07Z"
+        channel_binding:
+          $ref: "#/components/schemas/ChannelBinding"
+          description: Channel identity bound to this conversation; omitted when not channel-backed.
+      required: [id, message_count, created_at, updated_at]
+      example:
+        id: signal-alice
+        message_count: 42
+        created_at: "2026-06-20T08:15:00Z"
+        updated_at: "2026-06-24T14:31:07Z"
+        channel_binding:
+          channel: signal
+          address: "+15551234567"
+          contact_id: contact-alice
+          contact_name: Alice
+          trust_zone: trusted
+          link_source: exact
+          is_owner: false
+
+    ConversationPage:
+      type: object
+      description: >-
+        One filtered, sorted, keyset-paginated page of conversation summaries
+        plus the filter-wide total and the cursor for the next page.
+      properties:
+        conversations:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationSummary" }
+          readOnly: true
+          description: The summaries on this page, in the requested sort order.
+        count:
+          type: integer
+          readOnly: true
+          description: Number of summaries returned on this page.
+          example: 2
+        total:
+          type: integer
+          readOnly: true
+          description: Total conversations matching the filter, stable across pages (cursor-independent).
+          example: 138
+        next_cursor:
+          type: [string, "null"]
+          readOnly: true
+          description: Opaque keyset cursor for the next page; null on the last page.
+          example: "eyJzIjoidXBkYXRlZF9hdCIsImQiOiJkZXNjIiwidiI6IjIwMjYtMDYtMjRUMTQ6MzE6MDcuMDAwWiIsImkiOiJzaWduYWwtYWxpY2UifQ"
+      required: [conversations, count, total, next_cursor]
+      example:
+        conversations:
+          - id: signal-alice
+            message_count: 42
+            created_at: "2026-06-20T08:15:00Z"
+            updated_at: "2026-06-24T14:31:07Z"
+            channel_binding:
+              channel: signal
+              address: "+15551234567"
+              contact_id: contact-alice
+              contact_name: Alice
+              trust_zone: trusted
+              link_source: exact
+              is_owner: false
+          - id: sched-morning-briefing
+            message_count: 7
+            created_at: "2026-06-22T08:15:00Z"
+            updated_at: "2026-06-24T08:15:03Z"
+        count: 2
+        total: 138
+        next_cursor: "eyJzIjoidXBkYXRlZF9hdCIsImQiOiJkZXNjIiwidiI6IjIwMjYtMDYtMjRUMTQ6MzE6MDcuMDAwWiIsImkiOiJzaWduYWwtYWxpY2UifQ"
+
+    ConversationMessage:
+      type: object
+      description: >-
+        One message from a conversation transcript. The unified message type for
+        both active working-memory messages and archived transcripts; archive-only
+        fields are omitted for active messages.
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Message identifier — a UUIDv7 for messages Thane creates; imported messages preserve their external id.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        conversation_id:
+          type: string
+          readOnly: true
+          description: Conversation this message belongs to; set on archived messages.
+          example: signal-alice
+        session_id:
+          type: string
+          readOnly: true
+          description: Archive session this message was captured in; set on archived messages.
+          example: 019e7460-0000-7000-8000-000000000001
+        role:
+          type: string
+          readOnly: true
+          description: Role of the message author.
+          enum: [system, user, assistant, tool]
+          example: user
+        content:
+          type: string
+          readOnly: true
+          description: Text content of the message.
+          example: "Hey Bob, can you check the front door?"
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the message was created.
+          example: "2026-06-24T14:30:55Z"
+        token_count:
+          type: integer
+          readOnly: true
+          description: Estimated token count for the message content.
+          example: 11
+        tool_calls:
+          type: string
+          readOnly: true
+          description: JSON-encoded array of tool calls, for assistant messages that requested tools.
+          example: "[{\"id\":\"call_019e7469\",\"name\":\"lock_status\",\"arguments\":\"{\\\"door\\\":\\\"front\\\"}\"}]"
+        tool_call_id:
+          type: string
+          readOnly: true
+          description: Identifier of the tool call this message responds to, for tool-result messages.
+          example: call_019e7469
+        archived_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the message was archived; omitted for active messages.
+          example: "2026-06-24T15:00:00Z"
+        archive_reason:
+          type: string
+          readOnly: true
+          description: Why the message was archived (compaction, reset, shutdown, import); omitted for active messages.
+          example: compaction
+      required: [id, role, content, timestamp]
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        role: user
+        content: "Hey Bob, can you check the front door?"
+        timestamp: "2026-06-24T14:30:55Z"
+        token_count: 11
+
+    Conversation:
+      type: object
+      description: >-
+        A full conversation transcript — identity, timestamps, optional channel
+        metadata, and the ordered list of messages.
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Conversation identifier (the kind prefix names its producer family).
+          example: signal-alice
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: The conversation's messages in chronological order.
+        metadata:
+          $ref: "#/components/schemas/ConversationMetadata"
+          description: Typed conversation metadata; omitted when none is set.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the conversation was first created.
+          example: "2026-06-20T08:15:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for the conversation's most recent activity.
+          example: "2026-06-24T14:31:11Z"
+      required: [id, messages, created_at, updated_at]
+      example:
+        id: signal-alice
+        messages:
+          - id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+            role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T14:30:55Z"
+            token_count: 11
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+            role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T14:31:11Z"
+            token_count: 12
+        metadata:
+          channel_binding:
+            channel: signal
+            address: "+15551234567"
+            contact_id: contact-alice
+            contact_name: Alice
+            trust_zone: trusted
+            link_source: exact
+            is_owner: false
+        created_at: "2026-06-20T08:15:00Z"
+        updated_at: "2026-06-24T14:31:11Z"
+
+    UsageSummary:
+      type: object
+      description: >-
+        Aggregated token-usage and cost totals for one breakdown bucket
+        (a model, upstream model, provider, or resource).
+      required:
+        - total_records
+        - total_input_tokens
+        - total_output_tokens
+        - total_cache_creation_input_tokens
+        - total_cache_read_input_tokens
+        - total_cost_usd
+      properties:
+        total_records:
+          type: integer
+          readOnly: true
+          description: Number of usage records aggregated into this bucket.
+          example: 42
+        total_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total non-cached input tokens billed in this bucket.
+          example: 148213
+        total_output_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total output tokens generated in this bucket.
+          example: 28104
+        total_cache_creation_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total input tokens written to the prompt cache in this bucket.
+          example: 96000
+        total_cache_read_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total input tokens served from the prompt cache in this bucket.
+          example: 312500
+        total_cost_usd:
+          type: number
+          readOnly: true
+          description: Total estimated cost in USD for this bucket, from the config pricing table.
+          example: 0.8421
+      example:
+        total_records: 42
+        total_input_tokens: 148213
+        total_output_tokens: 28104
+        total_cache_creation_input_tokens: 96000
+        total_cache_read_input_tokens: 312500
+        total_cost_usd: 0.8421
+
+    SessionStats:
+      type: object
+      description: >-
+        Token-usage, cost, and context-window snapshot for the active
+        session, plus per-model/provider/resource breakdowns and build
+        metadata. Returned by GET /v1/sessions/stats.
+      required:
+        - total_input_tokens
+        - total_output_tokens
+        - total_cache_creation_input_tokens
+        - total_cache_read_input_tokens
+        - cache_hit_rate
+        - total_requests
+        - estimated_cost_usd
+        - context_tokens
+        - context_window
+        - message_count
+      properties:
+        total_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total non-cached input tokens billed this session.
+          example: 148213
+        total_output_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total output tokens generated this session.
+          example: 28104
+        total_cache_creation_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total input tokens written to the prompt cache this session.
+          example: 96000
+        total_cache_read_input_tokens:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total input tokens served from the prompt cache this session.
+          example: 312500
+        cache_hit_rate:
+          type: number
+          readOnly: true
+          description: >-
+            Cache read fraction over the session, cache_read / (cache_read +
+            cache_creation), in [0, 1]. Near zero on a cold start, high in a
+            warm session.
+          example: 0.765
+        total_requests:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Total number of model requests recorded this session.
+          example: 137
+        estimated_cost_usd:
+          type: number
+          readOnly: true
+          description: Total estimated cost in USD this session, from the config pricing table.
+          example: 1.2843
+        reported_balance_usd:
+          type: number
+          readOnly: true
+          description: Operator-reported account balance in USD, when one has been set.
+          example: 48.72
+        balance_set_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp when the reported balance was last set.
+          example: "2026-06-24T08:00:00Z"
+        by_model:
+          type: object
+          readOnly: true
+          description: Per-model usage totals, keyed by model alias.
+          additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
+        by_upstream_model:
+          type: object
+          readOnly: true
+          description: Per-upstream-model usage totals, keyed by the resolved upstream model name.
+          additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
+        by_provider:
+          type: object
+          readOnly: true
+          description: Per-provider usage totals, keyed by provider name.
+          additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
+        by_resource:
+          type: object
+          readOnly: true
+          description: Per-resource usage totals, keyed by resource name.
+          additionalProperties: { $ref: "#/components/schemas/UsageSummary" }
+        context_tokens:
+          type: integer
+          readOnly: true
+          description: Current token count of the active conversation context.
+          example: 148213
+        context_window:
+          type: integer
+          readOnly: true
+          description: Maximum context-window size in tokens for the active model.
+          example: 200000
+        message_count:
+          type: integer
+          readOnly: true
+          description: Number of messages currently held in the active conversation.
+          example: 312
+        build:
+          $ref: "#/components/schemas/VersionInfo"
+          description: Build and runtime metadata for the running process.
+      example:
+        total_input_tokens: 148213
+        total_output_tokens: 28104
+        total_cache_creation_input_tokens: 96000
+        total_cache_read_input_tokens: 312500
+        cache_hit_rate: 0.765
+        total_requests: 137
+        estimated_cost_usd: 1.2843
+        reported_balance_usd: 48.72
+        balance_set_at: "2026-06-24T08:00:00Z"
+        by_model:
+          thane:latest:
+            total_records: 120
+            total_input_tokens: 130000
+            total_output_tokens: 24000
+            total_cache_creation_input_tokens: 80000
+            total_cache_read_input_tokens: 290000
+            total_cost_usd: 1.1021
+          gpt-oss:120b:
+            total_records: 17
+            total_input_tokens: 18213
+            total_output_tokens: 4104
+            total_cache_creation_input_tokens: 16000
+            total_cache_read_input_tokens: 22500
+            total_cost_usd: 0.1822
+        by_provider:
+          anthropic:
+            total_records: 120
+            total_input_tokens: 130000
+            total_output_tokens: 24000
+            total_cache_creation_input_tokens: 80000
+            total_cache_read_input_tokens: 290000
+            total_cost_usd: 1.1021
+        context_tokens: 148213
+        context_window: 200000
+        message_count: 312
+        build:
+          version: v0.9.2-596-gf92a9208
+          git_commit: f92a9208
+          git_branch: main
+          go_version: go1.26.1
+
+    SessionMessage:
+      type: object
+      description: One user or assistant message from the active conversation history.
+      required: [role, content, timestamp]
+      properties:
+        role:
+          type: string
+          readOnly: true
+          description: Who authored the message.
+          enum: [user, assistant]
+          example: user
+        content:
+          type: string
+          readOnly: true
+          description: Plain-text content of the message.
+          example: "Hey Bob, can you check the front door?"
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the message was recorded.
+          example: "2026-06-24T14:30:55Z"
+      example:
+        role: user
+        content: "Hey Bob, can you check the front door?"
+        timestamp: "2026-06-24T14:30:55Z"
+
+    SessionHistory:
+      type: object
+      description: >-
+        Wrapper around the active conversation's user and assistant
+        messages, oldest first. Returned by GET /v1/sessions/history.
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          readOnly: true
+          description: User and assistant messages, oldest first.
+          items: { $ref: "#/components/schemas/SessionMessage" }
+      example:
+        messages:
+          - role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T14:30:55Z"
+          - role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T14:31:11Z"
+
+    SessionActionAck:
+      type: object
+      description: >-
+        Acknowledgement returned by session lifecycle actions
+        (POST /v1/sessions/compact and POST /v1/sessions/reset).
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          readOnly: true
+          description: Result status; always "ok" on success.
+          example: ok
+        message:
+          type: string
+          readOnly: true
+          description: Human-readable summary of the action performed.
+          example: conversation compacted
+      example:
+        status: ok
+        message: conversation compacted
+
+    SessionBalanceRequest:
+      type: object
+      description: Request body for POST /v1/sessions/balance, setting the reported account balance.
+      required: [balance_usd]
+      properties:
+        balance_usd:
+          type: number
+          description: Account balance to record, in USD.
+          example: 48.72
+      example:
+        balance_usd: 48.72
+
+    SessionBalanceAck:
+      type: object
+      description: Acknowledgement returned by POST /v1/sessions/balance after recording the balance.
+      required: [status, balance_usd]
+      properties:
+        status:
+          type: string
+          readOnly: true
+          description: Result status; always "ok" on success.
+          example: ok
+        balance_usd:
+          type: number
+          readOnly: true
+          description: The balance that was recorded, in USD, echoed back from the request.
+          example: 48.72
+      example:
+        status: ok
+        balance_usd: 48.72
+
+    ArchiveDelegationMetadata:
+      type: object
+      description: >-
+        Delegation-specific execution details preserved from the legacy
+        delegations table during migration. Only populated on imported
+        delegation sessions.
+      required:
+        - task
+        - profile
+        - model
+        - iterations
+        - max_iterations
+        - input_tokens
+        - output_tokens
+        - exhausted
+        - duration_ms
+      properties:
+        task:
+          type: string
+          readOnly: true
+          description: The task the delegate was assigned to carry out.
+          example: Draft a reply to Alice about the weekend plans
+        guidance:
+          type: string
+          readOnly: true
+          description: Optional extra guidance supplied to the delegate; omitted when none was given.
+          example: Keep it warm but brief
+        profile:
+          type: string
+          readOnly: true
+          description: Delegate profile that governed the run.
+          example: assistant
+        model:
+          type: string
+          readOnly: true
+          description: Model alias the delegate ran under.
+          example: claude-opus-4-8
+        iterations:
+          type: integer
+          readOnly: true
+          description: Number of loop iterations the delegate actually used.
+          example: 4
+        max_iterations:
+          type: integer
+          readOnly: true
+          description: Maximum loop iterations the delegate was permitted.
+          example: 12
+        input_tokens:
+          type: integer
+          readOnly: true
+          description: Total input tokens consumed across the delegation run.
+          example: 18213
+        output_tokens:
+          type: integer
+          readOnly: true
+          description: Total output tokens generated across the delegation run.
+          example: 2048
+        exhausted:
+          type: boolean
+          readOnly: true
+          description: Whether the delegate hit its iteration budget before finishing.
+          example: false
+        exhaust_reason:
+          type: string
+          readOnly: true
+          description: Why the delegate stopped early when exhausted; omitted when it ran to completion.
+          example: max iterations reached
+        result_content:
+          type: string
+          readOnly: true
+          description: Final result text the delegate returned; omitted when empty.
+          example: Replied to Alice confirming Saturday at 10am.
+        duration_ms:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Wall-clock duration of the delegation run, in milliseconds.
+          example: 8412
+        error:
+          type: string
+          readOnly: true
+          description: Error message if the delegation failed; omitted on success.
+          example: "delegate exceeded its deadline"
+        messages:
+          type: string
+          readOnly: true
+          description: >-
+            Raw JSON-serialized conversation history from the legacy delegations
+            table, preserved to avoid data loss; omitted when empty.
+          example: '[{"role":"user","content":"Draft a reply to Alice"}]'
+      example:
+        task: Draft a reply to Alice about the weekend plans
+        guidance: Keep it warm but brief
+        profile: assistant
+        model: claude-opus-4-8
+        iterations: 4
+        max_iterations: 12
+        input_tokens: 18213
+        output_tokens: 2048
+        exhausted: false
+        result_content: Replied to Alice confirming Saturday at 10am.
+        duration_ms: 8412
+
+    ArchivedSessionMetadata:
+      type: object
+      description: >-
+        Rich, LLM-generated metadata for human-oriented search and browsing of
+        an archived session. Stored as JSON so new fields can be added without
+        schema migrations; all fields are omitted when empty.
+      properties:
+        channel_binding:
+          $ref: "#/components/schemas/ChannelBinding"
+          description: Channel/contact binding snapshot active when the session was created, preserved for forensics.
+        one_liner:
+          type: string
+          readOnly: true
+          description: Roughly ten-word summary of the session for compact display.
+          example: Alice asked Thane to lock up and dim the lights
+        paragraph:
+          type: string
+          readOnly: true
+          description: Two-to-four-sentence summary of the session.
+          example: Alice checked in on the house before leaving. Thane confirmed the front door was locked and dimmed the living-room lights.
+        detailed:
+          type: string
+          readOnly: true
+          description: Full prose summary of the session.
+          example: Alice asked Thane to verify the front door and adjust the lighting before heading out for the evening. Thane confirmed the lock state, dimmed the living-room lights to 20%, and offered to arm the away mode.
+        key_decisions:
+          type: array
+          items: { type: string }
+          readOnly: true
+          description: Key decisions or outcomes from the session.
+          example:
+            - Left away mode disarmed at Alice's request
+        participants:
+          type: array
+          items: { type: string }
+          readOnly: true
+          description: People involved in or mentioned during the session.
+          example:
+            - Alice
+            - Bob
+        session_type:
+          type: string
+          readOnly: true
+          description: Characterization of the session's nature (e.g. debugging, architecture, philosophy, casual).
+          example: casual
+        tools_used:
+          type: object
+          readOnly: true
+          description: Tools invoked during the session, mapping tool name to call count.
+          additionalProperties: { type: integer }
+          example:
+            lock_status: 1
+            light_set: 2
+        files_touched:
+          type: array
+          items: { type: string }
+          readOnly: true
+          description: Files touched or discussed during the session.
+          example: []
+        models:
+          type: array
+          items: { type: string }
+          readOnly: true
+          description: Model aliases used during the session, when known.
+          example:
+            - claude-opus-4-8
+        delegation:
+          $ref: "#/components/schemas/ArchiveDelegationMetadata"
+          description: Legacy delegation execution details; present only on imported delegation sessions.
+      example:
+        one_liner: Alice asked Thane to lock up and dim the lights
+        paragraph: Alice checked in on the house before leaving. Thane confirmed the front door was locked and dimmed the living-room lights.
+        session_type: casual
+        participants:
+          - Alice
+        tools_used:
+          lock_status: 1
+          light_set: 2
+        models:
+          - claude-opus-4-8
+
+    ArchivedSession:
+      type: object
+      description: >-
+        An archived conversation session — the durable record of one
+        start-to-end run, with identity, timing, and rich metadata. Returned by
+        the archive session endpoints.
+      required:
+        - id
+        - conversation_id
+        - started_at
+        - message_count
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Session identifier — a UUIDv7 for native sessions; imported sessions use their source filename.
+          example: 019e7460-0000-7000-8000-000000000001
+        conversation_id:
+          type: string
+          readOnly: true
+          description: Conversation this session belongs to.
+          example: signal-alice
+        started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the session began.
+          example: "2026-06-24T08:15:01Z"
+        ended_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the session ended; omitted while the session is still active.
+          example: "2026-06-24T09:42:00Z"
+        end_reason:
+          type: string
+          readOnly: true
+          description: Why the session ended (e.g. idle, shutdown, reset); omitted while active.
+          example: idle
+        message_count:
+          type: integer
+          readOnly: true
+          description: Number of messages captured in the session.
+          example: 312
+        summary:
+          type: string
+          readOnly: true
+          description: Short summary of the session; omitted when none has been generated.
+          example: Evening check-in — locked up and dimmed the lights.
+        title:
+          type: string
+          readOnly: true
+          description: Human-friendly session title; omitted when none has been set.
+          example: Evening house check-in
+        tags:
+          type: array
+          items: { type: string }
+          readOnly: true
+          description: Free-form tags applied to the session; omitted when none are set.
+          example:
+            - household
+            - lighting
+        metadata:
+          $ref: "#/components/schemas/ArchivedSessionMetadata"
+          description: Rich LLM-generated session metadata; omitted when none is set.
+        parent_session_id:
+          type: string
+          readOnly: true
+          description: Parent session that spawned this one (e.g. a delegate's parent); omitted for top-level sessions.
+          example: 019e7460-1a2b-7c3d-8e4f-1234567890ab
+        parent_tool_call_id:
+          type: string
+          readOnly: true
+          description: Tool call in the parent that triggered this child session; omitted for top-level sessions.
+          example: call_019e7460abcd
+      example:
+        id: 019e7460-0000-7000-8000-000000000001
+        conversation_id: signal-alice
+        started_at: "2026-06-24T08:15:01Z"
+        ended_at: "2026-06-24T09:42:00Z"
+        end_reason: idle
+        message_count: 312
+        summary: Evening check-in — locked up and dimmed the lights.
+        title: Evening house check-in
+        tags:
+          - household
+          - lighting
+        metadata:
+          one_liner: Alice asked Thane to lock up and dim the lights
+          session_type: casual
+          participants:
+            - Alice
+
+    ArchivedToolCall:
+      type: object
+      description: A tool call preserved in the session archive.
+      required:
+        - id
+        - conversation_id
+        - session_id
+        - tool_name
+        - arguments
+        - started_at
+        - archived_at
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Stable identifier of the archived tool call.
+          example: call_019e7469
+        conversation_id:
+          type: string
+          readOnly: true
+          description: Conversation the tool call was made in.
+          example: signal-alice
+        session_id:
+          type: string
+          readOnly: true
+          description: Archive session the tool call belongs to.
+          example: 019e7460-0000-7000-8000-000000000001
+        tool_name:
+          type: string
+          readOnly: true
+          description: Name of the tool that was invoked.
+          example: lock_status
+        arguments:
+          type: string
+          readOnly: true
+          description: JSON-encoded arguments the tool was called with.
+          example: '{"door":"front"}'
+        result:
+          type: string
+          readOnly: true
+          description: JSON-encoded or text result the tool returned; omitted when the call errored or returned nothing.
+          example: '{"locked":true}'
+        error:
+          type: string
+          readOnly: true
+          description: Error message if the tool call failed; omitted on success.
+          example: "tool request timed out"
+        started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the tool call started.
+          example: "2026-06-24T14:30:55Z"
+        completed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the tool call completed; omitted while still in flight.
+          example: "2026-06-24T14:30:56Z"
+        duration_ms:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Wall-clock duration of the tool call, in milliseconds; omitted when not recorded.
+          example: 412
+        archived_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the tool call was archived.
+          example: "2026-06-24T15:00:00Z"
+        iteration_index:
+          type: integer
+          readOnly: true
+          description: Zero-based loop iteration the tool call belongs to; omitted when not tracked.
+          example: 2
+      example:
+        id: call_019e7469
+        conversation_id: signal-alice
+        session_id: 019e7460-0000-7000-8000-000000000001
+        tool_name: lock_status
+        arguments: '{"door":"front"}'
+        result: '{"locked":true}'
+        started_at: "2026-06-24T14:30:55Z"
+        completed_at: "2026-06-24T14:30:56Z"
+        duration_ms: 412
+        archived_at: "2026-06-24T15:00:00Z"
+        iteration_index: 2
+
+    ArchiveSearchResult:
+      type: object
+      description: >-
+        One full-text search hit from the archive, with the matched message and
+        the surrounding context messages on either side.
+      required:
+        - match
+        - session_id
+        - context_before
+        - context_after
+        - score
+      properties:
+        match:
+          $ref: "#/components/schemas/ConversationMessage"
+          description: The message that matched the query.
+        session_id:
+          type: string
+          readOnly: true
+          description: Archive session the matched message belongs to.
+          example: 019e7460-0000-7000-8000-000000000001
+        context_before:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: Messages immediately preceding the match, oldest first; empty when context expansion is disabled.
+        context_after:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: Messages immediately following the match, oldest first; empty when context expansion is disabled.
+        highlight:
+          type: string
+          readOnly: true
+          description: Snippet of the match with the query terms highlighted; omitted when unavailable.
+          example: "...can you check the <b>front door</b>?"
+        score:
+          type: number
+          readOnly: true
+          description: >-
+            Relevance signal (higher is a better match), derived from the FTS5
+            BM25 rank. Comparable within a match_type bucket but not across
+            buckets; zero on the LIKE fallback path.
+          example: 0.92
+        match_type:
+          type: string
+          readOnly: true
+          description: >-
+            Which pass produced the hit — "phrase" (literal-phrase precision) or
+            "terms" (OR-of-terms recall); omitted on the LIKE fallback path.
+          enum: [phrase, terms]
+          example: phrase
+      example:
+        match:
+          id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+          conversation_id: signal-alice
+          session_id: 019e7460-0000-7000-8000-000000000001
+          role: user
+          content: "Hey Bob, can you check the front door?"
+          timestamp: "2026-06-24T14:30:55Z"
+          token_count: 11
+        session_id: 019e7460-0000-7000-8000-000000000001
+        context_before: []
+        context_after:
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T14:31:11Z"
+            token_count: 12
+        highlight: "...can you check the <b>front door</b>?"
+        score: 0.92
+        match_type: phrase
+
+    ArchiveStats:
+      type: object
+      description: >-
+        Aggregate size and coverage statistics for the session archive — totals,
+        the captured time span, and per-role and per-status breakdowns. Returned
+        by GET /v1/archive/stats.
+      required:
+        - total_messages
+        - total_sessions
+        - total_tool_calls
+        - by_role
+      properties:
+        total_messages:
+          type: integer
+          readOnly: true
+          description: Total number of messages held in the archive.
+          example: 318204
+        total_sessions:
+          type: integer
+          readOnly: true
+          description: Total number of archived sessions.
+          example: 1842
+        total_tool_calls:
+          type: integer
+          readOnly: true
+          description: Total number of archived tool calls.
+          example: 90431
+        oldest_message:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp of the oldest message in the archive; omitted when the archive is empty.
+          example: "2025-11-02T03:14:00Z"
+        newest_message:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp of the newest message in the archive; omitted when the archive is empty.
+          example: "2026-06-24T14:31:11Z"
+        by_role:
+          type: object
+          readOnly: true
+          description: Message counts grouped by author role.
+          additionalProperties: { type: integer }
+          example:
+            user: 142100
+            assistant: 141980
+            tool: 32100
+            system: 2024
+        by_status:
+          type: object
+          readOnly: true
+          description: Message counts grouped by storage status (unified-mode archives only).
+          additionalProperties: { type: integer }
+          example:
+            active: 12044
+            archived: 306160
+        by_reason:
+          type: object
+          readOnly: true
+          description: Message counts grouped by archive reason (legacy-mode archives only).
+          additionalProperties: { type: integer }
+          example:
+            compaction: 280102
+            shutdown: 24100
+            import: 14002
+      example:
+        total_messages: 318204
+        total_sessions: 1842
+        total_tool_calls: 90431
+        oldest_message: "2025-11-02T03:14:00Z"
+        newest_message: "2026-06-24T14:31:11Z"
+        by_role:
+          user: 142100
+          assistant: 141980
+          tool: 32100
+          system: 2024
+        by_status:
+          active: 12044
+          archived: 306160
+
+    ArchivedSessionList:
+      type: object
+      description: >-
+        A list of archived session summaries with the count returned. Backs
+        GET /v1/archive/sessions.
+      required: [sessions, count]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/ArchivedSession" }
+          readOnly: true
+          description: The archived sessions, most recent first.
+        count:
+          type: integer
+          readOnly: true
+          description: Number of sessions returned.
+          example: 2
+      example:
+        sessions:
+          - id: 019e7460-0000-7000-8000-000000000001
+            conversation_id: signal-alice
+            started_at: "2026-06-24T08:15:01Z"
+            ended_at: "2026-06-24T09:42:00Z"
+            end_reason: idle
+            message_count: 312
+            title: Evening house check-in
+          - id: 019e7460-0000-7000-8000-000000000002
+            conversation_id: sched-morning-briefing
+            started_at: "2026-06-23T19:02:44Z"
+            ended_at: "2026-06-23T19:48:10Z"
+            end_reason: idle
+            message_count: 87
+        count: 2
+
+    ArchivedSessionDetail:
+      type: object
+      description: >-
+        One archived session together with its full transcript and tool calls.
+        Backs GET /v1/archive/sessions/{id}.
+      required: [session, transcript, tool_calls]
+      properties:
+        session:
+          $ref: "#/components/schemas/ArchivedSession"
+          description: The archived session record.
+        transcript:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: The session's messages in chronological order.
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/ArchivedToolCall" }
+          readOnly: true
+          description: Tool calls made during the session, in chronological order.
+      example:
+        session:
+          id: 019e7460-0000-7000-8000-000000000001
+          conversation_id: signal-alice
+          started_at: "2026-06-24T08:15:01Z"
+          ended_at: "2026-06-24T09:42:00Z"
+          end_reason: idle
+          message_count: 312
+          title: Evening house check-in
+        transcript:
+          - id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T14:30:55Z"
+            token_count: 11
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T14:31:11Z"
+            token_count: 12
+        tool_calls:
+          - id: call_019e7469
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            tool_name: lock_status
+            arguments: '{"door":"front"}'
+            result: '{"locked":true}'
+            started_at: "2026-06-24T14:30:55Z"
+            completed_at: "2026-06-24T14:30:56Z"
+            duration_ms: 412
+            archived_at: "2026-06-24T15:00:00Z"
+
+    ArchivedSessionExport:
+      type: object
+      description: >-
+        An archived session and its transcript, as returned by
+        GET /v1/archive/sessions/{id}/export with format=json. The markdown
+        format returns a text/markdown document instead.
+      required: [session, transcript]
+      properties:
+        session:
+          $ref: "#/components/schemas/ArchivedSession"
+          description: The archived session record.
+        transcript:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: The session's messages in chronological order.
+      example:
+        session:
+          id: 019e7460-0000-7000-8000-000000000001
+          conversation_id: signal-alice
+          started_at: "2026-06-24T08:15:01Z"
+          ended_at: "2026-06-24T09:42:00Z"
+          end_reason: idle
+          message_count: 312
+          title: Evening house check-in
+        transcript:
+          - id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T14:30:55Z"
+            token_count: 11
+
+    ArchivedMessageList:
+      type: object
+      description: >-
+        Archived messages within a time range, with the count and the echoed
+        bounds. Backs GET /v1/archive/messages.
+      required: [messages, count, from, to]
+      properties:
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/ConversationMessage" }
+          readOnly: true
+          description: The matching archived messages in chronological order.
+        count:
+          type: integer
+          readOnly: true
+          description: Number of messages returned.
+          example: 2
+        from:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Start of the queried time range (inclusive), echoed from the request.
+          example: "2026-06-24T00:00:00Z"
+        to:
+          type: string
+          format: date-time
+          readOnly: true
+          description: End of the queried time range (inclusive), echoed from the request.
+          example: "2026-06-25T00:00:00Z"
+      example:
+        messages:
+          - id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T14:30:55Z"
+            token_count: 11
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+            conversation_id: signal-alice
+            session_id: 019e7460-0000-7000-8000-000000000001
+            role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T14:31:11Z"
+            token_count: 12
+        count: 2
+        from: "2026-06-24T00:00:00Z"
+        to: "2026-06-25T00:00:00Z"
+
+    ArchiveSearchResults:
+      type: object
+      description: >-
+        Full-text search results across the archive, with the count and the
+        echoed query. Backs GET /v1/archive/search.
+      required: [results, count, query]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/ArchiveSearchResult" }
+          readOnly: true
+          description: The search hits, ordered by relevance.
+        count:
+          type: integer
+          readOnly: true
+          description: Number of results returned.
+          example: 1
+        query:
+          type: string
+          readOnly: true
+          description: The search query, echoed from the request.
+          example: front door
+      example:
+        results:
+          - match:
+              id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+              conversation_id: signal-alice
+              session_id: 019e7460-0000-7000-8000-000000000001
+              role: user
+              content: "Hey Bob, can you check the front door?"
+              timestamp: "2026-06-24T14:30:55Z"
+              token_count: 11
+            session_id: 019e7460-0000-7000-8000-000000000001
+            context_before: []
+            context_after: []
+            highlight: "...can you check the <b>front door</b>?"
+            score: 0.92
+            match_type: phrase
+        count: 1
+        query: front door
+
+    Checkpoint:
+      type: object
+      description: >-
+        A point-in-time snapshot of agent state. Returned in full (with the
+        captured `state`) by create and fetch; list responses carry only the
+        metadata fields and report `state` as null.
+      required: [id, created_at, trigger, state, byte_size, message_count, fact_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique checkpoint identifier.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the checkpoint was created.
+          example: "2026-06-24T09:42:00Z"
+        trigger:
+          type: string
+          readOnly: true
+          description: What caused the checkpoint to be created.
+          enum: [manual, periodic, pre-failover, shutdown, pre-compact]
+          example: pre-compact
+        note:
+          type: string
+          readOnly: true
+          description: Optional human description supplied at creation time.
+          example: before nightly compaction
+        state:
+          anyOf:
+            - $ref: "#/components/schemas/CheckpointState"
+            - type: "null"
+          readOnly: true
+          description: >-
+            The captured, restorable state. Populated on create and fetch;
+            null in list responses, which return metadata only.
+        byte_size:
+          type: integer
+          format: int64
+          readOnly: true
+          description: Compressed size of the captured state, in bytes.
+          example: 48213
+        message_count:
+          type: integer
+          readOnly: true
+          description: Total number of messages captured in the checkpoint.
+          example: 312
+        fact_count:
+          type: integer
+          readOnly: true
+          description: Total number of long-term memory facts captured.
+          example: 47
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        created_at: "2026-06-24T09:42:00Z"
+        trigger: pre-compact
+        note: before nightly compaction
+        state:
+          conversations:
+            - id: signal-alice
+              created_at: "2026-06-20T08:15:00Z"
+              updated_at: "2026-06-24T09:41:55Z"
+              messages:
+                - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+                  role: user
+                  content: "Hey Bob, can you check the front door?"
+                  timestamp: "2026-06-24T09:41:50Z"
+          facts:
+            - id: 019e7469-5d1e-7e6b-ae38-85b5e34915ae
+              category: user
+              key: preferred_name
+              value: Bob
+              source: signal-bob
+              created_at: "2026-06-20T08:15:00Z"
+              updated_at: "2026-06-24T09:41:00Z"
+              confidence: 0.95
+        byte_size: 48213
+        message_count: 312
+        fact_count: 47
+
+    CheckpointState:
+      type: object
+      description: The actual restorable data captured in a checkpoint.
+      required: [conversations, facts]
+      properties:
+        conversations:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointConversation" }
+          readOnly: true
+          description: Captured chat sessions with their full message history.
+        facts:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointFact" }
+          readOnly: true
+          description: Captured long-term memory facts.
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointTask" }
+          readOnly: true
+          description: Pending scheduled tasks at checkpoint time; omitted when none.
+        config:
+          $ref: "#/components/schemas/CheckpointConfigSnapshot"
+          description: Agent configuration at checkpoint time; omitted when not captured.
+      example:
+        conversations:
+          - id: signal-alice
+            created_at: "2026-06-20T08:15:00Z"
+            updated_at: "2026-06-24T09:41:55Z"
+            messages:
+              - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+                role: user
+                content: "Hey Bob, can you check the front door?"
+                timestamp: "2026-06-24T09:41:50Z"
+        facts:
+          - id: 019e7469-5d1e-7e6b-ae38-85b5e34915ae
+            category: user
+            key: preferred_name
+            value: Bob
+            source: signal-bob
+            created_at: "2026-06-20T08:15:00Z"
+            updated_at: "2026-06-24T09:41:00Z"
+            confidence: 0.95
+        tasks: []
+        config:
+          default_model: claude-opus-4-8
+          ha_configured: true
+          talent_count: 12
+
+    CheckpointConversation:
+      type: object
+      description: A captured chat session and its ordered message history.
+      required: [id, created_at, updated_at, messages]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Conversation identifier (the kind prefix names its producer family).
+          example: signal-alice
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the conversation was first created.
+          example: "2026-06-20T08:15:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for the conversation's most recent activity.
+          example: "2026-06-24T09:41:55Z"
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointMessage" }
+          readOnly: true
+          description: The conversation's messages in chronological order.
+      example:
+        id: signal-alice
+        created_at: "2026-06-20T08:15:00Z"
+        updated_at: "2026-06-24T09:41:55Z"
+        messages:
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+            role: user
+            content: "Hey Bob, can you check the front door?"
+            timestamp: "2026-06-24T09:41:50Z"
+          - id: 019e7469-4c0d-7e6b-ae38-85b5e34915ae
+            role: assistant
+            content: "I've checked the front door and it's locked."
+            timestamp: "2026-06-24T09:41:55Z"
+
+    CheckpointMessage:
+      type: object
+      description: A single turn in a captured conversation.
+      required: [id, role, content, timestamp]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Unique message identifier.
+          example: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+        role:
+          type: string
+          readOnly: true
+          description: Who produced the turn.
+          enum: [system, user, assistant, tool]
+          example: user
+        content:
+          type: string
+          readOnly: true
+          description: The textual content of the turn.
+          example: "Hey Bob, can you check the front door?"
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the turn occurred.
+          example: "2026-06-24T09:41:50Z"
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointToolCall" }
+          readOnly: true
+          description: Function calls made by the assistant in this turn; omitted when none.
+        tool_id:
+          type: string
+          readOnly: true
+          description: Identifier of the tool call this turn responds to, for tool responses.
+          example: call_8f3a2b1c
+        tool_name:
+          type: string
+          readOnly: true
+          description: Name of the tool this turn responds to, for tool responses.
+          example: ha_get_state
+      example:
+        id: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
+        role: user
+        content: "Hey Bob, can you check the front door?"
+        timestamp: "2026-06-24T09:41:50Z"
+
+    CheckpointToolCall:
+      type: object
+      description: A function call made by the assistant within a captured turn.
+      required: [id, name, arguments]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Unique identifier for the tool call.
+          example: call_8f3a2b1c
+        name:
+          type: string
+          readOnly: true
+          description: Name of the tool being invoked.
+          example: ha_get_state
+        arguments:
+          type: string
+          readOnly: true
+          description: JSON-encoded arguments passed to the tool.
+          example: '{"entity_id":"binary_sensor.front_door"}'
+      example:
+        id: call_8f3a2b1c
+        name: ha_get_state
+        arguments: '{"entity_id":"binary_sensor.front_door"}'
+
+    CheckpointFact:
+      type: object
+      description: A piece of long-term memory captured in a checkpoint.
+      required: [id, category, key, value, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique fact identifier.
+          example: 019e7469-5d1e-7e6b-ae38-85b5e34915ae
+        category:
+          type: string
+          readOnly: true
+          description: Classification bucket for the fact (e.g. user, home, preference).
+          example: user
+        key:
+          type: string
+          readOnly: true
+          description: The fact's key within its category.
+          example: preferred_name
+        value:
+          type: string
+          readOnly: true
+          description: The fact's stored value.
+          example: Bob
+        source:
+          type: string
+          readOnly: true
+          description: Where this fact originated; omitted when unknown.
+          example: signal-bob
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the fact was first recorded.
+          example: "2026-06-20T08:15:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for the fact's most recent update.
+          example: "2026-06-24T09:41:00Z"
+        confidence:
+          type: number
+          format: double
+          readOnly: true
+          description: Confidence in the fact on a 0–1 scale; omitted when not scored.
+          example: 0.95
+      example:
+        id: 019e7469-5d1e-7e6b-ae38-85b5e34915ae
+        category: user
+        key: preferred_name
+        value: Bob
+        source: signal-bob
+        created_at: "2026-06-20T08:15:00Z"
+        updated_at: "2026-06-24T09:41:00Z"
+        confidence: 0.95
+
+    CheckpointTask:
+      type: object
+      description: A scheduled action captured in a checkpoint.
+      required: [id, name, schedule, action, enabled, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique task identifier.
+          example: 019e7469-6e2f-7e6b-ae38-85b5e34915af
+        name:
+          type: string
+          readOnly: true
+          description: Human-readable task name.
+          example: morning-briefing
+        description:
+          type: string
+          readOnly: true
+          description: Longer description of the task; omitted when none.
+          example: Send Alice the daily summary at 7am.
+        schedule:
+          type: string
+          readOnly: true
+          description: Cron expression or timestamp defining when the task runs.
+          example: "0 7 * * *"
+        action:
+          type: string
+          readOnly: true
+          description: What the task does when it fires.
+          example: send_briefing
+        enabled:
+          type: boolean
+          readOnly: true
+          description: Whether the task is currently enabled.
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when the task was created.
+          example: "2026-06-20T08:15:00Z"
+      example:
+        id: 019e7469-6e2f-7e6b-ae38-85b5e34915af
+        name: morning-briefing
+        description: Send Alice the daily summary at 7am.
+        schedule: "0 7 * * *"
+        action: send_briefing
+        enabled: true
+        created_at: "2026-06-20T08:15:00Z"
+
+    CheckpointConfigSnapshot:
+      type: object
+      description: Relevant agent configuration captured at checkpoint time.
+      required: [default_model, ha_configured, talent_count]
+      properties:
+        default_model:
+          type: string
+          readOnly: true
+          description: The default model alias in effect at checkpoint time.
+          example: claude-opus-4-8
+        ha_configured:
+          type: boolean
+          readOnly: true
+          description: Whether Home Assistant was configured at checkpoint time.
+          example: true
+        talent_count:
+          type: integer
+          readOnly: true
+          description: Number of talents loaded at checkpoint time.
+          example: 12
+      example:
+        default_model: claude-opus-4-8
+        ha_configured: true
+        talent_count: 12
+
+    CheckpointList:
+      type: object
+      description: >-
+        A page of checkpoint metadata, with the count of entries returned.
+        Backs GET /v1/checkpoints; each entry carries metadata only (`state`
+        is null).
+      required: [count, checkpoints]
+      properties:
+        count:
+          type: integer
+          readOnly: true
+          description: Number of checkpoints returned in this response.
+          example: 2
+        checkpoints:
+          type: array
+          items: { $ref: "#/components/schemas/Checkpoint" }
+          readOnly: true
+          description: The checkpoints, newest first; each carries metadata only.
+      example:
+        count: 2
+        checkpoints:
+          - id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+            created_at: "2026-06-24T09:42:00Z"
+            trigger: pre-compact
+            note: before nightly compaction
+            state: null
+            byte_size: 48213
+            message_count: 312
+            fact_count: 47
+          - id: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f
+            created_at: "2026-06-24T03:00:00Z"
+            trigger: periodic
+            state: null
+            byte_size: 31077
+            message_count: 198
+            fact_count: 41
+
+    CheckpointRestoreAck:
+      type: object
+      description: >-
+        Acknowledgement that a checkpoint was restored. Backs POST
+        /v1/checkpoints/{id}/restore.
+      required: [status, id, message]
+      properties:
+        status:
+          type: string
+          readOnly: true
+          description: Outcome of the restore operation.
+          enum: [restored]
+          example: restored
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Identifier of the checkpoint that was restored.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        message:
+          type: string
+          readOnly: true
+          description: Human-readable confirmation message.
+          example: checkpoint restored successfully
+      example:
+        status: restored
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        message: checkpoint restored successfully
