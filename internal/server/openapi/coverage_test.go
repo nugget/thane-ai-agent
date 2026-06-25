@@ -118,3 +118,59 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestNativeTagGroupsCoverage guards the Scalar `x-tagGroups` sidebar config in
+// native.yaml against drift: every tag declared under top-level `tags` must
+// appear in exactly one `x-tagGroups` group, and every tag a group references
+// must be a declared tag. (vacuum's `operation-tag-defined` already enforces
+// that operations only use declared tags; together they guarantee every
+// operation's tag lands in exactly one sidebar group.) A mismatch — a typo, or
+// a new tag added without a group — silently orphans the tag in the /docs
+// sidebar, which no other check would catch.
+func TestNativeTagGroupsCoverage(t *testing.T) {
+	data, err := files.ReadFile("native.yaml")
+	if err != nil {
+		t.Fatalf("read embedded native.yaml: %v", err)
+	}
+	var doc struct {
+		Tags []struct {
+			Name string `yaml:"name"`
+		} `yaml:"tags"`
+		TagGroups []struct {
+			Name string   `yaml:"name"`
+			Tags []string `yaml:"tags"`
+		} `yaml:"x-tagGroups"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse native.yaml: %v", err)
+	}
+	if len(doc.Tags) < 5 || len(doc.TagGroups) < 2 {
+		t.Fatalf("parsed %d tags / %d groups — parsing likely broke", len(doc.Tags), len(doc.TagGroups))
+	}
+
+	declared := make(map[string]bool, len(doc.Tags))
+	for _, tag := range doc.Tags {
+		declared[tag.Name] = true
+	}
+
+	groupCount := make(map[string]int) // declared tag -> number of groups containing it
+	for _, g := range doc.TagGroups {
+		for _, name := range g.Tags {
+			if !declared[name] {
+				t.Errorf("x-tagGroups group %q references tag %q, which is not declared under top-level `tags`", g.Name, name)
+				continue
+			}
+			groupCount[name]++
+		}
+	}
+
+	for _, name := range sortedKeys(declared) {
+		switch groupCount[name] {
+		case 1: // exactly one group — correct
+		case 0:
+			t.Errorf("tag %q is declared but not placed in any x-tagGroups group (it would be orphaned in the /docs sidebar)", name)
+		default:
+			t.Errorf("tag %q appears in %d x-tagGroups groups; it must be in exactly one", name, groupCount[name])
+		}
+	}
+}
