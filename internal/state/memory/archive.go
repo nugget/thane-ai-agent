@@ -212,31 +212,6 @@ type IdleSessionInfo struct {
 	LastActivity   time.Time
 }
 
-// timestampFormats lists formats tried when parsing SQLite timestamp strings,
-// ordered from most specific to least. time.Time is commonly stored as
-// RFC3339Nano, but other paths (or direct SQL inserts) may produce
-// different layouts, so parsing tries each in turn.
-var timestampFormats = []string{
-	time.RFC3339Nano,
-	time.RFC3339,
-	"2006-01-02 15:04:05.999999999-07:00",
-	"2006-01-02 15:04:05.999999999",
-	"2006-01-02 15:04:05",
-	"2006-01-02 15:04:05.999999999 -0700 MST", // modernc default (time.Time.String); salvages migration-era rows
-}
-
-// parseTimestamp attempts to parse a SQLite timestamp string using the
-// known formats in timestampFormats. Returns zero time and false if none
-// match.
-func parseTimestamp(s string) (time.Time, bool) {
-	for _, layout := range timestampFormats {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
 // ArchivedToolCall represents a tool call preserved in the archive.
 type ArchivedToolCall struct {
 	ID             string     `json:"id"`
@@ -2170,8 +2145,8 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 			return nil, fmt.Errorf("scan active session: %w", err)
 		}
 
-		startedAt, ok := parseTimestamp(startedAtStr)
-		if !ok {
+		startedAt, err := database.ParseTimestamp(startedAtStr)
+		if err != nil {
 			// Skip sessions with unparseable timestamps rather than
 			// risk closing them due to a zero-time default.
 			continue
@@ -2185,7 +2160,6 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 		// (archive_messages table), session_id is always set and
 		// there's no status column.
 		var maxTS sql.NullString
-		var err error
 		if s.messagesDB != nil {
 			err = db.QueryRow(
 				fmt.Sprintf(`SELECT MAX(timestamp) FROM %s
@@ -2207,7 +2181,7 @@ func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, erro
 		}
 
 		if maxTS.Valid {
-			if parsed, ok := parseTimestamp(maxTS.String); ok {
+			if parsed, err := database.ParseTimestamp(maxTS.String); err == nil {
 				info.LastActivity = parsed
 			}
 		}

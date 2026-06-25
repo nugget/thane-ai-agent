@@ -48,6 +48,12 @@ func TestParseTimestamp(t *testing.T) {
 			want:  ref,
 		},
 		{
+			// Legacy archive write path (consolidated from memory.parseTimestamp).
+			name:  "space-separated nanoseconds without timezone",
+			input: "2026-03-09 21:39:58.123456789",
+			want:  time.Date(2026, 3, 9, 21, 39, 58, 123456789, time.UTC),
+		},
+		{
 			name:  "trailing whitespace",
 			input: "2026-03-09T21:39:58Z\n",
 			want:  ref,
