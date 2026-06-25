@@ -34,15 +34,12 @@ func newTestStore(t *testing.T) *Store {
 func TestFTS5_Enabled(t *testing.T) {
 	store := newTestStore(t)
 	if !store.ftsEnabled {
-		t.Skip("FTS5 not available in test environment")
+		t.Fatal("FTS5 must be available with the modernc.org/sqlite driver")
 	}
 }
 
 func TestFTS5_SearchByKeyword(t *testing.T) {
 	store := newTestStore(t)
-	if !store.ftsEnabled {
-		t.Skip("FTS5 not available")
-	}
 
 	// Insert test
 	_, err := store.Set(CategoryHome, "living_room_layout", "Large room with sectional sofa facing the TV", "user", 1.0, nil, "")
@@ -116,9 +113,6 @@ func TestFTS5_SearchByKeyword(t *testing.T) {
 
 func TestFTS5_SearchExcludesDeleted(t *testing.T) {
 	store := newTestStore(t)
-	if !store.ftsEnabled {
-		t.Skip("FTS5 not available")
-	}
 
 	_, err := store.Set(CategoryDevice, "garage_sensor", "Temperature sensor in the garage", "observation", 1.0, nil, "")
 	if err != nil {
@@ -151,9 +145,6 @@ func TestFTS5_SearchExcludesDeleted(t *testing.T) {
 
 func TestFTS5_SearchAfterUpdate(t *testing.T) {
 	store := newTestStore(t)
-	if !store.ftsEnabled {
-		t.Skip("FTS5 not available")
-	}
 
 	_, err := store.Set(CategoryPreference, "color_temp", "Prefers warm white lights", "user", 1.0, nil, "")
 	if err != nil {

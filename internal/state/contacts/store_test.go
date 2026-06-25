@@ -226,9 +226,6 @@ func TestUpsert_InvalidKind(t *testing.T) {
 
 func TestSearch_FTS(t *testing.T) {
 	store := newTestStore(t)
-	if !store.ftsEnabled {
-		t.Skip("FTS5 not available")
-	}
 
 	contacts := []*Contact{
 		{FormattedName: "Eve Engineer", Kind: "individual", Org: "Acme Corp", AISummary: "Backend developer"},
@@ -281,9 +278,6 @@ func TestSearch_FTS(t *testing.T) {
 
 func TestSearch_ExcludesDeleted(t *testing.T) {
 	store := newTestStore(t)
-	if !store.ftsEnabled {
-		t.Skip("FTS5 not available")
-	}
 
 	c := &Contact{FormattedName: "Grace Ghosted", Kind: "individual", AISummary: "Will be deleted soon"}
 	created, err := store.Upsert(c)
@@ -669,7 +663,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 func TestFTS5Enabled(t *testing.T) {
 	store := newTestStore(t)
 	if !store.ftsEnabled {
-		t.Skip("FTS5 not available in test environment")
+		t.Fatal("FTS5 must be available with the modernc.org/sqlite driver")
 	}
 }
 

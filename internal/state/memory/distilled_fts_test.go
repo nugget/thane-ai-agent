@@ -13,9 +13,6 @@ import (
 // columns. BM25 ranking orders the most relevant hit first.
 func TestSearchSessions_FindsByTitleSummaryTags(t *testing.T) {
 	store := newTestArchiveStore(t)
-	if !store.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
 
 	// Create three ended sessions with distinct distilled content.
 	mk := func(convID, title, summary, tags string) string {
@@ -93,10 +90,6 @@ func TestSearchSessions_BackfillOnFirstInit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !store1.FTSEnabled() {
-		store1.Close()
-		t.Skip("FTS5 not available")
-	}
 
 	// Drop the FTS table and triggers to simulate a pre-existing db
 	// that has sessions but no FTS infrastructure yet.
@@ -155,9 +148,6 @@ func TestSearchSessions_BackfillOnFirstInit(t *testing.T) {
 // shouldn't crash or run an unbounded scan. Returns empty slice.
 func TestSearchSessions_EmptyQueryReturnsNothing(t *testing.T) {
 	store := newTestArchiveStore(t)
-	if !store.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
 
 	got, err := store.SearchSessions("", 5)
 	if err != nil {
@@ -173,10 +163,7 @@ func TestSearchSessions_EmptyQueryReturnsNothing(t *testing.T) {
 // Set path becomes searchable through the FTS index, and a
 // phrase-shaped query returns it in BM25 order.
 func TestWorkingMemorySearch_FindsByContent(t *testing.T) {
-	store, archive := newTestWorkingMemoryStoreWithFTS(t)
-	if !archive.FTSEnabled() || !store.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
+	store, _ := newTestWorkingMemoryStoreWithFTS(t)
 
 	// Two conversations with distinct working-memory state.
 	if err := store.Set("conv-a",
@@ -211,10 +198,7 @@ func TestWorkingMemorySearch_FindsByContent(t *testing.T) {
 // search and find it, then update the row, search and find the
 // new content (not the old).
 func TestWorkingMemorySearch_UpdateReindexes(t *testing.T) {
-	store, archive := newTestWorkingMemoryStoreWithFTS(t)
-	if !archive.FTSEnabled() || !store.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
+	store, _ := newTestWorkingMemoryStoreWithFTS(t)
 
 	if err := store.Set("conv-update", "talking about the dryer making a clicking noise on the spin cycle"); err != nil {
 		t.Fatal(err)
@@ -294,9 +278,6 @@ func TestMemorySearch_AllSurfacesReachModelEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { archive.Close() })
-	if !archive.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
 
 	working, err := NewWorkingMemoryStore(archive.DB(), archive.FTSEnabled())
 	if err != nil {
@@ -385,9 +366,6 @@ func TestMemorySearch_DistilledFailureDoesNotBlockMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { archive.Close() })
-	if !archive.FTSEnabled() {
-		t.Skip("FTS5 not available")
-	}
 
 	// Seed a raw message so messages_fts has something to find.
 	if err := archive.ArchiveMessages([]Message{{

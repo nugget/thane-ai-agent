@@ -2094,9 +2094,6 @@ func TestSearch_TimeRangeScopesMessages(t *testing.T) {
 // match_type marking the phrase-precision pass.
 func TestSearch_SurfacesScoreAndMatchType(t *testing.T) {
 	store := newTestArchiveStore(t)
-	if !store.ftsEnabled {
-		t.Skip("BM25 score and phrase/terms match_type require FTS5 (build with -tags sqlite_fts5)")
-	}
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
 	if err := store.ArchiveMessages([]Message{
 		{ID: "m1", ConversationID: "conv-1", SessionID: "sess-1", Role: "user",
@@ -2124,9 +2121,6 @@ func TestSearch_SurfacesScoreAndMatchType(t *testing.T) {
 // the result limit.
 func TestSearch_CountMatchesEstimatesTotal(t *testing.T) {
 	store := newTestArchiveStore(t)
-	if !store.ftsEnabled {
-		t.Skip("total_estimated (OR-of-terms recall count) requires FTS5 (build with -tags sqlite_fts5)")
-	}
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
 	var msgs []Message
 	for i := 0; i < 7; i++ {
@@ -2213,9 +2207,6 @@ func TestSearch_AnticipationsFilteredByDefault(t *testing.T) {
 // substring pass and has no equivalent.
 func TestSearch_OrBackfillFillsThinPhrase(t *testing.T) {
 	store := newTestArchiveStore(t)
-	if !store.FTSEnabled() {
-		t.Skip("FTS5 not available; OR-backfill path requires FTS5")
-	}
 
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
 	msgs := []Message{
