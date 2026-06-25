@@ -973,163 +973,698 @@ components:
     LoopState:
       type: string
       enum: [pending, sleeping, waiting, processing, error, stopped]
-      description: Lifecycle state of a loop (mirrors runtime/loop.State).
+      readOnly: true
+      description: >-
+        Lifecycle state of a loop: pending (registered but not yet started),
+        sleeping (between iterations awaiting the next wake), waiting (blocked
+        on a WaitFunc for an external event), processing (actively running an
+        iteration), error (last iteration failed and will retry), or stopped
+        (cancelled and no longer running).
+      example: processing
     LoopStatus:
       type: object
-      description: Snapshot of a loop's state and metrics (mirrors runtime/loop.Status).
+      description: Snapshot of a loop's current lifecycle state and cumulative metrics, suitable for external inspection via the registry.
       properties:
-        id: { type: string }
-        name: { type: string }
+        id:
+          type: string
+          description: Unique identifier of the loop.
+          readOnly: true
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        name:
+          type: string
+          description: Human-readable name of the loop.
+          readOnly: true
+          example: signal-interactive
         state: { $ref: "#/components/schemas/LoopState" }
-        parent_id: { type: string }
-        started_at: { type: string, format: date-time }
-        last_wake_at: { type: string, format: date-time }
-        iterations: { type: integer }
-        attempts: { type: integer }
-        total_input_tokens: { type: integer }
-        total_output_tokens: { type: integer }
-        last_input_tokens: { type: integer }
-        last_output_tokens: { type: integer }
-        context_window: { type: integer }
-        last_error: { type: string }
-        consecutive_errors: { type: integer }
-        recent_conv_ids: { type: array, items: { type: string } }
-        handler_only: { type: boolean }
-        event_driven: { type: boolean }
+        parent_id:
+          type: string
+          description: Identifier of the parent loop, when this loop was spawned as a delegate.
+          readOnly: true
+          example: 019e7468-1c2d-7a90-b3ef-2f0a9c4d5e6f
+        started_at:
+          type: string
+          format: date-time
+          description: Time the loop was started.
+          readOnly: true
+          example: "2026-06-24T14:03:21Z"
+        last_wake_at:
+          type: string
+          format: date-time
+          description: Time the loop last began an iteration.
+          readOnly: true
+          example: "2026-06-24T14:31:07Z"
+        iterations:
+          type: integer
+          description: Total number of completed (successful) iterations.
+          readOnly: true
+          example: 142
+        attempts:
+          type: integer
+          description: Total number of iteration attempts, including failures.
+          readOnly: true
+          example: 145
+        total_input_tokens:
+          type: integer
+          format: int64
+          description: Cumulative input tokens consumed across all iterations.
+          readOnly: true
+          example: 1284532
+        total_output_tokens:
+          type: integer
+          format: int64
+          description: Cumulative output tokens produced across all iterations.
+          readOnly: true
+          example: 318204
+        last_input_tokens:
+          type: integer
+          description: Input token count from the most recent iteration.
+          readOnly: true
+          example: 9123
+        last_output_tokens:
+          type: integer
+          description: Output token count from the most recent iteration.
+          readOnly: true
+          example: 2048
+        context_window:
+          type: integer
+          description: Maximum context size, in tokens, of the model used.
+          readOnly: true
+          example: 200000
+        last_error:
+          type: string
+          description: Error message from the most recent failed iteration.
+          readOnly: true
+          example: "model request timed out"
+        consecutive_errors:
+          type: integer
+          description: Number of consecutive failed iterations.
+          readOnly: true
+          example: 0
+        recent_conv_ids:
+          type: array
+          items: { type: string }
+          description: Conversation IDs from the most recent iterations (up to 10, newest first), used to scope log queries to this loop.
+          readOnly: true
+          example: ["019e7469-3abf-7e6b-ae38-85b5e34915ac", "019e7469-1a2b-7c3d-9e4f-0a1b2c3d4e5f"]
+        handler_only:
+          type: boolean
+          description: True when the loop runs a Handler instead of LLM iterations and therefore reports no token metrics.
+          readOnly: true
+          example: false
+        event_driven:
+          type: boolean
+          description: True when the loop is event-driven (blocks on notification arrivals) rather than timer-based.
+          readOnly: true
+          example: false
         recent_iterations:
           type: array
           items: { $ref: "#/components/schemas/IterationSnapshot" }
-      required: [id, name, state, started_at, iterations, attempts]
+          description: Up to 10 completed iteration snapshots (newest first), used by the dashboard timeline.
+          readOnly: true
+      required: [id, name, state, started_at, iterations, attempts, total_input_tokens, total_output_tokens, consecutive_errors]
     IterationSnapshot:
       type: object
-      description: One completed iteration (schema first-pass; tighten against loop.IterationSnapshot).
-      additionalProperties: true
+      description: Serializable summary of a single completed loop iteration, retained in a ring buffer for the dashboard timeline.
+      properties:
+        number:
+          type: integer
+          description: 1-based iteration number, matching the loop's cumulative iteration counter at the time of completion.
+          readOnly: true
+          example: 142
+        conv_id:
+          type: string
+          description: Conversation ID used for this iteration.
+          readOnly: true
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        request_id:
+          type: string
+          description: Agent-generated request ID linking to log_request_content for prompt/response inspection.
+          readOnly: true
+          example: 019e7469-7b8c-7d9e-af01-23456789abcd
+        model:
+          type: string
+          description: LLM model used for this iteration.
+          readOnly: true
+          example: claude-opus-4-8
+        input_tokens:
+          type: integer
+          description: Input tokens consumed by this iteration.
+          readOnly: true
+          example: 9123
+        output_tokens:
+          type: integer
+          description: Output tokens produced by this iteration.
+          readOnly: true
+          example: 2048
+        context_window:
+          type: integer
+          description: Model's maximum context size, in tokens.
+          readOnly: true
+          example: 200000
+        tools_used:
+          type: object
+          additionalProperties: { type: integer }
+          description: Map of tool names to the number of times each was invoked during this iteration.
+          readOnly: true
+          example: { "log_search": 2, "send_message": 1 }
+        effective_tools:
+          type: array
+          items: { type: string }
+          description: Tools visible to the model for this turn.
+          readOnly: true
+          example: ["log_search", "send_message", "loop_status"]
+        active_tags:
+          type: array
+          items: { type: string }
+          description: Capability tags active for this turn.
+          readOnly: true
+          example: ["messaging", "retrospection"]
+        tooling:
+          type: object
+          additionalProperties: true
+          description: Tool-availability snapshot for the turn (which tools were exposed, and why).
+          readOnly: true
+        elapsed_ms:
+          type: integer
+          format: int64
+          description: Wall-clock duration of the iteration, in milliseconds.
+          readOnly: true
+          example: 4213
+        supervisor:
+          type: boolean
+          description: True when this iteration ran a supervisor turn.
+          readOnly: true
+          example: false
+        supervisor_trigger:
+          type: string
+          description: >-
+            Cause of the supervisor turn — empty for a normal turn, "random"
+            for a Bernoulli win, or "forced" for a notification-driven turn.
+          readOnly: true
+          example: random
+        error:
+          type: string
+          description: Error message if the iteration failed.
+          readOnly: true
+          example: "model request timed out"
+        started_at:
+          type: string
+          format: date-time
+          description: Time the iteration began.
+          readOnly: true
+          example: "2026-06-24T14:31:07Z"
+        completed_at:
+          type: string
+          format: date-time
+          description: Time the iteration finished.
+          readOnly: true
+          example: "2026-06-24T14:31:11Z"
+        sleep_after_ms:
+          type: integer
+          format: int64
+          description: Computed sleep duration following this iteration, in milliseconds; zero for WaitFunc-based loops.
+          readOnly: true
+          example: 30000
+        wait_after:
+          type: boolean
+          description: True when the loop entered WaitFunc after this iteration instead of sleeping.
+          readOnly: true
+          example: false
+        summary:
+          type: object
+          additionalProperties: true
+          description: Handler-reported metrics for this iteration, written by handlers during execution as small scalar values.
+          readOnly: true
+          example: { "messages_processed": 3 }
+      required: [number, elapsed_ms, started_at, completed_at]
     LoopEvent:
       type: object
-      description: A single SSE loop lifecycle event payload.
+      description: >-
+        A single loop lifecycle event streamed over the /v1/loops/events SSE
+        channel (the loopEvent wire envelope). The SSE `event:` line carries
+        the source ("loop" or "delegate"); this object is the `data:` payload.
       properties:
-        type: { type: string }
-        loop_id: { type: string }
-        loop_name: { type: string }
-        ts: { type: string, format: date-time }
-      additionalProperties: true
-
+        kind:
+          type: string
+          description: >-
+            Event kind identifying the lifecycle transition (e.g. loop_started,
+            loop_iteration_start, loop_iteration_complete, loop_sleep_start,
+            loop_wait_start, loop_state_change, loop_error, loop_tool_start,
+            loop_tool_done, loop_llm_start, loop_llm_response).
+          readOnly: true
+          example: loop_iteration_complete
+        ts:
+          type: string
+          format: date-time
+          description: Time the event occurred.
+          readOnly: true
+          example: "2026-06-24T14:31:11Z"
+        data:
+          type: object
+          additionalProperties: true
+          description: >-
+            Kind-specific key/value payload. The loop always injects loop_id
+            and loop_name; remaining keys depend on the event kind (e.g.
+            model, input_tokens, output_tokens, elapsed_ms, tools_used for
+            loop_iteration_complete; from, to for loop_state_change; error for
+            loop_error). Omitted when there are no event fields.
+          readOnly: true
+          example: { "loop_id": "019e7469-3abf-7e6b-ae38-85b5e34915ac", "loop_name": "signal-interactive", "model": "claude-opus-4-8", "input_tokens": 9123, "output_tokens": 2048, "elapsed_ms": 4213 }
+      required: [kind, ts]
     DefinitionRegistryView:
       type: object
-      description: Stored loop definitions plus live runtime state (mirrors loop.DefinitionRegistryView).
+      description: Effective combined view of stored loop definitions plus their current live runtime state.
       properties:
-        generation: { type: integer }
-        updated_at: { type: string, format: date-time }
-        config_definitions: { type: integer }
-        overlay_definitions: { type: integer }
-        running_definitions: { type: integer }
-        definitions_with_warnings: { type: integer }
-        warning_count: { type: integer }
-        by_policy_state: { type: object, additionalProperties: { type: integer } }
-        by_eligibility_state: { type: object, additionalProperties: { type: integer } }
-        by_runtime_state: { type: object, additionalProperties: { type: integer } }
+        generation:
+          type: integer
+          format: int64
+          description: Monotonic registry generation counter, bumped each time the effective definition set changes.
+          readOnly: true
+          example: 42
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp at which the underlying definition registry snapshot was last updated.
+          readOnly: true
+          example: "2026-06-24T18:57:13Z"
+        config_definitions:
+          type: integer
+          description: Number of definitions sourced from immutable config-file input.
+          readOnly: true
+          example: 7
+        overlay_definitions:
+          type: integer
+          description: Number of definitions sourced from the mutable persistent overlay.
+          readOnly: true
+          example: 3
+        running_definitions:
+          type: integer
+          description: Number of definitions that currently have a live backing loop instance running.
+          readOnly: true
+          example: 2
+        definitions_with_warnings:
+          type: integer
+          description: Number of definitions that produced at least one warning during view construction.
+          readOnly: true
+          example: 1
+        warning_count:
+          type: integer
+          description: Total number of warnings across all definitions in the view.
+          readOnly: true
+          example: 3
+        by_policy_state:
+          type: object
+          additionalProperties: { type: integer }
+          description: Count of definitions grouped by their effective policy state (active, paused, inactive).
+          readOnly: true
+          example: { active: 8, inactive: 2 }
+        by_eligibility_state:
+          type: object
+          additionalProperties: { type: integer }
+          description: Count of definitions grouped by their effective eligibility state (eligible, ineligible).
+          readOnly: true
+          example: { eligible: 9, ineligible: 1 }
+        by_runtime_state:
+          type: object
+          additionalProperties: { type: integer }
+          description: Count of definitions grouped by their current runtime lifecycle state (e.g. running, not_running).
+          readOnly: true
+          example: { running: 2, not_running: 8 }
         definitions:
           type: array
+          description: Per-definition combined stored-and-runtime views.
           items: { $ref: "#/components/schemas/DefinitionView" }
     DefinitionView:
       type: object
-      description: One stored definition with eligibility, runtime, warnings, and effective state.
+      description: One stored definition combined with its eligibility, live runtime status, warnings, and effective post-merge state.
       properties:
-        eligibility: { type: object, additionalProperties: true }
-        runtime: { type: object, additionalProperties: true }
-        warnings: { type: array, items: { type: object } }
-        effective: { type: object, additionalProperties: true }
+        eligibility:
+          type: object
+          additionalProperties: true
+          description: Effective eligibility evaluation for this definition, including whether it may run and why.
+          readOnly: true
+        runtime:
+          type: object
+          additionalProperties: true
+          description: Live runtime status of the backing loop instance for this definition (running flag, state, counters, last error).
+          readOnly: true
+        warnings:
+          type: array
+          items: { type: object }
+          description: Warnings produced while validating or rendering this definition's spec.
+          readOnly: true
+        effective:
+          type: object
+          additionalProperties: true
+          description: Post-ancestor-merge state for inheritable fields (tags, subscriptions, exclude_tools, routing factors, delegation gating); absent when there is nothing meaningful to report.
+          readOnly: true
       additionalProperties: true
     LoopDefinitionSpec:
       type: object
-      description: A persistable loop definition (name, operation, sleep envelope, subscriptions, outputs, tags...). Schema first-pass; tighten against loop.DefinitionSnapshot.
+      description: Persistable loop definition payload (name, operation, sleep envelope, subscriptions, tags, profile, ...). First-pass permissive schema; tighten against loop.Spec / loop.DefinitionSnapshot.
       properties:
-        name: { type: string }
-        operation: { type: string, enum: [service, event_driven] }
+        name:
+          type: string
+          description: Unique identifier of the loop definition.
+          example: research_assistant
+        operation:
+          type: string
+          enum: [request_reply, background_task, service, container, event_driven]
+          description: Runtime operation pattern the loop follows.
+          example: service
       required: [name]
       additionalProperties: true
     DefinitionPolicy:
       type: object
+      description: Set-policy request body for one loop definition (target name, desired state, optional reason). Wraps loop.DefinitionPolicy plus the target name.
       properties:
-        name: { type: string }
-        state: { type: string, enum: [active, paused] }
+        name:
+          type: string
+          description: Name of the loop definition this policy overlay targets.
+          example: research_assistant
+        state:
+          type: string
+          enum: [active, paused, inactive]
+          description: Desired effective runtime state for the definition.
+          example: paused
       required: [name, state]
-
     RequestDetail:
       type: object
-      description: Detail for one model turn (mirrors logging.RequestDetail).
+      description: Full retained content for a single model request, ready for JSON serialization by the web API.
       properties:
-        request_id: { type: string }
-        prompt_hash: { type: string }
-        system_prompt: { type: string }
-        messages: { type: array, items: { $ref: "#/components/schemas/MessageDetail" } }
-        user_content: { type: string }
-        assistant_content: { type: string }
-        model: { type: string }
-        iteration_count: { type: integer }
-        input_tokens: { type: integer }
-        output_tokens: { type: integer }
-        tools_used: { type: object, additionalProperties: { type: integer } }
-        exhausted: { type: boolean }
-        exhaust_reason: { type: string }
-        created_at: { type: string }
-        tool_calls: { type: array, items: { $ref: "#/components/schemas/ToolDetail" } }
-      required: [request_id, messages, tool_calls]
+        request_id:
+          type: string
+          description: Opaque identifier of the request this detail belongs to (a UUIDv7 in the common path; not guaranteed to be a UUID).
+          readOnly: true
+          example: "019e7469-3abf-7e6b-ae38-85b5e34915ac"
+        prompt_hash:
+          type: string
+          description: Hash of the resolved prompt for this request, used to detect identical prompts.
+          readOnly: true
+          example: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        system_prompt:
+          type: string
+          description: System prompt text supplied to the model for this request.
+          readOnly: true
+          example: "You are Thane, a helpful home assistant."
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/MessageDetail" }
+          description: Provider-neutral chat messages sent to the model for this request.
+          readOnly: true
+        user_content:
+          type: string
+          description: Flattened user-authored content extracted from the request.
+          readOnly: true
+          example: "What's the weather like today?"
+        assistant_content:
+          type: string
+          description: Flattened assistant-authored content produced for this request.
+          readOnly: true
+          example: "It's currently 72 degrees and sunny."
+        model:
+          type: string
+          description: Identifier of the model that served the request.
+          readOnly: true
+          example: "claude-opus-4-8"
+        iteration_count:
+          type: integer
+          format: int64
+          description: Number of model loop iterations executed while handling the request.
+          readOnly: true
+          example: 3
+        input_tokens:
+          type: integer
+          format: int64
+          description: Total input (prompt) tokens consumed across the request.
+          readOnly: true
+          example: 4215
+        output_tokens:
+          type: integer
+          format: int64
+          description: Total output (completion) tokens generated across the request.
+          readOnly: true
+          example: 318
+        tools_used:
+          type: object
+          additionalProperties: { type: integer }
+          description: Map of tool name to the number of times it was invoked during the request.
+          readOnly: true
+          example: { "weather_lookup": 1, "macos_calendar_events": 2 }
+        exhausted:
+          type: boolean
+          description: Whether the model loop terminated by exhausting its iteration budget rather than completing normally.
+          readOnly: true
+          example: false
+        exhaust_reason:
+          type: string
+          description: Explanation of why the iteration budget was exhausted, when applicable.
+          readOnly: true
+          example: "max iterations reached"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp at which the request was recorded.
+          readOnly: true
+          example: "2026-06-24T18:57:13Z"
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/ToolDetail" }
+          description: Tool invocations performed while handling the request.
+          readOnly: true
+      required: [request_id, messages, iteration_count, input_tokens, output_tokens, exhausted, created_at, tool_calls]
     MessageDetail:
       type: object
-      additionalProperties: true
+      description: One retained chat message from the provider-neutral payload sent to the model; image bytes are omitted and only media metadata is retained.
+      properties:
+        index:
+          type: integer
+          description: Zero-based position of this message within the request's message sequence.
+          readOnly: true
+          example: 0
+        role:
+          type: string
+          description: Role of the message author in the conversation.
+          readOnly: true
+          example: "user"
+        content:
+          type: string
+          description: Text content of the message.
+          readOnly: true
+          example: "What's the weather like today?"
+        content_truncated:
+          type: boolean
+          description: Whether the retained content was truncated from the original message text.
+          readOnly: true
+          example: false
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/MessageToolCallDetail" }
+          description: Tool calls embedded in this assistant message.
+          readOnly: true
+        tool_call_id:
+          type: string
+          description: Identifier of the tool call this message responds to, for tool-result messages.
+          readOnly: true
+          example: "call_019e7469"
+        images:
+          type: array
+          items: { $ref: "#/components/schemas/MessageImageDetail" }
+          description: Metadata for image attachments on this message, without the image payload.
+          readOnly: true
+      required: [index, role]
+    MessageToolCallDetail:
+      type: object
+      description: A tool call embedded in an assistant message from the retained chat payload.
+      properties:
+        id:
+          type: string
+          description: Identifier of the embedded tool call.
+          readOnly: true
+          example: "call_019e7469"
+        name:
+          type: string
+          description: Name of the tool requested by the call.
+          readOnly: true
+          example: "weather_lookup"
+        arguments:
+          type: string
+          description: JSON-encoded arguments passed to the tool call.
+          readOnly: true
+          example: "{\"location\":\"Austin, TX\"}"
+      required: [name]
+    MessageImageDetail:
+      type: object
+      description: Metadata for a retained image attachment, without the base64 image payload.
+      properties:
+        media_type:
+          type: string
+          description: MIME media type of the retained image attachment.
+          readOnly: true
+          example: "image/png"
     ToolDetail:
       type: object
+      description: Retained content for a single tool invocation during a request.
       properties:
-        tool_call_id: { type: string }
-        tool_name: { type: string }
-        arguments: { type: string }
-      required: [tool_name]
-
+        tool_call_id:
+          type: string
+          description: Identifier correlating this invocation with the assistant tool call that requested it.
+          readOnly: true
+          example: "call_019e7469"
+        tool_name:
+          type: string
+          description: Name of the tool that was invoked.
+          readOnly: true
+          example: "weather_lookup"
+        arguments:
+          type: string
+          description: JSON-encoded arguments passed to the tool invocation.
+          readOnly: true
+          example: "{\"location\":\"Austin, TX\"}"
+        result:
+          type: string
+          description: Result returned by the tool invocation.
+          readOnly: true
+          example: "72F, sunny, wind 5mph"
+        iteration_index:
+          type: integer
+          description: Zero-based model loop iteration in which this tool invocation occurred.
+          readOnly: true
+          example: 1
+      required: [tool_name, iteration_index]
     ScheduledTask:
       type: object
-      description: A durable scheduled task plus its next computed fire time (mirrors scheduler.Task).
+      description: A durable scheduled task plus its next computed fire time.
       properties:
-        id: { type: string }
-        name: { type: string }
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-assigned UUIDv7 identifier for the task.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        name:
+          type: string
+          description: Human-readable label for the task.
+          example: Morning briefing
         schedule: { $ref: "#/components/schemas/Schedule" }
         payload: { $ref: "#/components/schemas/SchedulePayload" }
-        enabled: { type: boolean }
-        created_at: { type: string, format: date-time }
-        created_by: { type: string }
-        updated_at: { type: string, format: date-time }
+        enabled:
+          type: boolean
+          description: Whether the task is active and eligible to fire.
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp recording when the task was created.
+          example: "2026-06-24T08:15:00Z"
+        created_by:
+          type: string
+          readOnly: true
+          description: Session or user ID that created the task.
+          example: session-7f3a9c
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp recording when the task was last updated.
+          example: "2026-06-24T09:42:00Z"
         next_run:
           type: string
           format: date-time
+          readOnly: true
           description: Next computed fire time; omitted when the task has no future run.
-      required: [id, name, schedule, payload, enabled]
+          example: "2026-06-25T08:15:00Z"
+      required: [id, name, schedule, payload, enabled, created_at, created_by, updated_at]
     Schedule:
       type: object
-      description: When a task fires (mirrors scheduler.Schedule).
+      description: When a task fires.
       properties:
-        kind: { type: string, enum: [at, every, cron] }
-        at: { type: string, format: date-time, description: Fire time for the at kind. }
-        every: { type: string, description: Go duration such as 15m for the every kind. }
-        cron: { type: string, description: Cron expression for the cron kind. }
-        timezone: { type: string, description: IANA timezone. }
+        kind:
+          type: string
+          enum: [at, every, cron]
+          description: Schedule type selecting which of the timing fields applies.
+          example: every
+        at:
+          type: string
+          format: date-time
+          description: One-shot fire time for the at kind.
+          example: "2026-06-25T08:15:00Z"
+        every:
+          type: string
+          description: Go duration string for the every kind, serialized in canonical form such as 15m0s; shorthand like 15m is accepted on input.
+          example: 15m0s
+        cron:
+          type: string
+          description: Cron expression for the cron kind.
+          example: "0 8 * * *"
+        timezone:
+          type: string
+          description: IANA timezone name in which the schedule is evaluated.
+          example: America/New_York
       required: [kind]
     SchedulePayload:
       type: object
-      description: What a task does when it fires (mirrors scheduler.Payload).
+      description: What a task does when it fires.
       properties:
-        kind: { type: string, enum: [wake, service, automation, webhook] }
-        target: { type: string }
-        data: { type: object, additionalProperties: true }
+        kind:
+          type: string
+          enum: [wake, service, automation, webhook]
+          description: Action type selecting how the payload is dispatched.
+          example: wake
+        target:
+          type: string
+          description: Kind-specific target such as a session ID, entity ID, or webhook reference.
+          example: session-7f3a9c
+        data:
+          type: object
+          additionalProperties: true
+          description: Kind-specific data passed to the action when it fires.
+          example: { message: "Time for your morning briefing" }
       required: [kind]
     ScheduleExecution:
       type: object
-      description: One run of a scheduled task (mirrors scheduler.Execution).
+      description: One run of a scheduled task.
       properties:
-        id: { type: string }
-        task_id: { type: string }
-        scheduled_at: { type: string, format: date-time }
-        started_at: { type: string, format: date-time }
-        completed_at: { type: string, format: date-time }
-        status: { type: string, enum: [pending, running, completed, failed, skipped] }
-        result: { type: string }
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Server-assigned UUIDv7 identifier for this execution.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        task_id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: UUIDv7 of the task this execution belongs to.
+          example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        scheduled_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when this run was supposed to fire.
+          example: "2026-06-24T08:15:00Z"
+        started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when execution began; omitted before it starts.
+          example: "2026-06-24T08:15:01Z"
+        completed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: RFC3339 timestamp for when execution finished; omitted until it completes.
+          example: "2026-06-24T08:15:03Z"
+        status:
+          type: string
+          enum: [pending, running, completed, failed, skipped]
+          readOnly: true
+          description: Current state of the execution.
+          example: completed
+        result:
+          type: string
+          readOnly: true
+          description: Output or error message produced by the run.
+          example: Briefing delivered
       required: [id, task_id, scheduled_at, status]
