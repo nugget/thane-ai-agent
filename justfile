@@ -118,6 +118,15 @@ fmt-check:
 lint: generate
     golangci-lint run ./...
 
+# Lint the OpenAPI specs against the Thane ruleset (.vacuum.yaml). Structural
+# errors fail the build; content gaps (missing descriptions/examples) ride at
+# `warn` during the #1060 stack and become errors at its capstone. Install:
+# `go install github.com/daveshanley/vacuum@v0.29.5` (CI does this).
+[group('test')]
+lint-openapi:
+    vacuum lint -r .vacuum.yaml --fail-severity error internal/server/openapi/native.yaml
+    vacuum lint -r .vacuum.yaml --fail-severity error internal/server/openapi/compat.yaml
+
 # Check go.mod/go.sum are tidy
 [group('test')]
 mod-tidy-check:
@@ -149,7 +158,7 @@ link-check:
 
 # CI: format check, lint, and tests
 [group('test')]
-ci: fmt-check mod-tidy-check config-generate-check architecture-check link-check lint test
+ci: fmt-check mod-tidy-check config-generate-check architecture-check link-check lint lint-openapi test
 
 # --- Install ---
 
