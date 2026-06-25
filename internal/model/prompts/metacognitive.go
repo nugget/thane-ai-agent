@@ -1,9 +1,9 @@
 package prompts
 
-// metacognitiveBaseTemplate is the prompt for each metacognitive loop
-// iteration. Current state is injected by the loop-declared output
-// context provider.
-const metacognitiveBaseTemplate = `Metacognitive loop iteration.
+// MetacognitiveBaseTemplate is the per-iteration prompt for the
+// metacognitive loop, set as the loop definition's Task. Current state
+// is injected by the loop-declared output context provider.
+const MetacognitiveBaseTemplate = `Metacognitive loop iteration.
 
 You are running as a background metacognitive process — a perpetual
 attention loop that monitors the environment, reasons about what you
@@ -48,10 +48,10 @@ names the generated replacement tool for the document.
   tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
-// metacognitiveSupervisorAugmentation is appended for frontier/supervisor turns.
-const metacognitiveSupervisorAugmentation = `
-
-## Supervisor Review (Frontier Iteration)
+// MetacognitiveSupervisorInstructions is the supervisor-turn prompt
+// prefix, applied declaratively via SupervisorProfile.Instructions on
+// frontier iterations (prepended to MetacognitiveBaseTemplate).
+const MetacognitiveSupervisorInstructions = `## Supervisor Review (Frontier Iteration)
 
 This iteration was randomly selected for supervisor-level review using a
 frontier model. In addition to the normal assessment, critically evaluate:
@@ -69,15 +69,3 @@ frontier model. In addition to the normal assessment, critically evaluate:
 
 Be honest. Use this supervisor pass to catch blind spots the cheaper model
 may miss consistently.`
-
-// MetacognitivePrompt returns the prompt for a metacognitive loop
-// iteration. When isSupervisor is true, additional self-review
-// instructions are appended for frontier-model iterations.
-func MetacognitivePrompt(currentState string, isSupervisor bool) string {
-	_ = currentState // State is now injected by loop-declared output context.
-	prompt := metacognitiveBaseTemplate
-	if isSupervisor {
-		prompt += metacognitiveSupervisorAugmentation
-	}
-	return prompt
-}

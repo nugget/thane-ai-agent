@@ -270,11 +270,14 @@ func TestCoreServiceLoopByNameMatchesSlice(t *testing.T) {
 }
 
 // TestCoreServiceRegistrationHydrate exercises each registration's
-// Hydrate closure directly: a missing cached config is a hard error,
-// and a hydrated spec carries the runtime task builder. Driving the
-// closures (rather than hydrateLoopDefinitionSpec) keeps the test
-// focused on the #988 dispatch contract without pulling in the
-// document-output hydration machinery.
+// Hydrate closure directly: a missing cached config is a hard error, and
+// a hydrated spec attaches only genuine runtime-only hooks. The prompt is
+// now declarative (DefinitionSpec sets spec.Task and
+// SupervisorProfile.Instructions), so Hydrate attaches no TaskBuilder;
+// of the three loops only metacognitive still needs a runtime hook (its
+// PostIterate iteration-log writer). Driving the closures (rather than
+// hydrateLoopDefinitionSpec) keeps the test focused on the #988 dispatch
+// contract without pulling in the document-output hydration machinery.
 func TestCoreServiceRegistrationHydrate(t *testing.T) {
 	t.Parallel()
 
@@ -296,8 +299,16 @@ func TestCoreServiceRegistrationHydrate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Hydrate: %v", err)
 			}
-			if spec.TaskBuilder == nil {
-				t.Error("Hydrate did not attach TaskBuilder")
+			if spec.TaskBuilder != nil {
+				t.Error("Hydrate should not attach a TaskBuilder; the prompt is the declarative spec Task")
+			}
+			// metacognitive is the only core loop with a remaining runtime
+			// hook: the PostIterate iteration-log writer (which needs the
+			// resolved state-file path). ego and archivist are hook-free
+			// here — the archivist's work-queue tools are attached later, at
+			// app hydration, not by this registration closure.
+			if reg.Name == "metacognitive" && spec.PostIterate == nil {
+				t.Error("metacognitive Hydrate should attach the PostIterate iteration-log writer")
 			}
 		})
 	}

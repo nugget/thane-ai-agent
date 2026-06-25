@@ -383,11 +383,16 @@ func TestHydrateSpecAttachesLoopRuntimeHooks(t *testing.T) {
 	}
 
 	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
-	if spec.TaskBuilder == nil {
-		t.Fatal("TaskBuilder should be set after hydration")
+	// Declarative prompt: no TaskBuilder. The one runtime hook hydration
+	// attaches is the PostIterate iteration-log writer.
+	if spec.TaskBuilder != nil {
+		t.Fatal("metacognitive loop is declarative; HydrateSpec should attach no TaskBuilder")
+	}
+	if !strings.Contains(spec.Task, "Metacognitive loop iteration") {
+		t.Error("spec.Task should be the metacognitive base prompt")
 	}
 	if spec.PostIterate == nil {
-		t.Fatal("PostIterate should be set after hydration")
+		t.Fatal("PostIterate (iteration-log writer) should be set after hydration")
 	}
 	if spec.Setup != nil {
 		t.Fatal("HydrateSpec should not attach app-level setup hooks")
@@ -419,8 +424,11 @@ func TestBuildLoopConfig(t *testing.T) {
 	if lc.Jitter == nil || *lc.Jitter != cfg.Jitter {
 		t.Errorf("Jitter = %v, want %v", lc.Jitter, cfg.Jitter)
 	}
-	if lc.TaskBuilder == nil {
-		t.Error("TaskBuilder should be set")
+	if lc.TaskBuilder != nil {
+		t.Error("metacognitive loop is declarative; no TaskBuilder expected")
+	}
+	if !strings.Contains(lc.Task, "Metacognitive loop iteration") {
+		t.Error("lc.Task should be the metacognitive base prompt")
 	}
 	if lc.PostIterate == nil {
 		t.Error("PostIterate should be set")
@@ -447,37 +455,7 @@ func TestBuildLoopConfig(t *testing.T) {
 	}
 }
 
-func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := testConfig()
-	statePath := filepath.Join(tmpDir, cfg.StateFile)
-	opts := Opts{
-		WorkspacePath: tmpDir,
-		StateFilePath: statePath,
-	}
-
-	// Write a state file that the old TaskBuilder path would have read.
-	// Current content now comes from declared output context instead.
-	stateContent := "## Current Sense\nAll systems nominal."
-	if err := os.WriteFile(statePath, []byte(stateContent), 0644); err != nil {
-		t.Fatalf("write state file: %v", err)
-	}
-
-	lc := BuildLoopConfig(cfg, opts)
-	prompt, err := lc.TaskBuilder(context.Background(), false)
-	if err != nil {
-		t.Fatalf("TaskBuilder: %v", err)
-	}
-
-	if strings.Contains(prompt, "All systems nominal") {
-		t.Error("TaskBuilder prompt should not inline state file content")
-	}
-	if !strings.Contains(prompt, "replace_output_metacognitive_state") {
-		t.Error("TaskBuilder prompt should mention generated output tool")
-	}
-}
-
-func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
+func TestBuildLoopConfig_Task(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
 	opts := Opts{
@@ -486,16 +464,20 @@ func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
 	}
 
 	lc := BuildLoopConfig(cfg, opts)
-	prompt, err := lc.TaskBuilder(context.Background(), false)
-	if err != nil {
-		t.Fatalf("TaskBuilder: %v", err)
-	}
 
-	if strings.Contains(prompt, "does not exist yet") {
-		t.Error("TaskBuilder prompt should not carry old first-iteration placeholder")
+	// The prompt is now a static Task (no TaskBuilder); current state
+	// comes from the declared output context, not inlined into the prompt.
+	if lc.TaskBuilder != nil {
+		t.Error("metacognitive loop is declarative; no TaskBuilder expected")
 	}
-	if !strings.Contains(prompt, "Declared Durable") {
-		t.Error("TaskBuilder prompt should point to declared output context")
+	if !strings.Contains(lc.Task, "replace_output_metacognitive_state") {
+		t.Error("Task should mention the generated output tool")
+	}
+	if !strings.Contains(lc.Task, "Declared Durable") {
+		t.Error("Task should point to the declared output context")
+	}
+	if strings.Contains(lc.Task, "does not exist yet") {
+		t.Error("Task should not carry the old first-iteration placeholder")
 	}
 }
 

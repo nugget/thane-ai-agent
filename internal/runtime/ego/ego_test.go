@@ -120,22 +120,23 @@ func TestDefinitionSpec_Outputs(t *testing.T) {
 	}
 }
 
-func TestHydrateSpec_AttachesTaskBuilder(t *testing.T) {
-	cfg := Config{Enabled: true}
+func TestSpec_DeclarativePrompt(t *testing.T) {
+	cfg := Config{Enabled: true, SupervisorProbability: 0.2}
 	spec := HydrateSpec(DefinitionSpec(cfg), cfg)
 
-	if spec.TaskBuilder == nil {
-		t.Fatal("TaskBuilder should be attached after HydrateSpec")
+	// The ego loop is fully declarative: no TaskBuilder closure.
+	if spec.TaskBuilder != nil {
+		t.Error("ego loop is declarative; HydrateSpec should attach no TaskBuilder")
 	}
-	prompt, err := spec.TaskBuilder(nil, false)
-	if err != nil {
-		t.Fatalf("TaskBuilder returned error: %v", err)
+	// The per-iteration prompt is the static Task.
+	if !strings.Contains(spec.Task, "Ego loop iteration") {
+		t.Errorf("spec.Task should be the ego base prompt, got %q", spec.Task)
 	}
-	if prompt == "" {
-		t.Error("TaskBuilder returned empty prompt")
+	if strings.Contains(spec.Task, "Supervisor Review") {
+		t.Error("base Task should not include the supervisor section")
 	}
-	supervisorPrompt, _ := spec.TaskBuilder(nil, true)
-	if len(supervisorPrompt) <= len(prompt) {
-		t.Error("supervisor prompt should be longer than normal prompt")
+	// The supervisor-turn prefix is the declarative SupervisorProfile.Instructions.
+	if spec.SupervisorProfile == nil || !strings.Contains(spec.SupervisorProfile.Instructions, "Supervisor Review") {
+		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
 	}
 }

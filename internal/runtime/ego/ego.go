@@ -9,7 +9,6 @@
 package ego
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -91,7 +90,7 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	return loop.Spec{
 		Name:       DefinitionName,
 		Enabled:    cfg.Enabled,
-		Task:       "Reflect on recent experience and update self-reflection state when warranted.",
+		Task:       prompts.EgoBaseTemplate,
 		Operation:  loop.OperationService,
 		Completion: loop.CompletionNone,
 		Outputs: []loop.OutputSpec{
@@ -125,36 +124,34 @@ func DefinitionSpec(cfg Config) loop.Spec {
 	}
 }
 
-// supervisorProfile builds the ego service's per-turn-mode
-// overrides from the supervisor router config. Returns nil when
-// no overrides are declared, signaling the loop runtime to reuse
-// the normal Profile during supervisor turns.
+// supervisorProfile builds the ego service's supervisor-turn overlay: the
+// frontier-review prompt prefix (always) plus a higher quality floor when
+// one is configured. Any field left unset falls back to the normal
+// Profile during supervisor turns; the prefix is prepended to the Task.
 func supervisorProfile(qualityFloor int) *router.LoopProfile {
-	if qualityFloor <= 0 {
-		return nil
+	p := &router.LoopProfile{Instructions: prompts.EgoSupervisorInstructions}
+	if qualityFloor > 0 {
+		p.QualityFloor = qualityFloor
 	}
-	return &router.LoopProfile{
-		QualityFloor: qualityFloor,
-	}
+	return p
 }
 
-// HydrateSpec attaches the runtime-only hooks needed to execute the ego
-// service from a durable loop definition.
-func HydrateSpec(spec loop.Spec, cfg Config) loop.Spec {
+// HydrateSpec is retained for the core-service registration shape. The ego
+// loop is fully declarative — its prompt is the spec Task and its
+// supervisor-turn prefix is SupervisorProfile.Instructions — so there are
+// no runtime-only hooks to attach beyond defaulting the name.
+func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	if strings.TrimSpace(spec.Name) == "" {
 		spec.Name = DefinitionName
-	}
-	spec.TaskBuilder = func(ctx context.Context, isSupervisor bool) (string, error) {
-		return prompts.EgoPrompt(isSupervisor), nil
 	}
 	return spec
 }
 
 // BuildSpec returns a [loop.Spec] that implements the ego loop as a
-// service loop. The returned spec declares the durable output document
-// and uses runtime hooks to build prompts. The supervisor prompt prefix
-// is produced by [prompts.EgoPrompt] inside the TaskBuilder, not via
-// the spec-level [SupervisorProfile.Instructions] hook.
+// service loop. The returned spec declares the durable output document;
+// the per-iteration prompt is the spec Task ([prompts.EgoBaseTemplate])
+// and the supervisor-turn prefix is the declarative
+// SupervisorProfile.Instructions ([prompts.EgoSupervisorInstructions]).
 func BuildSpec(cfg Config) loop.Spec {
 	return HydrateSpec(DefinitionSpec(cfg), cfg)
 }
