@@ -77,7 +77,7 @@ func (p *ContextProvider) TagContext(ctx context.Context, req agentctx.ContextRe
 		viewProps := make([]contextfmt.Property, 0, len(props))
 		for _, prop := range props {
 			viewProps = append(viewProps, contextfmt.Property{
-				Label: prop.Property,
+				Kind:  prop.Property,
 				Type:  prop.Type,
 				Value: prop.Value,
 			})
