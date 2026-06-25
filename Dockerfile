@@ -39,10 +39,6 @@ RUN test -n "${TARGETARCH}" || (echo "TARGETARCH build argument must be set" >&2
 # since the distroless final stage has no shell to mkdir/chown.
 RUN mkdir -p /out/data /out/config && chown -R 65532:65532 /out/data /out/config
 
-FROM scratch AS artifact
-
-COPY --from=builder /out/thane /thane
-
 FROM gcr.io/distroless/static-debian12:nonroot
 
 ARG THANE_VERSION=dev
