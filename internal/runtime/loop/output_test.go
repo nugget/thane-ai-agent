@@ -124,6 +124,8 @@ func TestOutputSpecValidateRefGrammar(t *testing.T) {
 		{name: "frontmatter blob rejected", ref: "---\ntitle: \"Ranch Climate Watch\"\ncreated: \"2026-06-25T03:45:49Z\"\n---\n\n# body", wantErr: true},
 		{name: "embedded newline rejected", ref: "core:state.md\nextra", wantErr: true},
 		{name: "carriage return rejected", ref: "core:state.md\r\nmore", wantErr: true},
+		{name: "nul byte rejected", ref: "core:sta\x00te.md", wantErr: true},
+		{name: "other control char rejected", ref: "core:sta\x07te.md", wantErr: true},
 		{name: "no root separator rejected", ref: "metacognitive.md", wantErr: true},
 		{name: "empty root rejected", ref: ":state.md", wantErr: true},
 		{name: "empty path rejected", ref: "core:", wantErr: true},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 const maxOutputToolNameLength = 64
@@ -211,15 +212,15 @@ func safeOutputToolSuffix(name string) string {
 // a multi-line markdown blob in Ref. That value passes the non-empty
 // check above but is not a reference — it only fails much later at wake
 // time with "unknown document root". A real ref is a single-line
-// root:path token, so newlines/control characters are an unambiguous
-// tell that content leaked into the ref. This check stays syntactic
-// (root membership is enforced at hydration, where the document store's
-// configured roots are available) so the loop package keeps no
-// dependency on the documents store.
+// root:path token, so any control character (newlines, NUL, and the rest
+// of the C0/C1 range) is an unambiguous tell that content leaked into the
+// ref. This check stays syntactic (root membership is enforced at
+// hydration, where the document store's configured roots are available)
+// so the loop package keeps no dependency on the documents store.
 func validateOutputRefGrammar(ref string) error {
 	trimmed := strings.TrimSpace(ref)
-	if strings.ContainsAny(trimmed, "\n\r\t\f\v") {
-		return fmt.Errorf("ref must be a single root:path reference, not document content (got a multi-line value beginning %q); a ref holding document text is the #1068 content-resolution corruption signature", outputRefFirstLine(trimmed))
+	if i := strings.IndexFunc(trimmed, unicode.IsControl); i >= 0 {
+		return fmt.Errorf("ref must be a single root:path reference, not document content (got a control character at offset %d in a value beginning %q); a ref holding document text is the #1068 content-resolution corruption signature", i, outputRefFirstLine(trimmed))
 	}
 	root, relPath, ok := strings.Cut(trimmed, ":")
 	root = strings.TrimSpace(root)
