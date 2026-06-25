@@ -2296,9 +2296,8 @@ components:
       properties:
         id:
           type: string
-          format: uuid
           readOnly: true
-          description: Stable UUIDv7 assigned to the message at creation time.
+          description: Message identifier — a UUIDv7 for messages Thane creates; imported messages preserve their external id.
           example: 019e7469-3abf-7e6b-ae38-85b5e34915ac
         conversation_id:
           type: string
@@ -2923,9 +2922,8 @@ components:
       properties:
         id:
           type: string
-          format: uuid
           readOnly: true
-          description: Stable session identifier (UUIDv7).
+          description: Session identifier — a UUIDv7 for native sessions; imported sessions use their source filename.
           example: 019e7460-0000-7000-8000-000000000001
         conversation_id:
           type: string
@@ -3027,7 +3025,6 @@ components:
           example: signal-alice
         session_id:
           type: string
-          format: uuid
           readOnly: true
           description: Archive session the tool call belongs to.
           example: 019e7460-0000-7000-8000-000000000001
@@ -3110,7 +3107,6 @@ components:
           description: The message that matched the query.
         session_id:
           type: string
-          format: uuid
           readOnly: true
           description: Archive session the matched message belongs to.
           example: 019e7460-0000-7000-8000-000000000001
@@ -3642,7 +3638,6 @@ components:
       properties:
         id:
           type: string
-          format: uuid
           readOnly: true
           description: Unique message identifier.
           example: 019e7469-4c0d-7e6b-ae38-85b5e34915ad
