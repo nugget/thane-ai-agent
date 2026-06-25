@@ -25,18 +25,15 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 		return "", (&looppkg.ImmutableDefinitionError{Name: spec.Name})
 	}
 	updatedAt := time.Now().UTC()
-	if r.persistLoopDefinition != nil {
-		if err := r.persistLoopDefinition(spec, updatedAt); err != nil {
-			return "", fmt.Errorf("persist loop definition: %w", err)
+	// Single durable commit (persist + upsert + reconcile). Fall back to a
+	// bare overlay upsert when no commit hook is wired so a registry-only
+	// configuration still works.
+	if r.commitLoopDefinitionSpec != nil {
+		if err := r.commitLoopDefinitionSpec(ctx, spec, updatedAt); err != nil {
+			return "", err
 		}
-	}
-	if err := r.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
+	} else if err := r.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
 		return "", err
-	}
-	if r.reconcileLoopDefinition != nil {
-		if err := r.reconcileLoopDefinition(ctx, spec.Name); err != nil {
-			return "", fmt.Errorf("reconcile loop definition: %w", err)
-		}
 	}
 	view, err := currentLoopDefinitionView(r)
 	if err != nil {

@@ -65,9 +65,13 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 				},
 			})
 		},
-		PersistSpec: func(spec looppkg.Spec, updatedAt time.Time) error {
+		CommitSpec: func(_ context.Context, spec looppkg.Spec, updatedAt time.Time) error {
 			deps.persisted[spec.Name] = spec
 			deps.persistedUpdated[spec.Name] = updatedAt
+			if err := defs.Upsert(spec, updatedAt); err != nil {
+				return err
+			}
+			deps.reconciled = append(deps.reconciled, spec.Name)
 			return nil
 		},
 		DeleteSpec: func(name string) error {

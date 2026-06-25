@@ -17,9 +17,12 @@ const (
 // tool registry so the model can inspect and mutate the persistent loops
 // definition overlay.
 type LoopDefinitionToolDeps struct {
-	Registry         *looppkg.DefinitionRegistry
-	View             func() *looppkg.DefinitionRegistryView
-	PersistSpec      func(looppkg.Spec, time.Time) error
+	Registry *looppkg.DefinitionRegistry
+	View     func() *looppkg.DefinitionRegistryView
+	// CommitSpec durably commits a definition (persist + overlay upsert +
+	// reconcile) in one step. loop_definition_set routes through it instead
+	// of sequencing the steps by hand.
+	CommitSpec       func(context.Context, looppkg.Spec, time.Time) error
 	DeleteSpec       func(string) error
 	PersistPolicy    func(string, looppkg.DefinitionPolicy) error
 	DeletePolicy     func(string) error
@@ -40,7 +43,7 @@ type LoopDefinitionToolDeps struct {
 func (r *Registry) ConfigureLoopDefinitionTools(deps LoopDefinitionToolDeps) {
 	r.loopDefinitionRegistry = deps.Registry
 	r.loopDefinitionView = deps.View
-	r.persistLoopDefinition = deps.PersistSpec
+	r.commitLoopDefinitionSpec = deps.CommitSpec
 	r.deletePersistedLoopDefinition = deps.DeleteSpec
 	r.persistLoopDefinitionPolicy = deps.PersistPolicy
 	r.deletePersistedLoopDefinitionPolicy = deps.DeletePolicy
