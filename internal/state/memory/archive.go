@@ -797,14 +797,95 @@ func (s *ArchiveStore) tryEnableFTS() bool {
 	contentTable := s.msgTableName
 	db := s.msgDB()
 
-	_, err := db.Exec(fmt.Sprintf(`
+	if _, err := db.Exec(fmt.Sprintf(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
 			content,
 			content=%s,
 			content_rowid=rowid
 		)
-	`, ftsTable, contentTable))
-	return err == nil
+	`, ftsTable, contentTable)); err != nil {
+		return false
+	}
+
+	// In unified mode the messages are written by SQLiteStore, which knows
+	// nothing about this external-content FTS index — so it can only stay
+	// in sync via triggers plus a one-time backfill, mirroring
+	// trySetupSessionsFTS. Without this the index is created empty and
+	// Search returns nothing (the consolidated-mode production path).
+	// Legacy mode keeps its explicit-insert path in ArchiveMessages;
+	// installing triggers there would double-index every row.
+	if s.messagesDB != nil {
+		s.setupMessagesFTSSync(db, ftsTable, contentTable)
+	}
+	return true
+}
+
+// setupMessagesFTSSync installs AFTER INSERT/DELETE/UPDATE sync triggers
+// on the unified messages table and backfills the external-content FTS
+// index. Degrades gracefully: failures are logged, never fatal, and the
+// next startup retries the backfill against the same shortfall signal.
+func (s *ArchiveStore) setupMessagesFTSSync(db *sql.DB, ftsTable, contentTable string) {
+	stmts := []string{
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_ai AFTER INSERT ON %s BEGIN
+				INSERT INTO %s(rowid, content) VALUES (new.rowid, COALESCE(new.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable),
+		// DELETE/UPDATE use the FTS5 'delete' command to tombstone the old
+		// row — external-content tables cannot do partial-column updates.
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_ad AFTER DELETE ON %s BEGIN
+				INSERT INTO %s(%s, rowid, content) VALUES ('delete', old.rowid, COALESCE(old.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable, ftsTable),
+		// Re-index only when content actually changes. Messages are updated
+		// frequently for status/archived_at, which leave content untouched;
+		// the WHEN guard avoids needless index churn on those writes. (A
+		// deliberate refinement over the sessions_fts triggers, where the
+		// indexed columns change together and no guard is warranted.)
+		fmt.Sprintf(`
+			CREATE TRIGGER IF NOT EXISTS %s_au AFTER UPDATE ON %s
+			WHEN old.content IS NOT new.content BEGIN
+				INSERT INTO %s(%s, rowid, content) VALUES ('delete', old.rowid, COALESCE(old.content, ''));
+				INSERT INTO %s(rowid, content) VALUES (new.rowid, COALESCE(new.content, ''));
+			END
+		`, ftsTable, contentTable, ftsTable, ftsTable, ftsTable),
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("messages_fts trigger setup failed", "error", err)
+			}
+			return
+		}
+	}
+
+	// Idempotent backfill: rebuild when the inverted index holds fewer docs
+	// than the source table — covering first creation and a prior failed
+	// rebuild. Probe the _docsize shadow table, not COUNT(*) on the FTS
+	// table: external-content FTS5 proxies COUNT(*) through to the source
+	// table, which would always self-equal and suppress the rebuild.
+	var docCount, srcCount int
+	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s_docsize`, ftsTable)).Scan(&docCount); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("messages_fts docsize probe failed", "error", err)
+		}
+		return
+	}
+	if err := db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, contentTable)).Scan(&srcCount); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("messages count probe failed", "error", err)
+		}
+		return
+	}
+	if docCount < srcCount {
+		if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("messages_fts backfill failed; next startup will retry",
+					"docsize", docCount, "messages", srcCount, "error", err)
+			}
+		}
+	}
 }
 
 // ArchiveMessages copies messages to the immutable archive.
