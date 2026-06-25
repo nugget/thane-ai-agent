@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestLoopSpecSchemaEnumeratesAuthorableFields guards the #1086 Phase-0
 // discoverability win: the loop-definition spec param must advertise its
@@ -37,13 +40,25 @@ func TestLoopSpecSchemaEnumeratesAuthorableFields(t *testing.T) {
 		}
 	}
 
-	// The constrained string fields must carry their enums so the model picks
-	// valid values rather than guessing.
-	for _, key := range []string{"operation", "on_retrigger"} {
+	// The constrained string fields must be typed string AND carry their
+	// enums, so the model picks valid values rather than guessing — and so a
+	// schema-following caller never sends the wrong JSON type. completion in
+	// particular is a string enum (loop.Completion), not an object.
+	for _, key := range []string{"operation", "on_retrigger", "completion"} {
 		field, _ := props[key].(map[string]any)
-		if field["enum"] == nil {
-			t.Errorf("%q must carry an enum", key)
+		if field["type"] != "string" {
+			t.Errorf("%q must be type string, got %v", key, field["type"])
 		}
+		enum, ok := field["enum"].([]string)
+		if !ok || len(enum) == 0 {
+			t.Errorf("%q must carry a non-empty enum", key)
+		}
+	}
+	// on_retrigger must advertise every mode ParseRetriggerMode accepts,
+	// including spawn (RetriggerSpawn) — omitting it hides a valid value.
+	retrigger, _ := props["on_retrigger"].(map[string]any)
+	if enum, _ := retrigger["enum"].([]string); !slices.Contains(enum, "spawn") {
+		t.Errorf("on_retrigger enum must include \"spawn\", got %v", retrigger["enum"])
 	}
 
 	// profile (and supervisor_profile, same builder) must expose the routing

@@ -89,8 +89,8 @@ func loopSpecSchema(description string) map[string]any {
 			},
 			"on_retrigger": map[string]any{
 				"type":        "string",
-				"enum":        []string{"single", "restart", "queue"},
-				"description": "Behavior when triggered again while running: single = ignore the new trigger; restart = cancel and restart; queue = run again after the current iteration.",
+				"enum":        []string{"single", "restart", "queue", "spawn"},
+				"description": "Behavior when triggered again while running: single = ignore the new trigger; restart = cancel and restart; queue = run again after the current iteration; spawn = start another concurrent instance.",
 			},
 			"conditions": map[string]any{
 				"type":        "object",
@@ -103,8 +103,9 @@ func loopSpecSchema(description string) map[string]any {
 				},
 			},
 			"completion": map[string]any{
-				"type":        "object",
-				"description": "How results are delivered back to a caller, conversation, or channel — mainly for request_reply and detached background_task loops.",
+				"type":        "string",
+				"enum":        []string{"return", "conversation", "channel", "none"},
+				"description": "Where results are delivered: return = to the caller; conversation = into the originating conversation; channel = to a channel; none = no outward delivery (the default for service loops). Mainly relevant for request_reply and detached background_task loops.",
 			},
 			"subscriptions": map[string]any{
 				"type":        "array",
