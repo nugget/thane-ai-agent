@@ -54,6 +54,7 @@ paths:
       servers:
         - url: http://localhost:8081
       requestBody:
+        description: The chat completion request — messages, model, and sampling options.
         required: true
         content:
           application/json:
@@ -94,6 +95,7 @@ paths:
       servers:
         - url: http://localhost:11434
       requestBody:
+        description: The Ollama chat request — model and messages.
         required: true
         content:
           application/json:

@@ -147,7 +147,7 @@ paths:
       x-thane-scope: system:read
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - { name: level, in: query, schema: { type: string, enum: [debug, info, warn, error] } }
+        - { name: level, in: query, description: "Minimum log level to include (debug, info, warn, error).", schema: { type: string, enum: [debug, info, warn, error] } }
       responses:
         "200":
           description: Log entries (newest first).
@@ -170,6 +170,7 @@ paths:
       x-thane-scope: sessions:write
       requestBody:
         required: true
+        description: The chat message to send (with an optional conversation_id).
         content:
           application/json:
             schema:
@@ -350,6 +351,7 @@ paths:
       x-thane-scope: definitions:write
       requestBody:
         required: true
+        description: The loop definition to create or replace.
         content:
           application/json:
             schema: { $ref: "#/components/schemas/LoopDefinitionSpec" }
@@ -412,6 +414,7 @@ paths:
       x-thane-scope: definitions:write
       requestBody:
         required: true
+        description: The launch policy override to apply to the definition.
         content:
           application/json:
             schema: { $ref: "#/components/schemas/DefinitionPolicy" }
@@ -423,7 +426,7 @@ paths:
       summary: Clear a launch policy override
       x-thane-scope: definitions:write
       parameters:
-        - { name: name, in: query, required: true, schema: { type: string } }
+        - { name: name, in: query, required: true, description: "Loop definition name whose policy override to clear.", schema: { type: string } }
       responses:
         "204": { description: Cleared. }
 
@@ -500,13 +503,13 @@ paths:
         - { name: address, in: query, description: "Filter by channel binding address.", schema: { type: string } }
         - { name: q, in: query, description: "Substring match over id, contact name, and address (metadata only).", schema: { type: string } }
         - { name: updated_after, in: query, description: "RFC3339 timestamp or a duration meaning 'ago' (e.g. 1h, 24h).", schema: { type: string } }
-        - { name: updated_before, in: query, schema: { type: string } }
-        - { name: created_after, in: query, schema: { type: string } }
-        - { name: created_before, in: query, schema: { type: string } }
-        - { name: min_messages, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: max_messages, in: query, schema: { type: integer, minimum: 0 } }
-        - { name: sort, in: query, schema: { type: string, enum: [updated_at, created_at, message_count], default: updated_at } }
-        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - { name: updated_before, in: query, description: "RFC3339 timestamp or a duration meaning 'ago' (e.g. 1h, 24h).", schema: { type: string } }
+        - { name: created_after, in: query, description: "RFC3339 timestamp or a duration meaning 'ago' (e.g. 1h, 24h).", schema: { type: string } }
+        - { name: created_before, in: query, description: "RFC3339 timestamp or a duration meaning 'ago' (e.g. 1h, 24h).", schema: { type: string } }
+        - { name: min_messages, in: query, description: "Only conversations with at least this many active messages.", schema: { type: integer, minimum: 0 } }
+        - { name: max_messages, in: query, description: "Only conversations with at most this many active messages.", schema: { type: integer, minimum: 0 } }
+        - { name: sort, in: query, description: "Field to sort by.", schema: { type: string, enum: [updated_at, created_at, message_count], default: updated_at } }
+        - { name: order, in: query, description: "Sort direction.", schema: { type: string, enum: [asc, desc], default: desc } }
         - { name: limit, in: query, description: "Page size.", schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: cursor, in: query, description: "Opaque keyset cursor from a prior next_cursor; valid only for the same sort/order.", schema: { type: string } }
       responses:
@@ -539,7 +542,7 @@ paths:
       summary: Fetch a conversation transcript
       x-thane-scope: conversations:read
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, description: "Conversation ID.", schema: { type: string } }
       responses:
         "200":
           description: Conversation transcript.
@@ -615,7 +618,7 @@ paths:
       summary: Fetch one archived session
       x-thane-scope: archive:read
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, description: "Archived session ID.", schema: { type: string } }
       responses:
         "200": { description: Archived session., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -626,7 +629,7 @@ paths:
       summary: Export an archived session (e.g. Markdown)
       x-thane-scope: archive:read
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, description: "Archived session ID.", schema: { type: string } }
       responses:
         "200":
           description: Exported document.
@@ -684,7 +687,7 @@ paths:
       operationId: getCheckpoint
       summary: Fetch a checkpoint
       x-thane-scope: checkpoints:read
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
       responses:
         "200": { description: Checkpoint., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -693,7 +696,7 @@ paths:
       operationId: deleteCheckpoint
       summary: Delete a checkpoint
       x-thane-scope: checkpoints:write
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
       responses:
         "204": { description: Deleted. }
   /v1/checkpoints/{id}/restore:
@@ -702,7 +705,7 @@ paths:
       operationId: restoreCheckpoint
       summary: Restore from a checkpoint
       x-thane-scope: checkpoints:write
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Checkpoint ID.", schema: { type: string } } ]
       responses:
         "200": { description: Restored. }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -734,7 +737,7 @@ paths:
       operationId: setModelPolicy
       summary: Set a model routing policy
       x-thane-scope: models:admin
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      requestBody: { required: true, description: "The model routing policy to apply.", content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Applied. } }
     delete:
       tags: [Models & Fleet]
@@ -748,7 +751,7 @@ paths:
       operationId: setResourcePolicy
       summary: Set a resource (host) policy
       x-thane-scope: models:admin
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      requestBody: { required: true, description: "The resource (host) policy to apply.", content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Applied. } }
     delete:
       tags: [Models & Fleet]
@@ -784,7 +787,7 @@ paths:
       description: Was `/v1/usage/summary`.
       x-thane-scope: insights:read
       parameters:
-        - { name: hours, in: query, schema: { type: integer, default: 24 } }
+        - { name: hours, in: query, description: "Lookback window in hours (default 24).", schema: { type: integer, default: 24 } }
         - { name: group_by, in: query, description: "Break the summary down by a dimension (e.g. model); omit for an ungrouped total.", schema: { type: string } }
       responses:
         "200": { description: "Usage summary (grouped when group_by is set).", content: { application/json: { schema: { type: object } } } }
@@ -803,7 +806,7 @@ paths:
       operationId: getCapability
       summary: One capability tag's resolved view
       x-thane-scope: insights:read
-      parameters: [ { name: tag, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: tag, in: path, required: true, description: "Capability tag.", schema: { type: string } } ]
       responses:
         "200": { description: Capability entry., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -822,7 +825,7 @@ paths:
       operationId: createContact
       summary: Create a contact
       x-thane-scope: contacts:write
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      requestBody: { required: true, description: "The contact to create.", content: { application/json: { schema: { type: object } } } }
       responses:
         "201": { description: Created., content: { application/json: { schema: { type: object } } } }
   /v1/contacts/{id}:
@@ -831,7 +834,7 @@ paths:
       operationId: getContact
       summary: Fetch a contact
       x-thane-scope: contacts:read
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
       responses:
         "200": { description: Contact., content: { application/json: { schema: { type: object } } } }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -840,8 +843,8 @@ paths:
       operationId: updateContact
       summary: Update a contact
       x-thane-scope: contacts:write
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
+      requestBody: { required: true, description: "The updated contact fields.", content: { application/json: { schema: { type: object } } } }
       responses:
         "200": { description: Updated. }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -850,7 +853,7 @@ paths:
       operationId: deleteContact
       summary: Delete a contact
       x-thane-scope: contacts:write
-      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { name: id, in: path, required: true, description: "Contact ID.", schema: { type: string } } ]
       responses:
         "204": { description: Deleted. }
 

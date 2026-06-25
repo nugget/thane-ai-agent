@@ -41,3 +41,9 @@ rules:
     then:
       field: description
       function: truthy
+
+  # Operations and parameters are now ENFORCED at error (#1060): every operation
+  # requestBody and every parameter must carry a description. Response examples
+  # (oas3-missing-example) remain the last content rule still at the default warn.
+  operation-description: error
+  oas3-parameter-description: error
