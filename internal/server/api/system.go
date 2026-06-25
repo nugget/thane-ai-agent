@@ -11,7 +11,7 @@ import (
 // handleSystem returns a slim system-status rollup: overall status, dependency
 // health, uptime, and version. Heavier snapshots (model registry, router
 // stats, capabilities) have dedicated endpoints under /v1/models and
-// /v1/insights. [GET /v1/system]
+// /v1/telemetry. [GET /v1/system]
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	health := map[string]DependencyStatus{}
 	if s.healthDeps != nil {

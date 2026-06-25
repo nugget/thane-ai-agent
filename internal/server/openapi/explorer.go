@@ -40,6 +40,10 @@ const indexHTML = `<!doctype html>
         // Default the "Try it" code samples to curl — the operator's lingua
         // franca for a self-hosted API.
         defaultHttpClient: { targetKey: 'shell', clientKey: 'curl' },
+        // Label the auto-rendered components/schemas section "Schemas" so it no
+        // longer reads as a bare "Models" — that title collided with the
+        // "Model Routing" tag and the "Routing & Telemetry" group.
+        modelsSectionLabel: 'Schemas',
       })
     </script>
   </body>
