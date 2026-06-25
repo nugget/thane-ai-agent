@@ -97,10 +97,34 @@ lint: generate
 # errors fail the build; content gaps (missing descriptions/examples) ride at
 # `warn` during the #1060 stack and become errors at its capstone. Install:
 # `go install github.com/daveshanley/vacuum@v0.29.5` (CI does this).
+#
+# Flake guard (#1078): vacuum's schema rules (oas-schema-check, oas-missing-type)
+# nondeterministically collapse — emitting wholesale spurious errors with varying
+# counts — when their per-rule / JSONPath-lookup timeouts are starved on a loaded
+# runner; a residual ~2% race remains even with slack. The rules finish in well
+# under a second locally, so the generous --timeout/--lookup-timeout below are
+# pure headroom, and a bounded retry clears the rare residual collapse. A genuine
+# spec error is deterministic and still fails all three attempts.
 [group('test')]
 lint-openapi:
-    vacuum lint -r .vacuum.yaml --fail-severity error internal/server/openapi/native.yaml
-    vacuum lint -r .vacuum.yaml --fail-severity error internal/server/openapi/compat.yaml
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lint_spec() {
+        local spec="$1" attempt
+        for attempt in 1 2 3; do
+            if vacuum lint -r .vacuum.yaml --fail-severity error \
+                --timeout 120 --lookup-timeout 10000 "$spec"; then
+                return 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+                echo "lint-openapi: ${spec} failed (attempt ${attempt}/3); retrying" >&2
+            fi
+        done
+        echo "lint-openapi: ${spec} still failing after 3 attempts" >&2
+        return 1
+    }
+    lint_spec internal/server/openapi/native.yaml
+    lint_spec internal/server/openapi/compat.yaml
 
 # Check go.mod/go.sum are tidy
 [group('test')]
