@@ -510,21 +510,21 @@ func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, er
 // LogEntry is an exported representation of a log index row suitable
 // for display in the web dashboard and tool queries.
 type LogEntry struct {
-	ID             int64
-	Timestamp      time.Time
-	Level          string
-	Msg            string
-	RequestID      string
-	SessionID      string
-	ConversationID string
-	Subsystem      string
-	Tool           string
-	Model          string
-	LoopID         string
-	LoopName       string
-	Attrs          string
-	SourceFile     string
-	SourceLine     int
+	ID             int64     `json:"id"`
+	Timestamp      time.Time `json:"ts"`
+	Level          string    `json:"level"`
+	Msg            string    `json:"msg"`
+	RequestID      string    `json:"request_id,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	ConversationID string    `json:"conversation_id,omitempty"`
+	Subsystem      string    `json:"subsystem,omitempty"`
+	Tool           string    `json:"tool,omitempty"`
+	Model          string    `json:"model,omitempty"`
+	LoopID         string    `json:"loop_id,omitempty"`
+	LoopName       string    `json:"loop_name,omitempty"`
+	Attrs          string    `json:"attrs,omitempty"`
+	SourceFile     string    `json:"source_file,omitempty"`
+	SourceLine     int       `json:"source_line,omitempty"`
 }
 
 // QueryParams holds filter criteria for querying the log index.
