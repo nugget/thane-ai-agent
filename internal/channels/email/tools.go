@@ -59,7 +59,7 @@ func (t *Tools) HandleList(ctx context.Context, args map[string]any) (string, er
 
 // HandleRead reads a single email by UID.
 func (t *Tools) HandleRead(ctx context.Context, args map[string]any) (string, error) {
-	uid := uint32(toolargs.Int(args, "uid"))
+	uid := toolargs.Uint32(args, "uid")
 	folder := toolargs.String(args, "folder")
 	account := toolargs.String(args, "account")
 
@@ -186,7 +186,7 @@ func parseMarkAction(args map[string]any) MarkAction {
 	}
 	action.UIDs = toolargs.Uint32Slice(args, "uids")
 	if len(action.UIDs) == 0 {
-		if uid := uint32(toolargs.Int(args, "uid")); uid != 0 {
+		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
 			action.UIDs = []uint32{uid}
 		}
 	}
@@ -219,7 +219,7 @@ func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, er
 // HandleReply replies to an existing message with threading headers.
 func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, error) {
 	opts := ReplyOptions{
-		UID:      uint32(toolargs.Int(args, "uid")),
+		UID:      toolargs.Uint32(args, "uid"),
 		Folder:   toolargs.String(args, "folder"),
 		Body:     toolargs.String(args, "body"),
 		ReplyAll: toolargs.Bool(args, "reply_all"),
@@ -310,7 +310,7 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	// Parse UIDs — accept "uids" array or singular "uid".
 	opts.UIDs = toolargs.Uint32Slice(args, "uids")
 	if len(opts.UIDs) == 0 {
-		if uid := uint32(toolargs.Int(args, "uid")); uid != 0 {
+		if uid := toolargs.Uint32(args, "uid"); uid != 0 {
 			opts.UIDs = []uint32{uid}
 		}
 	}

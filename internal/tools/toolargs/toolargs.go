@@ -209,6 +209,28 @@ func Uint32Slice(args map[string]any, key string) []uint32 {
 	return nil
 }
 
+// Uint32 returns the value at key as a uint32, or 0 when the key is
+// absent or not coercible to a valid identifier. Equivalent to the
+// value of Uint32OK; see Uint32OK for the coercion rules.
+func Uint32(args map[string]any, key string) uint32 {
+	n, _ := Uint32OK(args, key)
+	return n
+}
+
+// Uint32OK returns the value at key as a uint32 and whether it was
+// present and coercible. It is the single-value form of Uint32Slice's
+// element coercion: accepts float64, Go int, and decimal strings
+// (trimmed), and rejects values that are nil, negative, fractional,
+// below 1, or above the uint32 range (returning (0, false)).
+//
+// Prefer this over uint32(Int(args, key)) for identifier arguments
+// (e.g. an IMAP UID): the signed-int cast silently wraps a negative or
+// out-of-range value into a valid-looking large ID, whereas Uint32OK
+// rejects it so an absent/garbage value reads as "not provided."
+func Uint32OK(args map[string]any, key string) (uint32, bool) {
+	return coerceUint32(args[key])
+}
+
 // coerceUint32 converts a single value to a valid uint32 in [1,
 // maxUint32]. Returns (0, false) for nil, negative, fractional, or
 // out-of-range values.
