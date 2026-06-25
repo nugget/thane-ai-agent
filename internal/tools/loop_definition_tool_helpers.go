@@ -275,18 +275,6 @@ func loopLaunchOverrideProperties() map[string]any {
 	}
 }
 
-func findLoopDefinition(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
-	if snapshot == nil {
-		return looppkg.DefinitionSnapshot{}, false
-	}
-	for _, def := range snapshot.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionSnapshot{}, false
-}
-
 func currentLoopDefinitionSnapshot(r *Registry) (*looppkg.DefinitionRegistrySnapshot, error) {
 	if r.loopDefinitionRegistry == nil {
 		return nil, fmt.Errorf("loop definition registry not configured")
@@ -296,18 +284,6 @@ func currentLoopDefinitionSnapshot(r *Registry) (*looppkg.DefinitionRegistrySnap
 		return nil, fmt.Errorf("loop definition registry snapshot unavailable")
 	}
 	return snapshot, nil
-}
-
-func findLoopDefinitionView(view *looppkg.DefinitionRegistryView, name string) (looppkg.DefinitionView, bool) {
-	if view == nil {
-		return looppkg.DefinitionView{}, false
-	}
-	for _, def := range view.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionView{}, false
 }
 
 func currentLoopDefinitionView(r *Registry) (*looppkg.DefinitionRegistryView, error) {

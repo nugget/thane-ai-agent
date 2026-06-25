@@ -1252,9 +1252,13 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), nil)
 	})
 	server.ConfigureLoopDefinitionPersistence(
-		func(spec looppkg.Spec, updatedAt time.Time) error {
+		func(_ context.Context, spec looppkg.Spec, updatedAt time.Time) error {
 			savedSpec = spec
 			savedAt = updatedAt
+			if err := registry.Upsert(spec, updatedAt); err != nil {
+				return err
+			}
+			reconciled = append(reconciled, spec.Name)
 			return nil
 		},
 		func(name string) error {
@@ -1321,6 +1325,43 @@ func TestHandleLoopDefinitionSet_ConfigDefinitionConflict(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestHandleLoopDefinitionSet_CommitErrorStatusMapping(t *testing.T) {
+	// The HTTP set path folds onto commitLoopDefinition; respondLoopCommitError
+	// must preserve the per-stage status codes the old inline sequence
+	// returned: immutable conflict -> 409, register validation -> 400,
+	// persist/reconcile infra -> 500.
+	cases := []struct {
+		name      string
+		commitErr error
+		want      int
+	}{
+		{"register immutable -> 409", &looppkg.CommitError{Stage: looppkg.CommitStageRegister, Err: &looppkg.ImmutableDefinitionError{Name: "dyn_loop"}}, http.StatusConflict},
+		{"register validation -> 400", &looppkg.CommitError{Stage: looppkg.CommitStageRegister, Err: errors.New("outputs[0]: invalid ref")}, http.StatusBadRequest},
+		{"persist failure -> 500", &looppkg.CommitError{Stage: looppkg.CommitStagePersist, Err: errors.New("disk full")}, http.StatusInternalServerError},
+		{"reconcile failure -> 500", &looppkg.CommitError{Stage: looppkg.CommitStageReconcile, Err: errors.New("boom")}, http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := testAPILoopDefinitionRegistry(t)
+			server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+			server.UseLoopDefinitionRegistry(registry)
+			server.ConfigureLoopDefinitionPersistence(
+				func(_ context.Context, _ looppkg.Spec, _ time.Time) error { return tc.commitErr },
+				func(string) error { return nil },
+			)
+
+			body := bytes.NewBufferString(`{"spec":{"name":"dyn_loop","task":"t","operation":"service"}}`)
+			req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions", body)
+			rec := httptest.NewRecorder()
+			server.handleLoopDefinitionSet(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
 	}
 }
 

@@ -71,7 +71,7 @@ func (s *Server) handleLoopDefinitionGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: name}).Error())
 		return
@@ -96,38 +96,25 @@ func (s *Server) handleLoopDefinitionSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	snapshot := s.loopDefinitionRegistry.Snapshot()
-	if existing, found := findAPILoopDefinition(snapshot, req.Spec.Name); found && existing.Source == looppkg.DefinitionSourceConfig {
+	if existing, found := looppkg.FindDefinition(snapshot, req.Spec.Name); found && existing.Source == looppkg.DefinitionSourceConfig {
 		s.errorResponse(w, http.StatusConflict, (&looppkg.ImmutableDefinitionError{Name: req.Spec.Name}).Error())
 		return
 	}
 
-	updatedAt := time.Now().UTC()
-	if s.persistLoopDefinition != nil {
-		if err := s.persistLoopDefinition(req.Spec, updatedAt); err != nil {
-			s.logger.Error("persist loop definition failed", "name", req.Spec.Name, "error", err)
-			s.errorResponse(w, http.StatusInternalServerError, "failed to persist loop definition")
+	// Single durable commit (persist + upsert + reconcile) through the
+	// shared chokepoint, with a bare overlay upsert fallback for a
+	// registry-only server — mirroring the loop-authoring tool surfaces.
+	if s.commitLoopDefinition != nil {
+		if err := s.commitLoopDefinition(r.Context(), req.Spec, time.Now().UTC()); err != nil {
+			s.respondLoopCommitError(w, req.Spec.Name, err)
 			return
 		}
-	}
-	if err := s.loopDefinitionRegistry.Upsert(req.Spec, updatedAt); err != nil {
-		var immutable *looppkg.ImmutableDefinitionError
-		switch {
-		case errors.As(err, &immutable):
-			s.errorResponse(w, http.StatusConflict, err.Error())
-		default:
-			s.errorResponse(w, http.StatusBadRequest, err.Error())
-		}
+	} else if err := s.loopDefinitionRegistry.Upsert(req.Spec, time.Now().UTC()); err != nil {
+		s.respondLoopCommitError(w, req.Spec.Name, &looppkg.CommitError{Stage: looppkg.CommitStageRegister, Err: err})
 		return
 	}
-	if s.reconcileLoopDefinition != nil {
-		if err := s.reconcileLoopDefinition(r.Context(), req.Spec.Name); err != nil {
-			s.logger.Error("reconcile loop definition failed", "name", req.Spec.Name, "error", err)
-			s.errorResponse(w, http.StatusInternalServerError, "failed to reconcile loop definition")
-			return
-		}
-	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, req.Spec.Name)
+	def, found := looppkg.FindDefinitionView(view, req.Spec.Name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition stored but snapshot is unavailable")
 		return
@@ -138,6 +125,27 @@ func (s *Server) handleLoopDefinitionSet(w http.ResponseWriter, r *http.Request)
 		Generation: view.Generation,
 		Definition: def,
 	}, s.logger)
+}
+
+// respondLoopCommitError maps a commitLoopDefinition failure to the same
+// status codes the previous per-stage inline sequence returned: an
+// immutable-config conflict → 409, any other register/validation failure
+// → 400, and persist/reconcile (infrastructure) failures → 500. The stage
+// tag on looppkg.CommitError lets the transport classify without
+// re-implementing the commit sequence.
+func (s *Server) respondLoopCommitError(w http.ResponseWriter, name string, err error) {
+	var immutable *looppkg.ImmutableDefinitionError
+	if errors.As(err, &immutable) {
+		s.errorResponse(w, http.StatusConflict, err.Error())
+		return
+	}
+	var commit *looppkg.CommitError
+	if errors.As(err, &commit) && commit.Stage == looppkg.CommitStageRegister {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logger.Error("commit loop definition failed", "name", name, "error", err)
+	s.errorResponse(w, http.StatusInternalServerError, "failed to commit loop definition")
 }
 
 func (s *Server) handleLoopDefinitionDelete(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +159,7 @@ func (s *Server) handleLoopDefinitionDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	snapshot := s.loopDefinitionRegistry.Snapshot()
-	if existing, found := findAPILoopDefinition(snapshot, name); found && existing.Source == looppkg.DefinitionSourceConfig {
+	if existing, found := looppkg.FindDefinition(snapshot, name); found && existing.Source == looppkg.DefinitionSourceConfig {
 		s.errorResponse(w, http.StatusConflict, (&looppkg.ImmutableDefinitionError{Name: name}).Error())
 		return
 	} else if !found {
@@ -209,7 +217,7 @@ func (s *Server) handleLoopDefinitionPolicySet(w http.ResponseWriter, r *http.Re
 		s.errorResponse(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), req.Name); !found {
+	if _, found := looppkg.FindDefinition(s.loopDefinitionRegistry.Snapshot(), req.Name); !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: req.Name}).Error())
 		return
 	}
@@ -248,7 +256,7 @@ func (s *Server) handleLoopDefinitionPolicySet(w http.ResponseWriter, r *http.Re
 		}
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, req.Name)
+	def, found := looppkg.FindDefinitionView(view, req.Name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy applied but snapshot is unavailable")
 		return
@@ -271,7 +279,7 @@ func (s *Server) handleLoopDefinitionPolicyDelete(w http.ResponseWriter, r *http
 		s.errorResponse(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), name); !found {
+	if _, found := looppkg.FindDefinition(s.loopDefinitionRegistry.Snapshot(), name); !found {
 		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: name}).Error())
 		return
 	}
@@ -299,7 +307,7 @@ func (s *Server) handleLoopDefinitionPolicyDelete(w http.ResponseWriter, r *http
 		}
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy cleared but snapshot is unavailable")
 		return
@@ -350,7 +358,7 @@ func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	view := s.currentLoopDefinitionView()
-	def, found := findAPILoopDefinitionView(view, name)
+	def, found := looppkg.FindDefinitionView(view, name)
 	if !found {
 		s.errorResponse(w, http.StatusInternalServerError, "loop definition launched but snapshot is unavailable")
 		return
@@ -362,28 +370,4 @@ func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Reque
 		Definition: def,
 		Result:     result,
 	}, s.logger)
-}
-
-func findAPILoopDefinition(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
-	if snapshot == nil {
-		return looppkg.DefinitionSnapshot{}, false
-	}
-	for _, def := range snapshot.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionSnapshot{}, false
-}
-
-func findAPILoopDefinitionView(view *looppkg.DefinitionRegistryView, name string) (looppkg.DefinitionView, bool) {
-	if view == nil {
-		return looppkg.DefinitionView{}, false
-	}
-	for _, def := range view.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionView{}, false
 }

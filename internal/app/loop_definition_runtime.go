@@ -685,15 +685,15 @@ func (a *App) reconcileLoopDefinition(ctx context.Context, name string) error {
 // inspect it (errors.As for ImmutableDefinitionError) keep working.
 func (a *App) commitLoopDefinition(ctx context.Context, spec looppkg.Spec, updatedAt time.Time) error {
 	if err := a.persistLoopDefinition(spec, updatedAt); err != nil {
-		return fmt.Errorf("persist loop definition: %w", err)
+		return &looppkg.CommitError{Stage: looppkg.CommitStagePersist, Err: err}
 	}
 	if a.loopDefinitionRegistry != nil {
 		if err := a.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
-			return err
+			return &looppkg.CommitError{Stage: looppkg.CommitStageRegister, Err: err}
 		}
 	}
 	if err := a.reconcileLoopDefinition(ctx, spec.Name); err != nil {
-		return fmt.Errorf("reconcile loop definition: %w", err)
+		return &looppkg.CommitError{Stage: looppkg.CommitStageReconcile, Err: err}
 	}
 	return nil
 }

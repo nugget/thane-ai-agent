@@ -97,7 +97,7 @@ type Server struct {
 	deleteModelRegistryPolicy          func(string) error
 	persistModelRegistryResourcePolicy func(string, fleet.ResourcePolicy) error
 	deleteModelRegistryResourcePolicy  func(string) error
-	persistLoopDefinition              func(looppkg.Spec, time.Time) error
+	commitLoopDefinition               func(context.Context, looppkg.Spec, time.Time) error
 	deleteLoopDefinition               func(string) error
 	persistLoopDefinitionPolicy        func(string, looppkg.DefinitionPolicy) error
 	deleteLoopDefinitionPolicy         func(string) error
@@ -167,13 +167,23 @@ func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegist
 	s.loopDefinitionView = fn
 }
 
-// ConfigureLoopDefinitionPersistence configures persistence callbacks for
-// dynamic loop-definition overlay mutations.
+// ConfigureLoopDefinitionPersistence configures the durable-commit and
+// delete callbacks for dynamic loop-definition overlay mutations. commit
+// runs the full persist → overlay upsert → reconcile sequence (the same
+// chokepoint the loop-authoring tools use) so the HTTP write path cannot
+// drift from them.
+//
+// Contract: commit must tag its failures with *looppkg.CommitError (stage
+// persist/register/reconcile) — that is what handleLoopDefinitionSet's
+// respondLoopCommitError uses to map a register failure to 400 and a
+// persist/reconcile failure to 500. A commit that returns a raw error
+// instead silently collapses every failure to 500. App.commitLoopDefinition
+// satisfies this; alternative wiring (tests, custom setups) must too.
 func (s *Server) ConfigureLoopDefinitionPersistence(
-	save func(looppkg.Spec, time.Time) error,
+	commit func(context.Context, looppkg.Spec, time.Time) error,
 	remove func(string) error,
 ) {
-	s.persistLoopDefinition = save
+	s.commitLoopDefinition = commit
 	s.deleteLoopDefinition = remove
 }
 
