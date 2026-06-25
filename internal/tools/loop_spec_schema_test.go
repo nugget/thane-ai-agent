@@ -85,13 +85,17 @@ func TestLoopSpecSchemaEnumeratesAuthorableFields(t *testing.T) {
 		t.Error("output item type must carry an enum")
 	}
 
-	// subscriptions[].forecast is a Home Assistant forecast TYPE
-	// (daily/hourly/twice_daily/none), not a free-form horizon — it must
-	// carry the enum so callers send a valid value.
+	// subscriptions[].forecast is a Home Assistant forecast TYPE, not a
+	// free-form horizon — it must be a string carrying exactly the HA
+	// forecast types so a caller can't send an invalid value.
 	subs, _ := props["subscriptions"].(map[string]any)
 	subItem, _ := subs["items"].(map[string]any)
 	subProps, _ := subItem["properties"].(map[string]any)
-	if fc, _ := subProps["forecast"].(map[string]any); fc["enum"] == nil {
-		t.Error("subscriptions[].forecast must carry an enum (daily/hourly/twice_daily/none)")
+	fc, _ := subProps["forecast"].(map[string]any)
+	if fc["type"] != "string" {
+		t.Errorf("subscriptions[].forecast must be type string, got %v", fc["type"])
+	}
+	if got, _ := fc["enum"].([]string); !slices.Equal(got, []string{"daily", "hourly", "twice_daily", "none"}) {
+		t.Errorf("subscriptions[].forecast enum = %v, want [daily hourly twice_daily none]", fc["enum"])
 	}
 }
