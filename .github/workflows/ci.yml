@@ -70,8 +70,8 @@ jobs:
             tools/go.sum
       - uses: extractions/setup-just@v4
       - name: Install lychee
-        run: |
-          curl -sSfL "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar xz -C /usr/local/bin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Static checks
         run: just generate && just fmt-check mod-tidy-check config-generate-check architecture-check lint-openapi link-check
