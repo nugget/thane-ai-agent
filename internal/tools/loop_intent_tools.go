@@ -414,6 +414,14 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		Tags:          tags,
 		Outputs:       []looppkg.OutputSpec{outputSpec},
 		Subscriptions: curateEntitiesToSubscriptions(entities, now),
+		// Default-deny direct human-egress tools (#696): a model-authored
+		// curate loop is a subsystem loop that should wake the core loop via
+		// request_core_attention rather than contact a person directly. This
+		// matches the ego/metacognitive/archivist exclusion baseline; without
+		// it a wrong-tagged curate loop could acquire signal_send_message /
+		// email_send / ha_notify. (An operator-facing exclude_tools knob layers
+		// on top of this default in a later change.)
+		ExcludeTools: DirectHumanEgressToolNames(),
 		Profile: router.LoopProfile{
 			DelegationGating: "disabled",
 			Instructions:     strings.TrimSpace(instructions),

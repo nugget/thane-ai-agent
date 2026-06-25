@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -265,6 +266,14 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	// Only caller-supplied tags; the scope-tag mechanism is gone.
 	if len(found.Spec.Tags) != 1 || found.Spec.Tags[0] != "forge" {
 		t.Errorf("Tags = %v, want [forge]", found.Spec.Tags)
+	}
+	// Subsystem curate loops must default-deny direct human-egress tools
+	// (#696): the sanctioned path is request_core_attention, not
+	// signal_send_message / email_send / ha_notify.
+	for _, egress := range DirectHumanEgressToolNames() {
+		if !slices.Contains(found.Spec.ExcludeTools, egress) {
+			t.Errorf("curate spec ExcludeTools missing egress tool %q; got %v", egress, found.Spec.ExcludeTools)
+		}
 	}
 	if _, ok := found.Spec.Metadata["scope_tag"]; ok {
 		t.Errorf("scope_tag metadata should be gone, found %v", found.Spec.Metadata["scope_tag"])
