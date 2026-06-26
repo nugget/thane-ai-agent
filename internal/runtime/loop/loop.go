@@ -209,6 +209,13 @@ type Loop struct {
 	contextWindow     int
 	lastError         string
 
+	// sleepUntil is the scheduled wake instant while the loop is in a
+	// timer-based sleep (zero when processing or event-driven); currentSleep
+	// is the post-clamp/post-jitter duration being honored. Both are set in
+	// [Loop.sleep] and cleared on wake, under l.mu.
+	sleepUntil   time.Time
+	currentSleep time.Duration
+
 	// currentConvID is the conversation ID of the in-flight iteration.
 	// Set at the start of each iteration, cleared after. Tool handlers
 	// read it via [Loop.CurrentConvID].
@@ -686,6 +693,8 @@ func (l *Loop) Status() Status {
 		ParentID:              l.config.ParentID,
 		StartedAt:             l.startedAt,
 		LastWakeAt:            l.lastWakeAt,
+		SleepUntil:            l.sleepUntil,
+		CurrentSleep:          l.currentSleep,
 		Iterations:            l.iterations,
 		Attempts:              l.attempts,
 		TotalInputTokens:      l.totalInputTokens,
