@@ -317,6 +317,34 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 	}
 }
 
+func TestLoopStatusHealth(t *testing.T) {
+	statuses := []looppkg.Status{
+		{Name: "a", State: looppkg.State("sleeping")},
+		{Name: "b", State: looppkg.State("sleeping")},
+		{Name: "c", State: looppkg.State("error"), ConsecutiveErrors: 3},
+		{Name: "d", State: looppkg.State("waiting"), ConsecutiveErrors: 2},
+	}
+	h := loopStatusHealth(statuses)
+
+	if h["total"] != 4 {
+		t.Errorf("total = %v, want 4", h["total"])
+	}
+	if h["degraded"] != 2 {
+		t.Errorf("degraded = %v, want 2 (error state + consecutive errors)", h["degraded"])
+	}
+	bs, _ := h["by_state"].(map[string]int)
+	if bs["sleeping"] != 2 || bs["error"] != 1 || bs["waiting"] != 1 {
+		t.Errorf("by_state = %v", bs)
+	}
+	dl, _ := h["degraded_loops"].([]string)
+	if len(dl) != 2 || dl[0] != "c (3 consecutive errors)" {
+		t.Errorf("degraded_loops = %v, want [c..., d...]", dl)
+	}
+	if _, ok := h["degraded_truncated"]; ok {
+		t.Errorf("degraded_truncated should be absent when under the cap: %v", h)
+	}
+}
+
 func TestSpawnLoopAppliesConversationDefaults(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 

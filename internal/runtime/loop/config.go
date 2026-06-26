@@ -556,6 +556,13 @@ type Status struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastWakeAt is when the loop last began an iteration.
 	LastWakeAt time.Time `json:"last_wake_at,omitempty"`
+	// SleepUntil is the scheduled wake instant while the loop is in a
+	// timer-based sleep; zero when processing or event-driven (no timer to
+	// wake on). A notification can still cut the sleep short.
+	SleepUntil time.Time `json:"sleep_until,omitempty"`
+	// CurrentSleep is the post-clamp/post-jitter sleep duration being honored
+	// this cycle; zero when not sleeping.
+	CurrentSleep time.Duration `json:"current_sleep,omitempty"`
 	// Iterations is the total number of completed (successful) iterations.
 	Iterations int `json:"iterations"`
 	// Attempts is the total number of iteration attempts (including failures).

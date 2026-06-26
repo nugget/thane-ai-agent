@@ -44,8 +44,14 @@ type LoopView struct {
 	HandlerOnly  bool    `json:"handler_only"`
 
 	// ---- lifecycle / time (delta-oriented) ----
-	StartedDelta       *string `json:"started_delta"`
-	LastWakeDelta      *string `json:"last_wake_delta"`
+	StartedDelta  *string `json:"started_delta"`
+	LastWakeDelta *string `json:"last_wake_delta"`
+	// NextWakeIn is the signed-second delta to the scheduled wake while the
+	// loop is in a timer-based sleep (e.g. "+5953s"); null when processing or
+	// event-driven. CurrentSleep is the self-paced interval it is honoring
+	// this cycle (a duration string like "1h40m0s").
+	NextWakeIn         *string `json:"next_wake_in"`
+	CurrentSleep       *string `json:"current_sleep"`
 	PolicyUpdatedDelta *string `json:"policy_updated_delta"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
@@ -202,6 +208,15 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	if !s.LastWakeAt.IsZero() {
 		d := promptfmt.FormatDeltaOnly(s.LastWakeAt, r.now)
 		v.LastWakeDelta = &d
+	}
+	// Scheduled next wake + the self-paced interval, for timer-based sleeps —
+	// turns the census into a schedule. Event-driven loops (no timer) leave
+	// SleepUntil zero and correctly report null.
+	if !s.SleepUntil.IsZero() {
+		nw := promptfmt.FormatDeltaOnly(s.SleepUntil, r.now)
+		v.NextWakeIn = &nw
+		cs := s.CurrentSleep.String()
+		v.CurrentSleep = &cs
 	}
 
 	// Token economics — left nil for handler-only loops, which run no LLM

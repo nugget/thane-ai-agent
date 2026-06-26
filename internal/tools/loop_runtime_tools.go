@@ -185,8 +185,46 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 			"operation": operation,
 			"limit":     limit,
 		},
-		"loops": filtered,
+		// Health is computed over the FULL registry, not the filtered/limited
+		// rows, so "is anything wrong" is answerable in one read even when a
+		// degraded loop falls below the result limit.
+		"health": loopStatusHealth(statuses),
+		"loops":  filtered,
 	})
+}
+
+// maxDegradedLoopNames caps the degraded_loops list to keep the health
+// rollup's prompt footprint bounded; the count stays exact.
+const maxDegradedLoopNames = 10
+
+// loopStatusHealth summarizes the live registry: counts by state and the
+// loops that are degraded (in error, or carrying consecutive errors), so the
+// model can read "is anything wrong" without eyeballing every row. statuses
+// is already name-sorted (Registry.Statuses), so degraded_loops is
+// deterministic without an explicit sort.
+func loopStatusHealth(statuses []looppkg.Status) map[string]any {
+	byState := make(map[string]int)
+	degraded := make([]string, 0)
+	for _, s := range statuses {
+		byState[string(s.State)]++
+		if s.ConsecutiveErrors > 0 || s.State == looppkg.StateError {
+			degraded = append(degraded, fmt.Sprintf("%s (%d consecutive errors)", s.Name, s.ConsecutiveErrors))
+		}
+	}
+	degradedCount := len(degraded)
+	if len(degraded) > maxDegradedLoopNames {
+		degraded = degraded[:maxDegradedLoopNames]
+	}
+	health := map[string]any{
+		"total":          len(statuses),
+		"degraded":       degradedCount,
+		"by_state":       byState,
+		"degraded_loops": degraded,
+	}
+	if degradedCount > len(degraded) {
+		health["degraded_truncated"] = degradedCount - len(degraded)
+	}
+	return health
 }
 
 func (r *Registry) handleSetNextSleep(ctx context.Context, args map[string]any) (string, error) {
