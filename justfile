@@ -36,9 +36,9 @@ vacuum := "go run -modfile=tools/go.mod github.com/daveshanley/vacuum"
 # List available recipes
 default:
     @echo "Common workflows:"
-    @echo "  just release-github <version> [auto|prerelease|release]  # normal production release path"
-    @echo "  just deploy-macos <user@host>                            # deploy a signed pkg to a remote macOS host"
-    @echo "  just ci                                                   # full local validation gate"
+    @echo "    just release-github <version> [auto|prerelease|release]  # normal production release path"
+    @echo "    just deploy-macos <user@host>                            # deploy a signed pkg to a remote macOS host"
+    @echo "    just ci                                                  # full local validation gate"
     @echo ""
     @just --list
 
