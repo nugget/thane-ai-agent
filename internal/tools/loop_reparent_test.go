@@ -170,4 +170,12 @@ func TestLoopReparent_NoopWhenAlreadyParented(t *testing.T) {
 	if res["status"] != "noop" {
 		t.Errorf("second reparent should be a noop, got %s", out)
 	}
+	// A noop carries the same envelope fields as ok, so callers read both
+	// shapes uniformly.
+	if _, ok := res["old_parent"]; !ok {
+		t.Errorf("noop result missing old_parent (should match the ok envelope): %s", out)
+	}
+	if res["relaunched"] != false {
+		t.Errorf("noop relaunched = %v, want false", res["relaunched"])
+	}
 }

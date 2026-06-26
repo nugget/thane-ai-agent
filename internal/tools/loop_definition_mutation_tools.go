@@ -265,10 +265,13 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	// Empty, omitted, or "core" means top-level: directly under the
-	// structural root, with no container inheritance.
+	// Empty, omitted, or the core name means top-level: directly under the
+	// structural root, with no container inheritance. Match the core name
+	// exactly — loop names are case-sensitive everywhere else (GetByName,
+	// Spec.Validate), so a real container named "Core" must not be treated
+	// as the root.
 	target := toolargs.TrimmedString(args, "parent_name")
-	topLevel := target == "" || strings.EqualFold(target, "core")
+	topLevel := target == "" || target == looppkg.CoreLoopName
 
 	snapshot, err := currentLoopDefinitionSnapshot(r)
 	if err != nil {
@@ -282,11 +285,19 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 		return "", (&looppkg.ImmutableDefinitionError{Name: name})
 	}
 
-	live := r.loopIntentDeps.LiveRegistry
+	// Prefer the always-wired runtime registry. loopIntentDeps is only
+	// configured when the intent-tool surface is enabled (conditional on doc
+	// tools), so relying on it would silently disable container resolution,
+	// the children guard, and the relaunch in common configurations. Fall
+	// back to it for registry-only test setups.
+	live := r.liveLoopRegistry
+	if live == nil {
+		live = r.loopIntentDeps.LiveRegistry
+	}
 
 	newParent := ""
 	if !topLevel {
-		if strings.EqualFold(target, name) {
+		if target == name {
 			return "", fmt.Errorf("cannot reparent %q under itself", name)
 		}
 		if live == nil {
@@ -302,16 +313,34 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 		newParent = container.Name()
 	}
 
+	// attachLoopView adds the moved loop's canonical row to a result so ok and
+	// noop responses share one shape the model can read uniformly.
+	attachLoopView := func(result map[string]any) (string, error) {
+		if live != nil {
+			statuses := live.Statuses()
+			resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
+			for _, s := range statuses {
+				if s.Name == name {
+					result["loop"] = resolver.FromStatus(s)
+					break
+				}
+			}
+		}
+		return ldMarshalToolJSON(result)
+	}
+
 	oldParent := strings.TrimSpace(def.Spec.ParentName)
 	if oldParent == newParent {
 		dest := newParent
 		if dest == "" {
 			dest = "core (top-level)"
 		}
-		return ldMarshalToolJSON(map[string]any{
+		return attachLoopView(map[string]any{
 			"status":      "noop",
 			"name":        name,
+			"old_parent":  oldParent,
 			"parent_name": newParent,
+			"relaunched":  false,
 			"detail":      fmt.Sprintf("%q is already parented to %s", name, dest),
 		})
 	}
@@ -379,19 +408,7 @@ func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) 
 	} else {
 		result["detail"] = fmt.Sprintf("%q reparented under %q", name, newParent)
 	}
-	// Return the moved loop as the canonical LoopView so the model reads back
-	// the full row — new parent_name, ancestry, inherited tags — in the same
-	// shape loop_status emits. old_parent/relaunched stay envelope-level as
-	// transition facts that aren't loop-row fields.
-	if live != nil {
-		statuses := live.Statuses()
-		resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
-		for _, s := range statuses {
-			if s.Name == name {
-				result["loop"] = resolver.FromStatus(s)
-				break
-			}
-		}
-	}
-	return ldMarshalToolJSON(result)
+	// Return the moved loop as the canonical LoopView (same shape loop_status
+	// emits); old_parent/relaunched stay envelope-level as transition facts.
+	return attachLoopView(result)
 }
