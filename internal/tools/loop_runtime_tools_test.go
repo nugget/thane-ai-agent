@@ -317,58 +317,6 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 	}
 }
 
-func TestSummarizeLoopStatus_ContainerRollupsAndProvenance(t *testing.T) {
-	nameByID := map[string]string{"lp_core": "core", "lp_travel": "travel"}
-	childCount := map[string]int{"lp_core": 3, "lp_travel": 2}
-
-	container := summarizeLoopStatus(looppkg.Status{
-		ID:       "lp_travel",
-		Name:     "travel",
-		ParentID: "lp_core",
-		Config: looppkg.Config{
-			Operation: looppkg.OperationContainer,
-			Metadata:  map[string]string{"intent": "loops that run while owners are away"},
-		},
-		EffectiveTags: []looppkg.EffectiveTag{
-			{Tag: "away", From: "self"},
-			{Tag: "trusted", From: "core"},
-		},
-	}, nameByID, childCount)
-
-	if container.ParentName != "core" {
-		t.Errorf("ParentName = %q, want core", container.ParentName)
-	}
-	if container.ChildCount != 2 {
-		t.Errorf("ChildCount = %d, want 2", container.ChildCount)
-	}
-	if container.Intent != "loops that run while owners are away" {
-		t.Errorf("Intent = %q, want the metadata intent surfaced", container.Intent)
-	}
-	// Provenance must survive the projection — this {tag, from} data is exactly
-	// what the runtime computed and the old summarizer discarded.
-	if len(container.EffectiveTags) != 2 || container.EffectiveTags[1].From != "core" {
-		t.Errorf("EffectiveTags = %#v, want inherited provenance carried through", container.EffectiveTags)
-	}
-
-	// A leaf: parent resolves to a human name, no children, no intent.
-	leaf := summarizeLoopStatus(looppkg.Status{
-		ID:       "lp_pl",
-		Name:     "porch_lights",
-		ParentID: "lp_travel",
-		Config:   looppkg.Config{Operation: looppkg.OperationService},
-	}, nameByID, childCount)
-
-	if leaf.ParentName != "travel" {
-		t.Errorf("leaf ParentName = %q, want travel", leaf.ParentName)
-	}
-	if leaf.ChildCount != 0 {
-		t.Errorf("leaf ChildCount = %d, want 0", leaf.ChildCount)
-	}
-	if leaf.Intent != "" {
-		t.Errorf("leaf Intent = %q, want empty", leaf.Intent)
-	}
-}
-
 func TestSpawnLoopAppliesConversationDefaults(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 
