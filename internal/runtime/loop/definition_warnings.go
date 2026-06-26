@@ -96,8 +96,8 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 // shadowableSpecFields is the set of canonical top-level spec wire names (the
 // json tags on specJSON in spec_json.go) that a metadata key can collide
 // with. A metadata entry matching one of these is almost certainly a
-// misplaced structural field: Metadata is stored verbatim and never
-// interpreted, so the real field stays unset. parent_name is the motivating
+// misplaced structural field: metadata keys are not interpreted as
+// structural spec fields, so the real field stays unset. parent_name is the motivating
 // case — a loop authored with parent_name in metadata silently lands at the
 // graph root instead of under its container. The set excludes "metadata"
 // itself and the legacy compat keys (quality_floor, supervisor_context,
@@ -138,9 +138,9 @@ func metadataShadowWarnings(spec Spec) []DefinitionWarning {
 		var msg string
 		switch key {
 		case "parent_name", "parent_id":
-			msg = "metadata." + key + " is inert and does not nest this loop under a parent: metadata is stored verbatim and never interpreted. Set the top-level parent_name field instead."
+			msg = "metadata." + key + " is inert and does not nest this loop under a parent: a metadata entry does not set a structural spec field. Set the top-level parent_name field instead."
 		default:
-			msg = fmt.Sprintf("metadata.%s shadows the top-level %s field, which the runtime reads instead of metadata. The metadata copy is stored verbatim and never interpreted, so it is inert; set the top-level %s field.", key, key, key)
+			msg = fmt.Sprintf("metadata.%s shadows the top-level %s field, which the runtime reads instead of metadata. A metadata entry does not set a structural spec field, so this copy is inert; set the top-level %s field.", key, key, key)
 		}
 		warnings = append(warnings, DefinitionWarning{
 			Code:    "metadata_shadows_spec_field",

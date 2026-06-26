@@ -126,7 +126,7 @@ func loopSpecSchema(description string) map[string]any {
 			},
 			"metadata": map[string]any{
 				"type":                 "object",
-				"description":          "Opaque string-keyed metadata stored with the definition. Stored verbatim and never interpreted — a key here never sets a structural field. To nest this loop under a parent, use the top-level parent_name field, not a metadata entry.",
+				"description":          "Opaque string-keyed metadata stored with the definition. Keys here are not interpreted as structural spec fields — a metadata entry never sets a top-level field like parent_name. To nest this loop under a parent, use the top-level parent_name field, not a metadata entry.",
 				"additionalProperties": map[string]any{"type": "string"},
 			},
 			"parent_name": map[string]any{
