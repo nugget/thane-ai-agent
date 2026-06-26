@@ -2,6 +2,7 @@ package tools
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -33,11 +34,26 @@ func TestLoopSpecSchemaEnumeratesAuthorableFields(t *testing.T) {
 		"supervisor_prob", "supervisor_profile", "outputs", "tags",
 		"exclude_tools", "sleep_min", "sleep_max", "sleep_default", "jitter",
 		"max_duration", "max_iter", "on_retrigger", "conditions", "completion",
-		"subscriptions", "metadata",
+		"subscriptions", "metadata", "parent_name",
 	} {
 		if _, ok := props[key].(map[string]any); !ok {
 			t.Errorf("spec schema missing enumerated property %q", key)
 		}
+	}
+
+	// parent_name must be advertised as a string and frame the container
+	// relationship — it is the field a model otherwise misfiles into metadata
+	// (the tde-msrh-2026-06 mis-parenting incident). Guard both so the menu
+	// item can't silently regress into a bare or undocumented field.
+	pn, ok := props["parent_name"].(map[string]any)
+	if !ok {
+		t.Fatal("spec schema missing parent_name property")
+	}
+	if pn["type"] != "string" {
+		t.Errorf("parent_name must be type string, got %v", pn["type"])
+	}
+	if desc, _ := pn["description"].(string); !strings.Contains(desc, "container") {
+		t.Errorf("parent_name description must mention container nesting, got %q", desc)
 	}
 
 	// The constrained string fields must be typed string AND carry their

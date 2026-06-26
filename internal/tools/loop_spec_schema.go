@@ -126,8 +126,12 @@ func loopSpecSchema(description string) map[string]any {
 			},
 			"metadata": map[string]any{
 				"type":                 "object",
-				"description":          "Opaque string-keyed metadata stored with the definition.",
+				"description":          "Opaque string-keyed metadata stored with the definition. Stored verbatim and never interpreted — a key here never sets a structural field. To nest this loop under a parent, use the top-level parent_name field, not a metadata entry.",
 				"additionalProperties": map[string]any{"type": "string"},
+			},
+			"parent_name": map[string]any{
+				"type":        "string",
+				"description": "Durable name of the container to nest this loop under. The loop is placed beneath that node in the loop graph and inherits the container's tags and subscriptions. This is the author-time parent reference — a name, not an id — resolved to a live parent at launch. Today only container parents are honored; naming a non-container parent carries no inheritance. Omit for a top-level loop.",
 			},
 		},
 	}
