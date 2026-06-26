@@ -85,6 +85,42 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 	}
 }
 
+func TestLoopViewResolver_FromStatus_NextWake(t *testing.T) {
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	// A timer-sleeping loop reports the scheduled wake (signed-second delta)
+	// and the self-paced interval it is honoring.
+	sleeping := r.FromStatus(Status{
+		ID:           "lp_a",
+		Name:         "a",
+		State:        State("sleeping"),
+		SleepUntil:   now.Add(99 * time.Minute),
+		CurrentSleep: 99 * time.Minute,
+		Config:       Config{Operation: OperationService},
+	})
+	if sleeping.NextWakeDelta == nil || *sleeping.NextWakeDelta != "+5940s" {
+		t.Errorf("NextWakeDelta = %v, want +5940s", sleeping.NextWakeDelta)
+	}
+	// Unsigned seconds (a duration magnitude), not a delta: 99m = 5940s.
+	if sleeping.CurrentSleepDuration == nil || *sleeping.CurrentSleepDuration != "5940s" {
+		t.Errorf("CurrentSleepDuration = %v, want 5940s", sleeping.CurrentSleepDuration)
+	}
+
+	// A loop not in a timer sleep (no SleepUntil) reports null for both —
+	// processing loops and event-driven loops have no scheduled wake.
+	processing := r.FromStatus(Status{
+		ID:     "lp_b",
+		Name:   "b",
+		State:  State("processing"),
+		Config: Config{Operation: OperationService},
+	})
+	if processing.NextWakeDelta != nil || processing.CurrentSleepDuration != nil {
+		t.Errorf("non-sleeping loop should have nil next_wake/current_sleep, got %v/%v",
+			processing.NextWakeDelta, processing.CurrentSleepDuration)
+	}
+}
+
 func TestLoopViewResolver_FromStatus_HandlerOnlyAndCleanError(t *testing.T) {
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 	r := NewLoopViewResolver(nil, nil, now)

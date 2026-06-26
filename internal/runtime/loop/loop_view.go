@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -44,9 +45,18 @@ type LoopView struct {
 	HandlerOnly  bool    `json:"handler_only"`
 
 	// ---- lifecycle / time (delta-oriented) ----
-	StartedDelta       *string `json:"started_delta"`
-	LastWakeDelta      *string `json:"last_wake_delta"`
-	PolicyUpdatedDelta *string `json:"policy_updated_delta"`
+	StartedDelta  *string `json:"started_delta"`
+	LastWakeDelta *string `json:"last_wake_delta"`
+	// NextWakeDelta is the signed-second delta to the scheduled wake while the
+	// loop is in a timer-based sleep (e.g. "+5953s"); null when processing or
+	// event-driven. CurrentSleepDuration is the self-paced interval it is
+	// honoring this cycle, in the same seconds unit but UNSIGNED — it is a
+	// duration, not a delta-from-now (e.g. "5940s"). So a freshly-started sleep
+	// reads next_wake_delta≈"+5940s" / current_sleep_duration="5940s", and you
+	// watch the former shrink while the latter holds.
+	NextWakeDelta        *string `json:"next_wake_delta"`
+	CurrentSleepDuration *string `json:"current_sleep_duration"`
+	PolicyUpdatedDelta   *string `json:"policy_updated_delta"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
 	Iterations        *int `json:"iterations"`
@@ -202,6 +212,18 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	if !s.LastWakeAt.IsZero() {
 		d := promptfmt.FormatDeltaOnly(s.LastWakeAt, r.now)
 		v.LastWakeDelta = &d
+	}
+	// Scheduled next wake + the self-paced interval, for timer-based sleeps —
+	// turns the census into a schedule. Event-driven loops (no timer) leave
+	// SleepUntil zero and correctly report null.
+	if !s.SleepUntil.IsZero() {
+		nw := promptfmt.FormatDeltaOnly(s.SleepUntil, r.now)
+		v.NextWakeDelta = &nw
+		// Unsigned seconds — a duration magnitude, not a delta-from-now — so the
+		// whole row speaks one unit (e.g. current_sleep "5940s" alongside
+		// next_wake_delta "+5940s").
+		cs := fmt.Sprintf("%ds", int64(s.CurrentSleep/time.Second))
+		v.CurrentSleepDuration = &cs
 	}
 
 	// Token economics — left nil for handler-only loops, which run no LLM
