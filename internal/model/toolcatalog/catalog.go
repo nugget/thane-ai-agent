@@ -249,7 +249,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"loop_definition_lint":        {CanonicalID: "native:loop_definition_lint", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_launch":      {CanonicalID: "native:loop_definition_launch", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_list":        {CanonicalID: "native:loop_definition_list", Source: NativeToolSource, Tags: []string{"loops"}},
-	"loop_definition_patch":       {CanonicalID: "native:loop_definition_patch", Source: NativeToolSource, Tags: []string{"loops"}},
+	"loop_definition_update":      {CanonicalID: "native:loop_definition_update", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_set":         {CanonicalID: "native:loop_definition_set", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_set_policy":  {CanonicalID: "native:loop_definition_set_policy", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_summary":     {CanonicalID: "native:loop_definition_summary", Source: NativeToolSource, Tags: []string{"loops"}},

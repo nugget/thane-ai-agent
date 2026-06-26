@@ -12,8 +12,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
-// loopDefinitionPatchFields maps each model-facing patch key to its path in
-// the spec's JSON wire form (the same human-facing shape loop_definition_set
+// loopDefinitionUpdateFields maps each model-facing editable field to its path
+// in the spec's JSON wire form (the same human-facing shape loop_definition_set
 // accepts). A two-element path lands inside a nested object — profile or
 // supervisor_profile — which setLoopWirePath auto-creates when the current
 // spec omitted it.
@@ -21,9 +21,9 @@ import (
 // The set is deliberately scoped to scalar/text fields that are common,
 // low-blast-radius incremental edits — the ones whose full-replace friction
 // triggered the narrate-then-stop stall (#1110). Structural and list-valued
-// fields are intentionally absent; loopDefinitionPatchRedirects points the
+// fields are intentionally absent; loopDefinitionUpdateRedirects points the
 // model at the right tool for those.
-var loopDefinitionPatchFields = map[string][]string{
+var loopDefinitionUpdateFields = map[string][]string{
 	"task":                    {"task"},
 	"model":                   {"profile", "model"},
 	"instructions":            {"profile", "instructions"},
@@ -38,10 +38,10 @@ var loopDefinitionPatchFields = map[string][]string{
 	"max_iter":                {"max_iter"},
 }
 
-// loopDefinitionPatchRedirects names the right tool for fields patch
+// loopDefinitionUpdateRedirects names the right tool for fields this tool
 // deliberately does not own, so an unknown-field error teaches the next move
 // instead of just rejecting (model-facing-tools.md #4).
-var loopDefinitionPatchRedirects = map[string]string{
+var loopDefinitionUpdateRedirects = map[string]string{
 	"parent_name":   "use loop_reparent — it relaunches the loop so it actually re-homes; a bare parent_name edit does not move a running loop",
 	"enabled":       "use loop_definition_set_policy — it owns runtime lifecycle (active/paused/inactive), applies to a running loop, and is unambiguous; a spec-level enabled flip is ignored whenever a policy overlay exists and can stop a running loop mid-call",
 	"operation":     "structural field; use loop_definition_set to rewrite the full spec",
@@ -52,16 +52,16 @@ var loopDefinitionPatchRedirects = map[string]string{
 	"exclude_tools": "list field; use loop_definition_set to rewrite the full spec",
 	"conditions":    "structured field; use loop_definition_set to rewrite the full spec",
 	"metadata":      "map field; use loop_definition_set to rewrite the full spec",
-	"name":          "a loop definition cannot be renamed in place; create the renamed definition with loop_definition_set and remove the old one with loop_definition_delete",
 }
 
-// handleLoopDefinitionPatch applies a small, field-scoped edit to one stored
-// loop definition without resending the whole spec. It reads the current spec,
-// merges the requested fields at the JSON wire level, and re-decodes through
-// the spec's own UnmarshalJSON so the result validates exactly as
-// loop_definition_set would — every field the patch does not touch is
-// preserved verbatim by the round-trip.
-func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[string]any) (string, error) {
+// handleLoopDefinitionUpdate changes a subset of fields on one stored loop
+// definition without resending the whole spec. The editable fields are passed
+// as top-level parameters alongside name (matching the *_update tool family);
+// every field omitted is preserved. It reads the current spec, merges the
+// requested fields at the JSON wire level, and re-decodes through the spec's
+// own UnmarshalJSON so the result validates exactly as loop_definition_set
+// would.
+func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[string]any) (string, error) {
 	if r.loopDefinitionRegistry == nil {
 		return "", fmt.Errorf("loop definition registry not configured")
 	}
@@ -69,18 +69,21 @@ func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[strin
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	patchRaw, ok := args["patch"]
-	if !ok {
-		return "", fmt.Errorf("patch is required")
+
+	// Every argument except the loop name is a field change. Validating the
+	// change-set keys up front turns a typo or an uneditable field into a
+	// teaching error rather than a silent no-op.
+	changes := make(map[string]any, len(args))
+	for k, v := range args {
+		if k == "name" {
+			continue
+		}
+		changes[k] = v
 	}
-	patch, ok := patchRaw.(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("patch must be an object mapping field names to new values")
+	if len(changes) == 0 {
+		return "", fmt.Errorf("no fields to change; pass at least one editable field alongside name")
 	}
-	if len(patch) == 0 {
-		return "", fmt.Errorf("patch is empty; include at least one field to change")
-	}
-	if err := validateLoopDefinitionPatchKeys(patch); err != nil {
+	if err := validateLoopDefinitionUpdateKeys(changes); err != nil {
 		return "", err
 	}
 
@@ -98,10 +101,9 @@ func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[strin
 
 	// Read-modify-write through the spec's own JSON wire form. The overlay
 	// already persists specs via these MarshalJSON/UnmarshalJSON methods, so
-	// the round-trip is an identity for every field the patch leaves alone,
-	// and the patched fields reuse the exact duration parsing, profile
-	// nesting, and quality_floor int/string compatibility that
-	// loop_definition_set relies on.
+	// the round-trip is an identity for every field left alone, and the
+	// changed fields reuse the exact duration parsing, profile nesting, and
+	// quality_floor int/string compatibility loop_definition_set relies on.
 	baseJSON, err := json.Marshal(def.Spec)
 	if err != nil {
 		return "", fmt.Errorf("encode current spec: %w", err)
@@ -110,19 +112,19 @@ func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[strin
 	if err := json.Unmarshal(baseJSON, &base); err != nil {
 		return "", fmt.Errorf("decode current spec: %w", err)
 	}
-	for key, val := range patch {
-		setLoopWirePath(base, loopDefinitionPatchFields[key], val)
+	for key, val := range changes {
+		setLoopWirePath(base, loopDefinitionUpdateFields[key], val)
 	}
 	mergedJSON, err := json.Marshal(base)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("encode merged spec: %w", err)
 	}
 
 	var spec looppkg.Spec
 	if err := json.Unmarshal(mergedJSON, &spec); err != nil {
-		return "", fmt.Errorf("patched spec is invalid: %w", err)
+		return "", fmt.Errorf("updated spec is invalid: %w", err)
 	}
-	// Name keys the definition and is not patchable. The round-trip already
+	// Name keys the definition and is not editable here. The round-trip already
 	// preserves it; pin it so a future field addition can never rename in place
 	// (which would fork a second definition rather than edit this one).
 	spec.Name = def.Spec.Name
@@ -133,7 +135,7 @@ func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[strin
 	updatedAt := time.Now().UTC()
 	// Single durable commit (persist + upsert + reconcile), falling back to a
 	// bare overlay upsert when no commit hook is wired. Policy is a separate
-	// overlay and is left untouched — patch edits the spec only.
+	// overlay and is left untouched — this edits the spec only.
 	if r.commitLoopDefinitionSpec != nil {
 		if err := r.commitLoopDefinitionSpec(ctx, spec, updatedAt); err != nil {
 			return "", err
@@ -148,37 +150,38 @@ func (r *Registry) handleLoopDefinitionPatch(ctx context.Context, args map[strin
 	}
 	viewDef, ok := looppkg.FindDefinitionView(view, name)
 	if !ok {
-		return "", fmt.Errorf("loop definition patched but snapshot is unavailable")
+		return "", fmt.Errorf("loop definition updated but snapshot is unavailable")
 	}
 
 	result := map[string]any{
 		"status":         "ok",
 		"generation":     view.Generation,
-		"patched_fields": sortedStringKeys(patch),
+		"updated_fields": sortedStringKeys(changes),
 		"definition":     viewDef,
 	}
 	// A running service loop holds its launched-time config and does NOT
 	// re-read the spec on wake — the edit applies only after a full relaunch.
 	// Say so explicitly so the model doesn't wait for the next wake and assume
 	// the change failed. (loop_definition_set shares this next-relaunch
-	// semantics; patch surfaces it.)
+	// semantics; this surfaces it.)
 	if r.liveLoopRegistry != nil && r.liveLoopRegistry.GetByName(name) != nil {
 		result["notice"] = fmt.Sprintf("%q is currently running; the edit is persisted but a running loop keeps its launched-time config until a full relaunch (process restart, or stop_loop then loop_definition_launch) — it will NOT change on the next wake.", name)
 	}
 	return ldMarshalToolJSON(result)
 }
 
-// validateLoopDefinitionPatchKeys rejects any key patch does not own, with a
-// redirect to the correct tool when the key is a known-but-unpatchable field.
-func validateLoopDefinitionPatchKeys(patch map[string]any) error {
-	for k := range patch {
-		if _, ok := loopDefinitionPatchFields[k]; ok {
+// validateLoopDefinitionUpdateKeys rejects any change-set key the tool does not
+// own, with a redirect to the correct tool when the key is a known-but-
+// uneditable field.
+func validateLoopDefinitionUpdateKeys(changes map[string]any) error {
+	for k := range changes {
+		if _, ok := loopDefinitionUpdateFields[k]; ok {
 			continue
 		}
-		if hint, ok := loopDefinitionPatchRedirects[k]; ok {
-			return fmt.Errorf("%q is not patchable: %s", k, hint)
+		if hint, ok := loopDefinitionUpdateRedirects[k]; ok {
+			return fmt.Errorf("%q is not editable here: %s", k, hint)
 		}
-		return fmt.Errorf("unknown patch field %q; patchable fields: %s", k, strings.Join(sortedStringKeys(loopDefinitionPatchFields), ", "))
+		return fmt.Errorf("unknown field %q; editable fields: %s", k, strings.Join(sortedStringKeys(loopDefinitionUpdateFields), ", "))
 	}
 	return nil
 }
