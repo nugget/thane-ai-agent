@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -17,11 +18,17 @@ type DefinitionWarning struct {
 // BuildDefinitionWarnings returns authoring warnings for one loop spec.
 // These warnings are advisory: the spec may still validate and persist.
 func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
+	// Shadow checks run for every operation: a metadata key that duplicates a
+	// real top-level spec field is inert for any loop kind, and parent_name in
+	// metadata in particular silently fails to nest the loop — the runtime
+	// parents off the structural field, never metadata. Collect these before
+	// the service-only gate so containers and event-driven loops are covered.
+	warnings := metadataShadowWarnings(spec)
+
 	if effectiveOperation(spec.Operation) != OperationService {
-		return nil
+		return warnings
 	}
 
-	var warnings []DefinitionWarning
 	missingSleep := missingServiceSleepFields(spec)
 	switch len(missingSleep) {
 	case 4:
@@ -83,6 +90,63 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 		})
 	}
 
+	return warnings
+}
+
+// shadowableSpecFields is the set of canonical top-level spec wire names (the
+// json tags on specJSON in spec_json.go) that a metadata key can collide
+// with. A metadata entry matching one of these is almost certainly a
+// misplaced structural field: metadata keys are not interpreted as
+// structural spec fields, so the real field stays unset. parent_name is the motivating
+// case — a loop authored with parent_name in metadata silently lands at the
+// graph root instead of under its container. The set excludes "metadata"
+// itself and the legacy compat keys (quality_floor, supervisor_context,
+// supervisor_quality_floor), which are deliberately not part of the canonical
+// authoring surface.
+var shadowableSpecFields = map[string]struct{}{
+	"name": {}, "enabled": {}, "task": {}, "profile": {}, "operation": {},
+	"completion": {}, "outputs": {}, "subscriptions": {}, "conditions": {},
+	"tags": {}, "exclude_tools": {}, "sleep_min": {}, "sleep_max": {},
+	"sleep_default": {}, "jitter": {}, "max_duration": {}, "max_iter": {},
+	"supervisor": {}, "supervisor_prob": {}, "supervisor_profile": {},
+	"on_retrigger": {}, "routing_factors": {}, "delegation_gating": {},
+	"fallback_content": {}, "parent_name": {}, "parent_id": {},
+}
+
+// metadataShadowWarnings flags metadata keys that collide with a real
+// top-level spec field. Such keys are inert: the runtime reads the structural
+// field, not metadata, so the value never takes effect. parent_name/parent_id
+// get a placement-specific message because the failure is silent
+// mis-parenting rather than a generic dropped value.
+func metadataShadowWarnings(spec Spec) []DefinitionWarning {
+	if len(spec.Metadata) == 0 {
+		return nil
+	}
+	shadowed := make([]string, 0, len(spec.Metadata))
+	for key := range spec.Metadata {
+		if _, ok := shadowableSpecFields[key]; ok {
+			shadowed = append(shadowed, key)
+		}
+	}
+	if len(shadowed) == 0 {
+		return nil
+	}
+	sort.Strings(shadowed) // deterministic order across repeated lint/set calls
+
+	warnings := make([]DefinitionWarning, 0, len(shadowed))
+	for _, key := range shadowed {
+		var msg string
+		switch key {
+		case "parent_name", "parent_id":
+			msg = "metadata." + key + " is inert and does not nest this loop under a parent: a metadata entry does not set a structural spec field. Set the top-level parent_name field instead."
+		default:
+			msg = fmt.Sprintf("metadata.%s shadows the top-level %s field, which the runtime reads instead of metadata. A metadata entry does not set a structural spec field, so this copy is inert; set the top-level %s field.", key, key, key)
+		}
+		warnings = append(warnings, DefinitionWarning{
+			Code:    "metadata_shadows_spec_field",
+			Message: msg,
+		})
+	}
 	return warnings
 }
 
