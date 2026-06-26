@@ -24,9 +24,12 @@ func (r *Registry) ConfigureMessageTools(deps MessageToolDeps) {
 	r.registerMessageTools()
 }
 
-// registerMessageTools registers request_core_attention.
+// registerMessageTools registers request_core_attention (loop → core
+// escalation) and loop_wake (directed wake of a specific loop with a
+// one-shot message). Both are thin envelope-construction wrappers over the
+// shared message bus.
 //
-// Core-tool rationale: escalation primitive. Any tightly
+// Core-tool rationale (request_core_attention): escalation primitive. Any tightly
 // scoped service or delegate loop must be able to reach back to the
 // core loop when something deserves the operator's attention. Hiding
 // this behind a tag would orphan loops that already filtered down to
@@ -46,6 +49,90 @@ func (r *Registry) registerMessageTools() {
 		Parameters: coreAttentionToolParameters(),
 		Handler:    r.handleRequestCoreAttention,
 		Core:       true,
+	})
+
+	r.Register(&Tool{
+		Name:        "loop_wake",
+		Description: "Wake a specific live loop now and hand its next iteration a one-shot context message. Use this to tell a running watcher or service loop a fact it needs before its own schedule would surface it — correct a reading, deliver an event, hand off a decision — addressing the loop by name or loop_id from loop_status. If the loop is sleeping it wakes immediately; if it is mid-iteration the message is queued for its next turn. Set force_supervisor to promote that next iteration to a supervisor turn when the update warrants more capable handling. The message reaches only that one loop's next iteration; this is a directed signal between loops, not a broadcast or a channel for delivering to a human.",
+		Parameters:  wakeToolParameters(),
+		Handler:     r.handleLoopWake,
+	})
+}
+
+// wakeToolParameters is the schema for loop_wake: target a live loop by
+// loop_id or name, with an optional one-shot message and a force_supervisor
+// flag for the next iteration.
+func wakeToolParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"anyOf": []any{
+			map[string]any{"required": []string{"loop_id"}},
+			map[string]any{"required": []string{"name"}},
+		},
+		"properties": map[string]any{
+			"loop_id": map[string]any{
+				"type":        "string",
+				"description": "Exact live loop ID to wake. Preferred when available from loop_status.",
+			},
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Exact live loop name to wake when loop_id is not known.",
+			},
+			"message": map[string]any{
+				"type":        "string",
+				"description": "Optional one-shot context message delivered only to the loop's next iteration.",
+			},
+			"force_supervisor": map[string]any{
+				"type":        "boolean",
+				"description": "When true, force that next iteration to run in supervisor mode.",
+			},
+			"priority": map[string]any{
+				"type":        "string",
+				"enum":        []string{"low", "normal", "urgent"},
+				"description": "Optional delivery priority recorded in the envelope audit trail.",
+			},
+		},
+	}
+}
+
+func (r *Registry) handleLoopWake(ctx context.Context, args map[string]any) (string, error) {
+	if r.messageBus == nil {
+		return "", fmt.Errorf("message bus is not configured")
+	}
+	loopID := toolargs.TrimmedString(args, "loop_id")
+	name := toolargs.TrimmedString(args, "name")
+	if loopID == "" && name == "" {
+		return "", fmt.Errorf("loop_id or name is required")
+	}
+
+	destination := messages.Destination{Kind: messages.DestinationLoop}
+	if loopID != "" {
+		destination.Target = loopID
+		destination.Selector = messages.SelectorID
+	} else {
+		destination.Target = name
+		destination.Selector = messages.SelectorName
+	}
+
+	payload := messages.LoopNotifyPayload{
+		Message:         toolargs.TrimmedString(args, "message"),
+		ForceSupervisor: boolArg(args, "force_supervisor"),
+	}
+	env := messages.Envelope{
+		From:     senderIdentityFromContext(ctx),
+		To:       destination,
+		Type:     messages.TypeSignal,
+		Payload:  payload,
+		Priority: messagePriorityArg(args),
+	}
+
+	result, err := r.messageBus.Send(ctx, env)
+	if err != nil {
+		return "", err
+	}
+	return ldMarshalToolJSON(map[string]any{
+		"status":   "ok",
+		"delivery": result,
 	})
 }
 
