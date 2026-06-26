@@ -87,9 +87,17 @@ PY
         remote_version="${remote_version//$'\r'/}"
         remote_version="${remote_version//$'\n'/}"
         if [[ "$remote_version" == "$expected_version" ]]; then
-            step "Remote API reports version: $remote_version"
             section "Deployment complete"
-            step "Installed $(basename "$pkg_path") on $host and verified the running Thane API"
+            # Headline the live version so it's easy to cross-check against
+            # production logs/console. git-describe embeds the commit as a
+            # "-g<hash>" suffix; surface the 7-char short form alongside.
+            commit_short="$(printf '%s' "$remote_version" | sed -nE 's/.*-g([0-9a-f]{7,40}).*/\1/p' | cut -c1-7)"
+            if [[ -n "$commit_short" ]]; then
+                step "Deployed version: $remote_version ($commit_short)"
+            else
+                step "Deployed version: $remote_version"
+            fi
+            step "Installed $pkg_name on $host and verified the live Thane API at $verify_url"
             exit 0
         fi
         last_status="remote API reported version '$remote_version'"

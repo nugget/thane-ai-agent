@@ -1,6 +1,6 @@
 # Release Engineering
 
-Thane now has two operator paths on macOS Tahoe:
+Thane now has two operator paths on macOS:
 
 - a guarded GitHub release path for real published releases
 - a pkg-based remote deploy path for live-host testing
@@ -65,7 +65,7 @@ Use this when you want to test the real installer path on a remote Thane host
 without cutting a GitHub release.
 
 ```bash
-just deploy-macos-pkg aimee@pocket.hollowoak.net
+just deploy-macos aimee@pocket.hollowoak.net
 ```
 
 What it does:
@@ -80,7 +80,7 @@ What it does:
 - lets the target-side binary watcher react to the new install
 - polls the remote Thane API until `/v1/version` reports the expected build version
 
-This path assumes the remote host is also macOS Tahoe and that Thane is run
+This path assumes the remote host is also macOS and that Thane is run
 from a dedicated account whose normal home-scoped install location is
 `~/Thane/bin/thane`.
 
@@ -94,9 +94,9 @@ Useful variants:
 
 ```bash
 just build-macos-pkg
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng http://127.0.0.1:18080/v1/version 90
+just deploy-macos aimee@pocket.hollowoak.net arm64
+just deploy-macos aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng
+just deploy-macos aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng http://127.0.0.1:18080/v1/version 90
 ```
 
 ## Why Pkg-Based Deploys
@@ -111,3 +111,36 @@ ships to operators:
 
 Raw binary copies are still possible with lower-level tooling, but they are no
 longer the preferred operational path.
+
+## Release Artifact Contract (the macOS auto-updater)
+
+The [thane-agent-macos](https://github.com/nugget/thane-agent-macos) companion
+app auto-updates its managed `thane` binary from this repo's GitHub releases.
+Its updater (`LocalServer/UpdateManager.swift`) is the consumer and arbiter of
+release integrity, so the following are a hard contract — breaking one bricks the
+update path. `just ci`, `package-macos-pkg.sh`'s self-check, and the
+`prepare-release`/`publish-release` guards enforce most of them; keep the rest in
+mind when touching the release recipes.
+
+- **Asset names** — each release exposes `thane_<version>_darwin_arm64.pkg` and
+  `thane_<version>_darwin_amd64.pkg` (the updater matches the `darwin_<arch>.pkg`
+  suffix), plus exactly one `thane_<version>_checksums.txt`. No second `.pkg` per
+  arch and no second `*_checksums.txt` per release.
+- **Checksums** — `checksums.txt` is `sha256sum`/`shasum -a 256` text-mode lines
+  (`<hex>  <bare-basename>`), hashed *after* signing/notarizing/stapling. The
+  entry name must equal the uploaded asset name exactly.
+- **Pkg layout** — `pkgutil --expand-full` must yield
+  `thane-component.pkg/Payload/Thane/bin/thane`; the binary stays named `thane`
+  and installs to `~/Thane/bin/thane`. `package-macos-pkg.sh` self-checks this.
+- **Signing** — production pkgs are Developer ID Installer-signed, notarized, and
+  stapled. The updater records but does not reject an unsigned pkg, so
+  `prepare-release`/`publish-release` fail fast without the signing credentials.
+- **Version tags** — `vX.Y.Z[-pre]` with a three-integer core and **no
+  `+build-metadata`** (the updater's `SemanticVersion` parser can't read it).
+- **Release visibility** — published on `nugget/thane-ai-agent`, non-draft; a
+  non-prerelease "latest" must exist for default-channel updaters.
+
+The app updates *itself* (a `.dmg`) from the thane-agent-macos repo through a
+parallel updater; that contract is arch-agnostic where this one is
+arch-specific. Any future convergence of the two release pipelines must keep the
+`.pkg` arch-qualified and the `.dmg` arch-agnostic.

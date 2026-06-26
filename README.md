@@ -57,7 +57,7 @@ attestation. The preferred operator workflows are:
 
 - `just release-github 0.9.0`
 - `just release-github 0.9.0 prerelease`
-- `just deploy-macos-pkg user@host`
+- `just deploy-macos user@host`
 
 See [Release Engineering](docs/operating/release-engineering.md) for the full
 workflow and credential requirements.

@@ -30,7 +30,8 @@ jobs:
 
       - name: Validate release tag
         run: |
-          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          # No +build-metadata — the macOS auto-updater's SemanticVersion parser can't read it.
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
 
       - name: Set up Go
         uses: actions/setup-go@v6

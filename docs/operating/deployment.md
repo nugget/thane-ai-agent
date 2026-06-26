@@ -105,7 +105,7 @@ For the human-facing operator workflows, see
 [Release Engineering](release-engineering.md). The preferred paths are:
 
 - `just release-github <version>` for real GitHub releases from a clean main checkout
-- `just deploy-macos-pkg user@host` for pkg-based live-host testing on another macOS Tahoe system
+- `just deploy-macos user@host` for pkg-based live-host testing on another macOS system
 
 ## Container
 

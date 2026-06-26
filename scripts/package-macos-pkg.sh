@@ -211,4 +211,18 @@ if [ -n "$installer_identity" ] && [ "$installer_identity" != "-" ]; then
     pkgutil --check-signature "$artifact_path" >&2
 fi
 
+# Contract self-check (cross-repo coupling): the thane-agent-macos auto-updater
+# extracts the managed binary at thane-component.pkg/Payload/Thane/bin/thane
+# after `pkgutil --expand-full`. Assert that exact layout here so a component or
+# payload-path rename fails the build instead of silently shipping a pkg the
+# updater can't unpack.
+contract_dir="$stage_dir/contract-check"
+rm -rf "$contract_dir"
+pkgutil --expand-full "$artifact_path" "$contract_dir" >&2
+if [ ! -f "$contract_dir/thane-component.pkg/Payload/Thane/bin/thane" ]; then
+    echo "pkg contract broken: expected thane-component.pkg/Payload/Thane/bin/thane after expand-full (the thane-agent-macos auto-updater's findBinary primary path); the component/payload layout changed" >&2
+    exit 1
+fi
+rm -rf "$contract_dir"
+
 printf '%s\n' "$artifact_path"

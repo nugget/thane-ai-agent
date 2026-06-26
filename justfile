@@ -1,3 +1,9 @@
+# Don't echo each command line before running it — recipes emit their own
+# status and the underlying tools print their own output, so the default
+# interactive experience stays clean. Use `just --verbose <recipe>` to see
+# the commands when debugging.
+set quiet
+
 pkg := "github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 version := env("THANE_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo "dev"`)
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
@@ -30,9 +36,9 @@ vacuum := "go run -modfile=tools/go.mod github.com/daveshanley/vacuum"
 # List available recipes
 default:
     @echo "Common workflows:"
-    @echo "  just release-github <version> [auto|prerelease|release]  # normal production release path"
-    @echo "  just deploy-macos-pkg <user@host>                         # live-host pkg validation without a GitHub release"
-    @echo "  just ci                                                   # full local validation gate"
+    @echo "    just release-github <version> [auto|prerelease|release]  # normal production release path"
+    @echo "    just deploy-macos <user@host>                            # deploy a signed pkg to a remote macOS host"
+    @echo "    just ci                                                  # full local validation gate"
     @echo ""
     @just --list
 
@@ -40,6 +46,7 @@ default:
 
 # Copy default files into embeddable positions for go:embed, and
 # regenerate examples/config.example.yaml from internal/platform/config.
+[doc("Regenerate go:embed inputs (talents, persona) and config.example.yaml")]
 [group('build')]
 generate:
     go generate ./internal/model/talents/ ./cmd/thane/
@@ -57,6 +64,7 @@ build target_os=host_os target_arch=host_arch: generate
 # Build for all release targets. The pure-Go SQLite driver (modernc)
 # makes every target a CGO-free cross-compile, so Linux builds run
 # natively here too — no Docker/Buildx round-trip required.
+[doc("Build binaries for all release targets (darwin/linux × amd64/arm64)")]
 [group('build')]
 build-all:
     just build darwin amd64
@@ -93,6 +101,7 @@ test: generate
 
 # Race tests + coverage in a single pass (CI uses this so it never runs the
 # suite twice). Writes coverage.out for the coverage uploader.
+[doc("Race tests with coverage in one pass; writes coverage.out (used by CI)")]
 [group('test')]
 cover: generate
     go test -race -coverprofile=coverage.out ./...
@@ -120,6 +129,7 @@ lint: generate
 # under a second locally, so the generous --timeout/--lookup-timeout below are
 # pure headroom, and a bounded retry clears the rare residual collapse. A genuine
 # spec error is deterministic and still fails all three attempts.
+[doc("Lint the native + compat OpenAPI specs against the Thane ruleset (.vacuum.yaml)")]
 [group('test')]
 lint-openapi:
     #!/usr/bin/env bash
@@ -161,6 +171,7 @@ architecture:
 
 # Architecture guardrail check — fails if any metric in scripts/architecture.baseline is exceeded.
 # Run 'scripts/architecture.sh update' to advance a baseline when the growth is intentional.
+[doc("Fail if any architecture metric exceeds scripts/architecture.baseline")]
 [group('test')]
 architecture-check:
     @bash scripts/architecture.sh check
@@ -169,6 +180,7 @@ architecture-check:
 # tool, so unlike golangci-lint/vacuum it can't be vendored via go.mod;
 # locally it's skipped-with-notice when absent (CI always installs a pinned
 # build and enforces it).
+[doc("Check internal markdown links (offline; lychee, skipped locally if absent)")]
 [group('test')]
 link-check:
     #!/usr/bin/env bash
@@ -398,11 +410,11 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
 build-macos-pkg version="" target_arch=host_arch output_dir=pkg-dir:
     scripts/releng/build-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{output_dir}}" true
 
-[doc("Operator path: build, notarize, and deploy a macOS pkg to a remote Tahoe host, then verify the live API version")]
+[doc("Build, notarize, and deploy a signed macOS pkg to a remote macOS host, then verify the live API version (takes user@host)")]
 [group('deploy')]
 [macos]
-deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" verify_url="http://127.0.0.1:8080/v1/version" verify_timeout_seconds="60":
-    scripts/releng/deploy-macos-pkg.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{verify_url}}" "{{verify_timeout_seconds}}"
+deploy-macos host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" verify_url="http://127.0.0.1:8080/v1/version" verify_timeout_seconds="60":
+    scripts/releng/deploy-macos.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{verify_url}}" "{{verify_timeout_seconds}}"
 
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
@@ -412,6 +424,7 @@ serve: build
 # Tail live service logs (default: dev workdir). Follows the events
 # dataset and rolls to the next HH.jsonl segment automatically. Waits
 # patiently if no segment exists yet so this works on a fresh install.
+[doc("Tail live service logs, auto-rolling to the next hourly segment")]
 [group('operations')]
 logs workdir="./Thane":
     #!/usr/bin/env bash
@@ -452,55 +465,13 @@ logs workdir="./Thane":
         fi
     done
 
-# Live smoke test for loops-ng loop definition registry behavior against a running dev instance
-[group('operations')]
-loop-definition-smoke base_url="http://127.0.0.1:8080":
-    python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
-
-# Focused loops-ng regression pass for the packages that own the new
-# loop definition, launch, completion, app delivery, and interactive
-# channel integration surfaces.
-[group('operations')]
-web-static-check:
-    node --check internal/server/web/static/app.js
-    node --check internal/server/web/static/detail.js
-    node --check internal/server/web/static/request.js
-    node --check internal/server/web/static/shared.js
-
-# Focused loops-ng regression pass for the packages that own the new
-# loop definition, launch, completion, app delivery, interactive
-# channel integration, and dashboard graph surfaces.
-[group('operations')]
-loops-ng-contract-tests:
-    just web-static-check
-    go test -race ./internal/runtime/loop ./internal/tools ./internal/runtime/delegate ./internal/app ./internal/channels/messaging/signal ./internal/server/api
-
-# Broader loops-ng smoke pass: focused regression packages plus live
-# loop-definition runtime smoke against a running dev instance.
-[group('operations')]
-loops-ng-smoke base_url="http://127.0.0.1:8080":
-    just loops-ng-contract-tests
-    just loop-definition-smoke {{base_url}}
-
-# Live smoke test with restart/persistence validation. Example:
-# RESTART_CMD='cd /path/to/dev-workspace && just restart' just loop-definition-persistence
-[group('operations')]
-loop-definition-persistence base_url="http://127.0.0.1:8080":
-    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
-    RESTART_CMD="$RESTART_CMD" python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}} --restart-cmd "$RESTART_CMD"
-
-# Full loops-ng persistence pass: focused regression packages plus the
-# live restart/persistence harness.
-[group('operations')]
-loops-ng-persistence base_url="http://127.0.0.1:8080":
-    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
-    just loops-ng-contract-tests
-    RESTART_CMD="$RESTART_CMD" just loop-definition-persistence {{base_url}}
-
 # --- Release ---
+# Operator entry points: release-github (full path), prepare-release +
+# publish-release (manual breakpoint), build-macos-pkg, release-build-snapshot.
+# The release-* building blocks they orchestrate are [private] — hidden from
+# `just --list` but still invocable by name for debugging.
 
-[doc("Building block: sign a macOS binary")]
-[group('release-engineering')]
+[private]
 release-sign-macos binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -524,8 +495,7 @@ release-sign-macos binary identity=codesign-identity options=codesign-options ti
     codesign --verify --verbose=2 "$binary"
     codesign -dv --verbose=4 "$binary"
 
-[doc("Building block: notarize a packaged macOS release artifact")]
-[group('release-engineering')]
+[private]
 [macos]
 release-notarize-macos archive profile=notary-profile:
     test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
@@ -533,21 +503,18 @@ release-notarize-macos archive profile=notary-profile:
     test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
     xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
 
-[doc("Building block: package a macOS binary as a signed flat installer product archive")]
-[group('release-engineering')]
+[private]
 [macos]
 release-package-macos-pkg version target_arch binary output_dir=release-dir installer_identity=installer-identity:
     scripts/package-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{binary}}" "{{output_dir}}" "{{installer_identity}}"
 
-[doc("Building block: staple and validate a notarized macOS installer package")]
-[group('release-engineering')]
+[private]
 [macos]
 release-staple-macos archive:
     xcrun stapler staple "{{archive}}"
     xcrun stapler validate "{{archive}}"
 
-[doc("Building block: build one release artifact for a target")]
-[group('release-engineering')]
+[private]
 release-build-archive version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -578,8 +545,7 @@ release-build-archive version target_os=host_os target_arch=host_arch:
 
     printf '%s\n' "$archive"
 
-[doc("Building block: write checksums for prepared release artifacts")]
-[group('release-engineering')]
+[private]
 release-write-checksums version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -611,16 +577,21 @@ release-write-checksums version:
 
     printf '%s\n' "$output"
 
-[doc("Building block: build one local snapshot archive")]
+[doc("Build a local snapshot artifact + checksum for one target (no GitHub release)")]
 [group('release-engineering')]
 release-build-snapshot version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
-    just release-write-checksums "{{version}}"
+    # A single-target snapshot for pre-flight checks. The full-release
+    # checksums file (release-write-checksums) requires all four artifacts,
+    # so here we just checksum the one snapshot we built.
+    archive="$(just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" | tail -n 1)"
+    test -n "$archive" || { echo "release-build-archive did not report an artifact path" >&2; exit 1; }
+    name="$(basename "$archive")"
+    ( cd "$(dirname "$archive")" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$name" || shasum -a 256 "$name"; } )
+    echo "Snapshot artifact: $archive"
 
-[doc("Building block: build one Linux archive (CGO-free native cross-compile)")]
-[group('release-engineering')]
+[private]
 release-build-linux-archive version target_arch:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -633,8 +604,7 @@ release-build-linux-archive version target_arch:
     archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
 
-[doc("Building block: validate GitHub auth and prepared assets")]
-[group('release-engineering')]
+[private]
 release-github-check version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -703,8 +673,7 @@ release-github-check version:
         fi
     done
 
-[doc("Building block: create or update the GitHub release from prepared assets")]
-[group('release-engineering')]
+[private]
 release-github-upload version target_commit="" release_kind="auto":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -832,13 +801,23 @@ prepare-release version container_tag="thane:prepare-release":
 
     version="${version#v}"
 
-    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
         exit 1
     fi
 
     test "{{host_os}}" = "darwin" || { echo "prepare-release must run on a macOS release workstation"; exit 1; }
     test -z "$(git status --short)" || { echo "Worktree must be clean before a prepare-release run"; exit 1; }
+
+    # A published release MUST be signed + notarized: the thane-agent-macos
+    # auto-updater records provenance but never rejects an unsigned pkg, so the
+    # integrity guarantee has to live on the producer. Enforce it on every
+    # build/publish entry point — not just release-github.sh — so a direct
+    # prepare/publish can't ship an unsigned artifact the updater installs.
+    source scripts/releng/common.sh
+    require_real_codesign_identity
+    require_real_installer_identity
+    require_notary_profile
 
     mkdir -p "{{release-dir}}"
     rm -f \
@@ -892,12 +871,19 @@ publish-release version release_kind="auto":
     force_release="${THANE_RELEASE_FORCE:-false}"
     remote_tag_commit=""
 
-    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
         exit 1
     fi
 
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
+
+    # See prepare-release: the published artifacts must be signed + notarized
+    # (the updater won't reject unsigned), so enforce it on this publish path too.
+    source scripts/releng/common.sh
+    require_real_codesign_identity
+    require_real_installer_identity
+    require_notary_profile
 
     just --quiet release-github-check "$tag"
     export GH_TOKEN="${THANE_GH_TOKEN}"
@@ -960,49 +946,3 @@ publish-release version release_kind="auto":
 [macos]
 release-github version release_kind="auto" container_tag="thane:prepare-release":
     scripts/releng/release-github.sh "{{version}}" "{{release_kind}}" "{{container_tag}}"
-
-[private]
-macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
-    just release-sign-macos "{{binary}}" "{{identity}}" "{{options}}" "{{timestamp}}"
-
-[private]
-[macos]
-macos-notarize archive profile=notary-profile:
-    just release-notarize-macos "{{archive}}" "{{profile}}"
-
-[private]
-[macos]
-macos-staple archive:
-    just release-staple-macos "{{archive}}"
-
-[private]
-release-archive version target_os=host_os target_arch=host_arch:
-    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
-
-[private]
-release-checksums version:
-    just release-write-checksums "{{version}}"
-
-[private]
-release-snapshot version target_os=host_os target_arch=host_arch:
-    just release-build-snapshot "{{version}}" "{{target_os}}" "{{target_arch}}"
-
-[private]
-release-archive-linux version target_arch:
-    just release-build-linux-archive "{{version}}" "{{target_arch}}"
-
-[private]
-release-upload-validate version:
-    just release-github-check "{{version}}"
-
-[private]
-release-upload version release_kind="auto":
-    just release-github-upload "{{version}}" "" "{{release_kind}}"
-
-[private]
-release-breakpoint version container_tag="thane:release-breakpoint":
-    just prepare-release "{{version}}" "{{container_tag}}"
-
-[private]
-release version release_kind="auto":
-    just publish-release "{{version}}" "{{release_kind}}"
