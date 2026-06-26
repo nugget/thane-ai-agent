@@ -67,25 +67,74 @@ func TestFrontmatterValueRoundTripIsStable(t *testing.T) {
 	}
 }
 
-// TestFrontmatterBlockListRoundTripIsStable covers the multi-value /
-// block-list rendering path (e.g. source_refs, tags) which is quoted with
-// the same strconv.Quote escaping and must parse back losslessly.
-func TestFrontmatterBlockListRoundTripIsStable(t *testing.T) {
+// TestFrontmatterInlineListRoundTripIsStable covers the inline multi-value
+// list path — `key: ["a", "b"]` — which renderFrontmatter uses for every
+// multi-value key except source_refs. Each element is quoted with the same
+// strconv.Quote escaping and must parse back losslessly.
+func TestFrontmatterInlineListRoundTripIsStable(t *testing.T) {
 	t.Parallel()
 
 	meta := map[string][]string{
 		"tags": {`tag-with-"quote"`, `tag\with\backslash`},
 	}
 	rendered := renderFrontmatter(meta)
-	parsed := parseFrontmatterMap(rendered)
-	if reRendered := renderFrontmatter(parsed); reRendered != rendered {
-		t.Fatalf("block-list render is not a fixed point:\n  cycle 1: %q\n  cycle 2: %q", rendered, reRendered)
+	if !strings.Contains(rendered, "[") {
+		t.Fatalf("expected inline list rendering, got %q", rendered)
 	}
-	// Values must survive intact (order-independent: parse dedupe-sorts).
-	got := strings.Join(parsed["tags"], "|")
-	for _, want := range meta["tags"] {
-		if !strings.Contains(got, want) {
-			t.Fatalf("tag %q lost across round-trip; got %q", want, got)
+	assertListRoundTripStable(t, meta, "tags", rendered)
+}
+
+// TestFrontmatterBlockListRoundTripIsStable covers the block-list path —
+//
+//	source_refs:
+//	  - "a"
+//	  - "b"
+//
+// which renderFrontmatter uses *only* for source_refs (GeneratedFieldSourceRefs),
+// and which parseFrontmatterMap parses through its separate `- item`
+// branch. That branch does its own quote-stripping, so it is independently
+// vulnerable to the escaping-amplification bug and needs its own coverage.
+func TestFrontmatterBlockListRoundTripIsStable(t *testing.T) {
+	t.Parallel()
+
+	meta := map[string][]string{
+		GeneratedFieldSourceRefs: {`kb:notes/with "quotes".md`, `core:path\with\backslash`, "plain-ref"},
+	}
+	rendered := renderFrontmatter(meta)
+	if !strings.Contains(rendered, GeneratedFieldSourceRefs+":\n") || !strings.Contains(rendered, "\n  - ") {
+		t.Fatalf("expected block-list rendering for %s, got %q", GeneratedFieldSourceRefs, rendered)
+	}
+	assertListRoundTripStable(t, meta, GeneratedFieldSourceRefs, rendered)
+}
+
+// assertListRoundTripStable verifies a multi-value frontmatter key both
+// preserves its values across render→parse and stops growing across
+// repeated cycles. Value order is normalized by the parser (dedupe-sorted),
+// so the fixed-point check is taken from the second cycle onward; the
+// no-growth check spans every cycle and is what actually catches the
+// amplification bug regardless of ordering.
+func assertListRoundTripStable(t *testing.T, meta map[string][]string, key, rendered string) {
+	t.Helper()
+
+	parsed := parseFrontmatterMap(rendered)
+	got := strings.Join(parsed[key], "\x00")
+	for _, want := range meta[key] {
+		if !strings.Contains("\x00"+got+"\x00", "\x00"+want+"\x00") {
+			t.Fatalf("value %q for key %q lost across round-trip; got %q", want, key, parsed[key])
 		}
+	}
+
+	// Run several owning-loop cycles. Past the first normalization the
+	// rendered bytes must be a fixed point, and the size must never grow.
+	prev := renderFrontmatter(parseFrontmatterMap(rendered))
+	for i := 0; i < 5; i++ {
+		cur := renderFrontmatter(parseFrontmatterMap(prev))
+		if len(cur) > len(prev) {
+			t.Fatalf("%s frontmatter grew on cycle %d: %d → %d bytes", key, i+1, len(prev), len(cur))
+		}
+		if cur != prev {
+			t.Fatalf("%s render is not a fixed point on cycle %d:\n  prev: %q\n  cur:  %q", key, i+1, prev, cur)
+		}
+		prev = cur
 	}
 }
