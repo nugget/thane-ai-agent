@@ -237,4 +237,24 @@ func (r *Registry) registerLoopDefinitionTools() {
 		},
 		Handler: r.handleLoopDefinitionLaunch,
 	})
+
+	r.Register(&Tool{
+		Name:        "loop_reparent",
+		Description: "Move a stored loop under a different container by name and relaunch it so it re-homes immediately. This is the correct way to fix a loop that sits in the wrong place in the loop graph: set parent_name to the destination container, or omit it (or pass \"core\") to move the loop to top-level. The loop inherits the destination container's tags and subscriptions on relaunch. Parenting is resolved at launch, so editing parent_name alone does NOT move a running loop — this verb pairs the change with the relaunch. Config-owned definitions are immutable; a container that still has live children must have them moved or stopped first.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Name of the loop (or childless container) to move.",
+				},
+				"parent_name": map[string]any{
+					"type":        "string",
+					"description": "Name of the destination container. Omit, leave empty, or pass \"core\" to move the loop to top-level (directly under the structural root).",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: r.handleLoopReparent,
+	})
 }

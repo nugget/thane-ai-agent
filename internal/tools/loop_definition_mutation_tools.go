@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -248,4 +249,166 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 		"definition": def,
 		"result":     result,
 	})
+}
+
+// handleLoopReparent moves a stored loop under a different container (or to
+// top-level) by name and relaunches it so it re-homes immediately. Parenting
+// is resolved at launch, so a plain definition edit does not move a running
+// loop — this verb pairs the parent_name change with a stop+reconcile so the
+// loop comes back up under the new parent in one step. It is the first-class
+// form of the manual edit-then-relaunch recipe.
+func (r *Registry) handleLoopReparent(ctx context.Context, args map[string]any) (string, error) {
+	if r.loopDefinitionRegistry == nil {
+		return "", fmt.Errorf("loop definition registry not configured")
+	}
+	name := toolargs.TrimmedString(args, "name")
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	// Empty, omitted, or the core name means top-level: directly under the
+	// structural root, with no container inheritance. Match the core name
+	// exactly — loop names are case-sensitive everywhere else (GetByName,
+	// Spec.Validate), so a real container named "Core" must not be treated
+	// as the root.
+	target := toolargs.TrimmedString(args, "parent_name")
+	topLevel := target == "" || target == looppkg.CoreLoopName
+
+	snapshot, err := currentLoopDefinitionSnapshot(r)
+	if err != nil {
+		return "", err
+	}
+	def, ok := looppkg.FindDefinition(snapshot, name)
+	if !ok {
+		return "", (&looppkg.UnknownDefinitionError{Name: name})
+	}
+	if def.Source == looppkg.DefinitionSourceConfig {
+		return "", (&looppkg.ImmutableDefinitionError{Name: name})
+	}
+
+	// Prefer the always-wired runtime registry. loopIntentDeps is only
+	// configured when the intent-tool surface is enabled (conditional on doc
+	// tools), so relying on it would silently disable container resolution,
+	// the children guard, and the relaunch in common configurations. Fall
+	// back to it for registry-only test setups.
+	live := r.liveLoopRegistry
+	if live == nil {
+		live = r.loopIntentDeps.LiveRegistry
+	}
+
+	newParent := ""
+	if !topLevel {
+		if target == name {
+			return "", fmt.Errorf("cannot reparent %q under itself", name)
+		}
+		if live == nil {
+			return "", fmt.Errorf("live registry not configured; cannot resolve container %q", target)
+		}
+		container := live.GetByName(target)
+		if container == nil {
+			return "", fmt.Errorf("target container %q is not currently registered; create it first or wait for hydration", target)
+		}
+		if container.Operation() != looppkg.OperationContainer {
+			return "", fmt.Errorf("target %q is a %s, not a container; loops can only nest under containers", target, container.Operation())
+		}
+		newParent = container.Name()
+	}
+
+	// attachLoopView adds the moved loop's canonical row to a result so ok and
+	// noop responses share one shape the model can read uniformly.
+	attachLoopView := func(result map[string]any) (string, error) {
+		if live != nil {
+			statuses := live.Statuses()
+			resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
+			for _, s := range statuses {
+				if s.Name == name {
+					result["loop"] = resolver.FromStatus(s)
+					break
+				}
+			}
+		}
+		return ldMarshalToolJSON(result)
+	}
+
+	oldParent := strings.TrimSpace(def.Spec.ParentName)
+	if oldParent == newParent {
+		dest := newParent
+		if dest == "" {
+			dest = "core (top-level)"
+		}
+		return attachLoopView(map[string]any{
+			"status":      "noop",
+			"name":        name,
+			"old_parent":  oldParent,
+			"parent_name": newParent,
+			"relaunched":  false,
+			"detail":      fmt.Sprintf("%q is already parented to %s", name, dest),
+		})
+	}
+
+	// A container being moved must not have live children: descendants resolve
+	// their home from the container's current launch, so relaunching it would
+	// strand them. Reparent or stop the children first.
+	if live != nil && def.Spec.Operation == looppkg.OperationContainer {
+		if cur := live.GetByName(name); cur != nil {
+			if children := live.Children(cur.ID()); len(children) > 0 {
+				kids := make([]string, 0, len(children))
+				for _, c := range children {
+					kids = append(kids, c.Name())
+				}
+				return "", fmt.Errorf("container %q still has %d child loop(s): %v; reparent or stop them before moving the container", name, len(children), kids)
+			}
+		}
+	}
+
+	// Commit the new structural parent onto the persisted spec. ParentID is
+	// cleared so hydration resolves parent_name -> the live parent id afresh.
+	spec := def.Spec
+	spec.ParentName = newParent
+	spec.ParentID = ""
+	updatedAt := time.Now().UTC()
+	if r.commitLoopDefinitionSpec != nil {
+		if err := r.commitLoopDefinitionSpec(ctx, spec, updatedAt); err != nil {
+			return "", err
+		}
+	} else if err := r.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
+		return "", err
+	}
+
+	// The commit reconciles, but reconcile is a no-op on an already-running
+	// loop. Force a relaunch so the loop re-homes: stop it (StopLoop
+	// deregisters synchronously once the goroutine exits), then reconcile to
+	// respawn through the hydration path that resolves parent_name.
+	relaunched := false
+	if live != nil {
+		if cur := live.GetByName(name); cur != nil {
+			if err := live.StopLoop(cur.ID()); err != nil {
+				return "", fmt.Errorf("parent_name updated but relaunch could not stop %q: %w", name, err)
+			}
+			if live.GetByName(name) != nil {
+				return "", fmt.Errorf("parent_name updated but %q did not stop cleanly; run loop_reparent again to finish the relaunch", name)
+			}
+			relaunched = true
+		}
+	}
+	if r.reconcileLoopDefinition != nil {
+		if err := r.reconcileLoopDefinition(ctx, name); err != nil {
+			return "", fmt.Errorf("reconcile after reparent: %w", err)
+		}
+	}
+
+	result := map[string]any{
+		"status":      "ok",
+		"name":        name,
+		"old_parent":  oldParent,
+		"parent_name": newParent,
+		"relaunched":  relaunched,
+	}
+	if newParent == "" {
+		result["detail"] = fmt.Sprintf("%q moved to top-level (under core)", name)
+	} else {
+		result["detail"] = fmt.Sprintf("%q reparented under %q", name, newParent)
+	}
+	// Return the moved loop as the canonical LoopView (same shape loop_status
+	// emits); old_parent/relaunched stay envelope-level as transition facts.
+	return attachLoopView(result)
 }
