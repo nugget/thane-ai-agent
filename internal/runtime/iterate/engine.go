@@ -207,13 +207,21 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// TOOL CALL PATH
 		// =============================================
 		if len(llmResp.Message.ToolCalls) > 0 {
-			// When the model returns text alongside tool calls, defer
-			// the text for later use and strip it from the message
-			// context. This prevents the model from restating already-
-			// streamed content after tool execution (issue #347).
+			// When the model returns text alongside tool calls, capture it as
+			// deferredText so an empty post-tool response falls back to it
+			// instead of nudging the model into restating (issue #347).
+			//
+			// The text is deliberately NOT stripped from the message appended
+			// to history. Erasing the model's pre-tool-call reasoning made it
+			// lose its own plan across iterations: on a hard edit it would
+			// narrate a long plan alongside a loop_definition_get read, the
+			// stripped (empty) message went into history, and the next
+			// iteration — now blind to that plan — stalled without ever
+			// emitting the follow-up write. Keeping the text lets the reasoning
+			// survive; the empty-response fallback below still consumes
+			// deferredText, so #347's user-visible duplication stays fixed.
 			if cfg.DeferMixedText && llmResp.Message.Content != "" {
 				deferredText = llmResp.Message.Content
-				llmResp.Message.Content = ""
 			}
 
 			if cfg.NormalizeToolCall != nil {
