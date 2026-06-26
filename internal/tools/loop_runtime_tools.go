@@ -18,28 +18,32 @@ const (
 )
 
 type loopStatusView struct {
-	ID                    string             `json:"id"`
-	Name                  string             `json:"name"`
-	State                 looppkg.State      `json:"state"`
-	Operation             looppkg.Operation  `json:"operation,omitempty"`
-	Completion            looppkg.Completion `json:"completion,omitempty"`
-	ParentID              string             `json:"parent_id,omitempty"`
-	StartedAt             time.Time          `json:"started_at"`
-	LastWakeAt            time.Time          `json:"last_wake_at,omitempty"`
-	Iterations            int                `json:"iterations"`
-	Attempts              int                `json:"attempts"`
-	TotalInputTokens      int                `json:"total_input_tokens"`
-	TotalOutputTokens     int                `json:"total_output_tokens"`
-	LastInputTokens       int                `json:"last_input_tokens,omitempty"`
-	LastOutputTokens      int                `json:"last_output_tokens,omitempty"`
-	LastError             string             `json:"last_error,omitempty"`
-	ConsecutiveErrors     int                `json:"consecutive_errors,omitempty"`
-	HandlerOnly           bool               `json:"handler_only,omitempty"`
-	EventDriven           bool               `json:"event_driven,omitempty"`
-	LastSupervisorIter    int                `json:"last_supervisor_iter,omitempty"`
-	LastSupervisorTrigger string             `json:"last_supervisor_trigger,omitempty"`
-	ActiveTags            []string           `json:"active_tags,omitempty"`
-	Metadata              map[string]string  `json:"metadata,omitempty"`
+	ID                    string                 `json:"id"`
+	Name                  string                 `json:"name"`
+	State                 looppkg.State          `json:"state"`
+	Operation             looppkg.Operation      `json:"operation,omitempty"`
+	Completion            looppkg.Completion     `json:"completion,omitempty"`
+	Intent                string                 `json:"intent,omitempty"`
+	ParentID              string                 `json:"parent_id,omitempty"`
+	ParentName            string                 `json:"parent_name,omitempty"`
+	ChildCount            int                    `json:"child_count"`
+	StartedAt             time.Time              `json:"started_at"`
+	LastWakeAt            time.Time              `json:"last_wake_at,omitempty"`
+	Iterations            int                    `json:"iterations"`
+	Attempts              int                    `json:"attempts"`
+	TotalInputTokens      int                    `json:"total_input_tokens"`
+	TotalOutputTokens     int                    `json:"total_output_tokens"`
+	LastInputTokens       int                    `json:"last_input_tokens,omitempty"`
+	LastOutputTokens      int                    `json:"last_output_tokens,omitempty"`
+	LastError             string                 `json:"last_error,omitempty"`
+	ConsecutiveErrors     int                    `json:"consecutive_errors,omitempty"`
+	HandlerOnly           bool                   `json:"handler_only,omitempty"`
+	EventDriven           bool                   `json:"event_driven,omitempty"`
+	LastSupervisorIter    int                    `json:"last_supervisor_iter,omitempty"`
+	LastSupervisorTrigger string                 `json:"last_supervisor_trigger,omitempty"`
+	ActiveTags            []string               `json:"active_tags,omitempty"`
+	EffectiveTags         []looppkg.EffectiveTag `json:"effective_tags,omitempty"`
+	Metadata              map[string]string      `json:"metadata,omitempty"`
 }
 
 // LoopRuntimeToolDeps wires the live loop registry and ad hoc launch path
@@ -172,12 +176,23 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	limit := clampLoopListLimit(toolargs.Int(args, "limit"), defaultLoopStatusLimit, maxLoopStatusLimit)
 
 	statuses := r.liveLoopRegistry.Statuses()
+	// Derive name and child-count lookups from the FULL set (before the
+	// display filter) so parent_name and child_count stay accurate even when
+	// the parent or some children are filtered out of the returned rows.
+	nameByID := make(map[string]string, len(statuses))
+	childCount := make(map[string]int, len(statuses))
+	for _, status := range statuses {
+		nameByID[status.ID] = status.Name
+		if status.ParentID != "" {
+			childCount[status.ParentID]++
+		}
+	}
 	filtered := make([]loopStatusView, 0, len(statuses))
 	for _, status := range statuses {
 		if !matchLoopStatus(status, query, state, operation) {
 			continue
 		}
-		filtered = append(filtered, summarizeLoopStatus(status))
+		filtered = append(filtered, summarizeLoopStatus(status, nameByID, childCount))
 		if len(filtered) >= limit {
 			break
 		}
@@ -401,14 +416,22 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 	return false
 }
 
-func summarizeLoopStatus(status looppkg.Status) loopStatusView {
+// summarizeLoopStatus projects a runtime Status into the compact model-facing
+// row. nameByID and childCount are derived once from the full status set so a
+// row can show the human parent_name (not just an opaque parent_id) and how
+// many children a container holds — the grouping facts the model needs but
+// would otherwise have to reconstruct by cross-referencing parent_id itself.
+func summarizeLoopStatus(status looppkg.Status, nameByID map[string]string, childCount map[string]int) loopStatusView {
 	return loopStatusView{
 		ID:                    status.ID,
 		Name:                  status.Name,
 		State:                 status.State,
 		Operation:             status.Config.Operation,
 		Completion:            status.Config.Completion,
+		Intent:                status.Config.Metadata["intent"],
 		ParentID:              status.ParentID,
+		ParentName:            nameByID[status.ParentID],
+		ChildCount:            childCount[status.ID],
 		StartedAt:             status.StartedAt,
 		LastWakeAt:            status.LastWakeAt,
 		Iterations:            status.Iterations,
@@ -424,6 +447,7 @@ func summarizeLoopStatus(status looppkg.Status) loopStatusView {
 		LastSupervisorIter:    status.LastSupervisorIter,
 		LastSupervisorTrigger: string(status.LastSupervisorTrigger),
 		ActiveTags:            append([]string(nil), status.ActiveTags...),
+		EffectiveTags:         append([]looppkg.EffectiveTag(nil), status.EffectiveTags...),
 		Metadata:              cloneLoopMetadata(status.Config.Metadata),
 	}
 }
