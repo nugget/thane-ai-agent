@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -118,7 +119,7 @@ func parseFrontmatterMap(raw string) map[string][]string {
 			continue
 		}
 		if pendingKey != "" && strings.HasPrefix(trimmed, "-") {
-			value := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")), `"'`)
+			value := unquoteFrontmatterScalar(strings.TrimPrefix(trimmed, "-"))
 			if value != "" {
 				meta[pendingKey] = append(meta[pendingKey], value)
 			}
@@ -162,18 +163,46 @@ func parseFrontmatterValue(raw string) []string {
 		parts := strings.Split(raw, ",")
 		values := make([]string, 0, len(parts))
 		for _, part := range parts {
-			part = strings.Trim(strings.TrimSpace(part), `"'`)
+			part = unquoteFrontmatterScalar(part)
 			if part != "" {
 				values = append(values, part)
 			}
 		}
 		return dedupeSorted(values)
 	}
-	value := strings.Trim(raw, `"'`)
+	value := unquoteFrontmatterScalar(raw)
 	if value == "" {
 		return nil
 	}
 	return []string{value}
+}
+
+// unquoteFrontmatterScalar reverses the quoting applied by
+// renderFrontmatter, which writes every value through strconv.Quote.
+// Rendered values are therefore double-quoted Go string literals, and
+// strconv.Unquote inverts them exactly — including the backslash and
+// embedded-quote escaping that, left un-reversed, re-escapes and doubles
+// the value on every render→parse cycle. That asymmetry grew a
+// loop-managed document's loop_intent into a 32 MiB run of backslashes on
+// prod (knowledge/temporal/ranch-conditions.md, 2026-06): the intent held
+// a literal "quoted phrase", strconv.Quote escaped the quotes to \", the
+// old parser stripped only the outer quotes, and the owning service loop
+// doubled the backslashes each iteration until the file hit the document
+// read cap and wedged.
+//
+// Hand-authored frontmatter may instead use single quotes or bare,
+// unquoted values; those are not valid Go literals, so they fall back to
+// the historical quote-trim. This keeps the parser a strict superset of
+// the previous behavior while making our own rendered output round-trip
+// losslessly.
+func unquoteFrontmatterScalar(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		if unquoted, err := strconv.Unquote(raw); err == nil {
+			return unquoted
+		}
+	}
+	return strings.Trim(raw, `"'`)
 }
 
 func parseSections(body string) []Section {
