@@ -185,7 +185,8 @@ Tree is clean — verify it builds.
 - [ ] `just ci`
 - [ ] `just build`
 - [ ] `just release-build-snapshot <version> [os arch]` builds a single-target
-      snapshot pkg + checksum (defaults to the host target) for pre-flight
+      snapshot artifact (`.pkg` on darwin, `.tar.gz` on linux; defaults to the
+      host target) and prints its SHA-256 to stdout, for pre-flight
 - [ ] Snapshot artifact reports the same candidate identity through
       `thane version` or `/v1/version`
 
