@@ -195,7 +195,7 @@ Decide the operator path first; the rest follows from that choice.
 - [ ] Operator path chosen:
   - [ ] `just release-github <version> [auto|prerelease|release]` for a real published release
   - [ ] `just deploy-macos user@host` for live-host pkg testing without cutting a release
-- [ ] `just release-github <version>` completes on the macOS Tahoe release workstation
+- [ ] `just release-github <version>` completes on the macOS release workstation
 - [ ] Prepared release metadata matches the commit being published
 - [ ] Release tag created from a clean, up-to-date `main`
 - [ ] Candidate commit is the intended release commit — no unmerged

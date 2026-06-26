@@ -1,6 +1,6 @@
 # Release Engineering
 
-Thane now has two operator paths on macOS Tahoe:
+Thane now has two operator paths on macOS:
 
 - a guarded GitHub release path for real published releases
 - a pkg-based remote deploy path for live-host testing
@@ -80,7 +80,7 @@ What it does:
 - lets the target-side binary watcher react to the new install
 - polls the remote Thane API until `/v1/version` reports the expected build version
 
-This path assumes the remote host is also macOS Tahoe and that Thane is run
+This path assumes the remote host is also macOS and that Thane is run
 from a dedicated account whose normal home-scoped install location is
 `~/Thane/bin/thane`.
 
