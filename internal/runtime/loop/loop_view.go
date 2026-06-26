@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -48,11 +49,14 @@ type LoopView struct {
 	LastWakeDelta *string `json:"last_wake_delta"`
 	// NextWakeIn is the signed-second delta to the scheduled wake while the
 	// loop is in a timer-based sleep (e.g. "+5953s"); null when processing or
-	// event-driven. CurrentSleep is the self-paced interval it is honoring
-	// this cycle (a duration string like "1h40m0s").
-	NextWakeIn         *string `json:"next_wake_in"`
-	CurrentSleep       *string `json:"current_sleep"`
-	PolicyUpdatedDelta *string `json:"policy_updated_delta"`
+	// event-driven. CurrentSleepDuration is the self-paced interval it is
+	// honoring this cycle, in the same seconds unit but UNSIGNED — it is a
+	// duration, not a delta-from-now (e.g. "5940s"). So a freshly-started sleep
+	// reads next_wake_in≈"+5940s" / current_sleep_duration="5940s", and you
+	// watch the former shrink while the latter holds.
+	NextWakeIn           *string `json:"next_wake_in"`
+	CurrentSleepDuration *string `json:"current_sleep_duration"`
+	PolicyUpdatedDelta   *string `json:"policy_updated_delta"`
 
 	// ---- economics (%CPU / %MEM / TIME) ----
 	Iterations        *int `json:"iterations"`
@@ -215,8 +219,11 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	if !s.SleepUntil.IsZero() {
 		nw := promptfmt.FormatDeltaOnly(s.SleepUntil, r.now)
 		v.NextWakeIn = &nw
-		cs := s.CurrentSleep.String()
-		v.CurrentSleep = &cs
+		// Unsigned seconds — a duration magnitude, not a delta-from-now — so the
+		// whole row speaks one unit (e.g. current_sleep "5940s" alongside
+		// next_wake_in "+5940s").
+		cs := fmt.Sprintf("%ds", int64(s.CurrentSleep/time.Second))
+		v.CurrentSleepDuration = &cs
 	}
 
 	// Token economics — left nil for handler-only loops, which run no LLM

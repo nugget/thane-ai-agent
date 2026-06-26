@@ -207,8 +207,13 @@ func loopStatusHealth(statuses []looppkg.Status) map[string]any {
 	degraded := make([]string, 0)
 	for _, s := range statuses {
 		byState[string(s.State)]++
-		if s.ConsecutiveErrors > 0 || s.State == looppkg.StateError {
+		switch {
+		case s.ConsecutiveErrors > 0:
 			degraded = append(degraded, fmt.Sprintf("%s (%d consecutive errors)", s.Name, s.ConsecutiveErrors))
+		case s.State == looppkg.StateError:
+			// Errored this cycle but the counter already reset (or never
+			// incremented) — label the state, not a misleading "0 errors".
+			degraded = append(degraded, fmt.Sprintf("%s (error)", s.Name))
 		}
 	}
 	degradedCount := len(degraded)
