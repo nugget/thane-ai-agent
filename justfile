@@ -465,53 +465,6 @@ logs workdir="./Thane":
         fi
     done
 
-# Live smoke test for loop-definition registry behavior against a running dev instance
-[group('operations')]
-loop-definition-smoke base_url="http://127.0.0.1:8080":
-    python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
-
-# Syntax-check the web dashboard's static JS bundles.
-[group('operations')]
-web-static-check:
-    node --check internal/server/web/static/app.js
-    node --check internal/server/web/static/detail.js
-    node --check internal/server/web/static/request.js
-    node --check internal/server/web/static/shared.js
-
-# Focused loop regression pass: web static check plus the packages that own
-# loop definition, launch, completion, app delivery, interactive channel
-# integration, and dashboard graph surfaces.
-[doc("Focused loop + web regression pass (race tests on the loop-owning packages)")]
-[group('operations')]
-loops-contract-tests:
-    just web-static-check
-    go test -race ./internal/runtime/loop ./internal/tools ./internal/runtime/delegate ./internal/app ./internal/channels/messaging/signal ./internal/server/api
-
-# Broader loop smoke pass: focused regression packages plus live
-# loop-definition runtime smoke against a running dev instance.
-[doc("loops-contract-tests plus a live loop-definition smoke against a dev instance")]
-[group('operations')]
-loops-smoke base_url="http://127.0.0.1:8080":
-    just loops-contract-tests
-    just loop-definition-smoke {{base_url}}
-
-# Live smoke test with restart/persistence validation. Example:
-# RESTART_CMD='cd /path/to/dev-workspace && just restart' just loop-definition-persistence
-[doc("Live loop-definition smoke with restart/persistence validation (needs RESTART_CMD)")]
-[group('operations')]
-loop-definition-persistence base_url="http://127.0.0.1:8080":
-    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
-    RESTART_CMD="$RESTART_CMD" python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}} --restart-cmd "$RESTART_CMD"
-
-# Full loop persistence pass: focused regression packages plus the
-# live restart/persistence harness.
-[doc("loops-contract-tests plus the live restart/persistence harness (needs RESTART_CMD)")]
-[group('operations')]
-loops-persistence base_url="http://127.0.0.1:8080":
-    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
-    just loops-contract-tests
-    RESTART_CMD="$RESTART_CMD" just loop-definition-persistence {{base_url}}
-
 # --- Release ---
 # Operator entry points: release-github (full path), prepare-release +
 # publish-release (manual breakpoint), build-macos-pkg, release-build-snapshot.
