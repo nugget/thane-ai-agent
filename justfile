@@ -46,6 +46,7 @@ default:
 
 # Copy default files into embeddable positions for go:embed, and
 # regenerate examples/config.example.yaml from internal/platform/config.
+[doc("Regenerate go:embed inputs (talents, persona) and config.example.yaml")]
 [group('build')]
 generate:
     go generate ./internal/model/talents/ ./cmd/thane/
@@ -63,6 +64,7 @@ build target_os=host_os target_arch=host_arch: generate
 # Build for all release targets. The pure-Go SQLite driver (modernc)
 # makes every target a CGO-free cross-compile, so Linux builds run
 # natively here too — no Docker/Buildx round-trip required.
+[doc("Build binaries for all release targets (darwin/linux × amd64/arm64)")]
 [group('build')]
 build-all:
     just build darwin amd64
@@ -99,6 +101,7 @@ test: generate
 
 # Race tests + coverage in a single pass (CI uses this so it never runs the
 # suite twice). Writes coverage.out for the coverage uploader.
+[doc("Race tests with coverage in one pass; writes coverage.out (used by CI)")]
 [group('test')]
 cover: generate
     go test -race -coverprofile=coverage.out ./...
@@ -126,6 +129,7 @@ lint: generate
 # under a second locally, so the generous --timeout/--lookup-timeout below are
 # pure headroom, and a bounded retry clears the rare residual collapse. A genuine
 # spec error is deterministic and still fails all three attempts.
+[doc("Lint the native + compat OpenAPI specs against the Thane ruleset (.vacuum.yaml)")]
 [group('test')]
 lint-openapi:
     #!/usr/bin/env bash
@@ -167,6 +171,7 @@ architecture:
 
 # Architecture guardrail check — fails if any metric in scripts/architecture.baseline is exceeded.
 # Run 'scripts/architecture.sh update' to advance a baseline when the growth is intentional.
+[doc("Fail if any architecture metric exceeds scripts/architecture.baseline")]
 [group('test')]
 architecture-check:
     @bash scripts/architecture.sh check
@@ -175,6 +180,7 @@ architecture-check:
 # tool, so unlike golangci-lint/vacuum it can't be vendored via go.mod;
 # locally it's skipped-with-notice when absent (CI always installs a pinned
 # build and enforces it).
+[doc("Check internal markdown links (offline; lychee, skipped locally if absent)")]
 [group('test')]
 link-check:
     #!/usr/bin/env bash
@@ -418,6 +424,7 @@ serve: build
 # Tail live service logs (default: dev workdir). Follows the events
 # dataset and rolls to the next HH.jsonl segment automatically. Waits
 # patiently if no segment exists yet so this works on a fresh install.
+[doc("Tail live service logs, auto-rolling to the next hourly segment")]
 [group('operations')]
 logs workdir="./Thane":
     #!/usr/bin/env bash
@@ -474,6 +481,7 @@ web-static-check:
 # Focused loop regression pass: web static check plus the packages that own
 # loop definition, launch, completion, app delivery, interactive channel
 # integration, and dashboard graph surfaces.
+[doc("Focused loop + web regression pass (race tests on the loop-owning packages)")]
 [group('operations')]
 loops-contract-tests:
     just web-static-check
@@ -481,6 +489,7 @@ loops-contract-tests:
 
 # Broader loop smoke pass: focused regression packages plus live
 # loop-definition runtime smoke against a running dev instance.
+[doc("loops-contract-tests plus a live loop-definition smoke against a dev instance")]
 [group('operations')]
 loops-smoke base_url="http://127.0.0.1:8080":
     just loops-contract-tests
@@ -488,6 +497,7 @@ loops-smoke base_url="http://127.0.0.1:8080":
 
 # Live smoke test with restart/persistence validation. Example:
 # RESTART_CMD='cd /path/to/dev-workspace && just restart' just loop-definition-persistence
+[doc("Live loop-definition smoke with restart/persistence validation (needs RESTART_CMD)")]
 [group('operations')]
 loop-definition-persistence base_url="http://127.0.0.1:8080":
     @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
@@ -495,6 +505,7 @@ loop-definition-persistence base_url="http://127.0.0.1:8080":
 
 # Full loop persistence pass: focused regression packages plus the
 # live restart/persistence harness.
+[doc("loops-contract-tests plus the live restart/persistence harness (needs RESTART_CMD)")]
 [group('operations')]
 loops-persistence base_url="http://127.0.0.1:8080":
     @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
@@ -502,9 +513,12 @@ loops-persistence base_url="http://127.0.0.1:8080":
     RESTART_CMD="$RESTART_CMD" just loop-definition-persistence {{base_url}}
 
 # --- Release ---
+# Operator entry points: release-github (full path), prepare-release +
+# publish-release (manual breakpoint), build-macos-pkg, release-build-snapshot.
+# The release-* building blocks they orchestrate are [private] — hidden from
+# `just --list` but still invocable by name for debugging.
 
-[doc("Building block: sign a macOS binary")]
-[group('release-engineering')]
+[private]
 release-sign-macos binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -528,8 +542,7 @@ release-sign-macos binary identity=codesign-identity options=codesign-options ti
     codesign --verify --verbose=2 "$binary"
     codesign -dv --verbose=4 "$binary"
 
-[doc("Building block: notarize a packaged macOS release artifact")]
-[group('release-engineering')]
+[private]
 [macos]
 release-notarize-macos archive profile=notary-profile:
     test "{{codesign-identity}}" != "-" || (echo "Notarization requires THANE_CODESIGN_IDENTITY to name a Developer ID Application certificate" && exit 1)
@@ -537,21 +550,18 @@ release-notarize-macos archive profile=notary-profile:
     test -n "{{profile}}" || (echo "Set THANE_NOTARY_PROFILE or pass a notary profile name" && exit 1)
     xcrun notarytool submit "{{archive}}" --keychain-profile "{{profile}}" --wait
 
-[doc("Building block: package a macOS binary as a signed flat installer product archive")]
-[group('release-engineering')]
+[private]
 [macos]
 release-package-macos-pkg version target_arch binary output_dir=release-dir installer_identity=installer-identity:
     scripts/package-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{binary}}" "{{output_dir}}" "{{installer_identity}}"
 
-[doc("Building block: staple and validate a notarized macOS installer package")]
-[group('release-engineering')]
+[private]
 [macos]
 release-staple-macos archive:
     xcrun stapler staple "{{archive}}"
     xcrun stapler validate "{{archive}}"
 
-[doc("Building block: build one release artifact for a target")]
-[group('release-engineering')]
+[private]
 release-build-archive version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -582,8 +592,7 @@ release-build-archive version target_os=host_os target_arch=host_arch:
 
     printf '%s\n' "$archive"
 
-[doc("Building block: write checksums for prepared release artifacts")]
-[group('release-engineering')]
+[private]
 release-write-checksums version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -615,7 +624,7 @@ release-write-checksums version:
 
     printf '%s\n' "$output"
 
-[doc("Building block: build one local snapshot archive")]
+[doc("Build a local snapshot archive + checksums for a target (no GitHub release)")]
 [group('release-engineering')]
 release-build-snapshot version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
@@ -623,8 +632,7 @@ release-build-snapshot version target_os=host_os target_arch=host_arch:
     just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
     just release-write-checksums "{{version}}"
 
-[doc("Building block: build one Linux archive (CGO-free native cross-compile)")]
-[group('release-engineering')]
+[private]
 release-build-linux-archive version target_arch:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -637,8 +645,7 @@ release-build-linux-archive version target_arch:
     archive="$(scripts/package-release.sh "$version" linux "$target_arch" "dist/thane-linux-${target_arch}" "{{release-dir}}")"
     printf '%s\n' "$archive"
 
-[doc("Building block: validate GitHub auth and prepared assets")]
-[group('release-engineering')]
+[private]
 release-github-check version:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -707,8 +714,7 @@ release-github-check version:
         fi
     done
 
-[doc("Building block: create or update the GitHub release from prepared assets")]
-[group('release-engineering')]
+[private]
 release-github-upload version target_commit="" release_kind="auto":
     #!/usr/bin/env bash
     set -euo pipefail
