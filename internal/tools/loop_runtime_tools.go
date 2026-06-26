@@ -17,31 +17,6 @@ const (
 	maxLoopStatusLimit     = 200
 )
 
-type loopStatusView struct {
-	ID                    string             `json:"id"`
-	Name                  string             `json:"name"`
-	State                 looppkg.State      `json:"state"`
-	Operation             looppkg.Operation  `json:"operation,omitempty"`
-	Completion            looppkg.Completion `json:"completion,omitempty"`
-	ParentID              string             `json:"parent_id,omitempty"`
-	StartedAt             time.Time          `json:"started_at"`
-	LastWakeAt            time.Time          `json:"last_wake_at,omitempty"`
-	Iterations            int                `json:"iterations"`
-	Attempts              int                `json:"attempts"`
-	TotalInputTokens      int                `json:"total_input_tokens"`
-	TotalOutputTokens     int                `json:"total_output_tokens"`
-	LastInputTokens       int                `json:"last_input_tokens,omitempty"`
-	LastOutputTokens      int                `json:"last_output_tokens,omitempty"`
-	LastError             string             `json:"last_error,omitempty"`
-	ConsecutiveErrors     int                `json:"consecutive_errors,omitempty"`
-	HandlerOnly           bool               `json:"handler_only,omitempty"`
-	EventDriven           bool               `json:"event_driven,omitempty"`
-	LastSupervisorIter    int                `json:"last_supervisor_iter,omitempty"`
-	LastSupervisorTrigger string             `json:"last_supervisor_trigger,omitempty"`
-	ActiveTags            []string           `json:"active_tags,omitempty"`
-	Metadata              map[string]string  `json:"metadata,omitempty"`
-}
-
 // LoopRuntimeToolDeps wires the live loop registry and ad hoc launch path
 // into the tool registry so the model can inspect and control currently
 // running loops.
@@ -65,7 +40,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_status",
-		Description: "Inspect the live loop registry. Returns compact structured status for currently running loops, with optional filters by query text, state, operation, and a result limit.",
+		Description: "Inspect the live loop registry. Returns a rich canonical row per running loop — identity, parent container and ancestry, lifecycle counters (successful iterations vs attempts), token economics, state and policy, supervisor cadence, and effective tags/subscriptions with inheritance provenance — with optional filters by query text, state, operation, and a result limit.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -79,8 +54,8 @@ func (r *Registry) registerLoopRuntimeTools() {
 				},
 				"operation": map[string]any{
 					"type":        "string",
-					"enum":        []string{"request_reply", "background_task", "service"},
-					"description": "Optional exact operation filter.",
+					"enum":        []string{"request_reply", "background_task", "service", "container", "event_driven"},
+					"description": "Optional exact operation filter. Use container to list only grouping nodes.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -172,12 +147,19 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	limit := clampLoopListLimit(toolargs.Int(args, "limit"), defaultLoopStatusLimit, maxLoopStatusLimit)
 
 	statuses := r.liveLoopRegistry.Statuses()
-	filtered := make([]loopStatusView, 0, len(statuses))
+	// One resolver over the FULL status set (graph joins built once, not
+	// per row) plus the definition-policy join, so every row is the canonical
+	// LoopView — the same rich shape every loop-data tool emits.
+	resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
+	filtered := make([]looppkg.LoopView, 0, len(statuses))
 	for _, status := range statuses {
-		if !matchLoopStatus(status, query, state, operation) {
+		// Project first so the query can match the human parent_name/ancestry
+		// the row now surfaces, not just the opaque parent_id.
+		view := resolver.FromStatus(status)
+		if !matchLoopStatus(status, view, query, state, operation) {
 			continue
 		}
-		filtered = append(filtered, summarizeLoopStatus(status))
+		filtered = append(filtered, view)
 		if len(filtered) >= limit {
 			break
 		}
@@ -380,18 +362,29 @@ func clampLoopListLimit(raw, def, max int) int {
 	}
 }
 
-func matchLoopStatus(status looppkg.Status, query, state string, operation looppkg.Operation) bool {
+func matchLoopStatus(status looppkg.Status, view looppkg.LoopView, query, state string, operation looppkg.Operation) bool {
 	if state != "" && strings.ToLower(string(status.State)) != state {
 		return false
 	}
-	if operation != "" && status.Config.Operation != operation {
+	if operation != "" && !matchLoopOperation(status, operation) {
 		return false
 	}
 	if query == "" {
 		return true
 	}
-	if strings.Contains(strings.ToLower(status.ID), query) || strings.Contains(strings.ToLower(status.Name), query) || strings.Contains(strings.ToLower(status.ParentID), query) {
+	if strings.Contains(strings.ToLower(status.ID), query) || strings.Contains(strings.ToLower(status.Name), query) {
 		return true
+	}
+	// Match the human parent/ancestry names the row surfaces, so searching a
+	// container name (e.g. "travel") finds its descendants — the opaque
+	// parent_id is no longer the searchable handle.
+	if view.ParentName != nil && strings.Contains(strings.ToLower(*view.ParentName), query) {
+		return true
+	}
+	for _, anc := range view.Ancestry {
+		if strings.Contains(strings.ToLower(anc), query) {
+			return true
+		}
 	}
 	for _, value := range status.Config.Metadata {
 		if strings.Contains(strings.ToLower(value), query) {
@@ -401,40 +394,40 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 	return false
 }
 
-func summarizeLoopStatus(status looppkg.Status) loopStatusView {
-	return loopStatusView{
-		ID:                    status.ID,
-		Name:                  status.Name,
-		State:                 status.State,
-		Operation:             status.Config.Operation,
-		Completion:            status.Config.Completion,
-		ParentID:              status.ParentID,
-		StartedAt:             status.StartedAt,
-		LastWakeAt:            status.LastWakeAt,
-		Iterations:            status.Iterations,
-		Attempts:              status.Attempts,
-		TotalInputTokens:      status.TotalInputTokens,
-		TotalOutputTokens:     status.TotalOutputTokens,
-		LastInputTokens:       status.LastInputTokens,
-		LastOutputTokens:      status.LastOutputTokens,
-		LastError:             status.LastError,
-		ConsecutiveErrors:     status.ConsecutiveErrors,
-		HandlerOnly:           status.HandlerOnly,
-		EventDriven:           status.EventDriven,
-		LastSupervisorIter:    status.LastSupervisorIter,
-		LastSupervisorTrigger: string(status.LastSupervisorTrigger),
-		ActiveTags:            append([]string(nil), status.ActiveTags...),
-		Metadata:              cloneLoopMetadata(status.Config.Metadata),
+// matchLoopOperation matches the operation filter. event_driven is inclusive
+// of WaitFunc-based loops (Status.EventDriven=true) whose declared operation
+// is still service, so the filter catches every event-driven loop, not only
+// those whose Config.Operation literally equals event_driven.
+func matchLoopOperation(status looppkg.Status, operation looppkg.Operation) bool {
+	if operation == looppkg.OperationEventDriven {
+		return status.EventDriven || status.Config.Operation == looppkg.OperationEventDriven
 	}
+	return status.Config.Operation == operation
 }
 
-func cloneLoopMetadata(src map[string]string) map[string]string {
-	if len(src) == 0 {
+// loopPolicyByName builds the name→policy/eligibility join the LoopView
+// projector left-joins onto live loops, so each row shows active/paused and
+// eligibility without a second tool call. Returns nil when no definition
+// view is wired (loops then report policy_state="ephemeral").
+func (r *Registry) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
+	if r.loopDefinitionView == nil {
 		return nil
 	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
+	view := r.loopDefinitionView()
+	if view == nil {
+		return nil
 	}
-	return dst
+	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
+	for _, def := range view.Definitions {
+		out[def.Name] = looppkg.LoopPolicyInfo{
+			State:          string(def.PolicyState),
+			Source:         string(def.PolicySource),
+			Reason:         def.PolicyReason,
+			UpdatedAt:      def.PolicyUpdatedAt,
+			Eligible:       def.Eligibility.Eligible,
+			EligibleReason: def.Eligibility.Reason,
+			HasPolicy:      true,
+		}
+	}
+	return out
 }
