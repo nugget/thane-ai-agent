@@ -75,11 +75,46 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 	if len(v.EffectiveTags) != 2 || v.EffectiveTags[0].From != "travel" {
 		t.Errorf("EffectiveTags = %#v, want inheritance provenance carried through", v.EffectiveTags)
 	}
-	if v.StartedDelta == nil || *v.StartedDelta != "running for 4h12m" {
-		t.Errorf("StartedDelta = %v, want 'running for 4h12m'", v.StartedDelta)
+	// Signed exact-second deltas per the model-facing convention: 4h12m =
+	// 15120s ago, last wake 47s ago.
+	if v.StartedDelta == nil || *v.StartedDelta != "-15120s" {
+		t.Errorf("StartedDelta = %v, want -15120s", v.StartedDelta)
 	}
-	if v.LastWakeDelta == nil || *v.LastWakeDelta != "47s ago" {
-		t.Errorf("LastWakeDelta = %v, want '47s ago'", v.LastWakeDelta)
+	if v.LastWakeDelta == nil || *v.LastWakeDelta != "-47s" {
+		t.Errorf("LastWakeDelta = %v, want -47s", v.LastWakeDelta)
+	}
+}
+
+func TestLoopViewResolver_FromStatus_HandlerOnlyAndCleanError(t *testing.T) {
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	r := NewLoopViewResolver(nil, nil, now)
+
+	v := r.FromStatus(Status{
+		ID:               "lp_owu",
+		Name:             "owu",
+		State:            State("waiting"),
+		HandlerOnly:      true,
+		Iterations:       537,
+		Attempts:         537,
+		TotalInputTokens: 0,
+		ContextWindow:    200000,
+		LastError:        "",
+		Config:           Config{Operation: OperationService},
+	})
+
+	// Handler-only loops run no LLM iterations — token fields are nil, not 0,
+	// so "0" can't read as a real datum.
+	if v.TotalInputTokens != nil || v.ContextWindow != nil || v.ContextFillPct != nil {
+		t.Errorf("handler-only token fields should be nil, got in=%v ctx=%v fill=%v",
+			v.TotalInputTokens, v.ContextWindow, v.ContextFillPct)
+	}
+	// Iteration counters are still meaningful for handler loops.
+	if v.Iterations == nil || *v.Iterations != 537 {
+		t.Errorf("Iterations = %v, want 537 even for handler-only", v.Iterations)
+	}
+	// No error => null, not "".
+	if v.LastError != nil {
+		t.Errorf("LastError = %v, want nil for a clean loop", v.LastError)
 	}
 }
 

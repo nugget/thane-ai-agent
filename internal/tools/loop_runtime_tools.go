@@ -153,10 +153,13 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 	resolver := looppkg.NewLoopViewResolver(statuses, r.loopPolicyByName(), time.Now())
 	filtered := make([]looppkg.LoopView, 0, len(statuses))
 	for _, status := range statuses {
-		if !matchLoopStatus(status, query, state, operation) {
+		// Project first so the query can match the human parent_name/ancestry
+		// the row now surfaces, not just the opaque parent_id.
+		view := resolver.FromStatus(status)
+		if !matchLoopStatus(status, view, query, state, operation) {
 			continue
 		}
-		filtered = append(filtered, resolver.FromStatus(status))
+		filtered = append(filtered, view)
 		if len(filtered) >= limit {
 			break
 		}
@@ -359,18 +362,29 @@ func clampLoopListLimit(raw, def, max int) int {
 	}
 }
 
-func matchLoopStatus(status looppkg.Status, query, state string, operation looppkg.Operation) bool {
+func matchLoopStatus(status looppkg.Status, view looppkg.LoopView, query, state string, operation looppkg.Operation) bool {
 	if state != "" && strings.ToLower(string(status.State)) != state {
 		return false
 	}
-	if operation != "" && status.Config.Operation != operation {
+	if operation != "" && !matchLoopOperation(status, operation) {
 		return false
 	}
 	if query == "" {
 		return true
 	}
-	if strings.Contains(strings.ToLower(status.ID), query) || strings.Contains(strings.ToLower(status.Name), query) || strings.Contains(strings.ToLower(status.ParentID), query) {
+	if strings.Contains(strings.ToLower(status.ID), query) || strings.Contains(strings.ToLower(status.Name), query) {
 		return true
+	}
+	// Match the human parent/ancestry names the row surfaces, so searching a
+	// container name (e.g. "travel") finds its descendants — the opaque
+	// parent_id is no longer the searchable handle.
+	if view.ParentName != nil && strings.Contains(strings.ToLower(*view.ParentName), query) {
+		return true
+	}
+	for _, anc := range view.Ancestry {
+		if strings.Contains(strings.ToLower(anc), query) {
+			return true
+		}
 	}
 	for _, value := range status.Config.Metadata {
 		if strings.Contains(strings.ToLower(value), query) {
@@ -378,6 +392,17 @@ func matchLoopStatus(status looppkg.Status, query, state string, operation loopp
 		}
 	}
 	return false
+}
+
+// matchLoopOperation matches the operation filter. event_driven is inclusive
+// of WaitFunc-based loops (Status.EventDriven=true) whose declared operation
+// is still service, so the filter catches every event-driven loop, not only
+// those whose Config.Operation literally equals event_driven.
+func matchLoopOperation(status looppkg.Status, operation looppkg.Operation) bool {
+	if operation == looppkg.OperationEventDriven {
+		return status.EventDriven || status.Config.Operation == looppkg.OperationEventDriven
+	}
+	return status.Config.Operation == operation
 }
 
 // loopPolicyByName builds the name→policy/eligibility join the LoopView

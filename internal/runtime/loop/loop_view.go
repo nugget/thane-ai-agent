@@ -1,8 +1,9 @@
 package loop
 
 import (
-	"fmt"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // LoopView is the canonical model-facing projection of one loop — the
@@ -163,11 +164,7 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	state := string(s.State)
 	iterations := s.Iterations
 	attempts := s.Attempts
-	totalIn := s.TotalInputTokens
-	totalOut := s.TotalOutputTokens
-	lastIn := s.LastInputTokens
 	consecErr := s.ConsecutiveErrors
-	lastErr := s.LastError
 
 	v := LoopView{
 		Name:        s.Name,
@@ -196,30 +193,44 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	if pn := r.nameByID[s.ParentID]; pn != "" {
 		v.ParentName = &pn
 	}
+	// Delta-oriented timestamps per the model-facing convention: signed
+	// exact-second offsets from now (AGENTS.md), e.g. "-15120s" / "+240s".
 	if !s.StartedAt.IsZero() {
-		d := "running for " + humanLoopDuration(r.now.Sub(s.StartedAt))
+		d := promptfmt.FormatDeltaOnly(s.StartedAt, r.now)
 		v.StartedDelta = &d
 	}
 	if !s.LastWakeAt.IsZero() {
-		d := humanLoopDuration(r.now.Sub(s.LastWakeAt)) + " ago"
+		d := promptfmt.FormatDeltaOnly(s.LastWakeAt, r.now)
 		v.LastWakeDelta = &d
 	}
 
-	// Token economics; context fill is precomputed so the model never divides.
-	v.TotalInputTokens = &totalIn
-	v.TotalOutputTokens = &totalOut
-	v.LastInputTokens = &lastIn
-	if s.ContextWindow > 0 {
-		cw := s.ContextWindow
-		v.ContextWindow = &cw
-		if s.LastInputTokens > 0 {
-			pct := s.LastInputTokens * 100 / s.ContextWindow
-			v.ContextFillPct = &pct
+	// Token economics — left nil for handler-only loops, which run no LLM
+	// iterations and have no token metrics (a literal 0 would read as a real
+	// datum, not "not applicable"). Context fill is precomputed so the model
+	// never divides.
+	if !s.HandlerOnly {
+		totalIn := s.TotalInputTokens
+		totalOut := s.TotalOutputTokens
+		lastIn := s.LastInputTokens
+		v.TotalInputTokens = &totalIn
+		v.TotalOutputTokens = &totalOut
+		v.LastInputTokens = &lastIn
+		if s.ContextWindow > 0 {
+			cw := s.ContextWindow
+			v.ContextWindow = &cw
+			if s.LastInputTokens > 0 {
+				pct := s.LastInputTokens * 100 / s.ContextWindow
+				v.ContextFillPct = &pct
+			}
 		}
 	}
 
 	v.ConsecutiveErrors = &consecErr
-	v.LastError = &lastErr
+	// Null, not "", when there is no error — cleaner at the model boundary.
+	if s.LastError != "" {
+		lastErr := s.LastError
+		v.LastError = &lastErr
+	}
 
 	if s.Config.Supervisor {
 		prob := s.Config.SupervisorProb
@@ -246,7 +257,7 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 			v.PolicyReason = &reason
 		}
 		if !pol.UpdatedAt.IsZero() {
-			d := humanLoopDuration(r.now.Sub(pol.UpdatedAt)) + " ago"
+			d := promptfmt.FormatDeltaOnly(pol.UpdatedAt, r.now)
 			v.PolicyUpdatedDelta = &d
 		}
 		v.Eligible = pol.Eligible
@@ -269,33 +280,4 @@ func orEmptyLoopSlice[T any](s []T) []T {
 		return []T{}
 	}
 	return s
-}
-
-// humanLoopDuration renders a duration as a compact relative string
-// ("47s", "4h12m", "2d3h") for delta-oriented timestamps. Always
-// non-negative; callers add the "ago"/"running for" framing.
-func humanLoopDuration(d time.Duration) string {
-	if d < 0 {
-		d = -d
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		m := int(d.Minutes()) % 60
-		if m == 0 {
-			return fmt.Sprintf("%dh", h)
-		}
-		return fmt.Sprintf("%dh%dm", h, m)
-	default:
-		days := int(d.Hours()) / 24
-		h := int(d.Hours()) % 24
-		if h == 0 {
-			return fmt.Sprintf("%dd", days)
-		}
-		return fmt.Sprintf("%dd%dh", days, h)
-	}
 }
