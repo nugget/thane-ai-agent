@@ -989,3 +989,21 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+func TestAnthropicMaxTokens(t *testing.T) {
+	cases := []struct {
+		model string
+		want  int
+	}{
+		{"claude-opus-4-8", 16384},
+		{"claude-sonnet-4-6", 16384},
+		{"claude-haiku-4-5", 8192},
+		{"some-unknown-model", 4096},
+		{"", 4096},
+	}
+	for _, tc := range cases {
+		if got := anthropicMaxTokens(tc.model); got != tc.want {
+			t.Errorf("anthropicMaxTokens(%q) = %d, want %d", tc.model, got, tc.want)
+		}
+	}
+}

@@ -516,6 +516,47 @@ func TestEngine_DeferMixedText(t *testing.T) {
 	}
 }
 
+func TestEngine_DeferMixedText_PreservesReasoningInHistory(t *testing.T) {
+	// Mixed text+tool, then a FRESH (non-empty) response. The pre-tool
+	// reasoning must survive in conversation history rather than being
+	// stripped to empty — otherwise the model loses its own plan between a
+	// read and the follow-up write and stalls (the narrate-then-stop outage).
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role:      "assistant",
+					Content:   "Here is my detailed plan.",
+					ToolCalls: []llm.ToolCall{makeToolCall("read", map[string]any{"k": "v"})},
+				},
+			},
+			textResponse("done"),
+		},
+	}
+	exec := &mockExecutor{results: map[string]string{"read": "ok"}}
+	cfg := baseCfg(mock, exec)
+	cfg.DeferMixedText = true
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Content != "done" {
+		t.Errorf("content = %q, want the fresh iter-2 text", result.Content)
+	}
+	found := false
+	for _, m := range result.Messages {
+		if m.Role == "assistant" && strings.Contains(m.Content, "Here is my detailed plan.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pre-tool reasoning was stripped from history; the model would lose its plan. messages=%+v", result.Messages)
+	}
+}
+
 func TestEngine_BudgetExhaustion(t *testing.T) {
 	// Budget fires on the second iteration (after iter 0's tool has been
 	// executed, so the last message is a tool result). This lets forceText

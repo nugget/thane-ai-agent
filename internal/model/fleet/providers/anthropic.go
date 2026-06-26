@@ -358,7 +358,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		Model:        model,
 		Messages:     anthropicMsgs,
 		System:       systemPayload,
-		MaxTokens:    4096,
+		MaxTokens:    anthropicMaxTokens(model),
 		Stream:       stream,
 		Tools:        anthropicTools,
 		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),
@@ -701,6 +701,29 @@ const maxAnthropicCacheBreakpoints = 4
 // publishes for English prose. Used to check per-run prefix lengths
 // against the model-specific minimum cacheable tokens.
 const estimatedCharsPerToken = 4
+
+// anthropicMaxTokens returns the per-request output ceiling for a model.
+// The old blanket 4096 was far below the modern family limits and could
+// truncate a turn that needs to both reason and emit a large tool payload
+// (e.g. a long plan plus a full loop_definition_set spec) in one response —
+// the model would hit the cap mid-thought and never reach the write. These
+// values stay comfortably within the published per-family output maximums
+// (Opus/Sonnet 4.x ≥32k, Haiku 4.5 ≥8k) so the ceiling stops being a
+// constraint without risking an over-limit API rejection. max_tokens is a
+// ceiling, not a target: a response still costs only the tokens it generates.
+func anthropicMaxTokens(model string) int {
+	lower := strings.ToLower(model)
+	switch {
+	case strings.Contains(lower, "opus"), strings.Contains(lower, "sonnet"):
+		return 16384
+	case strings.Contains(lower, "haiku"):
+		return 8192
+	default:
+		// Unknown models keep the conservative legacy ceiling so a provider
+		// we can't reason about never gets an out-of-range max_tokens.
+		return 4096
+	}
+}
 
 // minCacheablePrefixTokens returns the minimum token count a cached
 // prefix must reach for the Anthropic API to actually cache it. Runs
