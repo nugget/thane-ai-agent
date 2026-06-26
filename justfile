@@ -577,13 +577,19 @@ release-write-checksums version:
 
     printf '%s\n' "$output"
 
-[doc("Build a local snapshot archive + checksums for a target (no GitHub release)")]
+[doc("Build a local snapshot artifact + checksum for one target (no GitHub release)")]
 [group('release-engineering')]
 release-build-snapshot version target_os=host_os target_arch=host_arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
-    just release-write-checksums "{{version}}"
+    # A single-target snapshot for pre-flight checks. The full-release
+    # checksums file (release-write-checksums) requires all four artifacts,
+    # so here we just checksum the one snapshot we built.
+    archive="$(just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}" | tail -n 1)"
+    test -n "$archive" || { echo "release-build-archive did not report an artifact path" >&2; exit 1; }
+    name="$(basename "$archive")"
+    ( cd "$(dirname "$archive")" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$name" || shasum -a 256 "$name"; } )
+    echo "Snapshot artifact: $archive"
 
 [private]
 release-build-linux-archive version target_arch:

@@ -184,7 +184,8 @@ Tree is clean — verify it builds.
       version, build suffix, commit SHA, branch, and target host
 - [ ] `just ci`
 - [ ] `just build`
-- [ ] `just release-build-snapshot <version>` for at least the primary operator target
+- [ ] `just release-build-snapshot <version> [os arch]` builds a single-target
+      snapshot pkg + checksum (defaults to the host target) for pre-flight
 - [ ] Snapshot artifact reports the same candidate identity through
       `thane version` or `/v1/version`
 
@@ -193,7 +194,10 @@ Tree is clean — verify it builds.
 Decide the operator path first; the rest follows from that choice.
 
 - [ ] Operator path chosen:
-  - [ ] `just release-github <version> [auto|prerelease|release]` for a real published release
+  - [ ] `just release-github <version> [auto|prerelease|release]` for a real
+        published release — it runs the guards, then `prepare-release`
+        (build + sign + notarize + checksum + container smoke), then
+        `publish-release` (tag + upload assets + trigger the GHCR image)
   - [ ] `just deploy-macos user@host` for live-host pkg testing without cutting a release
 - [ ] `just release-github <version>` completes on the macOS release workstation
 - [ ] Prepared release metadata matches the commit being published
