@@ -39,6 +39,8 @@ func RuntimeContract() string {
 		"",
 		"Keep the straight path clean. If persona, mission, conversation history, and current context are enough, answer directly.",
 		"",
+		"Naming an action is not taking it. If you say you are about to act, emit the tool call in the same turn — a turn that announces work but makes no tool call has not done the work, and the announcement must not stand in its place.",
+		"",
 		"Tags are bright trailheads into richer tool, context, and talent menus. When a task needs a domain, open one relevant door, read what appears, and keep moving without narrating the machinery.",
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",

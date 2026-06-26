@@ -325,6 +325,9 @@ func TestBuildSystemPrompt_RuntimeContractIncluded(t *testing.T) {
 	if !strings.Contains(prompt, "Keep the straight path clean") {
 		t.Fatal("runtime contract should keep direct answers prominent")
 	}
+	if !strings.Contains(prompt, "Naming an action is not taking it") {
+		t.Fatal("runtime contract should close the narrate-then-stop gap (promise an action ⇒ emit the tool call this turn)")
+	}
 	if !strings.Contains(prompt, "`thane_now`") {
 		t.Fatal("runtime contract should mention delegation when top-level tools are gated")
 	}
