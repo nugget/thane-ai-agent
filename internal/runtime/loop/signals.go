@@ -399,6 +399,21 @@ func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
 }
 
 func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
+	// Record the scheduled wake instant so loop_status can report when the
+	// loop next fires; clear it on wake so a processing loop never reports a
+	// stale deadline. A wakeCh notification can cut the sleep short — this is
+	// the *scheduled* deadline, not a guarantee.
+	l.mu.Lock()
+	l.sleepUntil = time.Now().Add(d)
+	l.currentSleep = d
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.sleepUntil = time.Time{}
+		l.currentSleep = 0
+		l.mu.Unlock()
+	}()
+
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
