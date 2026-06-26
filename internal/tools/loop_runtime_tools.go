@@ -40,7 +40,7 @@ func (r *Registry) registerLoopRuntimeTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_status",
-		Description: "Inspect the live loop registry. Returns a rich canonical row per running loop — identity, parent container and ancestry, lifecycle counters (successful iterations vs attempts), token economics, state and policy, supervisor cadence, and effective tags/subscriptions with inheritance provenance — with optional filters by query text, state, operation, and a result limit.",
+		Description: "Inspect the live loop registry. Returns a rich canonical row per running loop — identity, parent container and ancestry, lifecycle counters (successful iterations vs attempts), schedule (next_wake_delta + current_sleep_duration), token economics, state and policy, supervisor cadence, and effective tags/subscriptions with inheritance provenance — with optional filters by query text, state, operation, and a result limit. The envelope also carries a top-level health rollup (total, degraded count + names, by_state, degraded_truncated) computed over the whole registry, so you can tell at a glance whether anything is wrong even when a degraded loop falls below the limit.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
