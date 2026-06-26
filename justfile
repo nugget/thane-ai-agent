@@ -801,13 +801,23 @@ prepare-release version container_tag="thane:prepare-release":
 
     version="${version#v}"
 
-    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
         exit 1
     fi
 
     test "{{host_os}}" = "darwin" || { echo "prepare-release must run on a macOS release workstation"; exit 1; }
     test -z "$(git status --short)" || { echo "Worktree must be clean before a prepare-release run"; exit 1; }
+
+    # A published release MUST be signed + notarized: the thane-agent-macos
+    # auto-updater records provenance but never rejects an unsigned pkg, so the
+    # integrity guarantee has to live on the producer. Enforce it on every
+    # build/publish entry point — not just release-github.sh — so a direct
+    # prepare/publish can't ship an unsigned artifact the updater installs.
+    source scripts/releng/common.sh
+    require_real_codesign_identity
+    require_real_installer_identity
+    require_notary_profile
 
     mkdir -p "{{release-dir}}"
     rm -f \
@@ -861,12 +871,19 @@ publish-release version release_kind="auto":
     force_release="${THANE_RELEASE_FORCE:-false}"
     remote_tag_commit=""
 
-    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
         echo "Version must look like 0.9.0 or 0.9.0-rc.1" >&2
         exit 1
     fi
 
     test -z "$(git status --short)" || { echo "Worktree must be clean before cutting a release"; exit 1; }
+
+    # See prepare-release: the published artifacts must be signed + notarized
+    # (the updater won't reject unsigned), so enforce it on this publish path too.
+    source scripts/releng/common.sh
+    require_real_codesign_identity
+    require_real_installer_identity
+    require_notary_profile
 
     just --quiet release-github-check "$tag"
     export GH_TOKEN="${THANE_GH_TOKEN}"

@@ -66,7 +66,10 @@ normalize_version() {
 
 validate_release_version() {
     local version="$1"
-    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || \
+    # No +build-metadata: the macOS updater's shared SemanticVersion parser
+    # splits only on '-', so a vX.Y.Z+meta tag is silently dropped to .idle.
+    # Keep the producer's accepted set == the consumer's parseable set.
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || \
         die "version must look like 0.9.0 or 0.9.0-rc.1"
 }
 

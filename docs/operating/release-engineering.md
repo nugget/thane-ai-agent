@@ -111,3 +111,36 @@ ships to operators:
 
 Raw binary copies are still possible with lower-level tooling, but they are no
 longer the preferred operational path.
+
+## Release Artifact Contract (the macOS auto-updater)
+
+The [thane-agent-macos](https://github.com/nugget/thane-agent-macos) companion
+app auto-updates its managed `thane` binary from this repo's GitHub releases.
+Its updater (`LocalServer/UpdateManager.swift`) is the consumer and arbiter of
+release integrity, so the following are a hard contract — breaking one bricks the
+update path. `just ci`, `package-macos-pkg.sh`'s self-check, and the
+`prepare-release`/`publish-release` guards enforce most of them; keep the rest in
+mind when touching the release recipes.
+
+- **Asset names** — each release exposes `thane_<version>_darwin_arm64.pkg` and
+  `thane_<version>_darwin_amd64.pkg` (the updater matches the `darwin_<arch>.pkg`
+  suffix), plus exactly one `thane_<version>_checksums.txt`. No second `.pkg` per
+  arch and no second `*_checksums.txt` per release.
+- **Checksums** — `checksums.txt` is `sha256sum`/`shasum -a 256` text-mode lines
+  (`<hex>  <bare-basename>`), hashed *after* signing/notarizing/stapling. The
+  entry name must equal the uploaded asset name exactly.
+- **Pkg layout** — `pkgutil --expand-full` must yield
+  `thane-component.pkg/Payload/Thane/bin/thane`; the binary stays named `thane`
+  and installs to `~/Thane/bin/thane`. `package-macos-pkg.sh` self-checks this.
+- **Signing** — production pkgs are Developer ID Installer-signed, notarized, and
+  stapled. The updater records but does not reject an unsigned pkg, so
+  `prepare-release`/`publish-release` fail fast without the signing credentials.
+- **Version tags** — `vX.Y.Z[-pre]` with a three-integer core and **no
+  `+build-metadata`** (the updater's `SemanticVersion` parser can't read it).
+- **Release visibility** — published on `nugget/thane-ai-agent`, non-draft; a
+  non-prerelease "latest" must exist for default-channel updaters.
+
+The app updates *itself* (a `.dmg`) from the thane-agent-macos repo through a
+parallel updater; that contract is arch-agnostic where this one is
+arch-specific. Any future convergence of the two release pipelines must keep the
+`.pkg` arch-qualified and the `.dmg` arch-agnostic.

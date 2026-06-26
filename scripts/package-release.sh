@@ -42,11 +42,12 @@ cp -R "$root_dir/init/." "$package_dir/init/"
 
 case "$target_os" in
     darwin)
-        archive_path="$output_dir/${package_name}.zip"
-        (
-            cd "$stage_dir"
-            COPYFILE_DISABLE=1 ditto -c -k --norsrc --keepParent "$package_name" "$archive_path"
-        )
+        # darwin release artifacts are signed .pkg files from
+        # package-macos-pkg.sh. This generic packer must never produce a second
+        # darwin asset — a stray .zip would collide with the macOS auto-updater's
+        # single-asset suffix match for the release.
+        echo "package-release.sh does not package darwin — use package-macos-pkg.sh for the signed .pkg" >&2
+        exit 1
         ;;
     *)
         archive_path="$output_dir/${package_name}.tar.gz"
