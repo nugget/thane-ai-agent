@@ -99,8 +99,8 @@ func TestLoopViewResolver_FromStatus_NextWake(t *testing.T) {
 		CurrentSleep: 99 * time.Minute,
 		Config:       Config{Operation: OperationService},
 	})
-	if sleeping.NextWakeIn == nil || *sleeping.NextWakeIn != "+5940s" {
-		t.Errorf("NextWakeIn = %v, want +5940s", sleeping.NextWakeIn)
+	if sleeping.NextWakeDelta == nil || *sleeping.NextWakeDelta != "+5940s" {
+		t.Errorf("NextWakeDelta = %v, want +5940s", sleeping.NextWakeDelta)
 	}
 	// Unsigned seconds (a duration magnitude), not a delta: 99m = 5940s.
 	if sleeping.CurrentSleepDuration == nil || *sleeping.CurrentSleepDuration != "5940s" {
@@ -115,9 +115,9 @@ func TestLoopViewResolver_FromStatus_NextWake(t *testing.T) {
 		State:  State("processing"),
 		Config: Config{Operation: OperationService},
 	})
-	if processing.NextWakeIn != nil || processing.CurrentSleepDuration != nil {
+	if processing.NextWakeDelta != nil || processing.CurrentSleepDuration != nil {
 		t.Errorf("non-sleeping loop should have nil next_wake/current_sleep, got %v/%v",
-			processing.NextWakeIn, processing.CurrentSleepDuration)
+			processing.NextWakeDelta, processing.CurrentSleepDuration)
 	}
 }
 
