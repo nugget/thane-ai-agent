@@ -1,3 +1,9 @@
+# Don't echo each command line before running it — recipes emit their own
+# status and the underlying tools print their own output, so the default
+# interactive experience stays clean. Use `just --verbose <recipe>` to see
+# the commands when debugging.
+set quiet
+
 pkg := "github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 version := env("THANE_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo "dev"`)
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
@@ -31,7 +37,7 @@ vacuum := "go run -modfile=tools/go.mod github.com/daveshanley/vacuum"
 default:
     @echo "Common workflows:"
     @echo "  just release-github <version> [auto|prerelease|release]  # normal production release path"
-    @echo "  just deploy-macos-pkg <user@host>                         # live-host pkg validation without a GitHub release"
+    @echo "  just deploy-macos <user@host>                            # deploy a signed pkg to a remote macOS host"
     @echo "  just ci                                                   # full local validation gate"
     @echo ""
     @just --list
@@ -398,11 +404,11 @@ deploy-scp host remote_bin="Thane/bin/thane" target_os=host_os target_arch=host_
 build-macos-pkg version="" target_arch=host_arch output_dir=pkg-dir:
     scripts/releng/build-macos-pkg.sh "{{version}}" "{{target_arch}}" "{{output_dir}}" true
 
-[doc("Operator path: build, notarize, and deploy a macOS pkg to a remote Tahoe host, then verify the live API version")]
+[doc("Build, notarize, and deploy a signed macOS pkg to a remote macOS host, then verify the live API version (takes user@host)")]
 [group('deploy')]
 [macos]
-deploy-macos-pkg host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" verify_url="http://127.0.0.1:8080/v1/version" verify_timeout_seconds="60":
-    scripts/releng/deploy-macos-pkg.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{verify_url}}" "{{verify_timeout_seconds}}"
+deploy-macos host target_arch=host_arch version="" remote_pkg_dir="/tmp/thane-releng" verify_url="http://127.0.0.1:8080/v1/version" verify_timeout_seconds="60":
+    scripts/releng/deploy-macos.sh "{{host}}" "{{target_arch}}" "{{version}}" "{{remote_pkg_dir}}" "{{verify_url}}" "{{verify_timeout_seconds}}"
 
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
@@ -452,14 +458,12 @@ logs workdir="./Thane":
         fi
     done
 
-# Live smoke test for loops-ng loop definition registry behavior against a running dev instance
+# Live smoke test for loop-definition registry behavior against a running dev instance
 [group('operations')]
 loop-definition-smoke base_url="http://127.0.0.1:8080":
     python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
 
-# Focused loops-ng regression pass for the packages that own the new
-# loop definition, launch, completion, app delivery, and interactive
-# channel integration surfaces.
+# Syntax-check the web dashboard's static JS bundles.
 [group('operations')]
 web-static-check:
     node --check internal/server/web/static/app.js
@@ -467,19 +471,19 @@ web-static-check:
     node --check internal/server/web/static/request.js
     node --check internal/server/web/static/shared.js
 
-# Focused loops-ng regression pass for the packages that own the new
-# loop definition, launch, completion, app delivery, interactive
-# channel integration, and dashboard graph surfaces.
+# Focused loop regression pass: web static check plus the packages that own
+# loop definition, launch, completion, app delivery, interactive channel
+# integration, and dashboard graph surfaces.
 [group('operations')]
-loops-ng-contract-tests:
+loops-contract-tests:
     just web-static-check
     go test -race ./internal/runtime/loop ./internal/tools ./internal/runtime/delegate ./internal/app ./internal/channels/messaging/signal ./internal/server/api
 
-# Broader loops-ng smoke pass: focused regression packages plus live
+# Broader loop smoke pass: focused regression packages plus live
 # loop-definition runtime smoke against a running dev instance.
 [group('operations')]
-loops-ng-smoke base_url="http://127.0.0.1:8080":
-    just loops-ng-contract-tests
+loops-smoke base_url="http://127.0.0.1:8080":
+    just loops-contract-tests
     just loop-definition-smoke {{base_url}}
 
 # Live smoke test with restart/persistence validation. Example:
@@ -489,12 +493,12 @@ loop-definition-persistence base_url="http://127.0.0.1:8080":
     @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
     RESTART_CMD="$RESTART_CMD" python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}} --restart-cmd "$RESTART_CMD"
 
-# Full loops-ng persistence pass: focused regression packages plus the
+# Full loop persistence pass: focused regression packages plus the
 # live restart/persistence harness.
 [group('operations')]
-loops-ng-persistence base_url="http://127.0.0.1:8080":
+loops-persistence base_url="http://127.0.0.1:8080":
     @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
-    just loops-ng-contract-tests
+    just loops-contract-tests
     RESTART_CMD="$RESTART_CMD" just loop-definition-persistence {{base_url}}
 
 # --- Release ---
@@ -960,49 +964,3 @@ publish-release version release_kind="auto":
 [macos]
 release-github version release_kind="auto" container_tag="thane:prepare-release":
     scripts/releng/release-github.sh "{{version}}" "{{release_kind}}" "{{container_tag}}"
-
-[private]
-macos-sign binary identity=codesign-identity options=codesign-options timestamp=codesign-timestamp:
-    just release-sign-macos "{{binary}}" "{{identity}}" "{{options}}" "{{timestamp}}"
-
-[private]
-[macos]
-macos-notarize archive profile=notary-profile:
-    just release-notarize-macos "{{archive}}" "{{profile}}"
-
-[private]
-[macos]
-macos-staple archive:
-    just release-staple-macos "{{archive}}"
-
-[private]
-release-archive version target_os=host_os target_arch=host_arch:
-    just release-build-archive "{{version}}" "{{target_os}}" "{{target_arch}}"
-
-[private]
-release-checksums version:
-    just release-write-checksums "{{version}}"
-
-[private]
-release-snapshot version target_os=host_os target_arch=host_arch:
-    just release-build-snapshot "{{version}}" "{{target_os}}" "{{target_arch}}"
-
-[private]
-release-archive-linux version target_arch:
-    just release-build-linux-archive "{{version}}" "{{target_arch}}"
-
-[private]
-release-upload-validate version:
-    just release-github-check "{{version}}"
-
-[private]
-release-upload version release_kind="auto":
-    just release-github-upload "{{version}}" "" "{{release_kind}}"
-
-[private]
-release-breakpoint version container_tag="thane:release-breakpoint":
-    just prepare-release "{{version}}" "{{container_tag}}"
-
-[private]
-release version release_kind="auto":
-    just publish-release "{{version}}" "{{release_kind}}"

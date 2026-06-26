@@ -194,7 +194,7 @@ Decide the operator path first; the rest follows from that choice.
 
 - [ ] Operator path chosen:
   - [ ] `just release-github <version> [auto|prerelease|release]` for a real published release
-  - [ ] `just deploy-macos-pkg user@host` for live-host pkg testing without cutting a release
+  - [ ] `just deploy-macos user@host` for live-host pkg testing without cutting a release
 - [ ] `just release-github <version>` completes on the macOS Tahoe release workstation
 - [ ] Prepared release metadata matches the commit being published
 - [ ] Release tag created from a clean, up-to-date `main`
@@ -235,7 +235,7 @@ and confirms rollback is real.
   - [ ] One Home Assistant request succeeds if HA is production-critical
   - [ ] One scheduler/background loop completes after restart
   - [ ] Dashboard, request viewer, and registry windows load cleanly enough for incident response
-  - [ ] If a live host was used for pkg validation, `just deploy-macos-pkg user@host` completed and the target Thane API reported the intended build version after restart
+  - [ ] If a live host was used for pkg validation, `just deploy-macos user@host` completed and the target Thane API reported the intended build version after restart
 - [ ] **Log review**
   - [ ] Check recent `WARN`/`ERROR` output after restart
   - [ ] Distinguish startup burst noise from steady-state regressions

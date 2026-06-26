@@ -65,7 +65,7 @@ Use this when you want to test the real installer path on a remote Thane host
 without cutting a GitHub release.
 
 ```bash
-just deploy-macos-pkg aimee@pocket.hollowoak.net
+just deploy-macos aimee@pocket.hollowoak.net
 ```
 
 What it does:
@@ -94,9 +94,9 @@ Useful variants:
 
 ```bash
 just build-macos-pkg
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng
-just deploy-macos-pkg aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng http://127.0.0.1:18080/v1/version 90
+just deploy-macos aimee@pocket.hollowoak.net arm64
+just deploy-macos aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng
+just deploy-macos aimee@pocket.hollowoak.net arm64 0.9.0 /tmp/thane-releng http://127.0.0.1:18080/v1/version 90
 ```
 
 ## Why Pkg-Based Deploys
