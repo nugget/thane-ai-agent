@@ -243,6 +243,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"contact_owner":               {CanonicalID: "native:contact_owner", Source: NativeToolSource, Tags: []string{"owner"}},
 	"set_next_sleep":              {CanonicalID: "native:set_next_sleep", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_status":                 {CanonicalID: "native:loop_status", Source: NativeToolSource, Tags: []string{"loops"}},
+	"loop_wake":                   {CanonicalID: "native:loop_wake", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_delete":      {CanonicalID: "native:loop_definition_delete", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_get":         {CanonicalID: "native:loop_definition_get", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_lint":        {CanonicalID: "native:loop_definition_lint", Source: NativeToolSource, Tags: []string{"loops"}},
