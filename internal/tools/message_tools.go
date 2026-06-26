@@ -104,6 +104,11 @@ func (r *Registry) handleLoopWake(ctx context.Context, args map[string]any) (str
 	if loopID == "" && name == "" {
 		return "", fmt.Errorf("loop_id or name is required")
 	}
+	if loopID != "" && name != "" {
+		// Reject both so targeting is unambiguous — a stale loop_id paired
+		// with a correct name could otherwise wake the wrong loop.
+		return "", fmt.Errorf("provide loop_id or name, not both")
+	}
 
 	destination := messages.Destination{Kind: messages.DestinationLoop}
 	if loopID != "" {
@@ -115,12 +120,14 @@ func (r *Registry) handleLoopWake(ctx context.Context, args map[string]any) (str
 	}
 
 	payload := messages.LoopNotifyPayload{
+		Kind:            "loop_wake",
 		Message:         toolargs.TrimmedString(args, "message"),
 		ForceSupervisor: boolArg(args, "force_supervisor"),
 	}
 	env := messages.Envelope{
 		From:     senderIdentityFromContext(ctx),
 		To:       destination,
+		Scope:    []string{"loop_wake"},
 		Type:     messages.TypeSignal,
 		Payload:  payload,
 		Priority: messagePriorityArg(args),

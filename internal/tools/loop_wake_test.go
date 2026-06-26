@@ -70,6 +70,13 @@ func TestLoopWakeDeliversMessageAndForceSupervisor(t *testing.T) {
 	if payload.Message == "" || !payload.ForceSupervisor {
 		t.Fatalf("payload = %#v, want message + force supervisor", payload)
 	}
+	// A stable kind/scope makes the wake legible in the envelope audit trail.
+	if payload.Kind != "loop_wake" {
+		t.Errorf("payload.Kind = %q, want loop_wake", payload.Kind)
+	}
+	if len(handler.env.Scope) != 1 || handler.env.Scope[0] != "loop_wake" {
+		t.Errorf("scope = %#v, want [loop_wake]", handler.env.Scope)
+	}
 
 	var got struct {
 		Status string `json:"status"`
@@ -107,5 +114,10 @@ func TestLoopWakeByIDAndRequiresTarget(t *testing.T) {
 	// Neither loop_id nor name is an error, not a silent no-op.
 	if _, err := tool.Handler(context.Background(), map[string]any{"message": "hi"}); err == nil {
 		t.Fatal("expected error when neither loop_id nor name is provided")
+	}
+
+	// Both selectors at once is rejected so targeting is unambiguous.
+	if _, err := tool.Handler(context.Background(), map[string]any{"loop_id": "lp_abc", "name": "trip"}); err == nil {
+		t.Fatal("expected error when both loop_id and name are provided")
 	}
 }
