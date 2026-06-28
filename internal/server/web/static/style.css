@@ -269,7 +269,7 @@ body {
   position: fixed;
   top: 3.3rem;
   right: 0.9rem;
-  z-index: 65;
+  z-index: 90;
   display: grid;
   gap: 0.55rem;
   width: min(24rem, calc(100vw - 1.8rem));
@@ -846,7 +846,7 @@ body.resize-col .schema-card__fade {
 }
 
 .schema-card--hero {
-  background: linear-gradient(180deg, rgba(28, 33, 40, 0.9), color-mix(in srgb, var(--bg-secondary) 98%, transparent));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-tertiary) 90%, transparent), color-mix(in srgb, var(--bg-secondary) 98%, transparent));
 }
 
 .schema-hero {
@@ -980,7 +980,7 @@ body.resize-col .schema-card__fade {
 }
 
 .conversation-summary__summary:hover {
-  background: rgba(31, 41, 55, 0.38);
+  background: var(--bg-hover);
 }
 
 .conversation-summary__copy {
@@ -1639,9 +1639,9 @@ body.resize-col .schema-card__fade {
   padding: 0.05em 0.35em;
 }
 .iter-card__tool-item--scope {
-  background: rgba(30, 41, 59, 0.72);
-  color: var(--text-primary);
-  border-color: rgba(96, 165, 250, 0.26);
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 35%, transparent);
 }
 .iter-card__error {
   color: var(--orange);
@@ -3837,7 +3837,7 @@ body.resize-col .schema-card__fade {
   color: var(--text-secondary);
 }
 .proc-badge--processing { background: var(--accent-soft); color: var(--accent); }
-.proc-badge--error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.proc-badge--error { background: var(--red-dim); color: var(--red); }
 .proc-badge--sleeping { color: var(--text-muted); }
 
 .proc-anchor-btn {
