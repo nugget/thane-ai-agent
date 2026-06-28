@@ -24,7 +24,8 @@ function asArray(loops) {
 
 // childrenByParent indexes loops by their parent_id → child ids, the adjacency
 // the subtree walk needs. Loops without a parent_id are roots (absent here).
-export function childrenByParent(loops) {
+// Internal to this module (consumed by subtree); not exported.
+function childrenByParent(loops) {
   const byParent = new Map();
   for (const loop of asArray(loops)) {
     const pid = loop && loop.parent_id;

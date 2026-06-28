@@ -21,13 +21,6 @@ export function registerSurface(name, view) {
   surfaces.set(name, view);
 }
 
-// link builds a hash for a route — link('models') or
-// link('loop-definitions', 'cota_observer'). One source of truth for hash
-// shapes so cross-links don't drift from the route table.
-export function link(name, param) {
-  return '#/' + name + (param != null && param !== '' ? '/' + encodeURIComponent(param) : '');
-}
-
 // safeDecode tolerates malformed percent-encoding in the hash (e.g. a pasted
 // `#/models/%`): decodeURIComponent throws on those, which would otherwise take
 // routing down entirely. Fall back to the raw segment instead.

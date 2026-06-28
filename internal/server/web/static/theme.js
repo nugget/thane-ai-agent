@@ -51,7 +51,10 @@ function loadMode() {
   return m === 'light' || m === 'dark' ? m : 'auto';
 }
 function loadAccent() {
-  return readStored(ACCENT_KEY) || DEFAULT_ACCENT;
+  // Mirror the pre-paint head guard (index.html): only accept a #rrggbb value,
+  // so a corrupt/legacy stored accent can't be applied as an invalid CSS var.
+  const a = readStored(ACCENT_KEY);
+  return a && /^#[0-9a-f]{6}$/i.test(a) ? a : DEFAULT_ACCENT;
 }
 
 function initTheme() {

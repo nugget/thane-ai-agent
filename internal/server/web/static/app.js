@@ -1110,10 +1110,6 @@ function getModelRadiusFromParams(params) {
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
 }
 
-function getModelRadius(modelName) {
-  return getModelRadiusFromParams(getModelParams(modelName));
-}
-
 function getLoopContextWindow(loop) {
   if (!loop) return 0;
   const recent = loop.recent_iterations && loop.recent_iterations.length > 0
@@ -1438,11 +1434,6 @@ function renderNotifications() {
     card.appendChild(actions);
     notificationStack.appendChild(card);
   }
-}
-
-function formatSchemaToken(value) {
-  if (!value) return '';
-  return String(value).replace(/_/g, ' ');
 }
 
 function getLoopLatestSnapshot(loop) {
@@ -4084,7 +4075,6 @@ function renderLoopEntityDetail(loop) {
   appendSchemaRow(identity.body, 'visual category', entity.categoryLabel);
   appendSchemaRow(identity.body, 'classification source', entity.categorySource);
   if (entity.subsystem) appendSchemaRow(identity.body, 'subsystem', entity.subsystem);
-  detailEntity.appendChild(identity.card);
 
   const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail', {
     entityKind: entity.kind,
@@ -4450,7 +4440,7 @@ function renderDetail(opts = {}) {
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
-// escapeHTML, truncate are in shared.js.
+// escapeHTML, truncate, formatSchemaToken are in shared.js.
 
 // ---------------------------------------------------------------------------
 // Rendering — Log Panel
