@@ -423,8 +423,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
+  padding-bottom: 2.4rem;
   color: var(--text-muted);
   font-size: 0.9rem;
   pointer-events: none;

@@ -2760,7 +2760,12 @@ function renderAll() {
 function renderNodes() {
   const loops = Array.from(state.loops.values());
   const hasSystem = state.system !== null;
-  emptyState.hidden = loops.length > 0 || hasSystem;
+  // The registry-core loop is collapsed into the __system__ pseudo-node, so it
+  // is not a "live loop" from the operator's view. Count only loops that get a
+  // visible node, so the empty state still surfaces the genuine
+  // running-but-zero-loops condition instead of being hidden by the lone core.
+  const visibleLoops = hasSystem ? loops.filter((l) => !isRegistryCoreLoop(l)) : loops;
+  emptyState.hidden = visibleLoops.length > 0;
 
   // Canvas center — used as gravity anchor and for new-node spawn.
   const rect = refreshCanvasViewport() || getLayoutViewportRect();
@@ -2969,10 +2974,13 @@ function flashLinkingLine(loopId) {
     : '.link-line';
   const lines = canvasEdgeLayer.querySelectorAll(selector);
   for (const line of lines) {
-    const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
-    line.setAttribute('class', baseClass + ' link-line--flash');
+    const cur = line.getAttribute('class') || '';
+    line.setAttribute('class', cur.replace(' link-line--flash', '') + ' link-line--flash');
     setTimeout(() => {
-      line.setAttribute('class', baseClass);
+      // Strip only the flash modifier from the CURRENT class, so a render that
+      // ran during the flash (e.g. the line entering error/degraded) isn't
+      // clobbered by a stale captured base class.
+      line.setAttribute('class', (line.getAttribute('class') || '').replace(' link-line--flash', ''));
     }, 300);
   }
 }
