@@ -15,7 +15,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -128,14 +128,17 @@ func (s *WebServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent path traversal.
-	clean := filepath.Clean(file)
+	// Prevent path traversal. Use path (not path/filepath): both the request
+	// URL and the embed.FS keys are always slash-separated, so OS-specific
+	// separators must not leak in — otherwise nested modules (views/*, data/*)
+	// would miss the embed read and the etags lookup on Windows.
+	clean := path.Clean(file)
 	if strings.Contains(clean, "..") {
 		http.NotFound(w, r)
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(clean))
+	ext := strings.ToLower(path.Ext(clean))
 	if !allowedExtensions[ext] {
 		http.NotFound(w, r)
 		return
