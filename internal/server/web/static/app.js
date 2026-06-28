@@ -4470,6 +4470,14 @@ function showLogHint(message) {
 // Selection
 // ---------------------------------------------------------------------------
 
+// ensureInspectorVisible reveals the inspector pane when a user-initiated
+// inspect action (node click, "Inspect ..." context menu, long-press focus, or
+// a process-table selection) targets it while it is toggled off — otherwise the
+// selection renders into a hidden pane with no visible effect.
+function ensureInspectorVisible() {
+  if (document.getElementById('detail-panel').hidden) setInspectorVisible(true);
+}
+
 function selectLoop(loopId) {
   if (state.selected === loopId) {
     // Deselect.
@@ -4478,6 +4486,7 @@ function selectLoop(loopId) {
   } else {
     state.selected = loopId;
     fetchLogs(loopId);
+    ensureInspectorVisible();
   }
   if (viewState) viewState.setSelection(state.selected);
   renderAll();
@@ -4488,6 +4497,7 @@ function focusLoop(loopId) {
   if (state.selected !== loopId) {
     state.selected = loopId;
     fetchLogs(loopId);
+    ensureInspectorVisible();
     // Mirror selectLoop so the shared selection (process table) stays in sync
     // on touch long-press, not just mouse click.
     if (viewState) viewState.setSelection(loopId);
@@ -4502,6 +4512,7 @@ function selectSystem() {
   } else {
     state.selected = '__system__';
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    ensureInspectorVisible();
   }
   // The system node isn't a loop; clear any loop selection in the shared state.
   if (viewState) viewState.setSelection(null);
@@ -4512,6 +4523,7 @@ function focusSystem() {
   if (state.selected !== '__system__') {
     state.selected = '__system__';
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    ensureInspectorVisible();
     // The system node isn't a loop; clear any loop selection in the shared
     // state (mirrors selectSystem) so the process table doesn't keep a row lit.
     if (viewState) viewState.setSelection(null);
