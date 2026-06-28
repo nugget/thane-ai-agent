@@ -1395,9 +1395,11 @@ function renderNotifications() {
     eyebrow.textContent = note.sourceLabel || (note.level === 'error' ? 'Error' : note.level === 'warn' ? 'Warning' : 'Notice');
     header.appendChild(eyebrow);
 
+    const created = new Date(note.createdAt);
     const age = document.createElement('time');
     age.className = 'notification-card__age';
-    age.textContent = timeAgo(new Date(note.createdAt));
+    age.dateTime = created.toISOString();
+    age.textContent = timeAgo(created);
     header.appendChild(age);
     card.appendChild(header);
 
@@ -4595,6 +4597,7 @@ function setInspectorVisible(visible) {
   panel.hidden = !visible;
   handle.hidden = !visible;
   btn.classList.toggle('toggle-btn--active', visible);
+  btn.setAttribute('aria-pressed', String(visible));
   dashboardPrefs.inspectorVisible = visible;
   saveDashboardPrefs(dashboardPrefs);
   if (visible) requestAnimationFrame(() => syncAllSchemaCardLayouts());
@@ -4607,15 +4610,27 @@ function setLogsVisible(visible) {
   panel.hidden = !visible;
   handle.hidden = !visible;
   btn.classList.toggle('toggle-btn--active', visible);
+  btn.setAttribute('aria-pressed', String(visible));
   dashboardPrefs.logsVisible = visible;
   saveDashboardPrefs(dashboardPrefs);
 }
 
 function setLegendVisible(visible) {
   if (!legendPanel || !legendBackdrop || !legendToggleBtn) return;
+  const wasVisible = !legendPanel.hidden;
   legendPanel.hidden = !visible;
   legendBackdrop.hidden = !visible;
   legendToggleBtn.classList.toggle('toggle-btn--active', visible);
+  legendToggleBtn.setAttribute('aria-pressed', String(visible));
+  // Move focus into the modal on open and back to the toggle on close, so
+  // keyboard/screen-reader users get dialog focus context. The wasVisible
+  // guard keeps the Escape handler (which calls setLegendVisible(false)
+  // unconditionally) from stealing focus when the legend was already closed.
+  if (visible && !wasVisible) {
+    legendCloseBtn?.focus();
+  } else if (!visible && wasVisible) {
+    legendToggleBtn.focus();
+  }
 }
 
 function toggleLegend() {
@@ -4690,13 +4705,17 @@ function showContextMenu(clientX, clientY, items) {
     if (item.separator) {
       const sep = document.createElement('li');
       sep.className = 'context-menu-sep';
+      sep.setAttribute('role', 'separator');
       contextMenuItems.appendChild(sep);
       continue;
     }
     const li = document.createElement('li');
     li.textContent = item.label;
+    li.setAttribute('role', 'menuitem');
+    li.setAttribute('tabindex', '-1');
     if (item.disabled) {
       li.className = 'context-menu-item context-menu-item--disabled';
+      li.setAttribute('aria-disabled', 'true');
     } else {
       li.addEventListener('click', () => {
         hideContextMenu();
