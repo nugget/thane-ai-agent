@@ -8,8 +8,11 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -26,8 +29,6 @@ var allowedExtensions = map[string]bool{
 	".css":  true,
 	".js":   true,
 	".svg":  true,
-	".png":  true,
-	".ico":  true,
 	".json": true,
 }
 
@@ -38,6 +39,34 @@ func init() {
 			panic(fmt.Sprintf("web: invalid extension in allowedExtensions: %q", ext))
 		}
 	}
+}
+
+// etags maps each embedded static file's path (relative to the static/ root,
+// e.g. "app.js" or "views/forensics.js") to a strong content ETag. Computed
+// once at startup so request handling never re-hashes the asset.
+var etags = buildETags()
+
+func buildETags() map[string]string {
+	m := make(map[string]string)
+	walkErr := fs.WalkDir(staticFS, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, readErr := staticFS.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		sum := sha256.Sum256(data)
+		m[strings.TrimPrefix(path, "static/")] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+	if walkErr != nil {
+		panic(fmt.Sprintf("web: failed to compute static asset etags: %v", walkErr))
+	}
+	return m
 }
 
 // Config holds dependencies for the web server.
@@ -88,8 +117,6 @@ var contentTypes = map[string]string{
 	".css":  "text/css; charset=utf-8",
 	".js":   "application/javascript; charset=utf-8",
 	".svg":  "image/svg+xml",
-	".png":  "image/png",
-	".ico":  "image/x-icon",
 	".json": "application/json",
 }
 
@@ -123,6 +150,20 @@ func (s *WebServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if ct, ok := contentTypes[ext]; ok {
 		w.Header().Set("Content-Type", ct)
 	}
+
+	// Embedded assets are hashless and immutable for the binary's lifetime,
+	// changing only on redeploy. Cache-Control: no-cache means "store but
+	// always revalidate"; the content ETag then lets the browser get a 304
+	// when nothing changed, so it never serves stale code.
+	if etag := etags[clean]; etag != "" {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "no-cache")
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
 	if _, err = w.Write(data); err != nil {
 		s.logger.Debug("failed to write static response", "error", err)
 	}
