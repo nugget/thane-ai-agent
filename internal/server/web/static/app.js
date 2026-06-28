@@ -671,6 +671,14 @@ function reflowPhysicsNodes(prevRect, nextRect) {
 function refreshCanvasViewport() {
   const nextRect = getCanvasRectSnapshot();
   if (!nextRect) return null;
+  // While the graph is hidden (a surface view such as Processes is showing),
+  // the canvas reports a zero-size rect. Keep the last-good viewport instead of
+  // recomputing from it: otherwise the pinned center (cx,cy) collapses to
+  // ~(0,0) and the __system__ node's target is yanked to the corner, drifting
+  // there until the next real render snaps it back to center.
+  if (nextRect.pxWidth <= 0 || nextRect.pxHeight <= 0) {
+    return state.canvasRect;
+  }
   if (isCanvasRectChanged(state.canvasRect, nextRect)) {
     const prevRect = state.canvasRect;
     reflowPhysicsNodes(prevRect, nextRect);
