@@ -173,6 +173,75 @@ func (r *Registry) registerLoopDefinitionTools() {
 	})
 
 	r.Register(&Tool{
+		Name:        "loop_definition_update",
+		Description: "Change a subset of fields on one existing dynamic loop definition in the persistent loops overlay, without resending the whole spec. Use this for incremental edits — enable supervisor, set supervisor_prob, rewrite the profile instructions, retune the sleep envelope, pin a model — instead of recomposing the entire definition with loop_definition_set. Pass name plus any subset of the editable fields below; every field you omit is preserved exactly. Config-owned definitions are immutable. Structural and list-valued fields (operation, completion, outputs, subscriptions, tags) are not editable here — use loop_definition_set to rewrite those; to move a loop use loop_reparent, and to change run state (active/paused) use loop_definition_set_policy. The edit is persisted immediately, but a running service loop keeps its launched-time config until a full relaunch (process restart, or stop_loop then loop_definition_launch) — retunes apply then, not on the loop's next wake.",
+		// Same literal-payload hazard as loop_definition_set/lint: the merged
+		// spec carries outputs[].ref strings, and the field values are stored
+		// verbatim. Universal prefix-to-content resolution would rewrite a real
+		// ref (or a ref-shaped instruction) into a document body. See #1068.
+		SkipContentResolve: true,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Name of the dynamic loop definition to edit.",
+				},
+				"task": map[string]any{
+					"type":        "string",
+					"description": "Replace the loop's per-iteration task prompt.",
+				},
+				"model": map[string]any{
+					"type":        "string",
+					"description": "Pin the persistent model (spec.profile.model). Empty string clears the pin and returns selection to the router.",
+				},
+				"instructions": map[string]any{
+					"type":        "string",
+					"description": "Replace spec.profile.instructions — extra guidance text injected into each wake's user message (self-only; does not cascade to child loops).",
+				},
+				"quality_floor": map[string]any{
+					"type":        "integer",
+					"description": "Minimum model quality rating 1-10 (spec.profile.quality_floor). 0 clears it.",
+				},
+				"mission": map[string]any{
+					"type":        "string",
+					"description": "Routing mission hint (spec.profile.mission), e.g. \"conversation\" or \"background\".",
+				},
+				"supervisor": map[string]any{
+					"type":        "boolean",
+					"description": "Enable periodic supervisor turns (a per-wake Bernoulli trial that escalates to the more capable model).",
+				},
+				"supervisor_prob": map[string]any{
+					"type":        "number",
+					"description": "Per-wake probability of a supervisor turn, 0.0-1.0. Only meaningful when supervisor is true.",
+				},
+				"supervisor_instructions": map[string]any{
+					"type":        "string",
+					"description": "Replace spec.supervisor_profile.instructions — the prompt prefix used on supervisor turns. Creates supervisor_profile if absent.",
+				},
+				"sleep_min": map[string]any{
+					"type":        "string",
+					"description": "Minimum sleep between iterations, as a Go duration string like \"5m\".",
+				},
+				"sleep_max": map[string]any{
+					"type":        "string",
+					"description": "Maximum sleep between iterations, as a Go duration string like \"1h\".",
+				},
+				"sleep_default": map[string]any{
+					"type":        "string",
+					"description": "Initial sleep before the loop self-adjusts, as a Go duration string like \"15m\".",
+				},
+				"max_iter": map[string]any{
+					"type":        "integer",
+					"description": "Maximum iteration attempts per wake.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: r.handleLoopDefinitionUpdate,
+	})
+
+	r.Register(&Tool{
 		Name:        "loop_definition_delete",
 		Description: "Delete one dynamic loop definition from the persistent loops overlay. Config-owned definitions are immutable and cannot be deleted.",
 		Parameters: map[string]any{

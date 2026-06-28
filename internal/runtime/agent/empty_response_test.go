@@ -355,10 +355,12 @@ func TestDeferredText_FreshTextOverrides(t *testing.T) {
 	}
 }
 
-func TestDeferredText_StrippedFromContext(t *testing.T) {
-	// The text from a mixed (text + tool_call) response should be stripped
-	// from the assistant message in llmMessages so the model doesn't see
-	// its own text and restate it.
+func TestDeferredText_PreservedInContext(t *testing.T) {
+	// The text from a mixed (text + tool_call) response is PRESERVED on the
+	// assistant message in llmMessages so the model retains its own reasoning
+	// across iterations. Erasing it made the model lose its pre-write plan and
+	// stall (the narrate-then-stop outage). The empty-response fallback still
+	// uses the deferred copy, so #347's user-visible duplication stays fixed.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			// Iter 0: text + tool call
@@ -400,14 +402,19 @@ func TestDeferredText_StrippedFromContext(t *testing.T) {
 		t.Fatalf("Run() error: %v", err)
 	}
 
-	// Inspect the messages sent to the second LLM call. The assistant
-	// message from iter 0 should have empty Content (text stripped).
+	// Inspect the messages sent to the second LLM call. The assistant message
+	// from iter 0 must RETAIN its text (the model's reasoning), not be stripped.
 	secondCall := mock.calls[1]
+	found := false
 	for _, msg := range secondCall.Messages {
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			if msg.Content != "" {
-				t.Errorf("assistant message with tool calls should have empty Content, got %q", msg.Content)
+			found = true
+			if msg.Content != "Here's what I found." {
+				t.Errorf("assistant message with tool calls should preserve its reasoning text, got %q", msg.Content)
 			}
 		}
+	}
+	if !found {
+		t.Fatal("expected an assistant message with tool calls in the second call's history")
 	}
 }
