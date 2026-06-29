@@ -36,11 +36,11 @@
       </nav>
     </div>
     <div class="header-right">
-      <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
-      <button id="toggle-logs" class="toggle-btn" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
-      <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
+      <button id="toggle-inspector" class="toggle-btn toggle-btn--active" aria-pressed="true" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
+      <button id="toggle-logs" class="toggle-btn" aria-pressed="false" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <button id="toggle-legend" class="toggle-btn" aria-pressed="false" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
       <button id="toggle-theme" class="toggle-btn" title="Theme &amp; accent color"><span class="toggle-icon"></span> Theme</button>
-      <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
+      <span id="conn-status" class="conn-badge conn-badge--connecting" role="status" aria-live="polite">connecting</span>
     </div>
   </header>
 
@@ -55,7 +55,7 @@
         </g>
       </svg>
       <div id="empty-state" class="empty-state">
-        <p>No live loops</p>
+        <p>No loops running</p>
       </div>
     </section>
 
@@ -104,7 +104,7 @@
       </div>
     </div>
     <div id="log-empty" class="log-empty">
-      <p>Click a loop node to load logs</p>
+      <p>Select a loop node to inspect its diagnostic tail</p>
     </div>
     <div id="log-scroll" class="log-scroll" hidden>
       <table id="log-table" class="log-table">
@@ -131,10 +131,10 @@
   </footer>
 
   <div id="legend-backdrop" class="legend-backdrop" hidden></div>
-  <aside id="legend-panel" class="legend-panel" hidden>
+  <aside id="legend-panel" class="legend-panel" role="dialog" aria-modal="true" aria-labelledby="legend-title" hidden>
     <div class="legend-panel__header">
       <div>
-        <h2 class="legend-panel__title">Graph Legend</h2>
+        <h2 id="legend-title" class="legend-panel__title">Graph Legend</h2>
         <p class="legend-panel__subtitle">Entity family, runtime state, trust, lineage, and capacity cues.</p>
       </div>
       <button id="legend-close" class="btn" title="Close legend">&times;</button>
@@ -354,7 +354,7 @@
   </aside>
 
   <div id="context-menu" class="context-menu" hidden>
-    <ul id="context-menu-items"></ul>
+    <ul id="context-menu-items" role="menu"></ul>
   </div>
 
   <div id="theme-popover" class="theme-popover" hidden>

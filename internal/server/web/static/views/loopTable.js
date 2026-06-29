@@ -61,7 +61,7 @@ const COLUMNS = [
   { key: 'tokens', label: 'Tokens (in→out)', align: 'right', value: (l) => (l.last_output_tokens || 0) + (l.last_input_tokens || 0) },
   { key: 'context', label: 'Context', align: 'right', value: (l) => l.context_window || 0 },
   { key: 'activity', label: 'Activity', align: 'left', value: (l) => activeToolNames(l).length },
-  { key: 'wake', label: 'Last wake', align: 'right', value: (l) => Date.parse(l.last_wake_at || '') || 0 },
+  { key: 'wake', label: 'Last wake', align: 'right', value: (l) => { const t = Date.parse(l.last_wake_at || ''); return Number.isNaN(t) || t < 0 ? 0 : t; } },
   { key: 'err', label: 'Err', align: 'right', value: (l) => l.consecutive_errors || 0 },
 ];
 

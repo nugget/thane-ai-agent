@@ -124,3 +124,71 @@ func TestHandleIndex_RetiredPathIs404(t *testing.T) {
 		t.Errorf("GET /api/system status = %d, want 404 (not the dashboard shell)", w.Code)
 	}
 }
+
+func TestHandleStatic_NestedModules(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer()
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// The SPA boot imports nested ES modules (main.js: ./views/*, ./data/*).
+	// Guard that the {file...} wildcard keeps serving subdirectory assets, so a
+	// future change to the path handling can't silently break console boot.
+	for _, path := range []string{
+		"/static/views/placeholder.js",
+		"/static/data/viewState.js",
+	} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s status = %d, want 200", path, resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/javascript") {
+			t.Errorf("GET %s Content-Type = %q, want application/javascript", path, ct)
+		}
+	}
+}
+
+func TestHandleStatic_ETagRevalidation(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer()
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	// First request: a 200 carrying a strong ETag and a revalidation directive.
+	req := httptest.NewRequest("GET", "/static/app.js", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /static/app.js status = %d, want 200", resp.StatusCode)
+	}
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		t.Fatal("GET /static/app.js missing ETag header")
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", cc)
+	}
+
+	// Conditional re-request with the same validator: a 304 with an empty body.
+	req2 := httptest.NewRequest("GET", "/static/app.js", nil)
+	req2.Header.Set("If-None-Match", etag)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+
+	resp2 := w2.Result()
+	if resp2.StatusCode != http.StatusNotModified {
+		t.Fatalf("conditional GET status = %d, want 304", resp2.StatusCode)
+	}
+	body, _ := io.ReadAll(resp2.Body)
+	if len(body) != 0 {
+		t.Errorf("304 response body = %d bytes, want empty", len(body))
+	}
+}

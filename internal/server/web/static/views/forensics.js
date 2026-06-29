@@ -235,6 +235,11 @@ export function forensicsView(getStore, viewState) {
     body.replaceChildren();
     const l = focused();
     if (!l) {
+      // Reset the fetch trackers so re-selecting the SAME loop later refetches
+      // its log tail / waterfall instead of painting the stale cached copies.
+      logsFor = reqFor = null;
+      logsEntries = [];
+      reqDetail = null;
       body.appendChild(el('div', { class: 'surface-empty' }, [
         el('p', { text: 'Select a loop — in the graph or the process table — to watch it live here.' }),
       ]));

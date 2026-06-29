@@ -604,17 +604,23 @@ function syncPhysicsNodes(cx, cy) {
 }
 
 function cloneRect(rect) {
-  return rect ? { width: rect.width, height: rect.height, cx: rect.cx, cy: rect.cy } : null;
+  return rect
+    ? { width: rect.width, height: rect.height, cx: rect.cx, cy: rect.cy,
+        pxWidth: rect.pxWidth, pxHeight: rect.pxHeight }
+    : null;
 }
 
 function getLayoutViewportRect() {
   const rect = canvas.getBoundingClientRect();
   const zoom = Math.max(0.001, viewport.zoom || 1);
+  // World-space dims (zoom-divided) feed the physics layout; raw pixel dims
+  // are carried separately so resize-detection can ignore zoom (a wheel-zoom
+  // changes the world dims but not the canvas's physical size).
   const width = rect.width / zoom;
   const height = rect.height / zoom;
   const cx = (rect.width / 2 - viewport.panX) / zoom;
   const cy = (rect.height / 2 - viewport.panY) / zoom;
-  return { width, height, cx, cy };
+  return { width, height, cx, cy, pxWidth: rect.width, pxHeight: rect.height };
 }
 
 function getCanvasRectSnapshot() {
@@ -623,8 +629,10 @@ function getCanvasRectSnapshot() {
 
 function isCanvasRectChanged(prevRect, nextRect) {
   if (!prevRect || !nextRect) return true;
-  return Math.abs(prevRect.width - nextRect.width) > 0.5 ||
-    Math.abs(prevRect.height - nextRect.height) > 0.5;
+  // Compare the raw (un-zoomed) pixel size so a zoom isn't mistaken for a
+  // physical canvas resize — only a real panel/window resize reflows physics.
+  return Math.abs(prevRect.pxWidth - nextRect.pxWidth) > 0.5 ||
+    Math.abs(prevRect.pxHeight - nextRect.pxHeight) > 0.5;
 }
 
 function reflowPhysicsNodes(prevRect, nextRect) {
@@ -663,6 +671,14 @@ function reflowPhysicsNodes(prevRect, nextRect) {
 function refreshCanvasViewport() {
   const nextRect = getCanvasRectSnapshot();
   if (!nextRect) return null;
+  // While the graph is hidden (a surface view such as Processes is showing),
+  // the canvas reports a zero-size rect. Keep the last-good viewport instead of
+  // recomputing from it: otherwise the pinned center (cx,cy) collapses to
+  // ~(0,0) and the __system__ node's target is yanked to the corner, drifting
+  // there until the next real render snaps it back to center.
+  if (nextRect.pxWidth <= 0 || nextRect.pxHeight <= 0) {
+    return state.canvasRect;
+  }
   if (isCanvasRectChanged(state.canvasRect, nextRect)) {
     const prevRect = state.canvasRect;
     reflowPhysicsNodes(prevRect, nextRect);
@@ -1102,10 +1118,6 @@ function getModelRadiusFromParams(params) {
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
 }
 
-function getModelRadius(modelName) {
-  return getModelRadiusFromParams(getModelParams(modelName));
-}
-
 function getLoopContextWindow(loop) {
   if (!loop) return 0;
   const recent = loop.recent_iterations && loop.recent_iterations.length > 0
@@ -1387,9 +1399,11 @@ function renderNotifications() {
     eyebrow.textContent = note.sourceLabel || (note.level === 'error' ? 'Error' : note.level === 'warn' ? 'Warning' : 'Notice');
     header.appendChild(eyebrow);
 
+    const created = new Date(note.createdAt);
     const age = document.createElement('time');
     age.className = 'notification-card__age';
-    age.textContent = timeAgo(new Date(note.createdAt));
+    age.dateTime = created.toISOString();
+    age.textContent = timeAgo(created);
     header.appendChild(age);
     card.appendChild(header);
 
@@ -1428,11 +1442,6 @@ function renderNotifications() {
     card.appendChild(actions);
     notificationStack.appendChild(card);
   }
-}
-
-function formatSchemaToken(value) {
-  if (!value) return '';
-  return String(value).replace(/_/g, ' ');
 }
 
 function getLoopLatestSnapshot(loop) {
@@ -2750,7 +2759,12 @@ function renderAll() {
 function renderNodes() {
   const loops = Array.from(state.loops.values());
   const hasSystem = state.system !== null;
-  emptyState.hidden = loops.length > 0 || hasSystem;
+  // The registry-core loop is collapsed into the __system__ pseudo-node, so it
+  // is not a "live loop" from the operator's view. Count only loops that get a
+  // visible node, so the empty state still surfaces the genuine
+  // running-but-zero-loops condition instead of being hidden by the lone core.
+  const visibleLoops = hasSystem ? loops.filter((l) => !isRegistryCoreLoop(l)) : loops;
+  emptyState.hidden = visibleLoops.length > 0;
 
   // Canvas center — used as gravity anchor and for new-node spawn.
   const rect = refreshCanvasViewport() || getLayoutViewportRect();
@@ -2959,10 +2973,13 @@ function flashLinkingLine(loopId) {
     : '.link-line';
   const lines = canvasEdgeLayer.querySelectorAll(selector);
   for (const line of lines) {
-    const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
-    line.setAttribute('class', baseClass + ' link-line--flash');
+    const cur = line.getAttribute('class') || '';
+    line.setAttribute('class', cur.replace(' link-line--flash', '') + ' link-line--flash');
     setTimeout(() => {
-      line.setAttribute('class', baseClass);
+      // Strip only the flash modifier from the CURRENT class, so a render that
+      // ran during the flash (e.g. the line entering error/degraded) isn't
+      // clobbered by a stale captured base class.
+      line.setAttribute('class', (line.getAttribute('class') || '').replace(' link-line--flash', ''));
     }, 300);
   }
 }
@@ -4066,7 +4083,6 @@ function renderLoopEntityDetail(loop) {
   appendSchemaRow(identity.body, 'visual category', entity.categoryLabel);
   appendSchemaRow(identity.body, 'classification source', entity.categorySource);
   if (entity.subsystem) appendSchemaRow(identity.body, 'subsystem', entity.subsystem);
-  detailEntity.appendChild(identity.card);
 
   const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail', {
     entityKind: entity.kind,
@@ -4432,7 +4448,7 @@ function renderDetail(opts = {}) {
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
-// escapeHTML, truncate are in shared.js.
+// escapeHTML, truncate, formatSchemaToken are in shared.js.
 
 // ---------------------------------------------------------------------------
 // Rendering — Log Panel
@@ -4454,6 +4470,14 @@ function showLogHint(message) {
 // Selection
 // ---------------------------------------------------------------------------
 
+// ensureInspectorVisible reveals the inspector pane when a user-initiated
+// inspect action (node click, "Inspect ..." context menu, long-press focus, or
+// a process-table selection) targets it while it is toggled off — otherwise the
+// selection renders into a hidden pane with no visible effect.
+function ensureInspectorVisible() {
+  if (document.getElementById('detail-panel').hidden) setInspectorVisible(true);
+}
+
 function selectLoop(loopId) {
   if (state.selected === loopId) {
     // Deselect.
@@ -4462,6 +4486,7 @@ function selectLoop(loopId) {
   } else {
     state.selected = loopId;
     fetchLogs(loopId);
+    ensureInspectorVisible();
   }
   if (viewState) viewState.setSelection(state.selected);
   renderAll();
@@ -4472,6 +4497,10 @@ function focusLoop(loopId) {
   if (state.selected !== loopId) {
     state.selected = loopId;
     fetchLogs(loopId);
+    ensureInspectorVisible();
+    // Mirror selectLoop so the shared selection (process table) stays in sync
+    // on touch long-press, not just mouse click.
+    if (viewState) viewState.setSelection(loopId);
     renderAll();
   }
 }
@@ -4483,6 +4512,7 @@ function selectSystem() {
   } else {
     state.selected = '__system__';
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    ensureInspectorVisible();
   }
   // The system node isn't a loop; clear any loop selection in the shared state.
   if (viewState) viewState.setSelection(null);
@@ -4493,6 +4523,10 @@ function focusSystem() {
   if (state.selected !== '__system__') {
     state.selected = '__system__';
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    ensureInspectorVisible();
+    // The system node isn't a loop; clear any loop selection in the shared
+    // state (mirrors selectSystem) so the process table doesn't keep a row lit.
+    if (viewState) viewState.setSelection(null);
     renderAll();
   }
 }
@@ -4581,6 +4615,7 @@ function setInspectorVisible(visible) {
   panel.hidden = !visible;
   handle.hidden = !visible;
   btn.classList.toggle('toggle-btn--active', visible);
+  btn.setAttribute('aria-pressed', String(visible));
   dashboardPrefs.inspectorVisible = visible;
   saveDashboardPrefs(dashboardPrefs);
   if (visible) requestAnimationFrame(() => syncAllSchemaCardLayouts());
@@ -4593,15 +4628,27 @@ function setLogsVisible(visible) {
   panel.hidden = !visible;
   handle.hidden = !visible;
   btn.classList.toggle('toggle-btn--active', visible);
+  btn.setAttribute('aria-pressed', String(visible));
   dashboardPrefs.logsVisible = visible;
   saveDashboardPrefs(dashboardPrefs);
 }
 
 function setLegendVisible(visible) {
   if (!legendPanel || !legendBackdrop || !legendToggleBtn) return;
+  const wasVisible = !legendPanel.hidden;
   legendPanel.hidden = !visible;
   legendBackdrop.hidden = !visible;
   legendToggleBtn.classList.toggle('toggle-btn--active', visible);
+  legendToggleBtn.setAttribute('aria-pressed', String(visible));
+  // Move focus into the modal on open and back to the toggle on close, so
+  // keyboard/screen-reader users get dialog focus context. The wasVisible
+  // guard keeps the Escape handler (which calls setLegendVisible(false)
+  // unconditionally) from stealing focus when the legend was already closed.
+  if (visible && !wasVisible) {
+    legendCloseBtn?.focus();
+  } else if (!visible && wasVisible) {
+    legendToggleBtn.focus();
+  }
 }
 
 function toggleLegend() {
@@ -4676,13 +4723,17 @@ function showContextMenu(clientX, clientY, items) {
     if (item.separator) {
       const sep = document.createElement('li');
       sep.className = 'context-menu-sep';
+      sep.setAttribute('role', 'separator');
       contextMenuItems.appendChild(sep);
       continue;
     }
     const li = document.createElement('li');
     li.textContent = item.label;
+    li.setAttribute('role', 'menuitem');
+    li.setAttribute('tabindex', '-1');
     if (item.disabled) {
       li.className = 'context-menu-item context-menu-item--disabled';
+      li.setAttribute('aria-disabled', 'true');
     } else {
       li.addEventListener('click', () => {
         hideContextMenu();
@@ -4723,15 +4774,20 @@ document.addEventListener('keydown', (e) => {
   const tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+  // Bare-key toggles must not hijack browser/OS chords (Cmd/Ctrl/Alt + L/I).
+  // Shift stays allowed because '?' is Shift+/ on US layouts. Escape is left
+  // reachable so modifier+Escape still runs the close path.
+  const mod = e.metaKey || e.ctrlKey || e.altKey;
+
   switch (e.key.toLowerCase()) {
     case 'i':
-      toggleInspector();
+      if (!mod) toggleInspector();
       break;
     case 'l':
-      toggleLogs();
+      if (!mod) toggleLogs();
       break;
     case '?':
-      toggleLegend();
+      if (!mod) toggleLegend();
       break;
     case 'escape':
       if (activeRequestID) {
@@ -5019,7 +5075,13 @@ async function showRequestDetail(requestID) {
     activeRequestID = requestID;
     activeRequestJSON = JSON.stringify(detail, null, 2);
 
-    // Show the request detail panel, hide others.
+    // Show the request detail panel, hide others. Reveal the inspector aside
+    // and its resize handle directly (without persisting) so the request
+    // detail is visible even when the operator has the Inspector toggled off —
+    // e.g. opening a #request/<id> deep link on load. The saved Inspector
+    // preference is restored in closeRequestDetail / handleHashRoute.
+    document.getElementById('detail-panel').hidden = false;
+    document.getElementById('resize-v').hidden = false;
     detailPlaceholder.hidden = true;
     detailContent.hidden = true;
     requestDetailPanel.hidden = false;
@@ -5051,6 +5113,9 @@ function closeRequestDetail() {
     requestDetailAbort = null;
   }
   requestDetailPanel.hidden = true;
+  // Restore the inspector aside to the operator's saved preference — the
+  // request view may have force-revealed it.
+  setInspectorVisible(dashboardPrefs.inspectorVisible);
   // Restore the previous detail panel state.
   renderAll();
   // Clear hash while preserving path and query string.
@@ -5074,11 +5139,13 @@ $('#request-detail-copy').addEventListener('click', () => {
 // Override renderDetail to respect active request detail view.
 const _origRenderDetail = renderDetail;
 // eslint-disable-next-line no-global-assign
-renderDetail = function() {
+renderDetail = function(...args) {
   if (activeRequestID && !requestDetailPanel.hidden) {
     return; // Don't overwrite the request detail panel.
   }
-  _origRenderDetail();
+  // Forward opts (force/instantLayout) so schema-card preset clicks still get
+  // their forced re-render instead of being silently deferred.
+  _origRenderDetail(...args);
 };
 
 // Request ID chips resolve through inspectRequest (assigned to
@@ -5114,6 +5181,9 @@ function handleHashRoute() {
       requestDetailAbort = null;
     }
     requestDetailPanel.hidden = true;
+    // Restore the inspector aside to the operator's saved preference — the
+    // request view may have force-revealed it.
+    setInspectorVisible(dashboardPrefs.inspectorVisible);
     renderAll();
   }
 }

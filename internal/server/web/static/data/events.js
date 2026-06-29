@@ -26,13 +26,26 @@ function dispatch(method, payload) {
   }
 }
 
+// parse decodes an SSE payload, logging and skipping a malformed/truncated
+// frame rather than throwing out of the EventSource handler (which would drop
+// the event for every subscriber). Mirrors the guard-every-parse convention
+// used for persisted/streamed data elsewhere in the console.
+function parse(e) {
+  try {
+    return JSON.parse(e.data);
+  } catch (err) {
+    console.error('SSE bad payload', err);
+    return null;
+  }
+}
+
 function open() {
   closing = false;
   dispatch('onState', 'connecting');
   source = new EventSource(STREAM_URL);
-  source.addEventListener('snapshot', (e) => dispatch('onSnapshot', JSON.parse(e.data)));
-  source.addEventListener('loop', (e) => dispatch('onLoop', JSON.parse(e.data)));
-  source.addEventListener('delegate', (e) => dispatch('onDelegate', JSON.parse(e.data)));
+  source.addEventListener('snapshot', (e) => { const d = parse(e); if (d !== null) dispatch('onSnapshot', d); });
+  source.addEventListener('loop', (e) => { const d = parse(e); if (d !== null) dispatch('onLoop', d); });
+  source.addEventListener('delegate', (e) => { const d = parse(e); if (d !== null) dispatch('onDelegate', d); });
   source.onopen = () => { if (!closing) dispatch('onState', 'connected'); };
   source.onerror = () => { if (!closing) dispatch('onState', 'disconnected'); };
 }
