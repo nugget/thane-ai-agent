@@ -54,6 +54,15 @@ const physics = {
   // position: force = gravityStrength * (dist - ringRadius), signed so it
   // reels a node in when it drifts out and pushes it off when it sinks inward.
   gravityStrength:    0.06,
+  // Sibling angular spread: a decaying (1/d^2) central repulsion among
+  // same-parent siblings (scaled by ring^2) that reaches across gaps, so a
+  // clustered or cold-start-piled family spreads around its whole ring —
+  // overlap-only repulsion is too short-range to detangle a pile. It decays
+  // with distance, so an evenly-spaced ring feels almost none and still settles
+  // (a constant-magnitude spread never vanishes and orbits forever).
+  // siblingRepelMax caps the per-pair force near contact.
+  siblingRepelStrength: 1.2,
+  siblingRepelMax:    6,
   pinnedAnchorStrength: 0.16,
   pinnedAnchorDamping: 0.72,
   // Overlap repulsion fires ONLY when node footprints intersect; the force is
@@ -508,11 +517,11 @@ function physicsStep(cx, cy) {
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
 
-  // 1. Gravity-to-ring, per family. Each child is reeled onto its family's ring
-  // around the parent's CURRENT position — radius set, angle free. The angle is
-  // negotiated by the overlap repulsion below, which spaces siblings around the
-  // ring and (unlike a constant-magnitude sibling-spread) vanishes once they no
-  // longer overlap, so the layout settles to a true rest instead of orbiting.
+  // 1. Gravity-to-ring + 2. sibling spread, per family. Gravity reels each
+  // child onto its family's ring around the parent's CURRENT position (radius
+  // set, angle free); the decaying sibling repulsion then distributes the family
+  // around that ring and fills gaps so a clustered or cold-start-piled family
+  // detangles, while vanishing at even spacing so the layout settles to rest.
   const sysNode = P.nodes.get('__system__');
   for (const [key, loops] of groups) {
     const isRoot = key === '__root__';
@@ -541,6 +550,31 @@ function physicsStep(cx, cy) {
       const pull = P.gravityStrength * (dist - ring) / dist;
       nd.fx -= pull * dx;
       nd.fy -= pull * dy;
+    }
+
+    // Decaying (1/d^2) central repulsion among siblings — the long-range
+    // distribution force overlap-only repulsion lacks. Scaled by ring^2 so its
+    // reach tracks the family size; capped near contact to avoid a singularity.
+    if (loops.length > 1) {
+      const k = P.siblingRepelStrength * ring * ring;
+      for (let i = 0; i < loops.length; i++) {
+        const a = P.nodes.get(loops[i].id);
+        if (!a || a.pinned) continue;
+        for (let j = i + 1; j < loops.length; j++) {
+          const b = P.nodes.get(loops[j].id);
+          if (!b) continue;
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          let d2 = (dx * dx) + (dy * dy);
+          if (d2 < 1) d2 = 1;
+          const f = Math.min(P.siblingRepelMax, k / d2);
+          const d = Math.sqrt(d2);
+          const fx = (dx / d) * f;
+          const fy = (dy / d) * f;
+          a.fx += fx; a.fy += fy;
+          if (!b.pinned) { b.fx -= fx; b.fy -= fy; }
+        }
+      }
     }
   }
 
