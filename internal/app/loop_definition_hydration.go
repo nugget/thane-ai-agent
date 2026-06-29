@@ -16,6 +16,11 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 	for _, def := range baseDefinitions {
 		seen[strings.TrimSpace(def.Name)] = struct{}{}
 	}
+	// Grouping containers first, so member loops resolve their ParentName to
+	// a container that's already registered.
+	for _, spec := range builtInContainerDefinitionSpecs(a.cfg) {
+		baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
+	}
 	for _, spec := range builtInServiceDefinitionSpecs(a.cfg) {
 		baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 	}
@@ -35,7 +40,11 @@ func (a *App) buildLoopDefinitionBaseSpecs() ([]looppkg.Spec, error) {
 			return nil, fmt.Errorf("%s config: %w", reg.Name, err)
 		}
 		if enabled && !hasDefinition {
-			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, reg.DefinitionSpec(a))
+			spec := reg.DefinitionSpec(a)
+			// The core cognition loops (ego, metacognitive, archivist) live
+			// under the cognition container.
+			spec.ParentName = cognitionContainerName
+			baseDefinitions = appendMissingDefinition(baseDefinitions, seen, spec)
 		}
 	}
 	return baseDefinitions, nil

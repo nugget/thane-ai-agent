@@ -269,6 +269,89 @@ func TestCoreServiceLoopByNameMatchesSlice(t *testing.T) {
 	}
 }
 
+// TestBuildLoopDefinitionBaseSpecs_GroupingContainers checks that the
+// built-in grouping containers are seeded and that their member loops nest
+// under them via ParentName, giving the node graph its top-level shape.
+func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
+	t.Parallel()
+
+	cfg := coreServiceTestConfig() // ego / metacognitive / archivist enabled
+	cfg.HomeAssistant = config.HomeAssistantConfig{URL: "http://ha.local:8123", Token: "tok"}
+	cfg.MQTT = config.MQTTConfig{
+		Broker:             "mqtt://broker.local:1883",
+		DeviceName:         "thane-dev",
+		PublishIntervalSec: 60,
+		Telemetry:          config.TelemetryConfig{Enabled: true, Interval: 60},
+	}
+
+	a := &App{cfg: cfg}
+	specs, err := a.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		t.Fatalf("buildLoopDefinitionBaseSpecs: %v", err)
+	}
+	byName := make(map[string]looppkg.Spec, len(specs))
+	for _, s := range specs {
+		byName[s.Name] = s
+	}
+
+	// Containers exist and are inert grouping containers.
+	for _, name := range []string{cognitionContainerName, homeAssistantContainerName} {
+		s, ok := byName[name]
+		if !ok {
+			t.Errorf("grouping container %q missing from base specs", name)
+			continue
+		}
+		if s.Operation != looppkg.OperationContainer {
+			t.Errorf("container %q Operation = %q, want %q", name, s.Operation, looppkg.OperationContainer)
+		}
+	}
+
+	// Cognition members nest under the cognition container.
+	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName} {
+		if got := byName[name].ParentName; got != cognitionContainerName {
+			t.Errorf("%s ParentName = %q, want %q", name, got, cognitionContainerName)
+		}
+	}
+
+	// Home Assistant members nest under the home-assistant container.
+	for _, name := range []string{haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, "mqtt-default-handler"} {
+		if got := byName[name].ParentName; got != homeAssistantContainerName {
+			t.Errorf("%s ParentName = %q, want %q", name, got, homeAssistantContainerName)
+		}
+	}
+}
+
+// TestBuiltInContainerDefinitionSpecs_Gating guards the container gating:
+// cognition only when a core loop is enabled, home-assistant only when HA or
+// MQTT is configured, channels always.
+func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
+	t.Parallel()
+
+	names := func(specs []looppkg.Spec) map[string]bool {
+		m := make(map[string]bool, len(specs))
+		for _, s := range specs {
+			m[s.Name] = true
+		}
+		return m
+	}
+
+	bare := names(builtInContainerDefinitionSpecs(&config.Config{}))
+	if len(bare) != 0 {
+		t.Errorf("bare config seeded a gated container, want none: %v", bare)
+	}
+
+	if cog := names(builtInContainerDefinitionSpecs(coreServiceTestConfig())); !cog[cognitionContainerName] {
+		t.Error("cognition container missing when core loops enabled")
+	}
+
+	ha := names(builtInContainerDefinitionSpecs(&config.Config{
+		MQTT: config.MQTTConfig{Broker: "mqtt://b:1883", DeviceName: "d"},
+	}))
+	if !ha[homeAssistantContainerName] {
+		t.Error("home-assistant container missing when MQTT configured")
+	}
+}
+
 // TestCoreServiceRegistrationHydrate exercises each registration's
 // Hydrate closure directly: a missing cached config is a hard error, and
 // a hydrated spec attaches only genuine runtime-only hooks. The prompt is
