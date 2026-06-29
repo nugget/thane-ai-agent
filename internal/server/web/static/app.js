@@ -43,39 +43,75 @@ const CONVERSATION_SESSION_LIMIT = 8;
 
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
-  // The layout is hierarchy-first, with physics used only to smooth motion
-  // and resolve conflicts. This follows the Gource pattern much more closely
-  // than a global force soup.
-  springStrength:     0.014,
-  springRestLength:   164,
-  childSpringStrength: 0.05,
-  childRestLength:    112,
-  orbitAttractionStrength: 0.058,
-  orbitProjectionBlend: 0.14,
-  orbitProjectionMinBlend: 0.032,
-  orbitProjectionDistanceScale: 96,
-  orbitProjectionVelocityDamping: 0.74,
-  orbitRadiusVelocityGain: 0.028,
-  orbitRadiusVelocityCap: 1.3,
-  orbitAspectStrength: 0.42,
-  viewportReflowVelocityGain: 0.18,
-  viewportReflowPositionBlend: 0.08,
-  viewportReflowVelocityCap: 3.2,
+  // A homage to Gource's force model (acaudwell/Gource, src/dirnode.cpp): one
+  // force accumulator per node holding gravity-to-ring + overlap-only
+  // repulsion, integrated once with no stored velocity. Angle is emergent —
+  // repulsion spaces siblings around the ring rather than assigning precomputed
+  // slots — so the layout negotiates a single equilibrium and settles to rest.
+  springRestLength:   164,   // baseline root-ring radius
+  childRestLength:    112,   // baseline child-ring radius
+  // Gravity pulls each child onto its family ring around its parent's current
+  // position: force = gravityStrength * (dist - ringRadius), signed so it
+  // reels a node in when it drifts out and pushes it off when it sinks inward.
+  gravityStrength:    0.06,
+  // Per-edge "rim spring" for CHILD (non-root) families. Instead of pulling a
+  // child onto a sqrt-area family RING (which grows with family size + spread and
+  // made container-child edges long), pull it to a SHORT rest = the two nodes'
+  // own extents + a small gap — the Gource rim, where a child sits tangent on its
+  // parent. Rest depends only on the two endpoints, so the edge strains short
+  // regardless of sibling count, subtree depth, or viewport.spread. Stronger than
+  // gravity so it wins the RADIUS while sibling/overlap repulsion spread the
+  // children ANGULARLY around the rim.
+  edgeSpringStrength: 0.12,
+  edgeGap:            26,
+  // Sibling angular spread: a decaying (1/d^2) central repulsion among
+  // same-parent siblings (scaled by ring^2) that reaches across gaps, so a
+  // clustered or cold-start-piled family spreads around its whole ring —
+  // overlap-only repulsion is too short-range to detangle a pile. It decays
+  // with distance, so an evenly-spaced ring feels almost none and still settles
+  // (a constant-magnitude spread never vanishes and orbits forever).
+  // siblingRepelMax caps the per-pair force near contact.
+  siblingRepelStrength: 1.2,
+  siblingRepelMax:    6,
+  // Outward bias (a conservative analog of Gource's parent-normal fan,
+  // dirnode.cpp:675): a constant push on non-root children radially away from
+  // the FIXED core, so a subtree fans onto the far side of its parent instead of
+  // swinging core-facing and wedging into the tier-1 shell. Anchored to the
+  // fixed core (not the moving parent) it is torque-free about the core — it
+  // can't drive a slow cloud rotation the way a moving-apex pull does. Gentle:
+  // it must lose to overlap separation and the cold-start sibling-spread.
+  outwardFanStrength: 1,
+  // Root-ring aspect stretch — fills a non-square canvas (partially; a radial
+  // layout resists extreme aspects) and pins the layout's orientation so a
+  // circular cloud can't slowly spin.
+  orbitAspectStrength: 0.85,
+  // Puddle walls (disabled): edge forces only push in, but the puddle bulge
+  // needs the cloud to expand out — gravity-to-ring fights it, so the cloud
+  // compresses/churns instead of filling. Kept at 0; aspect ellipse does the job.
+  wallStrength: 0,
+  puddleExtent: 1.18,
   pinnedAnchorStrength: 0.16,
   pinnedAnchorDamping: 0.72,
-  overlapRepulsionStrength: 0.16,
-  overlapRepulsionRange: 1.2,
+  // Overlap repulsion fires ONLY when node footprints intersect; the force is
+  // the penetration depth, so deep overlaps separate hard and settled nodes
+  // feel no long-range field (Gource applyForceDir: if(distance2>0) return).
+  overlapRepulsionStrength: 0.22,
   parentChildRepulsionMultiplier: 1.55,
-  edgeNodeRepulsion:  0.22,
-  edgeNodePadding:    44,
+  // Area-conserving ring growth (Gource calcRadius): family ring scales as
+  // sqrt(summed child footprint area) * padding, so it stays compact and grows
+  // slowly with member count. orbitSubtreeReserve is how much of a child's
+  // descendant footprint it reserves as its own ring room.
+  orbitAreaPadding:   1.1,
+  orbitSubtreeReserve: 0.2,
   channelChildSpacingMultiplier: 1.22,
   nodeEnterDurationMs: 700,
   nodeEnterExtentBoost: 0.34,
-  damping:            0.88,
-  maxVelocity:        3.4,
-  wallStrength:       0.05,
+  // Overdamped integrator (Gource has no stored node velocity): position moves
+  // by force * stepScale each frame, capped at maxStep. No momentum means the
+  // layout descends to a true fixed point and stops dead — no orbiting or slosh.
+  stepScale:          3,
+  maxStep:            18,
   collisionPadding:   24,
-  resizeVelocityGain: 0.18,
 };
 
 function buildLoopBranchLoads() {
@@ -145,86 +181,30 @@ function isParentChildRelation(loopA, loopB) {
   return loopA.parent_id === loopB.id || loopB.parent_id === loopA.id;
 }
 
-function compareLoopsForLayout(a, b) {
-  const aMeta = getLoopMetadata(a);
-  const bMeta = getLoopMetadata(b);
-  const aCategory = normalizeVisualCategory(getLoopCategory(a));
-  const bCategory = normalizeVisualCategory(getLoopCategory(b));
-  const aKey = [aCategory, aMeta.subsystem || '', a.name || a.id];
-  const bKey = [bCategory, bMeta.subsystem || '', b.name || b.id];
-  return aKey.join('\u0000').localeCompare(bKey.join('\u0000'));
-}
-
-function buildSiblingIndex() {
-  const registryCoreID = getRegistryCoreID();
-  const siblings = new Map();
-  for (const loop of state.loops.values()) {
-    const parentID = getEffectiveParentID(loop, registryCoreID);
-    if (!parentID) continue;
-    if (!siblings.has(parentID)) siblings.set(parentID, []);
-    siblings.get(parentID).push(loop);
-  }
-  for (const list of siblings.values()) {
-    list.sort(compareLoopsForLayout);
-  }
-  return siblings;
-}
-
-function getOrbitSlotSize(parentID, loop, branchLoads) {
-  const parentLoop = parentID ? state.loops.get(parentID) : null;
-  const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
-  const load = branchLoads.get(loop.id);
-  const extent = getPhysicsNodeExtent(loop.id);
-  const footprint = getLoopBranchFootprint(load);
-  const basePadding = physics.collisionPadding + (parentID ? 30 : 42);
-  const subtreeAllowance = footprint <= 0 ? 0 : Math.min(parentID ? 92 : 156, footprint * (parentID ? 0.16 : 0.24));
-  return Math.max(
-    extent * 2 + basePadding,
-    extent * 2 + subtreeAllowance,
-    (parentID ? physics.childRestLength : physics.springRestLength) * spacingMultiplier * (parentID ? 0.9 : 1.05),
-  );
-}
-
+// Orbit ring radius for a family of siblings, using Gource's area-conserving
+// growth (calcRadius, dirnode.cpp:574): the disc that holds every child's
+// footprint, so the ring grows as sqrt(member count) instead of linearly and
+// stays compact. Each child reserves its own extent plus a fraction of its
+// subtree footprint, so subtree-heavy children claim more ring room without the
+// quadratic blow-up of squaring the full branch extent.
 function getOrbitFamilyRadius(parentID, loops, branchLoads) {
   if (!loops || loops.length === 0) return parentID ? physics.childRestLength : physics.springRestLength;
   const baseRadius = parentID ? physics.childRestLength : physics.springRestLength;
-  const requiredCircumference = loops.reduce((sum, loop) => sum + getOrbitSlotSize(parentID, loop, branchLoads), 0);
-  let radius = Math.max(baseRadius, requiredCircumference / (Math.PI * 2));
+  let area = 0;
+  for (const loop of loops) {
+    const extent = getPhysicsNodeExtent(loop.id);
+    const footprint = getLoopBranchFootprint(branchLoads.get(loop.id));
+    const reserve = extent + footprint * physics.orbitSubtreeReserve;
+    area += reserve * reserve;
+  }
+  let radius = Math.max(baseRadius, Math.sqrt(area) * physics.orbitAreaPadding);
   if (parentID) {
+    // Never let a child ring sink inside the parent's own footprint.
     const parentExtent = getPhysicsNodeExtent(parentID);
     const maxChildExtent = loops.reduce((max, loop) => Math.max(max, getPhysicsNodeExtent(loop.id)), 0);
-    const parentClearance = parentExtent + maxChildExtent + physics.collisionPadding + 8;
-    radius = Math.max(radius, parentClearance);
-    radius += Math.min(56, parentExtent * 0.35);
+    radius = Math.max(radius, parentExtent + maxChildExtent + physics.collisionPadding);
   }
   return radius;
-}
-
-function getLoopOrbitRadiusBias(parentID, loop, branchLoads) {
-  const load = branchLoads.get(loop.id);
-  if (!load) return 0;
-  const footprint = getLoopBranchFootprint(load);
-  if (footprint <= 0 && load.descendants <= 0) return 0;
-
-  if (!parentID) {
-    return Math.min(240, footprint * 0.34 + load.descendants * 12);
-  }
-
-  return Math.min(132, footprint * 0.18 + load.descendants * 6);
-}
-
-function getLoopOrbitDemand(parentID, loop, branchLoads) {
-  const load = branchLoads.get(loop.id);
-  const base = getOrbitSlotSize(parentID, loop, branchLoads);
-  if (!load) return base;
-  const footprint = getLoopBranchFootprint(load);
-  return base + Math.min(parentID ? 120 : 220, footprint * (parentID ? 0.18 : 0.28) + load.descendants * (parentID ? 5 : 10));
-}
-
-function compareLoopsForOrbit(parentID, a, b, branchLoads) {
-  const demandDiff = getLoopOrbitDemand(parentID, b, branchLoads) - getLoopOrbitDemand(parentID, a, branchLoads);
-  if (Math.abs(demandDiff) > 0.001) return demandDiff;
-  return compareLoopsForLayout(a, b);
 }
 
 function getGraphMotionScale(nodeCount) {
@@ -257,167 +237,6 @@ function getNodeEnterInfluence(id) {
   if (duration <= 0 || elapsed >= duration) return 0;
   const progress = clampUnit(elapsed / duration);
   return Math.max(0, 1 - easeOutBack(progress));
-}
-
-function normalizeAngle(angle) {
-  let out = angle;
-  while (out < 0) out += Math.PI * 2;
-  while (out >= Math.PI * 2) out -= Math.PI * 2;
-  return out;
-}
-
-function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
-  const targets = new Map();
-  const registryCoreID = getRegistryCoreID();
-  // Roots: genuine orphans plus loops re-rooted off the collapsed
-  // registry core. The core itself is excluded — it has no visual node
-  // (the __system__ pin owns its slot), so giving it an orbit target
-  // would reserve a phantom gap on the root ring and pull its adopted
-  // children toward an off-center point their edges never connect to.
-  const roots = Array.from(state.loops.values())
-    .filter(loop => {
-      if (registryCoreID && isRegistryCoreLoop(loop)) return false;
-      return !getEffectiveParentID(loop, registryCoreID);
-    })
-    .sort(compareLoopsForLayout);
-
-  const aspect = (vw && vh && vh > 0) ? (vw / vh) : 1;
-  const rootShapeX = 1 + ((Math.sqrt(aspect) - 1) * physics.orbitAspectStrength);
-  const rootShapeY = 1 + (((1 / Math.sqrt(aspect)) - 1) * physics.orbitAspectStrength);
-
-  function layoutFamily(parentID, loops, center, inwardAngle, depth) {
-    if (!loops || loops.length === 0) return;
-    const familyLoops = loops.slice().sort((a, b) => compareLoopsForOrbit(parentID, a, b, branchLoads));
-    const baseRadius = getOrbitFamilyRadius(parentID, familyLoops, branchLoads);
-    const shapeStrength = Math.max(0.18, 1 - (depth * 0.16));
-    const shapeX = 1 + ((rootShapeX - 1) * shapeStrength);
-    const shapeY = 1 + ((rootShapeY - 1) * shapeStrength);
-    const majorAxisAngle = shapeY > shapeX ? -Math.PI / 2 : 0;
-    const demands = familyLoops.map(loop => getLoopOrbitDemand(parentID, loop, branchLoads));
-    const totalDemand = demands.reduce((sum, demand) => sum + demand, 0) || familyLoops.length;
-    const firstSpan = (demands[0] / totalDemand) * Math.PI * 2;
-    const startAngle = Number.isFinite(inwardAngle) ? inwardAngle : (majorAxisAngle - firstSpan / 2);
-    let cursor = 0;
-
-    for (let i = 0; i < familyLoops.length; i += 1) {
-      const loop = familyLoops[i];
-      const radius = baseRadius + getLoopOrbitRadiusBias(parentID, loop, branchLoads);
-      const span = (demands[i] / totalDemand) * Math.PI * 2;
-      const angle = startAngle + cursor + span / 2;
-      const x = center.x + Math.cos(angle) * radius * shapeX;
-      const y = center.y + Math.sin(angle) * radius * shapeY;
-      targets.set(loop.id, { parentID, depth, angle, radius, x, y, centerX: center.x, centerY: center.y });
-      layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
-      cursor += span;
-    }
-  }
-
-  layoutFamily(null, roots, { x: cx, y: cy }, Number.NaN, 0);
-  return targets;
-}
-
-function projectOrbitTargets(targets, positionBlend, velocityDamping) {
-  if (!targets || positionBlend <= 0) return;
-  for (const [id, target] of targets) {
-    const nd = physics.nodes.get(id);
-    if (!nd || nd.pinned || !target) continue;
-    const dx = target.x - nd.x;
-    const dy = target.y - nd.y;
-    const dist = Math.sqrt((dx * dx) + (dy * dy));
-    const distanceScale = physics.orbitProjectionDistanceScale || 1;
-    const scaledBlend = dist > 0.001
-      ? positionBlend * Math.min(1, distanceScale / dist)
-      : positionBlend;
-    const blend = Math.max(physics.orbitProjectionMinBlend || 0, scaledBlend);
-    const prevX = nd.x;
-    const prevY = nd.y;
-    nd.x += dx * blend;
-    nd.y += dy * blend;
-    nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
-    nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
-  }
-}
-
-function applyOrbitRadiusElasticity(targets) {
-  if (!targets) return;
-  for (const [id, target] of targets) {
-    const nd = physics.nodes.get(id);
-    if (!nd || nd.pinned || !target) continue;
-
-    const prevRadius = Number.isFinite(nd.lastTargetRadius) ? nd.lastTargetRadius : target.radius;
-    const deltaRadius = target.radius - prevRadius;
-    nd.lastTargetRadius = target.radius;
-    if (Math.abs(deltaRadius) < 0.001) continue;
-
-    let dirX = target.x - target.centerX;
-    let dirY = target.y - target.centerY;
-    let dirLen = Math.sqrt((dirX * dirX) + (dirY * dirY));
-    if (dirLen < 0.001) {
-      dirX = Math.cos(target.angle);
-      dirY = Math.sin(target.angle);
-      dirLen = 1;
-    }
-
-    const impulse = Math.max(
-      -physics.orbitRadiusVelocityCap,
-      Math.min(physics.orbitRadiusVelocityCap, deltaRadius * physics.orbitRadiusVelocityGain),
-    );
-    nd.vx += (dirX / dirLen) * impulse;
-    nd.vy += (dirY / dirLen) * impulse;
-  }
-}
-
-function kickOrbitReflow(orbitTargets, loopIDs, intensity = 1) {
-  if (!orbitTargets || !loopIDs || loopIDs.length === 0) return;
-
-  const affected = new Set();
-  for (const loopID of loopIDs) {
-    let cursor = state.loops.get(loopID);
-    while (cursor) {
-      affected.add(cursor.id);
-      const parentID = cursor.parent_id;
-      for (const loop of state.loops.values()) {
-        if (loop.parent_id === parentID) affected.add(loop.id);
-      }
-      if (!parentID) break;
-      cursor = state.loops.get(parentID) || null;
-    }
-  }
-
-  for (const id of affected) {
-    const nd = physics.nodes.get(id);
-    const target = orbitTargets.get(id);
-    if (!nd || !target || nd.pinned) continue;
-    const dx = target.x - nd.x;
-    const dy = target.y - nd.y;
-    const dist = Math.sqrt((dx * dx) + (dy * dy));
-    if (dist < 0.001) continue;
-    const scaledIntensity = Math.max(0.4, intensity);
-    const gain = Math.min(0.34, 0.08 + (dist / 420) * 0.18) * scaledIntensity;
-    const blend = Math.min(0.18, physics.viewportReflowPositionBlend * scaledIntensity);
-    nd.x += dx * blend;
-    nd.y += dy * blend;
-    nd.vx += dx * gain * physics.viewportReflowVelocityGain;
-    nd.vy += dy * gain * physics.viewportReflowVelocityGain;
-    nd.vx = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vx));
-    nd.vy = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vy));
-  }
-}
-
-function kickViewportReflow(prevRect, nextRect) {
-  if (!nextRect || state.loops.size === 0) return;
-  const branchLoads = buildLoopBranchLoads();
-  const siblingIndex = buildSiblingIndex();
-  const orbitTargets = buildOrbitTargets(nextRect.cx, nextRect.cy, branchLoads, siblingIndex, nextRect.width, nextRect.height);
-  const loopIDs = Array.from(state.loops.keys());
-  const prevAspect = prevRect && prevRect.height > 0 ? prevRect.width / prevRect.height : nextRect.width / nextRect.height;
-  const nextAspect = nextRect.height > 0 ? nextRect.width / nextRect.height : prevAspect;
-  const aspectDelta = Math.abs(nextAspect - prevAspect);
-  const sizeDelta = prevRect && prevRect.width > 0 && prevRect.height > 0
-    ? Math.abs((nextRect.width * nextRect.height) - (prevRect.width * prevRect.height)) / (prevRect.width * prevRect.height)
-    : 0;
-  const intensity = Math.min(1.8, 0.7 + aspectDelta * 0.9 + sizeDelta * 0.45);
-  kickOrbitReflow(orbitTargets, loopIDs, intensity);
 }
 
 function updatePinnedAnchorPositions() {
@@ -487,10 +306,10 @@ function isContainerLoop(loop) {
 // status arrives, the registry core lays out as an ordinary root (the
 // same boot-order gating syncPhysicsNodes/renderNodes use).
 //
-// Each layout builder (buildLoopBranchLoads, buildSiblingIndex,
-// buildOrbitTargets) calls this once at its top — and physicsStep once
-// more for the spring pass — then threads the result into
-// [getEffectiveParentID] so the per-loop parent lookup stays O(1). The
+// Each layout builder (buildLoopBranchLoads, buildOrbitRings) calls this
+// once at its top — as do physicsStep and syncPhysicsNodes — then threads
+// the result into [getEffectiveParentID] so the per-loop parent lookup
+// stays O(1). The
 // scan here is O(loops): run a small constant number of times per tick
 // over a Map of at most a few dozen loops, it's negligible and not
 // worth threading a shared value through every builder's signature.
@@ -507,12 +326,11 @@ function getRegistryCoreID() {
 // registry core as its parent is treated as a root (parent = none),
 // because its visual slot — node, drawn edge, and spring anchor — is
 // the centered __system__ node, not the hidden core's phantom
-// position on the root ring. Every orbit/branch/sibling builder must
-// agree on this; if buildOrbitTargets re-roots a child to center but
-// buildSiblingIndex still files it under the core (or vice versa) the
-// orbit-attraction force and the spring force pull in different
-// directions and the layout never settles. Pass the precomputed
-// registryCoreID from [getRegistryCoreID] to avoid an O(n) scan per loop.
+// position on the root ring. Every layout builder must agree on this; if
+// one re-roots a child to center but another files it under the core,
+// gravity-to-ring would pull the node toward two different centers and the
+// layout never settles. Pass the precomputed registryCoreID from
+// [getRegistryCoreID] to avoid an O(n) scan per loop.
 function getEffectiveParentID(loop, registryCoreID) {
   if (!loop || !loop.parent_id) return null;
   if (registryCoreID && loop.parent_id === registryCoreID) return null;
@@ -540,12 +358,14 @@ function syncPhysicsNodes(cx, cy) {
   }
 
   const branchLoads = buildLoopBranchLoads();
-  const siblingIndex = buildSiblingIndex();
-  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, cx * 2, cy * 2);
-  const addedLoopIDs = [];
+  const registryCoreID = getRegistryCoreID();
+  const { ringRadius } = buildOrbitRings(branchLoads, registryCoreID);
   const nowMs = getNowMs();
 
-  // Loop nodes.
+  // Loop nodes. Roots spawn on the macro ring around the core at a free angle;
+  // child nodes spawn AT their parent's short rim, biased to the away-from-core
+  // side, so they land roughly where the rim spring settles them (no long reel-in
+  // from the old big ring) and fan outward instead of overlapping their siblings.
   for (const loop of state.loops.values()) {
     // Skip the registry's structural-root core loop — it shares its
     // visual slot with __system__ and rendering both produces the
@@ -553,31 +373,33 @@ function syncPhysicsNodes(cx, cy) {
     // [isRegistryCoreLoop] for the predicate's reasoning.
     if (state.system && isRegistryCoreLoop(loop)) continue;
     if (physics.nodes.has(loop.id)) continue;
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    const hasLiveParent = !!(parentID && physics.nodes.has(parentID));
+    const anchor = hasLiveParent ? physics.nodes.get(parentID) : physics.nodes.get('__system__');
     let sx, sy;
-    const target = orbitTargets.get(loop.id);
-    const parentNode = loop.parent_id ? physics.nodes.get(loop.parent_id) : null;
-    if (target && parentNode) {
-      const childExtent = getPhysicsNodeExtent(loop.id);
-      const parentExtent = getPhysicsNodeExtent(loop.parent_id);
-      const spawnRadius = Math.max(
-        parentExtent + childExtent + physics.collisionPadding + 6,
-        target.radius * 0.72,
-      );
-      const jitter = 6 + Math.random() * 8;
-      const angle = target.angle + ((Math.random() - 0.5) * 0.28);
-      sx = parentNode.x + Math.cos(angle) * (spawnRadius + jitter);
-      sy = parentNode.y + Math.sin(angle) * (spawnRadius + jitter);
-    } else if (target) {
-      const jitter = 6 + Math.random() * 8;
-      const angle = target.angle + ((Math.random() - 0.5) * 0.5);
-      sx = target.x + Math.cos(angle) * jitter;
-      sy = target.y + Math.sin(angle) * jitter;
+    if (anchor) {
+      let spawnR, angle;
+      if (hasLiveParent) {
+        // Child: seed AT the short rim (the rim-spring rest) on the away-from-core
+        // side of its parent, so it lands roughly where it settles — no long
+        // reel-in from the old macro ring, and an outward seed is the cheapest
+        // crossing preventer (subtree fans away from the grandparent).
+        spawnR = getPhysicsNodeExtent(parentID) + getPhysicsNodeExtent(loop.id) + physics.edgeGap;
+        const ax = anchor.x - cx, ay = anchor.y - cy; // core -> parent direction
+        const base = (ax || ay) ? Math.atan2(ay, ax) : Math.random() * Math.PI * 2;
+        angle = base + (Math.random() - 0.5) * 1.2;   // outward, with a little spread
+      } else {
+        // Root: seed on the macro ring around the core at a free angle.
+        spawnR = (ringRadius.get('__root__') || physics.springRestLength) + 6 + Math.random() * 10;
+        angle = Math.random() * Math.PI * 2;
+      }
+      sx = anchor.x + Math.cos(angle) * spawnR;
+      sy = anchor.y + Math.sin(angle) * spawnR;
     } else {
       sx = cx + (Math.random() * 40 - 20);
       sy = cy + (Math.random() * 40 - 20);
     }
     physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false, createdAt: nowMs });
-    addedLoopIDs.push(loop.id);
   }
 
   // Remove physics nodes for loops that no longer exist (and aren't system).
@@ -598,9 +420,6 @@ function syncPhysicsNodes(cx, cy) {
     }
   }
 
-  if (addedLoopIDs.length > 0) {
-    kickOrbitReflow(orbitTargets, addedLoopIDs);
-  }
 }
 
 function cloneRect(rect) {
@@ -611,16 +430,20 @@ function cloneRect(rect) {
 }
 
 function getLayoutViewportRect() {
+  // Physics runs in raw canvas-pixel space, independent of the camera: pan and
+  // zoom are a purely visual transform (applyViewportTransform), and the
+  // auto-fit camera reframes the graph by moving the camera, never the layout.
+  // Decoupling the layout frame from the camera is what keeps auto-fit free of
+  // a feedback loop with the pinned core.
   const rect = canvas.getBoundingClientRect();
-  const zoom = Math.max(0.001, viewport.zoom || 1);
-  // World-space dims (zoom-divided) feed the physics layout; raw pixel dims
-  // are carried separately so resize-detection can ignore zoom (a wheel-zoom
-  // changes the world dims but not the canvas's physical size).
-  const width = rect.width / zoom;
-  const height = rect.height / zoom;
-  const cx = (rect.width / 2 - viewport.panX) / zoom;
-  const cy = (rect.height / 2 - viewport.panY) / zoom;
-  return { width, height, cx, cy, pxWidth: rect.width, pxHeight: rect.height };
+  return {
+    width: rect.width,
+    height: rect.height,
+    cx: rect.width / 2,
+    cy: rect.height / 2,
+    pxWidth: rect.width,
+    pxHeight: rect.height,
+  };
 }
 
 function getCanvasRectSnapshot() {
@@ -645,26 +468,20 @@ function reflowPhysicsNodes(prevRect, nextRect) {
   const prevCy = Number.isFinite(prevRect.cy) ? prevRect.cy : (prevRect.height / 2);
   const nextCx = Number.isFinite(nextRect.cx) ? nextRect.cx : (nextRect.width / 2);
   const nextCy = Number.isFinite(nextRect.cy) ? nextRect.cy : (nextRect.height / 2);
-  const scaleX = Math.max(0.65, Math.min(1.65, nextRect.width / prevRect.width));
-  const scaleY = Math.max(0.65, Math.min(1.65, nextRect.height / prevRect.height));
+  const shiftX = nextCx - prevCx;
+  const shiftY = nextCy - prevCy;
 
+  // Translate the whole cloud (don't rescale it) so it rigidly follows the
+  // recentered core and keeps its natural non-overlapping size. Rescaling to
+  // the new viewport would squeeze a large graph back into overlap.
   for (const [id, nd] of physics.nodes) {
     if (id === '__system__') {
       nd.targetX = nextCx;
       nd.targetY = nextCy;
       continue;
     }
-
-    const oldX = nd.x;
-    const oldY = nd.y;
-    const dx = oldX - prevCx;
-    const dy = oldY - prevCy;
-    const nextX = nextCx + dx * scaleX;
-    const nextY = nextCy + dy * scaleY;
-    nd.x = nextX;
-    nd.y = nextY;
-    nd.vx += (nextX - oldX) * physics.resizeVelocityGain;
-    nd.vy += (nextY - oldY) * physics.resizeVelocityGain;
+    nd.x += shiftX;
+    nd.y += shiftY;
   }
 }
 
@@ -683,7 +500,6 @@ function refreshCanvasViewport() {
     const prevRect = state.canvasRect;
     reflowPhysicsNodes(prevRect, nextRect);
     state.canvasRect = cloneRect(nextRect);
-    kickViewportReflow(prevRect, nextRect);
   }
   return nextRect;
 }
@@ -699,8 +515,32 @@ function getPhysicsNodeExtent(id) {
   return base * (1 + enterInfluence * physics.nodeEnterExtentBoost);
 }
 
-// Run one physics simulation step. The hierarchy defines the desired orbit
-// structure, and physics is only used to smooth motion plus resolve overlap.
+// Compute the orbit ring each family of siblings shares, plus the family
+// grouping itself. Unlike the old explicit-slot layout, angle is NOT assigned
+// here — it emerges from the sibling-spread force in physicsStep. Roots (loops
+// with no effective parent) are grouped under '__root__' and orbit the pinned
+// core center. Only loops with a live physics node participate.
+function buildOrbitRings(branchLoads, registryCoreID) {
+  const groups = new Map(); // parentKey -> [loop, ...]
+  for (const loop of state.loops.values()) {
+    if (!physics.nodes.has(loop.id)) continue;
+    const parentID = getEffectiveParentID(loop, registryCoreID);
+    const key = (parentID && physics.nodes.has(parentID)) ? parentID : '__root__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(loop);
+  }
+  const ringRadius = new Map();
+  for (const [key, loops] of groups) {
+    ringRadius.set(key, getOrbitFamilyRadius(key === '__root__' ? null : key, loops, branchLoads));
+  }
+  return { groups, ringRadius };
+}
+
+// Run one physics simulation step in the Gource force model: a single force
+// accumulator per node holding gravity-to-ring + sibling-spread + overlap
+// repulsion, integrated once. There is no post-integration position write, so
+// attraction and repulsion negotiate one equilibrium instead of a slot
+// teleport re-overlapping nodes every frame.
 function physicsStep(cx, cy, vw, vh) {
   const P = physics;
   const nodes = Array.from(P.nodes.values());
@@ -708,85 +548,167 @@ function physicsStep(cx, cy, vw, vh) {
   const n = nodes.length;
   if (n === 0) return;
   const branchLoads = buildLoopBranchLoads();
-  const siblingIndex = buildSiblingIndex();
-  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
   const registryCoreID = getRegistryCoreID();
+  const { groups, ringRadius } = buildOrbitRings(branchLoads, registryCoreID);
   const motionScale = getGraphMotionScale(n);
-  const edges = [];
 
-  applyOrbitRadiusElasticity(orbitTargets);
+  // Aspect shaping: stretch the ROOT ring into an ellipse matching the canvas
+  // aspect ratio. Two wins from one move: (1) the graph puddle-fills a non-square
+  // canvas (a tall canvas gets a taller cloud) instead of leaving whitespace, and
+  // (2) the ellipse has a preferred orientation, which breaks the circular
+  // layout's rotational symmetry — a circle is free to drift/spin forever (no
+  // restoring force for rotation), an ellipse is pinned to the canvas axes.
+  const aspect = (vw > 0 && vh > 0) ? (vw / vh) : 1;
+  const rootShapeX = 1 + ((Math.sqrt(aspect) - 1) * P.orbitAspectStrength);
+  const rootShapeY = 1 + (((1 / Math.sqrt(aspect)) - 1) * P.orbitAspectStrength);
 
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
 
-  // 1. Orbit attraction — every node chases an explicit parent-centered slot.
-  for (const [loopID, target] of orbitTargets) {
-    const nd = P.nodes.get(loopID);
-    if (!nd || nd.pinned) continue;
-    nd.fx += (target.x - nd.x) * P.orbitAttractionStrength;
-    nd.fy += (target.y - nd.y) * P.orbitAttractionStrength;
-  }
+  // 1. Gravity-to-ring + 2. sibling spread, per family. Gravity reels each
+  // child onto its family's ring around the parent's CURRENT position (radius
+  // set, angle free); the decaying sibling repulsion then distributes the family
+  // around that ring and fills gaps so a clustered or cold-start-piled family
+  // detangles, while vanishing at even spacing so the layout settles to rest.
+  const sysNode = P.nodes.get('__system__');
+  const corePx = sysNode ? sysNode.x : cx;
+  const corePy = sysNode ? sysNode.y : cy;
+  for (const [key, loops] of groups) {
+    const isRoot = key === '__root__';
+    // Macro ring — ROOT families only: the tier-1 cloud rings the core at a
+    // sqrt-area radius, aspect-stretched and scaled by viewport.spread so the
+    // wheel fans tier-1 apart. Child families no longer use the ring for their
+    // edge length (they use the short rim spring below), so a big family stops
+    // lengthening every edge and `spread` no longer stretches intra-family edges.
+    const ring = (ringRadius.get(key) || (isRoot ? P.springRestLength : P.childRestLength)) * viewport.spread;
+    // Aspect ellipse pins the macro orientation; only roots take it now (child
+    // families hug their parent rim isotropically).
+    const shapeX = isRoot ? rootShapeX : 1;
+    const shapeY = isRoot ? rootShapeY : 1;
+    // Roots orbit the pinned core node's LIVE position rather than the raw
+    // viewport center it eases toward, so they stay attached to the core node
+    // through the pinned-anchor easing (e.g. across a resize). Non-roots orbit
+    // their parent node's current position. (cx, cy) is the boot-time fallback
+    // before __system__ exists.
+    const parentNode = isRoot ? sysNode : P.nodes.get(key);
+    const pcx = parentNode ? parentNode.x : cx;
+    const pcy = parentNode ? parentNode.y : cy;
 
-  // 2. Edge springs — keep the rendered connectors taut without letting them
-  // dominate the structure. Spring to the EFFECTIVE parent so adopted
-  // children of the collapsed registry core spring to __system__ (their
-  // orbit target's center) rather than to the hidden core's phantom slot.
-  // This must match buildOrbitTargets' re-rooting or the spring and the
-  // orbit-attraction force pull in different directions.
-  for (const loop of state.loops.values()) {
-    if (!P.nodes.has(loop.id)) continue;
-    const parentID = getEffectiveParentID(loop, registryCoreID);
-    if (parentID && P.nodes.has(parentID)) {
-      const source = P.nodes.get(parentID);
-      const target = P.nodes.get(loop.id);
-      const targetSpec = orbitTargets.get(loop.id);
-      const restLength = targetSpec ? targetSpec.radius : P.childRestLength;
-      applySpring(
-        source,
-        target,
-        P.childSpringStrength,
-        restLength,
-      );
-      edges.push({ sourceId: parentID, targetId: loop.id, source, target });
-    } else if (P.nodes.has('__system__')) {
-      const source = P.nodes.get('__system__');
-      const target = P.nodes.get(loop.id);
-      const targetSpec = orbitTargets.get(loop.id);
-      const restLength = targetSpec ? targetSpec.radius : P.springRestLength;
-      applySpring(
-        source,
-        target,
-        P.springStrength,
-        restLength,
-      );
-      edges.push({ sourceId: '__system__', targetId: loop.id, source, target });
+    // The outward bias applies to non-root families (children of a container or
+    // deeper); roots distribute freely around the core via sibling-spread.
+    const fanActive = !isRoot;
+
+    // Sibling-spread reach = the radius siblings actually sit at, so the 1/d^2
+    // spread is calibrated to the achievable spacing and vanishes at even spread
+    // (a reach tied to the big macro ring never decays on the short child arc and
+    // would buzz). Roots: the macro ring. Child families: the short rim radius.
+    let repelRadius = ring;
+    if (!isRoot) {
+      let maxChildExtent = 0;
+      for (const loop of loops) {
+        maxChildExtent = Math.max(maxChildExtent, getPhysicsNodeExtent(loop.id));
+      }
+      repelRadius = getPhysicsNodeExtent(key) + maxChildExtent + P.edgeGap;
+    }
+
+    for (const loop of loops) {
+      const nd = P.nodes.get(loop.id);
+      if (!nd || nd.pinned) continue;
+      let dx = nd.x - pcx;
+      let dy = nd.y - pcy;
+      let dist = Math.sqrt((dx * dx) + (dy * dy));
+      if (dist < 0.001) {
+        const a = Math.random() * Math.PI * 2;
+        dx = Math.cos(a); dy = Math.sin(a); dist = 1;
+      }
+      if (isRoot) {
+        // Macro gravity-to-(elliptical)-ring: positions the tier-1 family around
+        // the core, fills the canvas aspect, and pins rotational orientation.
+        const tx = pcx + ((ring * shapeX) * (dx / dist));
+        const ty = pcy + ((ring * shapeY) * (dy / dist));
+        nd.fx += (tx - nd.x) * P.gravityStrength;
+        nd.fy += (ty - nd.y) * P.gravityStrength;
+      } else {
+        // SHORT per-edge rim spring (Gource): rest = the two nodes' own extents +
+        // a small gap, so the child sits tangent on its parent's rim and the edge
+        // strains short no matter how big or deep the family is. Stronger than
+        // gravity so it holds the radius; sibling/overlap repulsion spread the
+        // children ANGULARLY around the rim rather than pushing them out radially.
+        const rest = getPhysicsNodeExtent(key) + getPhysicsNodeExtent(loop.id) + P.edgeGap;
+        const f = (dist - rest) * P.edgeSpringStrength;
+        nd.fx -= (dx / dist) * f;
+        nd.fy -= (dy / dist) * f;
+      }
+
+      // Outward bias (Gource parent-normal, dirnode.cpp:675): a constant push
+      // away from the FIXED core. Its tangential-about-the-parent component
+      // walks the child onto the far side of its parent (out of the tier-1
+      // shell), while gravity-to-ring still owns the radius. Radial about the
+      // core means zero torque, so it settles instead of rotating the cloud.
+      if (fanActive) {
+        const ox = nd.x - corePx;
+        const oy = nd.y - corePy;
+        const olen = Math.sqrt((ox * ox) + (oy * oy)) || 1;
+        nd.fx += (ox / olen) * P.outwardFanStrength;
+        nd.fy += (oy / olen) * P.outwardFanStrength;
+      }
+    }
+
+    // Decaying (1/d^2) central repulsion among siblings — the long-range
+    // distribution force overlap-only repulsion lacks. Scaled by ring^2 so its
+    // reach tracks the family size; capped near contact to avoid a singularity.
+    if (loops.length > 1) {
+      const k = P.siblingRepelStrength * repelRadius * repelRadius;
+      for (let i = 0; i < loops.length; i++) {
+        const a = P.nodes.get(loops[i].id);
+        if (!a || a.pinned) continue;
+        for (let j = i + 1; j < loops.length; j++) {
+          const b = P.nodes.get(loops[j].id);
+          if (!b) continue;
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          let d2 = (dx * dx) + (dy * dy);
+          if (d2 < 1) d2 = 1;
+          const f = Math.min(P.siblingRepelMax, k / d2);
+          const d = Math.sqrt(d2);
+          const fx = (dx / d) * f;
+          const fy = (dy / d) * f;
+          a.fx += fx; a.fy += fy;
+          if (!b.pinned) { b.fx -= fx; b.fy -= fy; }
+        }
+      }
     }
   }
 
-  // 3. Soft border gravity keeps the cloud within the viewport while still
-  // letting the force layout breathe and adapt to different aspect ratios.
-  const padX = Math.max(44, vw * 0.08);
-  const padY = Math.max(52, vh * 0.1);
-  for (let i = 0; i < n; i++) {
-    const id = ids[i];
-    const nd = nodes[i];
-    if (nd.pinned) continue;
-    const radius = getPhysicsNodeExtent(id);
-    const minX = padX + radius;
-    const maxX = Math.max(minX, vw - padX - radius);
-    const minY = padY + radius;
-    const maxY = Math.max(minY, vh - padY - radius);
-
-    if (nd.x < minX) nd.fx += (minX - nd.x) * P.wallStrength;
-    else if (nd.x > maxX) nd.fx -= (nd.x - maxX) * P.wallStrength;
-
-    if (nd.y < minY) nd.fy += (minY - nd.y) * P.wallStrength;
-    else if (nd.y > maxY) nd.fy -= (nd.y - maxY) * P.wallStrength;
+  // Puddle walls — reshape the cloud to the canvas aspect so it fills a
+  // non-square canvas like a puddle taking its container's shape. The box is
+  // sized from the STABLE root-ring radius (not the live bbox — that fed back
+  // into both the walls and the camera and churned), shaped to the canvas
+  // aspect: squeezing the narrow side makes the (overlap-incompressible) cloud
+  // bulge into the long side instead of overlapping, and the box axes pin the
+  // rotational spin. The camera auto-fit frames the result, so a small panel
+  // zooms out rather than compressing.
+  {
+    const a = (vw > 0 && vh > 0) ? (vw / vh) : 1;
+    const cloudR = (ringRadius.get('__root__') || P.springRestLength) * P.puddleExtent;
+    const boxHalfW = cloudR * Math.sqrt(a);
+    const boxHalfH = cloudR / Math.sqrt(a);
+    const wMinX = cx - boxHalfW, wMaxX = cx + boxHalfW;
+    const wMinY = cy - boxHalfH, wMaxY = cy + boxHalfH;
+    for (let i = 0; i < n; i++) {
+      const nd = nodes[i];
+      if (nd.pinned) continue;
+      if (nd.x < wMinX) nd.fx += (wMinX - nd.x) * P.wallStrength;
+      else if (nd.x > wMaxX) nd.fx -= (nd.x - wMaxX) * P.wallStrength;
+      if (nd.y < wMinY) nd.fy += (wMinY - nd.y) * P.wallStrength;
+      else if (nd.y > wMaxY) nd.fy -= (nd.y - wMaxY) * P.wallStrength;
+    }
   }
 
-  // 4. Pairwise repulsion — Gource-style conflict resolution rather than a
-  // long-range inverse-square field. Nodes mostly honor their family slots
-  // unless they actually interfere with each other.
+  // 3. Overlap repulsion — Gource's overlap-only, penetration-proportional
+  // push (dirnode.cpp applyForceDir). Fires only when node footprints actually
+  // intersect; the force is the penetration depth, so deep overlaps separate
+  // hard and settled, non-touching nodes feel no long-range field.
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const a = nodes[i], b = nodes[j];
@@ -799,7 +721,7 @@ function physicsStep(cx, cy, vw, vh) {
       if (isParentChildRelation(loopA, loopB)) {
         spacingMultiplier *= P.parentChildRepulsionMultiplier;
       }
-      const minGap = (getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding) * P.overlapRepulsionRange * (isParentChildRelation(loopA, loopB) ? 1.1 : 1);
+      const minGap = getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding;
       if (dist >= minGap) continue;
       if (dist < 0.001) {
         const angle = Math.random() * Math.PI * 2;
@@ -815,115 +737,27 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 5. Edge/node clearance — unrelated nodes should not sit comfortably on
-  // top of connector lines.
-  for (const edge of edges) {
-    const ax = edge.source.x;
-    const ay = edge.source.y;
-    const bx = edge.target.x;
-    const by = edge.target.y;
-    const segDx = bx - ax;
-    const segDy = by - ay;
-    const segLenSq = segDx * segDx + segDy * segDy;
-    if (segLenSq < 1) continue;
-
-    for (let i = 0; i < n; i += 1) {
-      const nodeID = ids[i];
-      if (nodeID === edge.sourceId || nodeID === edge.targetId) continue;
-      const nd = nodes[i];
-      if (nd.pinned) continue;
-
-      const t = Math.max(0, Math.min(1, (((nd.x - ax) * segDx) + ((nd.y - ay) * segDy)) / segLenSq));
-      const px = ax + segDx * t;
-      const py = ay + segDy * t;
-      let awayX = nd.x - px;
-      let awayY = nd.y - py;
-      let dist = Math.sqrt((awayX * awayX) + (awayY * awayY));
-      const clearance = getPhysicsNodeExtent(nodeID) + P.edgeNodePadding;
-      if (dist >= clearance) continue;
-      if (dist < 0.001) {
-        awayX = -segDy;
-        awayY = segDx;
-        dist = Math.sqrt((awayX * awayX) + (awayY * awayY)) || 1;
-      }
-      const nx = awayX / dist;
-      const ny = awayY / dist;
-      const pressure = clearance - dist;
-      const midSegmentBias = 1 - Math.min(1, Math.abs(0.5 - t) * 2);
-      const force = pressure * P.edgeNodeRepulsion * (1 + midSegmentBias * 1.5 + (pressure / clearance) * 1.4);
-      nd.fx += nx * force;
-      nd.fy += ny * force;
-      nd.vx += nx * pressure * 0.04;
-      nd.vy += ny * pressure * 0.04;
-
-      const endpointShare = force * (0.22 + midSegmentBias * 0.2);
-      if (!edge.source.pinned) {
-        edge.source.fx -= nx * endpointShare * (1 - t);
-        edge.source.fy -= ny * endpointShare * (1 - t);
-      }
-      if (!edge.target.pinned) {
-        edge.target.fx -= nx * endpointShare * t;
-        edge.target.fy -= ny * endpointShare * t;
-      }
-    }
-  }
-
-  // 6. Integration + damping.
+  // 4. Integration — overdamped (Gource move(), dirnode.cpp:811: pos += accel
+  // each frame, accel reset, no stored velocity). Without momentum the layout
+  // descends straight to its fixed point and stops dead — no orbiting, slosh,
+  // or limit-cycle spin — which is what makes a settled Gource graph feel calm
+  // at rest. The per-frame move is capped so a deep overlap or a freshly added
+  // node resolves without a jarring jump.
   for (let i = 0; i < n; i++) {
-    const id = ids[i];
     const nd = nodes[i];
     if (nd.pinned) continue;
-    nd.vx = (nd.vx + nd.fx * motionScale) * P.damping;
-    nd.vy = (nd.vy + nd.fy * motionScale) * P.damping;
-    // Clamp velocity.
-    const speed = Math.sqrt(nd.vx * nd.vx + nd.vy * nd.vy);
-    const maxVelocity = Math.max(2.6, P.maxVelocity * motionScale);
-    if (speed > maxVelocity) {
-      const scale = maxVelocity / speed;
-      nd.vx *= scale;
-      nd.vy *= scale;
+    let mx = nd.fx * P.stepScale * motionScale;
+    let my = nd.fy * P.stepScale * motionScale;
+    const move = Math.sqrt((mx * mx) + (my * my));
+    if (move > P.maxStep) {
+      const s = P.maxStep / move;
+      mx *= s; my *= s;
     }
-    nd.x += nd.vx;
-    nd.y += nd.vy;
-
-    // Safety clamp after integration so a burst of forces cannot eject nodes
-    // off-screen between frames.
-    const radius = getPhysicsNodeExtent(id);
-    const minX = padX + radius;
-    const maxX = Math.max(minX, vw - padX - radius);
-    const minY = padY + radius;
-    const maxY = Math.max(minY, vh - padY - radius);
-    if (nd.x < minX) {
-      nd.x = minX;
-      nd.vx *= 0.5;
-    } else if (nd.x > maxX) {
-      nd.x = maxX;
-      nd.vx *= 0.5;
-    }
-    if (nd.y < minY) {
-      nd.y = minY;
-      nd.vy *= 0.5;
-    } else if (nd.y > maxY) {
-      nd.y = maxY;
-      nd.vy *= 0.5;
-    }
+    nd.x += mx;
+    nd.y += my;
+    nd.vx = mx; // expose the last displacement for any velocity readers
+    nd.vy = my;
   }
-
-  // 7. Orbit projection — keep the hierarchy primary, with motion used for
-  // smoothing instead of letting the force solver invent topology.
-  projectOrbitTargets(orbitTargets, P.orbitProjectionBlend, P.orbitProjectionVelocityDamping);
-}
-
-// Apply a spring force between two nodes.
-function applySpring(a, b, strength, restLength) {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-  const force = strength * (dist - restLength);
-  const fx = (dx / dist) * force;
-  const fy = (dy / dist) * force;
-  if (!a.pinned) { a.fx += fx; a.fy += fy; }
-  if (!b.pinned) { b.fx -= fx; b.fy -= fy; }
 }
 
 // Write physics positions to DOM — node transforms and linking line endpoints.
@@ -1029,6 +863,33 @@ function categorySigil(category) {
   return sigil != null ? sigil : CATEGORY_SIGILS.generic;
 }
 
+// Operation type (the structured config.Operation execution model) — mirrors the
+// data-operation projection so a periodic timer, an event-driven loop, a
+// request/reply handler, and a container each read distinctly.
+function getLoopOperationType(loop) {
+  if (isContainerLoop(loop)) return 'container';
+  if (loop && loop.handler_only) return 'handler';
+  if (loop && loop.event_driven) return 'event';
+  return 'timer';
+}
+
+// Center glyph by operation type. Conversation channels read as '@' (the most
+// recognizable "this is a chat" cue) regardless of operation; containers stay
+// empty (their tiny knuckle is the cue). This replaces the heuristic
+// category sigil, which collapsed most loops to a featureless dot.
+const OPERATION_SIGILS = {
+  timer:   '◷', // periodic — runs on a schedule / wake timer
+  event:   '⚡', // event-driven — reacts to an incoming event
+  handler: '⇄', // request / reply handler
+  container: '',
+};
+function loopSigil(loop) {
+  if (isContainerLoop(loop)) return '';
+  if (getLoopCategory(loop) === 'channel') return '@';
+  const sigil = OPERATION_SIGILS[getLoopOperationType(loop)];
+  return sigil != null ? sigil : '·';
+}
+
 function normalizeVisualCategory(category) {
   return CATEGORY_LABELS[category] ? category : 'generic';
 }
@@ -1106,6 +967,9 @@ const DEFAULT_NODE_R = 32;
 // Containers are semantic groupings, not executing entities — rendered small,
 // just large enough to be a comfortable context-menu click target.
 const CONTAINER_NODE_R = 16;
+// Go-backed loops (no LLM model of their own) sit just above containers: they
+// execute, but they aren't sized by a model the way LLM loops are.
+const GO_BACKED_NODE_R = 20;
 
 function getModelRadiusFromParams(params) {
   if (params === null) return DEFAULT_NODE_R;
@@ -1116,6 +980,30 @@ function getModelRadiusFromParams(params) {
             (Math.sqrt(maxParams) - Math.sqrt(minParams));
   const clamped = Math.max(0, Math.min(1, t));
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Node radius from a model's context window, log-compressed. Context windows
+// span ~4k..1M+ (≈250x); a linear map would crush small local models to dots
+// and balloon frontier models off-screen, so we interpolate radius across the
+// log of the window. A node's "stature" = the heft of the brain it runs: a
+// frontier Opus (huge window) reads visibly larger than a small local model,
+// while structural containers stay the fixed knuckle (handled separately).
+const CTX_WINDOW_MIN = 4096;     // 4k — smallest model we'd expect
+const CTX_WINDOW_MAX = 1048576;  // 1M — frontier ceiling (clamps above)
+function getContextWindowRadius(contextWindow) {
+  if (!(contextWindow > 0)) return DEFAULT_NODE_R;
+  const t = (Math.log(contextWindow) - Math.log(CTX_WINDOW_MIN)) /
+            (Math.log(CTX_WINDOW_MAX) - Math.log(CTX_WINDOW_MIN));
+  const clamped = Math.max(0, Math.min(1, t));
+  return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Compact human label for a context window (1M / 400k / 8k).
+function formatContextWindow(n) {
+  if (!(n > 0)) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
 }
 
 function getLoopContextWindow(loop) {
@@ -1137,12 +1025,21 @@ function getLoopContextWindow(loop) {
   return 0;
 }
 
-function getLoopConfiguredModelRef(loop) {
-  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
+// Live context-window utilization (0..1): how full this loop's window is right
+// now. Static node size encodes the model's CAPACITY; this is the dynamic USAGE
+// that rides on top as an inner ring — a loop whose ring is nearly full is about
+// to get slow/expensive.
+function getLoopContextFill(loop) {
+  const recent = loop && loop.recent_iterations && loop.recent_iterations[0];
+  if (!recent) return 0;
+  const win = Number(recent.context_window) || getLoopContextWindow(loop);
+  const used = Number(recent.input_tokens) || 0;
+  if (!(win > 0)) return 0;
+  return Math.max(0, Math.min(1, used / win));
 }
 
-function getSystemDefaultModelRef() {
-  return (((state.system || {}).models || {}).default_model || '').trim();
+function getLoopConfiguredModelRef(loop) {
+  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
 }
 
 function deploymentMatchesModelRef(dep, ref) {
@@ -1194,8 +1091,8 @@ function getLoopVisualCapacity(loop) {
   if (contextWindow > 0) {
     const tier = getContextTier(contextWindow);
     return {
-      radius: tier.radius,
-      label: tier.label,
+      radius: getContextWindowRadius(contextWindow),
+      label: formatContextWindow(contextWindow),
       key: tier.key,
       basis: 'context',
       contextWindow,
@@ -1205,42 +1102,43 @@ function getLoopVisualCapacity(loop) {
   const recent = loop.recent_iterations && loop.recent_iterations.length > 0
     ? loop.recent_iterations[0]
     : null;
-  const configuredModel = getLoopConfiguredModelRef(loop);
+  // Only a model the loop OWNS counts (configured, or actually run) — do NOT
+  // fall back to the system default, or a pure-Go loop would borrow a big LLM
+  // size it never uses.
   const modelName = loop._liveModel
     || loop._lastModel
     || (recent && recent.model)
-    || configuredModel
-    || getSystemDefaultModelRef()
+    || getLoopConfiguredModelRef(loop)
     || '';
-  const registryContextWindow = getRegistryContextWindowForModel(modelName);
-  if (registryContextWindow > 0) {
-    const tier = getContextTier(registryContextWindow);
-    return {
-      radius: tier.radius,
-      label: tier.label,
-      key: tier.key,
-      basis: 'context',
-      contextWindow: registryContextWindow,
-    };
-  }
-  const params = getModelParams(modelName);
-  if (params !== null) {
-    return {
-      radius: getModelRadiusFromParams(params),
-      label: params + 'b',
-      key: 'model-estimate',
-      basis: 'model',
-      contextWindow: 0,
-    };
+  if (modelName) {
+    const registryContextWindow = getRegistryContextWindowForModel(modelName);
+    if (registryContextWindow > 0) {
+      const tier = getContextTier(registryContextWindow);
+      return {
+        radius: getContextWindowRadius(registryContextWindow),
+        label: formatContextWindow(registryContextWindow),
+        key: tier.key,
+        basis: 'context',
+        contextWindow: registryContextWindow,
+      };
+    }
+    const params = getModelParams(modelName);
+    if (params !== null) {
+      return {
+        radius: getModelRadiusFromParams(params),
+        label: params + 'b',
+        key: 'model-estimate',
+        basis: 'model',
+        contextWindow: 0,
+      };
+    }
+    // Has a model but unknown size — treat as a generic LLM.
+    return { radius: DEFAULT_NODE_R, label: '?', key: 'unknown', basis: 'unknown', contextWindow: 0 };
   }
 
-  return {
-    radius: DEFAULT_NODE_R,
-    label: '?',
-    key: 'unknown',
-    basis: 'unknown',
-    contextWindow: 0,
-  };
+  // No model of its own → a pure Go-backed loop (executes, but runs no LLM).
+  // Sized just above a container so it reads as lightweight, not as a big brain.
+  return { radius: GO_BACKED_NODE_R, label: '', key: 'go', basis: 'go', contextWindow: 0 };
 }
 
 function getLoopVisualState(loop) {
@@ -2999,14 +2897,16 @@ function setNodeData(dataset, key, value) {
 // facts already on the wire; owner/sigil await dedicated spec fields.
 function projectLoopCharacteristics(loop, capacity, visualState, group) {
   const d = group.dataset;
-  setNodeData(d, 'operation',
-    isContainerLoop(loop) ? 'container'
-      : loop.handler_only ? 'handler'
-      : loop.event_driven ? 'event'
-      : 'timer');
+  setNodeData(d, 'operation', getLoopOperationType(loop));
   setNodeData(d, 'category', normalizeVisualCategory(getLoopCategory(loop)));
   setNodeData(d, 'state', visualState);
   setNodeData(d, 'contextTier', capacity.key);
+  // Backing kind: 'llm' runs a model (sized by it), 'go' is a pure-Go loop
+  // (lightweight), 'container' is a structural grouping.
+  setNodeData(d, 'backing',
+    capacity.basis === 'go' ? 'go'
+      : capacity.basis === 'container' ? 'container'
+      : 'llm');
   setNodeData(d, 'contextWindow', String(capacity.contextWindow || 0));
   setNodeData(d, 'relation', loop.parent_id ? 'child' : 'root');
   const tz = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
@@ -3075,7 +2975,7 @@ function renderNode(loop) {
 
     const occlusionDisk = createSVG('circle', {
       class: 'node-occlusion',
-      r: nodeR + 6,
+      r: nodeR + 13,
     });
 
     // Glow ring (always a circle regardless of shape).
@@ -3095,6 +2995,25 @@ function renderNode(loop) {
       'stroke-dashoffset': circumference,
     });
 
+    // Context-fill ring — an inner arc showing live window utilization
+    // (input_tokens / context_window). Capacity is the node's size; this is the
+    // moment-to-moment usage. Containers / non-LLM nodes have none.
+    const fillR = nodeR * 0.72;
+    const fillCirc = 2 * Math.PI * fillR;
+    const fillFrac = getLoopContextFill(loop);
+    const fillRing = createSVG('circle', {
+      class: 'fill-ring',
+      r: fillR,
+      'stroke-dasharray': fillCirc,
+      'stroke-dashoffset': fillCirc * (1 - fillFrac),
+    });
+    // Color by pressure: green (roomy) -> orange -> red (nearly full).
+    fillRing.style.stroke = fillFrac >= 0.8 ? 'var(--red)'
+      : (fillFrac >= 0.5 ? 'var(--orange)' : 'var(--green)');
+    if (capacity.basis !== 'context' || fillFrac <= 0) {
+      fillRing.style.display = 'none';
+    }
+
     // Main shape — always a circle.
     const shapeEl = createNodeShape(category, nodeR);
 
@@ -3105,7 +3024,7 @@ function renderNode(loop) {
       'dominant-baseline': 'central',
       'font-size': Math.round(nodeR * 0.5),
     });
-    icon.textContent = categorySigil(category);
+    icon.textContent = loopSigil(loop);
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -3146,6 +3065,7 @@ function renderNode(loop) {
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
+    inner.appendChild(fillRing);
     inner.appendChild(icon);
     inner.appendChild(supDot);
     inner.appendChild(rimBadge);
@@ -3197,7 +3117,7 @@ function renderNode(loop) {
     // Update dependent radii.
     const newRingR = nodeR + 12;
     group.querySelector('.selection-ring').setAttribute('r', nodeR + 18);
-    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 6);
+    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 13);
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
     const newSleepR = nodeR;
@@ -3219,11 +3139,32 @@ function renderNode(loop) {
   // seam CSS/themes drive visuals from. Owns data-category and data-state.
   projectLoopCharacteristics(loop, capacity, visualState, group);
   shapeEl.setAttribute('class', 'node-shape node-shape--category-' + category + ' node-shape--activity-' + visualState);
-  iconEl.textContent = categorySigil(category);
+  iconEl.textContent = loopSigil(loop);
   iconEl.setAttribute('class', 'node-icon node-icon--' + category);
 
   const ring = group.querySelector('.node-ring');
   ring.setAttribute('class', 'node-ring node-ring--' + visualState);
+
+  // Keep the context-fill ring current. Utilization (arc length + pressure
+  // color) changes as iterations arrive, and the radius changes when the node
+  // resizes (e.g. a model change), so recompute every render instead of
+  // freezing the build-time values.
+  const fillRing = group.querySelector('.fill-ring');
+  if (fillRing) {
+    const fillFrac = getLoopContextFill(loop);
+    if (capacity.basis !== 'context' || fillFrac <= 0) {
+      fillRing.style.display = 'none';
+    } else {
+      const fillR = nodeR * 0.72;
+      const fillCirc = 2 * Math.PI * fillR;
+      fillRing.style.display = '';
+      fillRing.setAttribute('r', fillR);
+      fillRing.setAttribute('stroke-dasharray', fillCirc);
+      fillRing.setAttribute('stroke-dashoffset', fillCirc * (1 - fillFrac));
+      fillRing.style.stroke = fillFrac >= 0.8 ? 'var(--red)'
+        : (fillFrac >= 0.5 ? 'var(--orange)' : 'var(--green)');
+    }
+  }
 
   // Ring thickness represents context utilization percentage.
   const ctxPct = (capacity.contextWindow > 0 && loop.last_input_tokens > 0)
@@ -4547,13 +4488,48 @@ function currentDetailTickIntervalMs() {
   return 1000;
 }
 
+// Gource-style auto-fit camera: ease pan/zoom each frame so the whole graph
+// stays framed in the canvas, with margin. The layout lives in fixed
+// canvas-pixel space, so moving the camera here never disturbs the physics —
+// there is no feedback loop. Manual pan/zoom switches this off (see
+// initPanZoom); double-clicking the background turns it back on and snaps.
+function autoFitCamera(canvasW, canvasH) {
+  if (!viewport.autoFit || canvasW <= 0 || canvasH <= 0 || physics.nodes.size === 0) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [id, nd] of physics.nodes) {
+    const ext = getPhysicsNodeExtent(id);
+    if (nd.x - ext < minX) minX = nd.x - ext;
+    if (nd.x + ext > maxX) maxX = nd.x + ext;
+    if (nd.y - ext < minY) minY = nd.y - ext;
+    if (nd.y + ext > maxY) maxY = nd.y + ext;
+  }
+  if (!Number.isFinite(minX)) return;
+  const margin = 64;
+  const cloudW = Math.max(1, maxX - minX);
+  const cloudH = Math.max(1, maxY - minY);
+  const bcx = (minX + maxX) / 2;
+  const bcy = (minY + maxY) / 2;
+  // Fit to the tighter axis, but never magnify a small graph past 1:1.
+  const fit = Math.min((canvasW - (margin * 2)) / cloudW, (canvasH - (margin * 2)) / cloudH);
+  const targetZoom = Math.max(ZOOM_MIN, Math.min(1, fit));
+  const targetPanX = (canvasW / 2) - (bcx * targetZoom);
+  const targetPanY = (canvasH / 2) - (bcy * targetZoom);
+  const ease = viewport.autoFitSnap ? 1 : 0.12;
+  viewport.autoFitSnap = false;
+  viewport.zoom += (targetZoom - viewport.zoom) * ease;
+  viewport.panX += (targetPanX - viewport.panX) * ease;
+  viewport.panY += (targetPanY - viewport.panY) * ease;
+  applyViewportTransform();
+}
+
 function tick() {
   // Physics simulation — run every frame for smooth organic motion.
   const rect = refreshCanvasViewport() || getLayoutViewportRect();
   if (rect.width > 0 && rect.height > 0) {
-    physicsStep(rect.cx, rect.cy, rect.width, rect.height);
+    physicsStep(rect.cx, rect.cy, rect.pxWidth, rect.pxHeight);
     updatePinnedAnchorPositions();
     updateNodePositions();
+    autoFitCamera(rect.pxWidth, rect.pxHeight);
   }
 
   // Keep the selected inspector lively without redrawing at full frame rate.
@@ -4943,10 +4919,14 @@ function updateUptime() {
 // Canvas Pan & Zoom
 // ---------------------------------------------------------------------------
 
-const viewport = { panX: 0, panY: 0, zoom: 1 };
+const viewport = { panX: 0, panY: 0, zoom: 1, spread: 1, autoFit: true, autoFitSnap: true };
 const ZOOM_MIN = 0.25;
-const ZOOM_MAX = 4;
-const ZOOM_STEP = 0.1;
+// Spread is the layout's relief valve: the wheel scales the gravity rings so the
+// graph unfurls into available space (scroll out) or packs tighter (scroll in),
+// while the auto-fit camera reframes the result. Multiplicative per wheel tick.
+const SPREAD_MIN = 0.55;
+const SPREAD_MAX = 3.5;
+const SPREAD_STEP = 1.12;
 
 function applyViewportTransform() {
   canvasWorld.setAttribute(
@@ -4979,6 +4959,7 @@ function applyViewportTransform() {
 
   document.addEventListener('mousemove', (e) => {
     if (!isPanning) return;
+    viewport.autoFit = false; // a manual pan takes over from the auto-fit camera
     viewport.panX = startPanX + (e.clientX - startX);
     viewport.panY = startPanY + (e.clientY - startY);
     applyViewportTransform();
@@ -4992,35 +4973,24 @@ function applyViewportTransform() {
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-
-    // Zoom toward cursor position.
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // World coordinates under cursor before zoom.
-    const wx = (mouseX - viewport.panX) / viewport.zoom;
-    const wy = (mouseY - viewport.panY) / viewport.zoom;
-
-    // Apply zoom delta.
-    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewport.zoom + delta));
-    viewport.zoom = newZoom;
-
-    // Adjust pan so the world point under cursor stays fixed.
-    viewport.panX = mouseX - wx * viewport.zoom;
-    viewport.panY = mouseY - wy * viewport.zoom;
-
-    applyViewportTransform();
+    // The wheel drives LAYOUT SPREAD, not the camera: scrolling out grows the
+    // gravity rings so crowded families relax into the new room, scrolling in
+    // packs them. The auto-fit camera (kept on) reframes the resized cloud, so on
+    // screen the nodes shrink and the gaps open — the "more canvas to unfurl
+    // into" effect that a pure camera zoom can never produce.
+    const factor = e.deltaY > 0 ? SPREAD_STEP : 1 / SPREAD_STEP;
+    viewport.spread = Math.max(SPREAD_MIN, Math.min(SPREAD_MAX, viewport.spread * factor));
+    viewport.autoFit = true;      // let the camera reframe the new spread
+    viewport.autoFitSnap = false; // ease into the new frame rather than jumping
   }, { passive: false });
 
-  // Double-click to reset view.
+  // Double-click the background to re-enable the auto-fit camera and snap it to
+  // frame the whole graph.
   canvas.addEventListener('dblclick', (e) => {
     if (e.target.closest('.loop-node')) return;
-    viewport.panX = 0;
-    viewport.panY = 0;
-    viewport.zoom = 1;
-    applyViewportTransform();
+    viewport.spread = 1; // reset to the neutral spread along with re-fitting
+    viewport.autoFit = true;
+    viewport.autoFitSnap = true;
   });
 })();
 
