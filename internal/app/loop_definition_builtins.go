@@ -22,6 +22,49 @@ const (
 	telemetryDefinitionName       = "telemetry"
 )
 
+// Built-in grouping containers. Each is an inert Operation=container loop that
+// hangs under core and gives the node graph its top-level shape; member loops
+// join by setting ParentName to one of these names. The definition registry's
+// topological sort spawns each container before its members, so these work for
+// members that are themselves base definitions (dynamically-spawned members,
+// e.g. channel loops, need a different mechanism — they spawn before the
+// definition-driven containers are live).
+const (
+	cognitionContainerName     = "cognition"
+	homeAssistantContainerName = "home-assistant"
+)
+
+// builtInContainerDefinitionSpecs returns the built-in grouping containers,
+// each gated so an empty container never appears: cognition when any core
+// cognition loop is enabled, home-assistant when HA or MQTT is configured.
+func builtInContainerDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
+	if cfg == nil {
+		return nil
+	}
+	var specs []looppkg.Spec
+
+	if cfg.Metacognitive.Enabled || cfg.Ego.Enabled || cfg.Archivist.Enabled {
+		specs = append(specs, containerSpec(cognitionContainerName,
+			"Core cognition loops: reflection, identity, and memory."))
+	}
+	if cfg.HomeAssistant.Configured() || cfg.MQTT.Configured() {
+		specs = append(specs, containerSpec(homeAssistantContainerName,
+			"Home Assistant integration: state watching, MQTT transport, and telemetry."))
+	}
+
+	return specs
+}
+
+// containerSpec builds an inert grouping-container definition under core.
+func containerSpec(name, intent string) looppkg.Spec {
+	return looppkg.Spec{
+		Name:      name,
+		Enabled:   true,
+		Operation: looppkg.OperationContainer,
+		Metadata:  map[string]string{"intent": intent},
+	}
+}
+
 func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	if cfg == nil {
 		return nil
@@ -52,6 +95,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:       haStateWatcherDefinitionName,
 			Enabled:    true,
+			ParentName: homeAssistantContainerName,
 			Task:       "Watch Home Assistant state_changed events and feed ambient awareness state.",
 			Operation:  looppkg.OperationService,
 			Completion: looppkg.CompletionNone,
@@ -194,6 +238,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:       mqtt.DefaultHandlerLoopName,
 			Enabled:    true,
+			ParentName: homeAssistantContainerName,
 			Task:       "Triage MQTT wake events: inspect topic and payload, then act or escalate.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
@@ -211,6 +256,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:         mqttPublisherDefinitionName,
 			Enabled:      true,
+			ParentName:   homeAssistantContainerName,
 			Task:         "Publish MQTT state and discovery updates on the configured cadence.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
@@ -230,6 +276,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:         telemetryDefinitionName,
 			Enabled:      true,
+			ParentName:   homeAssistantContainerName,
 			Task:         "Collect runtime telemetry and publish it through MQTT sensors.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,

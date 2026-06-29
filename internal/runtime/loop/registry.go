@@ -795,6 +795,26 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 	return l.id, nil
 }
 
+// SpawnLoopUnderParentOrCore resolves cfg.ParentName to a live parent's ID and
+// spawns under it, falling back to core when the named parent isn't live yet.
+// Register only accepts an explicit ParentID — the bootstrap's topological sort
+// resolves names for definition-driven specs — so a loop spawned dynamically
+// during bootstrap (e.g. a channel loop whose grouping container may not be
+// live) must resolve its parent here. There is no late-reattach path, so a
+// fallback is permanent until the next spawn.
+func (r *Registry) SpawnLoopUnderParentOrCore(ctx context.Context, cfg Config, deps Deps) (string, error) {
+	if name := strings.TrimSpace(cfg.ParentName); name != "" {
+		cfg.ParentName = ""
+		if parent := r.GetByName(name); parent != nil {
+			cfg.ParentID = parent.ID()
+		} else if deps.Logger != nil {
+			deps.Logger.Debug("loop attached to core; grouping container not live",
+				"loop", cfg.Name, "parent_name", name)
+		}
+	}
+	return r.SpawnLoop(ctx, cfg, deps)
+}
+
 // SpawnSpec creates, registers, and starts a loop from a [Spec]. It is
 // the spec-based entrypoint; [Registry.SpawnLoop] with [Config] remains
 // available for callers that build a Config directly.

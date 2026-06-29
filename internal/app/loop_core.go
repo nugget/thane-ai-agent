@@ -54,3 +54,29 @@ func (a *App) ensureCoreLoop(ctx context.Context) error {
 	a.logger.Info("core loop auto-created", "name", looppkg.CoreLoopName)
 	return nil
 }
+
+// ensureChannelsContainer spawns the channels grouping container
+// ([looppkg.ChannelsContainerName]) as an inert implicit container under core,
+// mirroring [App.ensureCoreLoop]. It must run before the channel integrations
+// spawn their dynamically-created channel loops: there is no late-reattach
+// path, so a child that registers before its parent is live stays parentless.
+// Idempotent — a no-op once it exists.
+func (a *App) ensureChannelsContainer(ctx context.Context) error {
+	if a == nil || a.loopRegistry == nil {
+		return nil
+	}
+	if a.loopRegistry.GetByName(looppkg.ChannelsContainerName) != nil {
+		return nil
+	}
+	spec := looppkg.Spec{
+		Name:      looppkg.ChannelsContainerName,
+		Enabled:   true,
+		Operation: looppkg.OperationContainer,
+		Metadata:  map[string]string{"intent": "Interactive counterparty channels (Signal, OWU, and others)."},
+	}
+	if _, err := a.loopRegistry.SpawnSpec(ctx, spec, looppkg.Deps{Logger: a.logger}); err != nil {
+		return err
+	}
+	a.logger.Info("channels container auto-created", "name", looppkg.ChannelsContainerName)
+	return nil
+}
