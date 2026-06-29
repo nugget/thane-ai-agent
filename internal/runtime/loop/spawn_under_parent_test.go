@@ -36,17 +36,24 @@ func TestSpawnLoopUnderParentOrCore(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back when parent missing", func(t *testing.T) {
+	t.Run("falls back to core when parent missing", func(t *testing.T) {
 		t.Parallel()
 		r := NewRegistry()
-		id, err := r.SpawnLoopUnderParentOrCore(context.Background(), Config{
+		ctx := context.Background()
+		if _, err := r.SpawnSpec(ctx, Spec{Name: CoreLoopName, Enabled: true, Operation: OperationContainer}, Deps{}); err != nil {
+			t.Fatalf("spawn core: %v", err)
+		}
+		if _, err := r.SpawnLoopUnderParentOrCore(ctx, Config{
 			Name: "orphan-child", ParentName: "nonexistent", Handler: noop,
-		}, Deps{})
-		if err != nil {
+		}, Deps{}); err != nil {
 			t.Fatalf("expected graceful fallback, got error: %v", err)
 		}
-		if id == "" || r.GetByName("orphan-child") == nil {
+		child := r.GetByName("orphan-child")
+		if child == nil {
 			t.Fatal("child not registered after fallback")
+		}
+		if core := r.Core(); core == nil || child.ParentID() != core.ID() {
+			t.Errorf("child ParentID = %q, want core's id", child.ParentID())
 		}
 	})
 }

@@ -195,9 +195,9 @@ func (b *Bridge) Register(ctx context.Context) error {
 
 	parentID, err := b.registry.SpawnLoopUnderParentOrCore(ctx, loop.Config{
 		Name: "signal",
-		// Group under the built-in "channels" container (channelsContainerName
-		// in internal/app); falls back to core if it isn't live yet.
-		ParentName: "channels",
+		// Group under the built-in channels container; falls back to core if
+		// it isn't live yet.
+		ParentName: loop.ChannelsContainerName,
 		WaitFunc: func(wCtx context.Context) (any, error) {
 			select {
 			case <-wCtx.Done():

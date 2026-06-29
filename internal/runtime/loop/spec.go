@@ -77,6 +77,13 @@ const (
 // constant rather than re-spelling the string.
 const CoreLoopName = "core"
 
+// ChannelsContainerName is the well-known name of the built-in grouping
+// container for interactive counterparty channel loops (signal, owu, …).
+// Spawned eagerly under core at startup so dynamically-created channel loops
+// can attach to it. Shared here so the app bootstrap and the channel
+// integrations reference one constant instead of re-spelling the string.
+const ChannelsContainerName = "channels"
+
 // Completion describes how a loop's result should be delivered.
 // The zero value is accepted and means "no outward delivery declared".
 type Completion string

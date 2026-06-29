@@ -55,26 +55,21 @@ func (a *App) ensureCoreLoop(ctx context.Context) error {
 	return nil
 }
 
-// channelsContainerName is the implicit grouping container for interactive
-// counterparty channel loops (signal, owu, …). Keep in sync with the literal
-// used by the channel integrations (signal bridge, OWU tracker), which can't
-// import this package.
-const channelsContainerName = "channels"
-
-// ensureChannelsContainer spawns the channels grouping container as an inert
-// implicit container under core, mirroring [App.ensureCoreLoop]. It must run
-// before the channel integrations spawn their dynamically-created channel
-// loops: there is no late-reattach path, so a child that registers before its
-// parent is live stays parentless. Idempotent — a no-op once it exists.
+// ensureChannelsContainer spawns the channels grouping container
+// ([looppkg.ChannelsContainerName]) as an inert implicit container under core,
+// mirroring [App.ensureCoreLoop]. It must run before the channel integrations
+// spawn their dynamically-created channel loops: there is no late-reattach
+// path, so a child that registers before its parent is live stays parentless.
+// Idempotent — a no-op once it exists.
 func (a *App) ensureChannelsContainer(ctx context.Context) error {
 	if a == nil || a.loopRegistry == nil {
 		return nil
 	}
-	if a.loopRegistry.GetByName(channelsContainerName) != nil {
+	if a.loopRegistry.GetByName(looppkg.ChannelsContainerName) != nil {
 		return nil
 	}
 	spec := looppkg.Spec{
-		Name:      channelsContainerName,
+		Name:      looppkg.ChannelsContainerName,
 		Enabled:   true,
 		Operation: looppkg.OperationContainer,
 		Metadata:  map[string]string{"intent": "Interactive counterparty channels (Signal, OWU, and others)."},
@@ -82,6 +77,6 @@ func (a *App) ensureChannelsContainer(ctx context.Context) error {
 	if _, err := a.loopRegistry.SpawnSpec(ctx, spec, looppkg.Deps{Logger: a.logger}); err != nil {
 		return err
 	}
-	a.logger.Info("channels container auto-created", "name", channelsContainerName)
+	a.logger.Info("channels container auto-created", "name", looppkg.ChannelsContainerName)
 	return nil
 }

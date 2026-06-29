@@ -71,9 +71,9 @@ func NewOWUTracker(ctx context.Context, registry *loop.Registry, eventBus *event
 
 	parentID, err := registry.SpawnLoopUnderParentOrCore(ctx, loop.Config{
 		Name: "owu",
-		// Group under the built-in "channels" container (channelsContainerName
-		// in internal/app); falls back to core if it isn't live yet.
-		ParentName: "channels",
+		// Group under the built-in channels container; falls back to core if
+		// it isn't live yet.
+		ParentName: loop.ChannelsContainerName,
 		Handler:    func(context.Context, any) error { return nil },
 		Metadata:   map[string]string{"subsystem": "owu", "category": "channel"},
 	}, loop.Deps{Logger: logger, EventBus: eventBus})

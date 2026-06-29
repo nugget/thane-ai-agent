@@ -19,7 +19,7 @@ func TestEnsureChannelsContainer(t *testing.T) {
 	if err := a.ensureChannelsContainer(ctx); err != nil {
 		t.Fatalf("ensureChannelsContainer: %v", err)
 	}
-	c := a.loopRegistry.GetByName(channelsContainerName)
+	c := a.loopRegistry.GetByName(looppkg.ChannelsContainerName)
 	if c == nil {
 		t.Fatal("channels container not created")
 	}
@@ -31,7 +31,7 @@ func TestEnsureChannelsContainer(t *testing.T) {
 	if err := a.ensureChannelsContainer(ctx); err != nil {
 		t.Fatalf("second ensureChannelsContainer: %v", err)
 	}
-	if got := len(a.loopRegistry.FindByName(channelsContainerName)); got != 1 {
+	if got := len(a.loopRegistry.FindByName(looppkg.ChannelsContainerName)); got != 1 {
 		t.Errorf("channels container count = %d, want 1", got)
 	}
 }
