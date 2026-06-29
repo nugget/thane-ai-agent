@@ -9,6 +9,7 @@ import (
 	"time"
 
 	emailcfg "github.com/nugget/thane-ai-agent/internal/channels/email"
+	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
@@ -314,7 +315,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 	}
 
 	// Home Assistant members nest under the home-assistant container.
-	for _, name := range []string{haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, "mqtt-default-handler"} {
+	for _, name := range []string{haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName} {
 		if got := byName[name].ParentName; got != homeAssistantContainerName {
 			t.Errorf("%s ParentName = %q, want %q", name, got, homeAssistantContainerName)
 		}
@@ -323,7 +324,8 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 
 // TestBuiltInContainerDefinitionSpecs_Gating guards the container gating:
 // cognition only when a core loop is enabled, home-assistant only when HA or
-// MQTT is configured, channels always.
+// MQTT is configured. (channels is not a base-definition container — it is
+// spawned eagerly as an implicit container; see TestEnsureChannelsContainer.)
 func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 	t.Parallel()
 
