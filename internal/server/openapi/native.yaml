@@ -230,7 +230,7 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/LoopStatus" }
+                items: { $ref: "#/components/schemas/LoopStatusWithView" }
   /v1/loops/{id}:
     get:
       tags: [Loops]
@@ -244,7 +244,7 @@ paths:
           description: Loop status.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/LoopStatus" }
+              schema: { $ref: "#/components/schemas/LoopStatusWithView" }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/loops/{id}/logs:
     get:
@@ -1466,6 +1466,80 @@ components:
         recent_conv_ids: ["019e7469-3abf-7e6b-ae38-85b5e34915ac", "019e7469-1a2b-7c3d-9e4f-0a1b2c3d4e5f"]
         handler_only: false
         event_driven: false
+    LoopView:
+      type: object
+      description: |
+        Canonical model-facing projection of one loop — the "ps auxwwww" row the
+        Loops table and loop_* tools emit, attached to each running loop on
+        /v1/loops as `view` so the console reads schedule, structure, economics,
+        and policy in one consistent vocabulary. Pointer fields serialize as
+        explicit null when not applicable (e.g. token counters on a handler-only
+        loop). Mirrors internal/runtime/loop.LoopView; the inspector-relevant
+        fields are documented here and the remainder are tracked under the
+        OpenAPI field-parity effort.
+      additionalProperties: true
+      properties:
+        operation:
+          type: string
+          description: Canonical run shape (container, service, event_driven, request_reply, background_task).
+        intent:
+          type: string
+          description: One-line statement of what the loop is for, from its definition.
+        parent_name:
+          type: [string, "null"]
+          description: Parent loop's resolved name (never a bare ID); null at the root.
+        ancestry:
+          type: array
+          items: { type: string }
+          description: Ancestor names ordered root→leaf, for blast-radius context.
+        child_count:
+          type: integer
+          description: Number of direct child loops.
+        policy_state:
+          type: string
+          description: active, paused, or ephemeral (no stored definition backs the loop).
+        eligible:
+          type: boolean
+          description: Whether the loop's definition is currently eligible to run.
+        next_wake_delta:
+          type: [string, "null"]
+          description: Signed-second delta to the scheduled wake while timer-sleeping (e.g. "+5953s"); null when processing or event-driven.
+        current_sleep_duration:
+          type: [string, "null"]
+          description: Unsigned-second self-paced sleep interval honored this cycle (e.g. "5940s").
+        context_fill_pct:
+          type: [integer, "null"]
+          description: Last input tokens as a percentage of the context window; null for handler-only loops.
+        consecutive_errors:
+          type: [integer, "null"]
+          description: Length of the current error streak.
+        last_error:
+          type: [string, "null"]
+          description: Most recent error text; null when clean.
+    LoopStatusWithView:
+      description: A running loop's status snapshot enriched with its canonical LoopView projection under `view`.
+      allOf:
+        - $ref: "#/components/schemas/LoopStatus"
+        - type: object
+          properties:
+            view: { $ref: "#/components/schemas/LoopView" }
+      example:
+        id: 019e7469-3abf-7e6b-ae38-85b5e34915ac
+        name: signal-interactive
+        state: sleeping
+        view:
+          operation: service
+          intent: Tend the Signal conversation and respond to inbound messages.
+          parent_name: channels
+          ancestry: [core, channels]
+          child_count: 0
+          policy_state: active
+          eligible: true
+          next_wake_delta: "+5953s"
+          current_sleep_duration: "5940s"
+          context_fill_pct: 42
+          consecutive_errors: 0
+          last_error: null
     IterationSnapshot:
       type: object
       description: Serializable summary of a single completed loop iteration, retained in a ring buffer for the dashboard timeline.
