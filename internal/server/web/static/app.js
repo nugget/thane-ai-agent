@@ -54,6 +54,16 @@ const physics = {
   // position: force = gravityStrength * (dist - ringRadius), signed so it
   // reels a node in when it drifts out and pushes it off when it sinks inward.
   gravityStrength:    0.06,
+  // Per-edge "rim spring" for CHILD (non-root) families. Instead of pulling a
+  // child onto a sqrt-area family RING (which grows with family size + spread and
+  // made container-child edges long), pull it to a SHORT rest = the two nodes'
+  // own extents + a small gap — the Gource rim, where a child sits tangent on its
+  // parent. Rest depends only on the two endpoints, so the edge strains short
+  // regardless of sibling count, subtree depth, or viewport.spread. Stronger than
+  // gravity so it wins the RADIUS while sibling/overlap repulsion spread the
+  // children ANGULARLY around the rim.
+  edgeSpringStrength: 0.12,
+  edgeGap:            26,
   // Sibling angular spread: a decaying (1/d^2) central repulsion among
   // same-parent siblings (scaled by ring^2) that reaches across gaps, so a
   // clustered or cold-start-piled family spreads around its whole ring —
@@ -71,6 +81,15 @@ const physics = {
   // can't drive a slow cloud rotation the way a moving-apex pull does. Gentle:
   // it must lose to overlap separation and the cold-start sibling-spread.
   outwardFanStrength: 1,
+  // Root-ring aspect stretch — fills a non-square canvas (partially; a radial
+  // layout resists extreme aspects) and pins the layout's orientation so a
+  // circular cloud can't slowly spin.
+  orbitAspectStrength: 0.85,
+  // Puddle walls (disabled): edge forces only push in, but the puddle bulge
+  // needs the cloud to expand out — gravity-to-ring fights it, so the cloud
+  // compresses/churns instead of filling. Kept at 0; aspect ellipse does the job.
+  wallStrength: 0,
+  puddleExtent: 1.18,
   pinnedAnchorStrength: 0.16,
   pinnedAnchorDamping: 0.72,
   // Overlap repulsion fires ONLY when node footprints intersect; the force is
@@ -343,10 +362,10 @@ function syncPhysicsNodes(cx, cy) {
   const { ringRadius } = buildOrbitRings(branchLoads, registryCoreID);
   const nowMs = getNowMs();
 
-  // Loop nodes. New nodes spawn ON their family ring at a random angle around
-  // the parent (or core) — never inside the ring — so gravity, sibling-spread
-  // and overlap repulsion settle them into an open arc instead of shoving them
-  // outward through their siblings from an overlapping birth position.
+  // Loop nodes. Roots spawn on the macro ring around the core at a free angle;
+  // child nodes spawn AT their parent's short rim, biased to the away-from-core
+  // side, so they land roughly where the rim spring settles them (no long reel-in
+  // from the old big ring) and fan outward instead of overlapping their siblings.
   for (const loop of state.loops.values()) {
     // Skip the registry's structural-root core loop — it shares its
     // visual slot with __system__ and rendering both produces the
@@ -359,12 +378,23 @@ function syncPhysicsNodes(cx, cy) {
     const anchor = hasLiveParent ? physics.nodes.get(parentID) : physics.nodes.get('__system__');
     let sx, sy;
     if (anchor) {
-      const ring = ringRadius.get(hasLiveParent ? parentID : '__root__')
-        || (hasLiveParent ? physics.childRestLength : physics.springRestLength);
-      const angle = Math.random() * Math.PI * 2;
-      const jitter = 6 + Math.random() * 10;
-      sx = anchor.x + Math.cos(angle) * (ring + jitter);
-      sy = anchor.y + Math.sin(angle) * (ring + jitter);
+      let spawnR, angle;
+      if (hasLiveParent) {
+        // Child: seed AT the short rim (the rim-spring rest) on the away-from-core
+        // side of its parent, so it lands roughly where it settles — no long
+        // reel-in from the old macro ring, and an outward seed is the cheapest
+        // crossing preventer (subtree fans away from the grandparent).
+        spawnR = getPhysicsNodeExtent(parentID) + getPhysicsNodeExtent(loop.id) + physics.edgeGap;
+        const ax = anchor.x - cx, ay = anchor.y - cy; // core -> parent direction
+        const base = (ax || ay) ? Math.atan2(ay, ax) : Math.random() * Math.PI * 2;
+        angle = base + (Math.random() - 0.5) * 1.2;   // outward, with a little spread
+      } else {
+        // Root: seed on the macro ring around the core at a free angle.
+        spawnR = (ringRadius.get('__root__') || physics.springRestLength) + 6 + Math.random() * 10;
+        angle = Math.random() * Math.PI * 2;
+      }
+      sx = anchor.x + Math.cos(angle) * spawnR;
+      sy = anchor.y + Math.sin(angle) * spawnR;
     } else {
       sx = cx + (Math.random() * 40 - 20);
       sy = cy + (Math.random() * 40 - 20);
@@ -511,7 +541,7 @@ function buildOrbitRings(branchLoads, registryCoreID) {
 // repulsion, integrated once. There is no post-integration position write, so
 // attraction and repulsion negotiate one equilibrium instead of a slot
 // teleport re-overlapping nodes every frame.
-function physicsStep(cx, cy) {
+function physicsStep(cx, cy, vw, vh) {
   const P = physics;
   const nodes = Array.from(P.nodes.values());
   const ids = Array.from(P.nodes.keys());
@@ -521,6 +551,16 @@ function physicsStep(cx, cy) {
   const registryCoreID = getRegistryCoreID();
   const { groups, ringRadius } = buildOrbitRings(branchLoads, registryCoreID);
   const motionScale = getGraphMotionScale(n);
+
+  // Aspect shaping: stretch the ROOT ring into an ellipse matching the canvas
+  // aspect ratio. Two wins from one move: (1) the graph puddle-fills a non-square
+  // canvas (a tall canvas gets a taller cloud) instead of leaving whitespace, and
+  // (2) the ellipse has a preferred orientation, which breaks the circular
+  // layout's rotational symmetry — a circle is free to drift/spin forever (no
+  // restoring force for rotation), an ellipse is pinned to the canvas axes.
+  const aspect = (vw > 0 && vh > 0) ? (vw / vh) : 1;
+  const rootShapeX = 1 + ((Math.sqrt(aspect) - 1) * P.orbitAspectStrength);
+  const rootShapeY = 1 + (((1 / Math.sqrt(aspect)) - 1) * P.orbitAspectStrength);
 
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
@@ -535,7 +575,16 @@ function physicsStep(cx, cy) {
   const corePy = sysNode ? sysNode.y : cy;
   for (const [key, loops] of groups) {
     const isRoot = key === '__root__';
-    const ring = ringRadius.get(key) || (isRoot ? P.springRestLength : P.childRestLength);
+    // Macro ring — ROOT families only: the tier-1 cloud rings the core at a
+    // sqrt-area radius, aspect-stretched and scaled by viewport.spread so the
+    // wheel fans tier-1 apart. Child families no longer use the ring for their
+    // edge length (they use the short rim spring below), so a big family stops
+    // lengthening every edge and `spread` no longer stretches intra-family edges.
+    const ring = (ringRadius.get(key) || (isRoot ? P.springRestLength : P.childRestLength)) * viewport.spread;
+    // Aspect ellipse pins the macro orientation; only roots take it now (child
+    // families hug their parent rim isotropically).
+    const shapeX = isRoot ? rootShapeX : 1;
+    const shapeY = isRoot ? rootShapeY : 1;
     // Roots orbit the pinned core node's LIVE position rather than the raw
     // viewport center it eases toward, so they stay attached to the core node
     // through the pinned-anchor easing (e.g. across a resize). Non-roots orbit
@@ -549,6 +598,19 @@ function physicsStep(cx, cy) {
     // deeper); roots distribute freely around the core via sibling-spread.
     const fanActive = !isRoot;
 
+    // Sibling-spread reach = the radius siblings actually sit at, so the 1/d^2
+    // spread is calibrated to the achievable spacing and vanishes at even spread
+    // (a reach tied to the big macro ring never decays on the short child arc and
+    // would buzz). Roots: the macro ring. Child families: the short rim radius.
+    let repelRadius = ring;
+    if (!isRoot) {
+      let maxChildExtent = 0;
+      for (const loop of loops) {
+        maxChildExtent = Math.max(maxChildExtent, getPhysicsNodeExtent(loop.id));
+      }
+      repelRadius = getPhysicsNodeExtent(key) + maxChildExtent + P.edgeGap;
+    }
+
     for (const loop of loops) {
       const nd = P.nodes.get(loop.id);
       if (!nd || nd.pinned) continue;
@@ -559,11 +621,24 @@ function physicsStep(cx, cy) {
         const a = Math.random() * Math.PI * 2;
         dx = Math.cos(a); dy = Math.sin(a); dist = 1;
       }
-      // Signed radial spring to the ring: reels in past the ring, pushes out
-      // when sunk inside it (Gource gravity-to-parent, dirnode.cpp:666).
-      const pull = P.gravityStrength * (dist - ring) / dist;
-      nd.fx -= pull * dx;
-      nd.fy -= pull * dy;
+      if (isRoot) {
+        // Macro gravity-to-(elliptical)-ring: positions the tier-1 family around
+        // the core, fills the canvas aspect, and pins rotational orientation.
+        const tx = pcx + ((ring * shapeX) * (dx / dist));
+        const ty = pcy + ((ring * shapeY) * (dy / dist));
+        nd.fx += (tx - nd.x) * P.gravityStrength;
+        nd.fy += (ty - nd.y) * P.gravityStrength;
+      } else {
+        // SHORT per-edge rim spring (Gource): rest = the two nodes' own extents +
+        // a small gap, so the child sits tangent on its parent's rim and the edge
+        // strains short no matter how big or deep the family is. Stronger than
+        // gravity so it holds the radius; sibling/overlap repulsion spread the
+        // children ANGULARLY around the rim rather than pushing them out radially.
+        const rest = getPhysicsNodeExtent(key) + getPhysicsNodeExtent(loop.id) + P.edgeGap;
+        const f = (dist - rest) * P.edgeSpringStrength;
+        nd.fx -= (dx / dist) * f;
+        nd.fy -= (dy / dist) * f;
+      }
 
       // Outward bias (Gource parent-normal, dirnode.cpp:675): a constant push
       // away from the FIXED core. Its tangential-about-the-parent component
@@ -583,7 +658,7 @@ function physicsStep(cx, cy) {
     // distribution force overlap-only repulsion lacks. Scaled by ring^2 so its
     // reach tracks the family size; capped near contact to avoid a singularity.
     if (loops.length > 1) {
-      const k = P.siblingRepelStrength * ring * ring;
+      const k = P.siblingRepelStrength * repelRadius * repelRadius;
       for (let i = 0; i < loops.length; i++) {
         const a = P.nodes.get(loops[i].id);
         if (!a || a.pinned) continue;
@@ -605,12 +680,30 @@ function physicsStep(cx, cy) {
     }
   }
 
-  // No viewport wall forces: gravity-to-ring already binds every node near its
-  // parent and the pinned core, so the cloud stays centered and bounded on its
-  // own. Box walls sized to the panel only compressed large graphs back into
-  // overlap on small windows — the very occlusion this model exists to prevent.
-  // The cloud keeps its natural non-overlapping size and overflows a small
-  // panel instead (pan/zoom to navigate; double-click recenters).
+  // Puddle walls — reshape the cloud to the canvas aspect so it fills a
+  // non-square canvas like a puddle taking its container's shape. The box is
+  // sized from the STABLE root-ring radius (not the live bbox — that fed back
+  // into both the walls and the camera and churned), shaped to the canvas
+  // aspect: squeezing the narrow side makes the (overlap-incompressible) cloud
+  // bulge into the long side instead of overlapping, and the box axes pin the
+  // rotational spin. The camera auto-fit frames the result, so a small panel
+  // zooms out rather than compressing.
+  {
+    const a = (vw > 0 && vh > 0) ? (vw / vh) : 1;
+    const cloudR = (ringRadius.get('__root__') || P.springRestLength) * P.puddleExtent;
+    const boxHalfW = cloudR * Math.sqrt(a);
+    const boxHalfH = cloudR / Math.sqrt(a);
+    const wMinX = cx - boxHalfW, wMaxX = cx + boxHalfW;
+    const wMinY = cy - boxHalfH, wMaxY = cy + boxHalfH;
+    for (let i = 0; i < n; i++) {
+      const nd = nodes[i];
+      if (nd.pinned) continue;
+      if (nd.x < wMinX) nd.fx += (wMinX - nd.x) * P.wallStrength;
+      else if (nd.x > wMaxX) nd.fx -= (nd.x - wMaxX) * P.wallStrength;
+      if (nd.y < wMinY) nd.fy += (wMinY - nd.y) * P.wallStrength;
+      else if (nd.y > wMaxY) nd.fy -= (nd.y - wMaxY) * P.wallStrength;
+    }
+  }
 
   // 3. Overlap repulsion — Gource's overlap-only, penetration-proportional
   // push (dirnode.cpp applyForceDir). Fires only when node footprints actually
@@ -770,6 +863,33 @@ function categorySigil(category) {
   return sigil != null ? sigil : CATEGORY_SIGILS.generic;
 }
 
+// Operation type (the structured config.Operation execution model) — mirrors the
+// data-operation projection so a periodic timer, an event-driven loop, a
+// request/reply handler, and a container each read distinctly.
+function getLoopOperationType(loop) {
+  if (isContainerLoop(loop)) return 'container';
+  if (loop && loop.handler_only) return 'handler';
+  if (loop && loop.event_driven) return 'event';
+  return 'timer';
+}
+
+// Center glyph by operation type. Conversation channels read as '@' (the most
+// recognizable "this is a chat" cue) regardless of operation; containers stay
+// empty (their tiny knuckle is the cue). This replaces the heuristic
+// category sigil, which collapsed most loops to a featureless dot.
+const OPERATION_SIGILS = {
+  timer:   '◷', // periodic — runs on a schedule / wake timer
+  event:   '⚡', // event-driven — reacts to an incoming event
+  handler: '⇄', // request / reply handler
+  container: '',
+};
+function loopSigil(loop) {
+  if (isContainerLoop(loop)) return '';
+  if (getLoopCategory(loop) === 'channel') return '@';
+  const sigil = OPERATION_SIGILS[getLoopOperationType(loop)];
+  return sigil != null ? sigil : '·';
+}
+
 function normalizeVisualCategory(category) {
   return CATEGORY_LABELS[category] ? category : 'generic';
 }
@@ -847,6 +967,9 @@ const DEFAULT_NODE_R = 32;
 // Containers are semantic groupings, not executing entities — rendered small,
 // just large enough to be a comfortable context-menu click target.
 const CONTAINER_NODE_R = 16;
+// Go-backed loops (no LLM model of their own) sit just above containers: they
+// execute, but they aren't sized by a model the way LLM loops are.
+const GO_BACKED_NODE_R = 20;
 
 function getModelRadiusFromParams(params) {
   if (params === null) return DEFAULT_NODE_R;
@@ -857,6 +980,30 @@ function getModelRadiusFromParams(params) {
             (Math.sqrt(maxParams) - Math.sqrt(minParams));
   const clamped = Math.max(0, Math.min(1, t));
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Node radius from a model's context window, log-compressed. Context windows
+// span ~4k..1M+ (≈250x); a linear map would crush small local models to dots
+// and balloon frontier models off-screen, so we interpolate radius across the
+// log of the window. A node's "stature" = the heft of the brain it runs: a
+// frontier Opus (huge window) reads visibly larger than a small local model,
+// while structural containers stay the fixed knuckle (handled separately).
+const CTX_WINDOW_MIN = 4096;     // 4k — smallest model we'd expect
+const CTX_WINDOW_MAX = 1048576;  // 1M — frontier ceiling (clamps above)
+function getContextWindowRadius(contextWindow) {
+  if (!(contextWindow > 0)) return DEFAULT_NODE_R;
+  const t = (Math.log(contextWindow) - Math.log(CTX_WINDOW_MIN)) /
+            (Math.log(CTX_WINDOW_MAX) - Math.log(CTX_WINDOW_MIN));
+  const clamped = Math.max(0, Math.min(1, t));
+  return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Compact human label for a context window (1M / 400k / 8k).
+function formatContextWindow(n) {
+  if (!(n > 0)) return '';
+  if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
 }
 
 function getLoopContextWindow(loop) {
@@ -878,12 +1025,21 @@ function getLoopContextWindow(loop) {
   return 0;
 }
 
-function getLoopConfiguredModelRef(loop) {
-  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
+// Live context-window utilization (0..1): how full this loop's window is right
+// now. Static node size encodes the model's CAPACITY; this is the dynamic USAGE
+// that rides on top as an inner ring — a loop whose ring is nearly full is about
+// to get slow/expensive.
+function getLoopContextFill(loop) {
+  const recent = loop && loop.recent_iterations && loop.recent_iterations[0];
+  if (!recent) return 0;
+  const win = Number(recent.context_window) || getLoopContextWindow(loop);
+  const used = Number(recent.input_tokens) || 0;
+  if (!(win > 0)) return 0;
+  return Math.max(0, Math.min(1, used / win));
 }
 
-function getSystemDefaultModelRef() {
-  return (((state.system || {}).models || {}).default_model || '').trim();
+function getLoopConfiguredModelRef(loop) {
+  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
 }
 
 function deploymentMatchesModelRef(dep, ref) {
@@ -935,8 +1091,8 @@ function getLoopVisualCapacity(loop) {
   if (contextWindow > 0) {
     const tier = getContextTier(contextWindow);
     return {
-      radius: tier.radius,
-      label: tier.label,
+      radius: getContextWindowRadius(contextWindow),
+      label: formatContextWindow(contextWindow),
       key: tier.key,
       basis: 'context',
       contextWindow,
@@ -946,42 +1102,43 @@ function getLoopVisualCapacity(loop) {
   const recent = loop.recent_iterations && loop.recent_iterations.length > 0
     ? loop.recent_iterations[0]
     : null;
-  const configuredModel = getLoopConfiguredModelRef(loop);
+  // Only a model the loop OWNS counts (configured, or actually run) — do NOT
+  // fall back to the system default, or a pure-Go loop would borrow a big LLM
+  // size it never uses.
   const modelName = loop._liveModel
     || loop._lastModel
     || (recent && recent.model)
-    || configuredModel
-    || getSystemDefaultModelRef()
+    || getLoopConfiguredModelRef(loop)
     || '';
-  const registryContextWindow = getRegistryContextWindowForModel(modelName);
-  if (registryContextWindow > 0) {
-    const tier = getContextTier(registryContextWindow);
-    return {
-      radius: tier.radius,
-      label: tier.label,
-      key: tier.key,
-      basis: 'context',
-      contextWindow: registryContextWindow,
-    };
-  }
-  const params = getModelParams(modelName);
-  if (params !== null) {
-    return {
-      radius: getModelRadiusFromParams(params),
-      label: params + 'b',
-      key: 'model-estimate',
-      basis: 'model',
-      contextWindow: 0,
-    };
+  if (modelName) {
+    const registryContextWindow = getRegistryContextWindowForModel(modelName);
+    if (registryContextWindow > 0) {
+      const tier = getContextTier(registryContextWindow);
+      return {
+        radius: getContextWindowRadius(registryContextWindow),
+        label: formatContextWindow(registryContextWindow),
+        key: tier.key,
+        basis: 'context',
+        contextWindow: registryContextWindow,
+      };
+    }
+    const params = getModelParams(modelName);
+    if (params !== null) {
+      return {
+        radius: getModelRadiusFromParams(params),
+        label: params + 'b',
+        key: 'model-estimate',
+        basis: 'model',
+        contextWindow: 0,
+      };
+    }
+    // Has a model but unknown size — treat as a generic LLM.
+    return { radius: DEFAULT_NODE_R, label: '?', key: 'unknown', basis: 'unknown', contextWindow: 0 };
   }
 
-  return {
-    radius: DEFAULT_NODE_R,
-    label: '?',
-    key: 'unknown',
-    basis: 'unknown',
-    contextWindow: 0,
-  };
+  // No model of its own → a pure Go-backed loop (executes, but runs no LLM).
+  // Sized just above a container so it reads as lightweight, not as a big brain.
+  return { radius: GO_BACKED_NODE_R, label: '', key: 'go', basis: 'go', contextWindow: 0 };
 }
 
 function getLoopVisualState(loop) {
@@ -2740,14 +2897,16 @@ function setNodeData(dataset, key, value) {
 // facts already on the wire; owner/sigil await dedicated spec fields.
 function projectLoopCharacteristics(loop, capacity, visualState, group) {
   const d = group.dataset;
-  setNodeData(d, 'operation',
-    isContainerLoop(loop) ? 'container'
-      : loop.handler_only ? 'handler'
-      : loop.event_driven ? 'event'
-      : 'timer');
+  setNodeData(d, 'operation', getLoopOperationType(loop));
   setNodeData(d, 'category', normalizeVisualCategory(getLoopCategory(loop)));
   setNodeData(d, 'state', visualState);
   setNodeData(d, 'contextTier', capacity.key);
+  // Backing kind: 'llm' runs a model (sized by it), 'go' is a pure-Go loop
+  // (lightweight), 'container' is a structural grouping.
+  setNodeData(d, 'backing',
+    capacity.basis === 'go' ? 'go'
+      : capacity.basis === 'container' ? 'container'
+      : 'llm');
   setNodeData(d, 'contextWindow', String(capacity.contextWindow || 0));
   setNodeData(d, 'relation', loop.parent_id ? 'child' : 'root');
   const tz = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
@@ -2816,7 +2975,7 @@ function renderNode(loop) {
 
     const occlusionDisk = createSVG('circle', {
       class: 'node-occlusion',
-      r: nodeR + 6,
+      r: nodeR + 13,
     });
 
     // Glow ring (always a circle regardless of shape).
@@ -2836,6 +2995,25 @@ function renderNode(loop) {
       'stroke-dashoffset': circumference,
     });
 
+    // Context-fill ring — an inner arc showing live window utilization
+    // (input_tokens / context_window). Capacity is the node's size; this is the
+    // moment-to-moment usage. Containers / non-LLM nodes have none.
+    const fillR = nodeR * 0.72;
+    const fillCirc = 2 * Math.PI * fillR;
+    const fillFrac = getLoopContextFill(loop);
+    const fillRing = createSVG('circle', {
+      class: 'fill-ring',
+      r: fillR,
+      'stroke-dasharray': fillCirc,
+      'stroke-dashoffset': fillCirc * (1 - fillFrac),
+    });
+    // Color by pressure: green (roomy) -> orange -> red (nearly full).
+    fillRing.style.stroke = fillFrac >= 0.8 ? 'var(--red)'
+      : (fillFrac >= 0.5 ? 'var(--orange)' : 'var(--green)');
+    if (capacity.basis !== 'context' || fillFrac <= 0) {
+      fillRing.style.display = 'none';
+    }
+
     // Main shape — always a circle.
     const shapeEl = createNodeShape(category, nodeR);
 
@@ -2846,7 +3024,7 @@ function renderNode(loop) {
       'dominant-baseline': 'central',
       'font-size': Math.round(nodeR * 0.5),
     });
-    icon.textContent = categorySigil(category);
+    icon.textContent = loopSigil(loop);
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -2887,6 +3065,7 @@ function renderNode(loop) {
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
+    inner.appendChild(fillRing);
     inner.appendChild(icon);
     inner.appendChild(supDot);
     inner.appendChild(rimBadge);
@@ -2938,7 +3117,7 @@ function renderNode(loop) {
     // Update dependent radii.
     const newRingR = nodeR + 12;
     group.querySelector('.selection-ring').setAttribute('r', nodeR + 18);
-    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 6);
+    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 13);
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
     const newSleepR = nodeR;
@@ -2960,7 +3139,7 @@ function renderNode(loop) {
   // seam CSS/themes drive visuals from. Owns data-category and data-state.
   projectLoopCharacteristics(loop, capacity, visualState, group);
   shapeEl.setAttribute('class', 'node-shape node-shape--category-' + category + ' node-shape--activity-' + visualState);
-  iconEl.textContent = categorySigil(category);
+  iconEl.textContent = loopSigil(loop);
   iconEl.setAttribute('class', 'node-icon node-icon--' + category);
 
   const ring = group.querySelector('.node-ring');
@@ -4326,7 +4505,7 @@ function tick() {
   // Physics simulation — run every frame for smooth organic motion.
   const rect = refreshCanvasViewport() || getLayoutViewportRect();
   if (rect.width > 0 && rect.height > 0) {
-    physicsStep(rect.cx, rect.cy);
+    physicsStep(rect.cx, rect.cy, rect.pxWidth, rect.pxHeight);
     updatePinnedAnchorPositions();
     updateNodePositions();
     autoFitCamera(rect.pxWidth, rect.pxHeight);
@@ -4719,10 +4898,14 @@ function updateUptime() {
 // Canvas Pan & Zoom
 // ---------------------------------------------------------------------------
 
-const viewport = { panX: 0, panY: 0, zoom: 1, autoFit: true, autoFitSnap: true };
+const viewport = { panX: 0, panY: 0, zoom: 1, spread: 1, autoFit: true, autoFitSnap: true };
 const ZOOM_MIN = 0.25;
-const ZOOM_MAX = 4;
-const ZOOM_STEP = 0.1;
+// Spread is the layout's relief valve: the wheel scales the gravity rings so the
+// graph unfurls into available space (scroll out) or packs tighter (scroll in),
+// while the auto-fit camera reframes the result. Multiplicative per wheel tick.
+const SPREAD_MIN = 0.55;
+const SPREAD_MAX = 3.5;
+const SPREAD_STEP = 1.12;
 
 function applyViewportTransform() {
   canvasWorld.setAttribute(
@@ -4769,33 +4952,22 @@ function applyViewportTransform() {
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    viewport.autoFit = false; // a manual zoom takes over from the auto-fit camera
-
-    // Zoom toward cursor position.
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // World coordinates under cursor before zoom.
-    const wx = (mouseX - viewport.panX) / viewport.zoom;
-    const wy = (mouseY - viewport.panY) / viewport.zoom;
-
-    // Apply zoom delta.
-    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewport.zoom + delta));
-    viewport.zoom = newZoom;
-
-    // Adjust pan so the world point under cursor stays fixed.
-    viewport.panX = mouseX - wx * viewport.zoom;
-    viewport.panY = mouseY - wy * viewport.zoom;
-
-    applyViewportTransform();
+    // The wheel drives LAYOUT SPREAD, not the camera: scrolling out grows the
+    // gravity rings so crowded families relax into the new room, scrolling in
+    // packs them. The auto-fit camera (kept on) reframes the resized cloud, so on
+    // screen the nodes shrink and the gaps open — the "more canvas to unfurl
+    // into" effect that a pure camera zoom can never produce.
+    const factor = e.deltaY > 0 ? SPREAD_STEP : 1 / SPREAD_STEP;
+    viewport.spread = Math.max(SPREAD_MIN, Math.min(SPREAD_MAX, viewport.spread * factor));
+    viewport.autoFit = true;      // let the camera reframe the new spread
+    viewport.autoFitSnap = false; // ease into the new frame rather than jumping
   }, { passive: false });
 
   // Double-click the background to re-enable the auto-fit camera and snap it to
   // frame the whole graph.
   canvas.addEventListener('dblclick', (e) => {
     if (e.target.closest('.loop-node')) return;
+    viewport.spread = 1; // reset to the neutral spread along with re-fitting
     viewport.autoFit = true;
     viewport.autoFitSnap = true;
   });

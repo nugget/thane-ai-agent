@@ -2119,7 +2119,7 @@ body.resize-col .schema-card__fade {
 }
 
 .node-occlusion {
-  fill: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+  fill: var(--bg-primary);
   stroke: none;
   pointer-events: none;
 }
@@ -2141,6 +2141,12 @@ body.resize-col .schema-card__fade {
 .node-shape--category-delegate      { fill: var(--node-fill); }
 .node-shape--category-scheduled     { fill: var(--node-fill); }
 .node-shape--category-container     { fill: var(--node-fill-container); }
+
+/* Go-backed (non-LLM) loops read lighter than the model-sized LLM nodes — a
+   flatter fill and dimmer halo set them apart, while staying clearly executable
+   (unlike the inert containers, which are smaller and dimmer still). */
+.loop-node[data-backing="go"] .node-shape { fill: var(--node-fill-container); }
+.loop-node[data-backing="go"] .node-ring { opacity: 0.5; }
 
 /* Container loops — semantic groupings, not executing entities. Rendered
    small (16px, set in app.js), dimmed, and stripped of activity affordances
@@ -2172,7 +2178,7 @@ body.resize-col .schema-card__fade {
 
 /* Node label */
 .node-icon {
-  fill: rgba(230, 237, 243, 0.9);
+  fill: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 700;
@@ -2583,6 +2589,17 @@ body.resize-col .schema-card__fade {
   transform: rotate(-90deg);
   /* No transition — tick() updates at 60fps for smooth fill,
      and the reset snap-back is instant between cycles. */
+}
+
+/* Inner context-fill arc: live window utilization, colored by pressure
+   (green roomy -> orange -> red nearly full). Set via inline stroke in JS. */
+.fill-ring {
+  fill: none;
+  stroke-width: 3;
+  opacity: 0.9;
+  stroke-linecap: round;
+  transform-origin: 0 0;
+  transform: rotate(-90deg);
 }
 
 /* === Toggle Buttons === */
