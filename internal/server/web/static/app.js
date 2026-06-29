@@ -3145,6 +3145,27 @@ function renderNode(loop) {
   const ring = group.querySelector('.node-ring');
   ring.setAttribute('class', 'node-ring node-ring--' + visualState);
 
+  // Keep the context-fill ring current. Utilization (arc length + pressure
+  // color) changes as iterations arrive, and the radius changes when the node
+  // resizes (e.g. a model change), so recompute every render instead of
+  // freezing the build-time values.
+  const fillRing = group.querySelector('.fill-ring');
+  if (fillRing) {
+    const fillFrac = getLoopContextFill(loop);
+    if (capacity.basis !== 'context' || fillFrac <= 0) {
+      fillRing.style.display = 'none';
+    } else {
+      const fillR = nodeR * 0.72;
+      const fillCirc = 2 * Math.PI * fillR;
+      fillRing.style.display = '';
+      fillRing.setAttribute('r', fillR);
+      fillRing.setAttribute('stroke-dasharray', fillCirc);
+      fillRing.setAttribute('stroke-dashoffset', fillCirc * (1 - fillFrac));
+      fillRing.style.stroke = fillFrac >= 0.8 ? 'var(--red)'
+        : (fillFrac >= 0.5 ? 'var(--orange)' : 'var(--green)');
+    }
+  }
+
   // Ring thickness represents context utilization percentage.
   const ctxPct = (capacity.contextWindow > 0 && loop.last_input_tokens > 0)
     ? Math.min(1, loop.last_input_tokens / capacity.contextWindow)
