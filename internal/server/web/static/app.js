@@ -342,7 +342,8 @@ function syncPhysicsNodes(cx, cy) {
     const anchor = hasLiveParent ? physics.nodes.get(parentID) : physics.nodes.get('__system__');
     let sx, sy;
     if (anchor) {
-      const ring = ringRadius.get(hasLiveParent ? parentID : '__root__') || physics.springRestLength;
+      const ring = ringRadius.get(hasLiveParent ? parentID : '__root__')
+        || (hasLiveParent ? physics.childRestLength : physics.springRestLength);
       const angle = Math.random() * Math.PI * 2;
       const jitter = 6 + Math.random() * 10;
       sx = anchor.x + Math.cos(angle) * (ring + jitter);
@@ -512,9 +513,16 @@ function physicsStep(cx, cy) {
   // negotiated by the overlap repulsion below, which spaces siblings around the
   // ring and (unlike a constant-magnitude sibling-spread) vanishes once they no
   // longer overlap, so the layout settles to a true rest instead of orbiting.
+  const sysNode = P.nodes.get('__system__');
   for (const [key, loops] of groups) {
-    const ring = ringRadius.get(key) || P.springRestLength;
-    const parentNode = key === '__root__' ? null : P.nodes.get(key);
+    const isRoot = key === '__root__';
+    const ring = ringRadius.get(key) || (isRoot ? P.springRestLength : P.childRestLength);
+    // Roots orbit the pinned core node's LIVE position rather than the raw
+    // viewport center it eases toward, so they stay attached to the core node
+    // through the pinned-anchor easing (e.g. across a resize). Non-roots orbit
+    // their parent node's current position. (cx, cy) is the boot-time fallback
+    // before __system__ exists.
+    const parentNode = isRoot ? sysNode : P.nodes.get(key);
     const pcx = parentNode ? parentNode.x : cx;
     const pcy = parentNode ? parentNode.y : cy;
 
