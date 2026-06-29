@@ -74,6 +74,13 @@ func (a *App) initStores(s *newState) error {
 		return fmt.Errorf("ensure core loop: %w", err)
 	}
 
+	// The channels grouping container must be live before the channel
+	// integrations (wired later in new_servers) spawn their dynamic channel
+	// loops under it — there is no late-reattach path.
+	if err := a.ensureChannelsContainer(s.ctx); err != nil {
+		return fmt.Errorf("ensure channels container: %w", err)
+	}
+
 	baseDefinitions, err := a.buildLoopDefinitionBaseSpecs()
 	if err != nil {
 		return err
