@@ -63,6 +63,14 @@ const physics = {
   // siblingRepelMax caps the per-pair force near contact.
   siblingRepelStrength: 1.2,
   siblingRepelMax:    6,
+  // Outward bias (a conservative analog of Gource's parent-normal fan,
+  // dirnode.cpp:675): a constant push on non-root children radially away from
+  // the FIXED core, so a subtree fans onto the far side of its parent instead of
+  // swinging core-facing and wedging into the tier-1 shell. Anchored to the
+  // fixed core (not the moving parent) it is torque-free about the core — it
+  // can't drive a slow cloud rotation the way a moving-apex pull does. Gentle:
+  // it must lose to overlap separation and the cold-start sibling-spread.
+  outwardFanStrength: 1,
   pinnedAnchorStrength: 0.16,
   pinnedAnchorDamping: 0.72,
   // Overlap repulsion fires ONLY when node footprints intersect; the force is
@@ -523,6 +531,8 @@ function physicsStep(cx, cy) {
   // around that ring and fills gaps so a clustered or cold-start-piled family
   // detangles, while vanishing at even spacing so the layout settles to rest.
   const sysNode = P.nodes.get('__system__');
+  const corePx = sysNode ? sysNode.x : cx;
+  const corePy = sysNode ? sysNode.y : cy;
   for (const [key, loops] of groups) {
     const isRoot = key === '__root__';
     const ring = ringRadius.get(key) || (isRoot ? P.springRestLength : P.childRestLength);
@@ -534,6 +544,10 @@ function physicsStep(cx, cy) {
     const parentNode = isRoot ? sysNode : P.nodes.get(key);
     const pcx = parentNode ? parentNode.x : cx;
     const pcy = parentNode ? parentNode.y : cy;
+
+    // The outward bias applies to non-root families (children of a container or
+    // deeper); roots distribute freely around the core via sibling-spread.
+    const fanActive = !isRoot;
 
     for (const loop of loops) {
       const nd = P.nodes.get(loop.id);
@@ -550,6 +564,19 @@ function physicsStep(cx, cy) {
       const pull = P.gravityStrength * (dist - ring) / dist;
       nd.fx -= pull * dx;
       nd.fy -= pull * dy;
+
+      // Outward bias (Gource parent-normal, dirnode.cpp:675): a constant push
+      // away from the FIXED core. Its tangential-about-the-parent component
+      // walks the child onto the far side of its parent (out of the tier-1
+      // shell), while gravity-to-ring still owns the radius. Radial about the
+      // core means zero torque, so it settles instead of rotating the cloud.
+      if (fanActive) {
+        const ox = nd.x - corePx;
+        const oy = nd.y - corePy;
+        const olen = Math.sqrt((ox * ox) + (oy * oy)) || 1;
+        nd.fx += (ox / olen) * P.outwardFanStrength;
+        nd.fy += (oy / olen) * P.outwardFanStrength;
+      }
     }
 
     // Decaying (1/d^2) central repulsion among siblings — the long-range
