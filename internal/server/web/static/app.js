@@ -3989,9 +3989,11 @@ function parseDurationSecs(str) {
 }
 
 // renderSleepScrubber draws the loop's sleep cycle as a non-interactive
-// timeline: a track from 0 to the latest allowed wake (SleepMax), a hatched
-// locked zone before SleepMin, a marker at the chosen wake, and a playhead at
-// elapsed crawling toward it — red and past the marker when overdue. Chosen +
+// timeline: a track from 0 to the chosen wake (which sits at the right edge), a
+// hatched locked zone before SleepMin when the loop chose to sleep past it, and
+// a playhead at elapsed crawling toward the wake — clamped to the track and
+// turning red in place at the edge when overdue (it never renders past the
+// right edge). The SleepMax ceiling rides in the label, not the axis. Chosen +
 // elapsed prefer the LoopView projection and fall back to the client's observed
 // sleep timer; bounds come from the loop config (nanoseconds). Returns null
 // when there is no timer sleep to show (event-driven, or no wake data yet).

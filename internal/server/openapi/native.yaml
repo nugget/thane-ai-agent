@@ -1470,9 +1470,10 @@ components:
       type: object
       description: |
         Canonical model-facing projection of one loop — the "ps auxwwww" row the
-        Loops table and loop_* tools emit, attached to each running loop on
-        /v1/loops as `view` so the console reads schedule, structure, economics,
-        and policy in one consistent vocabulary. Pointer fields serialize as
+        Loops table and loop_* tools emit, attached to each running loop as
+        `view` on /v1/loops, /v1/loops/{id}, and the /v1/loops/events snapshot so
+        the console reads schedule, structure, economics, and policy in one
+        consistent vocabulary. Pointer fields serialize as
         explicit null when not applicable (e.g. token counters on a handler-only
         loop). Mirrors internal/runtime/loop.LoopView; the inspector-relevant
         fields are documented here and the remainder are tracked under the
