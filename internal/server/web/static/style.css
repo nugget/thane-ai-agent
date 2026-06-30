@@ -560,8 +560,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .detail-entity {
   display: grid;
+  /* Cap the single column at the panel width: an implicit `auto` track grows
+     to its widest child's min-content, so one wide leaf (a long mono tool name,
+     a nowrap preview, an unbreakable doc path) would push the whole column past
+     the panel and overflow:hidden would clip its right edge. minmax(0, 1fr)
+     pins the track to the container; min-width:0 lets each section shrink into
+     it (text wraps, nowrap leaves ellipsize) instead of forcing it wide. */
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(0.55rem, 1.2vw, 0.85rem);
 }
+
+.detail-entity > * { min-width: 0; }
 
 .detail-entity .detail-card {
   margin-bottom: 0;
@@ -737,13 +746,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .spec-output__path {
   font-family: var(--font-mono); font-size: 12px; color: var(--text-primary);
   background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+  overflow-wrap: anywhere;
 }
 .spec-output__path:hover { color: var(--accent); }
 .spec-output__path.is-copied { color: var(--accent); }
 .spec-output__mode {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
 }
-.spec-output__tool { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.spec-output__tool {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  margin-top: 2px; overflow-wrap: anywhere;
+}
 .spec-output__purpose { font-size: 12px; line-height: 1.4; color: var(--text-secondary); margin-top: 3px; }
 
 /* Live tool feed — in-situ transcript of a running loop's tool calls. */
