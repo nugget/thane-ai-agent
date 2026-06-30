@@ -72,7 +72,7 @@ func (a *App) ensureChannelsContainer(ctx context.Context) error {
 		Name:      looppkg.ChannelsContainerName,
 		Enabled:   true,
 		Operation: looppkg.OperationContainer,
-		Metadata:  map[string]string{"intent": "Interactive counterparty channels (Signal, OWU, and others)."},
+		Intent:    "Interactive counterparty channels (Signal, OWU, and others).",
 	}
 	if _, err := a.loopRegistry.SpawnSpec(ctx, spec, looppkg.Deps{Logger: a.logger}); err != nil {
 		return err
