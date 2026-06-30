@@ -182,7 +182,7 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		Operation:   string(s.Config.Operation),
 		Completion:  string(s.Config.Completion),
 		Task:        s.Config.Task,
-		Intent:      s.Config.Metadata["intent"],
+		Intent:      s.Config.Intent,
 		Ancestry:    r.ancestry(s.ID),
 		ChildCount:  r.childCount[s.ID],
 		Running:     true,

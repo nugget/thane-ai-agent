@@ -1041,6 +1041,7 @@ archivist:
 #     - name: office_watch
 #       enabled: true
 #       task: Watch the office and report noteworthy changes or trends.
+#       intent: Keep a current read on office activity so notable changes surface without being asked.
 #       profile:
 #         model: ""
 #         quality_floor: 0

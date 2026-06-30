@@ -104,7 +104,7 @@ func BuildDefinitionWarnings(spec Spec) []DefinitionWarning {
 // supervisor_quality_floor), which are deliberately not part of the canonical
 // authoring surface.
 var shadowableSpecFields = map[string]struct{}{
-	"name": {}, "enabled": {}, "task": {}, "profile": {}, "operation": {},
+	"name": {}, "enabled": {}, "task": {}, "intent": {}, "profile": {}, "operation": {},
 	"completion": {}, "outputs": {}, "subscriptions": {}, "conditions": {},
 	"tags": {}, "exclude_tools": {}, "sleep_min": {}, "sleep_max": {},
 	"sleep_default": {}, "jitter": {}, "max_duration": {}, "max_iter": {},
@@ -117,7 +117,9 @@ var shadowableSpecFields = map[string]struct{}{
 // top-level spec field. Such keys are inert: the runtime reads the structural
 // field, not metadata, so the value never takes effect. parent_name/parent_id
 // get a placement-specific message because the failure is silent
-// mis-parenting rather than a generic dropped value.
+// mis-parenting rather than a generic dropped value; intent gets a
+// deprecation message instead of "inert" because, during the #1106 promotion,
+// the runtime still reads metadata["intent"] as a one-release fallback.
 func metadataShadowWarnings(spec Spec) []DefinitionWarning {
 	if len(spec.Metadata) == 0 {
 		return nil
@@ -139,6 +141,8 @@ func metadataShadowWarnings(spec Spec) []DefinitionWarning {
 		switch key {
 		case "parent_name", "parent_id":
 			msg = "metadata." + key + " is inert and does not nest this loop under a parent: a metadata entry does not set a structural spec field. Set the top-level parent_name field instead."
+		case "intent":
+			msg = "metadata.intent is the legacy location for the loop's purpose. The runtime now prefers the top-level intent field and reads metadata.intent only as a one-release fallback. Set the top-level intent field; the metadata fallback is removed next release."
 		default:
 			msg = fmt.Sprintf("metadata.%s shadows the top-level %s field, which the runtime reads instead of metadata. A metadata entry does not set a structural spec field, so this copy is inert; set the top-level %s field.", key, key, key)
 		}

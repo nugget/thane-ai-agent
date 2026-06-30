@@ -33,6 +33,10 @@ func loopSpecSchema(description string) map[string]any {
 				"type":        "string",
 				"description": "Static prompt run each iteration.",
 			},
+			"intent": map[string]any{
+				"type":        "string",
+				"description": "One- or two-sentence statement of why this loop exists — its purpose, distinct from task. Surfaced as LoopView.intent across loop tools. Set this top-level field; do not put intent in metadata.",
+			},
 			"operation": map[string]any{
 				"type":        "string",
 				"enum":        []string{"request_reply", "background_task", "service", "container", "event_driven"},

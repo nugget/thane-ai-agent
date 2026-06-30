@@ -134,8 +134,8 @@ func TestThaneCreateContainerStoresAndLaunches(t *testing.T) {
 	if len(spec.Tags) != 2 || spec.Tags[0] != "home" || spec.Tags[1] != "ha" {
 		t.Errorf("persisted Tags = %v, want [home ha]", spec.Tags)
 	}
-	if spec.Metadata["intent"] == "" {
-		t.Error("intent missing from container metadata")
+	if spec.Intent == "" {
+		t.Error("intent missing from container spec (should be the first-class Intent field, not metadata)")
 	}
 	if rig.loops.GetByName("home_automation") == nil {
 		t.Error("container not registered in live registry after launch")

@@ -30,7 +30,7 @@ func TestLoopSpecSchemaEnumeratesAuthorableFields(t *testing.T) {
 		t.Fatal("properties missing or wrong type")
 	}
 	for _, key := range []string{
-		"name", "enabled", "task", "operation", "profile", "supervisor",
+		"name", "enabled", "task", "intent", "operation", "profile", "supervisor",
 		"supervisor_prob", "supervisor_profile", "outputs", "tags",
 		"exclude_tools", "sleep_min", "sleep_max", "sleep_default", "jitter",
 		"max_duration", "max_iter", "on_retrigger", "conditions", "completion",

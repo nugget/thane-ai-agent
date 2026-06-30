@@ -138,6 +138,13 @@ type Spec struct {
 	// TaskBuilder or TurnBuilder is set.
 	Task string `yaml:"task,omitempty" json:"task,omitempty"`
 
+	// Intent is a short (one- or two-sentence) statement of why this loop
+	// exists — its purpose, distinct from Task (the per-iteration prompt).
+	// First-class as of #1106 (promoted out of the metadata["intent"] bag): the
+	// runtime prefers this field and falls back to metadata["intent"] for one
+	// release (see [Spec.ToConfig]). Surfaced verbatim as LoopView.Intent.
+	Intent string `yaml:"intent,omitempty" json:"intent,omitempty"`
+
 	// Profile shapes loop execution: routing hints, context-injection
 	// tags, tool exclusions, and related request-shaping guidance.
 	Profile router.LoopProfile `yaml:"profile,omitempty" json:"profile,omitempty"`
@@ -451,6 +458,7 @@ func (s *Spec) ToConfig() Config {
 	return Config{
 		Name:                 ns.Name,
 		Task:                 ns.Task,
+		Intent:               resolveIntent(ns.Intent, ns.Metadata),
 		Operation:            ns.Operation,
 		Completion:           ns.Completion,
 		Outputs:              cloneOutputs(ns.Outputs),
@@ -482,6 +490,17 @@ func (s *Spec) ToConfig() Config {
 		ParentID:             ns.ParentID,
 		ParentName:           ns.ParentName,
 	}
+}
+
+// resolveIntent returns the loop's purpose string, preferring the first-class
+// [Spec.Intent] field and falling back to the legacy metadata["intent"] for one
+// release (#1106). When authoring no longer writes metadata["intent"] and stored
+// specs are migrated, the fallback collapses to the field alone.
+func resolveIntent(field string, metadata map[string]string) string {
+	if strings.TrimSpace(field) != "" {
+		return field
+	}
+	return metadata["intent"]
 }
 
 // containerShape is the shared shape contract for container loops. It

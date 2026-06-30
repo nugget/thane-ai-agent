@@ -77,6 +77,14 @@ func TestBuildDefinitionWarnings_MetadataShadowsSpecField(t *testing.T) {
 			wantInMsg: "shadows the top-level tags field",
 		},
 		{
+			// intent keeps a one-release metadata fallback, so its message must
+			// say deprecated/still-read, NOT "inert" like the generic case.
+			name:      "intent in metadata fires with deprecation guidance, not inert",
+			spec:      Spec{Operation: OperationService, Metadata: map[string]string{"intent": "watch the lake"}},
+			wantCode:  "metadata_shadows_spec_field",
+			wantInMsg: "one-release fallback",
+		},
+		{
 			// Containers and event-driven loops nest too, so the shadow check
 			// must fire regardless of operation — this guards the placement of
 			// the check before the service-only early return.

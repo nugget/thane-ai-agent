@@ -160,6 +160,11 @@ type Config struct {
 	// TaskBuilder or TurnBuilder is set.
 	Task string
 
+	// Intent is the resolved purpose string for the loop — [Spec.Intent] if
+	// set, otherwise the legacy metadata["intent"] fallback. Resolved once in
+	// [Spec.ToConfig] so readers (e.g. LoopView) take a single source.
+	Intent string
+
 	// Operation describes the runtime pattern expected for the loop.
 	Operation Operation
 
