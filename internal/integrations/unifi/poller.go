@@ -64,8 +64,9 @@ const debounceThreshold = 2
 
 // defaultFailureThreshold is the number of consecutive failed polls tolerated
 // before a poll failure is surfaced to the loop as an alarm. At the 30s default
-// poll interval that is ~1.5 minutes of sustained failure — long enough to ride
-// out a flaky gateway's transient 5xx, short enough to flag a real outage.
+// poll interval the 3rd consecutive failure lands ~1 minute after the first —
+// long enough to ride out a flaky gateway's transient 5xx, short enough to flag
+// a real outage.
 const defaultFailureThreshold = 3
 
 // Poller periodically queries a DeviceLocator and updates the person
@@ -101,7 +102,9 @@ func NewPoller(cfg PollerConfig) *Poller {
 
 // Poll executes a single poll cycle: query the controller for device
 // locations, apply debounce, and push room updates to the tracker.
-// Returns an error if the device locator fails; all other paths succeed.
+// A device-locator failure is tolerated (Poll returns nil) until
+// FailureThreshold consecutive failures, after which the error is surfaced to
+// the caller; all other paths succeed.
 func (p *Poller) Poll(ctx context.Context) error {
 	summary := loop.IterationSummary(ctx)
 
