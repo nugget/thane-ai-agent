@@ -453,36 +453,35 @@ func matchLoopOperation(status looppkg.Status, operation looppkg.Operation) bool
 // eligibility without a second tool call. Returns nil when no definition
 // view is wired (loops then report policy_state="ephemeral").
 func (r *Registry) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
-	if r.loopDefinitionView == nil {
+	if r.loopDefinitionRegistry == nil {
 		return nil
 	}
-	view := r.loopDefinitionView()
-	if view == nil {
-		return nil
-	}
-	// The projected view carries each definition's computed eligibility, but
-	// only a pre-formatted policy_updated_delta — the raw policy (with its
+	// Take ONE registry snapshot and derive both the raw policy (with its
 	// UpdatedAt time, which FromStatus needs to format the delta at its own
-	// render clock) lives on the registry snapshot. Index the snapshot by name
-	// and join.
-	policyByName := map[string]looppkg.DefinitionSnapshot{}
-	if r.loopDefinitionRegistry != nil {
-		if snap := r.loopDefinitionRegistry.Snapshot(); snap != nil {
-			for _, d := range snap.Definitions {
-				policyByName[d.Name] = d
-			}
-		}
+	// render clock) and the computed eligibility from it. Reading policy and
+	// eligibility from two independent Snapshot() calls opens a TOCTOU window
+	// where a definition deleted between them surfaces a half-populated join
+	// (empty policy_state but HasPolicy=true); the pre-B1 view embedded both
+	// together, keeping this atomic.
+	snap := r.loopDefinitionRegistry.Snapshot()
+	if snap == nil {
+		return nil
 	}
-	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
+	view := looppkg.BuildDefinitionRegistryView(snap, nil)
+	eligByName := make(map[string]looppkg.DefinitionEligibilityStatus, len(view.Definitions))
 	for _, def := range view.Definitions {
-		pol := policyByName[def.Name]
-		out[def.Name] = looppkg.LoopPolicyInfo{
-			State:          string(pol.PolicyState),
-			Source:         string(pol.PolicySource),
-			Reason:         pol.PolicyReason,
-			UpdatedAt:      pol.PolicyUpdatedAt,
-			Eligible:       def.Eligibility.Eligible,
-			EligibleReason: def.Eligibility.Reason,
+		eligByName[def.Name] = def.Eligibility
+	}
+	out := make(map[string]looppkg.LoopPolicyInfo, len(snap.Definitions))
+	for _, d := range snap.Definitions {
+		elig := eligByName[d.Name]
+		out[d.Name] = looppkg.LoopPolicyInfo{
+			State:          string(d.PolicyState),
+			Source:         string(d.PolicySource),
+			Reason:         d.PolicyReason,
+			UpdatedAt:      d.PolicyUpdatedAt,
+			Eligible:       elig.Eligible,
+			EligibleReason: elig.Reason,
 			HasPolicy:      true,
 		}
 	}

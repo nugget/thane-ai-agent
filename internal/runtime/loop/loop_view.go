@@ -173,8 +173,12 @@ func (r LoopViewResolver) ancestry(loopID string) []string {
 // definition-joined policy half can be absent (ephemeral loops).
 func (r LoopViewResolver) FromStatus(s Status) LoopView {
 	v := LoopView{
-		Name:        s.Name,
-		Operation:   string(s.Config.Operation),
+		Name: s.Name,
+		// Normalize through effectiveOperation so the canonical row reports the
+		// same operation FromDefinition does (an unset operation is
+		// "request_reply", never ""): the two projectors must agree field-for-
+		// field on the same loop.
+		Operation:   string(effectiveOperation(s.Config.Operation)),
 		Completion:  string(s.Config.Completion),
 		Task:        s.Config.Task,
 		Intent:      s.Config.Intent,

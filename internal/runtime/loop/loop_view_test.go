@@ -308,3 +308,22 @@ func TestDefinitionViewResolver_FromDefinition_GraphFromNames(t *testing.T) {
 			container.ParentName, container.Ancestry)
 	}
 }
+
+// TestLoopView_OperationNormalizedConsistently guards the two projectors against
+// disagreeing on a loop's operation: an unset operation is valid and must
+// normalize to the canonical "request_reply" on BOTH FromStatus and
+// FromDefinition, never "" on one and "request_reply" on the other.
+func TestLoopView_OperationNormalizedConsistently(t *testing.T) {
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	fromStatus := NewLoopViewResolver(nil, nil, now).FromStatus(Status{
+		ID: "lp_x", Name: "adhoc", State: State("processing"),
+		Config: Config{Task: "do a thing"}, // Operation unset
+	})
+	snaps := []DefinitionSnapshot{{Name: "adhoc", Spec: Spec{Name: "adhoc", Task: "do a thing"}}}
+	fromDef := NewDefinitionViewResolver(snaps, now).FromDefinition(snaps[0], DefinitionEligibilityStatus{}, nil)
+
+	if fromStatus.Operation != "request_reply" || fromDef.Operation != "request_reply" {
+		t.Errorf("unset operation must normalize to request_reply on both projectors: FromStatus=%q FromDefinition=%q",
+			fromStatus.Operation, fromDef.Operation)
+	}
+}
