@@ -253,6 +253,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"loop_definition_set":         {CanonicalID: "native:loop_definition_set", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_set_policy":  {CanonicalID: "native:loop_definition_set_policy", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_summary":     {CanonicalID: "native:loop_definition_summary", Source: NativeToolSource, Tags: []string{"loops"}},
+	"loop_reparent":               {CanonicalID: "native:loop_reparent", Source: NativeToolSource, Tags: []string{"loops"}},
 	"spawn_loop":                  {CanonicalID: "native:spawn_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"stop_loop":                   {CanonicalID: "native:stop_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"thane_assign":                {CanonicalID: "native:thane_assign", Source: NativeToolSource},
