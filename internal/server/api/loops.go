@@ -111,13 +111,26 @@ func (s *Server) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
 	if view == nil {
 		return nil
 	}
+	// Raw policy (with its UpdatedAt time, needed to format the delta at the
+	// projector's render clock) lives on the registry snapshot — the projected
+	// view carries only a pre-formatted policy_updated_delta. Join snapshot
+	// policy with the view's computed eligibility by name.
+	policyByName := map[string]looppkg.DefinitionSnapshot{}
+	if s.loopDefinitionRegistry != nil {
+		if snap := s.loopDefinitionRegistry.Snapshot(); snap != nil {
+			for _, d := range snap.Definitions {
+				policyByName[d.Name] = d
+			}
+		}
+	}
 	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
 	for _, def := range view.Definitions {
+		pol := policyByName[def.Name]
 		out[def.Name] = looppkg.LoopPolicyInfo{
-			State:          string(def.PolicyState),
-			Source:         string(def.PolicySource),
-			Reason:         def.PolicyReason,
-			UpdatedAt:      def.PolicyUpdatedAt,
+			State:          string(pol.PolicyState),
+			Source:         string(pol.PolicySource),
+			Reason:         pol.PolicyReason,
+			UpdatedAt:      pol.PolicyUpdatedAt,
 			Eligible:       def.Eligibility.Eligible,
 			EligibleReason: def.Eligibility.Reason,
 			HasPolicy:      true,

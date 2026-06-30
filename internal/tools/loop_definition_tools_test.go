@@ -57,11 +57,14 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 	reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
 		Registry: defs,
 		View: func() *looppkg.DefinitionRegistryView {
-			return looppkg.BuildDefinitionRegistryView(defs.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+			// Presence in liveByName (keyed by definition name) means the
+			// definition has a running backing loop; the Status carries the
+			// live state (sleeping) and ID the projection surfaces on Loop.
+			return looppkg.BuildDefinitionRegistryView(defs.Snapshot(), map[string]looppkg.Status{
 				"metacog_like": {
-					Running: true,
-					LoopID:  "loop-live-1",
-					State:   looppkg.StateSleeping,
+					Name:  "metacog_like",
+					ID:    "loop-live-1",
+					State: looppkg.StateSleeping,
 				},
 			})
 		},
@@ -450,14 +453,23 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &policyResp); err != nil {
 		t.Fatalf("unmarshal policy response: %v", err)
 	}
-	if policyResp.Definition.PolicyState != looppkg.DefinitionPolicyStateInactive || policyResp.Definition.PolicySource != looppkg.DefinitionPolicySourceOverlay {
-		t.Fatalf("policy = %q/%q, want inactive/overlay", policyResp.Definition.PolicyState, policyResp.Definition.PolicySource)
+	if policyResp.Definition.Loop == nil {
+		t.Fatal("definition loop view = nil, want live loop projection")
+	}
+	if policyResp.Definition.Loop.PolicyState != string(looppkg.DefinitionPolicyStateInactive) || policyResp.Definition.Loop.PolicySource != string(looppkg.DefinitionPolicySourceOverlay) {
+		t.Fatalf("policy = %q/%q, want inactive/overlay", policyResp.Definition.Loop.PolicyState, policyResp.Definition.Loop.PolicySource)
 	}
 	if deps.persistedPolicy["metacog_like"].Reason != "quiet hours" {
 		t.Fatalf("persisted policy = %+v, want quiet hours", deps.persistedPolicy["metacog_like"])
 	}
-	if policyResp.Definition.Runtime.LoopID != "loop-live-1" {
-		t.Fatalf("runtime loop_id = %q, want loop-live-1", policyResp.Definition.Runtime.LoopID)
+	if !policyResp.Definition.Loop.Running {
+		t.Fatal("definition loop running = false, want true (live loop should be surfaced)")
+	}
+	if policyResp.Definition.Loop.ID == nil {
+		t.Fatal("definition loop id = nil, want loop-live-1")
+	}
+	if *policyResp.Definition.Loop.ID != "loop-live-1" {
+		t.Fatalf("runtime loop_id = %q, want loop-live-1", *policyResp.Definition.Loop.ID)
 	}
 
 	launchOut, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
@@ -767,24 +779,28 @@ func TestLoopDefinitionListFiltersEligibility(t *testing.T) {
 			Generation: 1,
 			Definitions: []looppkg.DefinitionView{
 				{
-					DefinitionSnapshot: looppkg.DefinitionSnapshot{
-						Name: "eligible_watch",
-						Spec: looppkg.Spec{
-							Name:      "eligible_watch",
-							Task:      "watch",
-							Operation: looppkg.OperationService,
-						},
+					Name: "eligible_watch",
+					Spec: looppkg.Spec{
+						Name:      "eligible_watch",
+						Task:      "watch",
+						Operation: looppkg.OperationService,
+					},
+					Loop: &looppkg.LoopView{
+						Name:     "eligible_watch",
+						Eligible: true,
 					},
 					Eligibility: looppkg.DefinitionEligibilityStatus{Eligible: true},
 				},
 				{
-					DefinitionSnapshot: looppkg.DefinitionSnapshot{
-						Name: "ineligible_watch",
-						Spec: looppkg.Spec{
-							Name:      "ineligible_watch",
-							Task:      "watch later",
-							Operation: looppkg.OperationService,
-						},
+					Name: "ineligible_watch",
+					Spec: looppkg.Spec{
+						Name:      "ineligible_watch",
+						Task:      "watch later",
+						Operation: looppkg.OperationService,
+					},
+					Loop: &looppkg.LoopView{
+						Name:     "ineligible_watch",
+						Eligible: false,
 					},
 					Eligibility: looppkg.DefinitionEligibilityStatus{
 						Eligible: false,

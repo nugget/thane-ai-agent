@@ -1754,10 +1754,11 @@ components:
           description: Per-definition combined stored-and-runtime views.
           items: { $ref: "#/components/schemas/DefinitionView" }
           example:
-            - eligibility: { eligible: true }
-              runtime: { running: true, state: processing, iterations: 142 }
+            - name: cota_weekend_observer
+              source: overlay
+              eligibility: { eligible: true }
               warnings: []
-              effective: { tags: [messaging, retrospection] }
+              loop: { name: cota_weekend_observer, operation: service, running: true, state: processing, iterations: 142, effective_tags: [{ tag: messaging, from: self }] }
       example:
         generation: 42
         updated_at: "2026-06-24T18:57:13Z"
@@ -1770,43 +1771,79 @@ components:
         by_eligibility_state: { eligible: 9, ineligible: 1 }
         by_runtime_state: { running: 2, not_running: 8 }
         definitions:
-          - eligibility: { eligible: true }
-            runtime: { running: true, state: processing, iterations: 142 }
+          - name: cota_weekend_observer
+            source: overlay
+            eligibility: { eligible: true }
             warnings: []
-            effective: { tags: [messaging, retrospection] }
+            loop: { name: cota_weekend_observer, operation: service, running: true, state: processing, iterations: 142, effective_tags: [{ tag: messaging, from: self }] }
     DefinitionView:
       type: object
-      description: One stored definition combined with its eligibility, live runtime status, warnings, and effective post-merge state.
+      description: >-
+        One stored definition combined with its canonical loop projection,
+        eligibility, and lint warnings. Loop is the canonical "ps auxwwww" row
+        (LoopView) for this definition — stored-static fields always, with the
+        live half (state, economics, errors, effective_* inheritance) overlaid
+        when a backing loop is running. The remaining fields are
+        definition-corpus framing a live LoopView intentionally does not carry:
+        the raw authored spec (for round-trip editing), the provenance source,
+        lint warnings, and the per-ancestor eligibility cascade.
       properties:
+        name:
+          type: string
+          description: The definition's stable identifier (also loop.name).
+          readOnly: true
+        source:
+          type: string
+          description: Where the definition came from — config or overlay.
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          description: When the stored definition was last written.
+          readOnly: true
+        spec:
+          allOf: [{ $ref: "#/components/schemas/LoopDefinitionSpec" }]
+          description: The raw authored definition, kept for round-trip editing (loop_definition_update reads it before re-committing). loop is the resolved canonical view of the same definition.
+          readOnly: true
+        loop:
+          allOf: [{ $ref: "#/components/schemas/LoopView" }]
+          description: >-
+            Canonical loop projection of this definition. Stored-static fields
+            always; the live-only half is overlaid when a backing loop is
+            running, with loop.running as the discriminator (live-only fields
+            are null when not running).
+          readOnly: true
         eligibility:
           type: object
           additionalProperties: true
-          description: Effective eligibility evaluation for this definition, including whether it may run and why.
+          description: Detailed policy/condition eligibility. loop.eligible carries the summary bool; this carries the reason and the blocking detail.
           readOnly: true
           example: { eligible: true, reason: "all subscriptions satisfied" }
-        runtime:
-          type: object
-          additionalProperties: true
-          description: Live runtime status of the backing loop instance for this definition (running flag, state, counters, last error).
-          readOnly: true
         warnings:
           type: array
           items: { type: object }
-          description: Warnings produced while validating or rendering this definition's spec.
+          description: Lint findings produced while validating this definition's stored spec.
           readOnly: true
-        effective:
-          type: object
-          additionalProperties: true
-          description: Post-ancestor-merge state for inheritable fields (tags, subscriptions, exclude_tools, routing factors, delegation gating); absent when there is nothing meaningful to report.
+        effective_conditions:
+          type: array
+          items: { type: object }
+          description: Per-ancestor Conditions evaluation with provenance; present only when the eligibility cascade went through more than one level.
           readOnly: true
       additionalProperties: true
       example:
         name: cota_weekend_observer
-        operation: service
+        source: overlay
+        updated_at: "2026-06-24T18:57:13Z"
         eligibility: { eligible: true, reason: "all subscriptions satisfied" }
-        runtime: { running: true, state: processing, iterations: 142 }
         warnings: []
-        effective: { tags: [messaging, retrospection] }
+        loop:
+          name: cota_weekend_observer
+          operation: service
+          running: true
+          state: processing
+          iterations: 142
+          policy_state: active
+          effective_tags: [{ tag: messaging, from: self }]
     LoopDefinitionSpec:
       type: object
       description: Persistable loop definition payload (name, operation, sleep envelope, subscriptions, tags, profile, ...). First-pass permissive schema; tighten against loop.Spec / loop.DefinitionSnapshot.

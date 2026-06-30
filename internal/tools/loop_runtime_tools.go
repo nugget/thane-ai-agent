@@ -460,13 +460,27 @@ func (r *Registry) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
 	if view == nil {
 		return nil
 	}
+	// The projected view carries each definition's computed eligibility, but
+	// only a pre-formatted policy_updated_delta — the raw policy (with its
+	// UpdatedAt time, which FromStatus needs to format the delta at its own
+	// render clock) lives on the registry snapshot. Index the snapshot by name
+	// and join.
+	policyByName := map[string]looppkg.DefinitionSnapshot{}
+	if r.loopDefinitionRegistry != nil {
+		if snap := r.loopDefinitionRegistry.Snapshot(); snap != nil {
+			for _, d := range snap.Definitions {
+				policyByName[d.Name] = d
+			}
+		}
+	}
 	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
 	for _, def := range view.Definitions {
+		pol := policyByName[def.Name]
 		out[def.Name] = looppkg.LoopPolicyInfo{
-			State:          string(def.PolicyState),
-			Source:         string(def.PolicySource),
-			Reason:         def.PolicyReason,
-			UpdatedAt:      def.PolicyUpdatedAt,
+			State:          string(pol.PolicyState),
+			Source:         string(pol.PolicySource),
+			Reason:         pol.PolicyReason,
+			UpdatedAt:      pol.PolicyUpdatedAt,
 			Eligible:       def.Eligibility.Eligible,
 			EligibleReason: def.Eligibility.Reason,
 			HasPolicy:      true,

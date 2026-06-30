@@ -1208,11 +1208,11 @@ func TestHandleLoopDefinitions(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
-		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.Status{
 			"metacog_like": {
-				Running: true,
-				LoopID:  "loop-live-1",
-				State:   looppkg.StateSleeping,
+				Name:  "metacog_like",
+				ID:    "loop-live-1",
+				State: looppkg.StateSleeping,
 			},
 		})
 	})
@@ -1235,8 +1235,12 @@ func TestHandleLoopDefinitions(t *testing.T) {
 	if snap.Definitions[0].Name != "metacog_like" {
 		t.Fatalf("definition name = %q, want metacog_like", snap.Definitions[0].Name)
 	}
-	if !snap.Definitions[0].Runtime.Running || snap.Definitions[0].Runtime.LoopID != "loop-live-1" {
-		t.Fatalf("runtime = %+v, want running loop-live-1", snap.Definitions[0].Runtime)
+	loop := snap.Definitions[0].Loop
+	if loop == nil {
+		t.Fatal("definition Loop = nil, want canonical loop view")
+	}
+	if !loop.Running || loop.ID == nil || *loop.ID != "loop-live-1" {
+		t.Fatalf("loop = %+v, want running loop-live-1", loop)
 	}
 }
 
@@ -1372,11 +1376,11 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
-		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.Status{
 			"metacog_like": {
-				Running: true,
-				LoopID:  "loop-live-1",
-				State:   looppkg.StateSleeping,
+				Name:  "metacog_like",
+				ID:    "loop-live-1",
+				State: looppkg.StateSleeping,
 			},
 		})
 	})
@@ -1412,11 +1416,15 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
 		t.Fatalf("decode set response: %v", err)
 	}
-	if setResp.Definition.PolicyState != looppkg.DefinitionPolicyStateInactive || setResp.Definition.PolicySource != looppkg.DefinitionPolicySourceOverlay {
-		t.Fatalf("policy = %q/%q, want inactive/overlay", setResp.Definition.PolicyState, setResp.Definition.PolicySource)
+	loop := setResp.Definition.Loop
+	if loop == nil {
+		t.Fatal("definition Loop = nil, want canonical loop view")
 	}
-	if setResp.Definition.Runtime.LoopID != "loop-live-1" {
-		t.Fatalf("runtime loop_id = %q, want loop-live-1", setResp.Definition.Runtime.LoopID)
+	if loop.PolicyState != string(looppkg.DefinitionPolicyStateInactive) || loop.PolicySource != string(looppkg.DefinitionPolicySourceOverlay) {
+		t.Fatalf("policy = %q/%q, want inactive/overlay", loop.PolicyState, loop.PolicySource)
+	}
+	if loop.ID == nil || *loop.ID != "loop-live-1" {
+		t.Fatalf("runtime loop_id = %v, want loop-live-1", loop.ID)
 	}
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/loop-definitions/policy?name=metacog_like", nil)

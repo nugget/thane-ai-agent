@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
@@ -22,12 +23,13 @@ import (
 // meaning in both modes.
 type LoopView struct {
 	// ---- identity (PID / COMMAND) ----
-	Name       string  `json:"name"`
-	ID         *string `json:"id"`
-	Operation  string  `json:"operation"`
-	Completion string  `json:"completion,omitempty"`
-	Task       string  `json:"task"`
-	Intent     string  `json:"intent,omitempty"`
+	Name       string      `json:"name"`
+	ID         *string     `json:"id"`
+	Operation  string      `json:"operation"`
+	Completion string      `json:"completion,omitempty"`
+	Task       string      `json:"task"`
+	Intent     string      `json:"intent,omitempty"`
+	Origin     *OriginInfo `json:"origin,omitempty"`
 
 	// ---- structure (graph; resolved to names, never bare IDs) ----
 	ParentName *string  `json:"parent_name"`
@@ -170,54 +172,86 @@ func (r LoopViewResolver) ancestry(loopID string) []string {
 // policy/eligibility. Live-only fields are all populated; only the
 // definition-joined policy half can be absent (ephemeral loops).
 func (r LoopViewResolver) FromStatus(s Status) LoopView {
-	id := s.ID
-	state := string(s.State)
-	iterations := s.Iterations
-	attempts := s.Attempts
-	consecErr := s.ConsecutiveErrors
-
 	v := LoopView{
 		Name:        s.Name,
-		ID:          &id,
 		Operation:   string(s.Config.Operation),
 		Completion:  string(s.Config.Completion),
 		Task:        s.Config.Task,
 		Intent:      s.Config.Intent,
+		Origin:      s.Config.Origin.Clone(),
 		Ancestry:    r.ancestry(s.ID),
 		ChildCount:  r.childCount[s.ID],
-		Running:     true,
-		State:       &state,
 		EventDriven: s.EventDriven,
-		HandlerOnly: s.HandlerOnly,
-		Iterations:  &iterations,
-		Attempts:    &attempts,
 		Supervisor:  s.Config.Supervisor,
-
-		EffectiveTags:             orEmptyLoopSlice(s.EffectiveTags),
-		EffectiveSubscriptions:    orEmptyLoopSlice(s.EffectiveSubscriptions),
-		EffectiveExcludeTools:     orEmptyLoopSlice(s.EffectiveExcludeTools),
-		EffectiveRoutingFactors:   orEmptyLoopSlice(s.EffectiveRoutingFactors),
-		EffectiveDelegationGating: s.EffectiveDelegationGating,
 	}
-
 	if pn := r.nameByID[s.ParentID]; pn != "" {
 		v.ParentName = &pn
 	}
+	if s.Config.Supervisor {
+		prob := s.Config.SupervisorProb
+		v.SupervisorProb = &prob
+	}
+
+	// Policy/eligibility left-joined from the stored definition. A live Status
+	// carries no policy of its own; HasPolicy=false is an ad-hoc spawn.
+	if pol, ok := r.policyByName[s.Name]; ok && pol.HasPolicy {
+		v.PolicyState = pol.State
+		v.PolicySource = pol.Source
+		if pol.Reason != "" {
+			reason := pol.Reason
+			v.PolicyReason = &reason
+		}
+		if !pol.UpdatedAt.IsZero() {
+			d := promptfmt.FormatDeltaOnly(pol.UpdatedAt, r.now)
+			v.PolicyUpdatedDelta = &d
+		}
+		v.Eligible = pol.Eligible
+	} else {
+		// No stored definition backs this loop (ad-hoc spawn): there is no
+		// policy to report. Say so explicitly rather than implying "active".
+		v.PolicyState = "ephemeral"
+		v.Eligible = true
+	}
+
+	applyLiveTelemetry(&v, s, r.now)
+	return v
+}
+
+// applyLiveTelemetry fills the live-only half of a LoopView from a running
+// loop's Status: identity, runtime state, lifecycle deltas, economics, error
+// state, supervisor cadence, and the effective_* inheritance lists. Shared by
+// FromStatus (always live) and FromDefinition (only when the definition has a
+// running loop) so both projectors emit identical live fields. It sets
+// Running=true; a stored-but-not-running view never calls it and keeps every
+// live-only pointer nil.
+func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
+	id := s.ID
+	v.ID = &id
+	v.Running = true
+	state := string(s.State)
+	v.State = &state
+	v.HandlerOnly = s.HandlerOnly
+
+	iterations := s.Iterations
+	attempts := s.Attempts
+	v.Iterations = &iterations
+	v.Attempts = &attempts
+
 	// Delta-oriented timestamps per the model-facing convention: signed
 	// exact-second offsets from now (AGENTS.md), e.g. "-15120s" / "+240s".
 	if !s.StartedAt.IsZero() {
-		d := promptfmt.FormatDeltaOnly(s.StartedAt, r.now)
+		d := promptfmt.FormatDeltaOnly(s.StartedAt, now)
 		v.StartedDelta = &d
 	}
 	if !s.LastWakeAt.IsZero() {
-		d := promptfmt.FormatDeltaOnly(s.LastWakeAt, r.now)
+		d := promptfmt.FormatDeltaOnly(s.LastWakeAt, now)
 		v.LastWakeDelta = &d
 	}
 	// Scheduled next wake + the self-paced interval, for timer-based sleeps —
 	// turns the census into a schedule. Event-driven loops (no timer) leave
 	// SleepUntil zero and correctly report null.
 	if !s.SleepUntil.IsZero() {
-		nw := promptfmt.FormatDeltaOnly(s.SleepUntil, r.now)
+		nw := promptfmt.FormatDeltaOnly(s.SleepUntil, now)
 		v.NextWakeDelta = &nw
 		// Unsigned seconds — a duration magnitude, not a delta-from-now — so the
 		// whole row speaks one unit (e.g. current_sleep "5940s" alongside
@@ -247,6 +281,7 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		}
 	}
 
+	consecErr := s.ConsecutiveErrors
 	v.ConsecutiveErrors = &consecErr
 	// Null, not "", when there is no error — cleaner at the model boundary.
 	if s.LastError != "" {
@@ -254,10 +289,6 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		v.LastError = &lastErr
 	}
 
-	if s.Config.Supervisor {
-		prob := s.Config.SupervisorProb
-		v.SupervisorProb = &prob
-	}
 	if s.LastSupervisorIter > 0 {
 		lsi := s.LastSupervisorIter
 		v.LastSupervisorIter = &lsi
@@ -270,26 +301,109 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		v.SupervisorItersAgo = &ago
 	}
 
-	// Policy/eligibility left-joined from the stored definition.
-	if pol, ok := r.policyByName[s.Name]; ok && pol.HasPolicy {
-		v.PolicyState = pol.State
-		v.PolicySource = pol.Source
-		if pol.Reason != "" {
-			reason := pol.Reason
-			v.PolicyReason = &reason
+	// effective_* come straight off the Status — the registry populates them via
+	// the same ancestor walk loop_status uses. [] when running-and-empty
+	// (evaluated, nothing inherited) vs null when not running.
+	v.EffectiveTags = orEmptyLoopSlice(s.EffectiveTags)
+	v.EffectiveSubscriptions = orEmptyLoopSlice(s.EffectiveSubscriptions)
+	v.EffectiveExcludeTools = orEmptyLoopSlice(s.EffectiveExcludeTools)
+	v.EffectiveRoutingFactors = orEmptyLoopSlice(s.EffectiveRoutingFactors)
+	v.EffectiveDelegationGating = s.EffectiveDelegationGating
+}
+
+// DefinitionViewResolver carries the definition-graph joins a stored-definition
+// LoopView needs — parent_name/ancestry/child_count resolved from
+// Spec.ParentName, not live loop IDs — so they resolve once per render.
+// Construct one with NewDefinitionViewResolver, then call FromDefinition for
+// each definition.
+type DefinitionViewResolver struct {
+	parentByName map[string]string
+	childCount   map[string]int
+	now          time.Time
+}
+
+// NewDefinitionViewResolver builds the name/parent/child indexes once over the
+// full definition snapshot set (so parent_name and child_count stay accurate
+// even when the rendered rows are filtered) and captures one clock for deltas.
+func NewDefinitionViewResolver(snapshots []DefinitionSnapshot, now time.Time) DefinitionViewResolver {
+	parentByName := make(map[string]string, len(snapshots))
+	childCount := make(map[string]int, len(snapshots))
+	for _, snap := range snapshots {
+		parent := strings.TrimSpace(snap.Spec.ParentName)
+		parentByName[snap.Name] = parent
+		if parent != "" {
+			childCount[parent]++
 		}
-		if !pol.UpdatedAt.IsZero() {
-			d := promptfmt.FormatDeltaOnly(pol.UpdatedAt, r.now)
-			v.PolicyUpdatedDelta = &d
-		}
-		v.Eligible = pol.Eligible
-	} else {
-		// No stored definition backs this loop (ad-hoc spawn): there is no
-		// policy to report. Say so explicitly rather than implying "active".
-		v.PolicyState = "ephemeral"
-		v.Eligible = true
+	}
+	return DefinitionViewResolver{
+		parentByName: parentByName,
+		childCount:   childCount,
+		now:          now,
+	}
+}
+
+// ancestry walks the parent_name chain from a definition up to the root,
+// returning ancestor names ordered root→leaf. A seen-set guards a malformed
+// cycle so a corrupt graph can't spin the walk.
+func (r DefinitionViewResolver) ancestry(name string) []string {
+	out := []string{}
+	seen := map[string]bool{name: true}
+	for pn := r.parentByName[name]; pn != "" && !seen[pn]; pn = r.parentByName[pn] {
+		seen[pn] = true
+		out = append(out, pn)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// FromDefinition projects one stored loop definition into the canonical view —
+// the definition-corpus counterpart of FromStatus. Static fields come from the
+// Spec, graph fields from the definition's parent_name chain, and policy +
+// eligibility from the stored snapshot (a definition, unlike a live Status,
+// carries its own policy). When the definition has a running loop, pass its
+// Status as live and the live-only half is overlaid, identical to a FromStatus
+// row; when live is nil the row is stored-only — Running=false and every
+// live-only pointer stays nil (serialized as explicit null, never zero).
+func (r DefinitionViewResolver) FromDefinition(snap DefinitionSnapshot, eligibility DefinitionEligibilityStatus, live *Status) LoopView {
+	spec := snap.Spec
+	op := effectiveOperation(spec.Operation)
+	v := LoopView{
+		Name:        snap.Name,
+		Operation:   string(op),
+		Completion:  string(spec.Completion),
+		Task:        spec.Task,
+		Intent:      spec.Intent,
+		Origin:      spec.Origin.Clone(),
+		Ancestry:    r.ancestry(snap.Name),
+		ChildCount:  r.childCount[snap.Name],
+		EventDriven: op == OperationEventDriven,
+		Supervisor:  spec.Supervisor,
+
+		PolicyState:  string(snap.PolicyState),
+		PolicySource: string(snap.PolicySource),
+		Eligible:     eligibility.Eligible,
+	}
+	if pn := strings.TrimSpace(spec.ParentName); pn != "" {
+		v.ParentName = &pn
+	}
+	if snap.PolicyReason != "" {
+		reason := snap.PolicyReason
+		v.PolicyReason = &reason
+	}
+	if !snap.PolicyUpdatedAt.IsZero() {
+		d := promptfmt.FormatDeltaOnly(snap.PolicyUpdatedAt, r.now)
+		v.PolicyUpdatedDelta = &d
+	}
+	if spec.Supervisor {
+		prob := spec.SupervisorProb
+		v.SupervisorProb = &prob
 	}
 
+	if live != nil {
+		applyLiveTelemetry(&v, *live, r.now)
+	}
 	return v
 }
 

@@ -407,7 +407,10 @@ func TestLoopDefinitionRuntimeSnapshotIncludesRunningLoop(t *testing.T) {
 	if view.RunningDefinitions != 1 {
 		t.Fatalf("RunningDefinitions = %d, want 1", view.RunningDefinitions)
 	}
-	if len(view.Definitions) != 1 || !view.Definitions[0].Runtime.Running {
+	if len(view.Definitions) != 1 {
+		t.Fatalf("Definitions = %+v, want one running definition", view.Definitions)
+	}
+	if loop := view.Definitions[0].Loop; loop == nil || !loop.Running {
 		t.Fatalf("Definitions = %+v, want one running definition", view.Definitions)
 	}
 }

@@ -262,11 +262,13 @@ func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
 	}
 
 	now := time.Date(2026, 4, 6, 15, 0, 0, 0, time.UTC)
-	view := buildDefinitionRegistryViewAt(reg.Snapshot(), map[string]DefinitionRuntimeStatus{
+	view := buildDefinitionRegistryViewAt(reg.Snapshot(), map[string]Status{
+		// Presence in liveByName means the definition has a running backing
+		// loop; Name keys the join and State drives the runtime-state tally.
 		"metacog_like": {
-			Running: true,
-			LoopID:  "loop-123",
-			State:   StateSleeping,
+			Name:  "metacog_like",
+			ID:    "loop-123",
+			State: StateSleeping,
 		},
 	}, now)
 	if view == nil {
@@ -284,13 +286,22 @@ func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
 	if view.ByRuntimeState[string(StateSleeping)] != 1 || view.ByRuntimeState[definitionRuntimeStateNotRunning] != 1 {
 		t.Fatalf("ByRuntimeState = %+v, want sleeping=1 not_running=1", view.ByRuntimeState)
 	}
-	if !view.Definitions[0].Runtime.Running {
+	if view.Definitions[0].Loop == nil {
+		t.Fatal("metacog_like Loop view should never be nil")
+	}
+	if !view.Definitions[0].Loop.Running {
 		t.Fatal("metacog_like runtime should be running")
+	}
+	if view.Definitions[0].Loop.State == nil || *view.Definitions[0].Loop.State != string(StateSleeping) {
+		t.Fatalf("metacog_like state = %v, want sleeping", view.Definitions[0].Loop.State)
 	}
 	if !view.Definitions[0].Eligibility.Eligible {
 		t.Fatal("metacog_like eligibility should be true")
 	}
-	if view.Definitions[1].Runtime.Running {
+	if view.Definitions[1].Loop == nil {
+		t.Fatal("paused_watch Loop view should never be nil")
+	}
+	if view.Definitions[1].Loop.Running {
 		t.Fatal("paused_watch runtime should not be running")
 	}
 	if !view.Definitions[1].Eligibility.Eligible {
