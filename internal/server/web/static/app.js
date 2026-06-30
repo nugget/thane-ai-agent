@@ -4491,7 +4491,14 @@ function renderLoopSpecSection(loop) {
     e.preventDefault();
     e.stopPropagation();
     state.specMode.set(name, nextSpecMode(mode));
-    try { renderDetail(); } catch (err) { console.error('spec mode renderDetail:', err); }
+    // Force the re-render through the hover/interaction defer gate (see
+    // withPreservedDetailScroll). A plain renderDetail() is suppressed while the
+    // pointer is over the control, so the new mode wouldn't paint until mouse-
+    // out — the same path the schema-card controls take via applySchemaCardPreset.
+    bumpDetailInteractionHold(180);
+    requestAnimationFrame(() => {
+      try { renderDetail({ force: true }); } catch (err) { console.error('spec mode renderDetail:', err); }
+    });
   });
   controls.appendChild(btn);
   head.appendChild(controls);
