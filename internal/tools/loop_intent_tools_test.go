@@ -351,6 +351,14 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if found.Spec.Profile.QualityFloor != 7 {
 		t.Errorf("Profile.QualityFloor = %d, want 7", found.Spec.Profile.QualityFloor)
 	}
+	// #1106 C1: intent lands on the first-class Spec.Intent field, not the
+	// metadata bag. (operator metadata {"team":"release"} stays separate.)
+	if found.Spec.Intent != "Track v1.0 PR activity for the upcoming release." {
+		t.Errorf("curate Spec.Intent = %q, want the first-class intent field populated", found.Spec.Intent)
+	}
+	if _, leaked := found.Spec.Metadata["intent"]; leaked {
+		t.Error("curate leaked intent into metadata; it must use the first-class Intent field")
+	}
 	// exclude_tools is a trimmed, de-duplicated union over the egress floor:
 	// the duplicate "exec" collapses to one entry, and the whitespace-padded
 	// "  email_send  " trims and folds into the existing egress entry rather

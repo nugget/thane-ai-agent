@@ -61,7 +61,7 @@ func containerSpec(name, intent string) looppkg.Spec {
 		Name:      name,
 		Enabled:   true,
 		Operation: looppkg.OperationContainer,
-		Metadata:  map[string]string{"intent": intent},
+		Intent:    intent,
 	}
 }
 

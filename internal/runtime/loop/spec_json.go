@@ -13,6 +13,7 @@ type specJSON struct {
 	Name           string               `json:"name,omitempty"`
 	Enabled        bool                 `json:"enabled"`
 	Task           string               `json:"task,omitempty"`
+	Intent         string               `json:"intent,omitempty"`
 	Profile        any                  `json:"profile,omitempty"`
 	Operation      Operation            `json:"operation,omitempty"`
 	Completion     Completion           `json:"completion,omitempty"`
@@ -68,6 +69,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Name:              s.Name,
 		Enabled:           s.Enabled,
 		Task:              s.Task,
+		Intent:            s.Intent,
 		Profile:           s.Profile,
 		Operation:         s.Operation,
 		Completion:        s.Completion,
@@ -148,6 +150,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Name:             wire.Name,
 		Enabled:          wire.Enabled,
 		Task:             wire.Task,
+		Intent:           wire.Intent,
 		Operation:        wire.Operation,
 		Completion:       wire.Completion,
 		Outputs:          cloneOutputs(wire.Outputs),

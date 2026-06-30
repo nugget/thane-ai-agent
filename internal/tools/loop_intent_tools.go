@@ -174,11 +174,9 @@ func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[stri
 		Name:       name,
 		Enabled:    true,
 		Operation:  looppkg.OperationContainer,
+		Intent:     intent,
 		Tags:       tags,
 		ParentName: parentName,
-		Metadata: map[string]string{
-			"intent": intent,
-		},
 	}
 	if err := spec.ValidatePersistable(); err != nil {
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
@@ -467,6 +465,7 @@ func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (
 		Name:          name,
 		Enabled:       true,
 		Task:          buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
+		Intent:        intent,
 		Operation:     looppkg.OperationService,
 		SleepMin:      envelope.sleepMin,
 		SleepMax:      envelope.sleepMax,

@@ -167,14 +167,14 @@ func TestLoopViewResolver_FromStatus_ContainerAndEphemeral(t *testing.T) {
 		ID:     "lp_travel",
 		Name:   "travel",
 		State:  State("pending"),
-		Config: Config{Operation: OperationContainer, Metadata: map[string]string{"intent": "away trips"}},
+		Config: Config{Operation: OperationContainer, Intent: "away trips"},
 	})
 
 	if container.ChildCount != 2 {
 		t.Errorf("ChildCount = %d, want 2", container.ChildCount)
 	}
 	if container.Intent != "away trips" {
-		t.Errorf("Intent = %q, want the metadata intent surfaced", container.Intent)
+		t.Errorf("Intent = %q, want the resolved Config.Intent surfaced", container.Intent)
 	}
 	if container.ParentName != nil {
 		t.Errorf("top-level container ParentName = %v, want nil", container.ParentName)

@@ -274,6 +274,7 @@ func ExampleConfig() *Config {
 					Name:       "office_watch",
 					Enabled:    true,
 					Task:       "Watch the office and report noteworthy changes or trends.",
+					Intent:     "Keep a current read on office activity so notable changes surface without being asked.",
 					Operation:  looppkg.OperationService,
 					Completion: looppkg.CompletionNone,
 					Conditions: looppkg.Conditions{
