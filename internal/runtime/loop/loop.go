@@ -615,6 +615,9 @@ func (l *Loop) Status() Status {
 	cfgCopy.Setup = nil
 	cfgCopy.RuntimeTools = nil
 	cfgCopy.OutputContextBuilder = nil
+	// Origin is a pointer — clone it so a Status() caller can't mutate (or race
+	// with) the loop's internal creation provenance through the snapshot.
+	cfgCopy.Origin = l.config.Origin.Clone()
 	cfgCopy.Outputs = cloneOutputs(l.config.Outputs)
 	if l.config.Tags != nil {
 		cfgCopy.Tags = make([]string, len(l.config.Tags))

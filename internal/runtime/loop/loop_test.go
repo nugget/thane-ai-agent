@@ -208,6 +208,33 @@ func TestComputeSleep(t *testing.T) {
 	})
 }
 
+func TestStatusClonesConfigOrigin(t *testing.T) {
+	t.Parallel()
+
+	origin := &OriginInfo{RequestID: "r_1", CreatedByLoopID: "lp_a"}
+	l, err := New(Config{
+		Name:   "origin-clone-test",
+		Task:   "x",
+		Origin: origin,
+	}, Deps{Runner: &countingRunner{count: &atomic.Int32{}}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st := l.Status()
+	if st.Config.Origin == nil {
+		t.Fatal("Status().Config.Origin should be populated")
+	}
+	if st.Config.Origin == l.config.Origin {
+		t.Error("Status() must return a CLONE of Config.Origin, not the loop's internal pointer")
+	}
+	// Mutating the snapshot must not leak into the loop's internal origin.
+	st.Config.Origin.RequestID = "mutated"
+	if l.config.Origin.RequestID != "r_1" {
+		t.Error("mutating the Status() origin reached the loop's internal Config.Origin")
+	}
+}
+
 func TestLoopLifecycle(t *testing.T) {
 	t.Parallel()
 

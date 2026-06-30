@@ -327,3 +327,32 @@ func TestLoopView_OperationNormalizedConsistently(t *testing.T) {
 			fromStatus.Operation, fromDef.Operation)
 	}
 }
+
+// TestFromDefinition_RunningTakesLiveEventDrivenAndState guards that a running
+// definition-backed row reflects live runtime values — EventDriven from the
+// Status (not re-derived from the spec operation) and an empty state normalized
+// to "running" — so it stays byte-identical to a FromStatus row.
+func TestFromDefinition_RunningTakesLiveEventDrivenAndState(t *testing.T) {
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	snaps := []DefinitionSnapshot{{Name: "x", Spec: Spec{Name: "x", Operation: OperationService}}}
+	r := NewDefinitionViewResolver(snaps, now)
+
+	// Live loop reports event_driven and an empty state.
+	live := Status{ID: "lp_x", Name: "x", State: State(""), EventDriven: true, Config: Config{Operation: OperationService}}
+	v := r.FromDefinition(snaps[0], DefinitionEligibilityStatus{}, &live)
+	if !v.EventDriven {
+		t.Error("a running row must take EventDriven from the live Status, not the spec operation")
+	}
+	if v.State == nil || *v.State != "running" {
+		t.Errorf("empty live state must normalize to \"running\", got %v", v.State)
+	}
+
+	// The stored (non-running) counterpart keeps the spec-derived value.
+	stored := r.FromDefinition(snaps[0], DefinitionEligibilityStatus{}, nil)
+	if stored.EventDriven {
+		t.Error("a stored (non-running) service definition must not report event_driven")
+	}
+	if stored.State != nil {
+		t.Errorf("a stored definition must have nil state, got %v", stored.State)
+	}
+}

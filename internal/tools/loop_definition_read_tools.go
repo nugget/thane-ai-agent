@@ -79,10 +79,13 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		if source != "" && string(def.Source) != source {
 			continue
 		}
-		if operation != "" && string(def.Spec.Operation) != operation {
+		// Filter against the canonical projected values the client sees in
+		// results (e.g. an unset spec operation surfaces as "request_reply"),
+		// not the raw spec, so a filter matches what it returns.
+		if operation != "" && (def.Loop == nil || def.Loop.Operation != operation) {
 			continue
 		}
-		if completion != "" && string(def.Spec.Completion) != completion {
+		if completion != "" && (def.Loop == nil || def.Loop.Completion != completion) {
 			continue
 		}
 		if policyState != "" && (def.Loop == nil || def.Loop.PolicyState != policyState) {

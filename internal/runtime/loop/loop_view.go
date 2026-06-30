@@ -178,15 +178,15 @@ func (r LoopViewResolver) FromStatus(s Status) LoopView {
 		// same operation FromDefinition does (an unset operation is
 		// "request_reply", never ""): the two projectors must agree field-for-
 		// field on the same loop.
-		Operation:   string(effectiveOperation(s.Config.Operation)),
-		Completion:  string(s.Config.Completion),
-		Task:        s.Config.Task,
-		Intent:      s.Config.Intent,
-		Origin:      s.Config.Origin.Clone(),
-		Ancestry:    r.ancestry(s.ID),
-		ChildCount:  r.childCount[s.ID],
-		EventDriven: s.EventDriven,
-		Supervisor:  s.Config.Supervisor,
+		Operation:  string(effectiveOperation(s.Config.Operation)),
+		Completion: string(s.Config.Completion),
+		Task:       s.Config.Task,
+		Intent:     s.Config.Intent,
+		Origin:     s.Config.Origin.Clone(),
+		Ancestry:   r.ancestry(s.ID),
+		ChildCount: r.childCount[s.ID],
+		Supervisor: s.Config.Supervisor,
+		// EventDriven is set from the live Status in applyLiveTelemetry.
 	}
 	if pn := r.nameByID[s.ParentID]; pn != "" {
 		v.ParentName = &pn
@@ -232,9 +232,18 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	id := s.ID
 	v.ID = &id
 	v.Running = true
+	// Normalize an empty runtime state to "running" — matches the definition
+	// registry's runtime-state tally and keeps a live row from reading state:"".
 	state := string(s.State)
+	if state == "" {
+		state = "running"
+	}
 	v.State = &state
 	v.HandlerOnly = s.HandlerOnly
+	// EventDriven is a live runtime property (Status carries l.isEventDriven()).
+	// Take it from the Status so a running definition-backed row matches a
+	// FromStatus row exactly instead of re-deriving it from the spec operation.
+	v.EventDriven = s.EventDriven
 
 	iterations := s.Iterations
 	attempts := s.Attempts
