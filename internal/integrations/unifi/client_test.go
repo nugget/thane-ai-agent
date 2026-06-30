@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -95,13 +96,48 @@ func TestPing_Success(t *testing.T) {
 
 func TestPing_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// 503 is in the client's retry set; Retry-After:0 keeps the now-retried
+		// path instant in the test. The retries exhaust and the error surfaces.
+		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-key", nil)
 	if err := client.Ping(context.Background()); err == nil {
-		t.Fatal("expected error for 503 response")
+		t.Fatal("expected error for sustained 503 response")
+	}
+}
+
+// TestGetClientStations_RetriesTransient5xx verifies the client rides out a
+// transient gateway 5xx within a single call (the first layer of poll tolerance)
+// rather than surfacing it. Retry-After:0 keeps the test instant.
+func TestGetClientStations_RetriesTransient5xx(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("transient gateway error"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Data []ClientStation `json:"data"`
+		}{Data: []ClientStation{{MAC: "aa:bb:cc:dd:ee:ff", LastUplinkName: "ap-office", LastSeen: 1000}}})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", nil)
+	stations, err := client.GetClientStations(context.Background())
+	if err != nil {
+		t.Fatalf("expected transient 500 to be retried to success, got %v", err)
+	}
+	if len(stations) != 1 {
+		t.Fatalf("expected 1 station after retry, got %d", len(stations))
+	}
+	if got := atomic.LoadInt32(&calls); got < 2 {
+		t.Errorf("expected >=2 calls (1 fail + retry), got %d", got)
 	}
 }
 

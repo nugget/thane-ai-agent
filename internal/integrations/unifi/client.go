@@ -44,6 +44,18 @@ func NewClient(baseURL, apiKey string, logger *slog.Logger) *Client {
 		httpClient: httpkit.NewClient(
 			httpkit.WithTimeout(15*time.Second),
 			httpkit.WithRetry(2, 2*time.Second),
+			// The UniFi gateway returns transient 5xx (and occasional 429) on
+			// the station-list endpoint under load or during internal restarts.
+			// The poll is an idempotent GET, so ride those out within a single
+			// poll (honoring Retry-After) instead of surfacing every blip to the
+			// loop as an alarm.
+			httpkit.WithRetryOnStatus(
+				http.StatusTooManyRequests,
+				http.StatusInternalServerError,
+				http.StatusBadGateway,
+				http.StatusServiceUnavailable,
+				http.StatusGatewayTimeout,
+			),
 			httpkit.WithTLSInsecureSkipVerify(),
 			httpkit.WithLogger(logger),
 		),

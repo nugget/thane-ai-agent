@@ -3,6 +3,7 @@ package unifi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,12 @@ func (m *mockLocator) setLocations(locs []DeviceLocation) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.locations = locs
+}
+
+func (m *mockLocator) setErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
 }
 
 type roomUpdate struct {
@@ -234,10 +241,45 @@ func TestPoller_UnknownAP(t *testing.T) {
 	}
 }
 
-func TestPoller_LocatorError(t *testing.T) {
-	locator := &mockLocator{
-		err: fmt.Errorf("connection refused"),
+// TestPoller_ToleratesTransientFailures verifies a flaky gateway doesn't alarm
+// on the first failures: Poll returns nil (no loop error) until FailureThreshold
+// consecutive failures, at which point it surfaces the error.
+func TestPoller_ToleratesTransientFailures(t *testing.T) {
+	locator := &mockLocator{err: fmt.Errorf("UniFi API error 500: internal error")}
+	updater := &mockUpdater{}
+
+	p := NewPoller(PollerConfig{
+		Locator:      locator,
+		Updater:      updater,
+		PollInterval: time.Hour,
+		DeviceOwners: map[string]string{"aa:bb:cc:dd:ee:ff": "person.alice"},
+		APRooms:      map[string]string{"ap-office": "office"},
+	}) // default threshold = 3
+
+	// First two failures are tolerated (no alarm).
+	for i := 1; i <= defaultFailureThreshold-1; i++ {
+		if err := p.Poll(context.Background()); err != nil {
+			t.Fatalf("poll %d: expected tolerated (nil) error, got %v", i, err)
+		}
 	}
+	// The threshold'th consecutive failure surfaces the error (alarm).
+	err := p.Poll(context.Background())
+	if err == nil {
+		t.Fatal("expected error once failure threshold reached")
+	}
+	if !strings.Contains(err.Error(), "consecutive polls") {
+		t.Errorf("alarm error = %q, want it to mention consecutive polls", err)
+	}
+
+	if updates := updater.getUpdates(); len(updates) != 0 {
+		t.Errorf("expected no room updates on failure, got %d", len(updates))
+	}
+}
+
+// TestPoller_SuccessResetsFailureStreak verifies a single good poll clears the
+// streak so the budget resets — a gateway that recovers between blips never alarms.
+func TestPoller_SuccessResetsFailureStreak(t *testing.T) {
+	locator := &mockLocator{err: fmt.Errorf("UniFi API error 500: internal error")}
 	updater := &mockUpdater{}
 
 	p := NewPoller(PollerConfig{
@@ -248,17 +290,34 @@ func TestPoller_LocatorError(t *testing.T) {
 		APRooms:      map[string]string{"ap-office": "office"},
 	})
 
-	// Should return error and not update.
-	if err := p.Poll(context.Background()); err == nil {
-		t.Error("expected error from failing locator")
-	}
-	if err := p.Poll(context.Background()); err == nil {
-		t.Error("expected error from failing locator (second call)")
-	}
+	// Two failures (tolerated), then a success resets the streak.
+	mustPoll(t, p)
+	mustPoll(t, p)
+	locator.setErr(nil)
+	locator.setLocations([]DeviceLocation{{MAC: "aa:bb:cc:dd:ee:ff", APName: "ap-office", LastSeen: 1000}})
+	mustPoll(t, p) // success — streak reset to 0
 
-	updates := updater.getUpdates()
-	if len(updates) != 0 {
-		t.Errorf("expected no updates on error, got %d", len(updates))
+	// Failures resume; the budget is full again, so the next two are tolerated.
+	locator.setErr(fmt.Errorf("UniFi API error 500: internal error"))
+	mustPoll(t, p)
+	mustPoll(t, p)
+	if err := p.Poll(context.Background()); err == nil {
+		t.Fatal("expected error only after threshold failures following the reset")
+	}
+}
+
+// TestPoller_FailureThresholdConfigurable verifies the budget honors the config.
+func TestPoller_FailureThresholdConfigurable(t *testing.T) {
+	locator := &mockLocator{err: fmt.Errorf("UniFi API error 503")}
+	p := NewPoller(PollerConfig{
+		Locator:          locator,
+		Updater:          &mockUpdater{},
+		PollInterval:     time.Hour,
+		FailureThreshold: 1, // alarm on the very first failure
+	})
+
+	if err := p.Poll(context.Background()); err == nil {
+		t.Fatal("expected error on first failure with threshold=1")
 	}
 }
 

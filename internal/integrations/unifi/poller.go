@@ -36,6 +36,14 @@ type PollerConfig struct {
 	// APRooms maps AP names to human-readable room names.
 	APRooms map[string]string // ap_name → room
 
+	// FailureThreshold is the number of CONSECUTIVE failed polls tolerated
+	// before Poll surfaces the error to the loop (which raises the operator
+	// alarm). A transient gateway hiccup — the UniFi controller 5xx-ing on the
+	// station-list endpoint — is absorbed silently; only a sustained outage
+	// across this many polls is treated as genuinely broken and worth alarming.
+	// Defaults to defaultFailureThreshold when <= 0.
+	FailureThreshold int
+
 	// Logger for structured logging.
 	Logger *slog.Logger
 }
@@ -54,6 +62,12 @@ type pendingRoom struct {
 // transient WiFi roaming from causing room flicker.
 const debounceThreshold = 2
 
+// defaultFailureThreshold is the number of consecutive failed polls tolerated
+// before a poll failure is surfaced to the loop as an alarm. At the 30s default
+// poll interval that is ~1.5 minutes of sustained failure — long enough to ride
+// out a flaky gateway's transient 5xx, short enough to flag a real outage.
+const defaultFailureThreshold = 3
+
 // Poller periodically queries a DeviceLocator and updates the person
 // tracker with room-level presence. It requires two consecutive polls
 // showing the same AP before updating a room (debounce), preventing
@@ -61,8 +75,17 @@ const debounceThreshold = 2
 type Poller struct {
 	cfg PollerConfig
 
-	mu      sync.Mutex
-	pending map[string]*pendingRoom // entity_id → pending room change
+	mu                  sync.Mutex
+	pending             map[string]*pendingRoom // entity_id → pending room change
+	consecutiveFailures int                     // streak of failed polls; gates the alarm
+}
+
+// failureThreshold is the configured consecutive-failure budget, or the default.
+func (p *Poller) failureThreshold() int {
+	if p.cfg.FailureThreshold > 0 {
+		return p.cfg.FailureThreshold
+	}
+	return defaultFailureThreshold
 }
 
 // NewPoller creates a UniFi room presence poller.
@@ -84,7 +107,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 
 	locations, err := p.cfg.Locator.LocateDevices(ctx)
 	if err != nil {
-		return fmt.Errorf("locate devices: %w", err)
+		return p.tolerateFailure(err, summary)
 	}
 
 	// Build MAC → DeviceLocation index, keeping only tracked MACs.
@@ -133,6 +156,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 	// Apply debounce and update rooms.
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.consecutiveFailures = 0 // a successful locate clears the alarm gate
 
 	var roomsUpdated, pendingCount int
 	for entityID, best := range entityBest {
@@ -183,5 +207,35 @@ func (p *Poller) Poll(ctx context.Context) error {
 		summary["pending_changes"] = pendingCount
 	}
 
+	return nil
+}
+
+// tolerateFailure records a failed poll and decides whether to surface it. A
+// single transient gateway error (the UniFi controller 5xx-ing on /stat/sta) is
+// absorbed silently — Poll returns nil so the iteration succeeds and no operator
+// alarm flaps — and the degradation is reported to the loop dashboard instead.
+// Only once failures pile up to FailureThreshold consecutive polls, a genuine
+// sustained outage, is the error returned to the loop. A later successful poll
+// resets the streak (see Poll).
+func (p *Poller) tolerateFailure(err error, summary map[string]any) error {
+	p.mu.Lock()
+	p.consecutiveFailures++
+	n := p.consecutiveFailures
+	p.mu.Unlock()
+
+	threshold := p.failureThreshold()
+	if n >= threshold {
+		return fmt.Errorf("UniFi controller failing for %d consecutive polls: %w", n, err)
+	}
+
+	p.cfg.Logger.Warn("UniFi poll failed; tolerating as transient",
+		"consecutive_failures", n,
+		"threshold", threshold,
+		"error", err,
+	)
+	if summary != nil {
+		summary["poll_status"] = fmt.Sprintf("transient failure %d/%d", n, threshold)
+		summary["consecutive_failures"] = n
+	}
 	return nil
 }
