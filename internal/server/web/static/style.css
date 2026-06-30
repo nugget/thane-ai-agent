@@ -796,6 +796,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   display: grid; grid-template-columns: 36px 48px 1fr 1.4fr 40px;
   align-items: center; gap: 8px; height: 12px; margin-bottom: 4px;
   font-family: var(--font-mono); font-size: 11px;
+  cursor: help; /* row title reveals the wall-clock when it ran */
 }
 .iter-num { color: var(--text-muted); }
 .iter-model { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

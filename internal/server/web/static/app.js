@@ -4199,6 +4199,15 @@ function renderIterationStrip(loop) {
     const row = document.createElement('div');
     row.className = 'iter-row';
 
+    // Hover reveals the wall-clock when (kept off the row to stay compact): when
+    // it started, how long ago, and the duration that's already shown inline.
+    const startRaw = s.started_at || s.completed_at;
+    const startDate = startRaw ? new Date(startRaw) : null;
+    if (startDate && !isNaN(startDate)) {
+      const durTxt = s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : '';
+      row.title = `#${s.number || '?'} · ran ${formatWhen(startDate)} (${timeAgo(startDate)})${durTxt}`;
+    }
+
     const num = document.createElement('span');
     num.className = 'iter-num';
     num.textContent = '#' + (s.number || '');
