@@ -88,3 +88,25 @@ func TestAuthoritativeOrigin_StampsNewDefinition(t *testing.T) {
 		t.Fatalf("new definition origin = %+v", got)
 	}
 }
+
+// TestAuthoritativeOrigin_ExistingWithoutOriginStaysNil guards the #1125 review
+// fix: an existing definition that carries no origin (config-sourced or pre-C2)
+// must NOT be re-stamped on a later edit — that would record the editing turn as
+// the creation. Existence, not non-nil origin, is the discriminator.
+func TestAuthoritativeOrigin_ExistingWithoutOriginStaysNil(t *testing.T) {
+	defs, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	// A pre-existing definition with NO origin (e.g. a config-sourced loop).
+	if err := defs.Upsert(looppkg.Spec{Name: "config_loop", Enabled: true, Task: "watch", Operation: looppkg.OperationService}, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	a := &App{loopDefinitionRegistry: defs}
+
+	// A later edit from a real authoring turn must not fabricate creation origin.
+	got := a.authoritativeOrigin(authoringCtx("r_edit", "conv-2", "lp_b"), "config_loop", time.Now())
+	if got != nil {
+		t.Errorf("existing origin-less definition must stay origin-less on edit, got %+v", got)
+	}
+}

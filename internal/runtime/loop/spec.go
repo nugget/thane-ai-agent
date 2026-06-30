@@ -305,22 +305,28 @@ type Spec struct {
 	// Resolved on demand against the request/conversation stores; no turn
 	// snapshot is stored here. Nil for definitions authored outside a runtime
 	// authoring context (e.g. config-sourced loops).
-	Origin *OriginInfo `yaml:"origin,omitempty" json:"origin,omitempty"`
+	//
+	// `yaml:"-"`: origin is not config-authorable — it is runtime-stamped and
+	// would otherwise surface in the generated config example as an invalid
+	// zero-time placeholder. It still persists in the dynamic overlay, which is
+	// JSON (see loopDefinitionStore), routed through the custom specJSON wire.
+	Origin *OriginInfo `yaml:"-" json:"origin,omitempty"`
 }
 
 // OriginInfo records who/what/when created a loop definition — pointer-only
 // provenance (#1106 C2). The ids are foreign keys resolved on demand against
 // the primary-source stores (request store, conversation store), not copies of
-// any content.
+// any content. JSON-only: origin is never YAML-serialized (its Spec field is
+// `yaml:"-"`), and the overlay that persists it is JSON.
 type OriginInfo struct {
 	// RequestID is the model request (r_…) whose turn authored the definition.
-	RequestID string `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 	// ConversationID is the conversation that turn belonged to.
-	ConversationID string `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
 	// CreatedByLoopID is the live loop ID that ran the authoring turn.
-	CreatedByLoopID string `yaml:"created_by_loop_id,omitempty" json:"created_by_loop_id,omitempty"`
+	CreatedByLoopID string `json:"created_by_loop_id,omitempty"`
 	// CreatedAt is when the definition was first committed.
-	CreatedAt time.Time `yaml:"created_at,omitempty" json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 // Clone returns a copy of the origin (or nil). OriginInfo holds only value

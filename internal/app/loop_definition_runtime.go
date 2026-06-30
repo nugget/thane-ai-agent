@@ -705,13 +705,20 @@ func (a *App) commitLoopDefinition(ctx context.Context, spec looppkg.Spec, updat
 }
 
 // authoritativeOrigin returns the creation provenance to stamp on a definition
-// being committed. It preserves the original creation provenance across updates
-// and replaces by carrying forward any origin already on the stored definition;
-// only a genuinely new definition is stamped fresh from the authoring turn's
-// context (nil when there is no authoring identity).
+// being committed. Existence is the discriminator: if the name already exists in
+// the registry, its stored origin is carried forward unchanged — including none
+// at all, for config-sourced or pre-C2 definitions that never recorded one. An
+// edit or replace must never be recorded as the creation, so an existing
+// definition is never re-stamped from the editing turn. Only a genuinely new
+// name is stamped fresh from the authoring turn's context (nil when there is no
+// authoring identity).
+//
+// Startup hydration loads persisted definitions straight into the registry via
+// loopDefinitionStore.LoadInto, bypassing this chokepoint, so a persisted origin
+// is never seen by — and so never wiped by — this path on restart.
 func (a *App) authoritativeOrigin(ctx context.Context, name string, now time.Time) *looppkg.OriginInfo {
 	if a.loopDefinitionRegistry != nil {
-		if existing, ok := a.loopDefinitionRegistry.Get(name); ok && existing.Origin != nil {
+		if existing, ok := a.loopDefinitionRegistry.Get(name); ok {
 			return existing.Origin.Clone()
 		}
 	}
