@@ -45,6 +45,7 @@ type specJSON struct {
 	Metadata          map[string]string   `json:"metadata,omitempty"`
 	ParentID          string              `json:"parent_id,omitempty"`
 	ParentName        string              `json:"parent_name,omitempty"`
+	Origin            *OriginInfo         `json:"origin,omitempty"`
 
 	// Legacy top-level fields, accepted on UnmarshalJSON for backwards
 	// compatibility with persisted overlay specs written before the
@@ -93,6 +94,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Metadata:          s.Metadata,
 		ParentID:          s.ParentID,
 		ParentName:        s.ParentName,
+		Origin:            s.Origin.Clone(),
 	}
 	onRetrigger, err := s.OnRetrigger.MarshalText()
 	if err != nil {
@@ -173,6 +175,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Metadata:         cloneStringMap(wire.Metadata),
 		ParentID:         wire.ParentID,
 		ParentName:       wire.ParentName,
+		Origin:           wire.Origin.Clone(),
 	}
 	profileData, err := json.Marshal(wire.Profile)
 	if err != nil {

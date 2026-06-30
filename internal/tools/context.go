@@ -18,6 +18,7 @@ const hintsKey contextKey = "hints"
 const loopIDKey contextKey = "loop_id"
 const channelBindingKey contextKey = "channel_binding"
 const inheritableCapabilityTagsKey contextKey = "inheritable_capability_tags"
+const requestIDKey contextKey = "request_id"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -31,6 +32,22 @@ func ConversationIDFromContext(ctx context.Context) string {
 		return id
 	}
 	return "default"
+}
+
+// WithRequestID adds the model request ID (r_…) of the current turn to the
+// context, so a tool can record which request authored a side effect (e.g. loop
+// origin provenance, #1106 C2).
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey, id)
+}
+
+// RequestIDFromContext extracts the model request ID from the context, or ""
+// when none is set (e.g. outside a model turn).
+func RequestIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(requestIDKey).(string); ok {
+		return id
+	}
+	return ""
 }
 
 // WithSessionID adds the archive session ID to the context. This allows
