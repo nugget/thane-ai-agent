@@ -761,6 +761,40 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 .spec-output__purpose { font-size: 12px; line-height: 1.4; color: var(--text-secondary); margin-top: 3px; }
 
+/* Shared bordered section chrome — recent turns, and any block that wants the
+   spec/tooling look + a mode hamburger, on one presentation codepath. */
+.insp-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: clamp(0.55rem, 1.25vw, 0.85rem);
+}
+.insp-section__head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.insp-section__heading { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.insp-section__title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.insp-section__meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.insp-section__controls { margin-left: auto; flex-shrink: 0; display: inline-flex; }
+.insp-section__summary { font-size: 12px; line-height: 1.45; color: var(--text-secondary); }
+
+/* Drag-to-reorder: the content blocks below the pinned header live in
+   .insp-reorder; each gets a hover-reveal grip in the panel's left padding
+   gutter. The grip is absolute (header-agnostic) so it works for every block. */
+.insp-reorder { display: flex; flex-direction: column; gap: 0.75rem; }
+.insp-reorder > .insp-block { margin-bottom: 0; }
+.insp-block { position: relative; }
+.insp-grip {
+  position: absolute; top: 0; bottom: 0; left: -10px; width: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; padding: 0;
+  color: var(--text-muted); opacity: 0; cursor: grab;
+  transition: opacity 0.15s, color 0.15s; touch-action: none;
+}
+.insp-block:hover > .insp-grip { opacity: 0.4; }
+.insp-grip:hover { opacity: 0.95; color: var(--text-secondary); }
+.insp-grip:active { cursor: grabbing; }
+.insp-grip__icon { width: 11px; height: 15px; fill: currentColor; }
+.insp-block--dragging { opacity: 0.6; outline: 1px dashed var(--border-light); outline-offset: 2px; }
+
 /* Live tool feed — in-situ transcript of a running loop's tool calls. */
 .live-feed { padding: 12px 16px; border-bottom: 0.5px solid var(--border); background: var(--accent-dim); }
 .live-feed__head { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
@@ -790,10 +824,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .live-tool__result { color: var(--text-secondary); }
 .live-tool__result--error { color: var(--red); }
 
-/* Iteration small multiples — last ~10 turns on a shared scale, so a slow or
-   token-heavy turn spikes against uniform neighbors. */
-.iter-strip { padding: 12px 16px; border-bottom: 0.5px solid var(--border); }
-.iter-strip__head { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+/* Iteration small multiples — recent turns on a shared scale, so a slow or
+   token-heavy turn spikes against uniform neighbors. Box chrome comes from the
+   shared .insp-section; only the rows are styled here. */
 .iter-row {
   display: grid; grid-template-columns: 36px 48px 1fr 1.4fr 40px;
   align-items: center; gap: 8px; height: 12px; margin-bottom: 4px;

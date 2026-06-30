@@ -32,6 +32,7 @@ const state = {
   conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
   loopDefs: new Map(),            // loop name -> { status, def, at } cached /v1/loop-definitions
   specMode: new Map(),            // loop name -> 'summary' | 'brief' | 'verbose' spec view
+  recentMode: new Map(),          // loop id   -> 'summary' | 'brief' | 'verbose' recent-turns view
 };
 
 const MAX_EVENTS = 50;
@@ -4186,71 +4187,105 @@ function renderLoopGlanceHeader(loop) {
 function renderIterationStrip(loop) {
   const history = state.iterationHistory.get(loop.id) || [];
   if (history.length === 0) return null;
-  const rows = history.slice(0, 10); // newest-first
+  const mode = sectionViewMode(state.recentMode, loop.id);
+  const rows = history.slice(0, mode === 'verbose' ? 30 : 10); // newest-first
   const maxElapsed = Math.max(1, ...rows.map((s) => s.elapsed_ms || 0));
   const maxTokens = Math.max(1, ...rows.map((s) => (s.input_tokens || 0) + (s.output_tokens || 0)));
 
   const section = document.createElement('section');
-  section.className = 'iter-strip';
+  section.className = 'insp-section iter-strip';
+
   const head = document.createElement('div');
-  head.className = 'iter-strip__head';
-  head.textContent = 'recent turns';
+  head.className = 'insp-section__head';
+  const heading = document.createElement('div');
+  heading.className = 'insp-section__heading';
+  const title = document.createElement('span');
+  title.className = 'insp-section__title';
+  title.textContent = 'recent turns';
+  heading.appendChild(title);
+  const meta = document.createElement('span');
+  meta.className = 'insp-section__meta';
+  const newest = history[0];
+  meta.textContent = [
+    formatNumber(history.length) + (history.length === 1 ? ' turn' : ' turns'),
+    newest && newest.elapsed_ms ? 'last ' + formatDuration(newest.elapsed_ms) : null,
+  ].filter(Boolean).join('  ·  ');
+  heading.appendChild(meta);
+  head.appendChild(heading);
+  head.appendChild(makeSectionModeControl(mode, 'Recent turns', (nm) => state.recentMode.set(loop.id, nm)));
   section.appendChild(head);
 
-  for (const s of rows) {
-    const row = document.createElement('div');
-    row.className = 'iter-row';
-
-    // Hover reveals the wall-clock when (kept off the row to stay compact): when
-    // it started, how long ago, and the duration that's already shown inline.
-    const startRaw = s.started_at || s.completed_at;
+  // Summary: just an aggregate line — the newest turn's model and when it ran.
+  if (mode === 'summary') {
+    const startRaw = newest && (newest.started_at || newest.completed_at);
     const startDate = startRaw ? new Date(startRaw) : null;
-    if (startDate && !isNaN(startDate)) {
-      const durTxt = s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : '';
-      row.title = `#${s.number || '?'} · ran ${formatWhen(startDate)} (${timeAgo(startDate)})${durTxt}`;
-    }
-
-    const num = document.createElement('span');
-    num.className = 'iter-num';
-    num.textContent = '#' + (s.number || '');
-    row.appendChild(num);
-
-    const model = document.createElement('span');
-    model.className = 'iter-model';
-    model.textContent = s.model ? shortModelName(s.model) : '';
-    row.appendChild(model);
-
-    const tokBar = document.createElement('div');
-    tokBar.className = 'iter-bar iter-bar--tokens';
-    const inTok = s.input_tokens || 0;
-    const outTok = s.output_tokens || 0;
-    if (inTok + outTok > 0) {
-      const inEl = document.createElement('span');
-      inEl.className = 'iter-tok-in';
-      inEl.style.width = ((inTok / maxTokens) * 100) + '%';
-      tokBar.appendChild(inEl);
-      const outEl = document.createElement('span');
-      outEl.className = 'iter-tok-out';
-      outEl.style.width = ((outTok / maxTokens) * 100) + '%';
-      tokBar.appendChild(outEl);
-    }
-    row.appendChild(tokBar);
-
-    const elBar = document.createElement('div');
-    elBar.className = 'iter-bar iter-bar--elapsed';
-    const elFill = document.createElement('span');
-    elFill.style.width = (((s.elapsed_ms || 0) / maxElapsed) * 100) + '%';
-    elBar.appendChild(elFill);
-    row.appendChild(elBar);
-
-    const dur = document.createElement('span');
-    dur.className = 'iter-dur';
-    dur.textContent = s.elapsed_ms ? formatDuration(s.elapsed_ms) : '';
-    row.appendChild(dur);
-
-    section.appendChild(row);
+    const note = document.createElement('div');
+    note.className = 'insp-section__summary';
+    note.textContent = [
+      newest && newest.model ? 'on ' + shortModelName(newest.model) : null,
+      startDate && !isNaN(startDate) ? 'last ran ' + timeAgo(startDate) : null,
+    ].filter(Boolean).join('  ·  ') || 'No turn detail yet.';
+    section.appendChild(note);
+    return section;
   }
+
+  for (const s of rows) section.appendChild(buildIterRow(s, maxElapsed, maxTokens));
   return section;
+}
+
+// buildIterRow renders one small-multiple row: number, model, token bar, elapsed
+// bar, duration. Hover reveals the wall-clock when it ran (kept off the row to
+// stay compact): when it started, how long ago, and the duration shown inline.
+function buildIterRow(s, maxElapsed, maxTokens) {
+  const row = document.createElement('div');
+  row.className = 'iter-row';
+
+  const startRaw = s.started_at || s.completed_at;
+  const startDate = startRaw ? new Date(startRaw) : null;
+  if (startDate && !isNaN(startDate)) {
+    const durTxt = s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : '';
+    row.title = `#${s.number || '?'} · ran ${formatWhen(startDate)} (${timeAgo(startDate)})${durTxt}`;
+  }
+
+  const num = document.createElement('span');
+  num.className = 'iter-num';
+  num.textContent = '#' + (s.number || '');
+  row.appendChild(num);
+
+  const model = document.createElement('span');
+  model.className = 'iter-model';
+  model.textContent = s.model ? shortModelName(s.model) : '';
+  row.appendChild(model);
+
+  const tokBar = document.createElement('div');
+  tokBar.className = 'iter-bar iter-bar--tokens';
+  const inTok = s.input_tokens || 0;
+  const outTok = s.output_tokens || 0;
+  if (inTok + outTok > 0) {
+    const inEl = document.createElement('span');
+    inEl.className = 'iter-tok-in';
+    inEl.style.width = ((inTok / maxTokens) * 100) + '%';
+    tokBar.appendChild(inEl);
+    const outEl = document.createElement('span');
+    outEl.className = 'iter-tok-out';
+    outEl.style.width = ((outTok / maxTokens) * 100) + '%';
+    tokBar.appendChild(outEl);
+  }
+  row.appendChild(tokBar);
+
+  const elBar = document.createElement('div');
+  elBar.className = 'iter-bar iter-bar--elapsed';
+  const elFill = document.createElement('span');
+  elFill.style.width = (((s.elapsed_ms || 0) / maxElapsed) * 100) + '%';
+  elBar.appendChild(elFill);
+  row.appendChild(elBar);
+
+  const dur = document.createElement('span');
+  dur.className = 'iter-dur';
+  dur.textContent = s.elapsed_ms ? formatDuration(s.elapsed_ms) : '';
+  row.appendChild(dur);
+
+  return row;
 }
 
 // formatToolPayload renders a tool's args/result for the live feed — a JSON
@@ -4405,16 +4440,152 @@ function ensureLoopDef(name) {
     });
 }
 
-// Spec view modes mirror the schema cards' title/widget/full ladder so the
-// hamburger reads the same: summary = head only, brief = collapsed field
-// whispers, verbose = full bodies inline. The icon maps onto the shared
+// Section view modes mirror the schema cards' title/widget/full ladder so every
+// hamburger reads the same: summary = head only, brief = collapsed, verbose =
+// expanded. Shared by the spec and recent-turns sections; the icon maps onto the
 // schema-card glyphs (1 / 2 / 3 bars).
-const SPEC_MODES = ['summary', 'brief', 'verbose'];
-const SPEC_MODE_ICON = { summary: 'title', brief: 'widget', verbose: 'full' };
+const SECTION_VIEW_MODES = ['summary', 'brief', 'verbose'];
+const SECTION_VIEW_ICON = { summary: 'title', brief: 'widget', verbose: 'full' };
 
-function nextSpecMode(mode) {
-  const i = SPEC_MODES.indexOf(SPEC_MODES.includes(mode) ? mode : 'brief');
-  return SPEC_MODES[(i + 1) % SPEC_MODES.length];
+function nextSectionViewMode(mode) {
+  const i = SECTION_VIEW_MODES.indexOf(SECTION_VIEW_MODES.includes(mode) ? mode : 'brief');
+  return SECTION_VIEW_MODES[(i + 1) % SECTION_VIEW_MODES.length];
+}
+
+function sectionViewMode(store, key) {
+  return SECTION_VIEW_MODES.includes(store.get(key)) ? store.get(key) : 'brief';
+}
+
+// makeSectionModeControl builds the right-aligned hamburger that cycles a
+// section summary → brief → verbose, reusing the schema-card control look and
+// glyph. onCycle receives the next mode. The re-render is forced through the
+// hover/interaction defer gate — a plain renderDetail() is suppressed while the
+// pointer is over the control and would only paint on mouse-out.
+function makeSectionModeControl(mode, label, onCycle) {
+  const controls = document.createElement('div');
+  controls.className = 'insp-section__controls';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'schema-card__control';
+  btn.innerHTML = makeSchemaCardModeIcon(SECTION_VIEW_ICON[mode]);
+  const nm = nextSectionViewMode(mode);
+  btn.title = label + ' view: ' + mode + '. Click for ' + nm;
+  btn.setAttribute('aria-label', label + ' view: ' + mode + '. Click for ' + nm);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onCycle(nm);
+    bumpDetailInteractionHold(180);
+    requestAnimationFrame(() => {
+      try { renderDetail({ force: true }); } catch (err) { console.error('section mode renderDetail:', err); }
+    });
+  });
+  controls.appendChild(btn);
+  return controls;
+}
+
+// --- Inspector block reordering -------------------------------------------
+// The content blocks below the pinned glance header + live feed are drag-to-
+// reorderable. Order is a single global layout preference (not per-loop),
+// persisted to localStorage — it survives across browser sessions for free.
+const INSPECTOR_ORDER_KEY = 'thane.inspector.blockOrder';
+const INSPECTOR_DEFAULT_ORDER = ['recent', 'current-turn', 'spec', 'tooling', 'execution', 'profile'];
+
+function loadInspectorOrder() {
+  try {
+    const raw = localStorage.getItem(INSPECTOR_ORDER_KEY);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : null;
+  } catch (e) { return null; }
+}
+
+function saveInspectorOrder(keys) {
+  try { localStorage.setItem(INSPECTOR_ORDER_KEY, JSON.stringify(keys)); } catch (e) { /* private mode / no storage */ }
+}
+
+// orderInspectorBlocks lays the available {key,el} blocks out in the saved
+// order. Keys present this render but absent from the saved order (e.g. the
+// current-turn card, which only exists on conversation loops, when the order was
+// last saved from a loop without one) are spliced in next to their default-order
+// neighbor — not dumped at the end — so they land somewhere sensible.
+function orderInspectorBlocks(blocks) {
+  const saved = loadInspectorOrder() || [];
+  const present = new Set(blocks.map((b) => b.key));
+  const result = saved.filter((k) => present.has(k));
+  const placed = new Set(result);
+  for (const key of INSPECTOR_DEFAULT_ORDER) {
+    if (!present.has(key) || placed.has(key)) continue;
+    const di = INSPECTOR_DEFAULT_ORDER.indexOf(key);
+    let insertAt = result.length;
+    for (let i = di - 1; i >= 0; i--) {
+      const idx = result.indexOf(INSPECTOR_DEFAULT_ORDER[i]);
+      if (idx !== -1) { insertAt = idx + 1; break; }
+    }
+    result.splice(insertAt, 0, key);
+    placed.add(key);
+  }
+  for (const b of blocks) if (!placed.has(b.key)) { result.push(b.key); placed.add(b.key); }
+  const byKey = new Map(blocks.map((b) => [b.key, b]));
+  return result.map((k) => byKey.get(k)).filter(Boolean);
+}
+
+let inspectorDrag = null;
+
+// makeReorderable tags a content block with its stable key and a hover-reveal
+// drag grip in the left gutter. The grip is header-agnostic (absolute, in the
+// panel's left padding) so it works for every block regardless of internal
+// chrome — schema card, custom section, or turn card.
+function makeReorderable(key, el) {
+  el.classList.add('insp-block');
+  el.dataset.blockKey = key;
+  const grip = document.createElement('button');
+  grip.type = 'button';
+  grip.className = 'insp-grip';
+  grip.title = 'Drag to reorder';
+  grip.setAttribute('aria-label', 'Drag to reorder this section');
+  grip.innerHTML = '<svg viewBox="0 0 12 16" aria-hidden="true" class="insp-grip__icon">'
+    + '<circle cx="4" cy="4" r="1"/><circle cx="8" cy="4" r="1"/>'
+    + '<circle cx="4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/>'
+    + '<circle cx="4" cy="12" r="1"/><circle cx="8" cy="12" r="1"/></svg>';
+  grip.addEventListener('pointerdown', (e) => startInspectorDrag(e, el));
+  el.appendChild(grip);
+  return el;
+}
+
+function startInspectorDrag(e, el) {
+  if (e.button != null && e.button !== 0) return;
+  const container = el.parentElement;
+  if (!container) return;
+  e.preventDefault();
+  e.stopPropagation();
+  // Capture the pointer so pointerup lands even if released outside the panel.
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+  el.classList.add('insp-block--dragging');
+  bumpDetailInteractionHold(60000); // freeze the re-render for the whole gesture
+  const onMove = (ev) => {
+    if (!el.isConnected) return; // a re-render slipped through and detached us
+    const siblings = Array.from(container.querySelectorAll(':scope > .insp-block:not(.insp-block--dragging)'));
+    let before = null;
+    for (const s of siblings) {
+      const r = s.getBoundingClientRect();
+      if (ev.clientY < r.top + r.height / 2) { before = s; break; }
+    }
+    if (before) container.insertBefore(el, before);
+    else container.appendChild(el);
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    el.classList.remove('insp-block--dragging');
+    const order = Array.from(container.querySelectorAll(':scope > .insp-block'))
+      .map((b) => b.dataset.blockKey).filter(Boolean);
+    saveInspectorOrder(order);
+    inspectorDrag = null;
+    bumpDetailInteractionHold(200);
+  };
+  inspectorDrag = { el, onMove, onUp };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
 }
 
 // renderLoopSpecSection surfaces the loop's stored DEFINITION — what the loop
@@ -4477,33 +4648,9 @@ function renderLoopSpecSection(loop) {
     return section;
   }
 
-  // Hamburger toggle — reuses the schema-card control look + glyph, cycling the
-  // whole section's disclosure. Lives in the head, right-aligned.
-  const mode = SPEC_MODES.includes(state.specMode.get(name)) ? state.specMode.get(name) : 'brief';
-  const controls = document.createElement('div');
-  controls.className = 'loop-spec__controls';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'schema-card__control';
-  btn.innerHTML = makeSchemaCardModeIcon(SPEC_MODE_ICON[mode]);
-  const nm = nextSpecMode(mode);
-  btn.title = 'Spec view: ' + mode + '. Click for ' + nm;
-  btn.setAttribute('aria-label', 'Spec view: ' + mode + '. Click for ' + nm);
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    state.specMode.set(name, nextSpecMode(mode));
-    // Force the re-render through the hover/interaction defer gate (see
-    // withPreservedDetailScroll). A plain renderDetail() is suppressed while the
-    // pointer is over the control, so the new mode wouldn't paint until mouse-
-    // out — the same path the schema-card controls take via applySchemaCardPreset.
-    bumpDetailInteractionHold(180);
-    requestAnimationFrame(() => {
-      try { renderDetail({ force: true }); } catch (err) { console.error('spec mode renderDetail:', err); }
-    });
-  });
-  controls.appendChild(btn);
-  head.appendChild(controls);
+  // Hamburger toggle — the shared section control cycling summary/brief/verbose.
+  const mode = sectionViewMode(state.specMode, name);
+  head.appendChild(makeSectionModeControl(mode, 'Spec', (nm) => state.specMode.set(name, nm)));
 
   // Summary: head + a one-line census of what the spec carries, nothing more.
   if (mode === 'summary') {
@@ -4693,22 +4840,21 @@ function renderLoopEntityDetail(loop) {
   detailEntity.appendChild(renderLoopGlanceHeader(loop));
 
   // Live tool feed — the in-situ window into a running loop, directly under the
-  // header so it's the first thing you read while watching a loop work.
+  // header so it's the first thing you read while watching a loop work. Pinned
+  // (along with the glance header); only the content blocks below reorder.
   const liveFeed = renderLiveToolFeed(loop);
   if (liveFeed) detailEntity.appendChild(liveFeed);
 
-  const iterStrip = renderIterationStrip(loop);
-  if (iterStrip) detailEntity.appendChild(iterStrip);
+  // Content blocks below the header are drag-to-reorderable; collect them with
+  // stable keys and lay them out per the saved order at the end.
+  const blocks = [];
+  const pushBlock = (key, el) => { if (el) blocks.push({ key, el }); };
 
-  if (conversationBacked) {
-    detailEntity.appendChild(renderLoopCurrentTurnCard(loop, entity, currentConversation));
-  }
-
+  pushBlock('recent', renderIterationStrip(loop));
+  if (conversationBacked) pushBlock('current-turn', renderLoopCurrentTurnCard(loop, entity, currentConversation));
   // Spec — what the loop IS (prompt, supervisor review, declared outputs), from
-  // the definition registry. Sits above tooling/execution: definitional context
-  // before runtime stats. Lazy-loads; renders a placeholder until it arrives.
-  const specSection = renderLoopSpecSection(loop);
-  if (specSection) detailEntity.appendChild(specSection);
+  // the definition registry. Lazy-loads; renders a placeholder until it arrives.
+  pushBlock('spec', renderLoopSpecSection(loop));
 
   const identity = makeSchemaCard('Identity', 'Role in the graph', {
     entityKind: entity.kind,
@@ -4867,7 +5013,7 @@ function renderLoopEntityDetail(loop) {
     if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
   }
 
-  if (toolingSection) detailEntity.appendChild(toolingSection);
+  pushBlock('tooling', toolingSection);
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
     key: 'activity',
@@ -4935,16 +5081,19 @@ function renderLoopEntityDetail(loop) {
   activity.body.appendChild(timeline);
 
   // Tier 0: the hero / identity / relationship cards are subsumed by the glance
-  // header above. The remaining cards are Tier 1/2 fodder, kept until those
-  // slices rework them (their builds are pruned then).
-  if (conversationBacked) {
-    detailEntity.appendChild(execution.card);
-    detailEntity.appendChild(profile.card);
-    return;
-  }
+  // header above. Execution + Profile are Tier 1/2 fodder, kept until those
+  // slices rework them (the activity card is built for its parts but not shown).
+  pushBlock('execution', execution.card);
+  pushBlock('profile', profile.card);
 
-  detailEntity.appendChild(execution.card);
-  detailEntity.appendChild(profile.card);
+  // Lay the content blocks out in the user's saved order, each wrapped with a
+  // drag grip, inside a reorder container below the pinned header + live feed.
+  const reorder = document.createElement('div');
+  reorder.className = 'insp-reorder';
+  for (const { key, el } of orderInspectorBlocks(blocks)) {
+    reorder.appendChild(makeReorderable(key, el));
+  }
+  detailEntity.appendChild(reorder);
 }
 
 function buildLoopContextMenu(loop) {
