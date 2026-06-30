@@ -840,6 +840,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .iter-tok-out { background: var(--border-light); height: 100%; }
 .iter-bar--elapsed > span { background: var(--accent); height: 100%; display: block; border-radius: 1px; }
 .iter-dur { color: var(--text-muted); text-align: right; }
+/* A turn row that records a request_id is a link to its request-detail pane. */
+.iter-row--clickable {
+  cursor: pointer; border-radius: 3px;
+  margin-left: -4px; margin-right: -4px; padding-left: 4px; padding-right: 4px;
+}
+.iter-row--clickable:hover { background: var(--bg-hover); }
+.iter-row--clickable:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+.iter-row--clickable .iter-num { color: var(--accent); }
 
 .inspector-utility-bar {
   display: flex;

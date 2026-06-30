@@ -4242,9 +4242,27 @@ function buildIterRow(s, maxElapsed, maxTokens) {
 
   const startRaw = s.started_at || s.completed_at;
   const startDate = startRaw ? new Date(startRaw) : null;
-  if (startDate && !isNaN(startDate)) {
-    const durTxt = s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : '';
-    row.title = `#${s.number || '?'} · ran ${formatWhen(startDate)} (${timeAgo(startDate)})${durTxt}`;
+  const whenTxt = (startDate && !isNaN(startDate))
+    ? `ran ${formatWhen(startDate)} (${timeAgo(startDate)})${s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : ''}`
+    : '';
+
+  // Click a row to open that turn's request detail pane — same path as the live
+  // `req:` chip (window.onRequestChipClick → showRequestDetail, which fetches
+  // /v1/requests/{id} and closes gracefully if the request was evicted). Only
+  // when the turn recorded a request_id and the handler is wired (graph context).
+  const inspectable = s.request_id && typeof window.onRequestChipClick === 'function';
+  if (inspectable) {
+    row.classList.add('iter-row--clickable');
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.title = `inspect request ${shortID(s.request_id)}${whenTxt ? ' · ' + whenTxt : ''}`;
+    const open = () => window.onRequestChipClick(s.request_id);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  } else if (whenTxt) {
+    row.title = `#${s.number || '?'} · ${whenTxt}`;
   }
 
   const num = document.createElement('span');
