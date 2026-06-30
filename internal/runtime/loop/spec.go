@@ -296,6 +296,42 @@ type Spec struct {
 	// Today only container parents are honored (children of services
 	// have no inheritance semantics).
 	ParentName string `yaml:"parent_name,omitempty" json:"parent_name,omitempty"`
+
+	// Origin is the creation provenance of this definition: pointers (plain
+	// foreign keys) back to the request, conversation, and loop that authored
+	// it, plus when. Runtime-stamped at the durable commit chokepoint (#1106
+	// C2) and authoritative — a model-supplied origin is overwritten, and the
+	// original creation provenance is preserved across later updates/replaces.
+	// Resolved on demand against the request/conversation stores; no turn
+	// snapshot is stored here. Nil for definitions authored outside a runtime
+	// authoring context (e.g. config-sourced loops).
+	Origin *OriginInfo `yaml:"origin,omitempty" json:"origin,omitempty"`
+}
+
+// OriginInfo records who/what/when created a loop definition — pointer-only
+// provenance (#1106 C2). The ids are foreign keys resolved on demand against
+// the primary-source stores (request store, conversation store), not copies of
+// any content.
+type OriginInfo struct {
+	// RequestID is the model request (r_…) whose turn authored the definition.
+	RequestID string `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	// ConversationID is the conversation that turn belonged to.
+	ConversationID string `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	// CreatedByLoopID is the live loop ID that ran the authoring turn.
+	CreatedByLoopID string `yaml:"created_by_loop_id,omitempty" json:"created_by_loop_id,omitempty"`
+	// CreatedAt is when the definition was first committed.
+	CreatedAt time.Time `yaml:"created_at,omitempty" json:"created_at,omitempty"`
+}
+
+// Clone returns a copy of the origin (or nil). OriginInfo holds only value
+// types, so a shallow copy is a deep copy; the method exists to make the
+// preserve-across-update intent explicit at call sites.
+func (o *OriginInfo) Clone() *OriginInfo {
+	if o == nil {
+		return nil
+	}
+	cp := *o
+	return &cp
 }
 
 // IsZero reports whether the spec is the zero value (no fields set).

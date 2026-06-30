@@ -1096,6 +1096,11 @@ archivist:
 #         category: observer
 #       parent_id: ""
 #       parent_name: ""
+#       origin:
+#         request_id: ""
+#         conversation_id: ""
+#         created_by_loop_id: ""
+#         created_at: {}
 #
 # (optional) Debug configures diagnostic options for inspecting the assembled
 # debug:

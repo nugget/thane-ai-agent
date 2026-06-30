@@ -2250,6 +2250,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 			toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 			toolCtx = tools.WithIterationIndex(toolCtx, i)
+			toolCtx = tools.WithRequestID(toolCtx, requestID)
 			if lid := loop.LoopIDFromContext(ctx); lid != "" {
 				toolCtx = tools.WithLoopID(toolCtx, lid)
 			} else if lid := req.RoutingFactors["loop_id"]; lid != "" {
