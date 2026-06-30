@@ -79,13 +79,16 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		if source != "" && string(def.Source) != source {
 			continue
 		}
-		if operation != "" && string(def.Spec.Operation) != operation {
+		// Filter against the canonical projected values the client sees in
+		// results (e.g. an unset spec operation surfaces as "request_reply"),
+		// not the raw spec, so a filter matches what it returns.
+		if operation != "" && (def.Loop == nil || def.Loop.Operation != operation) {
 			continue
 		}
-		if completion != "" && string(def.Spec.Completion) != completion {
+		if completion != "" && (def.Loop == nil || def.Loop.Completion != completion) {
 			continue
 		}
-		if policyState != "" && string(def.PolicyState) != policyState {
+		if policyState != "" && (def.Loop == nil || def.Loop.PolicyState != policyState) {
 			continue
 		}
 		if eligibleFilter != "" {
@@ -102,14 +105,17 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		}
 		if runtimeState != "" {
 			currentRuntimeState := "not_running"
-			if def.Runtime.Running {
-				currentRuntimeState = strings.ToLower(string(def.Runtime.State))
+			if def.Loop != nil && def.Loop.Running {
+				currentRuntimeState = "running"
+				if def.Loop.State != nil {
+					currentRuntimeState = strings.ToLower(*def.Loop.State)
+				}
 			}
 			if currentRuntimeState != runtimeState {
 				continue
 			}
 		}
-		if query != "" && !loopDefinitionMatchesQuery(def.DefinitionSnapshot, query) {
+		if query != "" && !loopDefinitionMatchesQuery(def, query) {
 			continue
 		}
 		items = append(items, def)
@@ -125,11 +131,14 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 	})
 }
 
-func loopDefinitionMatchesQuery(def looppkg.DefinitionSnapshot, query string) bool {
+func loopDefinitionMatchesQuery(def looppkg.DefinitionView, query string) bool {
 	if strings.Contains(strings.ToLower(def.Name), query) {
 		return true
 	}
 	if strings.Contains(strings.ToLower(def.Spec.Task), query) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(def.Spec.Intent), query) {
 		return true
 	}
 	if strings.Contains(strings.ToLower(def.Spec.Profile.Mission), query) {

@@ -104,22 +104,33 @@ func (s *Server) loopViewResolver(all []looppkg.Status) looppkg.LoopViewResolver
 // active/paused/eligible rather than "ephemeral". Returns nil when no
 // definition registry is wired, which the projector reads as ephemeral.
 func (s *Server) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
-	if s.loopDefinitionView == nil {
+	if s.loopDefinitionRegistry == nil {
 		return nil
 	}
-	view := s.loopDefinitionView()
-	if view == nil {
+	// Take ONE registry snapshot and derive both raw policy (with its UpdatedAt
+	// time, needed to format the delta at the projector's render clock) and the
+	// computed eligibility from it. Reading them from two independent Snapshot()
+	// calls opens a TOCTOU window where a definition deleted between them
+	// surfaces a half-populated join (empty policy_state but HasPolicy=true).
+	snap := s.loopDefinitionRegistry.Snapshot()
+	if snap == nil {
 		return nil
 	}
-	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
+	view := looppkg.BuildDefinitionRegistryView(snap, nil)
+	eligByName := make(map[string]looppkg.DefinitionEligibilityStatus, len(view.Definitions))
 	for _, def := range view.Definitions {
-		out[def.Name] = looppkg.LoopPolicyInfo{
-			State:          string(def.PolicyState),
-			Source:         string(def.PolicySource),
-			Reason:         def.PolicyReason,
-			UpdatedAt:      def.PolicyUpdatedAt,
-			Eligible:       def.Eligibility.Eligible,
-			EligibleReason: def.Eligibility.Reason,
+		eligByName[def.Name] = def.Eligibility
+	}
+	out := make(map[string]looppkg.LoopPolicyInfo, len(snap.Definitions))
+	for _, d := range snap.Definitions {
+		elig := eligByName[d.Name]
+		out[d.Name] = looppkg.LoopPolicyInfo{
+			State:          string(d.PolicyState),
+			Source:         string(d.PolicySource),
+			Reason:         d.PolicyReason,
+			UpdatedAt:      d.PolicyUpdatedAt,
+			Eligible:       elig.Eligible,
+			EligibleReason: elig.Reason,
 			HasPolicy:      true,
 		}
 	}

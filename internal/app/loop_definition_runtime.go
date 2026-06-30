@@ -153,23 +153,19 @@ func (r *loopDefinitionRuntime) definition(name string) (looppkg.DefinitionSnaps
 	return findLoopDefinitionByName(snap, name)
 }
 
-func (r *loopDefinitionRuntime) runtimeStatusByName() map[string]looppkg.DefinitionRuntimeStatus {
+// liveStatusByName returns the full live loop Status for every running loop,
+// keyed by definition name. The full Status (not the old thin runtime summary)
+// carries the economics, error state, and resolved effective_* inheritance the
+// canonical LoopView projection needs, so the view builder no longer re-walks
+// the registry for effective state.
+func (r *loopDefinitionRuntime) liveStatusByName() map[string]looppkg.Status {
 	if r == nil || r.loops == nil {
 		return nil
 	}
-	statuses := make(map[string]looppkg.DefinitionRuntimeStatus)
+	statuses := make(map[string]looppkg.Status)
 	for _, l := range r.loops.List() {
 		st := l.Status()
-		statuses[st.Name] = looppkg.DefinitionRuntimeStatus{
-			Running:    true,
-			LoopID:     st.ID,
-			State:      st.State,
-			StartedAt:  st.StartedAt,
-			LastWakeAt: st.LastWakeAt,
-			Iterations: st.Iterations,
-			Attempts:   st.Attempts,
-			LastError:  st.LastError,
-		}
+		statuses[st.Name] = st
 	}
 	return statuses
 }
@@ -180,8 +176,7 @@ func (r *loopDefinitionRuntime) Snapshot() *looppkg.DefinitionRegistryView {
 	}
 	return looppkg.BuildDefinitionRegistryView(
 		r.definitions.Snapshot(),
-		r.runtimeStatusByName(),
-		looppkg.WithLiveRegistry(r.loops),
+		r.liveStatusByName(),
 	)
 }
 
@@ -760,9 +755,12 @@ func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
 	if a.loopDefinitionRegistry == nil {
 		return nil
 	}
+	// Degenerate fallback (no loop-definition runtime wired): project every
+	// definition as stored-only. The prior WithLiveRegistry path never
+	// populated effective state here either — it gated on a running status that
+	// this nil-runtime build never supplied.
 	return looppkg.BuildDefinitionRegistryView(
 		a.loopDefinitionRegistry.Snapshot(),
 		nil,
-		looppkg.WithLiveRegistry(a.loopRegistry),
 	)
 }

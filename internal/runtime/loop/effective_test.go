@@ -236,7 +236,8 @@ func TestLoopStatusEffectiveEmptyWithoutRegistry(t *testing.T) {
 
 // TestBuildDefinitionRegistryViewPopulatesEffective wires the full
 // path: a running loop plus its container ancestor produce a
-// DefinitionView with Effective populated and carrying provenance.
+// DefinitionView whose canonical Loop view has the effective_*
+// inheritance lists populated and carrying provenance.
 func TestBuildDefinitionRegistryViewPopulatesEffective(t *testing.T) {
 	t.Parallel()
 
@@ -295,12 +296,18 @@ func TestBuildDefinitionRegistryViewPopulatesEffective(t *testing.T) {
 		t.Fatalf("register leaf loop: %v", err)
 	}
 
-	runtimeStatus := map[string]DefinitionRuntimeStatus{
-		"home_automation": {Running: true, LoopID: container.ID()},
-		"morning_brief":   {Running: true, LoopID: leaf.ID()},
+	// Presence in liveByName (keyed by definition name) means the definition
+	// has a running backing loop; the Status carries the effective_*
+	// inheritance lists the live registry populated. Name each Status to its
+	// definition so the view matches by name.
+	containerStatus := container.Status()
+	leafStatus := leaf.Status()
+	liveByName := map[string]Status{
+		"home_automation": containerStatus,
+		"morning_brief":   leafStatus,
 	}
 
-	view := BuildDefinitionRegistryView(defReg.Snapshot(), runtimeStatus, WithLiveRegistry(live))
+	view := BuildDefinitionRegistryView(defReg.Snapshot(), liveByName)
 	if view == nil {
 		t.Fatal("BuildDefinitionRegistryView returned nil")
 	}
@@ -315,21 +322,25 @@ func TestBuildDefinitionRegistryViewPopulatesEffective(t *testing.T) {
 	if leafView == nil {
 		t.Fatal("morning_brief not in view")
 	}
-	if leafView.Effective == nil {
-		t.Fatal("Effective is nil; want populated for running loop")
+	if leafView.Loop == nil {
+		t.Fatal("Loop is nil; BuildDefinitionRegistryView never emits a nil Loop")
 	}
-	if len(leafView.Effective.Tags) != 2 {
-		t.Errorf("Effective.Tags len = %d, want 2: %+v", len(leafView.Effective.Tags), leafView.Effective.Tags)
+	if !leafView.Loop.Running {
+		t.Fatal("Loop.Running = false; want true for a running loop")
 	}
-	if len(leafView.Effective.Subscriptions) != 2 {
-		t.Errorf("Effective.Subscriptions len = %d, want 2: %+v", len(leafView.Effective.Subscriptions), leafView.Effective.Subscriptions)
+	if len(leafView.Loop.EffectiveTags) != 2 {
+		t.Errorf("Loop.EffectiveTags len = %d, want 2: %+v", len(leafView.Loop.EffectiveTags), leafView.Loop.EffectiveTags)
+	}
+	if len(leafView.Loop.EffectiveSubscriptions) != 2 {
+		t.Errorf("Loop.EffectiveSubscriptions len = %d, want 2: %+v", len(leafView.Loop.EffectiveSubscriptions), leafView.Loop.EffectiveSubscriptions)
 	}
 }
 
 // TestBuildDefinitionRegistryViewEffectiveNilWithoutRegistry covers
 // the safe-default branch: callers that build the view from a
-// snapshot alone (CLI tools, lint surfaces) get no Effective field
-// rather than a misleading empty one.
+// snapshot alone (CLI tools, lint surfaces) get a stored-only Loop
+// (Running=false) whose live-only effective_* lists stay nil rather
+// than a misleading empty list.
 func TestBuildDefinitionRegistryViewEffectiveNilWithoutRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -353,8 +364,17 @@ func TestBuildDefinitionRegistryViewEffectiveNilWithoutRegistry(t *testing.T) {
 		t.Fatal("nil view")
 	}
 	for _, dv := range view.Definitions {
-		if dv.Effective != nil {
-			t.Errorf("definition %q has Effective populated without a live registry; want nil", dv.Name)
+		if dv.Loop == nil {
+			t.Fatalf("definition %q has nil Loop; BuildDefinitionRegistryView never emits a nil Loop", dv.Name)
+		}
+		if dv.Loop.Running {
+			t.Errorf("definition %q is Running without a live registry; want stored-only", dv.Name)
+		}
+		if dv.Loop.EffectiveTags != nil {
+			t.Errorf("definition %q has EffectiveTags populated without a live registry; want nil", dv.Name)
+		}
+		if dv.Loop.EffectiveSubscriptions != nil {
+			t.Errorf("definition %q has EffectiveSubscriptions populated without a live registry; want nil", dv.Name)
 		}
 	}
 }

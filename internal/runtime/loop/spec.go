@@ -501,6 +501,7 @@ func (s *Spec) ToConfig() Config {
 		Name:                 ns.Name,
 		Task:                 ns.Task,
 		Intent:               resolveIntent(ns.Intent, ns.Metadata),
+		Origin:               ns.Origin.Clone(),
 		Operation:            ns.Operation,
 		Completion:           ns.Completion,
 		Outputs:              cloneOutputs(ns.Outputs),

@@ -165,6 +165,11 @@ type Config struct {
 	// [Spec.ToConfig] so readers (e.g. LoopView) take a single source.
 	Intent string
 
+	// Origin carries the creation provenance copied from [Spec.Origin] so a
+	// live loop's canonical view (FromStatus) surfaces the same origin a stored
+	// definition does (FromDefinition). Nil for loops with no recorded origin.
+	Origin *OriginInfo
+
 	// Operation describes the runtime pattern expected for the loop.
 	Operation Operation
 
