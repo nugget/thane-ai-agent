@@ -560,8 +560,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .detail-entity {
   display: grid;
+  /* Cap the single column at the panel width: an implicit `auto` track grows
+     to its widest child's min-content, so one wide leaf (a long mono tool name,
+     a nowrap preview, an unbreakable doc path) would push the whole column past
+     the panel and overflow:hidden would clip its right edge. minmax(0, 1fr)
+     pins the track to the container; min-width:0 lets each section shrink into
+     it (text wraps, nowrap leaves ellipsize) instead of forcing it wide. */
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(0.55rem, 1.2vw, 0.85rem);
 }
+
+.detail-entity > * { min-width: 0; }
 
 .detail-entity .detail-card {
   margin-bottom: 0;
@@ -589,6 +598,256 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   color: var(--text-secondary);
   text-wrap: balance;
 }
+
+/* Tier 0 glance header — dense, always-on triage read. */
+.glance-header {
+  padding: 14px 16px 13px;
+  border-bottom: 0.5px solid var(--border);
+  font-size: 13px;
+}
+.glance-id { display: flex; align-items: center; gap: 7px; }
+.glance-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.glance-header[data-state="processing"] .glance-dot { background: var(--accent); }
+.glance-header[data-state="error"]      .glance-dot { background: var(--red); }
+.glance-header[data-state="degraded"]   .glance-dot { background: var(--orange); }
+.glance-header[data-state="supervisor"] .glance-dot { background: var(--purple); }
+.glance-header[data-state="waiting"]    .glance-dot { background: var(--blue); }
+.glance-name { font-weight: 500; font-size: 15px; color: var(--text-primary); }
+.glance-meta {
+  margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62%;
+}
+.glance-alert { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--red); }
+.glance-alert__count { font-weight: 500; }
+.glance-alert__msg {
+  color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.glance-phase {
+  display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 5px 9px;
+  border-radius: 6px; background: var(--accent-dim); color: var(--accent); font-size: 12px;
+}
+.glance-phase--tool { background: var(--orange-dim); color: var(--orange); }
+.glance-phase__elapsed { margin-left: auto; font-family: var(--font-mono); font-weight: 500; }
+.glance-metrics { display: flex; gap: 18px; margin-top: 11px; }
+.glance-metric { min-width: 0; }
+.glance-metric__label { font-size: 11px; color: var(--text-muted); margin-bottom: 1px; }
+.glance-metric__value {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-primary);
+}
+.glance-spark { display: inline-block; vertical-align: middle; }
+.glance-spark polyline { stroke: var(--text-secondary); stroke-width: 1; }
+.glance-fill {
+  width: 64px; height: 8px; background: var(--bg-tertiary);
+  border-radius: 2px; overflow: hidden; flex: none;
+}
+.glance-fill__fill { height: 100%; }
+.glance-fill-label { font-size: 11px; color: var(--text-secondary); }
+
+/* Sleep scrubber — a non-interactive timeline of the loop's sleep cycle. */
+.sleep-scrubber { margin-top: 12px; }
+.sleep-scrubber__label {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px; color: var(--text-muted); margin-bottom: 6px;
+}
+.sleep-scrubber__eta { font-family: var(--font-mono); }
+.sleep-scrubber--overdue .sleep-scrubber__eta { color: var(--red); }
+.sleep-scrubber__track { position: relative; height: 12px; }
+.sleep-scrubber__track::before {
+  content: ''; position: absolute; top: 4px; left: 0; right: 0; height: 4px;
+  border-radius: 2px; background: var(--bg-tertiary);
+}
+.sleep-scrubber__locked {
+  position: absolute; top: 4px; left: 0; height: 4px; border-radius: 2px 0 0 2px;
+  opacity: 0.55;
+  background: repeating-linear-gradient(45deg, var(--text-muted) 0 1px, transparent 1px 3px);
+}
+.sleep-scrubber__fill {
+  position: absolute; top: 4px; left: 0; height: 4px; border-radius: 2px; background: var(--accent);
+}
+.sleep-scrubber--overdue .sleep-scrubber__fill { background: var(--red); }
+.sleep-scrubber__head {
+  position: absolute; top: 2px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); transform: translateX(-4px);
+  box-shadow: 0 0 0 2px var(--bg-tertiary);
+}
+.sleep-scrubber--overdue .sleep-scrubber__head { background: var(--red); }
+.sleep-scrubber__min { position: absolute; top: 1px; width: 1px; height: 10px; background: var(--text-muted); }
+
+/* Tooling — the single shared active-capabilities section (one render path for
+   every loop, conversation-backed or not). */
+.tooling-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: clamp(0.55rem, 1.25vw, 0.85rem);
+  margin-bottom: 0.75rem;
+}
+.tooling-section__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.tooling-section__title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+}
+.tooling-section__counts { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.tooling-section__chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* Loop spec — the stored definition: prompt, supervisor messaging, declared
+   output documents. What the loop IS, vs. the runtime sections' what it DOES. */
+.loop-spec {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: clamp(0.55rem, 1.25vw, 0.85rem);
+  margin-bottom: 0.75rem;
+}
+.loop-spec__head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.loop-spec__heading { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.loop-spec__controls { margin-left: auto; flex-shrink: 0; display: inline-flex; }
+.loop-spec__title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+}
+.loop-spec__meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.loop-spec__empty { font-size: 12px; line-height: 1.45; color: var(--text-secondary); }
+
+.spec-field { border-left: 2px solid var(--border-light); padding: 2px 0 4px 10px; margin-bottom: 9px; }
+.spec-field:last-child { margin-bottom: 0; }
+.spec-field__head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.spec-field__label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+}
+.spec-field__bytes { font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); }
+.spec-field__spacer { flex: 1; }
+.spec-field__btn {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 7px; cursor: pointer;
+}
+.spec-field__btn:hover { color: var(--text-primary); border-color: var(--border-light); }
+.spec-field__btn.is-copied { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.spec-field__preview {
+  font-size: 12px; line-height: 1.4; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.spec-field__body {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.45; margin: 0;
+  color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+  max-height: 22em; overflow-y: auto;
+  background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px;
+}
+
+.spec-outputs { border-left: 2px solid var(--accent-soft); padding: 2px 0 4px 10px; }
+.spec-outputs__label { display: block; margin-bottom: 5px; }
+.spec-output { margin-bottom: 8px; }
+.spec-output:last-child { margin-bottom: 0; }
+.spec-output__refline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.spec-output__root {
+  font-family: var(--font-mono); font-size: 10px; color: var(--accent);
+  background: var(--accent-dim); border-radius: 3px; padding: 0 5px;
+}
+.spec-output__path {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-primary);
+  background: none; border: none; padding: 0; cursor: pointer; text-align: left;
+  overflow-wrap: anywhere;
+}
+.spec-output__path:hover { color: var(--accent); }
+.spec-output__path.is-copied { color: var(--accent); }
+.spec-output__mode {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+}
+.spec-output__tool {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  margin-top: 2px; overflow-wrap: anywhere;
+}
+.spec-output__purpose { font-size: 12px; line-height: 1.4; color: var(--text-secondary); margin-top: 3px; }
+
+/* Shared bordered section chrome — recent turns, and any block that wants the
+   spec/tooling look + a mode hamburger, on one presentation codepath. */
+.insp-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: clamp(0.55rem, 1.25vw, 0.85rem);
+}
+.insp-section__head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.insp-section__heading { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.insp-section__title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.insp-section__meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.insp-section__controls { margin-left: auto; flex-shrink: 0; display: inline-flex; }
+.insp-section__summary { font-size: 12px; line-height: 1.45; color: var(--text-secondary); }
+
+/* Drag-to-reorder: the content blocks below the pinned header live in
+   .insp-reorder; each gets a hover-reveal grip in the panel's left padding
+   gutter. The grip is absolute (header-agnostic) so it works for every block. */
+.insp-reorder { display: flex; flex-direction: column; gap: 0.75rem; }
+.insp-reorder > .insp-block { margin-bottom: 0; }
+.insp-block { position: relative; }
+.insp-grip {
+  position: absolute; top: 0; bottom: 0; left: -10px; width: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; padding: 0;
+  color: var(--text-muted); opacity: 0; cursor: grab;
+  transition: opacity 0.15s, color 0.15s; touch-action: none;
+}
+.insp-block:hover > .insp-grip { opacity: 0.4; }
+.insp-grip:hover { opacity: 0.95; color: var(--text-secondary); }
+.insp-grip:active { cursor: grabbing; }
+.insp-grip__icon { width: 11px; height: 15px; fill: currentColor; }
+.insp-block--dragging { opacity: 0.6; outline: 1px dashed var(--border-light); outline-offset: 2px; }
+
+/* Live tool feed — in-situ transcript of a running loop's tool calls. */
+.live-feed { padding: 12px 16px; border-bottom: 0.5px solid var(--border); background: var(--accent-dim); }
+.live-feed__head { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+.live-feed__dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.live-feed__label { font-size: 12px; font-weight: 500; color: var(--accent); }
+.live-feed__count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.live-feed__idle { font-size: 12px; color: var(--text-secondary); }
+.live-tool { border-left: 2px solid var(--border-light); padding: 4px 0 5px 10px; margin-bottom: 7px; }
+.live-tool:last-child { margin-bottom: 0; }
+.live-tool--running { border-left-color: var(--accent); }
+.live-tool--done { border-left-color: var(--green); }
+.live-tool--error { border-left-color: var(--red); }
+.live-tool__head { display: flex; align-items: baseline; gap: 8px; }
+.live-tool__name { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
+.live-tool__status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.live-tool--running .live-tool__status { color: var(--accent); }
+.live-tool--error .live-tool__status { color: var(--red); }
+.live-tool__args, .live-tool__result {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.35; margin: 4px 0 0;
+  white-space: pre-wrap; word-break: break-word; max-height: 3.4em; overflow: hidden;
+}
+.live-tool__args { color: var(--text-muted); }
+.live-tool__result { color: var(--text-secondary); }
+.live-tool__result--error { color: var(--red); }
+
+/* Iteration small multiples — recent turns on a shared scale, so a slow or
+   token-heavy turn spikes against uniform neighbors. Box chrome comes from the
+   shared .insp-section; only the rows are styled here. */
+.iter-row {
+  display: grid; grid-template-columns: 36px 48px 1fr 1.4fr 40px;
+  align-items: center; gap: 8px; height: 12px; margin-bottom: 4px;
+  font-family: var(--font-mono); font-size: 11px;
+  cursor: help; /* row title reveals the wall-clock when it ran */
+}
+.iter-num { color: var(--text-muted); }
+.iter-model { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iter-bar { height: 7px; background: var(--bg-tertiary); border-radius: 1px; display: flex; gap: 1px; overflow: hidden; }
+.iter-tok-in { background: var(--text-secondary); height: 100%; }
+.iter-tok-out { background: var(--border-light); height: 100%; }
+.iter-bar--elapsed > span { background: var(--accent); height: 100%; display: block; border-radius: 1px; }
+.iter-dur { color: var(--text-muted); text-align: right; }
+/* A turn row that records a request_id is a link to its request-detail pane. */
+.iter-row--clickable {
+  cursor: pointer; border-radius: 3px;
+  margin-left: -4px; margin-right: -4px; padding-left: 4px; padding-right: 4px;
+}
+.iter-row--clickable:hover { background: var(--bg-hover); }
+.iter-row--clickable:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+.iter-row--clickable .iter-num { color: var(--accent); }
 
 .inspector-utility-bar {
   display: flex;

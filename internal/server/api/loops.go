@@ -44,18 +44,21 @@ func (s *Server) handleLoops(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusServiceUnavailable, "loop registry not configured")
 		return
 	}
-	statuses := s.loopRegistry.Statuses()
+	all := s.loopRegistry.Statuses()
+	rows := all
 	if state := strings.TrimSpace(r.URL.Query().Get("state")); state != "" {
-		filtered := make([]looppkg.Status, 0, len(statuses))
-		for _, st := range statuses {
+		filtered := make([]looppkg.Status, 0, len(all))
+		for _, st := range all {
 			if string(st.State) == state {
 				filtered = append(filtered, st)
 			}
 		}
-		statuses = filtered
+		rows = filtered
 	}
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, statuses, s.logger)
+	// The resolver is built over the FULL batch so parent_name/child_count/
+	// ancestry stay correct even when ?state= filtered the returned rows.
+	writeJSON(w, projectLoops(s.loopViewResolver(all), rows), s.logger)
 }
 
 // handleLoop returns one running loop's status snapshot. [GET /v1/loops/{id}]
@@ -74,8 +77,63 @@ func (s *Server) handleLoop(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusNotFound, "loop not found")
 		return
 	}
+	resolver := s.loopViewResolver(s.loopRegistry.Statuses())
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, status, s.logger)
+	writeJSON(w, loopWithView{Status: status, View: resolver.FromStatus(status)}, s.logger)
+}
+
+// loopWithView is a running-loop Status enriched with its canonical LoopView
+// projection (the "ps auxwwww" row) under a `view` key, so the web console
+// speaks the same schedule/structure/economics/policy vocabulary as the
+// model-facing Loops table. Status fields stay promoted (flat) for existing
+// clients; `view` is purely additive.
+type loopWithView struct {
+	looppkg.Status
+	View looppkg.LoopView `json:"view"`
+}
+
+// loopViewResolver builds a LoopView resolver over the full status batch joined
+// to the live definition policy, so one pass resolves parent_name, child_count,
+// ancestry, and policy_state for every projected row.
+func (s *Server) loopViewResolver(all []looppkg.Status) looppkg.LoopViewResolver {
+	return looppkg.NewLoopViewResolver(all, s.loopPolicyByName(), time.Now())
+}
+
+// loopPolicyByName joins each loop name to its stored definition's policy and
+// eligibility from the live registry view, so the projection reports
+// active/paused/eligible rather than "ephemeral". Returns nil when no
+// definition registry is wired, which the projector reads as ephemeral.
+func (s *Server) loopPolicyByName() map[string]looppkg.LoopPolicyInfo {
+	if s.loopDefinitionView == nil {
+		return nil
+	}
+	view := s.loopDefinitionView()
+	if view == nil {
+		return nil
+	}
+	out := make(map[string]looppkg.LoopPolicyInfo, len(view.Definitions))
+	for _, def := range view.Definitions {
+		out[def.Name] = looppkg.LoopPolicyInfo{
+			State:          string(def.PolicyState),
+			Source:         string(def.PolicySource),
+			Reason:         def.PolicyReason,
+			UpdatedAt:      def.PolicyUpdatedAt,
+			Eligible:       def.Eligibility.Eligible,
+			EligibleReason: def.Eligibility.Reason,
+			HasPolicy:      true,
+		}
+	}
+	return out
+}
+
+// projectLoops wraps each row with its LoopView projection using one shared
+// resolver.
+func projectLoops(resolver looppkg.LoopViewResolver, rows []looppkg.Status) []loopWithView {
+	out := make([]loopWithView, len(rows))
+	for i, st := range rows {
+		out[i] = loopWithView{Status: st, View: resolver.FromStatus(st)}
+	}
+	return out
 }
 
 // handleLoopLogs returns log entries scoped to one loop's recent conversation
@@ -182,7 +240,8 @@ func (s *Server) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.eventBus.Subscribe(64)
 	defer s.eventBus.Unsubscribe(ch)
 
-	snapJSON, err := json.Marshal(s.loopRegistry.Statuses())
+	allStatuses := s.loopRegistry.Statuses()
+	snapJSON, err := json.Marshal(projectLoops(s.loopViewResolver(allStatuses), allStatuses))
 	if err != nil {
 		s.logger.Warn("failed to marshal loop snapshot", "error", err)
 		return

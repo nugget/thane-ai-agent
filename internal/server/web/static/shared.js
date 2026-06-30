@@ -50,6 +50,20 @@ function formatTimeShort(date) {
   });
 }
 
+// formatWhen renders an absolute wall-clock instant for hover/detail text:
+// time-of-day (HH:MM:SS) when it happened today, prefixed with the month/day
+// when it didn't — so a long-sleep loop's turns from days ago stay unambiguous.
+// Rendered in the viewer's local timezone.
+function formatWhen(date) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
+  const sameDay = date.toDateString() === new Date().toDateString();
+  if (sameDay) return formatTime(date);
+  return date.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+}
+
 function timeAgo(date) {
   if (!(date instanceof Date) || isNaN(date)) return '';
   const diff = Date.now() - date.getTime();

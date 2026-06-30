@@ -30,6 +30,9 @@ const state = {
   canvasRect: null,          // last observed canvas viewport for responsive graph reflow
   conversationDetails: new Map(), // conversation_id -> derived dashboard summary
   conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
+  loopDefs: new Map(),            // loop name -> { status, def, at } cached /v1/loop-definitions
+  specMode: new Map(),            // loop name -> 'summary' | 'brief' | 'verbose' spec view
+  recentMode: new Map(),          // loop id   -> 'summary' | 'brief' | 'verbose' recent-turns view
 };
 
 const MAX_EVENTS = 50;
@@ -1502,8 +1505,6 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     titleSummary = [
       threadLabel,
       latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
-      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
-      currentLoadedCapabilities.length > 0 ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded` : '',
       activeToolNames.length > 0
         ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
         : `iteration ${iterationLabel} in progress`,
@@ -1512,9 +1513,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     titleSummary = [
       threadLabel,
       formatSchemaToken(entity.stateLabel),
-      'req ' + shortID(entity.latestRequestID),
-      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
-      lastWakeAgo ? 'wake ' + lastWakeAgo : '',
+      'req ' + shortID(entity.latestRequestID),      lastWakeAgo ? 'wake ' + lastWakeAgo : '',
     ].filter(Boolean).join(' · ');
   } else {
     titleSummary = [
@@ -1542,8 +1541,6 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       { label: 'Iteration', value: iterationLabel },
       { label: 'Model', value: latestModelLabel },
       { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
-      currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-      currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
       entity.activeLiveTools.length > 0 ? { label: 'Tools live', value: activeToolSet.join(', ') } : null,
       lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
     ],
@@ -1562,8 +1559,6 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     entity.activeLiveTools.length > 0
       ? { label: 'Tools in flight', value: activeToolSet.join(', ') }
       : { label: 'Thread', value: threadLabel },
-    currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-    currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
   ]);
   if (turnMetrics) card.body.appendChild(turnMetrics);
 
@@ -1592,8 +1587,6 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     { label: 'Model', value: latestModelLabel },
     { label: 'State', value: formatSchemaToken(entity.stateLabel) },
     { label: 'Context', value: contextLabel || 'pending' },
-    { label: 'Loaded capabilities', value: currentLoadedCapabilities.length > 0 ? currentLoadedCapabilities.map((entry) => entry.tag).join(', ') : 'none' },
-    { label: 'Tool surface', value: currentEffectiveTools.length > 0 ? formatNumber(currentEffectiveTools.length) : 'pending' },
     { label: 'Wake', value: lastWakeAgo || 'pending' },
   ];
   for (const item of briefFacts) {
@@ -1612,18 +1605,8 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   brief.appendChild(briefGrid);
   card.body.appendChild(brief);
 
-  const loadedTagsWrap = document.createElement('div');
-  loadedTagsWrap.className = 'schema-subsection';
-  loadedTagsWrap.innerHTML = '<h4 class="schema-subsection__title">Loaded Capabilities</h4>';
-  if (currentLoadedCapabilities.length > 0) {
-    loadedTagsWrap.appendChild(makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
-  } else {
-    const empty = document.createElement('div');
-    empty.className = 'loop-turn-empty';
-    empty.textContent = 'No capabilities are currently loaded for this loop.';
-    loadedTagsWrap.appendChild(empty);
-  }
-  card.body.appendChild(loadedTagsWrap);
+  // Capabilities render once, in the shared renderActiveCapabilities() section —
+  // not duplicated here (this was the conversation-vs-non-conversation divergence).
 
   if (entity.latestRequestID) {
     const requestWrap = document.createElement('div');
@@ -3945,6 +3928,913 @@ function renderSystemEntityDetail(sys) {
   updateSystemUptime();
 }
 
+// ---------------------------------------------------------------------------
+// Tier 0 — the glance header.
+// An always-on, zero-click read that answers what the NODE itself can't already
+// encode: an error STREAK (not just an "error" hue), what the loop is doing
+// right NOW (model phase vs tool phase, ticking), context pressure, and next
+// wake. Replaces the hero / identity / relationship cards. Prefers the
+// loop.view (LoopView) projection and falls back to existing fields when the
+// server hasn't shipped `view` yet, so it degrades cleanly across the deploy.
+
+function glanceMetric(label, fill) {
+  const m = document.createElement('div');
+  m.className = 'glance-metric';
+  const l = document.createElement('div');
+  l.className = 'glance-metric__label';
+  l.textContent = label;
+  m.appendChild(l);
+  const v = document.createElement('div');
+  v.className = 'glance-metric__value';
+  fill(v);
+  m.appendChild(v);
+  return m;
+}
+
+// makeSparkline draws a word-sized trend line from a value series (oldest→newest).
+function makeSparkline(values, w, h) {
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = (max - min) || 1;
+  const n = values.length;
+  const pts = values.map((val, i) => {
+    const x = n > 1 ? (i / (n - 1)) * (w - 2) + 1 : w / 2;
+    const y = h - 1 - ((val - min) / range) * (h - 2);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  const svg = createSVG('svg', { class: 'glance-spark', width: w, height: h, viewBox: '0 0 ' + w + ' ' + h });
+  svg.appendChild(createSVG('polyline', { points: pts, fill: 'none' }));
+  return svg;
+}
+
+// makeFillBar renders a filled-to-ceiling bar, hued by pressure past comfortable.
+function makeFillBar(pct) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const bar = document.createElement('div');
+  bar.className = 'glance-fill';
+  const fill = document.createElement('div');
+  fill.className = 'glance-fill__fill';
+  fill.style.width = clamped + '%';
+  fill.style.background = pct >= 85 ? 'var(--red)' : pct >= 60 ? 'var(--orange)' : 'var(--text-secondary)';
+  bar.appendChild(fill);
+  return bar;
+}
+
+// parseDurationSecs reads a signed-second LoopView string ("5940s", "+5953s",
+// "-12s") into seconds (sign preserved); null when absent/unparseable.
+function parseDurationSecs(str) {
+  if (!str) return null;
+  const m = String(str).match(/^([+-]?)(\d+)s$/);
+  if (!m) return null;
+  return (m[1] === '-' ? -1 : 1) * parseInt(m[2], 10);
+}
+
+// renderSleepScrubber draws the loop's sleep cycle as a non-interactive
+// timeline: a track from 0 to the chosen wake (which sits at the right edge), a
+// hatched locked zone before SleepMin when the loop chose to sleep past it, and
+// a playhead at elapsed crawling toward the wake — clamped to the track and
+// turning red in place at the edge when overdue (it never renders past the
+// right edge). The SleepMax ceiling rides in the label, not the axis. Chosen +
+// elapsed prefer the LoopView projection and fall back to the client's observed
+// sleep timer; bounds come from the loop config (nanoseconds). Returns null
+// when there is no timer sleep to show (event-driven, or no wake data yet).
+function renderSleepScrubber(loop) {
+  if (loop.event_driven) return null;
+  const view = loop.view || {};
+  const cfg = loop.config || {};
+  const ns2s = (ns) => (typeof ns === 'number' && ns > 0) ? ns / 1e9 : null;
+  const minS = parseDurationSecs(view.sleep_min) || ns2s(cfg.SleepMin);
+  const maxS = parseDurationSecs(view.sleep_max) || ns2s(cfg.SleepMax);
+
+  let chosenS = parseDurationSecs(view.current_sleep_duration);
+  const toWakeView = parseDurationSecs(view.next_wake_delta);
+  let toWakeS = toWakeView;
+  let elapsedS = (chosenS != null && toWakeView != null) ? (chosenS - toWakeView) : null;
+  if (chosenS == null) {
+    const timer = state.sleepTimers.get(loop.id);
+    if (timer && timer.durationMs > 0) {
+      chosenS = timer.durationMs / 1000;
+      elapsedS = (Date.now() - timer.startedAt) / 1000;
+      toWakeS = chosenS - elapsedS;
+    }
+  }
+  if (chosenS == null || elapsedS == null || chosenS <= 0) return null;
+
+  // Axis = the chosen sleep (0 → chosen = the wake at the right edge). Anchoring
+  // to the choice rather than SleepMax keeps a short choice from squishing
+  // against a far-larger ceiling; the ceiling rides in the label instead. The
+  // locked zone + min tick draw only when there is a real "can't wake before
+  // SleepMin yet, but chose to sleep past it" gap — otherwise (fixed-interval
+  // pollers where min ≈ chosen) the whole track would read as locked.
+  const pct = (s) => Math.max(0, Math.min(100, (s / chosenS) * 100));
+  const overdue = elapsedS > chosenS + 1;
+  const showMin = minS != null && minS > 0 && minS < chosenS * 0.98;
+  const showMaxLabel = maxS != null && maxS > chosenS * 1.1;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'sleep-scrubber' + (overdue ? ' sleep-scrubber--overdue' : '');
+
+  const label = document.createElement('div');
+  label.className = 'sleep-scrubber__label';
+  const chose = document.createElement('span');
+  chose.textContent = 'chose ' + formatDuration(Math.round(chosenS) * 1000)
+    + (showMaxLabel ? '  ·  max ' + formatDuration(Math.round(maxS) * 1000) : '');
+  label.appendChild(chose);
+  const eta = document.createElement('span');
+  eta.className = 'sleep-scrubber__eta';
+  eta.textContent = overdue
+    ? ('overdue ' + formatDuration(Math.round(elapsedS - chosenS) * 1000))
+    : ('wakes in ' + formatDuration(Math.max(0, Math.round(toWakeS)) * 1000));
+  label.appendChild(eta);
+  wrap.appendChild(label);
+
+  const track = document.createElement('div');
+  track.className = 'sleep-scrubber__track';
+  if (showMin) {
+    const locked = document.createElement('div');
+    locked.className = 'sleep-scrubber__locked';
+    locked.style.width = pct(minS) + '%';
+    track.appendChild(locked);
+  }
+  const fill = document.createElement('div');
+  fill.className = 'sleep-scrubber__fill';
+  fill.style.width = pct(elapsedS) + '%';
+  track.appendChild(fill);
+  const head = document.createElement('div');
+  head.className = 'sleep-scrubber__head';
+  head.style.left = pct(elapsedS) + '%';
+  track.appendChild(head);
+  if (showMin) {
+    const minTick = document.createElement('div');
+    minTick.className = 'sleep-scrubber__min';
+    minTick.style.left = pct(minS) + '%';
+    track.appendChild(minTick);
+  }
+  wrap.appendChild(track);
+
+  return wrap;
+}
+
+function renderLoopGlanceHeader(loop) {
+  const view = loop.view || {};
+  const header = document.createElement('section');
+  header.className = 'glance-header';
+  header.dataset.state = getLoopVisualState(loop);
+
+  // Identity: status dot (hue agrees with the node) + name + mono meta line.
+  const idLine = document.createElement('div');
+  idLine.className = 'glance-id';
+  const dot = document.createElement('span');
+  dot.className = 'glance-dot';
+  idLine.appendChild(dot);
+  const name = document.createElement('span');
+  name.className = 'glance-name';
+  name.textContent = (loop.name || loop.id || '').split('/').pop() || loop.id || 'loop';
+  idLine.appendChild(name);
+  const meta = document.createElement('span');
+  meta.className = 'glance-meta';
+  const model = loop._liveModel || loop._lastModel || (getLoopLatestSnapshot(loop) || {}).model || '';
+  meta.textContent = [shortID(loop.id), describeLoopExecutionMode(loop), model ? shortModelName(model) : null]
+    .filter(Boolean).join('  ·  ');
+  idLine.appendChild(meta);
+  header.appendChild(idLine);
+
+  // Error STREAK — draws nothing at zero (empty is the datum).
+  const errs = loop.consecutive_errors || 0;
+  if (errs > 0) {
+    const alert = document.createElement('div');
+    alert.className = 'glance-alert';
+    const count = document.createElement('span');
+    count.className = 'glance-alert__count';
+    count.textContent = 'errors ' + errs;
+    alert.appendChild(count);
+    if (loop.last_error) {
+      const msg = document.createElement('span');
+      msg.className = 'glance-alert__msg';
+      msg.textContent = truncate(String(loop.last_error).split('\n')[0], 76);
+      msg.title = loop.last_error;
+      alert.appendChild(msg);
+    }
+    header.appendChild(alert);
+  }
+
+  // Live phase badge — only while processing; the model-vs-tool read, erased
+  // when idle. Elapsed ticks from the turn start (per-phase timestamps are a
+  // later slice — this is the whole-turn interim).
+  if (loop.state === 'processing') {
+    const running = (loop._liveTools || []).find((t) => !t.status || t.status === 'running');
+    let label = '';
+    if (running && running.tool) label = 'waiting on ' + running.tool;
+    else if (loop._liveModel) label = 'thinking on ' + shortModelName(loop._liveModel);
+    if (label) {
+      const phase = document.createElement('div');
+      phase.className = 'glance-phase' + (running ? ' glance-phase--tool' : '');
+      const lbl = document.createElement('span');
+      lbl.className = 'glance-phase__label';
+      lbl.textContent = label;
+      phase.appendChild(lbl);
+      if (loop._iterStartTs) {
+        const el = document.createElement('span');
+        el.className = 'glance-phase__elapsed';
+        el.textContent = formatDuration(Date.now() - loop._iterStartTs);
+        phase.appendChild(el);
+      }
+      header.appendChild(phase);
+    }
+  }
+
+  // Metrics: iterations + cadence · context fill · next wake.
+  const metrics = document.createElement('div');
+  metrics.className = 'glance-metrics';
+
+  // Iteration count is the honest Tier-0 progress signal; per-turn duration
+  // variation (where a sparkline earns its ink) lives in the Tier-1 small
+  // multiples, a fixed frame where a real slow turn spikes against uniform
+  // neighbors instead of an auto-scaled line amplifying steady-state jitter.
+  const iters = loop.iterations || 0;
+  metrics.appendChild(glanceMetric('iterations', (v) => {
+    v.textContent = formatNumber(iters);
+  }));
+
+  const cw = loop.context_window || view.context_window || 0;
+  const used = loop.last_input_tokens || (loop._llmContext && loop._llmContext.est_tokens) || 0;
+  const pct = (view.context_fill_pct != null) ? view.context_fill_pct
+    : (cw > 0 && used > 0 ? Math.round((used * 100) / cw) : null);
+  if (pct != null) {
+    metrics.appendChild(glanceMetric('context', (v) => {
+      v.appendChild(makeFillBar(pct));
+      const lbl = document.createElement('span');
+      lbl.className = 'glance-fill-label';
+      lbl.textContent = cw > 0 ? (formatTokens(used) + ' / ' + formatTokens(cw)) : (pct + '%');
+      v.appendChild(lbl);
+    }));
+  }
+
+  header.appendChild(metrics);
+
+  // The sleep scrubber subsumes a plain "wakes in X" cell — a full-width
+  // timeline of the sleep cycle. Shown only for timer loops with wake data.
+  const scrubber = renderSleepScrubber(loop);
+  if (scrubber) header.appendChild(scrubber);
+
+  return header;
+}
+
+// renderIterationStrip — the Tier 1 small multiples. The last ~10 completed
+// turns as identical rows on a SHARED scale, so a genuinely slow or token-heavy
+// turn spikes against uniform neighbors (the fixed frame the header sparkline
+// lacked). No per-tool chips — tool itemization is a Tier 2 / catalog concern.
+function renderIterationStrip(loop) {
+  const history = state.iterationHistory.get(loop.id) || [];
+  if (history.length === 0) return null;
+  const mode = sectionViewMode(state.recentMode, loop.id);
+  const rows = history.slice(0, mode === 'verbose' ? 30 : 10); // newest-first
+  const maxElapsed = Math.max(1, ...rows.map((s) => s.elapsed_ms || 0));
+  const maxTokens = Math.max(1, ...rows.map((s) => (s.input_tokens || 0) + (s.output_tokens || 0)));
+
+  const section = document.createElement('section');
+  section.className = 'insp-section iter-strip';
+
+  const head = document.createElement('div');
+  head.className = 'insp-section__head';
+  const heading = document.createElement('div');
+  heading.className = 'insp-section__heading';
+  const title = document.createElement('span');
+  title.className = 'insp-section__title';
+  title.textContent = 'recent turns';
+  heading.appendChild(title);
+  const meta = document.createElement('span');
+  meta.className = 'insp-section__meta';
+  const newest = history[0];
+  meta.textContent = [
+    formatNumber(history.length) + (history.length === 1 ? ' turn' : ' turns'),
+    newest && newest.elapsed_ms ? 'last ' + formatDuration(newest.elapsed_ms) : null,
+  ].filter(Boolean).join('  ·  ');
+  heading.appendChild(meta);
+  head.appendChild(heading);
+  head.appendChild(makeSectionModeControl(mode, 'Recent turns', (nm) => state.recentMode.set(loop.id, nm)));
+  section.appendChild(head);
+
+  // Summary: just an aggregate line — the newest turn's model and when it ran.
+  if (mode === 'summary') {
+    const startRaw = newest && (newest.started_at || newest.completed_at);
+    const startDate = startRaw ? new Date(startRaw) : null;
+    const note = document.createElement('div');
+    note.className = 'insp-section__summary';
+    note.textContent = [
+      newest && newest.model ? 'on ' + shortModelName(newest.model) : null,
+      startDate && !isNaN(startDate) ? 'last ran ' + timeAgo(startDate) : null,
+    ].filter(Boolean).join('  ·  ') || 'No turn detail yet.';
+    section.appendChild(note);
+    return section;
+  }
+
+  for (const s of rows) section.appendChild(buildIterRow(s, maxElapsed, maxTokens));
+  return section;
+}
+
+// buildIterRow renders one small-multiple row: number, model, token bar, elapsed
+// bar, duration. Hover reveals the wall-clock when it ran (kept off the row to
+// stay compact): when it started, how long ago, and the duration shown inline.
+function buildIterRow(s, maxElapsed, maxTokens) {
+  const row = document.createElement('div');
+  row.className = 'iter-row';
+
+  const startRaw = s.started_at || s.completed_at;
+  const startDate = startRaw ? new Date(startRaw) : null;
+  const whenTxt = (startDate && !isNaN(startDate))
+    ? `ran ${formatWhen(startDate)} (${timeAgo(startDate)})${s.elapsed_ms ? ' · took ' + formatDuration(s.elapsed_ms) : ''}`
+    : '';
+
+  // Click a row to open that turn's request detail pane — same path as the live
+  // `req:` chip (window.onRequestChipClick → showRequestDetail, which fetches
+  // /v1/requests/{id} and closes gracefully if the request was evicted). Only
+  // when the turn recorded a request_id and the handler is wired (graph context).
+  const inspectable = s.request_id && typeof window.onRequestChipClick === 'function';
+  if (inspectable) {
+    row.classList.add('iter-row--clickable');
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.title = `inspect request ${shortID(s.request_id)}${whenTxt ? ' · ' + whenTxt : ''}`;
+    const open = () => window.onRequestChipClick(s.request_id);
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  } else if (whenTxt) {
+    row.title = `#${s.number || '?'} · ${whenTxt}`;
+  }
+
+  const num = document.createElement('span');
+  num.className = 'iter-num';
+  num.textContent = '#' + (s.number || '');
+  row.appendChild(num);
+
+  const model = document.createElement('span');
+  model.className = 'iter-model';
+  model.textContent = s.model ? shortModelName(s.model) : '';
+  row.appendChild(model);
+
+  const tokBar = document.createElement('div');
+  tokBar.className = 'iter-bar iter-bar--tokens';
+  const inTok = s.input_tokens || 0;
+  const outTok = s.output_tokens || 0;
+  if (inTok + outTok > 0) {
+    const inEl = document.createElement('span');
+    inEl.className = 'iter-tok-in';
+    inEl.style.width = ((inTok / maxTokens) * 100) + '%';
+    tokBar.appendChild(inEl);
+    const outEl = document.createElement('span');
+    outEl.className = 'iter-tok-out';
+    outEl.style.width = ((outTok / maxTokens) * 100) + '%';
+    tokBar.appendChild(outEl);
+  }
+  row.appendChild(tokBar);
+
+  const elBar = document.createElement('div');
+  elBar.className = 'iter-bar iter-bar--elapsed';
+  const elFill = document.createElement('span');
+  elFill.style.width = (((s.elapsed_ms || 0) / maxElapsed) * 100) + '%';
+  elBar.appendChild(elFill);
+  row.appendChild(elBar);
+
+  const dur = document.createElement('span');
+  dur.className = 'iter-dur';
+  dur.textContent = s.elapsed_ms ? formatDuration(s.elapsed_ms) : '';
+  row.appendChild(dur);
+
+  return row;
+}
+
+// formatToolPayload renders a tool's args/result for the live feed — a JSON
+// string for objects, the value as-is for strings.
+function formatToolPayload(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v); } catch (e) { return String(v); }
+}
+
+// renderLiveToolFeed is the in-situ window into a running loop: a live transcript
+// of the turn's tool calls — name, status, args in, result out — streaming as
+// they fire and return. Sits directly under the glance header so an operator can
+// watch a loop's focus and direction while it works. Sourced from loop._liveTools
+// (accumulated by the SSE reducer); shown only while there's a turn in flight.
+function renderLiveToolFeed(loop) {
+  const tools = loop._liveTools || [];
+  if (loop.state !== 'processing' && tools.length === 0) return null;
+
+  const section = document.createElement('section');
+  section.className = 'live-feed';
+
+  const head = document.createElement('div');
+  head.className = 'live-feed__head';
+  const dot = document.createElement('span');
+  dot.className = 'live-feed__dot';
+  head.appendChild(dot);
+  const label = document.createElement('span');
+  label.className = 'live-feed__label';
+  label.textContent = 'live · this turn';
+  head.appendChild(label);
+  const count = document.createElement('span');
+  count.className = 'live-feed__count';
+  const running = tools.filter((t) => t.status === 'running').length;
+  if (tools.length) {
+    count.textContent = formatNumber(tools.length) + (tools.length === 1 ? ' tool' : ' tools')
+      + (running ? ' · ' + running + ' running' : '');
+  }
+  head.appendChild(count);
+  section.appendChild(head);
+
+  if (tools.length === 0) {
+    const idle = document.createElement('div');
+    idle.className = 'live-feed__idle';
+    idle.textContent = loop._liveModel
+      ? 'thinking on ' + shortModelName(loop._liveModel) + ' — no tool in flight'
+      : 'working — no tool in flight';
+    section.appendChild(idle);
+    return section;
+  }
+
+  for (const t of tools) {
+    const card = document.createElement('div');
+    card.className = 'live-tool live-tool--' + (t.error ? 'error' : (t.status || 'done'));
+    const th = document.createElement('div');
+    th.className = 'live-tool__head';
+    const name = document.createElement('span');
+    name.className = 'live-tool__name';
+    name.textContent = t.tool || '?';
+    th.appendChild(name);
+    const status = document.createElement('span');
+    status.className = 'live-tool__status';
+    status.textContent = t.error ? 'error' : (t.status || 'done');
+    th.appendChild(status);
+    card.appendChild(th);
+    const args = formatToolPayload(t.args);
+    if (args) {
+      const pre = document.createElement('pre');
+      pre.className = 'live-tool__args';
+      pre.textContent = args.slice(0, 240);
+      card.appendChild(pre);
+    }
+    const out = t.error ? formatToolPayload(t.error) : formatToolPayload(t.result);
+    if (out) {
+      const pre = document.createElement('pre');
+      pre.className = 'live-tool__result' + (t.error ? ' live-tool__result--error' : '');
+      pre.textContent = out.slice(0, 240);
+      card.appendChild(pre);
+    }
+    section.appendChild(card);
+  }
+  return section;
+}
+
+// renderActiveCapabilities is the SINGLE shared tooling block — used for every
+// loop (conversation-backed or not) so the section reads identically instead of
+// the old split where conversation loops showed chips and others showed comma
+// lists. Minimized read = aggregate counts; brief = the loop's ACTIVE capability
+// tags as a full-width chip list, one box each ("active" tracks the tag_activate
+// verb the model-facing tooling uses). The available count lives in the summary,
+// never as its own box. (Full view → tool-reference catalog links once that
+// surface lands.)
+function renderActiveCapabilities(entity) {
+  const active = entity.currentLoadedCapabilities || [];
+  const toolCount = (entity.currentEffectiveTools || []).length;
+  const availCount = (entity.availableCapabilities || []).length;
+  if (active.length === 0 && toolCount === 0 && availCount === 0) return null;
+
+  const section = document.createElement('section');
+  section.className = 'tooling-section';
+
+  const head = document.createElement('div');
+  head.className = 'tooling-section__head';
+  const title = document.createElement('span');
+  title.className = 'tooling-section__title';
+  title.textContent = 'tooling';
+  head.appendChild(title);
+  const counts = document.createElement('span');
+  counts.className = 'tooling-section__counts';
+  counts.textContent = [
+    active.length ? formatNumber(active.length) + ' active' : null,
+    toolCount ? formatNumber(toolCount) + ' tools' : null,
+    availCount ? formatNumber(availCount) + ' available' : null,
+  ].filter(Boolean).join('  ·  ');
+  head.appendChild(counts);
+  section.appendChild(head);
+
+  if (active.length > 0) {
+    const chips = makeSchemaChipList(active.map((e) => e.tag), 'tag-chip tag-chip--active');
+    chips.classList.add('tooling-section__chips');
+    section.appendChild(chips);
+  }
+  return section;
+}
+
+const LOOP_DEF_TTL_MS = 60000; // specs change rarely; refetch at most once a minute
+
+// ensureLoopDef lazily loads a loop's stored definition (its spec: prompt,
+// supervisor config, declared outputs) from /v1/loop-definitions/{name} and
+// caches it on state.loopDefs. The inspector re-renders ~1/s, so this guards
+// against refetching: it only fires when there's no entry or the cached entry
+// is past its TTL, and the resolve handler re-renders the still-selected loop so
+// the spec appears without waiting for the next periodic tick.
+function ensureLoopDef(name) {
+  if (!name) return;
+  const cached = state.loopDefs.get(name);
+  const now = Date.now();
+  if (cached && (cached.status === 'loading' || (now - cached.at) < LOOP_DEF_TTL_MS)) return;
+  state.loopDefs.set(name, { status: 'loading', def: cached ? cached.def : null, at: now });
+  api.tryGet('/loop-definitions/' + encodeURIComponent(name))
+    .then((def) => {
+      state.loopDefs.set(name, { status: def ? 'ready' : 'absent', def: def || null, at: Date.now() });
+    })
+    .catch(() => {
+      state.loopDefs.set(name, { status: 'error', def: cached ? cached.def : null, at: Date.now() });
+    })
+    .finally(() => {
+      const sel = state.selected && state.loops.get(state.selected);
+      if (sel && sel.name === name) {
+        try { renderDetail(); } catch (e) { console.error('spec renderDetail:', e); }
+      }
+    });
+}
+
+// Section view modes mirror the schema cards' title/widget/full ladder so every
+// hamburger reads the same: summary = head only, brief = collapsed, verbose =
+// expanded. Shared by the spec and recent-turns sections; the icon maps onto the
+// schema-card glyphs (1 / 2 / 3 bars).
+const SECTION_VIEW_MODES = ['summary', 'brief', 'verbose'];
+const SECTION_VIEW_ICON = { summary: 'title', brief: 'widget', verbose: 'full' };
+
+function nextSectionViewMode(mode) {
+  const i = SECTION_VIEW_MODES.indexOf(SECTION_VIEW_MODES.includes(mode) ? mode : 'brief');
+  return SECTION_VIEW_MODES[(i + 1) % SECTION_VIEW_MODES.length];
+}
+
+function sectionViewMode(store, key) {
+  return SECTION_VIEW_MODES.includes(store.get(key)) ? store.get(key) : 'brief';
+}
+
+// makeSectionModeControl builds the right-aligned hamburger that cycles a
+// section summary → brief → verbose, reusing the schema-card control look and
+// glyph. onCycle receives the next mode. The re-render is forced through the
+// hover/interaction defer gate — a plain renderDetail() is suppressed while the
+// pointer is over the control and would only paint on mouse-out.
+function makeSectionModeControl(mode, label, onCycle) {
+  const controls = document.createElement('div');
+  controls.className = 'insp-section__controls';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'schema-card__control';
+  btn.innerHTML = makeSchemaCardModeIcon(SECTION_VIEW_ICON[mode]);
+  const nm = nextSectionViewMode(mode);
+  btn.title = label + ' view: ' + mode + '. Click for ' + nm;
+  btn.setAttribute('aria-label', label + ' view: ' + mode + '. Click for ' + nm);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onCycle(nm);
+    bumpDetailInteractionHold(180);
+    requestAnimationFrame(() => {
+      try { renderDetail({ force: true }); } catch (err) { console.error('section mode renderDetail:', err); }
+    });
+  });
+  controls.appendChild(btn);
+  return controls;
+}
+
+// --- Inspector block reordering -------------------------------------------
+// The content blocks below the pinned glance header + live feed are drag-to-
+// reorderable. Order is a single global layout preference (not per-loop),
+// persisted to localStorage — it survives across browser sessions for free.
+const INSPECTOR_ORDER_KEY = 'thane.inspector.blockOrder';
+const INSPECTOR_DEFAULT_ORDER = ['recent', 'current-turn', 'spec', 'tooling', 'execution', 'profile'];
+
+function loadInspectorOrder() {
+  try {
+    const raw = localStorage.getItem(INSPECTOR_ORDER_KEY);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : null;
+  } catch (e) { return null; }
+}
+
+function saveInspectorOrder(keys) {
+  try { localStorage.setItem(INSPECTOR_ORDER_KEY, JSON.stringify(keys)); } catch (e) { /* private mode / no storage */ }
+}
+
+// orderInspectorBlocks lays the available {key,el} blocks out in the saved
+// order. Keys present this render but absent from the saved order (e.g. the
+// current-turn card, which only exists on conversation loops, when the order was
+// last saved from a loop without one) are spliced in next to their default-order
+// neighbor — not dumped at the end — so they land somewhere sensible.
+function orderInspectorBlocks(blocks) {
+  const saved = loadInspectorOrder() || [];
+  const present = new Set(blocks.map((b) => b.key));
+  const result = saved.filter((k) => present.has(k));
+  const placed = new Set(result);
+  for (const key of INSPECTOR_DEFAULT_ORDER) {
+    if (!present.has(key) || placed.has(key)) continue;
+    const di = INSPECTOR_DEFAULT_ORDER.indexOf(key);
+    let insertAt = result.length;
+    for (let i = di - 1; i >= 0; i--) {
+      const idx = result.indexOf(INSPECTOR_DEFAULT_ORDER[i]);
+      if (idx !== -1) { insertAt = idx + 1; break; }
+    }
+    result.splice(insertAt, 0, key);
+    placed.add(key);
+  }
+  for (const b of blocks) if (!placed.has(b.key)) { result.push(b.key); placed.add(b.key); }
+  const byKey = new Map(blocks.map((b) => [b.key, b]));
+  return result.map((k) => byKey.get(k)).filter(Boolean);
+}
+
+let inspectorDrag = null;
+
+// makeReorderable tags a content block with its stable key and a hover-reveal
+// drag grip in the left gutter. The grip is header-agnostic (absolute, in the
+// panel's left padding) so it works for every block regardless of internal
+// chrome — schema card, custom section, or turn card.
+function makeReorderable(key, el) {
+  el.classList.add('insp-block');
+  el.dataset.blockKey = key;
+  const grip = document.createElement('button');
+  grip.type = 'button';
+  grip.className = 'insp-grip';
+  grip.title = 'Drag to reorder';
+  grip.setAttribute('aria-label', 'Drag to reorder this section');
+  grip.innerHTML = '<svg viewBox="0 0 12 16" aria-hidden="true" class="insp-grip__icon">'
+    + '<circle cx="4" cy="4" r="1"/><circle cx="8" cy="4" r="1"/>'
+    + '<circle cx="4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/>'
+    + '<circle cx="4" cy="12" r="1"/><circle cx="8" cy="12" r="1"/></svg>';
+  grip.addEventListener('pointerdown', (e) => startInspectorDrag(e, el));
+  el.appendChild(grip);
+  return el;
+}
+
+function startInspectorDrag(e, el) {
+  if (e.button != null && e.button !== 0) return;
+  const container = el.parentElement;
+  if (!container) return;
+  e.preventDefault();
+  e.stopPropagation();
+  // Capture the pointer so pointerup lands even if released outside the panel.
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* unsupported */ }
+  el.classList.add('insp-block--dragging');
+  bumpDetailInteractionHold(60000); // freeze the re-render for the whole gesture
+  const onMove = (ev) => {
+    if (!el.isConnected) return; // a re-render slipped through and detached us
+    const siblings = Array.from(container.querySelectorAll(':scope > .insp-block:not(.insp-block--dragging)'));
+    let before = null;
+    for (const s of siblings) {
+      const r = s.getBoundingClientRect();
+      if (ev.clientY < r.top + r.height / 2) { before = s; break; }
+    }
+    if (before) container.insertBefore(el, before);
+    else container.appendChild(el);
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    el.classList.remove('insp-block--dragging');
+    const order = Array.from(container.querySelectorAll(':scope > .insp-block'))
+      .map((b) => b.dataset.blockKey).filter(Boolean);
+    saveInspectorOrder(order);
+    inspectorDrag = null;
+    bumpDetailInteractionHold(200);
+  };
+  inspectorDrag = { el, onMove, onUp };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+}
+
+// renderLoopSpecSection surfaces the loop's stored DEFINITION — what the loop
+// IS, against the runtime sections above that show what it's DOING. Three
+// things an operator asks of a spec: the prompt it runs each wake, the
+// supervisor-review messaging (when the loop opts into frontier review turns),
+// and the documents it's declared to maintain. A hamburger cycles the whole
+// section summary → brief → verbose, the same control the schema cards carry.
+// Ephemeral loops (no stored definition) and containers (structural) say so.
+function renderLoopSpecSection(loop) {
+  const name = loop && loop.name;
+  if (!name || name === 'core') return null; // core has no registry definition
+  ensureLoopDef(name);
+  const entry = state.loopDefs.get(name);
+
+  const section = document.createElement('section');
+  section.className = 'loop-spec';
+  const head = document.createElement('div');
+  head.className = 'loop-spec__head';
+  const heading = document.createElement('div');
+  heading.className = 'loop-spec__heading';
+  const title = document.createElement('span');
+  title.className = 'loop-spec__title';
+  title.textContent = 'spec';
+  heading.appendChild(title);
+  const meta = document.createElement('span');
+  meta.className = 'loop-spec__meta';
+  heading.appendChild(meta);
+  head.appendChild(heading);
+  section.appendChild(head);
+
+  if (!entry || entry.status === 'loading') {
+    meta.textContent = 'reading definition…';
+    return section;
+  }
+  if (entry.status === 'error') {
+    meta.textContent = 'definition unavailable';
+    return section;
+  }
+  if (entry.status === 'absent') {
+    meta.textContent = 'ephemeral';
+    appendSpecEmpty(section, 'This loop runs from a runtime spec, not the definition registry — no persisted prompt, supervisor config, or declared outputs to show.');
+    return section;
+  }
+
+  const spec = (entry.def && entry.def.spec) || {};
+  meta.textContent = [
+    spec.operation || '',
+    spec.parent_name ? 'child of ' + spec.parent_name : null,
+    (spec.tags && spec.tags.length) ? spec.tags.join(', ') : null,
+  ].filter(Boolean).join('  ·  ');
+
+  const hasTask = (spec.task || '').trim();
+  const instr = spec.profile && spec.profile.instructions;
+  const hasInstr = (instr || '').trim();
+  const hasSupervisor = !!spec.supervisor;
+  const hasOutputs = (spec.outputs || []).length > 0;
+  if (spec.operation === 'container' && !hasTask && !hasOutputs) {
+    appendSpecEmpty(section, 'Container node — organizes its children and cascades subscriptions. No prompt or outputs of its own.');
+    return section;
+  }
+
+  // Hamburger toggle — the shared section control cycling summary/brief/verbose.
+  const mode = sectionViewMode(state.specMode, name);
+  head.appendChild(makeSectionModeControl(mode, 'Spec', (nm) => state.specMode.set(name, nm)));
+
+  // Summary: head + a one-line census of what the spec carries, nothing more.
+  if (mode === 'summary') {
+    const census = [
+      hasTask ? 'prompt' : null,
+      hasInstr ? 'instructions' : null,
+      hasSupervisor ? 'supervisor review' : null,
+      hasOutputs ? (spec.outputs.length === 1 ? '1 output document' : formatNumber(spec.outputs.length) + ' output documents') : null,
+    ].filter(Boolean).join('  ·  ');
+    if (census) appendSpecEmpty(section, census);
+    return section;
+  }
+
+  const verbose = mode === 'verbose';
+
+  // Prompt — the per-iteration task, plus method instructions when present.
+  if (hasTask) section.appendChild(makeSpecTextField('prompt', spec.task, null, verbose));
+  if (hasInstr) section.appendChild(makeSpecTextField('instructions', instr, null, verbose));
+
+  // Supervisor review — the frontier-review messaging, only when the loop opts in.
+  if (hasSupervisor) {
+    const sup = spec.supervisor_profile || {};
+    const pct = typeof spec.supervisor_prob === 'number' ? Math.round(spec.supervisor_prob * 100) : null;
+    const supMeta = [
+      pct != null ? '~' + pct + '% of wakes' : null,
+      sup.quality_floor ? 'quality floor ' + sup.quality_floor : null,
+    ].filter(Boolean).join(' · ');
+    if ((sup.instructions || '').trim()) {
+      section.appendChild(makeSpecTextField('supervisor review', sup.instructions, supMeta, verbose));
+    } else {
+      appendSpecEmpty(section, 'Supervisor review on (' + (supMeta || 'periodic') + ') using baseline frontier overrides — no custom review prompt.');
+    }
+  }
+
+  // Outputs — documents the loop maintains through scoped runtime tools.
+  if (hasOutputs) section.appendChild(makeSpecOutputs(spec.outputs));
+  return section;
+}
+
+function appendSpecEmpty(section, text) {
+  const note = document.createElement('div');
+  note.className = 'loop-spec__empty';
+  note.textContent = text;
+  section.appendChild(note);
+}
+
+// makeSpecTextField renders one long spec text (prompt / instructions /
+// supervisor messaging) as a copyable field. The section's view mode governs
+// disclosure: brief shows a one-line whisper + char count, verbose shows the
+// full body inline. Copy always lifts the full body to the clipboard for
+// pasting into an editor (the owner's stated way of working with prompt bodies).
+function makeSpecTextField(label, text, extraMeta, verbose) {
+  const body = String(text);
+
+  const field = document.createElement('div');
+  field.className = 'spec-field';
+
+  const fhead = document.createElement('div');
+  fhead.className = 'spec-field__head';
+  const lab = document.createElement('span');
+  lab.className = 'spec-field__label';
+  lab.textContent = label;
+  fhead.appendChild(lab);
+  const bytes = document.createElement('span');
+  bytes.className = 'spec-field__bytes';
+  bytes.textContent = [extraMeta, formatNumber(body.length) + ' chars'].filter(Boolean).join(' · ');
+  fhead.appendChild(bytes);
+  const spacer = document.createElement('span');
+  spacer.className = 'spec-field__spacer';
+  fhead.appendChild(spacer);
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'spec-field__btn';
+  copyBtn.textContent = 'copy';
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(body).then(() => {
+      copyBtn.textContent = 'copied';
+      copyBtn.classList.add('is-copied');
+      setTimeout(() => { copyBtn.textContent = 'copy'; copyBtn.classList.remove('is-copied'); }, 1200);
+    }).catch(() => {});
+  });
+  fhead.appendChild(copyBtn);
+  field.appendChild(fhead);
+
+  if (verbose) {
+    const pre = document.createElement('pre');
+    pre.className = 'spec-field__body';
+    pre.textContent = body;
+    field.appendChild(pre);
+  } else {
+    const whisper = body.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+    const preview = document.createElement('div');
+    preview.className = 'spec-field__preview';
+    preview.textContent = truncate(whisper, 150);
+    field.appendChild(preview);
+  }
+  return field;
+}
+
+// makeSpecOutputs lists the documents the loop is declared to maintain. Each row
+// shows the document root + path (click to copy the ref), the write mode, the
+// scoped runtime tool the loop writes through (replace_output_<name> for replace
+// mode), and the declared purpose — connecting the spec to the live tool feed.
+function makeSpecOutputs(outputs) {
+  const wrap = document.createElement('div');
+  wrap.className = 'spec-outputs';
+  const lab = document.createElement('div');
+  lab.className = 'spec-field__label spec-outputs__label';
+  lab.textContent = outputs.length === 1 ? 'output document' : formatNumber(outputs.length) + ' output documents';
+  wrap.appendChild(lab);
+
+  for (const out of outputs) {
+    const row = document.createElement('div');
+    row.className = 'spec-output';
+
+    const refLine = document.createElement('div');
+    refLine.className = 'spec-output__refline';
+    const ref = String(out.ref || '');
+    const ci = ref.indexOf(':');
+    const root = ci > 0 ? ref.slice(0, ci) : '';
+    const path = ci > 0 ? ref.slice(ci + 1) : ref;
+    if (root) {
+      const rootTag = document.createElement('span');
+      rootTag.className = 'spec-output__root';
+      rootTag.textContent = root;
+      refLine.appendChild(rootTag);
+    }
+    const pathEl = document.createElement('button');
+    pathEl.type = 'button';
+    pathEl.className = 'spec-output__path';
+    pathEl.textContent = path;
+    pathEl.title = 'copy ' + ref;
+    pathEl.addEventListener('click', () => {
+      navigator.clipboard.writeText(ref).then(() => {
+        pathEl.textContent = 'copied ref';
+        pathEl.classList.add('is-copied');
+        setTimeout(() => { pathEl.textContent = path; pathEl.classList.remove('is-copied'); }, 1200);
+      }).catch(() => {});
+    });
+    refLine.appendChild(pathEl);
+    if (out.mode) {
+      const mode = document.createElement('span');
+      mode.className = 'spec-output__mode';
+      mode.textContent = out.mode;
+      refLine.appendChild(mode);
+    }
+    row.appendChild(refLine);
+
+    if (out.mode === 'replace' && out.name) {
+      const tool = document.createElement('div');
+      tool.className = 'spec-output__tool';
+      tool.textContent = 'replace_output_' + out.name;
+      row.appendChild(tool);
+    }
+    if (out.purpose) {
+      const purpose = document.createElement('div');
+      purpose.className = 'spec-output__purpose';
+      purpose.textContent = out.purpose;
+      row.appendChild(purpose);
+    }
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
 function renderLoopEntityDetail(loop) {
   const entity = buildLoopEntity(loop);
   detailEntity.innerHTML = '';
@@ -3965,46 +4855,24 @@ function renderLoopEntityDetail(loop) {
   const latestToolsUsed = Object.keys(entity.latestToolsUsed || {}).filter(Boolean).sort();
   const liveToolNames = Array.from(new Set(entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean))).sort();
 
-  const hero = document.createElement('section');
-  hero.className = 'detail-card schema-card schema-card--hero';
-  hero.innerHTML = `
-    <div class="schema-hero">
-      <div class="schema-hero__copy">
-        <div class="schema-kind">${entity.kind}</div>
-        <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
-        <div class="schema-subtitle">
-          <strong>${escapeHTML(entity.categoryLabel)}</strong>
-          via ${escapeHTML(entity.categorySource)}
-        </div>
-      </div>
-      <div class="schema-badge-list">
-        <span class="state-badge state-badge--${escapeHTML(entity.stateLabel === 'supervisor' ? 'supervisor' : entity.state)}">${escapeHTML(formatSchemaToken(entity.stateLabel))}</span>
-        <span class="schema-badge">${escapeHTML(entity.executionMode)}</span>
-        <span class="schema-badge">${escapeHTML(entity.relation)}</span>
-      </div>
-    </div>
-  `;
-  const utilities = document.createElement('div');
-  utilities.className = 'inspector-utility-bar';
-  utilities.appendChild(makeInspectorUtility('loop', makeIDChip(entity.loopID)));
-  if (primaryConvID) {
-    utilities.appendChild(makeInspectorUtility('thread', makeIDChip(primaryConvID)));
-  }
-  utilities.appendChild(makeInspectorUtility(
-    'loaded capabilities',
-    currentLoadedCapabilities.length > 0
-      ? makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active')
-      : 'none',
-  ));
-  if (entity.latestRequestID) {
-    utilities.appendChild(makeInspectorUtility('request', makeRequestChip(entity.latestRequestID)));
-  }
-  hero.appendChild(utilities);
-  detailEntity.appendChild(hero);
+  detailEntity.appendChild(renderLoopGlanceHeader(loop));
 
-  if (conversationBacked) {
-    detailEntity.appendChild(renderLoopCurrentTurnCard(loop, entity, currentConversation));
-  }
+  // Live tool feed — the in-situ window into a running loop, directly under the
+  // header so it's the first thing you read while watching a loop work. Pinned
+  // (along with the glance header); only the content blocks below reorder.
+  const liveFeed = renderLiveToolFeed(loop);
+  if (liveFeed) detailEntity.appendChild(liveFeed);
+
+  // Content blocks below the header are drag-to-reorderable; collect them with
+  // stable keys and lay them out per the saved order at the end.
+  const blocks = [];
+  const pushBlock = (key, el) => { if (el) blocks.push({ key, el }); };
+
+  pushBlock('recent', renderIterationStrip(loop));
+  if (conversationBacked) pushBlock('current-turn', renderLoopCurrentTurnCard(loop, entity, currentConversation));
+  // Spec — what the loop IS (prompt, supervisor review, declared outputs), from
+  // the definition registry. Lazy-loads; renders a placeholder until it arrives.
+  pushBlock('spec', renderLoopSpecSection(loop));
 
   const identity = makeSchemaCard('Identity', 'Role in the graph', {
     entityKind: entity.kind,
@@ -4103,60 +4971,7 @@ function renderLoopEntityDetail(loop) {
     appendSchemaRow(execution.body, 'last error', err, { multiline: true });
   }
 
-  const tooling = makeSchemaCard('Tooling', 'Capability scope, tool surface, and live activity', {
-    entityKind: entity.kind,
-    key: 'tooling',
-    titleSummary: [
-      currentLoadedCapabilities.length > 0
-        ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded`
-        : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} tags configured` : ''),
-      currentEffectiveTools.length > 0
-        ? `${formatNumber(currentEffectiveTools.length)} tools in scope`
-        : (entity.excludedTools.length > 0 ? `${formatNumber(entity.excludedTools.length)} tools excluded` : ''),
-      entity.availableCapabilities.length > 0 ? `${formatNumber(entity.availableCapabilities.length)} capabilities available` : '',
-      liveToolNames.length > 0 ? `${formatNumber(liveToolNames.length)} tools live` : '',
-    ].filter(Boolean).join(' · ') || 'Capability state and tool surface pending.',
-    titleFacts: [
-      entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
-      currentLoadedCapabilities.length ? `${formatNumber(currentLoadedCapabilities.length)} loaded` : '',
-      currentEffectiveTools.length ? `${formatNumber(currentEffectiveTools.length)} in scope` : '',
-      liveToolNames.length ? `${formatNumber(liveToolNames.length)} running` : '',
-    ].filter(Boolean),
-    widgetFacts: [
-      entity.configTags.length ? { label: 'Configured tags', value: entity.configTags.join(', ') } : null,
-      currentLoadedCapabilities.length ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
-      entity.availableCapabilities.length ? { label: 'Available capabilities', value: formatNumber(entity.availableCapabilities.length) } : null,
-      currentEffectiveTools.length ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-      entity.excludedTools.length ? { label: 'Excluded', value: formatNumber(entity.excludedTools.length) } : null,
-      liveToolNames.length ? { label: 'Running', value: liveToolNames.join(', ') } : null,
-    ],
-  });
-  if (entity.configTags.length > 0) {
-    appendSchemaRow(tooling.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
-  }
-  if (currentLoadedCapabilities.length > 0) {
-    appendSchemaRow(tooling.body, 'loaded capabilities', makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
-  }
-  if (entity.availableCapabilities.length > 0) {
-    appendSchemaRow(tooling.body, 'available capabilities', makeSchemaChipList(entity.availableCapabilities.map((entry) => entry.tag), 'tag-chip'));
-  }
-  if (entity.excludedTools.length > 0) {
-    appendSchemaRow(tooling.body, 'excluded tools', makeSchemaChipList(entity.excludedTools, 'iter-card__tool-item iter-card__tool-item--scope'));
-  }
-  if (currentEffectiveTools.length > 0) {
-    appendSchemaRow(
-      tooling.body,
-      loop.state === 'processing' ? 'tool surface this turn' : 'tool surface last turn',
-      makeSchemaChipList(currentEffectiveTools, 'iter-card__tool-item iter-card__tool-item--scope'),
-      { multiline: true },
-    );
-  }
-  if (liveToolNames.length > 0) {
-    appendSchemaRow(tooling.body, 'tools in flight', makeSchemaChipList(liveToolNames, 'iter-card__tool-item'));
-  }
-  if (latestToolsUsed.length > 0) {
-    appendSchemaRow(tooling.body, 'tools used last turn', makeSchemaChipList(latestToolsUsed, 'iter-card__tool-item'));
-  }
+  const toolingSection = renderActiveCapabilities(entity);
 
   const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
     entityKind: entity.kind,
@@ -4216,7 +5031,7 @@ function renderLoopEntityDetail(loop) {
     if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
   }
 
-  detailEntity.appendChild(tooling.card);
+  pushBlock('tooling', toolingSection);
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
     key: 'activity',
@@ -4283,20 +5098,20 @@ function renderLoopEntityDetail(loop) {
   renderTimeline(loop, timeline, state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
   activity.body.appendChild(timeline);
 
-  if (conversationBacked) {
-    detailEntity.appendChild(execution.card);
-    detailEntity.appendChild(activity.card);
-    detailEntity.appendChild(relationships.card);
-    detailEntity.appendChild(profile.card);
-    detailEntity.appendChild(identity.card);
-    return;
-  }
+  // Tier 0: the hero / identity / relationship cards are subsumed by the glance
+  // header above. Execution + Profile are Tier 1/2 fodder, kept until those
+  // slices rework them (the activity card is built for its parts but not shown).
+  pushBlock('execution', execution.card);
+  pushBlock('profile', profile.card);
 
-  detailEntity.appendChild(execution.card);
-  detailEntity.appendChild(activity.card);
-  detailEntity.appendChild(relationships.card);
-  detailEntity.appendChild(profile.card);
-  detailEntity.appendChild(identity.card);
+  // Lay the content blocks out in the user's saved order, each wrapped with a
+  // drag grip, inside a reorder container below the pinned header + live feed.
+  const reorder = document.createElement('div');
+  reorder.className = 'insp-reorder';
+  for (const { key, el } of orderInspectorBlocks(blocks)) {
+    reorder.appendChild(makeReorderable(key, el));
+  }
+  detailEntity.appendChild(reorder);
 }
 
 function buildLoopContextMenu(loop) {

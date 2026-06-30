@@ -80,6 +80,53 @@ func TestHandleLoops(t *testing.T) {
 	}
 }
 
+func TestHandleLoops_IncludesLoopView(t *testing.T) {
+	s := quietServer(fakeLoopReg{statuses: []looppkg.Status{
+		{ID: "p", Name: "parent", State: looppkg.StateSleeping},
+		{ID: "c", Name: "child", State: looppkg.StateSleeping, ParentID: "p",
+			ContextWindow: 200000, LastInputTokens: 100000},
+	}})
+
+	rr := httptest.NewRecorder()
+	s.handleLoops(rr, httptest.NewRequest(http.MethodGet, "/v1/loops", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var rows []struct {
+		ID   string `json:"id"`
+		View struct {
+			ParentName     *string `json:"parent_name"`
+			ChildCount     int     `json:"child_count"`
+			ContextFillPct *int    `json:"context_fill_pct"`
+			PolicyState    string  `json:"policy_state"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]int{}
+	for i, r := range rows {
+		byID[r.ID] = i
+	}
+	parent, child := rows[byID["p"]], rows[byID["c"]]
+
+	// Resolver runs over the full batch, so graph joins are populated.
+	if parent.View.ChildCount != 1 {
+		t.Errorf("parent child_count = %d, want 1", parent.View.ChildCount)
+	}
+	if child.View.ParentName == nil || *child.View.ParentName != "parent" {
+		t.Errorf("child parent_name = %v, want \"parent\"", child.View.ParentName)
+	}
+	// Precomputed so the client never divides.
+	if child.View.ContextFillPct == nil || *child.View.ContextFillPct != 50 {
+		t.Errorf("child context_fill_pct = %v, want 50", child.View.ContextFillPct)
+	}
+	// No definition registry wired on quietServer ⇒ ephemeral, not a misleading default.
+	if child.View.PolicyState != "ephemeral" {
+		t.Errorf("child policy_state = %q, want ephemeral", child.View.PolicyState)
+	}
+}
+
 func TestHandleLoops_Unconfigured(t *testing.T) {
 	s := &Server{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	rr := httptest.NewRecorder()
