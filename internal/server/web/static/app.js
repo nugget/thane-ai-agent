@@ -31,7 +31,7 @@ const state = {
   conversationDetails: new Map(), // conversation_id -> derived dashboard summary
   conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
   loopDefs: new Map(),            // loop name -> { status, def, at } cached /v1/loop-definitions
-  specExpanded: new Set(),        // "name::field" keys whose spec text is expanded inline
+  specMode: new Map(),            // loop name -> 'summary' | 'brief' | 'verbose' spec view
 };
 
 const MAX_EVENTS = 50;
@@ -4403,12 +4403,25 @@ function ensureLoopDef(name) {
     });
 }
 
+// Spec view modes mirror the schema cards' title/widget/full ladder so the
+// hamburger reads the same: summary = head only, brief = collapsed field
+// whispers, verbose = full bodies inline. The icon maps onto the shared
+// schema-card glyphs (1 / 2 / 3 bars).
+const SPEC_MODES = ['summary', 'brief', 'verbose'];
+const SPEC_MODE_ICON = { summary: 'title', brief: 'widget', verbose: 'full' };
+
+function nextSpecMode(mode) {
+  const i = SPEC_MODES.indexOf(SPEC_MODES.includes(mode) ? mode : 'brief');
+  return SPEC_MODES[(i + 1) % SPEC_MODES.length];
+}
+
 // renderLoopSpecSection surfaces the loop's stored DEFINITION — what the loop
 // IS, against the runtime sections above that show what it's DOING. Three
 // things an operator asks of a spec: the prompt it runs each wake, the
 // supervisor-review messaging (when the loop opts into frontier review turns),
-// and the documents it's declared to maintain. Ephemeral loops (no stored
-// definition) and containers (structural only) say so plainly.
+// and the documents it's declared to maintain. A hamburger cycles the whole
+// section summary → brief → verbose, the same control the schema cards carry.
+// Ephemeral loops (no stored definition) and containers (structural) say so.
 function renderLoopSpecSection(loop) {
   const name = loop && loop.name;
   if (!name || name === 'core') return null; // core has no registry definition
@@ -4419,13 +4432,16 @@ function renderLoopSpecSection(loop) {
   section.className = 'loop-spec';
   const head = document.createElement('div');
   head.className = 'loop-spec__head';
+  const heading = document.createElement('div');
+  heading.className = 'loop-spec__heading';
   const title = document.createElement('span');
   title.className = 'loop-spec__title';
   title.textContent = 'spec';
-  head.appendChild(title);
+  heading.appendChild(title);
   const meta = document.createElement('span');
   meta.className = 'loop-spec__meta';
-  head.appendChild(meta);
+  heading.appendChild(meta);
+  head.appendChild(heading);
   section.appendChild(head);
 
   if (!entry || entry.status === 'loading') {
@@ -4450,19 +4466,56 @@ function renderLoopSpecSection(loop) {
   ].filter(Boolean).join('  ·  ');
 
   const hasTask = (spec.task || '').trim();
+  const instr = spec.profile && spec.profile.instructions;
+  const hasInstr = (instr || '').trim();
+  const hasSupervisor = !!spec.supervisor;
   const hasOutputs = (spec.outputs || []).length > 0;
   if (spec.operation === 'container' && !hasTask && !hasOutputs) {
     appendSpecEmpty(section, 'Container node — organizes its children and cascades subscriptions. No prompt or outputs of its own.');
     return section;
   }
 
+  // Hamburger toggle — reuses the schema-card control look + glyph, cycling the
+  // whole section's disclosure. Lives in the head, right-aligned.
+  const mode = SPEC_MODES.includes(state.specMode.get(name)) ? state.specMode.get(name) : 'brief';
+  const controls = document.createElement('div');
+  controls.className = 'loop-spec__controls';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'schema-card__control';
+  btn.innerHTML = makeSchemaCardModeIcon(SPEC_MODE_ICON[mode]);
+  const nm = nextSpecMode(mode);
+  btn.title = 'Spec view: ' + mode + '. Click for ' + nm;
+  btn.setAttribute('aria-label', 'Spec view: ' + mode + '. Click for ' + nm);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    state.specMode.set(name, nextSpecMode(mode));
+    try { renderDetail(); } catch (err) { console.error('spec mode renderDetail:', err); }
+  });
+  controls.appendChild(btn);
+  head.appendChild(controls);
+
+  // Summary: head + a one-line census of what the spec carries, nothing more.
+  if (mode === 'summary') {
+    const census = [
+      hasTask ? 'prompt' : null,
+      hasInstr ? 'instructions' : null,
+      hasSupervisor ? 'supervisor review' : null,
+      hasOutputs ? (spec.outputs.length === 1 ? '1 output document' : formatNumber(spec.outputs.length) + ' output documents') : null,
+    ].filter(Boolean).join('  ·  ');
+    if (census) appendSpecEmpty(section, census);
+    return section;
+  }
+
+  const verbose = mode === 'verbose';
+
   // Prompt — the per-iteration task, plus method instructions when present.
-  if (hasTask) section.appendChild(makeSpecTextField(name, 'prompt', spec.task));
-  const instr = spec.profile && spec.profile.instructions;
-  if ((instr || '').trim()) section.appendChild(makeSpecTextField(name, 'instructions', instr));
+  if (hasTask) section.appendChild(makeSpecTextField('prompt', spec.task, null, verbose));
+  if (hasInstr) section.appendChild(makeSpecTextField('instructions', instr, null, verbose));
 
   // Supervisor review — the frontier-review messaging, only when the loop opts in.
-  if (spec.supervisor) {
+  if (hasSupervisor) {
     const sup = spec.supervisor_profile || {};
     const pct = typeof spec.supervisor_prob === 'number' ? Math.round(spec.supervisor_prob * 100) : null;
     const supMeta = [
@@ -4470,7 +4523,7 @@ function renderLoopSpecSection(loop) {
       sup.quality_floor ? 'quality floor ' + sup.quality_floor : null,
     ].filter(Boolean).join(' · ');
     if ((sup.instructions || '').trim()) {
-      section.appendChild(makeSpecTextField(name, 'supervisor review', sup.instructions, supMeta));
+      section.appendChild(makeSpecTextField('supervisor review', sup.instructions, supMeta, verbose));
     } else {
       appendSpecEmpty(section, 'Supervisor review on (' + (supMeta || 'periodic') + ') using baseline frontier overrides — no custom review prompt.');
     }
@@ -4489,15 +4542,12 @@ function appendSpecEmpty(section, text) {
 }
 
 // makeSpecTextField renders one long spec text (prompt / instructions /
-// supervisor messaging) as a compact, copyable field. Collapsed by default to a
-// one-line whisper + char count; expand reads it inline, copy lifts the full
-// body to the clipboard for pasting into an editor (the owner's stated way of
-// working with prompt bodies). Expand state lives in state.specExpanded so it
-// survives the inspector's ~1/s full re-render.
-function makeSpecTextField(name, label, text, extraMeta) {
+// supervisor messaging) as a copyable field. The section's view mode governs
+// disclosure: brief shows a one-line whisper + char count, verbose shows the
+// full body inline. Copy always lifts the full body to the clipboard for
+// pasting into an editor (the owner's stated way of working with prompt bodies).
+function makeSpecTextField(label, text, extraMeta, verbose) {
   const body = String(text);
-  const key = name + '::' + label;
-  const expanded = state.specExpanded.has(key);
 
   const field = document.createElement('div');
   field.className = 'spec-field';
@@ -4516,17 +4566,6 @@ function makeSpecTextField(name, label, text, extraMeta) {
   spacer.className = 'spec-field__spacer';
   fhead.appendChild(spacer);
 
-  const expandBtn = document.createElement('button');
-  expandBtn.type = 'button';
-  expandBtn.className = 'spec-field__btn';
-  expandBtn.textContent = expanded ? 'collapse' : 'expand';
-  expandBtn.addEventListener('click', () => {
-    if (state.specExpanded.has(key)) state.specExpanded.delete(key);
-    else state.specExpanded.add(key);
-    try { renderDetail(); } catch (e) { console.error('spec expand renderDetail:', e); }
-  });
-  fhead.appendChild(expandBtn);
-
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
   copyBtn.className = 'spec-field__btn';
@@ -4541,7 +4580,7 @@ function makeSpecTextField(name, label, text, extraMeta) {
   fhead.appendChild(copyBtn);
   field.appendChild(fhead);
 
-  if (expanded) {
+  if (verbose) {
     const pre = document.createElement('pre');
     pre.className = 'spec-field__body';
     pre.textContent = body;

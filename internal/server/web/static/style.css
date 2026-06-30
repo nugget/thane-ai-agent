@@ -700,7 +700,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   padding: clamp(0.55rem, 1.25vw, 0.85rem);
   margin-bottom: 0.75rem;
 }
-.loop-spec__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.loop-spec__head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.loop-spec__heading { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.loop-spec__controls { margin-left: auto; flex-shrink: 0; display: inline-flex; }
 .loop-spec__title {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
 }
