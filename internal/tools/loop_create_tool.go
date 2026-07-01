@@ -30,7 +30,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"operation is explicit and picks the kind: " +
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
 			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; wire that trigger separately after creating the loop, or it never runs; " +
-			"\"container\" = a non-executing node that groups loops and shares its tags with descendants (takes only parent_name and tags). " +
+			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; they do NOT wake the loop (an event_driven loop's wake is wired separately). " +
