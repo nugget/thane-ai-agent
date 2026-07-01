@@ -155,11 +155,9 @@ func TestResolveCoreAttentionTargetPrefersExplicitMetadata(t *testing.T) {
 		t.Fatalf("Register core: %v", err)
 	}
 
-	reg := NewEmptyRegistry()
-	reg.ConfigureLoopRuntimeTools(LoopRuntimeToolDeps{Registry: loops})
-	target, err := reg.resolveCoreAttentionTarget()
+	target, err := looppkg.ResolveCoreAttentionTarget(loops.Statuses())
 	if err != nil {
-		t.Fatalf("resolveCoreAttentionTarget: %v", err)
+		t.Fatalf("ResolveCoreAttentionTarget: %v", err)
 	}
 	if target.LoopID != core.ID() || target.LoopName != "core-attention" || target.Reason != "metadata_core_attention_target" {
 		t.Fatalf("target = %#v, want explicit core loop", target)

@@ -367,6 +367,53 @@ func TestRunOnceAdvanceBaseline(t *testing.T) {
 	}
 }
 
+func TestRunOnceNotifiesOnAttentionTransitions(t *testing.T) {
+	reg := newSyncStateRegistry()
+	eng := &fakeEngine{results: []provenance.SyncResult{
+		{Outcome: provenance.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
+		{Outcome: provenance.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
+		{Outcome: provenance.SyncBlocked, RemoteHead: "r2", Detail: "first untrusted commit def456"},
+		{Outcome: provenance.SyncDiverged, RemoteHead: "r3", Detail: "local and remote diverged"},
+		{Outcome: provenance.SyncFastForwarded, RemoteHead: "r3"},
+		{Outcome: provenance.SyncClean, RemoteHead: "r3"},
+	}}
+	s := newTestSyncer(eng, reg, nil)
+	var transitions []syncStateTransition
+	s.notifyTransition = func(_ context.Context, tr syncStateTransition) error {
+		transitions = append(transitions, tr)
+		return nil
+	}
+
+	for range eng.results {
+		s.runOnce(context.Background())
+	}
+
+	if len(transitions) != 4 {
+		t.Fatalf("transitions len = %d, want 4: %+v", len(transitions), transitions)
+	}
+	tests := []struct {
+		i       int
+		kind    syncTransitionKind
+		outcome provenance.SyncOutcome
+		detail  string
+	}{
+		{0, syncTransitionAttentionRequired, provenance.SyncBlocked, "first untrusted commit abc123"},
+		{1, syncTransitionAttentionRequired, provenance.SyncBlocked, "first untrusted commit def456"},
+		{2, syncTransitionAttentionRequired, provenance.SyncDiverged, "local and remote diverged"},
+		{3, syncTransitionRecovered, provenance.SyncFastForwarded, ""},
+	}
+	for _, tt := range tests {
+		tr := transitions[tt.i]
+		if tr.Kind != tt.kind || tr.Current.Outcome != tt.outcome || tr.Current.Detail != tt.detail {
+			t.Errorf("transition[%d] = kind=%q outcome=%q detail=%q, want %q/%q/%q",
+				tt.i, tr.Kind, tr.Current.Outcome, tr.Current.Detail, tt.kind, tt.outcome, tt.detail)
+		}
+	}
+	if transitions[3].Previous.Outcome != provenance.SyncDiverged {
+		t.Fatalf("recovery previous outcome = %q, want diverged", transitions[3].Previous.Outcome)
+	}
+}
+
 // TestRunReturnsOnCancel covers both loop shapes: a manual (interval<=0) syncer
 // runs one pass then blocks on ctx, and a ticker syncer waits — both must
 // return promptly when the context is cancelled, and neither may panic on a

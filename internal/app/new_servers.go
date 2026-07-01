@@ -647,6 +647,14 @@ func (a *App) initServers(s *newState) error {
 			return a.loopDefinitionRuntime.StartScheduleWatcher(ctx)
 		})
 	}
+	if len(a.docRootSyncers) > 0 {
+		a.deferWorker("docroot-sync", func(ctx context.Context) error {
+			for _, syncer := range a.docRootSyncers {
+				go syncer.Run(ctx)
+			}
+			return nil
+		})
+	}
 	if mqttConnectWorker != nil {
 		a.deferWorker("mqtt-connect", mqttConnectWorker)
 	}

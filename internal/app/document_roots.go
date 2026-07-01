@@ -220,6 +220,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			if err != nil {
 				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s.git.remote: %w", root, err)
 			}
+			syncer.notifyTransition = a.docRootSyncAttentionNotifier()
 			a.docRootSyncers = append(a.docRootSyncers, syncer)
 		}
 	}
