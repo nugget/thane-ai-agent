@@ -12,9 +12,10 @@ import (
 // SetWorkingMemoryStore adds the session_working_memory tool to the
 // registry and stores a Registry-level reference so other tools
 // (notably archive_search) can search across working memory as part
-// of the unified multi-surface retrieval. Should be called before
-// SetArchiveStore so the latter sees the working memory store when
-// composing the MemorySearcher.
+// of the unified multi-surface retrieval. Order-independent with
+// SetArchiveStore: whichever runs second re-composes archive_search via
+// composeArchiveSearch, so the working-memory surface is never silently
+// dropped (#1096).
 //
 // This tool allows the agent to read and write free-form experiential
 // notes for the current conversation, capturing texture that mechanical
@@ -73,4 +74,7 @@ func (r *Registry) SetWorkingMemoryStore(store *memory.WorkingMemoryStore) {
 			}
 		},
 	})
+	// Re-compose archive_search so it includes the working-memory surface
+	// even when SetWorkingMemoryStore runs after SetArchiveStore.
+	r.composeArchiveSearch()
 }

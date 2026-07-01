@@ -77,6 +77,7 @@ type Registry struct {
 	lensStore          *LensStore
 	logIndexDB         *sql.DB
 	workingMemoryStore *memory.WorkingMemoryStore
+	archiveStore       *memory.ArchiveStore
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 

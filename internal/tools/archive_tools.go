@@ -71,11 +71,24 @@ const archiveTranscriptByteCap = 32000
 // uses the same MemorySearcher, so the two retrieval paths can't
 // drift apart.
 func (r *Registry) SetArchiveStore(store *memory.ArchiveStore) {
-	searcher := memory.NewMemorySearch(store, r.workingMemoryStore, nil)
-	r.registerArchiveSearch(searcher)
+	r.archiveStore = store
+	r.composeArchiveSearch()
 	r.registerArchiveSessions(store)
 	r.registerArchiveSessionTranscript(store)
 	r.registerArchiveRange(store)
+}
+
+// composeArchiveSearch (re)registers archive_search from the currently wired
+// archive and working-memory stores. Both SetArchiveStore and
+// SetWorkingMemoryStore call it, so the unified searcher picks up whichever
+// store is set second — archive_search no longer silently drops the
+// working-memory surface when the two setters run out of order (#1096). It is
+// a no-op until the archive store is present.
+func (r *Registry) composeArchiveSearch() {
+	if r.archiveStore == nil {
+		return
+	}
+	r.registerArchiveSearch(memory.NewMemorySearch(r.archiveStore, r.workingMemoryStore, nil))
 }
 
 func (r *Registry) registerArchiveSearch(searcher memory.MemorySearcher) {

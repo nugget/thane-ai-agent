@@ -15,12 +15,7 @@ import (
 func TestBuildSystemPrompt_OmitsConversationHistory(t *testing.T) {
 	l := newMinimalLoop()
 
-	history := []memory.Message{
-		{Role: "user", Content: "Turn on the lights", Timestamp: time.Now().Add(-time.Hour)},
-		{Role: "assistant", Content: "Done, lights are on.", Timestamp: time.Now().Add(-59 * time.Minute)},
-	}
-
-	prompt := l.buildSystemPrompt(context.Background(), "what is the temperature?", history)
+	prompt := l.buildSystemPrompt(context.Background(), "what is the temperature?")
 
 	for _, marker := range []string{
 		"## Conversation History",

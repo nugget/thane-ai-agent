@@ -1015,17 +1015,17 @@ type promptSection struct {
 	end   int
 }
 
-func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, _ []memory.Message) string {
-	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, nil, llm.DefaultModelInteractionProfile())
+func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
+	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, llm.DefaultModelInteractionProfile())
 	return prompt
 }
 
-func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage string, _ []memory.Message, profile llm.ModelInteractionProfile) string {
-	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, nil, profile)
+func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage string, profile llm.ModelInteractionProfile) string {
+	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, profile)
 	return prompt
 }
 
-func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMessage string, _ []memory.Message, profile llm.ModelInteractionProfile) (string, []llm.PromptSection) {
+func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMessage string, profile llm.ModelInteractionProfile) (string, []llm.PromptSection) {
 	var sb strings.Builder
 	promptMode := agentctx.PromptModeFromContext(ctx)
 	taskPrompt := promptMode == agentctx.PromptModeTask
@@ -1792,7 +1792,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
 	} else {
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, llm.DefaultModelInteractionProfile())
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
@@ -1825,7 +1825,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			return
 		}
 		usageInfo.Model = model
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
 		updateSystemMessage()
 	}
 
@@ -2152,7 +2152,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, history, l.modelInteractionProfileForModel(currentModel))
+				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				msgs[0].Content = rebuilt

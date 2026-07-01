@@ -13,13 +13,12 @@ func TestBuildSystemPromptWithProfile_AddsToolCallingContractForRawTextModels(t 
 	prompt := l.buildSystemPromptWithProfile(
 		testCtxForLoop(l),
 		"activate forge",
-		nil,
+
 		llm.ProfileForModel(llm.ModelProfileInput{
 			Provider: "lmstudio",
 			Model:    "google/gemma-3-4b",
 			Family:   "gemma3",
-		}),
-	)
+		}))
 
 	if !strings.Contains(prompt, "## Tool Calling Contract") {
 		t.Fatalf("prompt missing Tool Calling Contract section: %s", prompt)
@@ -41,9 +40,8 @@ func TestBuildSystemPromptWithProfile_OmitsToolCallingContractForNativeModels(t 
 	prompt := l.buildSystemPromptWithProfile(
 		testCtxForLoop(l),
 		"hello",
-		nil,
-		llm.DefaultModelInteractionProfile(),
-	)
+
+		llm.DefaultModelInteractionProfile())
 
 	if strings.Contains(prompt, "## Tool Calling Contract") {
 		t.Fatalf("prompt unexpectedly included Tool Calling Contract: %s", prompt)
