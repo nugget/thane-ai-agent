@@ -35,12 +35,20 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
 	}
-	statuses := r.liveLoopRegistry.Statuses()
-	containers := make([]map[string]any, 0)
-	for _, s := range statuses {
-		if s.Config.Operation != looppkg.OperationContainer {
-			continue
+	// Collect and sort the container statuses by name up front so the rows
+	// emit in a stable order without post-sorting an untyped map slice.
+	containerStatuses := make([]looppkg.Status, 0)
+	for _, s := range r.liveLoopRegistry.Statuses() {
+		if s.Config.Operation == looppkg.OperationContainer {
+			containerStatuses = append(containerStatuses, s)
 		}
+	}
+	sort.Slice(containerStatuses, func(i, j int) bool {
+		return containerStatuses[i].Name < containerStatuses[j].Name
+	})
+
+	containers := make([]map[string]any, 0, len(containerStatuses))
+	for _, s := range containerStatuses {
 		children := r.liveLoopRegistry.Children(s.ID)
 		sample := make([]string, 0, loopContainerSampleChildrenCap)
 		for _, c := range children {
@@ -58,9 +66,6 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 			"sample_children":  sample,
 		})
 	}
-	sort.Slice(containers, func(i, j int) bool {
-		return containers[i]["name"].(string) < containers[j]["name"].(string)
-	})
 	return ldMarshalToolJSON(map[string]any{
 		"status":     "ok",
 		"containers": containers,

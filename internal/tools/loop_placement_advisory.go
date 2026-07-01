@@ -31,8 +31,13 @@ func buildPlacementAdvisory(loopName, parentName string, loopTags []string, cont
 		want[t] = true
 	}
 
+	// Sort containers by name up front so candidates emit in a stable order
+	// without post-sorting an untyped map slice.
+	sorted := append([]containerTagSet(nil), containers...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
+
 	candidates := make([]map[string]any, 0)
-	for _, c := range containers {
+	for _, c := range sorted {
 		if c.name == loopName {
 			// Never suggest a loop nest under itself — relevant when the loop
 			// being placed is itself a container (create) or an update to an
@@ -58,9 +63,6 @@ func buildPlacementAdvisory(loopName, parentName string, loopTags []string, cont
 	if len(candidates) == 0 {
 		return nil
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i]["container"].(string) < candidates[j]["container"].(string)
-	})
 
 	return map[string]any{
 		"message": fmt.Sprintf(
