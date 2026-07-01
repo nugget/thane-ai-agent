@@ -407,6 +407,11 @@ func TestLoopViewByID_IsIDPreciseUnderNameCollision(t *testing.T) {
 		if v.ID == nil || *v.ID != id {
 			t.Errorf("loopViewByID(%s) resolved to id %v — a same-named sibling's row leaked into this loop's self-context", id, v.ID)
 		}
+		// A "worker" definition backs this name, so the collision path must carry
+		// its (per-name) policy, not fall back to a misleading "ephemeral".
+		if v.PolicyState == "ephemeral" {
+			t.Errorf("loopViewByID(%s) reported policy_state=ephemeral, but a definition backs this name — the definition's policy must be carried", id)
+		}
 	}
 }
 
