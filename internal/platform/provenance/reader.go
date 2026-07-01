@@ -33,6 +33,10 @@ type Reader interface {
 
 	// Revisions returns a page of the file's commit history, newest first.
 	Revisions(ctx context.Context, filename string, opts RevisionOptions) (RevisionPage, error)
+
+	// SignerFor reports who signed one commit and whether the signature is
+	// trusted. Verification never fails the call.
+	SignerFor(ctx context.Context, commit string) (CommitSigner, error)
 }
 
 // Revision identifies one commit in a file's history.
@@ -49,6 +53,9 @@ type Revision struct {
 	Timestamp time.Time
 	// Message is the commit subject.
 	Message string
+	// Signer describes who signed this revision, populated only when
+	// [RevisionOptions.WithSigners] is set; nil otherwise.
+	Signer *CommitSigner
 }
 
 // RevisionOptions bounds a [Reader.Revisions] page.
@@ -59,6 +66,9 @@ type RevisionOptions struct {
 	// Before, when set to a commit hash, returns only revisions strictly
 	// older than it — the pagination cursor. Empty starts at HEAD.
 	Before string
+	// WithSigners populates each returned revision's Signer via the same
+	// signature check as [Reader.SignerFor], folded into one git call.
+	WithSigners bool
 }
 
 // RevisionPage is one page of file history.
@@ -123,7 +133,7 @@ func (s *Store) Diff(ctx context.Context, from, to, filename string, format Diff
 func (s *Store) Revisions(ctx context.Context, filename string, opts RevisionOptions) (RevisionPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return readRevisions(ctx, s.path, filename, opts)
+	return readRevisions(ctx, s.path, s.allowedSignersPath, filename, opts)
 }
 
 // --- *Verifier satisfies Reader (read-only, so a required root without a
@@ -152,7 +162,7 @@ func (v *Verifier) Diff(ctx context.Context, from, to, filename string, format D
 func (v *Verifier) Revisions(ctx context.Context, filename string, opts RevisionOptions) (RevisionPage, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return readRevisions(ctx, v.path, filename, opts)
+	return readRevisions(ctx, v.path, v.allowedSignersPath, filename, opts)
 }
 
 // --- shared implementations ---
@@ -202,7 +212,7 @@ func describeRevision(ctx context.Context, repoPath, filename, commit, selector 
 	if err != nil {
 		return Revision{}, fmt.Errorf("describe revision %s: %w", shorten(commit), err)
 	}
-	rev, err := parseRevisionLine(strings.TrimSpace(meta))
+	rev, err := parseRevisionLine(strings.TrimSpace(meta), false)
 	if err != nil {
 		return Revision{}, err
 	}
@@ -283,7 +293,7 @@ func diffNumstat(ctx context.Context, repoPath, from, to, filename string) (int,
 	return added, removed, nil
 }
 
-func readRevisions(ctx context.Context, repoPath, filename string, opts RevisionOptions) (RevisionPage, error) {
+func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename string, opts RevisionOptions) (RevisionPage, error) {
 	total := 0
 	if out, err := runGitText(ctx, repoPath, "rev-list", "--count", "HEAD", "--", filename); err == nil {
 		total, _ = strconv.Atoi(strings.TrimSpace(out))
@@ -304,9 +314,21 @@ func readRevisions(ctx context.Context, repoPath, filename string, opts Revision
 		start = before + "^"
 	}
 
-	// Fetch one extra to detect whether an older page exists.
-	meta, err := runGitText(ctx, repoPath, "log",
-		"--format=%H%x00%aI%x00%s", fmt.Sprintf("-n%d", limit+1), start, "--", filename)
+	// Fold signature attribution into the same log call when requested, so a
+	// page costs one git invocation rather than one verify per revision.
+	// Fetch one extra entry to detect whether an older page exists.
+	format := "%H%x00%aI%x00%s"
+	logArgs := func() []string {
+		return []string{"log", "--format=" + format, fmt.Sprintf("-n%d", limit+1), start, "--", filename}
+	}
+	var meta string
+	var err error
+	if opts.WithSigners {
+		format += "%x00%G?%x00%GS%x00%GF"
+		meta, err = runGitTextVerify(ctx, repoPath, allowedSignersPath, logArgs()...)
+	} else {
+		meta, err = runGitText(ctx, repoPath, logArgs()...)
+	}
 	if err != nil {
 		// An empty repo or an out-of-range cursor yields no history.
 		return RevisionPage{Total: total}, nil
@@ -317,7 +339,7 @@ func readRevisions(ctx context.Context, repoPath, filename string, opts Revision
 		if line == "" {
 			continue
 		}
-		rev, err := parseRevisionLine(line)
+		rev, err := parseRevisionLine(line, opts.WithSigners)
 		if err != nil {
 			return RevisionPage{}, err
 		}
@@ -346,22 +368,32 @@ func readRevisions(ctx context.Context, repoPath, filename string, opts Revision
 	return page, nil
 }
 
-// parseRevisionLine parses a "hash\x00RFC3339\x00subject" log line.
-func parseRevisionLine(line string) (Revision, error) {
-	parts := strings.SplitN(line, "\x00", 3)
-	if len(parts) != 3 {
+// parseRevisionLine parses a log line "hash\x00RFC3339\x00subject", optionally
+// followed by "\x00%G?\x00%GS\x00%GF" when withSigner is set.
+func parseRevisionLine(line string, withSigner bool) (Revision, error) {
+	fields := 3
+	if withSigner {
+		fields = 6
+	}
+	parts := strings.SplitN(line, "\x00", fields)
+	if len(parts) < 3 {
 		return Revision{}, fmt.Errorf("malformed revision line %q", line)
 	}
 	t, err := time.Parse(time.RFC3339, parts[1])
 	if err != nil {
 		return Revision{}, fmt.Errorf("parse revision timestamp %q: %w", parts[1], err)
 	}
-	return Revision{
+	rev := Revision{
 		Commit:    parts[0],
 		Short:     shorten(parts[0]),
 		Timestamp: t,
 		Message:   parts[2],
-	}, nil
+	}
+	if withSigner && len(parts) == 6 {
+		cs := parseCommitSigner(parts[3], parts[4], parts[5])
+		rev.Signer = &cs
+	}
+	return rev, nil
 }
 
 func shorten(hash string) string {
