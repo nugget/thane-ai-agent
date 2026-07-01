@@ -209,3 +209,38 @@ func TestReaderVerifierSatisfiesReader(t *testing.T) {
 		t.Fatalf("Verifier.Blob = %q, %v", got, err)
 	}
 }
+
+// TestReaderRejectsArgumentInjection locks in the hardening: option-like
+// revisions, traversal/absolute paths, and bad cursors are refused before
+// reaching git.
+func TestReaderRejectsArgumentInjection(t *testing.T) {
+	s := buildReaderRepo(t)
+	ctx := t.Context()
+
+	if _, err := s.ResolveRevision(ctx, "kb/doc.md", "--output=/tmp/x"); err == nil {
+		t.Fatal("ResolveRevision accepted an option-like selector")
+	}
+	if _, err := s.Blob(ctx, "--upload-pack=x", "kb/doc.md"); err == nil {
+		t.Fatal("Blob accepted an option-like revision")
+	}
+	if _, err := s.Diff(ctx, "-O/tmp/x", "HEAD", "kb/doc.md", DiffPatch); err == nil {
+		t.Fatal("Diff accepted an option-like from")
+	}
+	if _, err := s.SignerFor(ctx, "--foo"); err == nil {
+		t.Fatal("SignerFor accepted an option-like commit")
+	}
+
+	// Path traversal and absolute paths are refused.
+	if _, err := s.ResolveRevision(ctx, "../escape.md", "HEAD"); err == nil {
+		t.Fatal("ResolveRevision accepted a traversal path")
+	}
+	if _, err := s.Blob(ctx, "HEAD", "/etc/passwd"); err == nil {
+		t.Fatal("Blob accepted an absolute path")
+	}
+
+	// A syntactically valid but nonexistent cursor surfaces an error rather
+	// than masking as an empty page.
+	if _, err := s.Revisions(ctx, "kb/doc.md", RevisionOptions{Before: "deadbeefcafe"}); err == nil {
+		t.Fatal("Revisions accepted an invalid pagination cursor")
+	}
+}

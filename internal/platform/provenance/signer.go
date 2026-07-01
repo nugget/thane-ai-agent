@@ -47,8 +47,11 @@ func (v *Verifier) SignerFor(ctx context.Context, commit string) (CommitSigner, 
 }
 
 func signerFor(ctx context.Context, repoPath, allowedSignersPath, commit string) (CommitSigner, error) {
+	if err := checkRevisionArg("commit", commit); err != nil {
+		return CommitSigner{}, err
+	}
 	out, err := runGitTextVerify(ctx, repoPath, allowedSignersPath,
-		"log", "-1", "--format=%G?%x00%GS%x00%GF", commit)
+		"log", "-1", "--format=%G?%x00%GS%x00%GF", "--end-of-options", commit)
 	if err != nil {
 		return CommitSigner{}, fmt.Errorf("read signer for %s: %w", shorten(commit), err)
 	}

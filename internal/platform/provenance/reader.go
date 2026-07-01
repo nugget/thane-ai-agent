@@ -168,10 +168,13 @@ func (v *Verifier) Revisions(ctx context.Context, filename string, opts Revision
 // --- shared implementations ---
 
 func resolveRevision(ctx context.Context, repoPath, filename, selector string) (Revision, error) {
+	if err := validateFilename(filename); err != nil {
+		return Revision{}, fmt.Errorf("resolve revision: %w", err)
+	}
 	sel := strings.TrimSpace(selector)
 	switch strings.ToLower(sel) {
 	case "", "head", "latest":
-		commit, err := runGitText(ctx, repoPath, "rev-list", "-1", "HEAD", "--", filename)
+		commit, err := runGitText(ctx, repoPath, "rev-list", "-1", "--end-of-options", "HEAD", "--", filename)
 		if err != nil {
 			return Revision{}, fmt.Errorf("resolve revision: %w", err)
 		}
@@ -180,15 +183,19 @@ func resolveRevision(ctx context.Context, repoPath, filename, selector string) (
 
 	if t, err := time.Parse(time.RFC3339, sel); err == nil {
 		commit, err := runGitText(ctx, repoPath, "rev-list", "-1",
-			"--before="+t.UTC().Format(time.RFC3339), "HEAD", "--", filename)
+			"--before="+t.UTC().Format(time.RFC3339), "--end-of-options", "HEAD", "--", filename)
 		if err != nil {
 			return Revision{}, fmt.Errorf("resolve revision at %s: %w", sel, err)
 		}
 		return describeRevision(ctx, repoPath, filename, strings.TrimSpace(commit), sel)
 	}
 
-	// Otherwise treat the selector as a commit-ish hash.
-	full, err := runGitText(ctx, repoPath, "rev-parse", "--verify", "--quiet", sel+"^{commit}")
+	// Otherwise treat the selector as a commit-ish hash. Validate it can't be
+	// mistaken for a git option before it reaches the command line.
+	if err := checkRevisionArg("revision", sel); err != nil {
+		return Revision{}, err
+	}
+	full, err := runGitText(ctx, repoPath, "rev-parse", "--verify", "--quiet", "--end-of-options", sel+"^{commit}")
 	if err != nil {
 		return Revision{}, fmt.Errorf("revision %q is not a known commit, timestamp, or HEAD", selector)
 	}
@@ -237,13 +244,19 @@ func revisionIndex(ctx context.Context, repoPath, filename, commit string) (int,
 }
 
 func readBlob(ctx context.Context, repoPath, rev, filename string) (string, error) {
+	if err := validateFilename(filename); err != nil {
+		return "", fmt.Errorf("read blob: %w", err)
+	}
 	rev = strings.TrimSpace(rev)
 	if rev == "" {
 		rev = "HEAD"
 	}
+	if err := checkRevisionArg("revision", rev); err != nil {
+		return "", err
+	}
 	// Raw content — no trimming, since a document's own leading/trailing
 	// whitespace is meaningful.
-	out, err := runGitText(ctx, repoPath, "show", rev+":"+filename)
+	out, err := runGitText(ctx, repoPath, "show", "--end-of-options", rev+":"+filename)
 	if err != nil {
 		return "", fmt.Errorf("read %s at %s: %w", filename, shorten(rev), err)
 	}
@@ -251,10 +264,19 @@ func readBlob(ctx context.Context, repoPath, rev, filename string) (string, erro
 }
 
 func readDiff(ctx context.Context, repoPath, from, to, filename string, format DiffFormat) (RevisionDiff, error) {
+	if err := validateFilename(filename); err != nil {
+		return RevisionDiff{}, fmt.Errorf("diff: %w", err)
+	}
 	if format != DiffPatch && format != DiffStat {
 		format = DiffPatch
 	}
 	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if err := checkRevisionArg("from", from); err != nil {
+		return RevisionDiff{}, err
+	}
+	if err := checkRevisionArg("to", to); err != nil {
+		return RevisionDiff{}, err
+	}
 
 	added, removed, err := diffNumstat(ctx, repoPath, from, to, filename)
 	if err != nil {
@@ -265,7 +287,7 @@ func readDiff(ctx context.Context, repoPath, from, to, filename string, format D
 	if format == DiffStat {
 		bodyArgs = append(bodyArgs, "--stat")
 	}
-	bodyArgs = append(bodyArgs, from, to, "--", filename)
+	bodyArgs = append(bodyArgs, "--end-of-options", from, to, "--", filename)
 	body, err := runGitText(ctx, repoPath, bodyArgs...)
 	if err != nil {
 		return RevisionDiff{}, fmt.Errorf("diff %s %s..%s: %w", filename, shorten(from), shorten(to), err)
@@ -276,7 +298,7 @@ func readDiff(ctx context.Context, repoPath, from, to, filename string, format D
 // diffNumstat returns the added/removed line counts for filename between two
 // revisions. Binary changes (numstat "-") report as zero.
 func diffNumstat(ctx context.Context, repoPath, from, to, filename string) (int, int, error) {
-	out, err := runGitText(ctx, repoPath, "diff", "--numstat", from, to, "--", filename)
+	out, err := runGitText(ctx, repoPath, "diff", "--numstat", "--end-of-options", from, to, "--", filename)
 	if err != nil {
 		return 0, 0, fmt.Errorf("diffstat %s: %w", filename, err)
 	}
@@ -294,8 +316,11 @@ func diffNumstat(ctx context.Context, repoPath, from, to, filename string) (int,
 }
 
 func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename string, opts RevisionOptions) (RevisionPage, error) {
+	if err := validateFilename(filename); err != nil {
+		return RevisionPage{}, fmt.Errorf("revisions: %w", err)
+	}
 	total := 0
-	if out, err := runGitText(ctx, repoPath, "rev-list", "--count", "HEAD", "--", filename); err == nil {
+	if out, err := runGitText(ctx, repoPath, "rev-list", "--count", "--end-of-options", "HEAD", "--", filename); err == nil {
 		total, _ = strconv.Atoi(strings.TrimSpace(out))
 	}
 
@@ -309,6 +334,14 @@ func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename s
 
 	start := "HEAD"
 	if before := strings.TrimSpace(opts.Before); before != "" {
+		if err := checkRevisionArg("before", before); err != nil {
+			return RevisionPage{}, err
+		}
+		// Surface an invalid cursor instead of masking it as an empty page.
+		if _, err := runGitText(ctx, repoPath, "rev-parse", "--verify", "--quiet",
+			"--end-of-options", before+"^{commit}"); err != nil {
+			return RevisionPage{}, fmt.Errorf("invalid pagination cursor %q", before)
+		}
 		// Exclude the cursor commit and everything newer; its first parent
 		// and older is the next page.
 		start = before + "^"
@@ -319,7 +352,7 @@ func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename s
 	// Fetch one extra entry to detect whether an older page exists.
 	format := "%H%x00%aI%x00%s"
 	logArgs := func() []string {
-		return []string{"log", "--format=" + format, fmt.Sprintf("-n%d", limit+1), start, "--", filename}
+		return []string{"log", "--format=" + format, fmt.Sprintf("-n%d", limit+1), "--end-of-options", start, "--", filename}
 	}
 	var meta string
 	var err error
@@ -402,6 +435,22 @@ func shorten(hash string) string {
 		return hash[:shortHashLen]
 	}
 	return hash
+}
+
+// checkRevisionArg rejects a revision or cursor value that git could mistake
+// for an option (argument injection): a legitimate ref, hash, or HEAD-ish
+// selector never begins with "-". Together with --end-of-options on the
+// commands and validateFilename on paths, this stops an untrusted caller from
+// smuggling git options through the read surface.
+func checkRevisionArg(kind, rev string) error {
+	rev = strings.TrimSpace(rev)
+	if rev == "" {
+		return fmt.Errorf("%s revision is empty", kind)
+	}
+	if strings.HasPrefix(rev, "-") {
+		return fmt.Errorf("%s revision %q must not begin with '-'", kind, rev)
+	}
+	return nil
 }
 
 // runGitText runs a read-only git command in repoPath and returns its raw
