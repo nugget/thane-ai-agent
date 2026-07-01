@@ -190,6 +190,35 @@ func TestSpawnLoopReturnsCanonicalLoopView(t *testing.T) {
 	}
 }
 
+func TestLoopViewFromStatus_ResolvesAncestryOfDeregisteredLoop(t *testing.T) {
+	// stop_loop captures a loop's status before deregistering it, so by the time
+	// the result is projected the loop is gone from the live batch. Its parent
+	// (still live) must resolve, and ancestry must not come back empty just
+	// because the loop's own id is no longer in the batch.
+	parent, err := looppkg.New(looppkg.Config{Name: "watchers", Operation: looppkg.OperationContainer}, looppkg.Deps{Runner: noopLoopRunner{}})
+	if err != nil {
+		t.Fatalf("New(parent): %v", err)
+	}
+	live := looppkg.NewRegistry(looppkg.WithMaxLoops(3))
+	if err := live.Register(parent); err != nil {
+		t.Fatalf("Register(parent): %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopRuntimeTools(LoopRuntimeToolDeps{Registry: live})
+
+	captured := looppkg.Status{
+		ID: "lp_child", Name: "child", ParentID: parent.ID(),
+		State: looppkg.State("sleeping"), Config: looppkg.Config{Operation: looppkg.OperationService},
+	}
+	lv := reg.loopViewFromStatus(captured)
+	if lv.ParentName == nil || *lv.ParentName != "watchers" {
+		t.Errorf("parent_name = %v, want watchers", lv.ParentName)
+	}
+	if len(lv.Ancestry) != 1 || lv.Ancestry[0] != "watchers" {
+		t.Errorf("ancestry = %v, want [watchers] — a deregistered loop's parent link must still resolve", lv.Ancestry)
+	}
+}
+
 func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 	live := deps.live.GetByName("battery_watch")
@@ -365,7 +394,7 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 	if stopped.Loop["name"] != "battery_watch" {
 		t.Fatalf("stopped loop = %#v, want battery_watch", stopped.Loop)
 	}
-	// B2: stop_loop now returns the spawned loop's canonical LoopView, not the
+	// B2: stop_loop now returns the stopped loop's canonical LoopView, not the
 	// raw Status it used to emit — policy_state is a LoopView-only field.
 	if _, ok := stopped.Loop["policy_state"]; !ok {
 		t.Errorf("stop_loop should return the canonical LoopView, got %#v", stopped.Loop)

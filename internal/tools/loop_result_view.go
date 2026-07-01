@@ -36,12 +36,29 @@ func (r *Registry) loopViewByID(id string) (looppkg.LoopView, bool) {
 
 // loopViewFromStatus projects an already-captured Status — e.g. the pre-stop
 // snapshot stop_loop holds, or a launch's final status — into its canonical
-// LoopView, resolving the graph against the current live batch (the loop itself
-// may no longer be in it).
+// LoopView, resolving the graph against the current live batch.
+//
+// The captured loop is often no longer in the live batch (stop_loop captures it
+// before stopping; a synchronous spawn's loop has finished), so we add the
+// status to the batch before building the resolver. ancestry/child_count are
+// keyed by loop ID, so without its own entry the resolver would report an empty
+// ancestry even when ParentID is known. Guard against double-indexing — which
+// would over-count the parent's child_count — for the case where the loop is
+// still live.
 func (r *Registry) loopViewFromStatus(s looppkg.Status) looppkg.LoopView {
 	var statuses []looppkg.Status
 	if r.liveLoopRegistry != nil {
 		statuses = r.liveLoopRegistry.Statuses()
+	}
+	present := false
+	for _, existing := range statuses {
+		if existing.ID == s.ID {
+			present = true
+			break
+		}
+	}
+	if !present {
+		statuses = append(statuses, s)
 	}
 	return r.loopViewResolver(statuses).FromStatus(s)
 }
