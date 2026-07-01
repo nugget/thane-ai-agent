@@ -976,6 +976,62 @@ type DocumentRootGitConfig struct {
 	// never replaces or removes from it. Use it to let an operator
 	// co-author a signed root.
 	AllowedSigners []AllowedSigner `yaml:"allowed_signers,omitempty"`
+
+	// Remote optionally makes this root a full git citizen that fetches,
+	// verifies, and (in bidirectional mode) pushes against a shared remote.
+	// Nil means local-only — behavior is byte-for-byte as it is without a
+	// remote. The remote is untrusted transport: it conveys commits but
+	// never confers trust, which comes only from signature verification
+	// against the out-of-tree trust_anchor. Ignored unless Enabled.
+	Remote *DocumentRootGitRemoteConfig `yaml:"remote,omitempty"`
+}
+
+// DocumentRootGitRemoteConfig configures optional sync of a git-backed
+// document root against a shared remote.
+type DocumentRootGitRemoteConfig struct {
+	// URL is the remote git URL (SSH like user@host:path, ssh://…, or an
+	// https URL). Required.
+	URL string `yaml:"url"`
+
+	// Branch is the remote branch to track. Empty means the sync uses
+	// "main" (applied where the remote is consumed, not by config Load).
+	Branch string `yaml:"branch,omitempty"`
+
+	// Mode is required and explicit: "fetch" (pull the operator's signed
+	// commits in) or "bidirectional" (also push thane's own signed commits
+	// out). There is no default, so a one-way setup is never silent.
+	Mode string `yaml:"mode"`
+
+	// Interval is the sync poll cadence as a Go duration (e.g. "60s").
+	// Empty means the sync uses 60s (applied where the remote is consumed,
+	// not by config Load); "0" disables the timer (manual/trigger-only).
+	Interval string `yaml:"interval,omitempty"`
+
+	// TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
+	// verification checks against. It must live outside the synced tree so a
+	// fetched commit can never rewrite the trust set. See #1135.
+	TrustAnchor string `yaml:"trust_anchor,omitempty"`
+
+	// Auth carries transport credentials only — never commit-signing
+	// material.
+	Auth DocumentRootGitRemoteAuthConfig `yaml:"auth,omitempty"`
+}
+
+// DocumentRootGitRemoteAuthConfig carries transport credentials for a remote.
+// The transport key proves "who may reach the remote"; the signing key proves
+// "who authored the commit" — they are deliberately distinct.
+type DocumentRootGitRemoteAuthConfig struct {
+	// SSHKey is the private key path for SSH transport, passed via
+	// GIT_SSH_COMMAND with IdentitiesOnly. Must not equal git.signing_key.
+	SSHKey string `yaml:"ssh_key,omitempty"`
+
+	// KnownHosts is the pinned known_hosts file, required for an SSH url:
+	// host-key verification is strict, with no trust-on-first-use.
+	KnownHosts string `yaml:"known_hosts,omitempty"`
+
+	// Token is an https personal access token. Documented, but SSH is the
+	// recommended transport.
+	Token string `yaml:"token,omitempty"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -2782,8 +2838,80 @@ func (c *Config) validateDocRoots() error {
 		if err := validateAllowedSigners(fmt.Sprintf("doc_roots.%s.git.allowed_signers", root), git.AllowedSigners); err != nil {
 			return err
 		}
+		if err := validateGitRemote(root, git); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateGitRemote fail-closed-checks an optional remote-sync block. The
+// structural invariants are enforced here; checks that need the resolved
+// on-disk repo path (that trust_anchor is genuinely outside the tree) run at
+// wiring time.
+func validateGitRemote(root string, git DocumentRootGitConfig) error {
+	r := git.Remote
+	if r == nil {
+		return nil
+	}
+	label := fmt.Sprintf("doc_roots.%s.git.remote", root)
+	if !git.Enabled {
+		return fmt.Errorf("%s requires doc_roots.%s.git.enabled", label, root)
+	}
+	if strings.TrimSpace(r.URL) == "" {
+		return fmt.Errorf("%s.url is required", label)
+	}
+	switch strings.TrimSpace(r.Mode) {
+	case "fetch":
+	case "bidirectional":
+		if !git.SignCommits {
+			return fmt.Errorf("%s.mode=bidirectional requires git.sign_commits: thane must sign the commits it pushes", label)
+		}
+	case "":
+		return fmt.Errorf("%s.mode is required and must be \"fetch\" or \"bidirectional\"", label)
+	default:
+		return fmt.Errorf("%s.mode %q must be \"fetch\" or \"bidirectional\"", label, r.Mode)
+	}
+	if v := strings.TrimSpace(r.Interval); v != "" && v != "0" {
+		if _, err := time.ParseDuration(v); err != nil {
+			return fmt.Errorf("%s.interval %q must be a Go duration like \"60s\" (or \"0\" to disable the timer): %w", label, r.Interval, err)
+		}
+	}
+	if isSSHGitURL(r.URL) && strings.TrimSpace(r.Auth.KnownHosts) == "" {
+		return fmt.Errorf("%s.auth.known_hosts is required for an SSH url (host keys are pinned; there is no trust-on-first-use)", label)
+	}
+	if key := strings.TrimSpace(r.Auth.SSHKey); key != "" && key == strings.TrimSpace(git.SigningKey) {
+		return fmt.Errorf("%s.auth.ssh_key must not be the same key as git.signing_key: transport auth and commit signing are separate", label)
+	}
+	// Verification needs an out-of-tree trust anchor; without it the
+	// operator's own signed history would read as untrusted and the root
+	// would boot permanently blocked.
+	verify := strings.TrimSpace(git.VerifySignatures)
+	if (verify == "warn" || verify == "required") && strings.TrimSpace(r.TrustAnchor) == "" {
+		return fmt.Errorf("%s.trust_anchor is required when verify_signatures is %q: it must be an out-of-tree allowed_signers file", label, verify)
+	}
+	return nil
+}
+
+// isSSHGitURL reports whether a git remote URL uses SSH transport (an ssh://
+// URL or the scp-like [user@]host:path form), as opposed to https/git. It
+// mirrors git's own rule: a URL with no scheme is scp-like when its first
+// colon comes before any slash — which also catches the user-less "host:repo"
+// form that must still require pinned host keys.
+func isSSHGitURL(url string) bool {
+	u := strings.TrimSpace(url)
+	if strings.HasPrefix(u, "ssh://") {
+		return true
+	}
+	if strings.Contains(u, "://") {
+		return false
+	}
+	colon := strings.IndexByte(u, ':')
+	if colon < 0 {
+		return false // a local path, no remote host
+	}
+	slash := strings.IndexByte(u, '/')
+	return slash < 0 || colon < slash
 }
 
 // validateSigning checks the shared operator allowed-signers block.
