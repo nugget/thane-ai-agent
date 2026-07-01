@@ -37,6 +37,12 @@ const (
 	// failed verification, the worktree was dirty, HEAD was detached, or a
 	// similar fail-closed condition. Detail explains which.
 	SyncBlocked SyncOutcome = "blocked"
+	// SyncRemoteBehind means the remote rewound: the fetched remote head is a
+	// strict ancestor of the head the caller last saw (LastKnownRemote). The
+	// engine refuses with no side effects rather than pushing local commits
+	// back over what looks like an intentional history rewrite; the operator
+	// resolves it on the workstation.
+	SyncRemoteBehind SyncOutcome = "remote_behind"
 )
 
 // SyncRequest parameterizes one sync pass. The engine is stateless: every
@@ -58,6 +64,13 @@ type SyncRequest struct {
 	// for any signed root synced from an untrusted remote; it does not
 	// downgrade to advisory ("warn") for a worktree-mutating fast-forward.
 	RequireVerify bool
+	// LastKnownRemote is the remote head SHA the caller observed on its
+	// previous pass, or empty on the first. It lets the otherwise-stateless
+	// engine detect a rewound remote: if the freshly fetched remote head is a
+	// strict ancestor of LastKnownRemote, the pass returns SyncRemoteBehind
+	// with no side effects instead of pushing local commits back over the
+	// rewind. Cross-pass memory of this value lives in the operability layer.
+	LastKnownRemote string
 }
 
 // SyncResult reports what one pass observed and did. Once a pass reaches
@@ -177,6 +190,29 @@ func (s *Store) syncLocked(ctx context.Context, req SyncRequest) (SyncResult, st
 	}
 
 	res := SyncResult{Ahead: ahead, Behind: behind, LocalHead: localHead, RemoteHead: remoteHead}
+
+	// Rewind guard: if the caller saw a different remote head last pass and the
+	// freshly fetched head is a strict ancestor of it, the remote rewound.
+	// Refuse with no side effects rather than pushing local commits back over
+	// what is likely an intentional history rewrite. A diverging rewrite (the
+	// new head is neither ancestor nor descendant) is not caught here — it
+	// falls through to the diverged classification, which also refuses safely.
+	if req.LastKnownRemote != "" && remoteHead != req.LastKnownRemote {
+		rewound, aerr := s.isAncestor(ctx, remoteHead, req.LastKnownRemote)
+		switch {
+		case aerr != nil:
+			// The prior remote head should be reachable (it was fetched last
+			// pass); a probe failure means it is pruned or misconfigured. The
+			// guard fails open, so surface it rather than silently skipping.
+			s.logger.Warn("rewind check failed; proceeding without it",
+				"branch", req.Branch, "remote_head", shorten(remoteHead),
+				"last_known_remote", shorten(req.LastKnownRemote), "error", aerr)
+		case rewound:
+			res.Outcome = SyncRemoteBehind
+			res.Detail = fmt.Sprintf("remote rewound: %s is behind the previously seen %s; refusing to push over an apparent history rewrite — resolve on the workstation", shorten(remoteHead), shorten(req.LastKnownRemote))
+			return res, "", nil
+		}
+	}
 
 	switch {
 	case ahead == 0 && behind == 0:
