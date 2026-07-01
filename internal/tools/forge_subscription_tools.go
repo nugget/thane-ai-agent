@@ -14,7 +14,7 @@ func (r *Registry) registerForgeSubscriptionTools() {
 	r.Register(&Tool{
 		Name: "forge_repo_follow",
 		Description: "Follow a code forge repository for new releases and/or commits, delivering structured event-source wakes to an existing loop. " +
-			"Use this after creating or identifying a thane_curate loop that owns the output document/corpus strategy.",
+			"Use this after creating or identifying a thane_loop_create service loop that owns the output document/corpus strategy.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -83,5 +83,5 @@ func (r *Registry) registerForgeSubscriptionTools() {
 }
 
 func forgeWakeLoopDefinition() map[string]any {
-	return messages.LoopWakeTargetSchema("Existing loop to wake when repository events are detected. Usually a thane_curate loop that owns the managed document and tagging strategy.")
+	return messages.LoopWakeTargetSchema("Existing loop to wake when repository events are detected. Usually a thane_loop_create service loop that owns the managed document and tagging strategy.")
 }

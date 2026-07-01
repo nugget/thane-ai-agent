@@ -84,7 +84,7 @@ func (a *App) initAwareness(s *newState) error {
 	// whose live state is injected into context each turn. Persisted in
 	// SQLite so the watchlist survives restarts. Shares thane.db. The
 	// store itself is constructed earlier in initStores so initChannels
-	// can wire it into thane_curate; here we register the runtime
+	// can wire it into thane_loop_create; here we register the runtime
 	// context providers that surface its rows into prompts.
 	watchlistStore := a.watchlistStore
 

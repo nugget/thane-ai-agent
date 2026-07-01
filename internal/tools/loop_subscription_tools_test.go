@@ -20,6 +20,7 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "watcher",
+		"operation": "service",
 		"intent":    "watch things",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
@@ -31,7 +32,7 @@ func TestUpdateEntitySubscriptions_AddRemove(t *testing.T) {
 			map[string]any{"entity_id": "sensor.old"},
 		},
 	}); err != nil {
-		t.Fatalf("thane_curate seed: %v", err)
+		t.Fatalf("thane_loop_create seed: %v", err)
 	}
 
 	updateTool := rig.reg.Get("update_entity_subscriptions")
@@ -182,6 +183,7 @@ func TestUpdateEntitySubscriptions_RequiresAddOrRemove(t *testing.T) {
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "loop_one",
+		"operation": "service",
 		"intent":    "x",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
@@ -217,6 +219,7 @@ func TestUpdateEntitySubscriptions_AddErrorsScopedCorrectly(t *testing.T) {
 
 	if _, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "scope_test",
+		"operation": "service",
 		"intent":    "x",
 		"sleep_min": "54m",
 		"sleep_max": "66m",

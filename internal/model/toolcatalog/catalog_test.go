@@ -138,22 +138,15 @@ func TestBuiltinToolCatalogIncludesCoreTools(t *testing.T) {
 }
 
 func TestBuiltinToolCatalogIncludesLoopIntentFrontDoors(t *testing.T) {
-	spec, ok := LookupBuiltinToolSpec("thane_create_container")
+	spec, ok := LookupBuiltinToolSpec("thane_loop_create")
 	if !ok {
-		t.Fatal("thane_create_container missing from builtin tool catalog")
+		t.Fatal("thane_loop_create missing from builtin tool catalog")
 	}
-	if !containsString(spec.Tags, "loops") {
-		t.Fatalf("thane_create_container tags = %v, want loops", spec.Tags)
+	// thane_loop_create is the Core front door (#1106 A) — always offered, so it
+	// carries no capability tag (empty Tags means it is not gated behind `loops`).
+	if len(spec.Tags) != 0 {
+		t.Fatalf("thane_loop_create tags = %v, want none (it is a Core, always-offered tool)", spec.Tags)
 	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestRenderLoadedCapabilitySummary_UsesDescriptionsAndFallsBackForUnknownTags(t *testing.T) {

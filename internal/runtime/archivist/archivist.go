@@ -238,5 +238,5 @@ var archivistExcludeTools = append([]string{
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"tag_activate", "tag_deactivate",
-	"spawn_loop", "thane_now", "thane_assign", "thane_curate", "thane_create_container",
+	"spawn_loop", "thane_now", "thane_assign", "thane_loop_create",
 }, tools.DirectHumanEgressToolNames()...)

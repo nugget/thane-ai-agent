@@ -369,7 +369,7 @@ func TestMutateLoopSubscriptionsWritesPersistedAndLive(t *testing.T) {
 }
 
 // TestBuildLoopFocusTools_RejectsFractionalIntegers mirrors the
-// thane_curate-side coerceInt guard.
+// thane_loop_create-side coerceInt guard.
 func TestBuildLoopFocusTools_RejectsFractionalIntegers(t *testing.T) {
 	t.Parallel()
 	m := newFakeMutator()

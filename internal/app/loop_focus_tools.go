@@ -261,7 +261,7 @@ func stringMapValue(m map[string]any, key string) string {
 }
 
 // intFromMap accepts the same flavors of integer JSON encoding the
-// thane_curate handler does (int, int64, integral float64) and rejects
+// thane_loop_create handler does (int, int64, integral float64) and rejects
 // fractional float values rather than truncating them silently.
 func intFromMap(m map[string]any, key string) (int, error) {
 	raw, present := m[key]

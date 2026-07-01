@@ -32,7 +32,7 @@ func upsertCommitSpec(reg *looppkg.DefinitionRegistry) func(context.Context, loo
 	}
 }
 
-// mkdirAllForTest is a tiny helper used by the thane_curate tests to
+// mkdirAllForTest is a tiny helper used by the thane_loop_create tests to
 // pre-create the document root directory before invoking the document
 // store, which refuses to write into a non-existent root.
 func mkdirAllForTest(dir string) error {
@@ -184,14 +184,14 @@ func TestThaneCurate_RejectsInvalidKnobs(t *testing.T) {
 			return looppkg.LaunchResult{LoopID: "x"}, nil
 		},
 	})
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	if tool == nil {
-		t.Fatal("thane_curate not registered")
+		t.Fatal("thane_loop_create not registered")
 	}
 
 	base := func() map[string]any {
 		return map[string]any{
-			"name": "knob_test", "intent": "track stuff",
+			"name": "knob_test", "intent": "track stuff", "operation": "service",
 			"sleep_min": "5m", "sleep_max": "30m",
 			"output": map[string]any{"mode": "maintain", "document": "kb:knob.md"},
 		}
@@ -266,14 +266,15 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		LaunchDefinition: launchFn,
 	})
 
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	if tool == nil {
-		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
+		t.Fatal("thane_loop_create tool not registered after ConfigureLoopIntentTools")
 	}
 
 	result, err := tool.Handler(context.Background(), map[string]any{
 		"name":      "test_pr_watchlist",
 		"intent":    "Track v1.0 PR activity for the upcoming release.",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -287,7 +288,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 		"metadata":      map[string]any{"team": "release"},
 	})
 	if err != nil {
-		t.Fatalf("thane_curate handler: %v", err)
+		t.Fatalf("thane_loop_create handler: %v", err)
 	}
 
 	// Verify the response shape includes the document, loop, and cadence.
@@ -507,10 +508,11 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 		},
 	})
 
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	_, err = tool.Handler(context.Background(), map[string]any{
 		"name":      "existing_loop",
 		"intent":    "Replace the prior loop without permission.",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -519,7 +521,7 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("expected thane_curate to refuse to clobber existing definition")
+		t.Fatal("expected thane_loop_create to refuse to clobber existing definition")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error %q should mention name collision", err)
@@ -578,10 +580,11 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 		},
 	})
 
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	_, err = tool.Handler(context.Background(), map[string]any{
 		"name":      "fresh_loop",
 		"intent":    "Track something the doc already covers.",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -590,7 +593,7 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("expected thane_curate to refuse to clobber existing document")
+		t.Fatal("expected thane_loop_create to refuse to clobber existing document")
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error %q should mention document collision", err)
@@ -645,10 +648,11 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 		},
 	})
 
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	if _, err := tool.Handler(context.Background(), map[string]any{
 		"name":      "release_journal",
 		"intent":    "Capture forge releases as a dated log.",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -656,7 +660,7 @@ func TestThaneCurate_JournalDeclaresAppendOutput(t *testing.T) {
 			"document": "kb:journal/releases.md",
 		},
 	}); err != nil {
-		t.Fatalf("thane_curate handler: %v", err)
+		t.Fatalf("thane_loop_create handler: %v", err)
 	}
 
 	snap := defRegistry.Snapshot()
@@ -742,13 +746,14 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 	})
 
 	const steering = "Focus on UPS load trends; ignore brief transients under 5 seconds."
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	if tool == nil {
-		t.Fatal("thane_curate tool not registered after ConfigureLoopIntentTools")
+		t.Fatal("thane_loop_create tool not registered after ConfigureLoopIntentTools")
 	}
 	if _, err := tool.Handler(context.Background(), map[string]any{
 		"name":         "instructions_test",
 		"intent":       "Watch the rack.",
+		"operation":    "service",
 		"sleep_min":    "5m",
 		"sleep_max":    "30m",
 		"instructions": "  " + steering + "  ", // whitespace trimmed
@@ -757,7 +762,7 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 			"document": "kb:dashboards/rack.md",
 		},
 	}); err != nil {
-		t.Fatalf("thane_curate handler: %v", err)
+		t.Fatalf("thane_loop_create handler: %v", err)
 	}
 
 	snap := defRegistry.Snapshot()
@@ -821,10 +826,11 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 		},
 	})
 
-	tool := reg.Get("thane_curate")
+	tool := reg.Get("thane_loop_create")
 	if _, err := tool.Handler(context.Background(), map[string]any{
 		"name":      "no_instructions",
 		"intent":    "Watch.",
+		"operation": "service",
 		"sleep_min": "5m",
 		"sleep_max": "30m",
 		"output": map[string]any{
@@ -832,7 +838,7 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 			"document": "kb:dashboards/no-inst.md",
 		},
 	}); err != nil {
-		t.Fatalf("thane_curate handler: %v", err)
+		t.Fatalf("thane_loop_create handler: %v", err)
 	}
 
 	snap := defRegistry.Snapshot()
@@ -852,7 +858,7 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 }
 
 // newCurateTestRig builds the minimum machinery needed for
-// thane_curate-handler tests: in-memory document store, empty
+// thane_loop_create-handler tests: in-memory document store, empty
 // definition registry, fake subscription store, stub launch + reconcile,
 // and a registered-tag recorder. Returned values let each test inspect
 // post-call state without re-running the setup boilerplate.
@@ -898,9 +904,9 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 			return looppkg.LaunchResult{LoopID: "loop-test-" + name}, nil
 		},
 	})
-	rig.tool = rig.reg.Get("thane_curate")
+	rig.tool = rig.reg.Get("thane_loop_create")
 	if rig.tool == nil {
-		t.Fatal("thane_curate not registered")
+		t.Fatal("thane_loop_create not registered")
 	}
 	return rig
 }
@@ -928,6 +934,7 @@ func TestThaneCurate_PersistsSubscriptions(t *testing.T) {
 	result, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "thermostat_journal",
 		"intent":    "Daily HVAC summary.",
+		"operation": "service",
 		"sleep_min": "21h",
 		"sleep_max": "27h",
 		"output": map[string]any{
@@ -947,7 +954,7 @@ func TestThaneCurate_PersistsSubscriptions(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("thane_curate: %v", err)
+		t.Fatalf("thane_loop_create: %v", err)
 	}
 
 	var resp map[string]any
@@ -994,6 +1001,7 @@ func TestThaneCurate_ReplaceOverwritesSubscriptions(t *testing.T) {
 		args := map[string]any{
 			"name":      "hvac_curate",
 			"intent":    "HVAC summary.",
+			"operation": "service",
 			"sleep_min": "21h",
 			"sleep_max": "27h",
 			"output": map[string]any{
@@ -1005,7 +1013,7 @@ func TestThaneCurate_ReplaceOverwritesSubscriptions(t *testing.T) {
 			args[k] = v
 		}
 		if _, err := rig.tool.Handler(context.Background(), args); err != nil {
-			t.Fatalf("thane_curate: %v", err)
+			t.Fatalf("thane_loop_create: %v", err)
 		}
 	}
 
@@ -1049,6 +1057,7 @@ func TestThaneCurate_RejectsDuplicateEntityID(t *testing.T) {
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "dup_test",
 		"intent":    "x",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -1081,6 +1090,7 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	_, err := rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "frac_test",
 		"intent":    "x",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{
@@ -1106,6 +1116,7 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 	_, err = rig.tool.Handler(context.Background(), map[string]any{
 		"name":      "whole_float_test",
 		"intent":    "x",
+		"operation": "service",
 		"sleep_min": "54m",
 		"sleep_max": "66m",
 		"output": map[string]any{

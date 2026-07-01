@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/model/router"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
-	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
 // LoopIntentToolDeps wires the loop-definition registry, document
@@ -23,18 +21,18 @@ import (
 //   - thane_assign (async one-shot delegate) — registered in
 //     app.initDelegation via delegate.AssignToolHandler; not part of
 //     this package.
-//   - thane_curate (recurring service loop) — registered below.
-//   - thane_create_container (durable, non-executing node that groups
-//     loops and holds inheritable tags) — registered below.
+//   - thane_loop_create (the Core front door for creating a durable
+//     service/container/event_driven loop) — registered below. It
+//     replaced the earlier thane_curate + thane_create_container verbs.
 //
 // External wakes to live loops are infrastructural rather than
 // tool-shaped: producer subsystems dispatch structured envelopes over
 // messages.Bus directly, and request_core_attention covers
 // loop → core/owner attention escalation.
 //
-// thane_curate constructs a Spec on the caller's behalf from intent-
-// shaped inputs, then persists + launches through the same registry +
-// reconcile + launch path used by loop_definition_set and
+// thane_loop_create constructs a Spec on the caller's behalf from
+// intent-shaped inputs, then persists + launches through the same
+// registry + reconcile + launch path used by loop_definition_set and
 // loop_definition_launch.
 type LoopIntentToolDeps struct {
 	DocTools *documents.Tools
@@ -44,520 +42,30 @@ type LoopIntentToolDeps struct {
 	// rather than reconciling.
 	PersistSpec func(looppkg.Spec, time.Time) error
 	// CommitSpec durably commits a definition (persist + overlay upsert +
-	// reconcile) in one step. thane_curate and thane_create_container route
-	// through it instead of sequencing the steps by hand.
+	// reconcile) in one step. thane_loop_create routes through it instead of
+	// sequencing the steps by hand.
 	CommitSpec       func(context.Context, looppkg.Spec, time.Time) error
 	LaunchDefinition func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	// LiveRegistry resolves container parent names to live loop IDs and
 	// propagates subscription mutations to running loops. Optional but
-	// strongly recommended: when nil, thane_create_container only
-	// supports top-level containers, and runtime subscription
-	// mutations do not reflect on the live loop until restart.
+	// strongly recommended: when nil, thane_loop_create only supports
+	// top-level loops, and runtime subscription mutations do not reflect on
+	// the live loop until restart.
 	LiveRegistry *looppkg.Registry
 }
 
-// ConfigureLoopIntentTools registers the intent-shaped loop creation
-// tools on the registry. The definition registry and LaunchDefinition
-// helper are required for any tool in the family. thane_curate also
-// needs the document store; when DocTools is nil, it is skipped while
-// thane_create_container still registers (containers don't own
-// documents). Missing the load-bearing pieces silently disables a
-// tool rather than registering one that would panic at call time.
+// ConfigureLoopIntentTools registers the intent-shaped loop creation tools on
+// the registry. The definition registry and LaunchDefinition helper are
+// required. thane_loop_create is Core and registers unconditionally; its output
+// sub-mode surfaces a clear error at call time when DocTools is nil rather than
+// silently disappearing.
 func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 	if r == nil || deps.Registry == nil || deps.LaunchDefinition == nil {
 		return
 	}
 	r.loopIntentDeps = deps
-	if deps.DocTools != nil {
-		r.registerThaneCurate()
-	}
-	r.registerThaneCreateContainer()
+	r.registerThaneLoopCreate()
 	r.registerUpdateEntitySubscriptions()
-}
-
-func (r *Registry) registerThaneCreateContainer() {
-	r.Register(&Tool{
-		Name: "thane_create_container",
-		Description: "Create a durable container loop that groups related loops and provides inheritable capability tags to its descendants. " +
-			"A container is a non-executing node in the loop graph — it never wakes, never runs a task, and produces no output. It exists to organize loops (like a folder), to hold capability tags every descendant inherits at iteration time, and to give the loop visualizer a stable structural node. " +
-			"Use this when you have several loops that share context (e.g., \"home_automation\" containing curate loops for upstairs, downstairs, and the garage) and want them to all inherit a common tag set. " +
-			"parent_name optionally nests this container inside another container by name; omit for a top-level container. " +
-			"tags are the capability tags every descendant loop will see in addition to its own — leave empty if you only want the container for organization. " +
-			"intent records the container's purpose so a future inspector knows what belongs here. " +
-			"Returns the container's loop_id (use as parent_id when launching loops that should sit inside this container) and the definition name.",
-		ContentResolveExempt: []string{"name", "intent", "parent_name", "tags", "replace"},
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{
-					"type":        "string",
-					"description": "Unique container loop definition name (lowercase, snake_case). Used as the parent reference for descendants and shown in the loop graph.",
-				},
-				"intent": map[string]any{
-					"type":        "string",
-					"description": "One- or two-sentence description of what this container groups and why it exists. Recorded on the container's metadata for future inspection.",
-				},
-				"parent_name": map[string]any{
-					"type":        "string",
-					"description": "Optional parent container's definition name. When set, this container is nested inside the named container at the current time of launch. Omit for a top-level container.",
-				},
-				"tags": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "Optional capability tags inherited by every descendant loop. Each descendant turn sees the union of its own tags and every container ancestor's tags.",
-				},
-				"replace": map[string]any{
-					"type":        "boolean",
-					"description": "When true, overwrite an existing container definition of the same name. Default false; the tool refuses to clobber existing containers.",
-				},
-			},
-			"required": []string{"name", "intent"},
-		},
-		Handler: r.handleThaneCreateContainer,
-	})
-}
-
-func (r *Registry) handleThaneCreateContainer(ctx context.Context, args map[string]any) (string, error) {
-	deps := r.loopIntentDeps
-	if deps.Registry == nil || deps.LaunchDefinition == nil {
-		return "", fmt.Errorf("thane_create_container not configured: ConfigureLoopIntentTools must be called at startup")
-	}
-
-	name := toolargs.TrimmedString(args, "name")
-	if name == "" {
-		return "", fmt.Errorf("name is required")
-	}
-	intent := toolargs.TrimmedString(args, "intent")
-	if intent == "" {
-		return "", fmt.Errorf("intent is required")
-	}
-	parentName := toolargs.TrimmedString(args, "parent_name")
-	replace, _ := args["replace"].(bool)
-
-	var tags []string
-	if rawTags, ok := args["tags"].([]any); ok {
-		for _, t := range rawTags {
-			if s, ok := t.(string); ok && strings.TrimSpace(s) != "" {
-				tags = append(tags, strings.TrimSpace(s))
-			}
-		}
-	}
-
-	// Refuse to clobber existing definition unless replace=true. The
-	// snapshot read here mirrors handleThaneCurate; the path is duplicated
-	// rather than abstracted because the surrounding handler shape is
-	// shallow and an extracted helper would obscure the refusal flow.
-	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := looppkg.FindDefinition(snap, name); ok {
-			if existing.Source == looppkg.DefinitionSourceConfig {
-				return "", (&looppkg.ImmutableDefinitionError{Name: name})
-			}
-			if !replace {
-				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
-			}
-			if existing.Spec.Operation != looppkg.OperationContainer {
-				return "", fmt.Errorf("loop definition %q already exists as operation %q; refusing to convert into a container", name, existing.Spec.Operation)
-			}
-		}
-	}
-
-	if parentName != "" {
-		if deps.LiveRegistry == nil {
-			return "", fmt.Errorf("parent_name set but live registry is not configured; tool cannot resolve container ancestry")
-		}
-		if parent := deps.LiveRegistry.GetByName(parentName); parent == nil {
-			return "", fmt.Errorf("parent container %q is not currently registered; create it first or wait for hydration", parentName)
-		}
-	}
-
-	spec := looppkg.Spec{
-		Name:       name,
-		Enabled:    true,
-		Operation:  looppkg.OperationContainer,
-		Intent:     intent,
-		Tags:       tags,
-		ParentName: parentName,
-	}
-	if err := spec.ValidatePersistable(); err != nil {
-		return "", fmt.Errorf("derived container spec invalid: %w", err)
-	}
-
-	updatedAt := time.Now().UTC()
-	if deps.CommitSpec != nil {
-		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
-			return "", err
-		}
-	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
-		return "", err
-	}
-
-	// Launch with an empty Launch so a retry of this tool against an
-	// already-running container short-circuits to the existing loop ID
-	// instead of tripping the running-durable-loop-with-overrides guard.
-	// The parent relationship is on the spec via ParentName and resolved
-	// at hydration time, so the launch payload stays free of overrides.
-	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{})
-	if err != nil {
-		return "", fmt.Errorf("launch container: %w", err)
-	}
-
-	var parentID string
-	if deps.LiveRegistry != nil {
-		if running := deps.LiveRegistry.Get(launchResult.LoopID); running != nil {
-			parentID = running.ParentID()
-		}
-	}
-
-	return ldMarshalToolJSON(map[string]any{
-		"status":               "ok",
-		"loop_definition_name": name,
-		"loop_id":              launchResult.LoopID,
-		"operation":            string(looppkg.OperationContainer),
-		"parent_name":          parentName,
-		"parent_loop_id":       parentID,
-		"tags":                 tags,
-	})
-}
-
-func (r *Registry) registerThaneCurate() {
-	r.Register(&Tool{
-		Name: "thane_curate",
-		Description: "Create and launch a recurring service loop that curates a managed markdown collection. " +
-			"Output-first: the target document (kb:, core:, scratchpad:, generated:) is scaffolded with frontmatter recording loop ownership before the loop is registered, so the loop's identity and intent are self-describing on disk. " +
-			"Two output modes today: \"journal\" appends a dated entry each cycle (research notes, decision logs, daily digests); \"maintain\" rewrites the document idempotently each cycle (dashboards, current-state snapshots). " +
-			"Future modes will accept a directory ref for tree-shaped collections (multiple files maintained as a structured corpus); the output parameter shape will grow additively. " +
-			"Sleep envelope: pass sleep_min and sleep_max as Go duration strings (\"5m\", \"30m\", \"1h\"). The running loop uses set_next_sleep to self-pace within those bounds — pick them to match the topic's metabolism (tight when busy work deserves quick checks, loose when quiet periods should cost nothing). sleep_default and jitter are optional with sensible defaults. " +
-			"Tags scope the loop's tools; omit to inherit the core tag set. " +
-			"Optional quality_floor sets the loop's minimum model quality rating; exclude_tools adds tool denials on top of the always-denied human-egress set; metadata attaches opaque string labels. " +
-			"Entities is a list of Home Assistant entity subscriptions the loop should see every iteration; they are persisted on the loop's own spec and surfaced into the loop's prompt automatically. Container ancestors' subscriptions also cascade in. " +
-			"Returns the document ref, loop definition name, loop_id, output mode, the generated output tool name (output_tool) the receiving loop writes through, the count of declared entity subscriptions, and the resolved sleep envelope.",
-		ContentResolveExempt: []string{"name", "intent", "sleep_min", "sleep_max", "sleep_default", "jitter", "tags", "instructions", "quality_floor", "exclude_tools", "metadata", "output", "entities", "replace"},
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{
-					"type":        "string",
-					"description": "Unique loop definition name (lowercase, snake_case). The same name is recorded in the output document's frontmatter as loop_definition_name.",
-				},
-				"intent": map[string]any{
-					"type":        "string",
-					"description": "One- or two-sentence description of what the loop tracks, why it exists, and what the document should contain. The model running each iteration sees this in its task prompt.",
-				},
-				"sleep_min": map[string]any{
-					"type":        "string",
-					"description": "Tightest interval between iterations (Go duration: \"5m\", \"30m\", \"1h\"). Floor at 1 minute. The loop's set_next_sleep can never wake sooner than this.",
-				},
-				"sleep_max": map[string]any{
-					"type":        "string",
-					"description": "Loosest interval between iterations (Go duration: \"30m\", \"6h\"). The loop's set_next_sleep can never sleep longer than this. Must be >= sleep_min; equal values pin a fixed interval.",
-				},
-				"sleep_default": map[string]any{
-					"type":        "string",
-					"description": "Optional initial sleep duration for the first wake. Defaults to the midpoint of sleep_min and sleep_max. Must lie within the envelope.",
-				},
-				"jitter": map[string]any{
-					"type":        "number",
-					"description": "Optional sleep randomization factor in [0, 1]. Defaults to 0.1. Set to 0 for deterministic timing.",
-				},
-				"output": map[string]any{
-					"type":        "object",
-					"description": "Output target the loop maintains. Required.",
-					"properties": map[string]any{
-						"mode": map[string]any{
-							"type":        "string",
-							"enum":        []string{"journal", "maintain"},
-							"description": "journal = append a dated entry each cycle; maintain = idempotent rewrite each cycle.",
-						},
-						"document": map[string]any{
-							"type":        "string",
-							"description": "Managed-root document ref like \"kb:dashboards/pr-watchlist.md\" or \"core:journal/decisions.md\".",
-						},
-						"title": map[string]any{
-							"type":        "string",
-							"description": "Optional human title for the document. Defaults to the loop name.",
-						},
-					},
-					"required": []string{"mode", "document"},
-				},
-				"tags": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "Optional capability tags scoping the loop's tool surface. Omit to use only core tags.",
-				},
-				"entities": map[string]any{
-					"type":        "array",
-					"description": "Optional Home Assistant entity subscriptions the loop should see in context every iteration. Each item declares an entity_id with optional history windows (seconds, e.g. [3600, 86400] for 1h and 1d summaries), weather forecast type for weather.* entities, and a ttl_seconds expiration. Stored on the loop's own spec; if the loop has a container parent, subscriptions declared on ancestor containers also appear at iteration time.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"entity_id": map[string]any{
-								"type":        "string",
-								"description": "The Home Assistant entity ID to watch (e.g., sensor.upstairs_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
-							},
-							"history": map[string]any{
-								"type":        "array",
-								"items":       map[string]any{"type": "integer"},
-								"description": "Optional historical context windows in seconds. Each window adds a compact summary of past state to context (e.g., [600, 3600, 86400] for 10min/1hr/1day).",
-							},
-							"forecast": map[string]any{
-								"type":        "string",
-								"enum":        []string{"daily", "hourly", "twice_daily", "none"},
-								"description": "For weather.* entities, fetch this HA forecast type each turn and include the compact forecast in context.",
-							},
-							"ttl_seconds": map[string]any{
-								"type":        "integer",
-								"description": "Optional expiration in seconds. After this TTL elapses, the subscription is auto-removed from future context injection.",
-							},
-							"include": EntityMetadataIncludeParameter(),
-						},
-						"required": []string{"entity_id"},
-					},
-				},
-				"instructions": map[string]any{
-					"type":        "string",
-					"description": "Optional steering text prepended to every iteration's task (output format guidance, what to focus on, what to skip). Persists on the spec's Profile and shows up in loop_definition_get.",
-				},
-				"quality_floor": map[string]any{
-					"type":        "integer",
-					"description": "Optional minimum model quality rating (1–10) for the loop's iterations. Omit to let the router choose; raise it for loops whose synthesis needs a stronger model.",
-				},
-				"exclude_tools": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "Optional additional tool names to deny this loop. These layer on top of the always-denied direct human-egress tools (signal/email/notify) — they extend the denylist, they do not replace the egress floor.",
-				},
-				"metadata": map[string]any{
-					"type":                 "object",
-					"additionalProperties": map[string]any{"type": "string"},
-					"description":          "Optional opaque string-keyed metadata stored on the loop definition (surfaced by loop_definition_get).",
-				},
-				"replace": map[string]any{
-					"type":        "boolean",
-					"description": "When true, overwrite an existing definition or document of the same name/ref. Default false; the tool refuses to clobber existing artifacts.",
-				},
-			},
-			"required": []string{"name", "intent", "sleep_min", "sleep_max", "output"},
-		},
-		Handler: r.handleThaneCurate,
-	})
-}
-
-func (r *Registry) handleThaneCurate(ctx context.Context, args map[string]any) (string, error) {
-	deps := r.loopIntentDeps
-	if deps.DocTools == nil || deps.Registry == nil {
-		return "", fmt.Errorf("thane_curate not configured: ConfigureLoopIntentTools must be called at startup")
-	}
-
-	name, _ := args["name"].(string)
-	intent, _ := args["intent"].(string)
-	if strings.TrimSpace(name) == "" {
-		return "", fmt.Errorf("name is required")
-	}
-	if strings.TrimSpace(intent) == "" {
-		return "", fmt.Errorf("intent is required")
-	}
-
-	envelope, err := parseSleepEnvelope(args)
-	if err != nil {
-		return "", err
-	}
-
-	output, _ := args["output"].(map[string]any)
-	if output == nil {
-		return "", fmt.Errorf("output is required (with mode and document)")
-	}
-	outputMode, _ := output["mode"].(string)
-	documentRef, _ := output["document"].(string)
-	if outputMode != "journal" && outputMode != "maintain" {
-		return "", fmt.Errorf("output.mode must be \"journal\" or \"maintain\"")
-	}
-	if strings.TrimSpace(documentRef) == "" {
-		return "", fmt.Errorf("output.document is required (e.g. \"kb:dashboards/foo.md\")")
-	}
-	title, _ := output["title"].(string)
-	if strings.TrimSpace(title) == "" {
-		title = name
-	}
-
-	var tags []string
-	if rawTags, ok := args["tags"].([]any); ok {
-		for _, t := range rawTags {
-			if s, ok := t.(string); ok && strings.TrimSpace(s) != "" {
-				tags = append(tags, s)
-			}
-		}
-	}
-	instructions, _ := args["instructions"].(string)
-	replace, _ := args["replace"].(bool)
-	// quality_floor: fail fast when present-but-invalid rather than silently
-	// coercing to 0 (which would drop the floor the caller asked for). Absent
-	// is fine — the router uses its default.
-	qualityFloor := 0
-	if raw, present := args["quality_floor"]; present && raw != nil {
-		n, ok := toolargs.IntOK(args, "quality_floor")
-		if !ok {
-			return "", fmt.Errorf("quality_floor must be an integer, got %v", raw)
-		}
-		qualityFloor = n
-	}
-
-	// Operator-provided tool exclusions layer ON TOP of the always-denied
-	// human-egress baseline (#696): a true union — trimmed, de-duplicated, and
-	// never shrinking the egress floor.
-	excludeTools := DirectHumanEgressToolNames()
-	seenExclude := make(map[string]bool, len(excludeTools))
-	for _, t := range excludeTools {
-		seenExclude[t] = true
-	}
-	for _, t := range toolargs.StringSlice(args, "exclude_tools") {
-		if t = strings.TrimSpace(t); t != "" && !seenExclude[t] {
-			seenExclude[t] = true
-			excludeTools = append(excludeTools, t)
-		}
-	}
-
-	// metadata: fail fast on a non-object, or non-string values, rather than
-	// silently dropping them so partial caller intent can't slip through.
-	var metadata map[string]string
-	if raw, present := args["metadata"]; present && raw != nil {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			return "", fmt.Errorf("metadata must be an object with string values")
-		}
-		if len(m) > 0 {
-			metadata = make(map[string]string, len(m))
-			for k, v := range m {
-				s, ok := v.(string)
-				if !ok {
-					return "", fmt.Errorf("metadata[%q] must be a string, got %T", k, v)
-				}
-				metadata[k] = s
-			}
-		}
-	}
-
-	entities, err := parseEntityList("entities", args["entities"])
-	if err != nil {
-		return "", err
-	}
-
-	// Refuse to clobber an existing definition unless replace=true.
-	// Read directly from deps.Registry rather than going through
-	// currentLoopDefinitionSnapshot, because the latter checks
-	// r.loopDefinitionRegistry (set by ConfigureLoopDefinitionTools)
-	// rather than the registry handle this tool was configured with.
-	if snap := deps.Registry.Snapshot(); snap != nil {
-		if existing, ok := looppkg.FindDefinition(snap, name); ok {
-			if existing.Source == looppkg.DefinitionSourceConfig {
-				return "", (&looppkg.ImmutableDefinitionError{Name: name})
-			}
-			if !replace {
-				return "", fmt.Errorf("loop definition %q already exists; pass replace=true to overwrite", name)
-			}
-		}
-	}
-
-	outputSpec := buildCurateOutputSpec(name, documentRef, outputMode, intent)
-
-	now := time.Now().UTC()
-	jitterRatio := envelope.jitter
-	spec := looppkg.Spec{
-		Name:          name,
-		Enabled:       true,
-		Task:          buildCurateTask(intent, documentRef, outputMode, outputSpec.ToolName()),
-		Intent:        intent,
-		Operation:     looppkg.OperationService,
-		SleepMin:      envelope.sleepMin,
-		SleepMax:      envelope.sleepMax,
-		SleepDefault:  envelope.sleepDefault,
-		Jitter:        &jitterRatio,
-		Tags:          tags,
-		Outputs:       []looppkg.OutputSpec{outputSpec},
-		Subscriptions: curateEntitiesToSubscriptions(entities, now),
-		// Default-deny direct human-egress tools (#696): a model-authored
-		// curate loop is a subsystem loop that should wake the core loop via
-		// request_core_attention rather than contact a person directly. This
-		// matches the ego/metacognitive/archivist exclusion baseline; without
-		// it a wrong-tagged curate loop could acquire signal_send_message /
-		// email_send / ha_notify. The operator-facing exclude_tools knob
-		// (parsed above) extends this floor — it can only add denials.
-		ExcludeTools: excludeTools,
-		Profile: router.LoopProfile{
-			DelegationGating: "disabled",
-			QualityFloor:     qualityFloor,
-			Instructions:     strings.TrimSpace(instructions),
-		},
-		Metadata: metadata,
-	}
-	if err := spec.ValidatePersistable(); err != nil {
-		return "", fmt.Errorf("derived spec invalid: %w", err)
-	}
-	warnings := looppkg.BuildDefinitionWarnings(spec)
-
-	// Refuse to clobber an existing document unless replace=true. The
-	// document store's Write replaces unconditionally, so we have to
-	// preflight here. doc_read returns a non-nil error when the
-	// document doesn't exist; an empty error means it does.
-	if _, readErr := deps.DocTools.Read(ctx, documents.RefArgs{Ref: documentRef}); readErr == nil && !replace {
-		return "", fmt.Errorf("output document %q already exists; pass replace=true to overwrite", documentRef)
-	}
-
-	// Scaffold the output document. Frontmatter records loop ownership
-	// so a future inspector can identify the doc as loop-managed
-	// without consulting the registry.
-	body := renderScaffoldBody(outputMode, title, intent)
-	frontmatter := map[string][]string{
-		"loop_definition_name": {name},
-		"loop_intent":          {intent},
-		"output_mode":          {outputMode},
-		"sleep_min":            {envelope.sleepMin.String()},
-		"sleep_max":            {envelope.sleepMax.String()},
-		"created":              {now.Format(time.RFC3339)},
-	}
-	docResult, err := deps.DocTools.Write(ctx, documents.WriteArgs{
-		Ref:         documentRef,
-		Title:       title,
-		Body:        &body,
-		Frontmatter: frontmatter,
-	})
-	if err != nil {
-		return "", fmt.Errorf("scaffold output document: %w", err)
-	}
-	_ = docResult // discard structured result; we surface the ref directly
-
-	// Commit (persist + upsert + reconcile) then launch. Mirrors
-	// handleLoopDefinitionSet + handleLoopDefinitionLaunch; collapsed here
-	// so the model only sees one round-trip for the intent.
-	updatedAt := now
-	if deps.CommitSpec != nil {
-		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
-			return "", err
-		}
-	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
-		return "", err
-	}
-
-	launchResult, err := deps.LaunchDefinition(ctx, name, looppkg.Launch{})
-	if err != nil {
-		return "", fmt.Errorf("launch loop: %w", err)
-	}
-
-	return ldMarshalToolJSON(map[string]any{
-		"status":               "ok",
-		"document_path":        documentRef,
-		"loop_definition_name": name,
-		"loop_id":              launchResult.LoopID,
-		"output_mode":          outputMode,
-		"output_tool":          outputSpec.ToolName(),
-		"entity_subscriptions": len(entities),
-		"sleep_envelope": map[string]any{
-			"sleep_min":     envelope.sleepMin.String(),
-			"sleep_max":     envelope.sleepMax.String(),
-			"sleep_default": envelope.sleepDefault.String(),
-			"jitter":        envelope.jitter,
-		},
-		"warnings": warnings,
-	})
 }
 
 // mutateLoopSubscriptions reads the current spec for loopName, calls
@@ -611,7 +119,7 @@ func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string,
 	return next, nil
 }
 
-// curateEntitiesToSubscriptions converts the parsed thane_curate
+// curateEntitiesToSubscriptions converts the parsed thane_loop_create
 // entity input into the typed [looppkg.EntitySubscription] form
 // persisted on Spec.Subscriptions. AddedAt is stamped at creation
 // so TTL countdown is meaningful from the moment the loop is
@@ -637,7 +145,7 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 	return out
 }
 
-// curateEntity is the parsed shape of one element from the thane_curate
+// curateEntity is the parsed shape of one element from the thane_loop_create
 // "entities" parameter. Fields mirror the watchlist subscription options.
 type curateEntity struct {
 	EntityID   string
@@ -649,7 +157,7 @@ type curateEntity struct {
 
 // parseEntityList decodes an entity-subscription array into a typed
 // list. fieldName is the caller-facing name of the parameter
-// (e.g. "entities" for thane_curate, "add" for
+// (e.g. "entities" for thane_loop_create, "add" for
 // update_entity_subscriptions) and is woven into every error message
 // so the model can see which argument failed validation.
 // Empty/missing returns nil. Invalid shapes return an actionable
@@ -799,7 +307,8 @@ func buildCurateOutputSpec(name, docRef, outputMode, intent string) looppkg.Outp
 }
 
 // buildCurateTask renders the per-iteration task prompt for a
-// thane_curate-created loop. The model running each iteration sees the
+// document-maintaining loop created via thane_loop_create. The model running
+// each iteration sees the
 // intent, the document target, the output mode, and the scoped output
 // tool name. Caller-supplied steering text lives on
 // [router.LoopProfile.Instructions] and is prepended during task-turn
