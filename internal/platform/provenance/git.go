@@ -316,7 +316,18 @@ func (s *Store) fileHistory(ctx context.Context, filename string) (*FileHistory,
 // non-nil, it is piped to the command. If stdout is non-nil, the
 // command's stdout is written there; otherwise it is discarded.
 func (s *Store) git(ctx context.Context, stdin *bytes.Reader, stdout *bytes.Buffer, args ...string) error {
+	return s.gitWithEnv(ctx, nil, stdin, stdout, args...)
+}
+
+// gitWithEnv is git with an optional extra environment appended to the
+// process environment — the seam used to inject GIT_SSH_COMMAND for network
+// transport. A nil (or empty) env inherits the process environment
+// unchanged, so gitWithEnv(ctx, nil, …) is byte-for-byte the local git path.
+func (s *Store) gitWithEnv(ctx context.Context, env []string, stdin *bytes.Reader, stdout *bytes.Buffer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", s.path}, args...)...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	if stdin != nil {
 		cmd.Stdin = stdin
