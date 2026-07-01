@@ -59,10 +59,12 @@ type SyncRequest struct {
 	RequireVerify bool
 }
 
-// SyncResult reports what one pass observed and did. Ahead/Behind and the two
-// head SHAs are always populated (they feed the operability layer's reporting
-// and its deferred rewind detector); Detail carries the reason for a Blocked
-// or Diverged outcome.
+// SyncResult reports what one pass observed and did. Once a pass reaches
+// classification, Ahead/Behind and the two head SHAs are populated (they feed
+// the operability layer's reporting and its deferred rewind detector); a pass
+// blocked before then — a detached HEAD or a branch mismatch, caught before
+// the heads are resolved — leaves them zero and explains why in Detail. Detail
+// carries the reason for any Blocked or Diverged outcome.
 type SyncResult struct {
 	Outcome    SyncOutcome
 	Ahead      int
@@ -144,7 +146,7 @@ func (s *Store) syncLocked(ctx context.Context, req SyncRequest) (SyncResult, st
 	// at the revParse below instead.)
 	branch, err := s.symbolicBranch(ctx)
 	if err != nil {
-		return SyncResult{Outcome: SyncBlocked, Detail: "repository HEAD is detached; sync requires HEAD on branch " + req.Branch}, "", nil
+		return SyncResult{Outcome: SyncBlocked, Detail: fmt.Sprintf("cannot resolve HEAD to a branch (a detached HEAD, or an unhealthy repository); sync requires HEAD on branch %q: %v", req.Branch, err)}, "", nil
 	}
 	if branch != req.Branch {
 		return SyncResult{Outcome: SyncBlocked, Detail: fmt.Sprintf("repository is on branch %q, not the configured sync branch %q", branch, req.Branch)}, "", nil
