@@ -51,9 +51,19 @@ func TestValidateAllowedSigners(t *testing.T) {
 			want:    "whitespace or control",
 		},
 		{
+			name:    "principal with surrounding whitespace is rejected, not trimmed",
+			signers: []AllowedSigner{{Principal: "  alice@example.com\n", Key: testSignerKeyAlice}},
+			want:    "whitespace or control",
+		},
+		{
 			name:    "missing key",
 			signers: []AllowedSigner{{Principal: "alice@example.com"}},
 			want:    "key is required",
+		},
+		{
+			name:    "key smuggling a second key via embedded newline",
+			signers: []AllowedSigner{{Principal: "alice@example.com", Key: testSignerKeyAlice + "\n" + testSignerKeyBob}},
+			want:    "exactly one SSH public key",
 		},
 		{
 			name:    "malformed key",

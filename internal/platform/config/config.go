@@ -2823,11 +2823,13 @@ func validateAllowedSigners(label string, list []AllowedSigner) error {
 // with whitespace would corrupt the line, and a newline anywhere would
 // smuggle an entire extra trusted key.
 func validateAllowedSigner(label string, s AllowedSigner) error {
-	principal := strings.TrimSpace(s.Principal)
-	if principal == "" {
+	if strings.TrimSpace(s.Principal) == "" {
 		return fmt.Errorf("%s.principal is required", label)
 	}
-	if strings.IndexFunc(principal, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+	// Check the raw principal, not a trimmed copy: leading or trailing
+	// whitespace (a trailing newline especially) must be rejected, not
+	// silently normalized away, since allowed_signers is space-delimited.
+	if strings.IndexFunc(s.Principal, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 		return fmt.Errorf("%s.principal %q must not contain whitespace or control characters", label, s.Principal)
 	}
 	if strings.TrimSpace(s.Key) == "" {
@@ -2871,10 +2873,18 @@ func parseAllowedSignerTime(label, field, value string) (*time.Time, error) {
 // canonicalAllowedSignerKey parses an authorized_keys-form public key and
 // returns its canonical "<type> <base64>" form with the comment stripped, so
 // keys that differ only by comment or surrounding whitespace compare equal.
+//
+// It rejects any value carrying more than one key: ssh.ParseAuthorizedKey
+// parses only the first line and returns the remainder in rest, so a value
+// with an embedded newline and a second key would otherwise be silently
+// accepted — exactly the injection the fail-closed rules exist to stop.
 func canonicalAllowedSignerKey(key string) (string, error) {
-	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
+	pub, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(key))
 	if err != nil {
 		return "", fmt.Errorf("not a valid SSH public key: %w", err)
+	}
+	if strings.TrimSpace(string(rest)) != "" {
+		return "", fmt.Errorf("value must contain exactly one SSH public key")
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
