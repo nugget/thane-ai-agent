@@ -102,6 +102,112 @@ func TestSyncClean(t *testing.T) {
 	}
 }
 
+// TestSyncRemoteBehind: after the remote rewinds to an ancestor of the head we
+// last saw, the pass returns remote_behind and does NOT push local commits
+// back over the rewind (no auto-undo of an intentional history rewrite).
+func TestSyncRemoteBehind(t *testing.T) {
+	thane := testSigner(t)
+	local := newInTreeStore(t, thane)
+	writeStore(t, local, "a.md", "a\n")
+	c1 := headSHA(t, local.path)
+	branch := headBranch(t, local.path)
+	writeStore(t, local, "b.md", "b\n")
+	writeStore(t, local, "c.md", "c\n")
+	c3 := headSHA(t, local.path)
+	remote := cloneBare(t, local.path) // remote at c3
+	runGit(t, local.path, "reset", "--hard", c1)
+
+	req := SyncRequest{RemoteURL: remote, Branch: branch, Mode: SyncModeBidirectional, RequireVerify: true}
+
+	// Pass 1: local fast-forwards up to c3; record the remote head.
+	res, err := local.Sync(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Sync 1: %v", err)
+	}
+	if res.Outcome != SyncFastForwarded || res.RemoteHead != c3 {
+		t.Fatalf("pass 1 = %q at %s, want fast_forwarded at %s", res.Outcome, shorten(res.RemoteHead), shorten(c3))
+	}
+
+	// The remote rewinds to c1 (a force-push style history rewrite).
+	runGit(t, remote, "update-ref", "refs/heads/"+branch, c1)
+
+	// Pass 2: with LastKnownRemote=c3, the rewind is caught. Without the guard
+	// this would be ahead=2/behind=0 and push c2/c3 back, re-advancing the
+	// remote past the rewind.
+	req.LastKnownRemote = res.RemoteHead
+	res2, err := local.Sync(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Sync 2: %v", err)
+	}
+	if res2.Outcome != SyncRemoteBehind {
+		t.Fatalf("pass 2 = %q, want remote_behind (detail %q)", res2.Outcome, res2.Detail)
+	}
+	if got := strings.TrimSpace(runGit(t, remote, "rev-parse", "refs/heads/"+branch)); got != c1 {
+		t.Fatalf("remote advanced to %s despite the rewind guard; want %s", shorten(got), shorten(c1))
+	}
+}
+
+// TestSyncRemoteForwardNotBehind: forward motion (the remote head is a
+// descendant of LastKnownRemote) must NOT be misread as a rewind.
+func TestSyncRemoteForwardNotBehind(t *testing.T) {
+	thane := testSigner(t)
+	local := newInTreeStore(t, thane)
+	writeStore(t, local, "a.md", "a\n")
+	c1 := headSHA(t, local.path)
+	branch := headBranch(t, local.path)
+	writeStore(t, local, "b.md", "b\n")
+	c2 := headSHA(t, local.path)
+	writeStore(t, local, "c.md", "c\n")
+	remote := cloneBare(t, local.path) // remote at c3 (descendant of c2)
+	runGit(t, local.path, "reset", "--hard", c1)
+
+	// LastKnownRemote = c2, remote now at c3: forward motion, not a rewind.
+	res, err := local.Sync(t.Context(), SyncRequest{
+		RemoteURL: remote, Branch: branch, Mode: SyncModeBidirectional,
+		RequireVerify: true, LastKnownRemote: c2,
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Outcome != SyncFastForwarded {
+		t.Fatalf("outcome = %q, want fast_forwarded (forward motion misread as rewind?)", res.Outcome)
+	}
+}
+
+// TestSyncDivergedWithBaseline: a divergence with a baseline set is classified
+// as diverged (the guard fires only on a strict ancestor), refused with no
+// side effects.
+func TestSyncDivergedWithBaseline(t *testing.T) {
+	thane := testSigner(t)
+	local := newInTreeStore(t, thane)
+	writeStore(t, local, "a.md", "a\n")
+	c1 := headSHA(t, local.path)
+	branch := headBranch(t, local.path)
+
+	remote := cloneWorktree(t, local.path)
+	remoteStore, err := New(remote, thane, slog.Default())
+	if err != nil {
+		t.Fatalf("remote store: %v", err)
+	}
+	writeStore(t, remoteStore, "r.md", "r\n") // remote: c1 -> R
+	writeStore(t, local, "l.md", "l\n")       // local:  c1 -> L
+	localTip := headSHA(t, local.path)
+
+	res, err := local.Sync(t.Context(), SyncRequest{
+		RemoteURL: remote, Branch: branch, Mode: SyncModeBidirectional,
+		RequireVerify: true, LastKnownRemote: c1,
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Outcome != SyncDiverged {
+		t.Fatalf("outcome = %q, want diverged", res.Outcome)
+	}
+	if headSHA(t, local.path) != localTip {
+		t.Fatal("local head moved on a diverged pass")
+	}
+}
+
 // TestSyncFastForwardTrusted: remote is ahead by trusted commits — local
 // fast-forwards to it.
 func TestSyncFastForwardTrusted(t *testing.T) {
