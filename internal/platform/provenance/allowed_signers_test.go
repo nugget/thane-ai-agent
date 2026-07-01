@@ -1,6 +1,11 @@
 package provenance
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -153,4 +158,88 @@ func TestRenderAllowedSigners_CanonicalizesComments(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "agent's own signing key") {
 		t.Fatalf("RenderAllowedSigners() error = %v, want agent-key rejection despite comment", err)
 	}
+}
+
+// TestRenderAllowedSigners_CollapsesSamePrincipalDuplicate confirms the same
+// key under the same principal (e.g. listed in both the shared block and a
+// root's own list, which union) collapses to one line rather than erroring.
+func TestRenderAllowedSigners_CollapsesSamePrincipalDuplicate(t *testing.T) {
+	t.Parallel()
+	got, err := RenderAllowedSigners(testAgentKey, []TrustedSigner{
+		{Principal: "alice@example.com", PublicKey: testAliceKey},
+		{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "listed twice"},
+	})
+	if err != nil {
+		t.Fatalf("RenderAllowedSigners() error = %v", err)
+	}
+	if n := strings.Count(got, testAliceKey); n != 1 {
+		t.Fatalf("alice key appears %d times, want 1:\n%s", n, got)
+	}
+}
+
+// TestReconcileAllowedSignersCommitsUnionAndIsIdempotent covers the full I/O
+// path: rendering the agent+operator union into the repo's .allowed_signers,
+// committing it as signed history, keeping HEAD verifiable, and doing nothing
+// on an unchanged set.
+func TestReconcileAllowedSignersCommitsUnionAndIsIdempotent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	signer := testSigner(t)
+	s, err := New(dir, signer, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	ops := []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"}}
+	changed, err := s.ReconcileAllowedSigners(t.Context(), ops)
+	if err != nil {
+		t.Fatalf("ReconcileAllowedSigners: %v", err)
+	}
+	if !changed {
+		t.Fatal("first reconcile changed = false, want true")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, ".allowed_signers"))
+	if err != nil {
+		t.Fatalf("read .allowed_signers: %v", err)
+	}
+	if !strings.HasPrefix(string(got), AgentPrincipal+" ") {
+		t.Fatalf("agent anchor is not the first line:\n%s", got)
+	}
+	if !strings.Contains(string(got), "alice@example.com "+testAliceKey+" Alice laptop") {
+		t.Fatalf("operator line missing or malformed:\n%s", got)
+	}
+
+	// HEAD (the reconcile commit) must still verify against the rendered
+	// trust file — the agent key that signed it is in the file.
+	if err := s.git(t.Context(), nil, nil, "verify-commit", "HEAD"); err != nil {
+		t.Fatalf("verify-commit HEAD after reconcile: %v", err)
+	}
+
+	// Idempotent: an unchanged set makes no commit and does not move HEAD.
+	before := headHash(t, s)
+	changed, err = s.ReconcileAllowedSigners(t.Context(), ops)
+	if err != nil {
+		t.Fatalf("second ReconcileAllowedSigners: %v", err)
+	}
+	if changed {
+		t.Fatal("second reconcile changed = true, want false (idempotent)")
+	}
+	if after := headHash(t, s); after != before {
+		t.Fatalf("HEAD moved on idempotent reconcile: %s -> %s", before, after)
+	}
+}
+
+func headHash(t *testing.T, s *Store) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := s.git(t.Context(), nil, &buf, "rev-parse", "HEAD"); err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	return strings.TrimSpace(buf.String())
 }

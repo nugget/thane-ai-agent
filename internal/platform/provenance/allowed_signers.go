@@ -1,7 +1,11 @@
 package provenance
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -65,18 +69,27 @@ func RenderAllowedSigners(agentPublicKey string, operators []TrustedSigner) (str
 		if err != nil {
 			return "", fmt.Errorf("operator signer %d (%s): %w", i, strings.TrimSpace(s.Principal), err)
 		}
+		principal := strings.TrimSpace(s.Principal)
 		if blob == agentBlob {
-			return "", fmt.Errorf("operator signer %q uses the agent's own signing key; the agent key is trusted implicitly and must not be listed", strings.TrimSpace(s.Principal))
+			return "", fmt.Errorf("operator signer %q uses the agent's own signing key; the agent key is trusted implicitly and must not be listed", principal)
 		}
 		if prev, ok := seen[blob]; ok {
-			return "", fmt.Errorf("operator signer %q duplicates the key already trusted for %q", strings.TrimSpace(s.Principal), prev)
+			// The same key under the same principal collapses silently:
+			// this is the benign case where a key is listed in both the
+			// shared block and a root's own list (the sets union). The
+			// same key under a *different* principal is a spoof and is
+			// refused.
+			if prev == principal {
+				continue
+			}
+			return "", fmt.Errorf("operator signer %q duplicates the key already trusted for %q", principal, prev)
 		}
-		seen[blob] = strings.TrimSpace(s.Principal)
-		line, err := renderSignerLine(s.Principal, blob, s.Comment, s.ValidAfter, s.ValidBefore)
+		seen[blob] = principal
+		line, err := renderSignerLine(principal, blob, s.Comment, s.ValidAfter, s.ValidBefore)
 		if err != nil {
-			return "", fmt.Errorf("operator signer %q: %w", strings.TrimSpace(s.Principal), err)
+			return "", fmt.Errorf("operator signer %q: %w", principal, err)
 		}
-		others = append(others, entry{principal: strings.TrimSpace(s.Principal), blob: blob, line: line})
+		others = append(others, entry{principal: principal, blob: blob, line: line})
 	}
 	sort.Slice(others, func(i, j int) bool {
 		if others[i].principal != others[j].principal {
@@ -97,6 +110,51 @@ func RenderAllowedSigners(agentPublicKey string, operators []TrustedSigner) (str
 		b.WriteByte('\n')
 	}
 	return b.String(), nil
+}
+
+// ReconcileAllowedSigners renders this repository's trust set — the agent key
+// plus the given operator signers — and, when it differs from the repo's
+// current .allowed_signers, writes it and makes a signed commit so the tracked
+// trust surface stays clean and covered by signed history. It reports whether
+// a commit was made and is idempotent: an unchanged set is a no-op with no
+// commit, so it can run on every boot without churning history.
+//
+// The repository must already have a HEAD, so call it after
+// [Store.BootstrapBirthCommit]. Rendering enforces the trust invariants
+// (agent key unremovable and never reused by an operator, no principal-spoof
+// duplicates), so a config that violates them fails here rather than silently
+// weakening verification.
+func (s *Store) ReconcileAllowedSigners(ctx context.Context, operators []TrustedSigner) (bool, error) {
+	desired, err := RenderAllowedSigners(s.signer.PublicKey(), operators)
+	if err != nil {
+		return false, fmt.Errorf("render allowed_signers: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.path, ".allowed_signers")
+	// A symlink here would let the trust surface be redirected out from
+	// under verification; reject anything but a regular file (absent is
+	// fine — we are about to create it).
+	if err := validateAllowedSignersFile(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	current, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read .allowed_signers: %w", err)
+	}
+	if string(current) == desired {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(desired), 0o644); err != nil {
+		return false, fmt.Errorf("write .allowed_signers: %w", err)
+	}
+	if _, err := s.commitFiles(ctx, []string{".allowed_signers"}, "reconcile allowed_signers"); err != nil {
+		return false, fmt.Errorf("commit .allowed_signers: %w", err)
+	}
+	s.logger.Info("reconciled allowed_signers", "operator_entries", len(operators))
+	return true, nil
 }
 
 // renderSignerLine builds one allowed_signers line:
