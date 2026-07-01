@@ -111,6 +111,10 @@ export function ancestorPath(loops, anchorId) {
 
 const MAX_EVENTS = 50;
 const DELEGATE_LINGER_MS = 15000;
+// REFETCH_DEBOUNCE_MS coalesces a burst of change signals (topology events,
+// loop_started/stopped) into a single /v1/loops re-sync — a reconcile that
+// stops and restarts several loops would otherwise refetch once per event.
+const REFETCH_DEBOUNCE_MS = 200;
 
 export function createLoopStore({ client, events } = {}) {
   const loops = new Map();
@@ -119,6 +123,7 @@ export function createLoopStore({ client, events } = {}) {
   const eventLog = [];
   let connState = 'connecting';
   let unsubscribe = null;
+  let refetchTimer = null;
 
   const changeListeners = new Set();
   const lifecycle = new Map();
@@ -177,6 +182,16 @@ export function createLoopStore({ client, events } = {}) {
   function ingestLoopEvent(evt) {
     const loopId = evt.data && evt.data.loop_id;
     const loopName = evt.data && evt.data.loop_name;
+
+    // Topology events (a loop added/removed/reparented — containers included,
+    // which emit no goroutine lifecycle event) carry no per-loop state; just
+    // re-sync the graph from /v1/loops. Handled before pushEvent so these
+    // re-sync signals don't crowd the recent-events log.
+    if (evt.kind === 'loop_topology') {
+      scheduleRefetch();
+      return;
+    }
+
     pushEvent(evt);
 
     // loop_started needs a full re-fetch; bootstrap a minimal entry so events
@@ -188,7 +203,7 @@ export function createLoopStore({ client, events } = {}) {
           parent_id: evt.data.parent_id || null, iterations: 0, _iterStartTs: Date.now(),
         });
       }
-      void refetch();
+      scheduleRefetch();
       emitChange();
       return;
     }
@@ -214,6 +229,13 @@ export function createLoopStore({ client, events } = {}) {
     if (evt.kind === 'loop_error') {
       const message = (evt.data && evt.data.error) || loop.last_error || 'Loop iteration failed.';
       emit('loop_error', { loopId, loop, message });
+    }
+    // A stopped loop may have been removed from the registry (stop/reparent);
+    // re-sync so it drops from the graph rather than lingering as 'stopped'.
+    // (A stopped-but-still-registered loop is preserved — /v1/loops still
+    // reports it, so the refetch keeps it.)
+    if (evt.kind === 'loop_stopped') {
+      scheduleRefetch();
     }
     emitChange();
   }
@@ -295,6 +317,17 @@ export function createLoopStore({ client, events } = {}) {
     }
   }
 
+  // scheduleRefetch coalesces rapid change signals into one refetch (see
+  // REFETCH_DEBOUNCE_MS). Leading-edge guarded so a burst schedules exactly one
+  // trailing re-sync rather than resetting the timer indefinitely.
+  function scheduleRefetch() {
+    if (refetchTimer) return;
+    refetchTimer = setTimeout(() => {
+      refetchTimer = null;
+      void refetch();
+    }, REFETCH_DEBOUNCE_MS);
+  }
+
   return {
     // shared structures (view layers may reference these directly during the
     // graph migration; new consumers should prefer the accessors below)
@@ -341,6 +374,10 @@ export function createLoopStore({ client, events } = {}) {
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
+      }
+      if (refetchTimer) {
+        clearTimeout(refetchTimer);
+        refetchTimer = null;
       }
     },
 

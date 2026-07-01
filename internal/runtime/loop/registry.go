@@ -20,6 +20,13 @@ type Registry struct {
 	loops    map[string]*Loop
 	maxLoops int
 	logger   *slog.Logger
+	// onChange, when set, is invoked with the affected loop ID after a
+	// Register or Deregister actually mutates graph membership. It fires
+	// outside the lock so the callback (publishing a topology event) can't
+	// deadlock or stall registry operations. Every structural add/remove —
+	// including inert container nodes, which never run a goroutine — flows
+	// through here, so consumers get one reliable "the graph changed" signal.
+	onChange func(loopID string)
 }
 
 // RegistryOption configures a Registry.
@@ -39,6 +46,20 @@ func WithRegistryLogger(l *slog.Logger) RegistryOption {
 	return func(r *Registry) {
 		if l != nil {
 			r.logger = l
+		}
+	}
+}
+
+// WithRegistryChangeHook registers a callback invoked (outside the lock)
+// whenever a loop is added to or removed from the registry — the chokepoints
+// for adds, removals, and reparents (which relaunch through both). Used to
+// publish a topology-changed event so live consumers (the web console graph)
+// can re-sync, including for container nodes that emit no goroutine lifecycle
+// events. Nil is ignored.
+func WithRegistryChangeHook(fn func(loopID string)) RegistryOption {
+	return func(r *Registry) {
+		if fn != nil {
+			r.onChange = fn
 		}
 	}
 }
@@ -116,7 +137,15 @@ func (e *ContainerHasChildrenError) Error() string {
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
 func (r *Registry) Register(l *Loop) error {
+	registered := false
 	r.mu.Lock()
+	// Registered first so it runs LAST (LIFO) — after the unlock below — so the
+	// topology hook fires without the registry lock held.
+	defer func() {
+		if registered && r.onChange != nil {
+			r.onChange(l.id)
+		}
+	}()
 	defer r.mu.Unlock()
 
 	if _, exists := r.loops[l.id]; exists {
@@ -179,6 +208,7 @@ func (r *Registry) Register(l *Loop) error {
 	}
 
 	r.loops[l.id] = l
+	registered = true
 	// Containers inherit nothing themselves (they exist precisely to
 	// provide tags to descendants). Wiring the function uniformly is
 	// still fine — the resolver simply returns nil for a container with
@@ -207,13 +237,22 @@ func (r *Registry) Register(l *Loop) error {
 // Deregister removes a loop from the registry. Safe to call for a loop
 // that is not registered (no-op).
 func (r *Registry) Deregister(id string) {
+	removed := false
 	r.mu.Lock()
+	// Fire the change hook after the unlock below (LIFO), and only when a loop
+	// was actually removed — a no-op Deregister must not emit a topology event.
+	defer func() {
+		if removed && r.onChange != nil {
+			r.onChange(id)
+		}
+	}()
 	defer r.mu.Unlock()
 
 	if _, exists := r.loops[id]; !exists {
 		return
 	}
 	delete(r.loops, id)
+	removed = true
 	r.logger.Debug("loop deregistered",
 		"loop_id", id,
 		"active_loops", len(r.loops),

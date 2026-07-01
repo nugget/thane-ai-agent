@@ -96,6 +96,13 @@ const (
 	// KindLoopStopped signals a loop goroutine has stopped.
 	// Data: loop_id, loop_name, iterations, attempts.
 	KindLoopStopped = "loop_stopped"
+	// KindLoopTopology signals the loop graph's membership or parentage
+	// changed — a loop was added, removed, or reparented. Unlike the
+	// goroutine lifecycle events above, this fires for inert container
+	// nodes too (they never run a goroutine), giving live consumers a
+	// single reliable "the graph changed, re-sync it" signal.
+	// Data: loop_id.
+	KindLoopTopology = "loop_topology"
 	// KindLoopIterationStart signals the beginning of a loop iteration.
 	// Data: loop_id, loop_name, conversation_id, supervisor,
 	// supervisor_trigger, attempt, signal_envelopes.
