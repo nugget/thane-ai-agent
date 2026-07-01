@@ -76,6 +76,47 @@ func TestBuildPlacementAdvisory(t *testing.T) {
 	})
 }
 
+func TestPlacementAdvisoryOnContainerCreate(t *testing.T) {
+	rig := newContainerTestRig(t)
+	ctx := context.Background()
+
+	// A container that owns the "travel" tag.
+	if _, err := rig.reg.Get("thane_loop_create").Handler(ctx, map[string]any{
+		"name": "travel", "intent": "trip logistics", "operation": "container",
+		"tags": []any{"travel"},
+	}); err != nil {
+		t.Fatalf("create travel: %v", err)
+	}
+
+	// A second container declaring the same tag, left at the root — should draw
+	// a placement advisory pointing at the existing travel container, and never
+	// at itself. This exercises the create wiring and the resolveLiveRegistry
+	// fallback (the container rig wires only the intent-tools live registry).
+	out, err := rig.reg.Get("thane_loop_create").Handler(ctx, map[string]any{
+		"name": "budget_travel", "intent": "cheap trips", "operation": "container",
+		"tags": []any{"travel"},
+	})
+	if err != nil {
+		t.Fatalf("create budget_travel: %v", err)
+	}
+	var got struct {
+		PlacementAdvisory *struct {
+			Candidates []struct {
+				Container string `json:"container"`
+			} `json:"candidates"`
+		} `json:"placement_advisory"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if got.PlacementAdvisory == nil {
+		t.Fatalf("expected placement_advisory:\n%s", out)
+	}
+	if len(got.PlacementAdvisory.Candidates) != 1 || got.PlacementAdvisory.Candidates[0].Container != "travel" {
+		t.Fatalf("candidates = %+v, want [travel] (self-excluded)", got.PlacementAdvisory.Candidates)
+	}
+}
+
 func TestPlacementAdvisoryOnLint(t *testing.T) {
 	defs, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
 		{Name: "travel", Operation: looppkg.OperationContainer, Intent: "trip logistics", Tags: []string{"travel"}},

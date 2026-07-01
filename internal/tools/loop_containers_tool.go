@@ -35,10 +35,21 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
 	}
-	// Collect and sort the container statuses by name up front so the rows
-	// emit in a stable order without post-sorting an untyped map slice.
-	containerStatuses := make([]looppkg.Status, 0)
-	for _, s := range r.liveLoopRegistry.Statuses() {
+	statuses := r.liveLoopRegistry.Statuses()
+
+	// Index the graph once so per-container child/descendant rollups don't each
+	// rescan the fleet (O(containers) walks over one shared index, not O(N)
+	// per container).
+	byID := make(map[string]looppkg.Status, len(statuses))
+	for _, s := range statuses {
+		byID[s.ID] = s
+	}
+	childrenByParent := make(map[string][]string, len(statuses))
+	var containerStatuses []looppkg.Status
+	for _, s := range statuses {
+		if s.ParentID != "" {
+			childrenByParent[s.ParentID] = append(childrenByParent[s.ParentID], s.ID)
+		}
 		if s.Config.Operation == looppkg.OperationContainer {
 			containerStatuses = append(containerStatuses, s)
 		}
@@ -49,19 +60,22 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 
 	containers := make([]map[string]any, 0, len(containerStatuses))
 	for _, s := range containerStatuses {
-		children := r.liveLoopRegistry.Children(s.ID)
+		childIDs := append([]string(nil), childrenByParent[s.ID]...)
+		sort.Slice(childIDs, func(i, j int) bool {
+			return byID[childIDs[i]].Name < byID[childIDs[j]].Name
+		})
 		sample := make([]string, 0, loopContainerSampleChildrenCap)
-		for _, c := range children {
+		for _, cid := range childIDs {
 			if len(sample) >= loopContainerSampleChildrenCap {
 				break
 			}
-			sample = append(sample, c.Name())
+			sample = append(sample, byID[cid].Name)
 		}
 		containers = append(containers, map[string]any{
 			"name":             s.Name,
 			"intent":           s.Config.Intent,
-			"child_count":      len(children),
-			"descendant_count": len(r.liveLoopRegistry.Descendants(s.ID)),
+			"child_count":      len(childIDs),
+			"descendant_count": countDescendants(s.ID, childrenByParent),
 			"confers_tags":     containerConfersTags(s),
 			"sample_children":  sample,
 		})
@@ -70,6 +84,27 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 		"status":     "ok",
 		"containers": containers,
 	})
+}
+
+// countDescendants counts the transitive children of rootID via the shared
+// parent→children index, cycle-safe (seen-set), without rescanning the fleet.
+func countDescendants(rootID string, childrenByParent map[string][]string) int {
+	seen := map[string]struct{}{rootID: {}}
+	queue := []string{rootID}
+	count := 0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, cid := range childrenByParent[current] {
+			if _, ok := seen[cid]; ok {
+				continue
+			}
+			seen[cid] = struct{}{}
+			count++
+			queue = append(queue, cid)
+		}
+	}
+	return count
 }
 
 // containerConfersTags returns the sorted, deduped capability tags a container

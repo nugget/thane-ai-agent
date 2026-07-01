@@ -1,9 +1,19 @@
 package loop
 
 import (
-	"slices"
+	"fmt"
 	"testing"
 )
+
+// countTreeNodes returns the total number of nodes across a forest.
+func countTreeNodes(nodes []LoopTreeNode) int {
+	n := 0
+	for _, node := range nodes {
+		n++
+		n += countTreeNodes(node.Children)
+	}
+	return n
+}
 
 func TestBuildLoopTree(t *testing.T) {
 	t.Parallel()
@@ -18,7 +28,10 @@ func TestBuildLoopTree(t *testing.T) {
 		{ID: "lp_orphan", Name: "orphan", ParentID: "lp_missing", Config: Config{Operation: OperationService}},
 	}
 
-	tree := BuildLoopTree(statuses)
+	tree, truncated := BuildLoopTree(statuses, 0)
+	if truncated {
+		t.Fatal("unlimited build should not truncate")
+	}
 
 	// Roots sorted by name: core, orphan.
 	if len(tree) != 2 || tree[0].Name != "core" || tree[1].Name != "orphan" {
@@ -57,48 +70,34 @@ func TestBuildLoopTreeTerminatesOnCycle(t *testing.T) {
 		{ID: "a", Name: "a", ParentID: "b", Config: Config{Operation: OperationService}},
 		{ID: "b", Name: "b", ParentID: "a", Config: Config{Operation: OperationService}},
 	}
-	if tree := BuildLoopTree(statuses); len(tree) != 0 {
+	if tree, _ := BuildLoopTree(statuses, 0); len(tree) != 0 {
 		t.Fatalf("pure-cycle forest = %+v, want empty (no rootable node)", tree)
 	}
 }
 
-func TestRegistryDescendants(t *testing.T) {
+func TestBuildLoopTreeTruncates(t *testing.T) {
 	t.Parallel()
 
-	r := NewRegistry()
-	deps := Deps{Runner: &noopRunner{}}
-	reg := func(cfg Config) *Loop {
-		l := mustNew(t, cfg, deps)
-		if err := r.Register(l); err != nil {
-			t.Fatalf("Register %s: %v", cfg.Name, err)
-		}
-		return l
+	// One root with a flat fan-out of ten children.
+	statuses := []Status{{ID: "root", Name: "root", Config: Config{Operation: OperationContainer}}}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("c%02d", i)
+		statuses = append(statuses, Status{ID: id, Name: id, ParentID: "root", Config: Config{Operation: OperationService}})
 	}
 
-	root := reg(Config{Name: "root", Task: "x"})
-	mid := reg(Config{Name: "mid", Task: "x", ParentID: root.ID()})
-	reg(Config{Name: "leaf1", Task: "x", ParentID: mid.ID()})
-	reg(Config{Name: "leaf2", Task: "x", ParentID: root.ID()})
-	unrelated := reg(Config{Name: "unrelated", Task: "x"})
-
-	descNames := func(ls []*Loop) []string {
-		out := make([]string, len(ls))
-		for i, l := range ls {
-			out[i] = l.config.Name
-		}
-		return out
+	tree, truncated := BuildLoopTree(statuses, 4)
+	if !truncated {
+		t.Fatal("expected truncated=true when the node budget is exceeded")
+	}
+	if got := countTreeNodes(tree); got > 4 {
+		t.Fatalf("emitted %d nodes, want <= 4 (the cap)", got)
 	}
 
-	// root's full subtree, sorted by name.
-	if got := descNames(r.Descendants(root.ID())); !slices.Equal(got, []string{"leaf1", "leaf2", "mid"}) {
-		t.Fatalf("Descendants(root) = %v, want [leaf1 leaf2 mid]", got)
+	full, fullTruncated := BuildLoopTree(statuses, 0)
+	if fullTruncated {
+		t.Error("unlimited build should not truncate")
 	}
-	// mid has one child.
-	if got := descNames(r.Descendants(mid.ID())); !slices.Equal(got, []string{"leaf1"}) {
-		t.Fatalf("Descendants(mid) = %v, want [leaf1]", got)
-	}
-	// A leaf / unrelated loop has none.
-	if got := r.Descendants(unrelated.ID()); got != nil {
-		t.Fatalf("Descendants(unrelated) = %v, want nil", descNames(got))
+	if got := countTreeNodes(full); got != 11 {
+		t.Fatalf("unlimited build emitted %d nodes, want 11 (root + 10)", got)
 	}
 }

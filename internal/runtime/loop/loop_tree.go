@@ -20,7 +20,12 @@ type LoopTreeNode struct {
 // and roots — are sorted by name for stable output. A shared seen-set prevents
 // a malformed cycle from being expanded twice, and recursion is bounded at
 // ancestorWalkLimit so a pathologically deep graph can't overflow the stack.
-func BuildLoopTree(statuses []Status) []LoopTreeNode {
+//
+// maxNodes caps the number of loops emitted so the projection stays bounded on
+// a large fleet (a value <= 0 means unlimited). When the cap is hit the walk
+// stops adding nodes and returns truncated=true, so the caller can flag the
+// result rather than emit an unbounded structure.
+func BuildLoopTree(statuses []Status, maxNodes int) (nodes []LoopTreeNode, truncated bool) {
 	byID := make(map[string]Status, len(statuses))
 	for _, s := range statuses {
 		byID[s.ID] = s
@@ -39,6 +44,15 @@ func BuildLoopTree(statuses []Status) []LoopTreeNode {
 	}
 
 	seen := make(map[string]bool, len(statuses))
+	emitted := 0
+	atCap := func() bool {
+		if maxNodes > 0 && emitted >= maxNodes {
+			truncated = true
+			return true
+		}
+		return false
+	}
+
 	var build func(id string, depth int) LoopTreeNode
 	build = func(id string, depth int) LoopTreeNode {
 		s := byID[id]
@@ -56,7 +70,11 @@ func BuildLoopTree(statuses []Status) []LoopTreeNode {
 			if seen[kid] {
 				continue
 			}
+			if atCap() {
+				break
+			}
 			seen[kid] = true
+			emitted++
 			node.Children = append(node.Children, build(kid, depth+1))
 		}
 		return node
@@ -68,8 +86,12 @@ func BuildLoopTree(statuses []Status) []LoopTreeNode {
 		if seen[id] {
 			continue
 		}
+		if atCap() {
+			break
+		}
 		seen[id] = true
+		emitted++
 		out = append(out, build(id, 0))
 	}
-	return out
+	return out, truncated
 }

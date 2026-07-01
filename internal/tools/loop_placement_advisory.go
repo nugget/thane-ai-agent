@@ -66,7 +66,7 @@ func buildPlacementAdvisory(loopName, parentName string, loopTags []string, cont
 
 	return map[string]any{
 		"message": fmt.Sprintf(
-			"This loop is parented to %q (the root), but %d existing container(s) declare tags it shares — consider setting parent_name to one so the loop nests under it and inherits its context.",
+			"This loop is parented to %q (the root), but %d existing container(s) declare tags it shares — consider setting parent_name to one of them so the loop nests under it and inherits its context.",
 			looppkg.CoreLoopName, len(candidates)),
 		"current_parent": looppkg.CoreLoopName,
 		"candidates":     candidates,
@@ -96,7 +96,7 @@ func (r *Registry) livePlacementAdvisory(loopName string, loopTags []string, par
 	if !placementAtRoot(parentName) || len(loopTags) == 0 {
 		return nil
 	}
-	live := r.loopIntentDeps.LiveRegistry
+	live := r.resolveLiveRegistry()
 	if live == nil {
 		return nil
 	}
@@ -124,4 +124,16 @@ func placementAdvisoryFromView(loopName string, loopTags []string, parentName st
 		containers = append(containers, containerTagSet{name: def.Spec.Name, tags: def.Spec.Tags})
 	}
 	return buildPlacementAdvisory(loopName, parentName, loopTags, containers)
+}
+
+// resolveLiveRegistry returns the live loop registry, preferring the one wired
+// by ConfigureLoopRuntimeTools (always present when the runtime loop tools are
+// configured) and falling back to the intent-tools dependency (which some test
+// rigs wire instead). Both point at the same registry in production; the
+// fallback keeps the create-path advisory working when only one path is wired.
+func (r *Registry) resolveLiveRegistry() *looppkg.Registry {
+	if r.liveLoopRegistry != nil {
+		return r.liveLoopRegistry
+	}
+	return r.loopIntentDeps.LiveRegistry
 }

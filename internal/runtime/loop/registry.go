@@ -361,44 +361,6 @@ func (r *Registry) Children(loopID string) []*Loop {
 	return children
 }
 
-// Descendants returns every transitive child of loopID — its children, their
-// children, and so on — sorted by name. A seen-set makes each loop appear at
-// most once, so a malformed cycle can't spin the walk; termination is
-// otherwise bounded by the registered loop count. Returns nil when loopID has
-// no descendants. Used for container subtree rollups (#1102 Tier 2).
-func (r *Registry) Descendants(loopID string) []*Loop {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// Index children by parent once so the walk is O(n), not O(n·depth).
-	childrenByParent := make(map[string][]*Loop, len(r.loops))
-	for _, l := range r.loops {
-		if pid := l.config.ParentID; pid != "" {
-			childrenByParent[pid] = append(childrenByParent[pid], l)
-		}
-	}
-
-	var out []*Loop
-	seen := map[string]struct{}{loopID: {}}
-	queue := []string{loopID}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, child := range childrenByParent[current] {
-			if _, ok := seen[child.id]; ok {
-				continue
-			}
-			seen[child.id] = struct{}{}
-			out = append(out, child)
-			queue = append(queue, child.id)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].config.Name < out[j].config.Name
-	})
-	return out
-}
-
 // effectiveStateResult is the bundle returned by the shared internal
 // walker. Surfaced through dedicated Effective* methods rather than
 // directly so each public field can carry its own GoDoc and so the
