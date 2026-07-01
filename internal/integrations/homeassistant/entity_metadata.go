@@ -110,17 +110,17 @@ type EntityVisibility struct {
 // for an entity, resolved through direct entity area first and device
 // area second.
 type EntityAreaMetadata struct {
-	ID                  string               `json:"id"`
-	Name                string               `json:"name,omitempty"`
-	Aliases             []string             `json:"aliases,omitempty"`
-	FloorID             string               `json:"floor_id,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	FloorID string   `json:"floor_id,omitempty"`
 	// Floor and Building are mutually exclusive: an area's floor is reported
 	// under exactly one of them, chosen by the homeassistant.floor_alias
 	// deployment setting. By default the floor lands in Floor; with
 	// floor_alias: building it lands in Building instead. At most one is ever
 	// non-nil.
-	Floor    *EntityFloorMetadata `json:"floor,omitempty"`
-	Building *EntityFloorMetadata `json:"building,omitempty"`
+	Floor               *EntityFloorMetadata `json:"floor,omitempty"`
+	Building            *EntityFloorMetadata `json:"building,omitempty"`
 	Icon                string               `json:"icon,omitempty"`
 	TemperatureEntityID string               `json:"temperature_entity_id,omitempty"`
 	HumidityEntityID    string               `json:"humidity_entity_id,omitempty"`
