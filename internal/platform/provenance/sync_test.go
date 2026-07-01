@@ -342,6 +342,37 @@ func TestAssertAnchorOutsideTree(t *testing.T) {
 	}
 }
 
+// TestAnchorContainmentSymlinkLeaf exercises the case resolveReal exists for:
+// an anchor whose leaf does not exist yet and whose path reaches the repo
+// through a symlink. resolveReal must resolve the symlinked ancestor so the
+// containment check still catches it — the class of macOS /var → /private/var
+// resolution bug the walk-to-existing-ancestor logic guards against.
+func TestAnchorContainmentSymlinkLeaf(t *testing.T) {
+	base := t.TempDir()
+	realRepo := filepath.Join(base, "realrepo")
+	if err := os.MkdirAll(realRepo, 0o755); err != nil {
+		t.Fatalf("mkdir realRepo: %v", err)
+	}
+	linkRepo := filepath.Join(base, "linkrepo")
+	if err := os.Symlink(realRepo, linkRepo); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	// Anchor reached through the symlink, with a not-yet-created leaf: the
+	// symlinked parent must resolve to realRepo so this is caught as in-tree.
+	s := &Store{path: realRepo, allowedSignersPath: filepath.Join(linkRepo, ".allowed_signers"), logger: slog.Default()}
+	if err := s.assertAnchorOutsideTree(); err == nil {
+		t.Fatal("anchor reaching the repo through a symlink (non-existent leaf) accepted; want in-tree rejection")
+	}
+
+	// A genuinely out-of-tree anchor with a not-yet-created leaf under a
+	// not-yet-created parent is still accepted.
+	s = &Store{path: realRepo, allowedSignersPath: filepath.Join(base, "elsewhere", "sub", "anchor"), logger: slog.Default()}
+	if err := s.assertAnchorOutsideTree(); err != nil {
+		t.Fatalf("out-of-tree anchor with non-existent leaf rejected: %v", err)
+	}
+}
+
 func TestIsWithin(t *testing.T) {
 	sep := string(filepath.Separator)
 	tests := []struct {
