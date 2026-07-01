@@ -131,13 +131,17 @@ func (t *Tools) Diff(ctx context.Context, args DiffArgs) (string, error) {
 		return "", err
 	}
 	// A unified patch over the byte budget degrades to a diffstat so a clipped,
-	// unparseable patch never reaches the model.
+	// unparseable patch never reaches the model. The fallback is mandatory: if
+	// the diffstat itself fails, error rather than emit the over-budget patch
+	// (which marshalToolResult would clip into a meaningless preview).
 	note := ""
 	if format == "patch" && len(diff.Body) > diffPatchBudget {
-		if statDiff, sErr := t.store.revisionDiff(ctx, args.Ref, from, to, "stat"); sErr == nil {
-			diff = statDiff
-			note = fmt.Sprintf("patch exceeded %d bytes; showing diffstat — narrow the range for the full patch", diffPatchBudget)
+		statDiff, sErr := t.store.revisionDiff(ctx, args.Ref, from, to, "stat")
+		if sErr != nil {
+			return "", fmt.Errorf("diff for %s exceeded %d bytes and the diffstat fallback failed: %w", args.Ref, diffPatchBudget, sErr)
 		}
+		diff = statDiff
+		note = fmt.Sprintf("patch exceeded %d bytes; showing diffstat — narrow the range for the full patch", diffPatchBudget)
 	}
 	now := nowUTC()
 	return marshalToolResult(modelDiff{
