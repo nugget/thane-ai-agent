@@ -189,7 +189,11 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 		// rows, so "is anything wrong" is answerable in one read even when a
 		// degraded loop falls below the result limit.
 		"health": loopStatusHealth(statuses),
-		"loops":  filtered,
+		// Tree is the parent→child projection over the FULL registry (names,
+		// not IDs), so the container structure stays legible in one read even
+		// when the flat loops[] list below is filtered or limited (#1102 Tier 2).
+		"tree":  looppkg.BuildLoopTree(statuses),
+		"loops": filtered,
 	})
 }
 
