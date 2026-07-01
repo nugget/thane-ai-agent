@@ -22,6 +22,10 @@ func decodeLoopSpecArg(args map[string]any, key string) (looppkg.Spec, error) {
 	if !ok {
 		return looppkg.Spec{}, fmt.Errorf("%s is required", key)
 	}
+	raw, err := coerceStringifiedJSON(raw)
+	if err != nil {
+		return looppkg.Spec{}, fmt.Errorf("%s was a JSON string but did not parse: %w", key, err)
+	}
 	data, err := json.Marshal(raw)
 	if err != nil {
 		return looppkg.Spec{}, err
@@ -38,6 +42,10 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 	if !ok {
 		return looppkg.Launch{}, nil
 	}
+	raw, err := coerceStringifiedJSON(raw)
+	if err != nil {
+		return looppkg.Launch{}, fmt.Errorf("%s was a JSON string but did not parse: %w", key, err)
+	}
 	if err := rejectLaunchModelKeys(raw); err != nil {
 		return looppkg.Launch{}, err
 	}
@@ -50,6 +58,40 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 		return looppkg.Launch{}, err
 	}
 	return launch, nil
+}
+
+// coerceStringifiedJSON canonicalizes a tool argument that models sometimes
+// emit as a JSON *string* (a stringified object/array) instead of a native
+// object. This is a known LLM quirk that bites hardest on tools whose whole
+// argument is a single large nested object — the loop spec/launch payloads —
+// where big or complex values get serialized as a quoted string while small
+// ones arrive as a native dict. Without coercion the string flows into
+// json.Marshal→Unmarshal and fails with the opaque "cannot unmarshal string
+// into Go value of type loop.specJSON" (see #1116). This applies the
+// model-facing-tools.md §2 principle: accept how models think, then
+// canonicalize.
+//
+// A string is only coerced when it looks like a JSON object or array (first
+// non-space rune is '{' or '['), so a legitimate bare-string value is never
+// reinterpreted. On success the decoded value is returned for the normal
+// marshal→unmarshal path (which preserves rejectLaunchModelKeys and every
+// other downstream check). A JSON-looking string that fails to parse returns
+// an error so the caller can surface a precise message rather than the opaque
+// type error. Non-string and non-JSON-looking values pass through unchanged.
+func coerceStringifiedJSON(raw any) (any, error) {
+	s, ok := raw.(string)
+	if !ok {
+		return raw, nil
+	}
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return raw, nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }
 
 // rejectLaunchModelKeys catches tool-facing launch payloads that try to
