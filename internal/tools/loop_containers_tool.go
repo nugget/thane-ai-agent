@@ -1,0 +1,135 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+)
+
+// loopContainerSampleChildrenCap bounds the sample_children preview per
+// container so the directory stays compact for large fleets; child_count and
+// descendant_count still report the true totals.
+const loopContainerSampleChildrenCap = 8
+
+// registerLoopContainers registers the loop_containers placement directory —
+// the loop-graph analog of doc_roots (#1102 Tier 2). It shares the live
+// registry dependency wired by ConfigureLoopRuntimeTools.
+func (r *Registry) registerLoopContainers() {
+	if r.liveLoopRegistry == nil {
+		return
+	}
+	r.Register(&Tool{
+		Name:        "loop_containers",
+		Description: "List the container loops — the grouping nodes that new loops nest under — as a placement directory (the loop-graph analog of doc_roots). Each entry carries the container's intent, how many loops it holds directly (child_count) and transitively (descendant_count), the capability tags it confers to everything nested under it (confers_tags), and a sample of its children by name. Use this before creating a loop to decide where it belongs: pick the container whose confers_tags and intent match the new loop's purpose, then pass its name as parent_name to thane_loop_create.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: r.handleLoopContainers,
+	})
+}
+
+func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (string, error) {
+	if r.liveLoopRegistry == nil {
+		return "", fmt.Errorf("live loop registry is not configured")
+	}
+	statuses := r.liveLoopRegistry.Statuses()
+
+	// Index the graph once so per-container child/descendant rollups don't each
+	// rescan the fleet (O(containers) walks over one shared index, not O(N)
+	// per container).
+	byID := make(map[string]looppkg.Status, len(statuses))
+	for _, s := range statuses {
+		byID[s.ID] = s
+	}
+	childrenByParent := make(map[string][]string, len(statuses))
+	var containerStatuses []looppkg.Status
+	for _, s := range statuses {
+		if s.ParentID != "" {
+			childrenByParent[s.ParentID] = append(childrenByParent[s.ParentID], s.ID)
+		}
+		if s.Config.Operation == looppkg.OperationContainer {
+			containerStatuses = append(containerStatuses, s)
+		}
+	}
+	sort.Slice(containerStatuses, func(i, j int) bool {
+		return containerStatuses[i].Name < containerStatuses[j].Name
+	})
+
+	containers := make([]map[string]any, 0, len(containerStatuses))
+	for _, s := range containerStatuses {
+		childIDs := append([]string(nil), childrenByParent[s.ID]...)
+		sort.Slice(childIDs, func(i, j int) bool {
+			return byID[childIDs[i]].Name < byID[childIDs[j]].Name
+		})
+		sample := make([]string, 0, loopContainerSampleChildrenCap)
+		for _, cid := range childIDs {
+			if len(sample) >= loopContainerSampleChildrenCap {
+				break
+			}
+			sample = append(sample, byID[cid].Name)
+		}
+		containers = append(containers, map[string]any{
+			"name":             s.Name,
+			"intent":           s.Config.Intent,
+			"child_count":      len(childIDs),
+			"descendant_count": countDescendants(s.ID, childrenByParent),
+			"confers_tags":     containerConfersTags(s),
+			"sample_children":  sample,
+		})
+	}
+	return ldMarshalToolJSON(map[string]any{
+		"status":     "ok",
+		"containers": containers,
+	})
+}
+
+// countDescendants counts the transitive children of rootID via the shared
+// parent→children index, cycle-safe (seen-set), without rescanning the fleet.
+func countDescendants(rootID string, childrenByParent map[string][]string) int {
+	seen := map[string]struct{}{rootID: {}}
+	queue := []string{rootID}
+	count := 0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, cid := range childrenByParent[current] {
+			if _, ok := seen[cid]; ok {
+				continue
+			}
+			seen[cid] = struct{}{}
+			count++
+			queue = append(queue, cid)
+		}
+	}
+	return count
+}
+
+// containerConfersTags returns the sorted, deduped capability tags a container
+// passes to everything nested under it: its effective tag set (own declared
+// tags plus any inherited from its own ancestors), falling back to the
+// declared Tags when live effective state has not been computed. Always
+// non-nil so the field serializes as [] rather than null.
+func containerConfersTags(s looppkg.Status) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	add := func(tag string) {
+		if tag == "" || seen[tag] {
+			return
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	for _, t := range s.EffectiveTags {
+		add(t.Tag)
+	}
+	if len(out) == 0 {
+		for _, t := range s.Config.Tags {
+			add(t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
