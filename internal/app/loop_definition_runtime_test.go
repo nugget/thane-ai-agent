@@ -361,6 +361,60 @@ func TestLoopDefinitionRuntimeLaunchDefinition(t *testing.T) {
 	}
 }
 
+func TestLoopViewByID_IsIDPreciseUnderNameCollision(t *testing.T) {
+	t.Parallel()
+
+	// The definition view is name-keyed, but the live registry keys by id and
+	// loop names are not unique. loopViewByID must resolve THIS exact loop, never
+	// a same-named sibling's row (#1106 B3 review).
+	defs, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name: "worker", Enabled: true, Task: "work", Operation: looppkg.OperationService,
+			SleepMin: time.Minute, SleepMax: time.Minute, SleepDefault: time.Minute, Jitter: looppkg.Float64Ptr(0),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loopFor := func() *looppkg.Loop {
+		l, err := looppkg.New(looppkg.Config{Name: "worker", Operation: looppkg.OperationService, Task: "work"}, looppkg.Deps{Runner: testLoopRunner{}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return l
+	}
+	loops := looppkg.NewRegistry()
+	a1, a2 := loopFor(), loopFor()
+	if err := loops.Register(a1); err != nil {
+		t.Fatalf("Register a1: %v", err)
+	}
+	if err := loops.Register(a2); err != nil {
+		t.Fatalf("Register a2: %v", err)
+	}
+
+	runtime := &loopDefinitionRuntime{
+		definitions: defs, loops: loops, runner: testLoopRunner{},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), now: time.Now, scheduleCh: make(chan struct{}, 1),
+	}
+	app := &App{loopRegistry: loops, loopDefinitionRuntime: runtime}
+
+	for _, id := range []string{a1.ID(), a2.ID()} {
+		v, ok := app.loopViewByID(id)
+		if !ok {
+			t.Fatalf("loopViewByID(%s): not found", id)
+		}
+		if v.ID == nil || *v.ID != id {
+			t.Errorf("loopViewByID(%s) resolved to id %v — a same-named sibling's row leaked into this loop's self-context", id, v.ID)
+		}
+		// A "worker" definition backs this name, so the collision path must carry
+		// its (per-name) policy, not fall back to a misleading "ephemeral".
+		if v.PolicyState == "ephemeral" {
+			t.Errorf("loopViewByID(%s) reported policy_state=ephemeral, but a definition backs this name — the definition's policy must be carried", id)
+		}
+	}
+}
+
 func TestLoopDefinitionRuntimeSnapshotIncludesRunningLoop(t *testing.T) {
 	t.Parallel()
 

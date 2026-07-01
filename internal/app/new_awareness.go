@@ -32,6 +32,12 @@ func (a *App) initAwareness(s *newState) error {
 	contactLookup := &contactNameLookup{store: a.contactStore, logger: logger}
 	a.loop.RegisterAlwaysContextProvider(agent.NewChannelProvider(contactLookup))
 	a.loop.UseContactLookup(contactLookup)
+	// Self-context: inject the running loop's own canonical row each iteration
+	// so it is self-aware — id/state/parent/intent/cadence/effective-tags —
+	// without a loop_status tool call (#1106 B3). One provider serves every
+	// non-container loop; it resolves the current loop from the iteration's
+	// loop_id.
+	a.loop.RegisterAlwaysContextProvider(agent.NewLoopSelfContextProvider(a.loopViewByID))
 	a.loop.RegisterAlwaysContextProvider(agent.NewChannelOverviewProvider(agent.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
 		Phones: &contactPhoneResolver{store: a.contactStore},

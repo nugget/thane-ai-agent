@@ -745,6 +745,57 @@ func (a *App) launchLoopDefinition(ctx context.Context, name string, launch loop
 	return a.loopDefinitionRuntime.LaunchDefinition(ctx, name, launch)
 }
 
+// loopViewByID resolves a live loop id to its canonical LoopView for the
+// self-context provider (#1106 B3). It prefers the definition view — where
+// policy, eligibility, and effective_* are already resolved with live telemetry
+// overlaid — and falls back to a live projection for ephemeral, definition-less
+// loops. Returns ok=false for an id with no live loop.
+func (a *App) loopViewByID(loopID string) (looppkg.LoopView, bool) {
+	if a == nil || a.loopRegistry == nil {
+		return looppkg.LoopView{}, false
+	}
+	st, ok := a.loopRegistry.StatusByID(loopID)
+	if !ok {
+		return looppkg.LoopView{}, false
+	}
+	// Prefer the definition view — policy, eligibility, and effective_* are
+	// already resolved there. Loop names are not unique (the live registry keys
+	// by id while the definition view is name-keyed), so use the name-matched
+	// row directly only when it resolves to THIS exact loop; otherwise a
+	// same-named sibling's live telemetry would be returned for the wrong id.
+	if view := a.loopDefinitionView(); view != nil {
+		if def, ok := looppkg.FindDefinitionView(view, st.Name); ok && def.Loop != nil {
+			if def.Loop.ID != nil && *def.Loop.ID == loopID {
+				return *def.Loop, true
+			}
+			// Name collision: project THIS loop id-precisely, but carry the
+			// definition's policy/eligibility. Those are per-definition (keyed by
+			// name), not per-instance, so they hold for any loop of this name —
+			// and keep the self-context from misreporting a definition-backed
+			// loop as "ephemeral".
+			v := a.projectLiveLoopView(st)
+			v.PolicyState = def.Loop.PolicyState
+			v.PolicySource = def.Loop.PolicySource
+			v.PolicyReason = def.Loop.PolicyReason
+			v.PolicyUpdatedDelta = def.Loop.PolicyUpdatedDelta
+			v.Eligible = def.Loop.Eligible
+			return v, true
+		}
+	}
+	// No definition of this name (a genuinely ephemeral loop): an id-precise
+	// projection carrying the "ephemeral" policy the projector assigns a loop
+	// with no backing definition.
+	return a.projectLiveLoopView(st), true
+}
+
+// projectLiveLoopView projects a live Status into its canonical LoopView using
+// the current live batch for graph resolution (parent_name/ancestry/child_count),
+// with no definition policy join — callers overlay policy when a definition
+// backs the loop.
+func (a *App) projectLiveLoopView(st looppkg.Status) looppkg.LoopView {
+	return looppkg.NewLoopViewResolver(a.loopRegistry.Statuses(), nil, time.Now()).FromStatus(st)
+}
+
 func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
 	if a == nil {
 		return nil
