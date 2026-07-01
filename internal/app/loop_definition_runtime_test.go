@@ -252,12 +252,13 @@ func TestLoopDefinitionRuntimeReconcileDefinitionStopsInactiveService(t *testing
 // TestLoopDefinitionRuntimeReconcileDefinitionLeavesRunningLoopOnSpecChange
 // pins the intentional early-return in ReconcileDefinition: a spec change
 // committed while the same-named loop is running (still durable, active,
-// eligible) must NOT stop, respawn, or patch the live loop — the new spec
-// takes effect only at the next relaunch. Every commit surface
-// (loop_definition_set, loop_definition_update, thane_loop_create,
-// POST /v1/loop-definitions) relies on this reconcile as its only
-// propagation step, and the write tools tell the model exactly this via
-// their running-loop notice — a behavior change here must update those
+// eligible) must NOT stop, respawn, or patch the live loop — reconcile-side
+// propagation happens only at the next relaunch. The relaunch-tier commit
+// surfaces (loop_definition_set, thane_loop_create, POST
+// /v1/loop-definitions) rely on this reconcile as their only propagation
+// step and tell the model so via their running-loop notice;
+// loop_definition_update compensates separately with a live retune
+// (Loop.QueueRetune, #1153). A behavior change here must update those
 // surfaces in the same stroke.
 func TestLoopDefinitionRuntimeReconcileDefinitionLeavesRunningLoopOnSpecChange(t *testing.T) {
 	t.Parallel()

@@ -333,14 +333,19 @@ func (r *Registry) runningLoopByName(name string) *looppkg.Loop {
 	return live.GetByName(name)
 }
 
-// staleRunningLoopNotice is the model-facing sentence a definition-write
-// result carries when the target loop was already running before the write
-// and survived it: a running loop holds its launched-time config and does
-// NOT re-read the spec on wake — changes apply only after a full relaunch.
-// Saying so explicitly keeps the model from waiting for the next wake and
-// concluding the change failed. One shared helper so every write surface
-// (loop_definition_set, loop_definition_update, thane_loop_create replace)
-// teaches the same contract and the wording cannot drift.
+// staleRunningLoopNotice is the model-facing sentence a RELAUNCH-TIER
+// definition write carries when the target loop was already running before
+// the write and survived it: a running loop holds its launched-time config
+// and does NOT re-read the spec on wake — structural changes apply only
+// after a full relaunch. Saying so explicitly keeps the model from waiting
+// for the next wake and concluding the change failed. One shared helper so
+// the relaunch-tier surfaces (loop_definition_set, thane_loop_create
+// replace) teach the same contract and the wording cannot drift.
+// loop_definition_update is deliberately NOT a caller: it applies scalar
+// retunes live via [looppkg.Loop.QueueRetune] and emits
+// [retuneAppliedNotice] instead. The operation passed in must be the LIVE
+// instance's (Loop.Operation()), not the just-written spec's — the two can
+// diverge, and the relaunch recipe has to match what is actually running.
 //
 // Callers must gate on the SAME instance surviving the write (capture the
 // live loop before, compare IDs after) — a loop spawned by the write's own
