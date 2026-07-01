@@ -245,6 +245,13 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
+      # AllowedSigners lists operator SSH public keys trusted to sign
+      # commits in this root, in addition to the shared
+      # signing.allowed_signers set and the agent's own (always-trusted,
+      # unremovable) key. This only extends the trust set for one root; it
+      # never replaces or removes from it. Use it to let an operator
+      # co-author a signed root.
+      allowed_signers: []
   kb:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -278,6 +285,32 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ~/.ssh/id_ed25519
+      # AllowedSigners lists operator SSH public keys trusted to sign
+      # commits in this root, in addition to the shared
+      # signing.allowed_signers set and the agent's own (always-trusted,
+      # unremovable) key. This only extends the trust set for one root; it
+      # never replaces or removes from it. Use it to let an operator
+      # co-author a signed root.
+      allowed_signers:
+        - # Principal is the OpenSSH signer identity, conventionally an email
+          # such as "alice@example.com". Required. It must not contain
+          # whitespace or control characters — the allowed_signers format is
+          # space-delimited, so either would corrupt the line or smuggle a
+          # second entry.
+          principal: bob@example.com
+          # Key is the SSH public key in authorized_keys form, such as
+          # "ssh-ed25519 AAAA...". Required. It must parse as a valid public
+          # key.
+          key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+3xdUdsJA9XoATiuDErHwn2cDSIO1U1/t+BuN6P3Gv
+          # Label is an optional human note rendered as the key's trailing
+          # comment. It must not contain control characters.
+          label: Bob (kb co-author)
+          # ValidAfter and ValidBefore optionally bound when the key is trusted.
+          # Each is an RFC3339 timestamp; when both are set, ValidAfter must be
+          # strictly before ValidBefore. Enforcement is delegated to OpenSSH at
+          # verify time; thane does not yet surface expiry.
+          valid_after: ""
+          valid_before: ""
   scratchpad:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -311,6 +344,13 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
+      # AllowedSigners lists operator SSH public keys trusted to sign
+      # commits in this root, in addition to the shared
+      # signing.allowed_signers set and the agent's own (always-trusted,
+      # unremovable) key. This only extends the trust set for one root; it
+      # never replaces or removes from it. Use it to let an operator
+      # co-author a signed root.
+      allowed_signers: []
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
 # paths: {}
@@ -806,6 +846,34 @@ talents_dir: ./talents
 #   commits. The key is loaded at startup and held in memory.
 #   Supports ~ expansion. Example: ~/.ssh/id_ed25519
 #   signing_key: ~/.ssh/id_ed25519
+#
+# (optional) Signing declares the operator-managed set of SSH public keys trusted
+# signing:
+#   AllowedSigners lists SSH public keys trusted to sign commits across
+#   all signing roots. Each entry is an operator identity; a root may
+#   add more via its git.allowed_signers. The agent's own key is
+#   implicit and unremovable, so this list never needs — and must not
+#   include — it.
+#   allowed_signers:
+#     - # Principal is the OpenSSH signer identity, conventionally an email
+#       such as "alice@example.com". Required. It must not contain
+#       whitespace or control characters — the allowed_signers format is
+#       space-delimited, so either would corrupt the line or smuggle a
+#       second entry.
+#       principal: alice@example.com
+#       Key is the SSH public key in authorized_keys form, such as
+#       "ssh-ed25519 AAAA...". Required. It must parse as a valid public
+#       key.
+#       key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyUStZXWURqF4b7IWfSTz2W6zYz5JnXrKbcuPfGAmUo
+#       Label is an optional human note rendered as the key's trailing
+#       comment. It must not contain control characters.
+#       label: Alice laptop
+#       ValidAfter and ValidBefore optionally bound when the key is trusted.
+#       Each is an RFC3339 timestamp; when both are set, ValidAfter must be
+#       strictly before ValidBefore. Enforcement is delegated to OpenSSH at
+#       verify time; thane does not yet surface expiry.
+#       valid_after: ""
+#       valid_before: ""
 #
 # (optional) StateWindow configures the rolling window of recent Home Assistant
 # state_window:

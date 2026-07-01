@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
@@ -43,6 +44,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -295,6 +297,15 @@ type Config struct {
 	// layouts read always-on identity documents directly from
 	// {workspace.path}/core rather than from this store.
 	Provenance ProvenanceConfig `yaml:"provenance"`
+
+	// Signing declares the operator-managed set of SSH public keys trusted
+	// to sign commits in git-backed document roots, in addition to the
+	// agent's own generated signing key (which is always trusted and can
+	// never be removed). These shared keys apply to every signing root; a
+	// root may extend the set with its own git.allowed_signers. Keys live
+	// only here in config and are never reachable by a model loop. This is
+	// the trust gate that lets an operator co-author a signed root.
+	Signing SigningConfig `yaml:"signing"`
 
 	// StateWindow configures the rolling window of recent Home Assistant
 	// state changes injected into the agent's system prompt on every run.
@@ -815,6 +826,48 @@ func (c ProvenanceConfig) Configured() bool {
 	return c.Path != "" && c.SigningKey != ""
 }
 
+// SigningConfig declares the operator-managed set of trusted signing keys
+// for git-backed document roots. These keys are unioned with the agent's
+// own signing key — which is always trusted and can never be removed — to
+// form the trust set that signature verification checks against. Keys are
+// operator-only: they live in config and are never exposed to a model.
+type SigningConfig struct {
+	// AllowedSigners lists SSH public keys trusted to sign commits across
+	// all signing roots. Each entry is an operator identity; a root may
+	// add more via its git.allowed_signers. The agent's own key is
+	// implicit and unremovable, so this list never needs — and must not
+	// include — it.
+	AllowedSigners []AllowedSigner `yaml:"allowed_signers,omitempty"`
+}
+
+// AllowedSigner is one trusted signing identity: an SSH public key bound to
+// a principal, with an optional label and validity window. It renders to
+// one line of an OpenSSH allowed_signers file at startup.
+type AllowedSigner struct {
+	// Principal is the OpenSSH signer identity, conventionally an email
+	// such as "alice@example.com". Required. It must not contain
+	// whitespace or control characters — the allowed_signers format is
+	// space-delimited, so either would corrupt the line or smuggle a
+	// second entry.
+	Principal string `yaml:"principal"`
+
+	// Key is the SSH public key in authorized_keys form, such as
+	// "ssh-ed25519 AAAA...". Required. It must parse as a valid public
+	// key.
+	Key string `yaml:"key"`
+
+	// Label is an optional human note rendered as the key's trailing
+	// comment. It must not contain control characters.
+	Label string `yaml:"label,omitempty"`
+
+	// ValidAfter and ValidBefore optionally bound when the key is trusted.
+	// Each is an RFC3339 timestamp; when both are set, ValidAfter must be
+	// strictly before ValidBefore. Enforcement is delegated to OpenSSH at
+	// verify time; thane does not yet surface expiry.
+	ValidAfter  string `yaml:"valid_after,omitempty"`
+	ValidBefore string `yaml:"valid_before,omitempty"`
+}
+
 // RootEntry combines a managed root's path with its per-root policy
 // in the unified roots: block. Accepts either a bare-string shorthand
 // (the entire entry is the path, all policy fields default) or a
@@ -915,6 +968,14 @@ type DocumentRootGitConfig struct {
 	// SigningKey is the SSH private key used to sign managed commits.
 	// Supports ~ expansion at startup.
 	SigningKey string `yaml:"signing_key,omitempty"`
+
+	// AllowedSigners lists operator SSH public keys trusted to sign
+	// commits in this root, in addition to the shared
+	// signing.allowed_signers set and the agent's own (always-trusted,
+	// unremovable) key. This only extends the trust set for one root; it
+	// never replaces or removes from it. Use it to let an operator
+	// co-author a signed root.
+	AllowedSigners []AllowedSigner `yaml:"allowed_signers,omitempty"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -2154,7 +2215,7 @@ func entryHasPolicy(entry RootEntry) bool {
 	}
 	g := entry.Git
 	return g.Enabled || g.SignCommits || g.VerifySignatures != "" ||
-		g.RepoPath != "" || g.SigningKey != ""
+		g.RepoPath != "" || g.SigningKey != "" || len(g.AllowedSigners) > 0
 }
 
 // applyServiceLoopDefaults fills the unset fields of one core service-loop
@@ -2633,6 +2694,9 @@ func (c *Config) Validate() error {
 	if err := c.validateDocRoots(); err != nil {
 		return err
 	}
+	if err := c.validateSigning(); err != nil {
+		return err
+	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
@@ -2715,8 +2779,104 @@ func (c *Config) validateDocRoots() error {
 		if git.Enabled && git.SignCommits && strings.TrimSpace(git.SigningKey) == "" {
 			return fmt.Errorf("doc_roots.%s.git.signing_key is required when sign_commits is true", root)
 		}
+		if err := validateAllowedSigners(fmt.Sprintf("doc_roots.%s.git.allowed_signers", root), git.AllowedSigners); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateSigning checks the shared operator allowed-signers block.
+func (c *Config) validateSigning() error {
+	return validateAllowedSigners("signing.allowed_signers", c.Signing.AllowedSigners)
+}
+
+// validateAllowedSigners validates a list of trusted signing keys, prefixing
+// errors with label (e.g. "signing.allowed_signers" or
+// "doc_roots.kb.git.allowed_signers"). It is fail-closed: a single malformed
+// entry rejects the whole config rather than being silently dropped, because
+// silently shrinking a trust set is worse than refusing to boot. It also
+// rejects the same public key appearing twice in one list — redundant at
+// best, a principal-spoofing typo at worst.
+func validateAllowedSigners(label string, list []AllowedSigner) error {
+	seen := make(map[string]string, len(list))
+	for i, s := range list {
+		entry := fmt.Sprintf("%s[%d]", label, i)
+		if err := validateAllowedSigner(entry, s); err != nil {
+			return err
+		}
+		blob, err := canonicalAllowedSignerKey(s.Key)
+		if err != nil {
+			return fmt.Errorf("%s.key: %w", entry, err)
+		}
+		if prev, ok := seen[blob]; ok {
+			return fmt.Errorf("%s.key duplicates the key already declared for principal %q", entry, prev)
+		}
+		seen[blob] = strings.TrimSpace(s.Principal)
+	}
+	return nil
+}
+
+// validateAllowedSigner validates one trusted signing identity. Every field
+// that renders into the space-delimited OpenSSH allowed_signers line is
+// checked for the injection vectors that format is prone to: a principal
+// with whitespace would corrupt the line, and a newline anywhere would
+// smuggle an entire extra trusted key.
+func validateAllowedSigner(label string, s AllowedSigner) error {
+	principal := strings.TrimSpace(s.Principal)
+	if principal == "" {
+		return fmt.Errorf("%s.principal is required", label)
+	}
+	if strings.IndexFunc(principal, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return fmt.Errorf("%s.principal %q must not contain whitespace or control characters", label, s.Principal)
+	}
+	if strings.TrimSpace(s.Key) == "" {
+		return fmt.Errorf("%s.key is required", label)
+	}
+	if _, err := canonicalAllowedSignerKey(s.Key); err != nil {
+		return fmt.Errorf("%s.key: %w", label, err)
+	}
+	if strings.IndexFunc(s.Label, unicode.IsControl) >= 0 {
+		return fmt.Errorf("%s.label must not contain control characters", label)
+	}
+	after, err := parseAllowedSignerTime(label, "valid_after", s.ValidAfter)
+	if err != nil {
+		return err
+	}
+	before, err := parseAllowedSignerTime(label, "valid_before", s.ValidBefore)
+	if err != nil {
+		return err
+	}
+	if after != nil && before != nil && !after.Before(*before) {
+		return fmt.Errorf("%s.valid_after must be strictly before valid_before", label)
+	}
+	return nil
+}
+
+// parseAllowedSignerTime parses an optional RFC3339 validity bound. Operators
+// author windows in RFC3339; conversion to the OpenSSH allowed_signers time
+// format happens at render time.
+func parseAllowedSignerTime(label, field, value string) (*time.Time, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, fmt.Errorf("%s.%s %q must be an RFC3339 timestamp: %w", label, field, value, err)
+	}
+	return &t, nil
+}
+
+// canonicalAllowedSignerKey parses an authorized_keys-form public key and
+// returns its canonical "<type> <base64>" form with the comment stripped, so
+// keys that differ only by comment or surrounding whitespace compare equal.
+func canonicalAllowedSignerKey(key string) (string, error) {
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
+	if err != nil {
+		return "", fmt.Errorf("not a valid SSH public key: %w", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
 // validateServiceLoop checks one core service-loop config for internal

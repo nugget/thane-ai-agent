@@ -119,6 +119,11 @@ func ExampleConfig() *Config {
 					SignCommits:      true,
 					VerifySignatures: "warn",
 					SigningKey:       "~/.ssh/id_ed25519",
+					AllowedSigners: []AllowedSigner{{
+						Principal: "bob@example.com",
+						Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+3xdUdsJA9XoATiuDErHwn2cDSIO1U1/t+BuN6P3Gv",
+						Label:     "Bob (kb co-author)",
+					}},
 				},
 			},
 			"scratchpad": {
@@ -265,6 +270,14 @@ func ExampleConfig() *Config {
 		Provenance: ProvenanceConfig{
 			Path:       "~/Thane/core",
 			SigningKey: "~/.ssh/id_ed25519",
+		},
+
+		Signing: SigningConfig{
+			AllowedSigners: []AllowedSigner{{
+				Principal: "alice@example.com",
+				Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyUStZXWURqF4b7IWfSTz2W6zYz5JnXrKbcuPfGAmUo",
+				Label:     "Alice laptop",
+			}},
 		},
 
 		Loops: LoopsConfig{
