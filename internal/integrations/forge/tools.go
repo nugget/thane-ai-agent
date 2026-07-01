@@ -27,17 +27,15 @@ type Tools struct {
 
 // NewTools creates forge tools backed by the given manager. The opLog
 // records successful operations for context injection; pass nil to
-// disable operation tracking.
-func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions ...*SubscriptionStore) *Tools {
-	t := &Tools{
-		manager: mgr,
-		opLog:   opLog,
-		logger:  logger,
+// disable operation tracking. subscriptions may be nil to disable the
+// repository-subscription surface.
+func NewTools(mgr *Manager, opLog *OperationLog, logger *slog.Logger, subscriptions *SubscriptionStore) *Tools {
+	return &Tools{
+		manager:       mgr,
+		opLog:         opLog,
+		logger:        logger,
+		subscriptions: subscriptions,
 	}
-	if len(subscriptions) > 0 {
-		t.subscriptions = subscriptions[0]
-	}
-	return t
 }
 
 // SetLoopResolver wires the live loop registry into forge tools so

@@ -147,36 +147,6 @@ func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	return spec
 }
 
-// BuildSpec returns a [loop.Spec] that implements the ego loop as a
-// service loop. The returned spec declares the durable output document;
-// the per-iteration prompt is the spec Task ([prompts.EgoBaseTemplate])
-// and the supervisor-turn prefix is the declarative
-// SupervisorProfile.Instructions ([prompts.EgoSupervisorInstructions]).
-func BuildSpec(cfg Config) loop.Spec {
-	return HydrateSpec(DefinitionSpec(cfg), cfg)
-}
-
-// BuildLoopConfig returns the engine-facing [loop.Config] view of the
-// ego loop. Kept as a compatibility shim for callers that work directly
-// with [loop.Config] rather than [loop.Spec].
-func BuildLoopConfig(cfg Config) loop.Config {
-	spec := BuildSpec(cfg)
-	out := spec.ToConfig()
-	profileHints := spec.Profile.RoutingFactors()
-	if len(profileHints) > 0 {
-		if out.RoutingFactors == nil {
-			out.RoutingFactors = make(map[string]string, len(profileHints))
-		}
-		for k, v := range profileHints {
-			out.RoutingFactors[k] = v
-		}
-	}
-	if spec.Profile.DelegationGating != "" {
-		out.DelegationGating = spec.Profile.DelegationGating
-	}
-	return out
-}
-
 // egoExcludeTools lists tools that the ego loop should not have access
 // to. File tools are replaced by the declared durable output tool, exec
 // is unnecessary, session management is for interactive use only.
@@ -187,4 +157,8 @@ var egoExcludeTools = append([]string{
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"tag_activate", "tag_deactivate",
+	// A reflective loop must not stand up new durable loops; thane_loop_create is
+	// Core (#1106 A), so it has to be excluded by name rather than gated behind
+	// the `loops` capability the ego can't activate.
+	"thane_loop_create",
 }, tools.DirectHumanEgressToolNames()...)

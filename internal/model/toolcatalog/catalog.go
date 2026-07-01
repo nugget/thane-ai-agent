@@ -97,12 +97,16 @@ type BuiltinTagSpec struct {
 	// `owner`) without being a menu.
 	Protected bool
 
-	// Parents lists the menu tag(s) this leaf appears under in the
+	// Parents lists the menu tag(s) a leaf appears under in the intended
 	// hierarchical capability menu. Multi-valued because some leaves
-	// legitimately serve more than one menu (e.g. `files` is
-	// reachable from both development and knowledge). Omitted for
-	// menus themselves and for tags that don't fit any menu — those
-	// surface as top-level entries in the menu rendering.
+	// legitimately serve more than one menu (e.g. `files` is reachable
+	// from both development and knowledge). Omitted for menus themselves
+	// and for tags that don't fit any menu.
+	//
+	// Reserved: Parents is authored on every leaf and validated by the
+	// catalog invariant test, but no renderer consumes it yet — the
+	// hierarchical menu that would group leaves beneath their parents has
+	// not shipped. Until it does, menu navigation flows through NextTags.
 	Parents []string
 }
 
@@ -243,6 +247,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"contact_owner":               {CanonicalID: "native:contact_owner", Source: NativeToolSource, Tags: []string{"owner"}},
 	"set_next_sleep":              {CanonicalID: "native:set_next_sleep", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_status":                 {CanonicalID: "native:loop_status", Source: NativeToolSource, Tags: []string{"loops"}},
+	"loop_containers":             {CanonicalID: "native:loop_containers", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_wake":                   {CanonicalID: "native:loop_wake", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_delete":      {CanonicalID: "native:loop_definition_delete", Source: NativeToolSource, Tags: []string{"loops"}},
 	"loop_definition_get":         {CanonicalID: "native:loop_definition_get", Source: NativeToolSource, Tags: []string{"loops"}},
@@ -257,8 +262,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"spawn_loop":                  {CanonicalID: "native:spawn_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"stop_loop":                   {CanonicalID: "native:stop_loop", Source: NativeToolSource, Tags: []string{"loops"}},
 	"thane_assign":                {CanonicalID: "native:thane_assign", Source: NativeToolSource},
-	"thane_create_container":      {CanonicalID: "native:thane_create_container", Source: NativeToolSource, Tags: []string{"loops"}},
-	"thane_curate":                {CanonicalID: "native:thane_curate", Source: NativeToolSource, Tags: []string{"loops"}},
+	"thane_loop_create":           {CanonicalID: "native:thane_loop_create", Source: NativeToolSource},
 	"thane_now":                   {CanonicalID: "native:thane_now", Source: NativeToolSource},
 	"update_entity_subscriptions": {CanonicalID: "native:update_entity_subscriptions", Source: NativeToolSource, Tags: []string{"loops"}},
 	"macos_calendar_events":       {CanonicalID: "native:macos_calendar_events", Source: NativeToolSource, Tags: []string{"companion"}},

@@ -26,7 +26,7 @@ func TestBuildSystemPrompt_ActiveCapabilitiesUseSharedSurface(t *testing.T) {
 		},
 	})
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 	if !strings.Contains(prompt, "## Active Tags") {
 		t.Fatalf("prompt missing Active Tags section: %s", prompt)
 	}
@@ -51,7 +51,7 @@ func TestBuildSystemPrompt_ActiveCapabilitiesEmptyStateUsesSharedSurface(t *test
 		},
 	})
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 	if !strings.Contains(prompt, "## Active Tags") {
 		t.Fatalf("prompt missing Active Tags section: %s", prompt)
 	}

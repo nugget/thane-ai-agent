@@ -187,35 +187,6 @@ func HydrateSpec(spec loop.Spec, _ Config) loop.Spec {
 	return spec
 }
 
-// BuildSpec returns a [loop.Spec] that implements the archivist loop as
-// a service loop. The per-iteration prompt is the spec Task
-// ([prompts.ArchivistBaseTemplate]) and the supervisor-turn prefix is the
-// declarative SupervisorProfile.Instructions.
-func BuildSpec(cfg Config) loop.Spec {
-	return HydrateSpec(DefinitionSpec(cfg), cfg)
-}
-
-// BuildLoopConfig returns the engine-facing [loop.Config] view of the
-// archivist loop. Kept as a compatibility shim for callers that work
-// directly with [loop.Config] rather than [loop.Spec].
-func BuildLoopConfig(cfg Config) loop.Config {
-	spec := BuildSpec(cfg)
-	out := spec.ToConfig()
-	profileHints := spec.Profile.RoutingFactors()
-	if len(profileHints) > 0 {
-		if out.RoutingFactors == nil {
-			out.RoutingFactors = make(map[string]string, len(profileHints))
-		}
-		for k, v := range profileHints {
-			out.RoutingFactors[k] = v
-		}
-	}
-	if spec.Profile.DelegationGating != "" {
-		out.DelegationGating = spec.Profile.DelegationGating
-	}
-	return out
-}
-
 // archivistExcludeTools lists tools the archivist loop should not have
 // access to. The archivist's writes go through the managed output
 // (`core:archivist.md`) and the documents tools (for dossiers in the
@@ -238,5 +209,5 @@ var archivistExcludeTools = append([]string{
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"tag_activate", "tag_deactivate",
-	"spawn_loop", "thane_now", "thane_assign", "thane_curate", "thane_create_container",
+	"spawn_loop", "thane_now", "thane_assign", "thane_loop_create",
 }, tools.DirectHumanEgressToolNames()...)

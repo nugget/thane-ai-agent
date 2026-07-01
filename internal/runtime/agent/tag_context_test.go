@@ -74,7 +74,7 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "hexagonal pattern") {
 		t.Error("system prompt should contain first KB article content")
@@ -108,7 +108,7 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 		Logger:  l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if strings.Contains(prompt, "Secret content") {
 		t.Error("system prompt should not contain context from inactive tags")
@@ -145,7 +145,7 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 		Logger:  l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	// The shared file should appear exactly once.
 	count := strings.Count(prompt, "shared knowledge")
@@ -176,7 +176,7 @@ func TestBuildSystemPrompt_TagContextTrailheadFirst(t *testing.T) {
 		Logger:  l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 	treeIdx := strings.Index(prompt, "TREE_MARKER")
 	articleIdx := strings.Index(prompt, "ARTICLE_MARKER")
 	if treeIdx < 0 || articleIdx < 0 {
@@ -191,7 +191,7 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 	l := newMinimalLoop()
 	// capTags not set — should not inject any tag context
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if strings.Contains(prompt, "Tagged Guidance") {
 		t.Error("system prompt should not contain tagged guidance section when capTags is nil")
@@ -220,7 +220,7 @@ func TestBuildSystemPrompt_TagContextChannelPinnedBuiltinTagIncluded(t *testing.
 	scope.PinChannelTags([]string{"interactive"})
 	ctx := withCapabilityScope(context.Background(), scope)
 
-	prompt := l.buildSystemPrompt(ctx, "hello", nil)
+	prompt := l.buildSystemPrompt(ctx, "hello")
 
 	if !strings.Contains(prompt, "INTERACTIVE_CONTEXT_MARKER") {
 		t.Fatal("channel-pinned builtin helper tag should inject matching KB article")
@@ -256,7 +256,7 @@ func TestBuildSystemPrompt_CoreContextProviderOrder(t *testing.T) {
 		Logger:  l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	injectedIdx := strings.Index(prompt, "INJECTED_MARKER")
 	tagCtxIdx := strings.Index(prompt, "TAG_CONTEXT_MARKER")
@@ -321,7 +321,7 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 		Logger:   l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "## Current HA State (live)") {
 		t.Error("prompt should contain live state header")
@@ -356,7 +356,7 @@ func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
 	}))
 	// haInject not set — should pass through without resolving
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if strings.Contains(prompt, "## Current HA State") {
 		t.Error("prompt should not contain state block when haInject is nil")
@@ -389,7 +389,7 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 		Logger:   l.logger,
 	}))
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "⚠️ HA entity state unavailable") {
 		t.Error("prompt should contain unavailability warning when all fetches fail")
@@ -804,7 +804,7 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 		content: `{"accounts":["github-primary"]}`,
 	})
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "github-primary") {
 		t.Error("system prompt should contain live provider content")
@@ -833,7 +833,7 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 			},
 		}, nil)
 
-		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 		if !strings.Contains(prompt, "github-primary") {
 			t.Error("provider registered with whitespace-padded tag should fire under the trimmed tag")
 		}
@@ -851,7 +851,7 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 			"forge": {Description: "x", Tools: []string{"t"}, Core: true},
 		}, nil)
 
-		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 		// Exactly one provider's content must appear; both would
 		// indicate the staging map kept whitespace-distinct keys.
 		hasFirst := strings.Contains(prompt, "first")
@@ -872,7 +872,7 @@ func TestRegisterTagContextProvider_NormalizesTag(t *testing.T) {
 			"forge": {Description: "x", Tools: []string{"t"}, Core: true},
 		}, nil)
 
-		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+		prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 		if strings.Contains(prompt, "leak") {
 			t.Error("empty-after-trim registration should be dropped, not staged")
 		}

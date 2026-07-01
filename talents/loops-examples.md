@@ -49,7 +49,7 @@ Activate the next tag based on what shape this work has:
   durable definitions you pause/resume, supervisor randomization,
   linting before save.
 
-The shapes are not exclusive — a curate loop can spawn a one-shot
+The shapes are not exclusive — a service loop can spawn a one-shot
 research delegate when it needs a side investigation. Pick the
 primary shape first.
 
@@ -63,8 +63,11 @@ next_tags: [loops_examples_curate_dashboard, loops_examples_curate_journal, loop
 
 # Curate
 
-`thane_curate` creates a service loop that owns a managed markdown
-document. Two questions decide which sub-shape fits:
+`thane_loop_create` with `operation: service` creates a self-paced
+recurring loop. A service loop can maintain a managed markdown document
+(via the optional `output`), but the document is no longer required —
+omit `output` for a service loop that just does recurring work. When it
+does own a document, two questions decide which sub-shape fits:
 
 1. **Does each cycle replace the document or append to it?**
    - Replace (idempotent rewrite) → activate
@@ -78,9 +81,10 @@ document. Two questions decide which sub-shape fits:
 
 ## The sleep envelope is the one judgment call
 
-`thane_curate` requires `sleep_min` and `sleep_max`. The loop
-self-paces inside that envelope via `set_next_sleep`, which is clamped
-to the bounds. Pick bounds to match the topic's metabolism:
+`thane_loop_create` with `operation: service` requires `sleep_min` and
+`sleep_max`. The loop self-paces inside that envelope via
+`set_next_sleep`, which is clamped to the bounds. Pick bounds to match
+the topic's metabolism:
 
 - UPS guardian: `[5m, 30m]`
 - Burn-ban monitor: `[1h, 6h]`
@@ -94,7 +98,7 @@ only the envelope does.
 
 The `tags` array activates tags for the loop's iterations
 (things like `home`, `ha`, `awareness`, `documents`). Omit to inherit
-the core tag set. A curate loop watching HA entities needs at least
+the core tag set. A service loop watching HA entities needs at least
 `home` or `ha` so it has the tools to interpret its watch set.
 
 ---
@@ -114,6 +118,7 @@ not history. Each cycle rewrites the body; the generated output tool is
 {
   "name": "server_closet_guardian",
   "intent": "Watch the server-closet environment and equipment health. Document trends. Surface UPS dropouts, dehumidifier failure, or temperature excursions that need attention.",
+  "operation": "service",
   "sleep_min": "10m",
   "sleep_max": "30m",
   "entities": [
@@ -154,6 +159,7 @@ new dated section without touching prior entries.
 {
   "name": "burn_ban_monitor",
   "intent": "Check the Comal County fire marshal site for the current burn ban status. Note any changes from the prior entry; otherwise note 'no change.'",
+  "operation": "service",
   "sleep_min": "1h",
   "sleep_max": "6h",
   "output": {
@@ -173,19 +179,20 @@ and yesterday's state is just noise.
 name: loops_examples_curate_circle
 tags: [loops_examples_curate_circle]
 kind: trailhead
-teaser: "Bi-directional curate loop: escalates decisions to you, accepts new focus when you adjust its scope."
+teaser: "Bi-directional service loop: escalates decisions to you, accepts new focus when you adjust its scope."
 ---
 
 # Curate: The Circle of Life
 
-A curate loop becomes bi-directional when it (a) pulls your attention
+A service loop becomes bi-directional when it (a) pulls your attention
 when something deserves a decision and (b) accepts new focus from you
 when its scope should shift.
 
 ## Four steps
 
-1. **You launch the watcher** with `thane_curate` (dashboard or
-   journal shape — see those branches).
+1. **You launch the watcher** with `thane_loop_create`
+   (`operation: service`, dashboard or journal shape — see those
+   branches).
 
 2. **The watcher runs at its own pace** inside the envelope, tuning
    via `set_next_sleep` and adjusting its own watch set via
@@ -230,7 +237,7 @@ when its scope should shift.
 
 For event-driven wakes (a new release on a repo, a new feed entry),
 producer tools like `forge_repo_follow` and `media_follow` take a
-`wake_loop` target so the curate loop wakes on the event rather than
+`wake_loop` target so the service loop wakes on the event rather than
 its timer.
 
 For wakes triggered by *arbitrary external events* — most commonly
@@ -443,8 +450,8 @@ profile), executes the task, and returns its content as the tool
 result. Cost is sync model spend on the delegate's iterations.
 
 Prefer `thane_assign` (the next tag) when the work can run in the
-background while this turn moves on. Prefer `thane_curate` when the
-work is recurring.
+background while this turn moves on. Prefer `thane_loop_create` with
+`operation: service` when the work is recurring.
 
 ---
 name: loops_examples_assign
@@ -473,7 +480,8 @@ final reply.
 
 Use this for side investigations the operator should hear about but
 that don't need to block. Use `thane_now` when the answer is needed
-inline; use `thane_curate` when the work is recurring.
+inline; use `thane_loop_create` with `operation: service` when the work
+is recurring.
 
 ---
 name: loops_examples_advanced
@@ -484,8 +492,8 @@ teaser: "Custom shapes, lifecycle management, supervisor turns, lint before save
 
 # Advanced shapes
 
-When none of `thane_curate`, `thane_now`, or `thane_assign` fits the
-work, the lower-level surface is available.
+When none of `thane_loop_create`, `thane_now`, or `thane_assign` fits
+the work, the lower-level surface is available.
 
 ## Lint before saving a durable definition
 
@@ -513,9 +521,9 @@ routing through the orchestrator-delegate gating pattern.
 When a service loop should mostly run cheap iterations but occasionally
 take a more expensive supervisor pass, set `supervisor: true` plus
 `supervisor_prob`, `supervisor_quality_floor`, and a
-`supervisor_context` that prompts the model to step back. `thane_curate`
-doesn't expose supervisor fields directly — use `loop_definition_set`
-or `spawn_loop` for supervisor-shaped loops.
+`supervisor_context` that prompts the model to step back.
+`thane_loop_create` doesn't expose supervisor fields directly — use
+`loop_definition_set` or `spawn_loop` for supervisor-shaped loops.
 
 ```json
 {

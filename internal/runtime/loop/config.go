@@ -476,9 +476,10 @@ type IterationResult struct {
 	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
-	// Supervisor indicates whether this iteration ran a supervisor
-	// turn. Derived from SupervisorTrigger; preserved for
-	// backwards-compatible consumers that just want the bool.
+	// Supervisor reports whether this iteration ran a supervisor turn.
+	// It is a convenience projection of SupervisorTrigger != "" for event
+	// payloads and consumers that only need the boolean and don't match on
+	// the trigger enum.
 	Supervisor bool
 	// SupervisorTrigger names why a supervisor turn fired (or
 	// reports the empty string when this iteration ran as a normal
@@ -523,9 +524,10 @@ type IterationSnapshot struct {
 	// value is directly usable by the client without nanosecond
 	// conversion.
 	ElapsedMs int64 `json:"elapsed_ms"`
-	// Supervisor indicates whether this iteration ran a supervisor
-	// turn. Derived from SupervisorTrigger; the JSON wire format
-	// keeps the bool so existing dashboard clients render correctly.
+	// Supervisor reports whether this iteration ran a supervisor turn.
+	// It is a convenience projection of SupervisorTrigger != "" kept on
+	// the JSON wire so dashboard clients can read the boolean directly
+	// without matching on supervisor_trigger.
 	Supervisor bool `json:"supervisor,omitempty"`
 	// SupervisorTrigger names why a supervisor turn fired. Empty
 	// string for normal turns. Emitted alongside the bool so

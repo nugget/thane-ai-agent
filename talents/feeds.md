@@ -9,7 +9,7 @@ Feeds is the subscription surface for RSS/Atom and YouTube channels.
 Following a feed registers it for periodic polling; new entries are
 detected and — when `notify: true` (the default) — dispatched as
 event-source wakes to a loop (the built-in `media-default-handler`
-by default, or a named curate loop you pass via `wake_loop`). With
+by default, or a named service loop you pass via `wake_loop`). With
 `notify: false` the polling still happens and the entries still
 land in the feed state, but no wake fires; the subscription
 becomes a silent record of "we've seen these." Three tools cover
@@ -56,9 +56,9 @@ state) without spawning loop attention on each one. The
 `media-default-handler` (or your custom `wake_loop` target) is
 still registered; it just doesn't fire while `notify: false`.
 
-When the right handler is a curate loop maintaining a digest
-document, point `wake_loop` at it directly so each new entry
-wakes the digest loop with the entry as context:
+When the right handler is a `thane_loop_create` service loop
+maintaining a digest document, point `wake_loop` at it directly
+so each new entry wakes the digest loop with the entry as context:
 
 ```json
 {
@@ -69,7 +69,7 @@ wakes the digest loop with the entry as context:
 }
 ```
 
-The curate loop's task can then decide whether the new entry is
+The service loop's task can then decide whether the new entry is
 worth summarizing into the digest, ignore noise, etc. — model-
 shaped judgment that the feed follower doesn't try to make on
 its own.
@@ -98,16 +98,19 @@ from `media_feeds` — like the mqtt-wake retirement pattern, this
 is by-ID, not by-URL. The wake_loop continues to exist; this
 only drops the source.
 
-## Pairing with curate loops
+## Pairing with service loops
 
-The canonical shape: a `thane_curate` loop maintains a document
+The canonical shape: a `thane_loop_create` loop with
+`operation=service` maintains a document
 (`generated:youtube/<channel>.md` or similar), and the loop is
 the `wake_loop` target on one or more follows. The follow notices
-new entries, the curate loop wakes, the loop decides what to do
+new entries, the service loop wakes, the loop decides what to do
 (summarize → append journal entry, skip → no-op, surface to user
-→ `send_notification`).
+→ `send_notification`). A service loop can maintain a document,
+but the output document is now optional — it can also just run
+and act on wakes without maintaining one.
 
-See `loops_examples_curate` for the curate-loop shape; the
+See `loops_examples_curate` for the service-loop shape; the
 worked example there shows the wake-on-event pattern in full.
 
 ## Cross-references
@@ -116,8 +119,8 @@ worked example there shows the wake-on-event pattern in full.
   blog post body), bounce to `media` (`media_transcript`) for
   video/podcast or `web` (`web_fetch`) for arbitrary URLs.
 - For the *loop shape* that consumes feed wakes, bounce to
-  `loops_examples_curate` — the digest pattern is the canonical
-  consumer.
+  `loops_examples_curate` — the `thane_loop_create`
+  `operation=service` digest pattern is the canonical consumer.
 - For other event-driven wakes (forge releases, MQTT messages),
   the same `wake_loop` parameter shape appears on
   `forge_repo_follow` and `mqtt_wake_add` respectively. Feeds

@@ -76,7 +76,7 @@ func newTestLoopRuntimeDeps(t *testing.T) *testLoopRuntimeDeps {
 
 func TestConfigureLoopRuntimeTools_RegistersTools(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
-	for _, name := range []string{"loop_status", "set_next_sleep", "spawn_loop", "stop_loop"} {
+	for _, name := range []string{"loop_status", "loop_containers", "set_next_sleep", "spawn_loop", "stop_loop"} {
 		if deps.reg.Get(name) == nil {
 			t.Fatalf("%s tool not registered", name)
 		}

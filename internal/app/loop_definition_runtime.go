@@ -671,7 +671,7 @@ func (a *App) reconcileLoopDefinition(ctx context.Context, name string) error {
 // commitLoopDefinition is the single durable-commit chokepoint for a loop
 // definition: persist it, upsert it into the live overlay registry, then
 // reconcile the running loop against it. Every model-facing authoring
-// surface (loop_definition_set, thane_curate, thane_create_container)
+// surface (loop_definition_set, thane_loop_create)
 // routes through here instead of open-coding the same three steps, so a
 // guard added once (validation, audit, signing) protects all of them and
 // the surfaces cannot drift in commit semantics. Error wrapping matches

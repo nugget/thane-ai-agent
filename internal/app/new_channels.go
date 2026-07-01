@@ -432,16 +432,20 @@ func (a *App) initChannels(s *newState) error {
 			return removed, configRefs, rerr
 		},
 	})
-	if a.documentTools != nil {
-		a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{
-			DocTools:         a.documentTools,
-			Registry:         a.loopDefinitionRegistry,
-			PersistSpec:      a.persistLoopDefinition,
-			CommitSpec:       a.commitLoopDefinition,
-			LaunchDefinition: a.launchLoopDefinition,
-			LiveRegistry:     a.loopRegistry,
-		})
-	}
+	// thane_loop_create is Core/always-on (#1106 A) — register it regardless
+	// of whether a document store is configured. DocTools may be nil here: the
+	// output sub-mode surfaces a clear call-time error, while container and
+	// output-less service/event_driven creation never touch it. Gating this
+	// call on documentTools != nil would silently drop the Core front door in
+	// any config without document roots.
+	a.loop.Tools().ConfigureLoopIntentTools(tools.LoopIntentToolDeps{
+		DocTools:         a.documentTools,
+		Registry:         a.loopDefinitionRegistry,
+		PersistSpec:      a.persistLoopDefinition,
+		CommitSpec:       a.commitLoopDefinition,
+		LaunchDefinition: a.launchLoopDefinition,
+		LiveRegistry:     a.loopRegistry,
+	})
 	a.loop.Tools().ConfigureLoopRuntimeTools(tools.LoopRuntimeToolDeps{
 		Registry:   a.loopRegistry,
 		LaunchLoop: a.launchLoop,

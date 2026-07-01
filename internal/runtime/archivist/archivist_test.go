@@ -190,7 +190,7 @@ func TestExcludeTools_LocksDownHumanEgressFileWritesAndSpawns(t *testing.T) {
 		"conversation_reset", "session_close",
 		"tag_activate", "tag_deactivate",
 		// Zero spawn rights for the background class (#1024).
-		"spawn_loop", "thane_now", "thane_assign", "thane_curate", "thane_create_container",
+		"spawn_loop", "thane_now", "thane_assign", "thane_loop_create",
 	}
 	for _, tool := range mustExclude {
 		if !excluded[tool] {

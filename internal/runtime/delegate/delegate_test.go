@@ -466,6 +466,19 @@ func TestDelegateToolRegistry_ExcludesFullDelegateFamily(t *testing.T) {
 	})
 }
 
+func TestDelegateToolExclusions_ExcludesLoopCreation(t *testing.T) {
+	t.Parallel()
+	// thane_loop_create is Core (#1106 A) — it would otherwise reach every
+	// delegate regardless of tags. A delegate is ephemeral work; it must not be
+	// able to stand up a durable, self-perpetuating loop that outlives it.
+	excl := delegateToolExclusions()
+	for _, want := range []string{"thane_loop_create", "spawn_loop"} {
+		if !containsString(excl, want) {
+			t.Errorf("delegateToolExclusions() must exclude %q so a delegate can't create a durable loop; got %v", want, excl)
+		}
+	}
+}
+
 func TestDelegateToolRegistry_ExcludesDirectHumanEgress(t *testing.T) {
 	t.Parallel()
 

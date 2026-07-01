@@ -15,6 +15,10 @@ import (
 const (
 	defaultLoopStatusLimit = 25
 	maxLoopStatusLimit     = 200
+	// maxLoopTreeNodes bounds the loop_status tree projection so a large fleet
+	// can't produce an unbounded response; the tree carries names-only nodes,
+	// so this is generous relative to the full-row loops[] limit above.
+	maxLoopTreeNodes = 200
 )
 
 // LoopRuntimeToolDeps wires the live loop registry and ad hoc launch path
@@ -31,6 +35,7 @@ func (r *Registry) ConfigureLoopRuntimeTools(deps LoopRuntimeToolDeps) {
 	r.liveLoopRegistry = deps.Registry
 	r.launchLoop = deps.LaunchLoop
 	r.registerLoopRuntimeTools()
+	r.registerLoopContainers()
 }
 
 func (r *Registry) registerLoopRuntimeTools() {
@@ -174,7 +179,14 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 		}
 	}
 
-	return ldMarshalToolJSON(map[string]any{
+	// Tree is the parent→child projection over the FULL registry (names, not
+	// IDs), so the container structure stays legible in one read even when the
+	// flat loops[] list is filtered or limited (#1102 Tier 2). It is bounded by
+	// maxLoopTreeNodes so a large fleet can't produce an unbounded response;
+	// when the cap is hit, tree_truncated/tree_total flag the elision.
+	tree, treeTruncated := looppkg.BuildLoopTree(statuses, maxLoopTreeNodes)
+
+	result := map[string]any{
 		"status":             "ok",
 		"active_count":       r.liveLoopRegistry.ActiveCount(),
 		"max_loops":          maxLoops,
@@ -189,8 +201,14 @@ func (r *Registry) handleLoopStatus(_ context.Context, args map[string]any) (str
 		// rows, so "is anything wrong" is answerable in one read even when a
 		// degraded loop falls below the result limit.
 		"health": loopStatusHealth(statuses),
+		"tree":   tree,
 		"loops":  filtered,
-	})
+	}
+	if treeTruncated {
+		result["tree_truncated"] = true
+		result["tree_total"] = len(statuses)
+	}
+	return ldMarshalToolJSON(result)
 }
 
 // maxDegradedLoopNames caps the degraded_loops list to keep the health

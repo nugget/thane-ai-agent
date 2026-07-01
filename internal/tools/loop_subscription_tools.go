@@ -13,7 +13,7 @@ import (
 
 // registerUpdateEntitySubscriptions wires the external CRUD tool for
 // adjusting a named loop's entity-subscription set post-launch. Loop
-// creation already accepts an entities parameter via thane_curate;
+// creation already accepts an entities parameter via thane_loop_create;
 // this tool is for the model managing an existing loop without
 // re-launching it. Changes write through to the persisted spec and
 // land on the live loop on the next iteration.
@@ -31,7 +31,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 			"Scope: this targets a NAMED loop only. To watch an entity in your own always-visible context (what a conversation uses for itself), use add_entity_subscription instead — a conversation is not a loop and cannot be named here. " +
 			"From inside the running loop's own iteration, prefer the scoped watch_entity / unwatch_entity tools surfaced on that loop's tool list; those don't need the loop name because it is baked in. " +
 			"Both add and remove are optional and may be combined in one call; at least one must carry entries. Removes are applied before adds, so re-adding the same entity with new options is a single round-trip. " +
-			"Add items mirror thane_curate.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
+			"Add items mirror thane_loop_create.entities (entity_id with optional history, forecast, ttl_seconds). Remove items are bare entity_id strings. " +
 			"To inspect what a loop currently watches, call loop_definition_get on its name — Spec.Subscriptions is the source of truth, plus any inherited entries from container ancestors. " +
 			"Returns counts of added and removed entries and the resulting subscription_count.",
 		ContentResolveExempt: []string{"name", "add", "remove"},
@@ -44,7 +44,7 @@ func (r *Registry) registerUpdateEntitySubscriptions() {
 				},
 				"add": map[string]any{
 					"type":        "array",
-					"description": "Entity subscriptions to add. Same shape as thane_curate's entities parameter.",
+					"description": "Entity subscriptions to add. Same shape as thane_loop_create's entities parameter.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{

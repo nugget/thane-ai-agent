@@ -99,7 +99,7 @@ An entity subscription's `entity_id` may be a glob (e.g.
 subscription is re-expanded against live entities every turn — newly
 matching entities join automatically — and is capped per turn, emitting a
 truncation marker when it matches more than the cap. This works across
-`add_entity_subscription`, `watch_entity`, `thane_curate.entities`, and
+`add_entity_subscription`, `watch_entity`, `thane_loop_create.entities`, and
 `update_entity_subscriptions`.
 
 Entity subscriptions also accept `include`, a set of HA metadata flags:
@@ -285,7 +285,7 @@ Owner channel activity recency is reported with delta fields such as
 always delivered as structured event-source wakes — when `wake_loop` is
 omitted they route to the built-in `media-default-handler` event-driven
 loop; when set, they route to that loop instead (e.g. a
-`thane_curate`-managed document). The retired pre-PR-T2c
+`thane_loop_create` service loop's managed document). The retired pre-PR-T2c
 "default media-analysis conversation" spawn path no longer exists.
 
 ## `attachments` — vision pipeline
@@ -326,8 +326,8 @@ Attachment list and search results report arrival recency as
 | `forge_repo_subscriptions` | List repository event subscriptions and target loops. |
 
 Repository subscriptions require `wake_loop` so event handling is owned by
-an existing loop, usually one created with `thane_curate` for a specific
-managed document.
+an existing loop, usually one created with `thane_loop_create`
+(`operation: service`) for a specific managed document.
 
 ## `scheduler` — time-based tasks
 
@@ -341,8 +341,9 @@ Task next-run values include a model-facing delta.
 
 ## `thane_*` family — intent-shaped front door for "do work"
 
-Core (`thane_now`, `thane_assign`) plus loops-tagged
-(`thane_curate`, `thane_create_container`). Pick by lifecycle.
+Core (`thane_now`, `thane_assign`, `thane_loop_create`). Pick by
+lifecycle; `thane_loop_create` takes an explicit `operation`
+(`service` / `event_driven` / `container`).
 External wakes to live loops are
 infrastructural rather than tool-shaped — producer subsystems dispatch
 structured envelopes over the message bus directly, and
@@ -352,8 +353,8 @@ structured envelopes over the message bus directly, and
 |------|-----------|-------------|
 | `thane_now` | sync | Synchronously delegate a bounded task and return the result inline. |
 | `thane_assign` | async one-shot | Assign a task to a sub-agent that runs in the background and reports back through the current conversation/channel when complete. |
-| `thane_curate` | recurring | Scaffold a managed document and launch a recurring service loop that curates it (`journal` mode appends entries; `maintain` mode rewrites idempotently). |
-| `thane_create_container` | durable container | Create a non-executing loop container that groups descendant loops and provides inheritable tags. |
+| `thane_loop_create` (`operation: service`) | recurring | Scaffold a managed document (via `output`) and launch a self-paced recurring loop that maintains it (`journal` mode appends entries; `maintain` mode rewrites idempotently); `entities` surface HA subscriptions into the loop's context. |
+| `thane_loop_create` (`operation: container`) | durable container | Create a non-executing loop container that groups descendant loops and provides inheritable tags. |
 
 `thane_now` and `thane_assign` accept `context_mode`. The default,
 `task`, gives the child run a compact
@@ -388,7 +389,8 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 
 | Tool | Description |
 |------|-------------|
-| `loop_status` | Snapshot of currently running loops. |
+| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry. |
+| `loop_containers` | Placement directory of container loops (intent, child/descendant counts, conferred tags, sample children) — the loop-graph analog of `doc_roots`. |
 | `set_next_sleep` | From inside a service loop, request the next sleep duration. |
 | `spawn_loop` | Launch an ad-hoc loop from a definition and input. |
 | `stop_loop` | Stop a running loop. |

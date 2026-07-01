@@ -140,3 +140,18 @@ func TestSpec_DeclarativePrompt(t *testing.T) {
 		t.Error("supervisor-turn prefix should live in SupervisorProfile.Instructions")
 	}
 }
+
+func TestEgoExcludeTools_ExcludesLoopCreation(t *testing.T) {
+	// thane_loop_create is Core (#1106 A) so it bypasses the loops tag gate the
+	// ego can't activate; a reflective loop must not stand up new durable loops.
+	found := false
+	for _, n := range egoExcludeTools {
+		if n == "thane_loop_create" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("egoExcludeTools must exclude thane_loop_create; got %v", egoExcludeTools)
+	}
+}

@@ -315,9 +315,9 @@ func TestFormatToolsUsed_Sorted(t *testing.T) {
 	}
 }
 
-// --- BuildLoopConfig tests ---
+// --- Hydrated spec/config projection tests ---
 
-func TestBuildSpec(t *testing.T) {
+func TestHydratedSpec(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
 	opts := Opts{
@@ -325,7 +325,7 @@ func TestBuildSpec(t *testing.T) {
 		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
 	}
 
-	spec := BuildSpec(cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
 	if spec.Name != "metacognitive" {
 		t.Errorf("Name = %q, want metacognitive", spec.Name)
 	}
@@ -399,7 +399,7 @@ func TestHydrateSpecAttachesLoopRuntimeHooks(t *testing.T) {
 	}
 }
 
-func TestBuildLoopConfig(t *testing.T) {
+func TestHydratedConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
 	opts := Opts{
@@ -407,7 +407,8 @@ func TestBuildLoopConfig(t *testing.T) {
 		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
 	}
 
-	lc := BuildLoopConfig(cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	lc := spec.ToConfig()
 
 	if lc.Name != "metacognitive" {
 		t.Errorf("Name = %q, want metacognitive", lc.Name)
@@ -433,15 +434,10 @@ func TestBuildLoopConfig(t *testing.T) {
 	if lc.PostIterate == nil {
 		t.Error("PostIterate should be set")
 	}
-	if lc.RoutingFactors["source"] != "metacognitive" {
-		t.Errorf("Hints[source] = %q, want metacognitive", lc.RoutingFactors["source"])
-	}
-	if lc.RoutingFactors["mission"] != "metacognitive" {
-		t.Errorf("Hints[mission] = %q, want metacognitive", lc.RoutingFactors["mission"])
-	}
-	if lc.DelegationGating != "disabled" {
-		t.Errorf("Config.DelegationGating = %q, want disabled", lc.DelegationGating)
-	}
+	// Profile-derived routing factors (mission/source) and DelegationGating
+	// are applied by the live loop at request time via Profile.RequestOptions,
+	// not by ToConfig — so they are asserted on the Spec in TestHydratedSpec
+	// rather than on this bare Config projection.
 
 	// Verify ExcludeTools contains key entries.
 	excluded := make(map[string]bool)
@@ -455,7 +451,7 @@ func TestBuildLoopConfig(t *testing.T) {
 	}
 }
 
-func TestBuildLoopConfig_Task(t *testing.T) {
+func TestHydratedConfig_Task(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
 	opts := Opts{
@@ -463,7 +459,8 @@ func TestBuildLoopConfig_Task(t *testing.T) {
 		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
 	}
 
-	lc := BuildLoopConfig(cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	lc := spec.ToConfig()
 
 	// The prompt is now a static Task (no TaskBuilder); current state
 	// comes from the declared output context, not inlined into the prompt.
@@ -481,7 +478,7 @@ func TestBuildLoopConfig_Task(t *testing.T) {
 	}
 }
 
-func TestBuildLoopConfig_PostIterate(t *testing.T) {
+func TestHydratedConfig_PostIterate(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
 	statePath := filepath.Join(tmpDir, cfg.StateFile)
@@ -490,7 +487,8 @@ func TestBuildLoopConfig_PostIterate(t *testing.T) {
 		StateFilePath: statePath,
 	}
 
-	lc := BuildLoopConfig(cfg, opts)
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	lc := spec.ToConfig()
 
 	result := loop.IterationResult{
 		ConvID:       "metacog-post-test",
@@ -515,5 +513,20 @@ func TestBuildLoopConfig_PostIterate(t *testing.T) {
 
 	if !strings.Contains(s, "conversation=metacog-post-test") {
 		t.Error("PostIterate should append iteration log with conversation ID")
+	}
+}
+
+func TestMetacogExcludeTools_ExcludesLoopCreation(t *testing.T) {
+	// thane_loop_create is Core (#1106 A) so it bypasses the loops tag gate the
+	// ego can't activate; a reflective loop must not stand up new durable loops.
+	found := false
+	for _, n := range metacogExcludeTools {
+		if n == "thane_loop_create" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("metacogExcludeTools must exclude thane_loop_create; got %v", metacogExcludeTools)
 	}
 }

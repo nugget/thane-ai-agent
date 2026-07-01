@@ -21,7 +21,7 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 		"files":     {Description: "Files", Core: false},
 	}, parsed)
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "KNOWLEDGE_TREE_MARKER") {
 		t.Fatalf("prompt missing knowledge talent: %s", prompt)
@@ -47,7 +47,7 @@ func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 		"forge":       {Description: "Forge", Core: false},
 	}, parsed)
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 
 	if !strings.Contains(prompt, "CORE_COMMUNICATION_MARKER") {
 		t.Fatalf("prompt missing core communication slice: %s", prompt)
@@ -72,7 +72,7 @@ func TestBuildSystemPrompt_TrailheadTalentsPrecedeTaggedDoctrine(t *testing.T) {
 		"interactive": {Description: "Interactive", Core: true},
 	}, parsed)
 
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
 	coreIdx := strings.Index(prompt, "CORE_MARKER")
 	entryIdx := strings.Index(prompt, "INTERACTIVE_ENTRY_MARKER")
 	commIdx := strings.Index(prompt, "INTERACTIVE_COMM_MARKER")
@@ -100,9 +100,8 @@ func TestBuildSystemPromptWithProfileSections_SplitsCacheableBehaviorPrefix(t *t
 	prompt, sections := l.buildSystemPromptWithProfileSections(
 		testCtxForLoop(l),
 		"hello",
-		nil,
-		llm.DefaultModelInteractionProfile(),
-	)
+
+		llm.DefaultModelInteractionProfile())
 
 	if !strings.Contains(prompt, "CORE_MARKER") || !strings.Contains(prompt, "INTERACTIVE_ENTRY_MARKER") {
 		t.Fatalf("prompt missing expected markers:\n%s", prompt)

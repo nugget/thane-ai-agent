@@ -85,7 +85,7 @@ when X" and "no when not-X."
 **Leaves are concrete.** The success criterion for a leaf is: the model
 can adapt the leaf's content into a real tool call with minimal
 reshaping. For `loops_examples_curate_dashboard`, that means a full
-`thane_curate` JSON literal with realistic entity IDs, a real sleep
+`thane_loop_create` JSON literal (`operation: service`) with realistic entity IDs, a real sleep
 envelope, and the `output` block already filled out. The model swaps
 the topic-specific details and calls. It does not have to translate
 prose into structure.
@@ -119,7 +119,7 @@ Activate the next tag based on what shape this work has:
 ```
 
 Read what that root *doesn't* do:
-- It doesn't tell the model what `thane_curate` is. The leaf does.
+- It doesn't tell the model what `thane_loop_create` is. The leaf does.
 - It doesn't enumerate all loop tools. The leaves do.
 - It doesn't have a "Quick Reference" section. The leaves cover the
   concrete shapes.
@@ -132,7 +132,7 @@ is leaf work.
 ### Sub-trailheads
 
 When a leaf is itself a multi-way choice, make it a sub-trailhead.
-`loops_examples_curate` is one — picking `thane_curate` doesn't
+`loops_examples_curate` is one — picking `thane_loop_create` (`operation: service`) doesn't
 finish the decision; there are still three sub-shapes (dashboard,
 journal, circle). The sub-trailhead asks the next question:
 
@@ -328,7 +328,7 @@ paragraphs. By adapting the literal shape.
 
 Bad leaf content:
 
-> Use `thane_curate` with a sensible sleep envelope and the right
+> Use `thane_loop_create` (`operation: service`) with a sensible sleep envelope and the right
 > output mode for the use case. Include any entities the loop should
 > watch. Pick tags that fit the work.
 
@@ -419,7 +419,7 @@ TestRepoTalentToolReferences` and let the test surface the miss.
 This bit PR-A: `add_entity_subscription` and
 `remove_entity_subscription` are real tools, but they mutate the
 *conversation-wide* always-visible subscription set. The loop-scoped
-subscription set (the one a `thane_curate` loop creates) is mutated
+subscription set (the one a `thane_loop_create` service loop creates) is mutated
 by `update_entity_subscriptions`. The talent said "adjust the watch
 set via add/remove" when the watch set in question lived in a
 different store. The regression test can't catch this because both

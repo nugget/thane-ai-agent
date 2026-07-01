@@ -36,7 +36,8 @@ registry. Pass an explicit narrow set instead, even just
 Match the tags to the smallest tool surface that lets the loop do its
 job:
 
-- **Curate loop watching HA entities** — needs `home` or `ha` so the
+- **Service loop watching HA entities** (`thane_loop_create` with
+  `operation="service"`) — needs `home` or `ha` so the
   state/control tools resolve. `awareness` if the loop should see
   ambient context. `documents` if its output goes into a managed doc.
 - **Research delegate** — `documents` and `web` cover most one-shot
@@ -58,7 +59,7 @@ which loop family is doing the launching:
   true, so omitting `tags:` inherits the caller's currently-loaded
   tags. Pass `inherit_caller_tags: false` along with an explicit
   `tags` array when you need a clean scope.
-- **`thane_curate` / `spawn_loop` / `loop_definition_launch`** — no
+- **`thane_loop_create` / `spawn_loop` / `loop_definition_launch`** — no
   caller-tag inheritance. Omitting `tags:` behaves the same as `tags:
   []` (unreliable, see above). Name the tags explicitly for service
   loops so the surface is stable across the loop's lifetime.

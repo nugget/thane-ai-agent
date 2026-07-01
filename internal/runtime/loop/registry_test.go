@@ -48,6 +48,34 @@ func TestRegistryRegisterDeregister(t *testing.T) {
 	r.Deregister("nonexistent")
 }
 
+func TestRegistryChangeHook(t *testing.T) {
+	t.Parallel()
+
+	// The hook fires synchronously inside Register/Deregister (in a deferred
+	// call after the lock releases), so plain appends are race-free here.
+	var changes []string
+	r := NewRegistry(WithRegistryChangeHook(func(id string) {
+		changes = append(changes, id)
+	}))
+	l := mustNew(t, Config{Name: "hooked", Task: "x"}, Deps{Runner: &noopRunner{}})
+
+	if err := r.Register(l); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// A failed (duplicate) Register must not fire the hook.
+	if err := r.Register(l); err == nil {
+		t.Fatal("duplicate Register should fail")
+	}
+	// A no-op Deregister (unknown ID) must not fire the hook.
+	r.Deregister("does-not-exist")
+	// A real Deregister fires it.
+	r.Deregister(l.ID())
+
+	if want := []string{l.ID(), l.ID()}; !slices.Equal(changes, want) {
+		t.Fatalf("hook calls = %v, want [register, deregister] = %v", changes, want)
+	}
+}
+
 func TestRegistryConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 

@@ -75,9 +75,10 @@ audiences and trust models are different.
   `contacts` (`contact_lookup`). Required reading before `email_send`
   unless you're certain every recipient is already in the directory.
 - For high-volume triage loops (digest every morning, watch for
-  specific senders), the right shape is usually `thane_curate` rather
-  than a synchronous email turn. See `loops_examples_curate` for the
-  pattern.
+  specific senders), the right shape is usually `thane_loop_create`
+  with `operation=service` rather than a synchronous email turn. The
+  managed output document is optional, so a triage loop can run without
+  maintaining one. See `loops_examples_curate` for the pattern.
 - For escalation when an email needs human attention (sensitive thread,
   legal/financial content), bounce to `notifications` —
   `request_human_decision` with the email summary in the body.
@@ -263,8 +264,9 @@ audience-wrong is a real leak.
   draft the body in a `scratchpad:` doc and ask for owner sign-off
   via `request_human_decision` before sending.
 - For the loop shape that reads incoming mail and decides whether to
-  reply, see `loops_examples_curate` — long-horizon triage loops are
-  the right vehicle when "every morning" matters.
+  reply, see `loops_examples_curate` — a `thane_loop_create` with
+  `operation=service` is the right vehicle when "every morning"
+  matters.
 
 ---
 name: email_organize
@@ -342,7 +344,8 @@ are coming.
 - For finding the messages to organize first, bounce to `email_triage`
   — list or search produces the UIDs you'll feed here.
 - For automating the organize step (every morning archive read mail),
-  this is curate-loop territory; see `loops_examples_curate`.
+  this is service-loop territory — `thane_loop_create` with
+  `operation=service`; see `loops_examples_curate`.
 - For deleting rather than archiving, the move pattern still applies
   — `destination: "Trash"` is the conventional target. Trash retention
   policy is server-side, not Thane-managed.
