@@ -29,11 +29,11 @@ func (r *Registry) registerThaneLoopCreate() {
 		Description: "Create and launch a durable, reusable loop. This is the always-on front door for standing up recurring work; for the full lifecycle afterwards (inspect, edit, relaunch, reparent) activate the `loops` capability. " +
 			"operation is explicit and picks the kind: " +
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
-			"\"event_driven\" = a loop that stays quiescent and wakes only when a subscribed entity changes (no sleep envelope); " +
+			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; wire that trigger separately after creating the loop, or it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants (takes only parent_name and tags). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
-			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration (for event_driven, the entities whose changes wake it). " +
+			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; they do NOT wake the loop (an event_driven loop's wake is wired separately). " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared.",
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
@@ -455,7 +455,7 @@ func thaneLoopCreateSchema() map[string]any {
 			"operation": map[string]any{
 				"type":        "string",
 				"enum":        []string{"service", "container", "event_driven"},
-				"description": "The kind of loop. service = recurring, self-paced within a sleep envelope; event_driven = quiescent until a subscribed entity changes (no sleep envelope); container = non-executing grouping node that shares tags/subscriptions with descendants.",
+				"description": "The kind of loop. service = recurring, self-paced within a sleep envelope; event_driven = a quiescent handler with no timer that runs only when an external trigger wakes it (a feed/forge subscription or MQTT wake pointed at it, or an inter-loop notification), which you wire separately; container = non-executing grouping node that shares tags/subscriptions with descendants.",
 			},
 			"parent_name": map[string]any{
 				"type":        "string",
@@ -483,7 +483,7 @@ func thaneLoopCreateSchema() map[string]any {
 			},
 			"entities": map[string]any{
 				"type":        "array",
-				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. For event_driven loops these are the entities whose changes wake the loop. Container ancestors' subscriptions also cascade in.",
+				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. They provide context only and do NOT wake the loop — an event_driven loop's wake is wired separately (feed/forge/MQTT/inter-loop notification). Container ancestors' subscriptions also cascade in.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

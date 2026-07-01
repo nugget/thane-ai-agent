@@ -517,3 +517,18 @@ func TestBuildLoopConfig_PostIterate(t *testing.T) {
 		t.Error("PostIterate should append iteration log with conversation ID")
 	}
 }
+
+func TestMetacogExcludeTools_ExcludesLoopCreation(t *testing.T) {
+	// thane_loop_create is Core (#1106 A) so it bypasses the loops tag gate the
+	// ego can't activate; a reflective loop must not stand up new durable loops.
+	found := false
+	for _, n := range metacogExcludeTools {
+		if n == "thane_loop_create" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("metacogExcludeTools must exclude thane_loop_create; got %v", metacogExcludeTools)
+	}
+}
