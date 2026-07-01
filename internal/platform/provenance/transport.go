@@ -1,10 +1,8 @@
 package provenance
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -105,21 +103,9 @@ func (s *Store) AheadBehind(ctx context.Context, branch string) (ahead, behind i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var out bytes.Buffer
-	if err := s.git(ctx, nil, &out, "rev-list", "--left-right", "--count",
-		"--end-of-options", "HEAD...refs/remotes/origin/"+branch); err != nil {
+	ahead, behind, err = s.countAheadBehind(ctx, "HEAD", "refs/remotes/origin/"+branch)
+	if err != nil {
 		return 0, 0, fmt.Errorf("ahead/behind %s: %w", branch, err)
-	}
-
-	fields := strings.Fields(out.String())
-	if len(fields) != 2 {
-		return 0, 0, fmt.Errorf("ahead/behind %s: unexpected rev-list output %q", branch, out.String())
-	}
-	if ahead, err = strconv.Atoi(fields[0]); err != nil {
-		return 0, 0, fmt.Errorf("ahead/behind %s: parse ahead %q: %w", branch, fields[0], err)
-	}
-	if behind, err = strconv.Atoi(fields[1]); err != nil {
-		return 0, 0, fmt.Errorf("ahead/behind %s: parse behind %q: %w", branch, fields[1], err)
 	}
 	return ahead, behind, nil
 }
