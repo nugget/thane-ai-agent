@@ -168,7 +168,7 @@ func (v *Verifier) Revisions(ctx context.Context, filename string, opts Revision
 // --- shared implementations ---
 
 func resolveRevision(ctx context.Context, repoPath, filename, selector string) (Revision, error) {
-	if err := validateFilename(filename); err != nil {
+	if err := validateReaderFilename(filename); err != nil {
 		return Revision{}, fmt.Errorf("resolve revision: %w", err)
 	}
 	sel := strings.TrimSpace(selector)
@@ -178,7 +178,9 @@ func resolveRevision(ctx context.Context, repoPath, filename, selector string) (
 		if err != nil {
 			return Revision{}, fmt.Errorf("resolve revision: %w", err)
 		}
-		return describeRevision(ctx, repoPath, filename, strings.TrimSpace(commit), sel)
+		// Label the resolved revision "HEAD" so a not-found error reads
+		// sensibly even when the caller passed the empty default selector.
+		return describeRevision(ctx, repoPath, filename, strings.TrimSpace(commit), "HEAD")
 	}
 
 	if t, err := time.Parse(time.RFC3339, sel); err == nil {
@@ -244,7 +246,7 @@ func revisionIndex(ctx context.Context, repoPath, filename, commit string) (int,
 }
 
 func readBlob(ctx context.Context, repoPath, rev, filename string) (string, error) {
-	if err := validateFilename(filename); err != nil {
+	if err := validateReaderFilename(filename); err != nil {
 		return "", fmt.Errorf("read blob: %w", err)
 	}
 	rev = strings.TrimSpace(rev)
@@ -264,7 +266,7 @@ func readBlob(ctx context.Context, repoPath, rev, filename string) (string, erro
 }
 
 func readDiff(ctx context.Context, repoPath, from, to, filename string, format DiffFormat) (RevisionDiff, error) {
-	if err := validateFilename(filename); err != nil {
+	if err := validateReaderFilename(filename); err != nil {
 		return RevisionDiff{}, fmt.Errorf("diff: %w", err)
 	}
 	if format != DiffPatch && format != DiffStat {
@@ -316,7 +318,7 @@ func diffNumstat(ctx context.Context, repoPath, from, to, filename string) (int,
 }
 
 func readRevisions(ctx context.Context, repoPath, allowedSignersPath, filename string, opts RevisionOptions) (RevisionPage, error) {
-	if err := validateFilename(filename); err != nil {
+	if err := validateReaderFilename(filename); err != nil {
 		return RevisionPage{}, fmt.Errorf("revisions: %w", err)
 	}
 	total := 0
@@ -453,11 +455,27 @@ func checkRevisionArg(kind, rev string) error {
 	return nil
 }
 
+// validateReaderFilename applies validateFilename (no absolute paths or
+// traversal) and additionally rejects a leading ":" — the git pathspec-magic
+// sigil. --literal-pathspecs already neutralizes magic at the command line;
+// this rejects it early with a clear message.
+func validateReaderFilename(filename string) error {
+	if err := validateFilename(filename); err != nil {
+		return err
+	}
+	if strings.HasPrefix(strings.TrimSpace(filename), ":") {
+		return fmt.Errorf("filename %q must not begin with ':' (git pathspec magic)", filename)
+	}
+	return nil
+}
+
 // runGitText runs a read-only git command in repoPath and returns its raw
 // stdout. Stderr is kept separate and surfaced only in the error, so it never
-// contaminates blob or diff output.
+// contaminates blob or diff output. --literal-pathspecs disables git pathspec
+// magic (":(...)", ":!", ":^", …) so a caller-supplied path after "--" cannot
+// broaden a per-file query beyond the single file.
 func runGitText(ctx context.Context, repoPath string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath, "--literal-pathspecs"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -472,6 +490,6 @@ func runGitText(ctx context.Context, repoPath string, args ...string) (string, e
 
 // runGitCheck runs a git command only for its exit status.
 func runGitCheck(ctx context.Context, repoPath string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath, "--literal-pathspecs"}, args...)...)
 	return cmd.Run()
 }

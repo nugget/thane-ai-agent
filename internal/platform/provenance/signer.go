@@ -16,7 +16,8 @@ type CommitSigner struct {
 	// Principal is the allowed_signers identity that signed (for example
 	// "thane@provenance.local" or "alice@example.com"), when git reports one.
 	Principal string
-	// Kind classifies the principal: "agent", "operator", or "unknown".
+	// Kind classifies the principal, one of [SignerKindAgent],
+	// [SignerKindOperator], or [SignerKindUnknown].
 	Kind string
 	// KeyFingerprint is the signing key's fingerprint, when git reports one.
 	KeyFingerprint string
@@ -26,9 +27,9 @@ type CommitSigner struct {
 }
 
 const (
-	signerKindAgent    = "agent"
-	signerKindOperator = "operator"
-	signerKindUnknown  = "unknown"
+	SignerKindAgent    = "agent"
+	SignerKindOperator = "operator"
+	SignerKindUnknown  = "unknown"
 )
 
 // SignerFor reports who signed one commit. Verification never fails the call:
@@ -105,11 +106,11 @@ func parseCommitSigner(verdict, principal, fingerprint string) CommitSigner {
 func signerKind(principal string) string {
 	switch principal {
 	case "":
-		return signerKindUnknown
+		return SignerKindUnknown
 	case AgentPrincipal:
-		return signerKindAgent
+		return SignerKindAgent
 	default:
-		return signerKindOperator
+		return SignerKindOperator
 	}
 }
 

@@ -237,6 +237,9 @@ func TestReaderRejectsArgumentInjection(t *testing.T) {
 	if _, err := s.Blob(ctx, "HEAD", "/etc/passwd"); err == nil {
 		t.Fatal("Blob accepted an absolute path")
 	}
+	if _, err := s.Blob(ctx, "HEAD", ":(exclude)kb/doc.md"); err == nil {
+		t.Fatal("Blob accepted a git pathspec-magic filename")
+	}
 
 	// A syntactically valid but nonexistent cursor surfaces an error rather
 	// than masking as an empty page.

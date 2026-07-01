@@ -17,14 +17,14 @@ func TestParseCommitSigner(t *testing.T) {
 		wantKind     string
 		wantReason   string // substring; "" means Reason must be empty
 	}{
-		{"agent good", "G", AgentPrincipal, true, signerKindAgent, ""},
-		{"operator good", "G", "alice@example.com", true, signerKindOperator, ""},
-		{"valid but untrusted", "U", "", false, signerKindUnknown, "allow-list"},
-		{"unsigned", "N", "", false, signerKindUnknown, "unsigned"},
-		{"empty verdict is unsigned", "", "", false, signerKindUnknown, "unsigned"},
-		{"bad signature", "B", "", false, signerKindUnknown, "bad"},
-		{"cannot verify", "E", "", false, signerKindUnknown, "cannot"},
-		{"revoked", "R", "bob@example.com", false, signerKindOperator, "revoked"},
+		{"agent good", "G", AgentPrincipal, true, SignerKindAgent, ""},
+		{"operator good", "G", "alice@example.com", true, SignerKindOperator, ""},
+		{"valid but untrusted", "U", "", false, SignerKindUnknown, "allow-list"},
+		{"unsigned", "N", "", false, SignerKindUnknown, "unsigned"},
+		{"empty verdict is unsigned", "", "", false, SignerKindUnknown, "unsigned"},
+		{"bad signature", "B", "", false, SignerKindUnknown, "bad"},
+		{"cannot verify", "E", "", false, SignerKindUnknown, "cannot"},
+		{"revoked", "R", "bob@example.com", false, SignerKindOperator, "revoked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -61,7 +61,7 @@ func TestSignerForAgentCommit(t *testing.T) {
 	if !cs.Verified {
 		t.Fatalf("agent commit not verified: %+v", cs)
 	}
-	if cs.Kind != signerKindAgent {
+	if cs.Kind != SignerKindAgent {
 		t.Fatalf("Kind = %q, want agent", cs.Kind)
 	}
 	if cs.Principal != AgentPrincipal {
@@ -75,7 +75,10 @@ func TestSignerForAgentCommit(t *testing.T) {
 func TestSignerForUntrusted(t *testing.T) {
 	s := buildReaderRepo(t)
 	ctx := t.Context()
-	head, _ := s.ResolveRevision(ctx, "kb/doc.md", "HEAD")
+	head, err := s.ResolveRevision(ctx, "kb/doc.md", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve HEAD: %v", err)
+	}
 
 	// Replace the trust file with a different key: HEAD's signature is still
 	// cryptographically intact, but its signer is no longer trusted.
@@ -120,7 +123,7 @@ func TestRevisionsWithSigners(t *testing.T) {
 		if rev.Signer == nil {
 			t.Fatalf("Revisions[%d].Signer is nil with WithSigners", i)
 		}
-		if !rev.Signer.Verified || rev.Signer.Kind != signerKindAgent {
+		if !rev.Signer.Verified || rev.Signer.Kind != SignerKindAgent {
 			t.Fatalf("Revisions[%d].Signer = %+v, want verified agent", i, rev.Signer)
 		}
 	}
