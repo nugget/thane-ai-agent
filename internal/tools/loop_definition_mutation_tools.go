@@ -25,6 +25,11 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if existing, ok := looppkg.FindDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
 		return "", (&looppkg.ImmutableDefinitionError{Name: spec.Name})
 	}
+	// Captured before the commit: the commit's reconcile can SPAWN an absent
+	// active definition, and a loop that is live only after the commit runs
+	// the just-written spec — only an instance that survived the commit is
+	// stale.
+	prior := r.runningLoopByName(spec.Name)
 	updatedAt := time.Now().UTC()
 	// Single durable commit (persist + upsert + reconcile). Fall back to a
 	// bare overlay upsert when no commit hook is wired so a registry-only
@@ -44,11 +49,23 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	if !ok {
 		return "", fmt.Errorf("loop definition stored but snapshot is unavailable")
 	}
-	return ldMarshalToolJSON(map[string]any{
+	result := map[string]any{
 		"status":     "ok",
 		"generation": view.Generation,
 		"definition": def,
-	})
+	}
+	// The reconcile's stop branch clears the other direction: a loop the
+	// commit stopped (spec made non-durable or ineligible) is gone by now and
+	// correctly gets no notice. The notice recipe keys off the LIVE
+	// instance's operation, not the just-written spec's — set can rewrite
+	// operation while the running loop keeps its old shape, and the relaunch
+	// guidance must match what is actually running.
+	if prior != nil {
+		if after := r.runningLoopByName(spec.Name); after != nil && after.ID() == prior.ID() {
+			result["notice"] = staleRunningLoopNotice(spec.Name, after.Operation())
+		}
+	}
+	return ldMarshalToolJSON(result)
 }
 
 func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[string]any) (string, error) {
@@ -231,6 +248,10 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 	launch = applyLoopLaunchContextDefaults(ctx, def, launch)
+	// Captured before the launch so the running-durable short-circuit
+	// (LaunchDefinition returns the existing loop's ID untouched) is
+	// distinguishable from a fresh start and can be flagged below.
+	prior := r.runningLoopByName(name)
 	result, err := r.launchLoopDefinition(ctx, name, launch)
 	if err != nil {
 		return "", err
@@ -243,12 +264,17 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if !found {
 		return "", fmt.Errorf("definition launched but snapshot is unavailable")
 	}
-	return ldMarshalToolJSON(map[string]any{
+	out := map[string]any{
 		"status":     "ok",
 		"generation": view.Generation,
 		"definition": def,
 		"result":     result,
-	})
+	}
+	if prior != nil && result.LoopID == prior.ID() {
+		out["reused_running_loop"] = true
+		out["notice"] = reusedRunningLoopLaunchNotice(name)
+	}
+	return ldMarshalToolJSON(out)
 }
 
 // handleLoopReparent moves a stored loop under a different container (or to

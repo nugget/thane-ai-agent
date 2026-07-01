@@ -132,6 +132,11 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 		return "", err
 	}
 
+	// Captured before the commit: the commit's reconcile can spawn an absent
+	// active definition, and a loop that is live only after the commit runs
+	// the just-written spec — only an instance that survived the commit is
+	// stale.
+	prior := r.runningLoopByName(name)
 	updatedAt := time.Now().UTC()
 	// Single durable commit (persist + upsert + reconcile), falling back to a
 	// bare overlay upsert when no commit hook is wired. Policy is a separate
@@ -159,13 +164,29 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 		"updated_fields": sortedStringKeys(changes),
 		"definition":     viewDef,
 	}
-	// A running service loop holds its launched-time config and does NOT
-	// re-read the spec on wake — the edit applies only after a full relaunch.
-	// Say so explicitly so the model doesn't wait for the next wake and assume
-	// the change failed. (loop_definition_set shares this next-relaunch
-	// semantics; this surfaces it.)
-	if r.liveLoopRegistry != nil && r.liveLoopRegistry.GetByName(name) != nil {
-		result["notice"] = fmt.Sprintf("%q is currently running; the edit is persisted but a running loop keeps its launched-time config until a full relaunch (process restart, or stop_loop then loop_definition_launch) — it will NOT change on the next wake.", name)
+	// The retune conformance path (#1153): the same instance survived the
+	// commit, so push the merged spec's hot-swappable scalars into the live
+	// loop. Promotion is turn-boundary-safe inside the engine; a rejection
+	// (operation drift, stopped/finished instance) falls back to honest
+	// relaunch guidance — without recommending this tool back to itself.
+	if prior != nil {
+		if after := r.runningLoopByName(name); after != nil && after.ID() == prior.ID() {
+			if retuneErr := after.QueueRetune(spec); retuneErr != nil {
+				result["notice"] = fmt.Sprintf("The edit is persisted, but it could not be applied to the running loop (%v). %q keeps its launched-time config; the edit takes effect at the next relaunch (stop_loop then loop_definition_launch, or process restart).", retuneErr, name)
+			} else {
+				result["retune"] = "applied"
+				notice := retuneAppliedNotice(name)
+				// MaxIter counts this instance's lifetime attempts: a cap at
+				// or below what is already consumed stops the loop at its
+				// next wake. Applied conformance, but say it loudly.
+				if spec.MaxIter > 0 {
+					if st := after.Status(); st.Attempts >= spec.MaxIter {
+						notice += fmt.Sprintf(" Warning: max_iter %d is at or below this instance's %d attempts — the loop will stop at its next wake; relaunch to reset the count.", spec.MaxIter, st.Attempts)
+					}
+				}
+				result["notice"] = notice
+			}
+		}
 	}
 	return ldMarshalToolJSON(result)
 }

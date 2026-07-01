@@ -304,6 +304,58 @@ func TestThaneCreateContainerIdempotentRetry(t *testing.T) {
 	}
 }
 
+// TestThaneCreateReplaceRunningLoopFlagsStaleConfig pins the honesty contract
+// on the replace path: replacing a definition whose loop is currently running
+// short-circuits to the existing instance (the idempotent-retry contract), so
+// the result must say the running loop was reused and still holds its
+// launched-time config — otherwise it reads as if the new spec is live.
+func TestThaneCreateReplaceRunningLoopFlagsStaleConfig(t *testing.T) {
+	t.Parallel()
+	rig := newContainerTestRig(t)
+
+	create := func(intent string, replace bool) map[string]any {
+		args := map[string]any{"name": "ops", "intent": intent, "operation": "container"}
+		if replace {
+			args["replace"] = true
+		}
+		out, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), args)
+		if err != nil {
+			t.Fatalf("thane_loop_create(%q): %v", intent, err)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal([]byte(out), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return resp
+	}
+
+	first := create("Original intent.", false)
+	if _, present := first["reused_running_loop"]; present {
+		t.Error("fresh create should not carry reused_running_loop")
+	}
+
+	second := create("Replacement intent.", true)
+	if second["reused_running_loop"] != true {
+		t.Errorf("replace against a running loop: reused_running_loop = %v, want true", second["reused_running_loop"])
+	}
+	notice, _ := second["notice"].(string)
+	if !strings.Contains(notice, "currently running") || !strings.Contains(notice, "launched-time config") {
+		t.Errorf("notice = %q, want the running-loop stale-config contract", notice)
+	}
+	// Containers get the container-specific recipe: stop_loop refuses a
+	// container with live children, so the notice must teach that prerequisite.
+	if !strings.Contains(notice, "children") {
+		t.Errorf("notice = %q, want the container-specific relaunch guidance", notice)
+	}
+	if first["loop_id"] != second["loop_id"] {
+		t.Errorf("loop_id changed on replace: %v -> %v (running instance should be reused, not relaunched)", first["loop_id"], second["loop_id"])
+	}
+	// The replacement itself is persisted — only the live instance is stale.
+	if got := rig.persisted["ops"].Intent; got != "Replacement intent." {
+		t.Errorf("persisted intent = %q, want the replacement", got)
+	}
+}
+
 // TestLoopDefinitionDeleteAllowsEmptyContainer verifies the symmetric
 // happy path: a container with no children deletes cleanly, so the
 // model can dismantle stale structure without manual surgery.

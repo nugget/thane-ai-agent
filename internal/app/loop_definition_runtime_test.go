@@ -249,6 +249,82 @@ func TestLoopDefinitionRuntimeReconcileDefinitionStopsInactiveService(t *testing
 	}
 }
 
+// TestLoopDefinitionRuntimeReconcileDefinitionLeavesRunningLoopOnSpecChange
+// pins the intentional early-return in ReconcileDefinition: a spec change
+// committed while the same-named loop is running (still durable, active,
+// eligible) must NOT stop, respawn, or patch the live loop — reconcile-side
+// propagation happens only at the next relaunch. The relaunch-tier commit
+// surfaces (loop_definition_set, thane_loop_create, POST
+// /v1/loop-definitions) rely on this reconcile as their only propagation
+// step and tell the model so via their running-loop notice;
+// loop_definition_update compensates separately with a live retune
+// (Loop.QueueRetune, #1153). A behavior change here must update those
+// surfaces in the same stroke.
+func TestLoopDefinitionRuntimeReconcileDefinitionLeavesRunningLoopOnSpecChange(t *testing.T) {
+	t.Parallel()
+
+	spec := looppkg.Spec{
+		Name:         "office_watch",
+		Enabled:      true,
+		Task:         "Watch the office.",
+		Operation:    looppkg.OperationService,
+		Completion:   looppkg.CompletionNone,
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       looppkg.Float64Ptr(0),
+	}
+	registry, err := looppkg.NewDefinitionRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+	if err := registry.Upsert(spec, time.Now().UTC()); err != nil {
+		t.Fatalf("Upsert(initial): %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition(spawn): %v", err)
+	}
+	running := loops.GetByName("office_watch")
+	if running == nil {
+		t.Fatal("expected office_watch to be running after first reconcile")
+	}
+	originalID := running.ID()
+
+	changed := spec
+	changed.Task = "Watch the office more carefully."
+	if err := registry.Upsert(changed, time.Now().UTC()); err != nil {
+		t.Fatalf("Upsert(changed): %v", err)
+	}
+
+	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition(after change): %v", err)
+	}
+	after := loops.GetByName("office_watch")
+	if after == nil {
+		t.Fatal("spec-content change stopped the running loop; reconcile must leave it running")
+	}
+	if after.ID() != originalID {
+		t.Errorf("loop was respawned on spec change (id %q -> %q); reconcile must not restart a running loop", originalID, after.ID())
+	}
+}
+
 func TestLoopDefinitionRuntimeReconcileDefinitionServiceSurvivesRequestContext(t *testing.T) {
 	t.Parallel()
 

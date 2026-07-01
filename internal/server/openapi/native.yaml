@@ -1442,6 +1442,11 @@ components:
           description: True when the loop is event-driven (blocks on notification arrivals) rather than timer-based.
           readOnly: true
           example: false
+        pending_retune:
+          type: boolean
+          description: True while a queued live retune (loop_definition_update on a running loop) has not yet been promoted into the live config — in practice only while an in-flight turn finishes under its previous config. Omitted when false.
+          readOnly: true
+          example: false
         recent_iterations:
           type: array
           items: { $ref: "#/components/schemas/IterationSnapshot" }
@@ -1496,6 +1501,9 @@ components:
         child_count:
           type: integer
           description: Number of direct child loops.
+        pending_retune:
+          type: boolean
+          description: True while a queued live retune has not yet been promoted into the running loop's config — only while an in-flight turn finishes under its previous config. Omitted when false.
         policy_state:
           type: string
           description: active, paused, or ephemeral (no stored definition backs the loop).
