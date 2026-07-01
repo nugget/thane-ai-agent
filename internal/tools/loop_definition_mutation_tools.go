@@ -56,10 +56,13 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 	}
 	// The reconcile's stop branch clears the other direction: a loop the
 	// commit stopped (spec made non-durable or ineligible) is gone by now and
-	// correctly gets no notice.
+	// correctly gets no notice. The notice recipe keys off the LIVE
+	// instance's operation, not the just-written spec's — set can rewrite
+	// operation while the running loop keeps its old shape, and the relaunch
+	// guidance must match what is actually running.
 	if prior != nil {
 		if after := r.runningLoopByName(spec.Name); after != nil && after.ID() == prior.ID() {
-			result["notice"] = staleRunningLoopNotice(spec.Name, spec.Operation)
+			result["notice"] = staleRunningLoopNotice(spec.Name, after.Operation())
 		}
 	}
 	return ldMarshalToolJSON(result)

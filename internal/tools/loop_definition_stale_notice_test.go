@@ -89,6 +89,28 @@ func TestLoopDefinitionSetNoticeWhenLoopRunning(t *testing.T) {
 	}
 }
 
+// TestLoopDefinitionSetNoticeMatchesLiveOperation pins the notice's recipe to
+// the SURVIVING instance's operation: set can rewrite operation while the
+// running loop keeps its old shape, and relaunch guidance for a live service
+// loop must not carry the container-children wording of the drifted spec.
+func TestLoopDefinitionSetNoticeMatchesLiveOperation(t *testing.T) {
+	deps, live := noticeHarness(t)
+	registerRunningLoop(t, live, "update_target") // live SERVICE loop
+
+	env := execLoopDefinitionSet(t, deps, looppkg.Spec{
+		Name:      "update_target",
+		Enabled:   true,
+		Operation: looppkg.OperationContainer, // drifted spec
+	})
+	notice, _ := env["notice"].(string)
+	if !strings.Contains(notice, "stop_loop then loop_definition_launch") {
+		t.Errorf("notice = %q, want the service-loop relaunch recipe (live instance is a service)", notice)
+	}
+	if strings.Contains(notice, "children") {
+		t.Errorf("notice = %q, carries container guidance for a live service loop", notice)
+	}
+}
+
 func TestLoopDefinitionSetNoNoticeWhenLoopNotRunning(t *testing.T) {
 	deps, _ := noticeHarness(t)
 

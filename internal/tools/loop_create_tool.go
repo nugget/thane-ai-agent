@@ -115,7 +115,7 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
 	}
 
-	launchResult, reusedRunning, err := r.commitAndLaunchLoop(ctx, spec)
+	launchResult, reused, err := r.commitAndLaunchLoop(ctx, spec)
 	if err != nil {
 		return "", err
 	}
@@ -136,9 +136,9 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		"parent_loop_id":       parentID,
 		"tags":                 tags,
 	}
-	if reusedRunning {
+	if reused != nil {
 		result["reused_running_loop"] = true
-		result["notice"] = staleRunningLoopNotice(name, looppkg.OperationContainer)
+		result["notice"] = staleRunningLoopNotice(name, reused.Operation())
 	}
 	if advisory := r.livePlacementAdvisory(name, tags, parentName); advisory != nil {
 		result["placement_advisory"] = advisory
@@ -292,7 +292,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		}
 	}
 
-	launchResult, reusedRunning, err := r.commitAndLaunchLoop(ctx, spec)
+	launchResult, reused, err := r.commitAndLaunchLoop(ctx, spec)
 	if err != nil {
 		return "", err
 	}
@@ -306,9 +306,9 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		"entity_subscriptions": len(entities),
 		"warnings":             warnings,
 	}
-	if reusedRunning {
+	if reused != nil {
 		result["reused_running_loop"] = true
-		result["notice"] = staleRunningLoopNotice(name, op)
+		result["notice"] = staleRunningLoopNotice(name, reused.Operation())
 	}
 	if hasOutput {
 		result["document_path"] = documentRef
@@ -333,29 +333,31 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 // commitAndLaunchLoop commits a derived spec through the durable chokepoint (or
 // the bare Upsert fallback) then launches it with an empty Launch so a retry
 // short-circuits to the existing loop instead of tripping the running-loop guard.
-// reusedRunning reports that short-circuit: the returned loop_id belongs to a
-// loop that was already running before the commit, which keeps its launched-time
-// config — the replacement spec applies only at its next relaunch. Callers must
-// surface that, or the result reads as if the new spec is live.
-func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (result looppkg.LaunchResult, reusedRunning bool, err error) {
+// reused reports that short-circuit: non-nil when the returned loop_id belongs
+// to a loop that was already running before the commit, which keeps its
+// launched-time config — the replacement spec applies only at its next
+// relaunch. Callers must surface that (keying any guidance off the reused
+// instance's own operation, which replace may have diverged from), or the
+// result reads as if the new spec is live.
+func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (result looppkg.LaunchResult, reused *looppkg.Loop, err error) {
 	deps := r.loopIntentDeps
-	var priorID string
-	if prior := r.runningLoopByName(spec.Name); prior != nil {
-		priorID = prior.ID()
-	}
+	prior := r.runningLoopByName(spec.Name)
 	updatedAt := time.Now().UTC()
 	if deps.CommitSpec != nil {
 		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
-			return looppkg.LaunchResult{}, false, err
+			return looppkg.LaunchResult{}, nil, err
 		}
 	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
-		return looppkg.LaunchResult{}, false, err
+		return looppkg.LaunchResult{}, nil, err
 	}
 	res, err := deps.LaunchDefinition(ctx, spec.Name, looppkg.Launch{})
 	if err != nil {
-		return looppkg.LaunchResult{}, false, fmt.Errorf("launch loop %q: %w", spec.Name, err)
+		return looppkg.LaunchResult{}, nil, fmt.Errorf("launch loop %q: %w", spec.Name, err)
 	}
-	return res, priorID != "" && res.LoopID == priorID, nil
+	if prior != nil && res.LoopID == prior.ID() {
+		return res, prior, nil
+	}
+	return res, nil, nil
 }
 
 // resolveLoopParent validates that a named parent container is registered before
