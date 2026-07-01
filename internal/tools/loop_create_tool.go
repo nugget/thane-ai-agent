@@ -115,7 +115,7 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		return "", fmt.Errorf("derived container spec invalid: %w", err)
 	}
 
-	launchResult, err := r.commitAndLaunchLoop(ctx, spec)
+	launchResult, reusedRunning, err := r.commitAndLaunchLoop(ctx, spec)
 	if err != nil {
 		return "", err
 	}
@@ -135,6 +135,10 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		"parent_name":          parentName,
 		"parent_loop_id":       parentID,
 		"tags":                 tags,
+	}
+	if reusedRunning {
+		result["reused_running_loop"] = true
+		result["notice"] = staleRunningLoopNotice(name, looppkg.OperationContainer)
 	}
 	if advisory := r.livePlacementAdvisory(name, tags, parentName); advisory != nil {
 		result["placement_advisory"] = advisory
@@ -288,7 +292,7 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		}
 	}
 
-	launchResult, err := r.commitAndLaunchLoop(ctx, spec)
+	launchResult, reusedRunning, err := r.commitAndLaunchLoop(ctx, spec)
 	if err != nil {
 		return "", err
 	}
@@ -301,6 +305,10 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 		"parent_name":          parentName,
 		"entity_subscriptions": len(entities),
 		"warnings":             warnings,
+	}
+	if reusedRunning {
+		result["reused_running_loop"] = true
+		result["notice"] = staleRunningLoopNotice(name, op)
 	}
 	if hasOutput {
 		result["document_path"] = documentRef
@@ -325,21 +333,29 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 // commitAndLaunchLoop commits a derived spec through the durable chokepoint (or
 // the bare Upsert fallback) then launches it with an empty Launch so a retry
 // short-circuits to the existing loop instead of tripping the running-loop guard.
-func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (looppkg.LaunchResult, error) {
+// reusedRunning reports that short-circuit: the returned loop_id belongs to a
+// loop that was already running before the commit, which keeps its launched-time
+// config — the replacement spec applies only at its next relaunch. Callers must
+// surface that, or the result reads as if the new spec is live.
+func (r *Registry) commitAndLaunchLoop(ctx context.Context, spec looppkg.Spec) (result looppkg.LaunchResult, reusedRunning bool, err error) {
 	deps := r.loopIntentDeps
+	var priorID string
+	if prior := r.runningLoopByName(spec.Name); prior != nil {
+		priorID = prior.ID()
+	}
 	updatedAt := time.Now().UTC()
 	if deps.CommitSpec != nil {
 		if err := deps.CommitSpec(ctx, spec, updatedAt); err != nil {
-			return looppkg.LaunchResult{}, err
+			return looppkg.LaunchResult{}, false, err
 		}
 	} else if err := deps.Registry.Upsert(spec, updatedAt); err != nil {
-		return looppkg.LaunchResult{}, err
+		return looppkg.LaunchResult{}, false, err
 	}
 	res, err := deps.LaunchDefinition(ctx, spec.Name, looppkg.Launch{})
 	if err != nil {
-		return looppkg.LaunchResult{}, fmt.Errorf("launch loop %q: %w", spec.Name, err)
+		return looppkg.LaunchResult{}, false, fmt.Errorf("launch loop %q: %w", spec.Name, err)
 	}
-	return res, nil
+	return res, priorID != "" && res.LoopID == priorID, nil
 }
 
 // resolveLoopParent validates that a named parent container is registered before
@@ -557,7 +573,7 @@ func thaneLoopCreateSchema() map[string]any {
 			},
 			"replace": map[string]any{
 				"type":        "boolean",
-				"description": "When true, overwrite an existing definition (and output document) of the same name. Default false; the tool refuses to clobber existing artifacts.",
+				"description": "When true, overwrite an existing definition (and output document) of the same name. A loop that is already running is NOT restarted — it keeps its launched-time config and the replacement applies at its next relaunch (stop_loop then loop_definition_launch); the result flags this with reused_running_loop and a notice. Default false; the tool refuses to clobber existing artifacts.",
 			},
 		},
 		"required": []string{"name", "intent", "operation"},

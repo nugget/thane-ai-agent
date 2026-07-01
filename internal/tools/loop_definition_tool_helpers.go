@@ -317,6 +317,56 @@ func loopLaunchOverrideProperties() map[string]any {
 	}
 }
 
+// runningLoopByName resolves a live loop by definition name, preferring the
+// always-wired runtime registry and falling back to the intent-tool deps for
+// registry-only configurations (the same resolution loop_reparent uses).
+// Returns nil when no live registry is wired — liveness is unknowable there
+// and callers treat it as "not running".
+func (r *Registry) runningLoopByName(name string) *looppkg.Loop {
+	live := r.liveLoopRegistry
+	if live == nil {
+		live = r.loopIntentDeps.LiveRegistry
+	}
+	if live == nil {
+		return nil
+	}
+	return live.GetByName(name)
+}
+
+// staleRunningLoopNotice is the model-facing sentence a definition-write
+// result carries when the target loop was already running before the write
+// and survived it: a running loop holds its launched-time config and does
+// NOT re-read the spec on wake — changes apply only after a full relaunch.
+// Saying so explicitly keeps the model from waiting for the next wake and
+// concluding the change failed. One shared helper so every write surface
+// (loop_definition_set, loop_definition_update, thane_loop_create replace)
+// teaches the same contract and the wording cannot drift.
+//
+// Callers must gate on the SAME instance surviving the write (capture the
+// live loop before, compare IDs after) — a loop spawned by the write's own
+// reconcile is running the just-written spec and must not get this notice.
+//
+// Containers get their own recipe: a container with live children refuses
+// stop_loop (ContainerHasChildrenError), so the two-step relaunch is taught
+// with that prerequisite.
+func staleRunningLoopNotice(name string, op looppkg.Operation) string {
+	if op == looppkg.OperationContainer {
+		return fmt.Sprintf("%q is currently running and keeps its launched-time config; changes from this write apply only after a full relaunch — NOT on the next wake. A container with live children cannot be stopped in place: reparent or stop its children first, then stop_loop and loop_definition_launch (or restart the process).", name)
+	}
+	return fmt.Sprintf("%q is currently running and keeps its launched-time config; changes from this write apply only after a full relaunch (stop_loop then loop_definition_launch, or process restart) — NOT on the loop's next wake.", name)
+}
+
+// reusedRunningLoopLaunchNotice is the launch-side counterpart: the launch
+// short-circuited to an already-running durable loop instead of starting a
+// new one, so a caller relaunching to apply a spec edit has not actually
+// relaunched anything. This closes the drain race in the taught recipe —
+// stop_loop returns ok after ~10s even if the loop is still draining, and
+// the follow-up launch would otherwise be indistinguishable from a fresh
+// start.
+func reusedRunningLoopLaunchNotice(name string) string {
+	return fmt.Sprintf("%q was already running; this launch returned the existing loop instead of starting a new one, and it keeps its launched-time config. To relaunch with the current stored definition, stop_loop and confirm the loop deregistered, then call loop_definition_launch again.", name)
+}
+
 func currentLoopDefinitionSnapshot(r *Registry) (*looppkg.DefinitionRegistrySnapshot, error) {
 	if r.loopDefinitionRegistry == nil {
 		return nil, fmt.Errorf("loop definition registry not configured")

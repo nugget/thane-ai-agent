@@ -132,6 +132,11 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 		return "", err
 	}
 
+	// Captured before the commit: the commit's reconcile can spawn an absent
+	// active definition, and a loop that is live only after the commit runs
+	// the just-written spec — only an instance that survived the commit is
+	// stale.
+	prior := r.runningLoopByName(name)
 	updatedAt := time.Now().UTC()
 	// Single durable commit (persist + upsert + reconcile), falling back to a
 	// bare overlay upsert when no commit hook is wired. Policy is a separate
@@ -159,13 +164,10 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 		"updated_fields": sortedStringKeys(changes),
 		"definition":     viewDef,
 	}
-	// A running service loop holds its launched-time config and does NOT
-	// re-read the spec on wake — the edit applies only after a full relaunch.
-	// Say so explicitly so the model doesn't wait for the next wake and assume
-	// the change failed. (loop_definition_set shares this next-relaunch
-	// semantics; this surfaces it.)
-	if r.liveLoopRegistry != nil && r.liveLoopRegistry.GetByName(name) != nil {
-		result["notice"] = fmt.Sprintf("%q is currently running; the edit is persisted but a running loop keeps its launched-time config until a full relaunch (process restart, or stop_loop then loop_definition_launch) — it will NOT change on the next wake.", name)
+	if prior != nil {
+		if after := r.runningLoopByName(name); after != nil && after.ID() == prior.ID() {
+			result["notice"] = staleRunningLoopNotice(name, spec.Operation)
+		}
 	}
 	return ldMarshalToolJSON(result)
 }
