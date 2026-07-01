@@ -308,7 +308,7 @@ model doesn't have to:
 }
 ```
 
-Right for `mode: journal` curate loops and any append-only chronology.
+Right for `mode: journal` service loops (`thane_loop_create`, `operation: service`) and any append-only chronology.
 Wrong when the goal is to replace what's there — that's `doc_write` or
 `doc_edit` with `replace_body`.
 

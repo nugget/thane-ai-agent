@@ -461,7 +461,7 @@ keeps the encoded vCard small enough to scan reliably. As with
 - For bulk *deduplication* after import (multiple records that should
   collapse), the loop is `contact_lookup` → identify duplicates →
   `contact_save` on the canonical one to absorb facts → `contact_forget`
-  on the duplicates. Multi-step; consider whether a curate loop is the
+  on the duplicates. Multi-step; consider whether a service loop is the
   better shape (`loops_examples_curate`).
 - For *sending* the exported card, bounce to `email` or `signal`
   depending on the channel.

@@ -92,7 +92,7 @@ Polling intervals and feed lists are managed via the `media_follow` and
 
 Feeds may also target an existing loop with `wake_loop`. In that mode the
 poller sends structured `feed_entry` events through the loop notification
-path, allowing a `thane_curate` loop to own the output document, path, and
+path, allowing a `thane_loop_create` (`operation: service`) loop to own the output document, path, and
 tagging strategy.
 
 ## Code Forge Repository Events
@@ -105,5 +105,5 @@ opstate.
 Unlike legacy pollers that start a fresh generic conversation, forge
 subscriptions require `wake_loop`. New `release` and `commit` events are
 delivered to the named loop as structured event-source notifications, so the
-receiving `thane_curate` or other `thane_` loop remains the owner of durable
+receiving `thane_loop_create` or other `thane_` loop remains the owner of durable
 documents and corpus conventions.

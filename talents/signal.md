@@ -70,7 +70,7 @@ multiple things, or you want to send *before* the final reply text
 
 Use this when:
 - A loop's work finished and you want to update the user out-of-band
-  ("the curate loop wrote its document; here's the link").
+  ("the service loop wrote its document; here's the link").
 - Following up on a thread that's gone quiet ("did you have a chance
   to look at the PR I sent over?") — but consider whether the
   follow-up is actually warranted before reaching for the tool.
