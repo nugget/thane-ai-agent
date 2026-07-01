@@ -174,8 +174,8 @@ func TestSyncBlockedLaundering(t *testing.T) {
 	}
 }
 
-// TestSyncBlockedUnverifiedSkippedWhenVerifyOff shows the mode is honored:
-// with RequireVerify=false, an untrusted range still fast-forwards. (The
+// TestSyncFastForwardNoVerify shows the mode is honored: with
+// RequireVerify=false, an untrusted range still fast-forwards. (The
 // operability layer sets RequireVerify=true for signed roots; this documents
 // the engine mechanism.)
 func TestSyncFastForwardNoVerify(t *testing.T) {
@@ -183,7 +183,6 @@ func TestSyncFastForwardNoVerify(t *testing.T) {
 	local := f.newSyncStore(t, f.signer)
 	writeStore(t, local, "a.md", "a\n")
 	branch := headBranch(t, local.path)
-	base := headSHA(t, local.path)
 
 	remote := cloneWorktree(t, local.path)
 	attacker := testSigner(t)
@@ -204,7 +203,6 @@ func TestSyncFastForwardNoVerify(t *testing.T) {
 	if got := headSHA(t, local.path); got != tip {
 		t.Fatalf("local head = %s, want %s", shorten(got), shorten(tip))
 	}
-	_ = base
 }
 
 // TestSyncBlockedDirtyWorktree: a behind local with uncommitted tracked
