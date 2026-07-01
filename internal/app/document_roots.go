@@ -311,6 +311,23 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		return nil, fmt.Errorf("doc_roots.%s reconcile allowed_signers: %w", root, err)
 	}
 
+	// Boot-time round-trip: confirm HEAD actually verifies against the trust
+	// file we just rendered, so a malformed signer line or an OpenSSH version
+	// that can't parse a rendered option fails loudly now instead of silently
+	// blocking reads later. Honor the root's verification policy — hard-fail a
+	// required root, warn a warn root, skip when verification is off.
+	switch strings.TrimSpace(gitCfg.VerifySignatures) {
+	case "required":
+		if err := store.VerifyHead(bootstrapCtx); err != nil {
+			return nil, fmt.Errorf("doc_roots.%s allowed_signers boot verification: %w", root, err)
+		}
+	case "warn":
+		if err := store.VerifyHead(bootstrapCtx); err != nil {
+			logger.Warn("document root allowed_signers boot verification failed",
+				"root", root, "error", err)
+		}
+	}
+
 	logger.Info("document root provenance enabled",
 		"root", root,
 		"repo", store.Path(),
