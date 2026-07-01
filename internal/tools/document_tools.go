@@ -44,6 +44,81 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 	})
 
 	r.Register(&Tool{
+		Name:                 "doc_history",
+		Description:          "List the revision history of one managed document by semantic ref like `kb:network/vlans.md`, newest first. Only git-backed roots have history — `doc_roots` reports `revisions: true` for those. Each revision has a short `rev` hash (feed it to `doc_diff`/`doc_at`), an `index` (0 is newest), an `age` delta plus absolute `timestamp`, the commit message, and a `signer` (`verified`, `principal`, `kind`: agent or operator). Paginate older by passing `before` set to the returned `next_before`.",
+		ContentResolveExempt: []string{"ref", "before"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref":    map[string]any{"type": "string", "description": "Canonical document ref like `kb:network/vlans.md`."},
+				"limit":  map[string]any{"type": "integer", "description": "Max revisions to return (integer, not string; default 20, max 100)."},
+				"before": map[string]any{"type": "string", "description": "Pagination cursor: a `rev` hash; returns revisions older than it. Use the `next_before` from a prior call."},
+			},
+			"required": []string{"ref"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			if ref == "" {
+				return "", fmt.Errorf("ref is required")
+			}
+			before, _ := args["before"].(string)
+			return dt.History(ctx, documents.HistoryArgs{
+				Ref:    ref,
+				Limit:  numericArg(args["limit"], 20, 100),
+				Before: before,
+			})
+		},
+	})
+
+	r.Register(&Tool{
+		Name:                 "doc_diff",
+		Description:          "Show the diff of one managed document between two revisions. `from` and `to` accept a `rev` hash from `doc_history`, `HEAD`/`latest`, an RFC3339 timestamp, or a relative delta like `-7d`; `to` defaults to `HEAD`. Endpoints are ordered automatically so the older one is the base. Returns added/removed line counts and the patch; a patch too large to return whole degrades to a diffstat with a note. `format` is `patch` (default) or `stat`.",
+		ContentResolveExempt: []string{"ref", "from", "to"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref":    map[string]any{"type": "string", "description": "Canonical document ref like `kb:network/vlans.md`."},
+				"from":   map[string]any{"type": "string", "description": "One endpoint: a `rev` hash, `HEAD`/`latest`, an RFC3339 timestamp, or a delta like `-7d`."},
+				"to":     map[string]any{"type": "string", "description": "Other endpoint (default `HEAD`)."},
+				"format": map[string]any{"type": "string", "description": "`patch` (default, unified diff) or `stat` (summary)."},
+			},
+			"required": []string{"ref", "from"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			if ref == "" {
+				return "", fmt.Errorf("ref is required")
+			}
+			from, _ := args["from"].(string)
+			to, _ := args["to"].(string)
+			format, _ := args["format"].(string)
+			return dt.Diff(ctx, documents.DiffArgs{Ref: ref, From: from, To: to, Format: format})
+		},
+	})
+
+	r.Register(&Tool{
+		Name:                 "doc_at",
+		Description:          "Recall one managed document's content as of a past revision. `rev` accepts a `rev` hash from `doc_history`, `HEAD`/`latest` (default), an RFC3339 timestamp, or a delta like `-7d`. Returns the frontmatter, outline, and body as of that revision, plus `verify_status` and the `signer`. When the revision is not trusted, the content is returned under `unverified_body` instead of `body`.",
+		ContentResolveExempt: []string{"ref", "rev"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref": map[string]any{"type": "string", "description": "Canonical document ref like `kb:network/vlans.md`."},
+				"rev": map[string]any{"type": "string", "description": "Revision to recall: a `rev` hash, `HEAD` (default), an RFC3339 timestamp, or a delta like `-7d`."},
+			},
+			"required": []string{"ref"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			ref, _ := args["ref"].(string)
+			if ref == "" {
+				return "", fmt.Errorf("ref is required")
+			}
+			rev, _ := args["rev"].(string)
+			return dt.At(ctx, documents.AtArgs{Ref: ref, Rev: rev})
+		},
+	})
+
+	r.Register(&Tool{
 		Name:        "doc_roots",
 		Description: "List indexed markdown roots with helpful corpus summaries such as document counts, total size, last modification delta, top tags, top directories, and recent example documents. Use first when the answer probably lives in a managed document corpus but you do not yet know which root to browse.",
 		Parameters: map[string]any{

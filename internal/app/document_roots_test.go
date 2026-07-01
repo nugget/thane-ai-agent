@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"io"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
+	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
@@ -440,5 +443,78 @@ func TestDocumentRootProvenanceWriterDoesNotCleanEscapesIntoPrefix(t *testing.T)
 	}
 	if got := writer.storeFilename("../outside.md"); got != "../outside.md" {
 		t.Fatalf("storeFilename(escape) = %q, want provenance validator to see escape", got)
+	}
+}
+
+// TestDocumentRootProvenanceReviser exercises the app adapter that bridges a
+// provenance.Reader to documents.RootReviser against a real signed repo.
+func TestDocumentRootProvenanceReviser(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	signer, err := provenance.NewSSHSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	store, err := provenance.New(dir, signer, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, step := range []struct{ content, msg string }{
+		{"a\n", "first"}, {"a\nb\n", "second"}, {"a\nb\nc\n", "third"},
+	} {
+		if err := store.Write(t.Context(), "doc.md", step.content, step.msg); err != nil {
+			t.Fatalf("write %q: %v", step.msg, err)
+		}
+	}
+
+	reviser := &documentRootProvenanceReviser{reader: store, prefix: ""}
+	ctx := t.Context()
+
+	listing, err := reviser.History(ctx, "doc.md", documents.RevisionQuery{WithSigners: true})
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if listing.Total != 3 || len(listing.Revisions) != 3 {
+		t.Fatalf("history = %d/%d, want 3/3", listing.Total, len(listing.Revisions))
+	}
+	if listing.Revisions[0].Message != "third" || listing.Revisions[0].Index != 0 {
+		t.Fatalf("newest = %q idx %d, want third idx 0", listing.Revisions[0].Message, listing.Revisions[0].Index)
+	}
+	if s := listing.Revisions[0].Signer; s == nil || !s.Verified || s.Kind != provenance.SignerKindAgent {
+		t.Fatalf("newest signer = %+v, want verified agent", s)
+	}
+
+	head, err := reviser.Resolve(ctx, "doc.md", "HEAD")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	content, err := reviser.Content(ctx, "doc.md", head.Commit)
+	if err != nil {
+		t.Fatalf("Content: %v", err)
+	}
+	if content.Content != "a\nb\nc\n" {
+		t.Fatalf("Content = %q, want full doc", content.Content)
+	}
+	if content.Revision.Signer == nil || !content.Revision.Signer.Verified {
+		t.Fatalf("Content signer = %+v, want verified", content.Revision.Signer)
+	}
+
+	// Endpoints passed reversed to confirm the reviser time-orders base<target.
+	first := listing.Revisions[2] // "first"
+	diff, err := reviser.Diff(ctx, "doc.md", "HEAD", first.Short, "patch")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.Base.Message != "first" || diff.Target.Message != "third" {
+		t.Fatalf("diff base/target = %q/%q, want first/third", diff.Base.Message, diff.Target.Message)
+	}
+	if diff.Added != 2 || diff.Removed != 0 {
+		t.Fatalf("diff counts = +%d/-%d, want +2/-0", diff.Added, diff.Removed)
 	}
 }
