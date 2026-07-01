@@ -72,7 +72,7 @@ func decodeLoopLaunchArg(args map[string]any, key string) (looppkg.Launch, error
 // canonicalize.
 //
 // A string is only coerced when it looks like a JSON object or array (first
-// non-space rune is '{' or '['), so a legitimate bare-string value is never
+// non-space byte is '{' or '['), so a legitimate bare-string value is never
 // reinterpreted. On success the decoded value is returned for the normal
 // marshal→unmarshal path (which preserves rejectLaunchModelKeys and every
 // other downstream check). A JSON-looking string that fails to parse returns
