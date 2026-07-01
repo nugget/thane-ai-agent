@@ -100,7 +100,6 @@ func (m *EntityMetadata) Empty() bool {
 type EntityVisibility struct {
 	Enabled        bool   `json:"enabled"`
 	Visible        bool   `json:"visible"`
-	DefaultContext bool   `json:"default_context"`
 	ContextRole    string `json:"context_role"`
 	HiddenBy       string `json:"hidden_by,omitempty"`
 	DisabledBy     string `json:"disabled_by,omitempty"`
@@ -115,8 +114,13 @@ type EntityAreaMetadata struct {
 	Name                string               `json:"name,omitempty"`
 	Aliases             []string             `json:"aliases,omitempty"`
 	FloorID             string               `json:"floor_id,omitempty"`
-	Floor               *EntityFloorMetadata `json:"floor,omitempty"`
-	Building            *EntityFloorMetadata `json:"building,omitempty"`
+	// Floor and Building are mutually exclusive: an area's floor is reported
+	// under exactly one of them, chosen by the homeassistant.floor_alias
+	// deployment setting. By default the floor lands in Floor; with
+	// floor_alias: building it lands in Building instead. At most one is ever
+	// non-nil.
+	Floor    *EntityFloorMetadata `json:"floor,omitempty"`
+	Building *EntityFloorMetadata `json:"building,omitempty"`
 	Icon                string               `json:"icon,omitempty"`
 	TemperatureEntityID string               `json:"temperature_entity_id,omitempty"`
 	HumidityEntityID    string               `json:"humidity_entity_id,omitempty"`
@@ -304,19 +308,11 @@ func applyEntityVisibility(meta *EntityMetadata, entry *EntityRegistryEntry) {
 	meta.Visibility = &EntityVisibility{
 		Enabled:        entry.DisabledBy == "",
 		Visible:        entry.HiddenBy == "",
-		DefaultContext: entityDefaultContext(entry),
 		ContextRole:    entityContextRole(entry),
 		HiddenBy:       entry.HiddenBy,
 		DisabledBy:     entry.DisabledBy,
 		EntityCategory: entry.EntityCategory,
 	}
-}
-
-func entityDefaultContext(entry *EntityRegistryEntry) bool {
-	return entry.DisabledBy == "" &&
-		entry.HiddenBy == "" &&
-		entry.EntityCategory != "diagnostic" &&
-		entry.EntityCategory != "config"
 }
 
 func entityContextRole(entry *EntityRegistryEntry) string {

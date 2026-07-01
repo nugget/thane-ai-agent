@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 const maxHAListEntitiesLimit = 100
@@ -30,7 +32,25 @@ type haListEntityItem struct {
 	EntityID     string                        `json:"entity_id"`
 	FriendlyName string                        `json:"friendly_name,omitempty"`
 	State        string                        `json:"state"`
+	Since        string                        `json:"since,omitempty"`
+	Updated      string                        `json:"updated,omitempty"`
 	Metadata     *homeassistant.EntityMetadata `json:"metadata,omitempty"`
+}
+
+// haRecencyDelta returns the delta-formatted recency signals for an entity
+// state, mirroring the canonical entity contextfmt projection
+// (contextfmt/entity_format.go) so ha_search_states and ha_list_entities carry
+// the same "how fresh is this?" signal the always-on context does. since is the
+// time since the last state change; updated is set only when the last attribute
+// update meaningfully post-dates that change.
+func haRecencyDelta(s homeassistant.State, now time.Time) (since, updated string) {
+	if !s.LastChanged.IsZero() {
+		since = promptfmt.FormatDeltaOnly(s.LastChanged, now)
+	}
+	if !s.LastUpdated.IsZero() && s.LastUpdated.Sub(s.LastChanged) > time.Second {
+		updated = promptfmt.FormatDeltaOnly(s.LastUpdated, now)
+	}
+	return since, updated
 }
 
 // EntityMetadataIncludeParameter returns the shared JSON schema

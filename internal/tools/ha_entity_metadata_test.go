@@ -86,11 +86,10 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 				NameByUser string `json:"name_by_user"`
 			} `json:"device"`
 			Visibility struct {
-				Enabled        bool   `json:"enabled"`
-				Visible        bool   `json:"visible"`
-				DefaultContext bool   `json:"default_context"`
-				ContextRole    string `json:"context_role"`
-				HiddenBy       string `json:"hidden_by"`
+				Enabled     bool   `json:"enabled"`
+				Visible     bool   `json:"visible"`
+				ContextRole string `json:"context_role"`
+				HiddenBy    string `json:"hidden_by"`
 			} `json:"visibility"`
 			TranslationKey string `json:"translation_key"`
 			HasEntityName  bool   `json:"has_entity_name"`
@@ -121,7 +120,6 @@ func TestHAGetStateIncludesEntityMetadata(t *testing.T) {
 	}
 	if !got.Metadata.Visibility.Enabled ||
 		got.Metadata.Visibility.Visible ||
-		got.Metadata.Visibility.DefaultContext ||
 		got.Metadata.Visibility.ContextRole != "hidden" ||
 		got.Metadata.Visibility.HiddenBy != "user" {
 		t.Errorf("visibility = %#v, want enabled hidden-by-user", got.Metadata.Visibility)
