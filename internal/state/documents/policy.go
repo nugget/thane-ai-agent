@@ -67,6 +67,10 @@ type RootGitPolicySummary struct {
 	Enabled          bool             `json:"enabled"`
 	SignCommits      bool             `json:"sign_commits,omitempty"`
 	VerifySignatures VerificationMode `json:"verify_signatures,omitempty"`
+	// Revisions reports whether this root exposes revision history
+	// (doc_history / doc_diff / doc_at). Always emitted so the model can
+	// rely on it to decide whether to reach for those tools.
+	Revisions bool `json:"revisions"`
 }
 
 // SignatureStatus describes the last known signature verification state
@@ -117,6 +121,7 @@ type StoreOptions struct {
 	RootPolicies  map[string]RootPolicy
 	RootWriters   map[string]RootWriter
 	RootVerifiers map[string]RootVerifier
+	RootRevisers  map[string]RootReviser
 }
 
 func defaultRootPolicy() RootPolicy {
@@ -193,6 +198,24 @@ func normalizeRootVerifiers(roots map[string]string, verifiers map[string]RootVe
 	return out
 }
 
+func normalizeRootRevisers(roots map[string]string, revisers map[string]RootReviser) map[string]RootReviser {
+	if len(revisers) == 0 {
+		return nil
+	}
+	out := make(map[string]RootReviser, len(revisers))
+	for root, reviser := range revisers {
+		root = normalizeRootName(root)
+		if root == "" || reviser == nil {
+			continue
+		}
+		if _, ok := roots[root]; !ok {
+			continue
+		}
+		out[root] = reviser
+	}
+	return out
+}
+
 func normalizeRootName(root string) string {
 	return strings.TrimSuffix(strings.TrimSpace(root), ":")
 }
@@ -209,6 +232,7 @@ func (s *Store) rootPolicy(root string) RootPolicy {
 }
 
 func (s *Store) rootPolicySummary(root string) RootPolicySummary {
+	root = normalizeRootName(root)
 	policy := s.rootPolicy(root)
 	return RootPolicySummary{
 		Indexing:  policy.Indexing,
@@ -217,6 +241,7 @@ func (s *Store) rootPolicySummary(root string) RootPolicySummary {
 			Enabled:          policy.Git.Enabled,
 			SignCommits:      policy.Git.SignCommits,
 			VerifySignatures: policy.Git.VerifySignatures,
+			Revisions:        s.rootReviser(root) != nil,
 		},
 	}
 }
@@ -235,4 +260,12 @@ func (s *Store) rootVerifier(root string) RootVerifier {
 		return nil
 	}
 	return s.rootVerifiers[root]
+}
+
+func (s *Store) rootReviser(root string) RootReviser {
+	root = normalizeRootName(root)
+	if s == nil || len(s.rootRevisers) == 0 {
+		return nil
+	}
+	return s.rootRevisers[root]
 }

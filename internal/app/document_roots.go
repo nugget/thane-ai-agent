@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -43,14 +42,7 @@ func (w *documentRootProvenanceWriter) Delete(ctx context.Context, filename, mes
 }
 
 func (w *documentRootProvenanceWriter) storeFilename(filename string) string {
-	clean := filepath.ToSlash(filepath.Clean(filename))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
-		return clean
-	}
-	if w.prefix == "" || w.prefix == "." {
-		return clean
-	}
-	return path.Join(w.prefix, clean)
+	return repoPrefixedFilename(w.prefix, filename)
 }
 
 func (v *documentRootProvenanceVerifier) Verify(ctx context.Context, filename string) (documents.SignatureVerification, error) {
@@ -64,14 +56,7 @@ func (v *documentRootProvenanceVerifier) VerifyRoot(ctx context.Context) (docume
 }
 
 func (v *documentRootProvenanceVerifier) storeFilename(filename string) string {
-	clean := filepath.ToSlash(filepath.Clean(filename))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
-		return clean
-	}
-	if v.prefix == "" || v.prefix == "." {
-		return clean
-	}
-	return path.Join(v.prefix, clean)
+	return repoPrefixedFilename(v.prefix, filename)
 }
 
 func documentSignatureVerificationFromProvenance(result provenance.VerificationResult) documents.SignatureVerification {
@@ -174,8 +159,9 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			writer = w
 		}
 
+		var verifier *documentRootProvenanceVerifier
 		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
-			verifier, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
+			v, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
 			if err != nil {
 				if policy.Git.VerifySignatures == documents.VerificationRequired {
 					return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s verify_signatures=required but verifier unavailable: %w", root, err)
@@ -186,6 +172,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 					"error", err,
 				)
 			} else {
+				verifier = v
 				if opts.RootVerifiers == nil {
 					opts.RootVerifiers = make(map[string]documents.RootVerifier)
 				}
@@ -198,6 +185,23 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 				opts.RootWriters = make(map[string]documents.RootWriter)
 			}
 			opts.RootWriters[root] = writer
+		}
+
+		// Expose revision history for any git-backed root: prefer the signing
+		// store, otherwise the verify-only verifier. Both satisfy
+		// provenance.Reader, so a required verify-only root is inspectable too.
+		var reviser *documentRootProvenanceReviser
+		switch {
+		case writer != nil:
+			reviser = &documentRootProvenanceReviser{reader: writer.store, prefix: writer.prefix}
+		case verifier != nil:
+			reviser = &documentRootProvenanceReviser{reader: verifier.verifier, prefix: verifier.prefix}
+		}
+		if reviser != nil {
+			if opts.RootRevisers == nil {
+				opts.RootRevisers = make(map[string]documents.RootReviser)
+			}
+			opts.RootRevisers[root] = reviser
 		}
 	}
 	return opts, nil
