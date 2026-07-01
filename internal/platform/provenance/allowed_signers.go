@@ -125,6 +125,15 @@ func RenderAllowedSigners(agentPublicKey string, operators []TrustedSigner) (str
 // duplicates), so a config that violates them fails here rather than silently
 // weakening verification.
 func (s *Store) ReconcileAllowedSigners(ctx context.Context, operators []TrustedSigner) (bool, error) {
+	// This reconcile writes and commits the repo-local trust file. When the
+	// Store verifies against an external allowed_signers file, that file is
+	// not in the worktree and cannot be committed — reconciling the
+	// repo-local file would write a trust surface git never consults. Refuse
+	// rather than silently diverge; out-of-tree trust is a separate path.
+	if s.allowedSignersPath != "" {
+		return false, fmt.Errorf("ReconcileAllowedSigners: store verifies against an external allowed_signers file (%s); in-tree reconcile does not apply", s.allowedSignersPath)
+	}
+
 	desired, err := RenderAllowedSigners(s.signer.PublicKey(), operators)
 	if err != nil {
 		return false, fmt.Errorf("render allowed_signers: %w", err)
@@ -147,14 +156,58 @@ func (s *Store) ReconcileAllowedSigners(ctx context.Context, operators []Trusted
 	if string(current) == desired {
 		return false, nil
 	}
-	if err := os.WriteFile(path, []byte(desired), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte(desired), 0o644); err != nil {
 		return false, fmt.Errorf("write .allowed_signers: %w", err)
+	}
+	// Re-validate after the rename: a swapped symlink would have been
+	// replaced by our regular file, but confirm the invariant still holds.
+	if err := validateAllowedSignersFile(path); err != nil {
+		return false, err
 	}
 	if _, err := s.commitFiles(ctx, []string{".allowed_signers"}, "reconcile allowed_signers"); err != nil {
 		return false, fmt.Errorf("commit .allowed_signers: %w", err)
 	}
 	s.logger.Info("reconciled allowed_signers", "operator_entries", len(operators))
 	return true, nil
+}
+
+// atomicWriteFile writes data to path atomically: it writes a temp file in the
+// same directory, fsyncs it, renames it into place, then fsyncs the directory
+// so a crash cannot leave a partial or truncated file. Renaming over the
+// target also collapses the symlink/regular-file TOCTOU window — the result is
+// always the regular file we wrote.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".allowed_signers-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // best-effort cleanup; a no-op once renamed
+
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // renderSignerLine builds one allowed_signers line:
@@ -183,34 +236,45 @@ func renderSignerLine(principal, blob, comment, validAfter, validBefore string) 
 }
 
 // renderValidityOptions renders the comma-joined OpenSSH options field for a
-// validity window, or "" when neither bound is set.
+// validity window, or "" when neither bound is set. Config already validates
+// the window, but this renderer is a security-sensitive seam other callers can
+// reach, so it independently enforces that valid_after is strictly before
+// valid_before rather than emit an options field that violates the contract.
 func renderValidityOptions(validAfter, validBefore string) (string, error) {
 	var opts []string
+	var after, before time.Time
+	haveAfter, haveBefore := false, false
+
 	if v := strings.TrimSpace(validAfter); v != "" {
-		ts, err := opensshTime(v)
+		t, ts, err := opensshTime(v)
 		if err != nil {
 			return "", fmt.Errorf("valid_after: %w", err)
 		}
+		after, haveAfter = t, true
 		opts = append(opts, `valid-after="`+ts+`"`)
 	}
 	if v := strings.TrimSpace(validBefore); v != "" {
-		ts, err := opensshTime(v)
+		t, ts, err := opensshTime(v)
 		if err != nil {
 			return "", fmt.Errorf("valid_before: %w", err)
 		}
+		before, haveBefore = t, true
 		opts = append(opts, `valid-before="`+ts+`"`)
+	}
+	if haveAfter && haveBefore && !after.Before(before) {
+		return "", fmt.Errorf("valid_after must be strictly before valid_before")
 	}
 	return strings.Join(opts, ","), nil
 }
 
-// opensshTime converts an RFC3339 timestamp to OpenSSH's allowed_signers time
-// format (YYYYMMDDHHMMSSZ, UTC).
-func opensshTime(rfc3339 string) (string, error) {
+// opensshTime parses an RFC3339 timestamp and returns both the parsed time and
+// its rendering in OpenSSH's allowed_signers time format (YYYYMMDDHHMMSSZ, UTC).
+func opensshTime(rfc3339 string) (time.Time, string, error) {
 	t, err := time.Parse(time.RFC3339, rfc3339)
 	if err != nil {
-		return "", fmt.Errorf("%q must be an RFC3339 timestamp: %w", rfc3339, err)
+		return time.Time{}, "", fmt.Errorf("%q must be an RFC3339 timestamp: %w", rfc3339, err)
 	}
-	return t.UTC().Format("20060102150405Z"), nil
+	return t, t.UTC().Format("20060102150405Z"), nil
 }
 
 // canonicalKeyBlob parses an authorized_keys-form public key and returns its

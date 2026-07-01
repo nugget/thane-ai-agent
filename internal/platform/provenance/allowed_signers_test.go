@@ -134,6 +134,17 @@ func TestRenderAllowedSigners_Rejections(t *testing.T) {
 			ops:   []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey + "\n" + testBobKey}},
 			want:  "exactly one SSH public key",
 		},
+		{
+			name:  "inverted validity window",
+			agent: testAgentKey,
+			ops: []TrustedSigner{{
+				Principal:   "alice@example.com",
+				PublicKey:   testAliceKey,
+				ValidAfter:  "2027-01-01T00:00:00Z",
+				ValidBefore: "2026-01-01T00:00:00Z",
+			}},
+			want: "strictly before",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -232,6 +243,29 @@ func TestReconcileAllowedSignersCommitsUnionAndIsIdempotent(t *testing.T) {
 	}
 	if after := headHash(t, s); after != before {
 		t.Fatalf("HEAD moved on idempotent reconcile: %s -> %s", before, after)
+	}
+}
+
+// TestReconcileAllowedSignersRejectsExternalTrustFile confirms the in-tree
+// reconcile refuses to run when the Store verifies against an external
+// allowed_signers file it could not commit anyway.
+func TestReconcileAllowedSignersRejectsExternalTrustFile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	signer := testSigner(t)
+	allowedPath := filepath.Join(dir, "allowed_signers")
+	if err := os.WriteFile(allowedPath, []byte(AgentPrincipal+" "+signer.PublicKey()+"\n"), 0o644); err != nil {
+		t.Fatalf("write external allowed_signers: %v", err)
+	}
+	s, err := NewWithOptions(filepath.Join(dir, "repo"), signer, slog.Default(), Options{AllowedSignersPath: allowedPath})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+	_, err = s.ReconcileAllowedSigners(t.Context(), []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}})
+	if err == nil || !strings.Contains(err.Error(), "external allowed_signers") {
+		t.Fatalf("ReconcileAllowedSigners error = %v, want external-file rejection", err)
 	}
 }
 
