@@ -317,25 +317,110 @@ func TestSyncBlockedDetachedHead(t *testing.T) {
 	}
 }
 
-func TestAssertAnchorOutsideTree(t *testing.T) {
+// newInTreeStore builds a signing store that verifies against its own in-tree
+// .allowed_signers (no external anchor) — the default trust model for a
+// remote-synced root. ensureRepo bootstraps the file with the signer's key, so
+// the signer's own commits verify as trusted.
+func newInTreeStore(t *testing.T, signer *SSHFileSigner) *Store {
+	t.Helper()
+	s, err := New(t.TempDir(), signer, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+// TestSyncInTreeFastForward proves a trusted fast-forward works with the
+// in-tree .allowed_signers and no configured out-of-tree anchor.
+func TestSyncInTreeFastForward(t *testing.T) {
+	thane := testSigner(t)
+	local := newInTreeStore(t, thane)
+	writeStore(t, local, "a.md", "a\n")
+	base := headSHA(t, local.path)
+	branch := headBranch(t, local.path)
+
+	writeStore(t, local, "b.md", "b\n")
+	writeStore(t, local, "c.md", "c\n")
+	tip := headSHA(t, local.path)
+	remote := cloneBare(t, local.path)
+	runGit(t, local.path, "reset", "--hard", base)
+
+	res, err := local.Sync(t.Context(), SyncRequest{RemoteURL: remote, Branch: branch, Mode: SyncModeBidirectional, RequireVerify: true})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Outcome != SyncFastForwarded {
+		t.Fatalf("Outcome = %q, want fast_forwarded (detail %q)", res.Outcome, res.Detail)
+	}
+	if got := headSHA(t, local.path); got != tip {
+		t.Fatalf("local head = %s, want %s", shorten(got), shorten(tip))
+	}
+}
+
+// TestSyncInTreeBlockedLaundering is the load-bearing test for the in-tree
+// trust model: a laundered range A(trusted)-X(untrusted)-T(trusted) is blocked
+// exactly as with an out-of-tree anchor. Verification runs against HEAD's
+// in-tree .allowed_signers — a fetch never rewrites the worktree before the
+// range is checked — so the attacker's middle commit is judged against a trust
+// set that does not contain its key, and local never moves.
+func TestSyncInTreeBlockedLaundering(t *testing.T) {
+	thane := testSigner(t)
+	local := newInTreeStore(t, thane)
+	writeStore(t, local, "a.md", "a\n") // C1, thane-signed
+	branch := headBranch(t, local.path)
+	base := headSHA(t, local.path)
+
+	remote := cloneWorktree(t, local.path)
+
+	// C2 signed by an attacker key absent from the in-tree .allowed_signers.
+	attacker := testSigner(t)
+	attackerStore, err := New(remote, attacker, slog.Default())
+	if err != nil {
+		t.Fatalf("attacker store: %v", err)
+	}
+	writeStore(t, attackerStore, "x.md", "x\n")
+
+	// C3 signed by thane (trusted) on top — so the tip verifies.
+	thaneRemote, err := New(remote, thane, slog.Default())
+	if err != nil {
+		t.Fatalf("thane remote store: %v", err)
+	}
+	writeStore(t, thaneRemote, "t.md", "t\n")
+
+	res, err := local.Sync(t.Context(), SyncRequest{RemoteURL: remote, Branch: branch, Mode: SyncModeBidirectional, RequireVerify: true})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Outcome != SyncBlocked {
+		t.Fatalf("Outcome = %q, want blocked (detail %q)", res.Outcome, res.Detail)
+	}
+	if !strings.Contains(res.Detail, "not trusted") {
+		t.Fatalf("Detail = %q, want an untrusted-commit reason", res.Detail)
+	}
+	if headSHA(t, local.path) != base {
+		t.Fatalf("local head moved despite a blocked in-tree laundering attempt")
+	}
+}
+
+func TestAssertAnchorPlacement(t *testing.T) {
 	repo := t.TempDir()
 
-	// Empty anchor → refuse.
+	// Empty anchor → permitted (in-tree .allowed_signers).
 	s := &Store{path: repo, allowedSignersPath: "", logger: slog.Default()}
-	if err := s.assertAnchorOutsideTree(); err == nil {
-		t.Fatal("empty anchor accepted, want error")
+	if err := s.assertAnchorPlacement(); err != nil {
+		t.Fatalf("empty (in-tree) anchor rejected: %v", err)
 	}
 
-	// In-tree anchor → refuse.
-	s = &Store{path: repo, allowedSignersPath: filepath.Join(repo, ".allowed_signers"), logger: slog.Default()}
-	if err := s.assertAnchorOutsideTree(); err == nil {
-		t.Fatal("in-tree anchor accepted, want error")
+	// A configured anchor inside the tree → refuse.
+	s = &Store{path: repo, allowedSignersPath: filepath.Join(repo, "sub", "anchor"), logger: slog.Default()}
+	if err := s.assertAnchorPlacement(); err == nil {
+		t.Fatal("in-tree configured anchor accepted, want error")
 	}
 
-	// Out-of-tree anchor → ok.
+	// A configured anchor outside the tree → ok.
 	outside := filepath.Join(t.TempDir(), "anchor")
 	s = &Store{path: repo, allowedSignersPath: outside, logger: slog.Default()}
-	if err := s.assertAnchorOutsideTree(); err != nil {
+	if err := s.assertAnchorPlacement(); err != nil {
 		t.Fatalf("out-of-tree anchor rejected: %v", err)
 	}
 }
@@ -359,14 +444,14 @@ func TestAnchorContainmentSymlinkLeaf(t *testing.T) {
 	// Anchor reached through the symlink, with a not-yet-created leaf: the
 	// symlinked parent must resolve to realRepo so this is caught as in-tree.
 	s := &Store{path: realRepo, allowedSignersPath: filepath.Join(linkRepo, ".allowed_signers"), logger: slog.Default()}
-	if err := s.assertAnchorOutsideTree(); err == nil {
+	if err := s.assertAnchorPlacement(); err == nil {
 		t.Fatal("anchor reaching the repo through a symlink (non-existent leaf) accepted; want in-tree rejection")
 	}
 
 	// A genuinely out-of-tree anchor with a not-yet-created leaf under a
 	// not-yet-created parent is still accepted.
 	s = &Store{path: realRepo, allowedSignersPath: filepath.Join(base, "elsewhere", "sub", "anchor"), logger: slog.Default()}
-	if err := s.assertAnchorOutsideTree(); err != nil {
+	if err := s.assertAnchorPlacement(); err != nil {
 		t.Fatalf("out-of-tree anchor with non-existent leaf rejected: %v", err)
 	}
 }

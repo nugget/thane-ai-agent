@@ -53,8 +53,9 @@ type SyncRequest struct {
 	// Mode selects fetch-only vs bidirectional.
 	Mode SyncMode
 	// RequireVerify hard-gates every fast-forward on signature verification
-	// against the store's out-of-tree allowed-signers anchor. It must be
-	// true for any signed root synced from an untrusted remote; it does not
+	// against the store's allowed-signers trust set — the in-tree
+	// .allowed_signers, or a configured out-of-tree anchor. It must be true
+	// for any signed root synced from an untrusted remote; it does not
 	// downgrade to advisory ("warn") for a worktree-mutating fast-forward.
 	RequireVerify bool
 }
@@ -79,10 +80,11 @@ type SyncResult struct {
 // bidirectional local lead) a push performed outside the lock.
 //
 // The security posture, enforced step by step below, is: the remote is
-// untrusted transport; trust is decided per-commit against an out-of-tree
-// anchor over the exact incoming range; the branch only ever moves forward;
-// and the engine never force-pushes nor rewrites local history. A hostile or
-// broken remote can, at worst, leave the pass Blocked or Diverged — never
+// untrusted transport; trust is decided per-commit against the store's
+// allowed-signers trust set over the exact incoming range; the branch only
+// ever moves forward; and the engine never force-pushes nor rewrites local
+// history. A hostile or broken remote can, at worst, leave the pass Blocked or
+// Diverged — never
 // corrupt the signed document root.
 func (s *Store) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) {
 	if err := checkRemoteArg("remote url", req.RemoteURL); err != nil {
@@ -130,11 +132,14 @@ func (s *Store) syncLocked(ctx context.Context, req SyncRequest) (SyncResult, st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Fail closed on the trust anchor before touching any git state. Re-run
-	// every pass (not once at construction): the anchor path is compared
-	// against the live, post-fetch worktree.
+	// Fail closed on trust-file placement before verifying or integrating. The
+	// fetch has already run, but it touched only objects and the tracking ref,
+	// not the worktree — so .allowed_signers is still HEAD's version here,
+	// which is exactly why the in-tree file is permitted. A configured external
+	// anchor must resolve outside the worktree. Re-checked every pass, not once
+	// at construction.
 	if req.RequireVerify {
-		if err := s.assertAnchorOutsideTree(); err != nil {
+		if err := s.assertAnchorPlacement(); err != nil {
 			return SyncResult{}, "", err
 		}
 	}
@@ -228,7 +233,8 @@ func (s *Store) fastForwardLocked(ctx context.Context, req SyncRequest, res Sync
 	}
 
 	// Verify EVERY incoming commit (localHead..remoteHead) against the
-	// out-of-tree anchor, fail-closed. This runs before the branch moves.
+	// allowed-signers trust set, fail-closed. This runs before the branch
+	// moves, so the trust file is still HEAD's version.
 	if req.RequireVerify {
 		commits, err := s.rangeCommits(ctx, res.LocalHead, res.RemoteHead)
 		if err != nil {

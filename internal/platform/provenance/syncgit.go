@@ -14,7 +14,7 @@ import (
 // This file holds the low-level git plumbing the fast-forward-only sync
 // engine in sync.go composes: range enumeration and per-commit verification,
 // the fast-forward and push operations, ref/branch resolution, and the
-// out-of-tree trust-anchor containment check.
+// allowed-signers trust-file placement check.
 
 // rangeCommits lists the commits reachable from `to` but not from `from`
 // (git rev-list from..to) with no history-pruning flags, so every commit —
@@ -34,11 +34,12 @@ func (s *Store) rangeCommits(ctx context.Context, from, to string) ([]string, er
 	return strings.Fields(buf.String()), nil
 }
 
-// firstUntrusted verifies each commit against the store's out-of-tree anchor
+// firstUntrusted verifies each commit against the store's allowed-signers
+// trust set (the in-tree .allowed_signers, or a configured out-of-tree anchor)
 // and returns a reason for the first one that is not trusted, or "" if all
 // pass. Trust keys strictly on CommitSigner.Verified (git %G?=="G"): a valid
-// signature by a key absent from the anchor (a "U" verdict) is untrusted. Any
-// verification error is treated as untrusted (fail-closed), never skipped.
+// signature by a key absent from the trust set (a "U" verdict) is untrusted.
+// Any verification error is treated as untrusted (fail-closed), never skipped.
 func (s *Store) firstUntrusted(ctx context.Context, commits []string) string {
 	for _, sha := range commits {
 		cs, err := signerFor(ctx, s.path, s.allowedSignersPath, sha)
@@ -194,19 +195,28 @@ func (s *Store) worktreeMatchesHead(ctx context.Context) (bool, error) {
 	return false, err
 }
 
-// assertAnchorOutsideTree fails closed unless the store's allowed-signers
-// anchor is configured and resolves strictly outside the repository working
-// tree. A remote-synced root's trust set must live out-of-tree: an in-tree
-// .allowed_signers is a file a fetch can rewrite, which would let a pushed
-// commit add an attacker key and self-authorize. Both paths are resolved to
-// absolute, symlink-free form before a component-wise containment check.
-func (s *Store) assertAnchorOutsideTree() error {
+// assertAnchorPlacement fails closed if the store's verification trust file
+// sits somewhere a fetch could rewrite before it is consulted.
+//
+// An empty allowedSignersPath means verification uses the repository's in-tree
+// .allowed_signers, which is permitted: the sync engine's fetch writes only
+// objects and the remote-tracking ref, never the worktree, so the in-tree file
+// stays at HEAD's version while the incoming range is verified. Every commit
+// is checked against the pre-integration trust set, and the worktree only
+// advances (via the fast-forward) after verification passes — so an incoming
+// commit cannot rewrite the very file that authorizes it.
+//
+// A configured external anchor is a deliberate out-of-tree trust file and MUST
+// resolve strictly outside the worktree; one that resolves inside is a
+// misconfiguration a fetch could rewrite, so it is refused. Paths are resolved
+// to absolute, symlink-free form before a component-wise containment check.
+func (s *Store) assertAnchorPlacement() error {
 	anchor := strings.TrimSpace(s.allowedSignersPath)
 	if anchor == "" {
-		return fmt.Errorf("remote-synced verification requires an out-of-tree allowed-signers anchor, but the store has none (an in-tree .allowed_signers is rewritable by a fetch)")
+		return nil // in-tree .allowed_signers; safe under fetch-before-verify
 	}
 	if isWithin(resolveReal(s.path), resolveReal(anchor)) {
-		return fmt.Errorf("allowed-signers anchor %q resolves inside the synced tree %q; a fetch could rewrite the trust set and self-authorize", anchor, s.path)
+		return fmt.Errorf("configured allowed-signers anchor %q resolves inside the synced tree %q; move it outside the worktree, or leave it unset to use the in-tree .allowed_signers", anchor, s.path)
 	}
 	return nil
 }
