@@ -132,10 +132,12 @@ func (s *Store) syncLocked(ctx context.Context, req SyncRequest) (SyncResult, st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Fail closed on trust-file placement before touching any git state. The
-	// in-tree .allowed_signers is permitted (a fetch never rewrites the
-	// worktree before verification); a configured external anchor must resolve
-	// outside the worktree. Re-checked every pass, not once at construction.
+	// Fail closed on trust-file placement before verifying or integrating. The
+	// fetch has already run, but it touched only objects and the tracking ref,
+	// not the worktree — so .allowed_signers is still HEAD's version here,
+	// which is exactly why the in-tree file is permitted. A configured external
+	// anchor must resolve outside the worktree. Re-checked every pass, not once
+	// at construction.
 	if req.RequireVerify {
 		if err := s.assertAnchorPlacement(); err != nil {
 			return SyncResult{}, "", err
