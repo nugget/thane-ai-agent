@@ -44,9 +44,14 @@ type haListEntityItem struct {
 // time since the last state change; updated is set only when the last attribute
 // update meaningfully post-dates that change.
 func haRecencyDelta(s homeassistant.State, now time.Time) (since, updated string) {
-	if !s.LastChanged.IsZero() {
-		since = promptfmt.FormatDeltaOnly(s.LastChanged, now)
+	// Without a last-changed timestamp there is no meaningful recency signal:
+	// return neither field rather than deriving a nonsense delta against the
+	// zero time — which would also let `updated` populate while `since` stays
+	// empty, since LastUpdated.Sub(zero) is an enormous duration.
+	if s.LastChanged.IsZero() {
+		return "", ""
 	}
+	since = promptfmt.FormatDeltaOnly(s.LastChanged, now)
 	if !s.LastUpdated.IsZero() && s.LastUpdated.Sub(s.LastChanged) > time.Second {
 		updated = promptfmt.FormatDeltaOnly(s.LastUpdated, now)
 	}
