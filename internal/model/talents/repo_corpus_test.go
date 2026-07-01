@@ -148,6 +148,14 @@ var nonToolTokens = map[string]struct{}{
 	"ai_summary":       {},
 	"ha_companion_app": {},
 
+	// Record timestamp/soft-delete column names that appear backticked in
+	// talent prose (e.g. the contacts surface). They are person-record
+	// fields, not tools. The matcher flags `deleted_at` because its second
+	// segment `at` is also the second segment of the doc_at revision tool.
+	"deleted_at": {},
+	"created_at": {},
+	"updated_at": {},
+
 	// Notification record field name (UUID identifying an outstanding
 	// actionable). Appears as a parameter on resolve_actionable and
 	// as an annotation in conversation history. The matcher flags it

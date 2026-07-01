@@ -84,6 +84,15 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 		}
 	}
 
+	// The complementary check: a native tool registered but missing from the
+	// tool catalog carries no capability tag and is silently never offered to
+	// the model. This runs against the fully-assembled registry, so it catches
+	// the gap for every tool from every package (see uncataloguedNativeTools).
+	if missing := uncataloguedNativeTools(a.loop.Tools()); len(missing) > 0 {
+		logger.Error("native tools registered but absent from the tool catalog; they carry no capability tag and will NOT be offered to the model — add them to internal/model/toolcatalog/catalog.go with the right tags",
+			"tools", missing, "count", len(missing))
+	}
+
 	// Audit operator-excluded tools that downstream wiring expects to
 	// be available. Personas/talents and the orchestrator allowlist
 	// are the most common silent-breakage paths when an exclude turns
