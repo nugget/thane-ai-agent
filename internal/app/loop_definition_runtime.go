@@ -745,6 +745,28 @@ func (a *App) launchLoopDefinition(ctx context.Context, name string, launch loop
 	return a.loopDefinitionRuntime.LaunchDefinition(ctx, name, launch)
 }
 
+// loopViewByID resolves a live loop id to its canonical LoopView for the
+// self-context provider (#1106 B3). It prefers the definition view — where
+// policy, eligibility, and effective_* are already resolved with live telemetry
+// overlaid — and falls back to a live projection for ephemeral, definition-less
+// loops. Returns ok=false for an id with no live loop.
+func (a *App) loopViewByID(loopID string) (looppkg.LoopView, bool) {
+	if a == nil || a.loopRegistry == nil {
+		return looppkg.LoopView{}, false
+	}
+	st, ok := a.loopRegistry.StatusByID(loopID)
+	if !ok {
+		return looppkg.LoopView{}, false
+	}
+	if view := a.loopDefinitionView(); view != nil {
+		if def, ok := looppkg.FindDefinitionView(view, st.Name); ok && def.Loop != nil {
+			return *def.Loop, true
+		}
+	}
+	resolver := looppkg.NewLoopViewResolver(a.loopRegistry.Statuses(), nil, time.Now())
+	return resolver.FromStatus(st), true
+}
+
 func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
 	if a == nil {
 		return nil
