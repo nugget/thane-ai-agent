@@ -310,11 +310,19 @@ func (r *Registry) handleSpawnLoop(ctx context.Context, args map[string]any) (st
 	if err != nil {
 		return "", err
 	}
-	return ldMarshalToolJSON(map[string]any{
+	out := map[string]any{
 		"status":     "ok",
 		"result":     result,
 		"completion": completion,
-	})
+	}
+	// Surface the spawned loop's canonical row (#1106 B2): the live instance
+	// while it runs, else its captured final status for a synchronous spawn.
+	if lv, ok := r.loopViewByID(result.LoopID); ok {
+		out["loop"] = lv
+	} else if result.FinalStatus != nil {
+		out["loop"] = r.loopViewFromStatus(*result.FinalStatus)
+	}
+	return ldMarshalToolJSON(out)
 }
 
 func parseNextSleepDurationArg(args map[string]any) (time.Duration, string, error) {
@@ -390,7 +398,9 @@ func (r *Registry) handleStopLoop(_ context.Context, args map[string]any) (strin
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status": "ok",
-		"loop":   status,
+		// status is the pre-stop snapshot; project it to the canonical row so
+		// stop_loop returns the same loop shape as every other surface (#1106 B2).
+		"loop": r.loopViewFromStatus(status),
 	})
 }
 

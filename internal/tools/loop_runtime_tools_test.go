@@ -137,6 +137,88 @@ func TestSpawnLoopRejectsTopLevelModelOverride(t *testing.T) {
 	}
 }
 
+func TestSpawnLoopReturnsCanonicalLoopView(t *testing.T) {
+	live := looppkg.NewRegistry(looppkg.WithMaxLoops(3))
+	spawned, err := looppkg.New(looppkg.Config{
+		Name:      "adhoc_task",
+		Task:      "do a thing",
+		Operation: looppkg.OperationBackgroundTask,
+	}, looppkg.Deps{Runner: noopLoopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := live.Register(spawned); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopRuntimeTools(LoopRuntimeToolDeps{
+		Registry: live,
+		LaunchLoop: func(_ context.Context, _ looppkg.Launch) (looppkg.LaunchResult, error) {
+			return looppkg.LaunchResult{LoopID: spawned.ID(), Operation: looppkg.OperationBackgroundTask, Detached: true}, nil
+		},
+	})
+
+	out, err := reg.Get("spawn_loop").Handler(context.Background(), map[string]any{
+		"launch": map[string]any{
+			"spec": map[string]any{"task": "do a thing", "operation": "background_task"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("spawn_loop: %v", err)
+	}
+
+	var resp struct {
+		Status string         `json:"status"`
+		Loop   map[string]any `json:"loop"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("unmarshal spawn_loop: %v", err)
+	}
+	if resp.Loop == nil {
+		t.Fatal("spawn_loop should surface the spawned loop's canonical row (#1106 B2)")
+	}
+	if resp.Loop["name"] != "adhoc_task" {
+		t.Errorf("loop.name = %v, want adhoc_task", resp.Loop["name"])
+	}
+	// Canonical LoopView, not the raw LaunchResult — policy_state is LoopView-only.
+	if _, ok := resp.Loop["policy_state"]; !ok {
+		t.Errorf("spawn_loop loop should be a canonical LoopView, got %#v", resp.Loop)
+	}
+	if resp.Loop["operation"] != "background_task" {
+		t.Errorf("loop.operation = %v, want background_task", resp.Loop["operation"])
+	}
+}
+
+func TestLoopViewFromStatus_ResolvesAncestryOfDeregisteredLoop(t *testing.T) {
+	// stop_loop captures a loop's status before deregistering it, so by the time
+	// the result is projected the loop is gone from the live batch. Its parent
+	// (still live) must resolve, and ancestry must not come back empty just
+	// because the loop's own id is no longer in the batch.
+	parent, err := looppkg.New(looppkg.Config{Name: "watchers", Operation: looppkg.OperationContainer}, looppkg.Deps{Runner: noopLoopRunner{}})
+	if err != nil {
+		t.Fatalf("New(parent): %v", err)
+	}
+	live := looppkg.NewRegistry(looppkg.WithMaxLoops(3))
+	if err := live.Register(parent); err != nil {
+		t.Fatalf("Register(parent): %v", err)
+	}
+	reg := NewEmptyRegistry()
+	reg.ConfigureLoopRuntimeTools(LoopRuntimeToolDeps{Registry: live})
+
+	captured := looppkg.Status{
+		ID: "lp_child", Name: "child", ParentID: parent.ID(),
+		State: looppkg.State("sleeping"), Config: looppkg.Config{Operation: looppkg.OperationService},
+	}
+	lv := reg.loopViewFromStatus(captured)
+	if lv.ParentName == nil || *lv.ParentName != "watchers" {
+		t.Errorf("parent_name = %v, want watchers", lv.ParentName)
+	}
+	if len(lv.Ancestry) != 1 || lv.Ancestry[0] != "watchers" {
+		t.Errorf("ancestry = %v, want [watchers] — a deregistered loop's parent link must still resolve", lv.Ancestry)
+	}
+}
+
 func TestSetNextSleepForCurrentServiceLoop(t *testing.T) {
 	deps := newTestLoopRuntimeDeps(t)
 	live := deps.live.GetByName("battery_watch")
@@ -304,13 +386,21 @@ func TestLoopStatusFiltersAndStopLoop(t *testing.T) {
 	}
 	var stopped struct {
 		Status string         `json:"status"`
-		Loop   looppkg.Status `json:"loop"`
+		Loop   map[string]any `json:"loop"`
 	}
 	if err := json.Unmarshal([]byte(stopOut), &stopped); err != nil {
 		t.Fatalf("unmarshal stop_loop: %v", err)
 	}
-	if stopped.Loop.Name != "battery_watch" {
+	if stopped.Loop["name"] != "battery_watch" {
 		t.Fatalf("stopped loop = %#v, want battery_watch", stopped.Loop)
+	}
+	// B2: stop_loop now returns the stopped loop's canonical LoopView, not the
+	// raw Status it used to emit — policy_state is a LoopView-only field.
+	if _, ok := stopped.Loop["policy_state"]; !ok {
+		t.Errorf("stop_loop should return the canonical LoopView, got %#v", stopped.Loop)
+	}
+	if stopped.Loop["operation"] != "service" {
+		t.Errorf("stopped loop.operation = %v, want service (normalized)", stopped.Loop["operation"])
 	}
 	if deps.live.ActiveCount() != 1 {
 		t.Fatalf("ActiveCount after stop = %d, want 1", deps.live.ActiveCount())
