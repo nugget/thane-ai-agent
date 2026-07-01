@@ -77,6 +77,7 @@ type Registry struct {
 	lensStore          *LensStore
 	logIndexDB         *sql.DB
 	workingMemoryStore *memory.WorkingMemoryStore
+	archiveStore       *memory.ArchiveStore
 
 	channelReactionHandlers map[string]ChannelReactionFunc
 
@@ -1343,6 +1344,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	var matchEntityIDs []string
 	var matchStates []homeassistant.State
 	total := 0
+	now := time.Now()
 	prefix := ""
 	if domain != "" {
 		prefix = domain + "."
@@ -1364,6 +1366,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 			EntityID: s.EntityID,
 			State:    s.State,
 		}
+		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly
 		}

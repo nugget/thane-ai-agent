@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
@@ -198,10 +199,12 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 		}
 	}
 
+	now := time.Now()
 	items := make([]haListEntityItem, 0, len(candidates))
 	for i := range candidates {
 		s := candidates[i]
 		item := haListEntityItem{EntityID: s.EntityID, State: s.State}
+		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly
 		}

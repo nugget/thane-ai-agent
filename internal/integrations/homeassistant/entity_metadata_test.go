@@ -102,8 +102,8 @@ func TestEntityMetadataResolverJoinsPhysicalContext(t *testing.T) {
 	if got.Visibility == nil || !got.Visibility.Enabled || !got.Visibility.Visible {
 		t.Fatalf("Visibility = %#v, want enabled and visible", got.Visibility)
 	}
-	if got.Visibility.ContextRole != "default" || !got.Visibility.DefaultContext {
-		t.Fatalf("Visibility role/default = %q/%v, want default/true", got.Visibility.ContextRole, got.Visibility.DefaultContext)
+	if got.Visibility.ContextRole != "default" {
+		t.Fatalf("Visibility role = %q, want default", got.Visibility.ContextRole)
 	}
 
 	wantLabels := map[string]string{
@@ -147,9 +147,6 @@ func TestEntityMetadataResolverProjectsVisibility(t *testing.T) {
 	if got.Visibility.Visible {
 		t.Errorf("Visible = true, want false for hidden entity")
 	}
-	if got.Visibility.DefaultContext {
-		t.Errorf("DefaultContext = true, want false for hidden entity")
-	}
 	if got.Visibility.ContextRole != "hidden" {
 		t.Errorf("ContextRole = %q, want hidden", got.Visibility.ContextRole)
 	}
@@ -172,16 +169,14 @@ func TestEntityMetadataResolverVisibilityContextRoles(t *testing.T) {
 
 	resolver := NewEntityMetadataResolver(nil, nil, nil)
 	tests := []struct {
-		name        string
-		entry       EntityRegistryEntry
-		wantRole    string
-		wantDefault bool
+		name     string
+		entry    EntityRegistryEntry
+		wantRole string
 	}{
 		{
-			name:        "default",
-			entry:       EntityRegistryEntry{EntityID: "light.office"},
-			wantRole:    "default",
-			wantDefault: true,
+			name:     "default",
+			entry:    EntityRegistryEntry{EntityID: "light.office"},
+			wantRole: "default",
 		},
 		{
 			name:     "diagnostic",
@@ -205,8 +200,8 @@ func TestEntityMetadataResolverVisibilityContextRoles(t *testing.T) {
 			if got == nil || got.Visibility == nil {
 				t.Fatalf("MetadataForEntity returned %#v, want visibility", got)
 			}
-			if got.Visibility.ContextRole != tt.wantRole || got.Visibility.DefaultContext != tt.wantDefault {
-				t.Fatalf("role/default = %q/%v, want %q/%v", got.Visibility.ContextRole, got.Visibility.DefaultContext, tt.wantRole, tt.wantDefault)
+			if got.Visibility.ContextRole != tt.wantRole {
+				t.Fatalf("role = %q, want %q", got.Visibility.ContextRole, tt.wantRole)
 			}
 		})
 	}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
-	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
 func newMinimalLoop() *Loop {
@@ -32,7 +31,7 @@ func TestBuildSystemPrompt_EgoFileIncluded(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetEgoFile(egoPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, content) {
 		t.Error("system prompt should contain ego.md content")
@@ -61,7 +60,7 @@ literal ego body
 	l := newMinimalLoop()
 	l.SetEgoFile(egoPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "literal ego body") {
 		t.Fatal("system prompt should contain ego.md body")
@@ -90,7 +89,7 @@ func TestBuildSystemPrompt_AxiomsFileIncludedBeforePersona(t *testing.T) {
 	l.persona = "PERSONA_MARKER"
 	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
 
-	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", nil, llm.DefaultModelInteractionProfile())
+	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", llm.DefaultModelInteractionProfile())
 
 	if !strings.Contains(prompt, content) {
 		t.Error("system prompt should contain axioms.md content")
@@ -114,7 +113,7 @@ func TestBuildSystemPrompt_AxiomsFileMissing(t *testing.T) {
 	l := newMinimalLoop()
 	l.ensureCoreContextProvider().updateAxiomsFile(filepath.Join(t.TempDir(), "nonexistent.md"))
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "axioms.md") {
 		t.Error("system prompt should not contain axioms section when file is missing")
@@ -131,7 +130,7 @@ func TestBuildSystemPrompt_AxiomsFileEmpty(t *testing.T) {
 	l := newMinimalLoop()
 	l.ensureCoreContextProvider().updateAxiomsFile(axiomsPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "axioms.md") {
 		t.Error("system prompt should not contain axioms section when file is empty")
@@ -149,7 +148,7 @@ func TestBuildSystemPrompt_PersonaFileIncludedAndReread(t *testing.T) {
 	l.persona = "PERSONA_FALLBACK"
 	l.ensureCoreContextProvider().updatePersonaFile(personaPath)
 
-	prompt1 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt1 := l.buildSystemPrompt(context.Background(), "hello")
 	if !strings.Contains(prompt1, "PERSONA_VERSION_1") {
 		t.Fatalf("prompt missing persona file content:\n%s", prompt1)
 	}
@@ -160,7 +159,7 @@ func TestBuildSystemPrompt_PersonaFileIncludedAndReread(t *testing.T) {
 	if err := os.WriteFile(personaPath, []byte("PERSONA_VERSION_2"), 0o644); err != nil {
 		t.Fatalf("rewrite persona.md: %v", err)
 	}
-	prompt2 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt2 := l.buildSystemPrompt(context.Background(), "hello")
 	if strings.Contains(prompt2, "PERSONA_VERSION_1") || !strings.Contains(prompt2, "PERSONA_VERSION_2") {
 		t.Fatalf("persona file should be reread each turn:\n%s", prompt2)
 	}
@@ -171,7 +170,7 @@ func TestBuildSystemPrompt_PersonaFileMissingUsesFallback(t *testing.T) {
 	l.persona = "PERSONA_FALLBACK"
 	l.ensureCoreContextProvider().updatePersonaFile(filepath.Join(t.TempDir(), "missing.md"))
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "PERSONA_FALLBACK") {
 		t.Fatalf("missing persona file should use fallback persona:\n%s", prompt)
@@ -188,7 +187,7 @@ func TestBuildSystemPrompt_PersonaFileReadErrorLogsWarning(t *testing.T) {
 	l.persona = "PERSONA_FALLBACK"
 	l.ensureCoreContextProvider().updatePersonaFile(personaPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "PERSONA_FALLBACK") {
 		t.Fatalf("unreadable persona file should use fallback persona:\n%s", prompt)
@@ -213,7 +212,7 @@ func TestBuildSystemPrompt_MissionFileIncluded(t *testing.T) {
 	l := newMinimalLoop()
 	l.ensureCoreContextProvider().updateMissionFile(missionPath)
 
-	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", nil, llm.DefaultModelInteractionProfile())
+	prompt, sections := l.buildSystemPromptWithProfileSections(context.Background(), "hello", llm.DefaultModelInteractionProfile())
 
 	if !strings.Contains(prompt, content) {
 		t.Error("system prompt should contain mission.md content")
@@ -232,7 +231,7 @@ func TestBuildSystemPrompt_MissionFileMissingAndEmpty(t *testing.T) {
 	l := newMinimalLoop()
 	l.ensureCoreContextProvider().updateMissionFile(filepath.Join(t.TempDir(), "missing.md"))
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 	if strings.Contains(prompt, "mission.md") {
 		t.Fatalf("missing mission file should not render section:\n%s", prompt)
 	}
@@ -243,7 +242,7 @@ func TestBuildSystemPrompt_MissionFileMissingAndEmpty(t *testing.T) {
 		t.Fatalf("write mission.md: %v", err)
 	}
 	l.ensureCoreContextProvider().updateMissionFile(missionPath)
-	prompt = l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt = l.buildSystemPrompt(context.Background(), "hello")
 	if strings.Contains(prompt, "mission.md") {
 		t.Fatalf("empty mission file should not render section:\n%s", prompt)
 	}
@@ -253,7 +252,7 @@ func TestBuildSystemPrompt_EgoFileMissing(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetEgoFile(filepath.Join(t.TempDir(), "nonexistent.md"))
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "ego.md") {
 		t.Error("system prompt should not contain ego section when file is missing")
@@ -270,7 +269,7 @@ func TestBuildSystemPrompt_EgoFileEmpty(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetEgoFile(egoPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "ego.md") {
 		t.Error("system prompt should not contain ego section when file is empty")
@@ -290,7 +289,7 @@ func TestBuildSystemPrompt_EgoFileTruncated(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetEgoFile(egoPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "truncated") {
 		t.Error("system prompt should contain truncation marker for oversized ego.md")
@@ -304,7 +303,7 @@ func TestBuildSystemPrompt_NoEgoFile(t *testing.T) {
 	l := newMinimalLoop()
 	// egoFile not set — default empty string
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "ego.md") {
 		t.Error("system prompt should not contain ego section when egoFile is not set")
@@ -314,7 +313,7 @@ func TestBuildSystemPrompt_NoEgoFile(t *testing.T) {
 func TestBuildSystemPrompt_RuntimeContractIncluded(t *testing.T) {
 	l := newMinimalLoop()
 
-	prompt := l.buildSystemPrompt(context.Background(), "summarize kb:article.md", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "summarize kb:article.md")
 
 	if !strings.Contains(prompt, "## Runtime Contract") {
 		t.Fatal("system prompt should contain runtime contract section")
@@ -342,7 +341,7 @@ func TestBuildSystemPrompt_InjectFilesIncluded(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetInjectFiles([]string{f1, f2})
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "key fact") {
 		t.Error("system prompt should contain first inject file content")
@@ -377,7 +376,7 @@ literal context body
 	l := newMinimalLoop()
 	l.SetInjectFiles([]string{f})
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if !strings.Contains(prompt, "literal context body") {
 		t.Fatal("system prompt should contain inject file body")
@@ -411,7 +410,7 @@ func TestBuildSystemPrompt_InjectFilesVerifierBlocks(t *testing.T) {
 	l.SetInjectFiles([]string{f})
 	l.UseInjectFileVerifier(rejectingInjectFileVerifier{}.VerifyPath)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "blocked context") {
 		t.Fatal("system prompt should not contain content rejected by the inject-file verifier")
@@ -429,7 +428,7 @@ func TestBuildSystemPrompt_InjectFilesRereadOnChange(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetInjectFiles([]string{f})
 
-	prompt1 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt1 := l.buildSystemPrompt(context.Background(), "hello")
 	if !strings.Contains(prompt1, "version-1") {
 		t.Fatal("first prompt should contain version-1")
 	}
@@ -437,7 +436,7 @@ func TestBuildSystemPrompt_InjectFilesRereadOnChange(t *testing.T) {
 	// Modify the file between turns.
 	os.WriteFile(f, []byte("version-2"), 0644)
 
-	prompt2 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt2 := l.buildSystemPrompt(context.Background(), "hello")
 	if strings.Contains(prompt2, "version-1") {
 		t.Error("second prompt should not contain stale version-1")
 	}
@@ -450,7 +449,7 @@ func TestBuildSystemPrompt_InjectFilesMissing(t *testing.T) {
 	l := newMinimalLoop()
 	l.SetInjectFiles([]string{filepath.Join(t.TempDir(), "nonexistent.md")})
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "Injected Context") {
 		t.Error("system prompt should not contain injected context section when all files are missing")
@@ -461,7 +460,7 @@ func TestBuildSystemPrompt_InjectFilesEmpty(t *testing.T) {
 	l := newMinimalLoop()
 	// injectFiles not set — default nil
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(context.Background(), "hello")
 
 	if strings.Contains(prompt, "Injected Context") {
 		t.Error("system prompt should not contain injected context section when no files configured")
@@ -485,14 +484,12 @@ func TestBuildSystemPrompt_TaskModeOmitsIdentityContinuityContext(t *testing.T) 
 	l.SetInjectFiles([]string{injectPath})
 
 	ctx := agentctx.WithPromptMode(context.Background(), agentctx.PromptModeTask)
-	history := []memory.Message{{Role: "user", Content: "HISTORY_MARKER"}}
-	prompt := l.buildSystemPrompt(ctx, "hello", history)
+	prompt := l.buildSystemPrompt(ctx, "hello")
 
 	for _, marker := range []string{
 		"PERSONA_MARKER",
 		"EGO_MARKER",
 		"INJECT_MARKER",
-		"HISTORY_MARKER",
 		"Self-Reflection (ego.md)",
 		"Injected Context",
 		"Conversation History",

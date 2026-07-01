@@ -230,36 +230,6 @@ func HydrateSpec(spec loop.Spec, _ Config, opts Opts) loop.Spec {
 	return spec
 }
 
-// BuildSpec returns a [loop.Spec] that implements the metacognitive
-// loop as a service loop. The per-iteration prompt is the spec Task
-// ([prompts.MetacognitiveBaseTemplate]) and the supervisor-turn prefix
-// is the declarative SupervisorProfile.Instructions; HydrateSpec adds
-// the PostIterate iteration-log writer.
-func BuildSpec(cfg Config, opts Opts) loop.Spec {
-	return HydrateSpec(DefinitionSpec(cfg), cfg, opts)
-}
-
-// BuildLoopConfig returns the engine-facing [loop.Config] view of the
-// metacognitive loop. Kept as a compatibility shim for callers that
-// work directly with [loop.Config] rather than [loop.Spec].
-func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
-	spec := BuildSpec(cfg, opts)
-	out := spec.ToConfig()
-	profileHints := spec.Profile.RoutingFactors()
-	if len(profileHints) > 0 {
-		if out.RoutingFactors == nil {
-			out.RoutingFactors = make(map[string]string, len(profileHints))
-		}
-		for k, v := range profileHints {
-			out.RoutingFactors[k] = v
-		}
-	}
-	if spec.Profile.DelegationGating != "" {
-		out.DelegationGating = spec.Profile.DelegationGating
-	}
-	return out
-}
-
 // metacogExcludeTools lists tools that the metacognitive loop should not
 // have access to. File tools are replaced by the declared durable output
 // tool, exec is unnecessary and dangerous, session management is for

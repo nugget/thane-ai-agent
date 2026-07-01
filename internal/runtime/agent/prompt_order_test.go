@@ -57,9 +57,9 @@ func TestBuildSystemPromptSections_FullPromptUsesInvertedPyramidOrder(t *testing
 	_, sections := l.buildSystemPromptWithProfileSections(
 		testCtxForLoop(l),
 		"hello",
-		nil,
-		llm.DefaultModelInteractionProfile(),
-	)
+
+		llm.DefaultModelInteractionProfile())
+
 	index := promptSectionIndex(t, sections)
 	assertPromptSectionsStartAtContent(t, sections)
 
@@ -131,9 +131,9 @@ func TestBuildSystemPromptSections_TaskPromptUsesCompactOrder(t *testing.T) {
 	_, sections := l.buildSystemPromptWithProfileSections(
 		ctx,
 		"hello",
-		nil,
-		llm.DefaultModelInteractionProfile(),
-	)
+
+		llm.DefaultModelInteractionProfile())
+
 	index := promptSectionIndex(t, sections)
 	assertPromptSectionsStartAtContent(t, sections)
 
@@ -189,9 +189,8 @@ func TestBuildSystemPromptSections_CoreFileBudgetTruncation(t *testing.T) {
 	_, sections := l.buildSystemPromptWithProfileSections(
 		context.Background(),
 		"hello",
-		nil,
-		llm.DefaultModelInteractionProfile(),
-	)
+
+		llm.DefaultModelInteractionProfile())
 
 	assertPromptSectionContains(t, sections, "AXIOMS", "axioms.md truncated")
 	assertPromptSectionContains(t, sections, "PERSONA", "persona.md truncated")
