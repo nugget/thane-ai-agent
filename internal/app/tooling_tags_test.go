@@ -350,3 +350,25 @@ func TestMergeTalentMenuHints_PreservesExistingKBHint(t *testing.T) {
 		t.Fatalf("next_tags = %#v, want existing KB next_tags", hint.NextTags)
 	}
 }
+
+// TestUncataloguedNativeTools verifies the choke-point guard: a native,
+// non-core tool with no catalog entry is flagged (it would carry no capability
+// tag and never be offered), while catalogued tools, Core tools, and non-native
+// provider tools are correctly excluded.
+func TestUncataloguedNativeTools(t *testing.T) {
+	reg := tools.NewEmptyRegistry()
+	// Native + catalogued (Register enriches Source/Tags from the catalog).
+	reg.Register(&tools.Tool{Name: "doc_read"})
+	// Native + NOT catalogued — the bug this guard exists to catch.
+	reg.Register(&tools.Tool{Name: "totally_uncatalogued_tool_xyz"})
+	// Core tools are exempt from tag filtering, so absence is fine.
+	reg.Register(&tools.Tool{Name: "core_meta_tool_xyz", Core: true})
+	// Provider tools declare a non-native source and are intentionally absent.
+	reg.Register(&tools.Tool{Name: "provider_tool_xyz", Source: "mcp"})
+
+	got := uncataloguedNativeTools(reg)
+	want := []string{"totally_uncatalogued_tool_xyz"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("uncataloguedNativeTools = %v, want %v", got, want)
+	}
+}

@@ -48,6 +48,34 @@ type resolvedCapabilityTags struct {
 // Excluded tools are surfaced in resolvedCapabilityTags.ExcludedTools
 // with State{Status: "excluded"} so views that opt in (?include=excluded
 // or thane caps show --excluded) can render them.
+// uncataloguedNativeTools returns the names of registered native, non-core
+// tools that have no toolcatalog entry. Registry.Register enriches a tool's
+// capability tags from the catalog and defaults an unrecognized tool to the
+// native source with no tags — so a native tool missing from the catalog is
+// registered yet carries no tag, and is silently never offered to a tag-gated
+// model (the doc_history/doc_diff/doc_at gap from #1136, and loop_reparent
+// before it). This is the one choke point that catches that for every tool
+// from every package: provider and dynamic tools (mcp, companion, …) set a
+// non-native Source and are intentionally absent from the static catalog, so
+// they are excluded, and Core tools are exempt from tag filtering entirely.
+func uncataloguedNativeTools(reg *tools.Registry) []string {
+	if reg == nil {
+		return nil
+	}
+	var missing []string
+	for _, name := range reg.AllToolNames() {
+		t := reg.Get(name)
+		if t == nil || t.Core || t.Source != string(toolcatalog.NativeToolSource) {
+			continue
+		}
+		if _, ok := toolcatalog.LookupBuiltinToolSpec(name); !ok {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
 func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.CapabilityTagConfig) resolvedCapabilityTags {
 	out := resolvedCapabilityTags{
 		Configs:       make(map[string]config.CapabilityTagConfig),
