@@ -49,7 +49,7 @@ func TestNativeToolLiteralsAreCatalogued(t *testing.T) {
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
-			if !ok || !isToolLiteralType(lit.Type) {
+			if !ok || !isToolLiteralType(lit.Type, f.Name.Name) {
 				return true
 			}
 			name, ok := stringFieldValue(lit, "Name")
@@ -80,13 +80,15 @@ func TestNativeToolLiteralsAreCatalogued(t *testing.T) {
 	}
 }
 
-// isToolLiteralType reports whether a composite-literal type is tools.Tool:
-// the bare `Tool` (inside package tools) or the qualified `tools.Tool`
-// (everywhere else).
-func isToolLiteralType(expr ast.Expr) bool {
+// isToolLiteralType reports whether a composite-literal type is tools.Tool.
+// The bare `Tool` form is only tools.Tool inside package tools itself, so
+// pkgName gates it — otherwise another package's unrelated `Tool` type would
+// be misclassified and cause a false failure. Elsewhere only the qualified
+// `tools.Tool` selector matches.
+func isToolLiteralType(expr ast.Expr, pkgName string) bool {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		return t.Name == "Tool"
+		return t.Name == "Tool" && pkgName == "tools"
 	case *ast.SelectorExpr:
 		pkg, ok := t.X.(*ast.Ident)
 		return ok && pkg.Name == "tools" && t.Sel.Name == "Tool"
