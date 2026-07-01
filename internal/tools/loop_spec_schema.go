@@ -45,7 +45,7 @@ func loopSpecSchema(description string) map[string]any {
 			"profile": loopProfileSchema("Routing and request-shaping for normal (non-supervisor) iterations."),
 			"supervisor": map[string]any{
 				"type":        "boolean",
-				"description": "Enable periodic supervisor turns: a per-wake Bernoulli trial promotes the iteration to a more capable, non-local model. Note: a model-authored (overlay) loop may be barred from self-enabling this; config-sourced loops set it freely.",
+				"description": "Enable periodic supervisor turns: a per-wake Bernoulli trial promotes the iteration to a more capable, non-local model.",
 			},
 			"supervisor_prob": map[string]any{
 				"type":        "number",
