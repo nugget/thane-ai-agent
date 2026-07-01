@@ -352,8 +352,11 @@ existing tracker covers the work:
 ## Follow a repo for event-driven wakes
 
 `forge_repo_follow` wakes a loop on new releases and/or commits. Use
-after identifying or creating a `thane_curate` loop that owns the
-output — see `loops_examples_curate` for the curate-loop shape.
+after identifying or creating a `thane_loop_create` service loop
+(`operation="service"`) that owns the output — see
+`loops_examples_curate` for the service-loop shape. The output document
+is optional now, so a service loop can consume these wakes without
+maintaining one.
 
 ```json
 {

@@ -187,4 +187,8 @@ var egoExcludeTools = append([]string{
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
 	"tag_activate", "tag_deactivate",
+	// A reflective loop must not stand up new durable loops; thane_loop_create is
+	// Core (#1106 A), so it has to be excluded by name rather than gated behind
+	// the `loops` capability the ego can't activate.
+	"thane_loop_create",
 }, tools.DirectHumanEgressToolNames()...)

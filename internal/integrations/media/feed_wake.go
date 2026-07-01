@@ -120,7 +120,7 @@ func loadFeedWakeTarget(state *opstate.Store, feedID string) (messages.LoopWakeT
 }
 
 func feedWakeTargetDefinition() map[string]any {
-	return messages.LoopWakeTargetSchema("Loop to receive event-source wakes when this feed has new entries. Omit to default to the built-in media-default-handler triage loop; point at a custom loop (e.g. a thane_curate-managed document) to override.")
+	return messages.LoopWakeTargetSchema("Loop to receive event-source wakes when this feed has new entries. Omit to default to the built-in media-default-handler triage loop; point at a custom loop (e.g. a thane_loop_create-managed document) to override.")
 }
 
 func feedWakeTargetJSON(target messages.LoopWakeTarget, ok bool) map[string]any {

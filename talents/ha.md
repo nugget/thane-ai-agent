@@ -506,9 +506,9 @@ config backups but annoying; double-check the ID first.
   "do this once right now."
 - For automations that should run inside a Thane loop instead of
   HA's engine (richer model-driven logic, document outputs,
-  multi-step reasoning), bounce to `loops_examples` — `thane_curate`
-  is the alternative when HA's automation YAML can't express the
-  judgment you need.
+  multi-step reasoning), bounce to `loops_examples` — `thane_loop_create`
+  with `operation="service"` is the alternative when HA's automation
+  YAML can't express the judgment you need.
 - For HA-event → Thane-loop wake patterns (an automation that
   needs to *tell a Thane loop something happened* rather than act
   itself), the bridge is MQTT: the automation publishes via

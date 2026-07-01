@@ -16,7 +16,7 @@ const NowToolDescription = "Synchronously delegate a bounded task to a sub-agent
 	"Uses compact task context by default; set context_mode=full only for continuity-sensitive work. " +
 	"Blocks until the delegate completes or exhausts its budget. " +
 	"For fire-and-forget background work, use thane_assign instead. " +
-	"For recurring document-anchored work on a schedule, use thane_curate."
+	"For recurring document-anchored work on a schedule, create a durable loop with thane_loop_create (operation=service)."
 
 // AssignToolDescription is the LLM-facing description for thane_assign,
 // the async one-shot member of the thane_* family.
@@ -24,7 +24,7 @@ const AssignToolDescription = "Assign a bounded task to a sub-agent that runs in
 	"Use when the work will take long enough that the calling model should not block waiting — multi-step investigation, deferred report generation, anything where the caller wants to move on while the delegate completes. " +
 	"Uses compact task context by default; set context_mode=full only for continuity-sensitive work. " +
 	"For an answer needed in this turn, use thane_now. " +
-	"For recurring scheduled work, use thane_curate."
+	"For recurring scheduled work, create a durable loop with thane_loop_create (operation=service)."
 
 // NowToolDefinition returns the JSON schema for thane_now.
 func NowToolDefinition() map[string]any {

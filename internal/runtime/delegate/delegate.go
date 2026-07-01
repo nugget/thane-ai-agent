@@ -39,8 +39,20 @@ var delegateFamilyToolNames = []string{
 	"thane_assign",
 }
 
+// loopCreationToolNames are the durable-loop-creation tools excluded from
+// delegate registries. A delegate is ephemeral "do work now" work; it must not
+// stand up a durable, self-perpetuating loop that outlives it — a strictly worse
+// escalation than the delegate recursion the family guard blocks.
+// thane_loop_create is Core (#1106 A) so it would otherwise reach every delegate
+// regardless of tags; spawn_loop stays here defensively even though it is
+// loops-tagged.
+var loopCreationToolNames = []string{
+	"thane_loop_create",
+	"spawn_loop",
+}
+
 func delegateToolExclusions() []string {
-	return mergeTagLists(delegateFamilyToolNames, tools.DirectHumanEgressToolNames())
+	return mergeTagLists(delegateFamilyToolNames, loopCreationToolNames, tools.DirectHumanEgressToolNames())
 }
 
 // Exhaustion reason constants are defined in the [iterate] package.

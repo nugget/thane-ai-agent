@@ -117,7 +117,7 @@ func (a *App) initStores(s *newState) error {
 
 	// --- Entity watchlist store ---
 	// Constructed early so later init phases (initChannels →
-	// ConfigureLoopIntentTools) can wire it into thane_curate for
+	// ConfigureLoopIntentTools) can wire it into thane_loop_create for
 	// loop-owned entity subscriptions. The associated tag/always context
 	// providers are registered in initAwareness, which uses a.watchlistStore.
 	watchlistStore, err := awareness.NewWatchlistStore(a.mem.DB(), logger)

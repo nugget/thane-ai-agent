@@ -11,9 +11,10 @@ import (
 )
 
 // containerTestRig wires the minimum slice of loop-intent and loop-
-// definition tooling needed to exercise thane_create_container and its
-// non-empty-delete refusal. It keeps a live loop registry around so the
-// tool's parent_name resolution and the delete refusal can find children.
+// definition tooling needed to exercise thane_loop_create (container
+// operation) and its non-empty-delete refusal. It keeps a live loop
+// registry around so the tool's parent_name resolution and the delete
+// refusal can find children.
 type containerTestRig struct {
 	reg       *Registry
 	defs      *looppkg.DefinitionRegistry
@@ -88,11 +89,11 @@ func newContainerTestRig(t *testing.T) *containerTestRig {
 		Reconcile:  func(_ context.Context, _ string) error { return nil },
 	})
 
-	// ConfigureLoopIntentTools refuses to register thane_curate when
-	// DocTools is nil, so register the create_container directly to keep
-	// the rig small.
-	if rig.reg.Get("thane_create_container") == nil {
-		t.Fatal("thane_create_container not registered; ConfigureLoopIntentTools wiring changed?")
+	// thane_loop_create is Core, so ConfigureLoopIntentTools registers it
+	// unconditionally — even with a nil DocTools (which the container
+	// operation never touches).
+	if rig.reg.Get("thane_loop_create") == nil {
+		t.Fatal("thane_loop_create not registered; ConfigureLoopIntentTools wiring changed?")
 	}
 	return rig
 }
@@ -105,13 +106,14 @@ func TestThaneCreateContainerStoresAndLaunches(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	out, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
-		"name":   "home_automation",
-		"intent": "Top-level container for all HA loops.",
-		"tags":   []any{"home", "ha"},
+	out, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
+		"name":      "home_automation",
+		"intent":    "Top-level container for all HA loops.",
+		"operation": "container",
+		"tags":      []any{"home", "ha"},
 	})
 	if err != nil {
-		t.Fatalf("thane_create_container: %v", err)
+		t.Fatalf("thane_loop_create: %v", err)
 	}
 	var resp map[string]any
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
@@ -149,9 +151,10 @@ func TestThaneCreateContainerNestsByName(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	if _, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
-		"name":   "outer",
-		"intent": "Outer.",
+	if _, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
+		"name":      "outer",
+		"intent":    "Outer.",
+		"operation": "container",
 	}); err != nil {
 		t.Fatalf("create outer: %v", err)
 	}
@@ -160,9 +163,10 @@ func TestThaneCreateContainerNestsByName(t *testing.T) {
 		t.Fatal("outer container not in live registry")
 	}
 
-	out, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
+	out, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
 		"name":        "inner",
 		"intent":      "Inner.",
+		"operation":   "container",
 		"parent_name": "outer",
 	})
 	if err != nil {
@@ -198,9 +202,10 @@ func TestThaneCreateContainerRejectsMissingParent(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	_, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
+	_, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
 		"name":        "child",
 		"intent":      "x",
+		"operation":   "container",
 		"parent_name": "no_such_container",
 	})
 	if err == nil || !strings.Contains(err.Error(), "no_such_container") {
@@ -216,9 +221,10 @@ func TestLoopDefinitionDeleteRefusesNonEmptyContainer(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	if _, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
-		"name":   "parent_container",
-		"intent": "Holds a child loop.",
+	if _, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
+		"name":      "parent_container",
+		"intent":    "Holds a child loop.",
+		"operation": "container",
 	}); err != nil {
 		t.Fatalf("create container: %v", err)
 	}
@@ -257,8 +263,8 @@ func TestLoopDefinitionDeleteRefusesNonEmptyContainer(t *testing.T) {
 }
 
 // TestThaneCreateContainerIdempotentRetry covers the retry contract:
-// calling thane_create_container a second time against an already-
-// running container (with the same parent) must short-circuit to the
+// calling thane_loop_create (container operation) a second time against
+// an already-running container (with the same parent) must short-circuit to the
 // existing loop_id instead of tripping
 // RunningDurableLoopOverridesError. This is the regression test for
 // the "ParentID in launch payload trips HasOverrides" bug.
@@ -266,16 +272,18 @@ func TestThaneCreateContainerIdempotentRetry(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	if _, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
-		"name":   "outer",
-		"intent": "Outer.",
+	if _, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
+		"name":      "outer",
+		"intent":    "Outer.",
+		"operation": "container",
 	}); err != nil {
 		t.Fatalf("create outer: %v", err)
 	}
 	create := func() string {
-		out, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
+		out, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
 			"name":        "inner",
 			"intent":      "Inner.",
+			"operation":   "container",
 			"parent_name": "outer",
 			"replace":     true,
 		})
@@ -303,9 +311,10 @@ func TestLoopDefinitionDeleteAllowsEmptyContainer(t *testing.T) {
 	t.Parallel()
 	rig := newContainerTestRig(t)
 
-	if _, err := rig.reg.Get("thane_create_container").Handler(context.Background(), map[string]any{
-		"name":   "empty_container",
-		"intent": "Holds nothing.",
+	if _, err := rig.reg.Get("thane_loop_create").Handler(context.Background(), map[string]any{
+		"name":      "empty_container",
+		"intent":    "Holds nothing.",
+		"operation": "container",
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

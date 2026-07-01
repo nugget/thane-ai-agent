@@ -46,7 +46,7 @@ type EntitySubscription struct {
 	TTLSeconds int `yaml:"ttl_seconds,omitempty" json:"ttl_seconds,omitempty"`
 
 	// AddedAt is when the subscription first landed on the spec. Every
-	// write-side helper (thane_curate creation, watch_entity,
+	// write-side helper (thane_loop_create creation, watch_entity,
 	// update_entity_subscriptions add, the legacy-rows migration)
 	// stamps a real timestamp; the field exists to make TTL countdown
 	// meaningful. Hand-authored Specs that leave it zero will not
@@ -107,7 +107,7 @@ const EffectiveOriginSelf = "self"
 // lets [Spec.UnmarshalJSON] guard hydration without depending on
 // the tools or awareness packages.
 //
-// Tool-boundary callers (thane_curate, update_entity_subscriptions,
+// Tool-boundary callers (thane_loop_create, update_entity_subscriptions,
 // watch_entity) and the awareness watchlist store have their own
 // normalizers that match this contract; consolidation is a
 // follow-up.

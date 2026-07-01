@@ -16,7 +16,7 @@ func (r *Registry) registerMediaFeedTools(ft *media.FeedTools) {
 
 	r.Register(&Tool{
 		Name:        "media_follow",
-		Description: "Follow an RSS/Atom feed or YouTube channel. New entries are detected during periodic polling and dispatched as event-source wakes to the built-in media-default-handler loop. Pass an explicit `wake_loop` to route wakes to a custom handler (e.g. a thane_curate-managed document) instead. Accepts direct RSS/Atom URLs or YouTube channel URLs (e.g., https://www.youtube.com/@ChannelName).",
+		Description: "Follow an RSS/Atom feed or YouTube channel. New entries are detected during periodic polling and dispatched as event-source wakes to the built-in media-default-handler loop. Pass an explicit `wake_loop` to route wakes to a custom handler (e.g. a thane_loop_create-managed document) instead. Accepts direct RSS/Atom URLs or YouTube channel URLs (e.g., https://www.youtube.com/@ChannelName).",
 		Parameters:  media.FollowDefinition(),
 		Handler:     ft.FollowHandler(),
 	})
