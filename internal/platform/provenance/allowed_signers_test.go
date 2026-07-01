@@ -269,6 +269,40 @@ func TestReconcileAllowedSignersRejectsExternalTrustFile(t *testing.T) {
 	}
 }
 
+// TestVerifyHead covers the boot round-trip: HEAD verifies against a trust
+// file that includes its signer, and fails against one that does not.
+func TestVerifyHead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	signer := testSigner(t)
+	s, err := New(dir, signer, slog.Default())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	// HEAD is signed by the agent key, which the bootstrapped trust file
+	// trusts — the round-trip passes.
+	if err := s.VerifyHead(t.Context()); err != nil {
+		t.Fatalf("VerifyHead on a well-formed repo: %v", err)
+	}
+
+	// Point the trust file at an unrelated key: HEAD's signer is no longer
+	// trusted, so the round-trip must fail.
+	other := testSigner(t)
+	if err := os.WriteFile(filepath.Join(dir, ".allowed_signers"),
+		[]byte(AgentPrincipal+" "+other.PublicKey()+"\n"), 0o644); err != nil {
+		t.Fatalf("overwrite .allowed_signers: %v", err)
+	}
+	if err := s.VerifyHead(t.Context()); err == nil {
+		t.Fatal("VerifyHead with an untrusted signer = nil, want error")
+	}
+}
+
 func headHash(t *testing.T, s *Store) string {
 	t.Helper()
 	var buf bytes.Buffer

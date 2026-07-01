@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -364,6 +366,42 @@ func TestBuildDocumentStoreOptionsNonBootstrapMissingDirStillErrors(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "does not exist on disk") {
 		t.Fatalf("error = %v, want does-not-exist message", err)
+	}
+}
+
+// TestApplyBootVerification locks in the boot round-trip's policy mapping: a
+// required root fails to construct on a verification failure, a warn root logs
+// and continues, verification-off is a no-op, and a passing check never errors.
+func TestApplyBootVerification(t *testing.T) {
+	sentinel := errors.New("verify HEAD failed")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for _, tc := range []struct {
+		name    string
+		mode    documents.VerificationMode
+		verErr  error
+		wantErr bool
+	}{
+		{"required + failure fails construction", documents.VerificationRequired, sentinel, true},
+		{"warn + failure continues", documents.VerificationWarn, sentinel, false},
+		{"none + failure is a no-op", documents.VerificationNone, sentinel, false},
+		{"required + success is a no-op", documents.VerificationRequired, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := applyBootVerification(tc.mode, "kb", tc.verErr, logger)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("applyBootVerification = nil, want error")
+				}
+				if !strings.Contains(err.Error(), "kb") {
+					t.Fatalf("error %q should name the root", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applyBootVerification = %v, want nil", err)
+			}
+		})
 	}
 }
 

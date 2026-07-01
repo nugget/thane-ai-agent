@@ -171,6 +171,22 @@ func (s *Store) ReconcileAllowedSigners(ctx context.Context, operators []Trusted
 	return true, nil
 }
 
+// VerifyHead confirms the repository's HEAD commit verifies as trusted against
+// the current allowed_signers file. Run it after reconciling the trust set as
+// a boot-time round-trip: git parses the whole allowed_signers file to verify
+// any commit, so this catches a malformed signer line or an OpenSSH version
+// that cannot parse a rendered option (such as a validity window) right away,
+// rather than letting it surface later as a silent verification failure on the
+// first managed read.
+func (s *Store) VerifyHead(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.git(ctx, nil, nil, "verify-commit", "HEAD"); err != nil {
+		return fmt.Errorf("verify HEAD against allowed_signers: %w", err)
+	}
+	return nil
+}
+
 // atomicWriteFile writes data to path atomically: it writes a temp file in the
 // same directory, fsyncs it, renames it into place, then fsyncs the directory
 // so a crash cannot leave a partial or truncated file. Renaming over the
