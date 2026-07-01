@@ -354,6 +354,13 @@ func buildValueNode(v reflect.Value, t reflect.Type, comments commentMap) *yaml.
 	// here, synthesize a zero value so the YAML block is still meaningful.
 	if t.Kind() == reflect.Pointer {
 		if v.IsNil() {
+			// A nil pointer to a composite (struct/map/slice) renders as an
+			// empty block that can trip fail-closed validation on parse; emit
+			// null so it round-trips back to a nil pointer. Scalar pointers
+			// keep a meaningful zero value.
+			if k := t.Elem().Kind(); k == reflect.Struct || k == reflect.Map || k == reflect.Slice {
+				return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+			}
 			zv := reflect.New(t.Elem()).Elem()
 			return buildValueNode(zv, t.Elem(), comments)
 		}

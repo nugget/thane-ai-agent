@@ -993,7 +993,8 @@ type DocumentRootGitRemoteConfig struct {
 	// https URL). Required.
 	URL string `yaml:"url"`
 
-	// Branch is the remote branch to track. Empty defaults to "main".
+	// Branch is the remote branch to track. Empty means the sync uses
+	// "main" (applied where the remote is consumed, not by config Load).
 	Branch string `yaml:"branch,omitempty"`
 
 	// Mode is required and explicit: "fetch" (pull the operator's signed
@@ -1002,7 +1003,8 @@ type DocumentRootGitRemoteConfig struct {
 	Mode string `yaml:"mode"`
 
 	// Interval is the sync poll cadence as a Go duration (e.g. "60s").
-	// Empty defaults to 60s; "0" disables the timer (manual/trigger-only).
+	// Empty means the sync uses 60s (applied where the remote is consumed,
+	// not by config Load); "0" disables the timer (manual/trigger-only).
 	Interval string `yaml:"interval,omitempty"`
 
 	// TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
@@ -2891,8 +2893,11 @@ func validateGitRemote(root string, git DocumentRootGitConfig) error {
 	return nil
 }
 
-// isSSHGitURL reports whether a git remote URL uses SSH transport (scp-like
-// user@host:path or ssh://…), as opposed to https/git.
+// isSSHGitURL reports whether a git remote URL uses SSH transport (an ssh://
+// URL or the scp-like [user@]host:path form), as opposed to https/git. It
+// mirrors git's own rule: a URL with no scheme is scp-like when its first
+// colon comes before any slash — which also catches the user-less "host:repo"
+// form that must still require pinned host keys.
 func isSSHGitURL(url string) bool {
 	u := strings.TrimSpace(url)
 	if strings.HasPrefix(u, "ssh://") {
@@ -2901,7 +2906,12 @@ func isSSHGitURL(url string) bool {
 	if strings.Contains(u, "://") {
 		return false
 	}
-	return strings.Contains(u, "@") && strings.Contains(u, ":")
+	colon := strings.IndexByte(u, ':')
+	if colon < 0 {
+		return false // a local path, no remote host
+	}
+	slash := strings.IndexByte(u, '/')
+	return slash < 0 || colon < slash
 }
 
 // validateSigning checks the shared operator allowed-signers block.

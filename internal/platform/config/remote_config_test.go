@@ -98,10 +98,12 @@ func TestIsSSHGitURL(t *testing.T) {
 		ssh bool
 	}{
 		{"aimee@pocket.hollowoak.net:Thane/kb.git", true},
+		{"pocket.hollowoak.net:Thane/kb.git", true}, // scp-like without a user
 		{"ssh://git@host/repo.git", true},
 		{"https://example.com/kb.git", false},
 		{"git://example.com/kb.git", false},
 		{"/local/path/repo.git", false},
+		{"./relative/path:notacolon.git", false}, // colon after a slash → local path
 	} {
 		if got := isSSHGitURL(tc.url); got != tc.ssh {
 			t.Fatalf("isSSHGitURL(%q) = %v, want %v", tc.url, got, tc.ssh)

@@ -258,35 +258,7 @@ roots:
       # remote. The remote is untrusted transport: it conveys commits but
       # never confers trust, which comes only from signature verification
       # against the out-of-tree trust_anchor. Ignored unless Enabled.
-      remote:
-        # URL is the remote git URL (SSH like user@host:path, ssh://…, or an
-        # https URL). Required.
-        url: ""
-        # Branch is the remote branch to track. Empty defaults to "main".
-        branch: ""
-        # Mode is required and explicit: "fetch" (pull the operator's signed
-        # commits in) or "bidirectional" (also push thane's own signed commits
-        # out). There is no default, so a one-way setup is never silent.
-        mode: ""
-        # Interval is the sync poll cadence as a Go duration (e.g. "60s").
-        # Empty defaults to 60s; "0" disables the timer (manual/trigger-only).
-        interval: ""
-        # TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
-        # verification checks against. It must live outside the synced tree so a
-        # fetched commit can never rewrite the trust set. See #1135.
-        trust_anchor: ""
-        # Auth carries transport credentials only — never commit-signing
-        # material.
-        auth:
-          # SSHKey is the private key path for SSH transport, passed via
-          # GIT_SSH_COMMAND with IdentitiesOnly. Must not equal git.signing_key.
-          ssh_key: ""
-          # KnownHosts is the pinned known_hosts file, required for an SSH url:
-          # host-key verification is strict, with no trust-on-first-use.
-          known_hosts: ""
-          # Token is an https personal access token. Documented, but SSH is the
-          # recommended transport.
-          token: ""
+      remote: null
   kb:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -356,14 +328,16 @@ roots:
         # URL is the remote git URL (SSH like user@host:path, ssh://…, or an
         # https URL). Required.
         url: aimee@pocket.hollowoak.net:Thane/knowledge.git
-        # Branch is the remote branch to track. Empty defaults to "main".
+        # Branch is the remote branch to track. Empty means the sync uses
+        # "main" (applied where the remote is consumed, not by config Load).
         branch: main
         # Mode is required and explicit: "fetch" (pull the operator's signed
         # commits in) or "bidirectional" (also push thane's own signed commits
         # out). There is no default, so a one-way setup is never silent.
         mode: bidirectional
         # Interval is the sync poll cadence as a Go duration (e.g. "60s").
-        # Empty defaults to 60s; "0" disables the timer (manual/trigger-only).
+        # Empty means the sync uses 60s (applied where the remote is consumed,
+        # not by config Load); "0" disables the timer (manual/trigger-only).
         interval: 60s
         # TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
         # verification checks against. It must live outside the synced tree so a
@@ -427,35 +401,7 @@ roots:
       # remote. The remote is untrusted transport: it conveys commits but
       # never confers trust, which comes only from signature verification
       # against the out-of-tree trust_anchor. Ignored unless Enabled.
-      remote:
-        # URL is the remote git URL (SSH like user@host:path, ssh://…, or an
-        # https URL). Required.
-        url: ""
-        # Branch is the remote branch to track. Empty defaults to "main".
-        branch: ""
-        # Mode is required and explicit: "fetch" (pull the operator's signed
-        # commits in) or "bidirectional" (also push thane's own signed commits
-        # out). There is no default, so a one-way setup is never silent.
-        mode: ""
-        # Interval is the sync poll cadence as a Go duration (e.g. "60s").
-        # Empty defaults to 60s; "0" disables the timer (manual/trigger-only).
-        interval: ""
-        # TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
-        # verification checks against. It must live outside the synced tree so a
-        # fetched commit can never rewrite the trust set. See #1135.
-        trust_anchor: ""
-        # Auth carries transport credentials only — never commit-signing
-        # material.
-        auth:
-          # SSHKey is the private key path for SSH transport, passed via
-          # GIT_SSH_COMMAND with IdentitiesOnly. Must not equal git.signing_key.
-          ssh_key: ""
-          # KnownHosts is the pinned known_hosts file, required for an SSH url:
-          # host-key verification is strict, with no trust-on-first-use.
-          known_hosts: ""
-          # Token is an https personal access token. Documented, but SSH is the
-          # recommended transport.
-          token: ""
+      remote: null
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
 # paths: {}
@@ -686,27 +632,12 @@ talents_dir: ./talents
 #       is how every wake delivers; the target's own Spec.Profile
 #       governs routing. Point this at "mqtt-default-handler" for the
 #       built-in triage loop when you don't have a bespoke handler.
-#       wake_loop:
-#         loop_id: ""
-#         name: ""
-#         force_supervisor: false
-#         priority: ""
-#         instructions: ""
-#         tags: []
+#       wake_loop: null
 #       Wake is the deprecated inline-routing form. Entries that use
 #       it are auto-migrated onto the default handler at config load
 #       (a one-shot upgrade). New subscriptions should declare
 #       WakeLoop directly instead.
-#       wake:
-#         model: ""
-#         quality_floor: 0
-#         mission: ""
-#         local_only: ""
-#         delegation_gating: ""
-#         prefer_speed: ""
-#         exclude_tools: []
-#         extra_hints: {}
-#         instructions: ""
+#       wake: null
 #       InitialTags is the deprecated companion to Wake. Migrated
 #       values flow into the resulting wake_loop target's Tags field
 #       at load time, so per-iteration capability tag activation
@@ -721,27 +652,12 @@ talents_dir: ./talents
 #       is how every wake delivers; the target's own Spec.Profile
 #       governs routing. Point this at "mqtt-default-handler" for the
 #       built-in triage loop when you don't have a bespoke handler.
-#       wake_loop:
-#         loop_id: ""
-#         name: ""
-#         force_supervisor: false
-#         priority: ""
-#         instructions: ""
-#         tags: []
+#       wake_loop: null
 #       Wake is the deprecated inline-routing form. Entries that use
 #       it are auto-migrated onto the default handler at config load
 #       (a one-shot upgrade). New subscriptions should declare
 #       WakeLoop directly instead.
-#       wake:
-#         model: ""
-#         quality_floor: 0
-#         mission: ""
-#         local_only: ""
-#         delegation_gating: ""
-#         prefer_speed: ""
-#         exclude_tools: []
-#         extra_hints: {}
-#         instructions: ""
+#       wake: null
 #       InitialTags is the deprecated companion to Wake. Migrated
 #       values flow into the resulting wake_loop target's Tags field
 #       at load time, so per-iteration capability tag activation
@@ -756,13 +672,7 @@ talents_dir: ./talents
 #       is how every wake delivers; the target's own Spec.Profile
 #       governs routing. Point this at "mqtt-default-handler" for the
 #       built-in triage loop when you don't have a bespoke handler.
-#       wake_loop:
-#         loop_id: ""
-#         name: ""
-#         force_supervisor: false
-#         priority: ""
-#         instructions: ""
-#         tags: []
+#       wake_loop: null
 #       Wake is the deprecated inline-routing form. Entries that use
 #       it are auto-migrated onto the default handler at config load
 #       (a one-shot upgrade). New subscriptions should declare
@@ -1252,16 +1162,7 @@ archivist:
 #       max_iter: 0
 #       supervisor: false
 #       supervisor_prob: 0.0
-#       supervisor_profile:
-#         model: ""
-#         quality_floor: 0
-#         mission: ""
-#         local_only: ""
-#         delegation_gating: ""
-#         prefer_speed: ""
-#         exclude_tools: []
-#         extra_hints: {}
-#         instructions: ""
+#       supervisor_profile: null
 #       on_retrigger: 0
 #       routing_factors: {}
 #       delegation_gating: ""
