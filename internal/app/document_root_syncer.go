@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -70,6 +71,39 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 		req.SSHCommand = provenance.BuildSSHCommand(resolve(sshKey), resolve(knownHosts))
 	}
 	return req
+}
+
+// buildDocRootSyncer constructs a per-root syncer from a root's git config,
+// driving the given engine (the root's provenance store). It returns (nil, nil)
+// when the root has no remote block. resolve expands configured paths.
+//
+// An out-of-tree trust_anchor is not yet wired: the default is the in-tree
+// .allowed_signers (which the sync engine verifies safely, since a fetch never
+// rewrites the worktree before verification), so a configured trust_anchor is
+// refused rather than silently ignored.
+func buildDocRootSyncer(root string, gitCfg config.DocumentRootGitConfig, engine syncEngine, registry *syncStateRegistry, resolve func(string) string, logger *slog.Logger) (*docRootSyncer, error) {
+	remote := gitCfg.Remote
+	if remote == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(remote.TrustAnchor) != "" {
+		return nil, fmt.Errorf("git.remote.trust_anchor (out-of-tree verification) is not yet wired; omit it to use the in-tree .allowed_signers")
+	}
+	interval, err := parseSyncInterval(remote.Interval)
+	if err != nil {
+		return nil, fmt.Errorf("git.remote.interval: %w", err)
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &docRootSyncer{
+		root:     root,
+		engine:   engine,
+		request:  buildSyncRequest(gitCfg, resolve),
+		interval: interval,
+		registry: registry,
+		logger:   logger.With("component", "docroot_syncer", "root", root),
+	}, nil
 }
 
 // syncState is the in-memory, per-root observed state of remote sync. It is

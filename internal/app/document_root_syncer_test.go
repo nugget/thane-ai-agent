@@ -148,6 +148,55 @@ func TestBuildSyncRequest(t *testing.T) {
 	})
 }
 
+func TestBuildDocRootSyncer(t *testing.T) {
+	reg := newSyncStateRegistry()
+	identity := func(s string) string { return s }
+
+	t.Run("nil remote yields nil syncer", func(t *testing.T) {
+		s, err := buildDocRootSyncer("kb", config.DocumentRootGitConfig{}, &fakeEngine{}, reg, identity, testLogger())
+		if err != nil || s != nil {
+			t.Fatalf("got (%v, %v), want (nil, nil)", s, err)
+		}
+	})
+
+	t.Run("trust_anchor is deferred with a clear error", func(t *testing.T) {
+		_, err := buildDocRootSyncer("kb", config.DocumentRootGitConfig{
+			Remote: &config.DocumentRootGitRemoteConfig{URL: "u", Mode: "fetch", TrustAnchor: "/anchor"},
+		}, &fakeEngine{}, reg, identity, testLogger())
+		if err == nil {
+			t.Fatal("trust_anchor accepted, want a not-yet-wired error")
+		}
+	})
+
+	t.Run("bad interval errors", func(t *testing.T) {
+		_, err := buildDocRootSyncer("kb", config.DocumentRootGitConfig{
+			Remote: &config.DocumentRootGitRemoteConfig{URL: "u", Mode: "fetch", Interval: "xyz"},
+		}, &fakeEngine{}, reg, identity, testLogger())
+		if err == nil {
+			t.Fatal("bad interval accepted")
+		}
+	})
+
+	t.Run("constructs with mapped request and interval", func(t *testing.T) {
+		s, err := buildDocRootSyncer("kb", config.DocumentRootGitConfig{
+			VerifySignatures: "required",
+			Remote:           &config.DocumentRootGitRemoteConfig{URL: "u", Mode: "bidirectional", Interval: "30s"},
+		}, &fakeEngine{}, reg, identity, testLogger())
+		if err != nil {
+			t.Fatalf("buildDocRootSyncer: %v", err)
+		}
+		if s.root != "kb" || s.interval != 30*time.Second {
+			t.Errorf("root=%q interval=%v, want kb/30s", s.root, s.interval)
+		}
+		if s.request.Mode != provenance.SyncModeBidirectional || !s.request.RequireVerify {
+			t.Errorf("request = %+v, want bidirectional + RequireVerify", s.request)
+		}
+		if s.registry != reg {
+			t.Error("registry not wired")
+		}
+	})
+}
+
 func TestSyncStateRegistry(t *testing.T) {
 	r := newSyncStateRegistry()
 

@@ -15,10 +15,11 @@ func TestValidateGitRemote(t *testing.T) {
 			VerifySignatures: "required",
 			SigningKey:       "/keys/signing_ed25519",
 			Remote: &DocumentRootGitRemoteConfig{
-				URL:         "aimee@pocket.hollowoak.net:Thane/kb.git",
-				Mode:        "bidirectional",
-				Interval:    "60s",
-				TrustAnchor: "/keys/kb.allowed_signers",
+				URL:      "aimee@pocket.hollowoak.net:Thane/kb.git",
+				Mode:     "bidirectional",
+				Interval: "60s",
+				// No trust_anchor: verification defaults to the in-tree
+				// .allowed_signers.
 				Auth: DocumentRootGitRemoteAuthConfig{
 					SSHKey:     "/keys/transport_ed25519",
 					KnownHosts: "/ssh/known_hosts",
@@ -49,7 +50,8 @@ func TestValidateGitRemote(t *testing.T) {
 		{"bidirectional requires sign_commits", func(g *DocumentRootGitConfig) { g.SignCommits = false }, "requires git.sign_commits"},
 		{"ssh url requires known_hosts", func(g *DocumentRootGitConfig) { g.Remote.Auth.KnownHosts = "" }, "known_hosts is required"},
 		{"transport key must differ from signing key", func(g *DocumentRootGitConfig) { g.Remote.Auth.SSHKey = g.SigningKey }, "must not be the same key"},
-		{"verify required needs trust_anchor", func(g *DocumentRootGitConfig) { g.Remote.TrustAnchor = "" }, "trust_anchor is required"},
+		{"verify required is valid without trust_anchor (in-tree default)", func(*DocumentRootGitConfig) {}, ""},
+		{"trust_anchor is config-optional", func(g *DocumentRootGitConfig) { g.Remote.TrustAnchor = "/keys/kb.allowed_signers" }, ""},
 		{"bad interval", func(g *DocumentRootGitConfig) { g.Remote.Interval = "soon" }, "interval"},
 		{"interval 0 disables timer", func(g *DocumentRootGitConfig) { g.Remote.Interval = "0" }, ""},
 	} {
