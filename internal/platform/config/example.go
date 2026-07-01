@@ -125,11 +125,10 @@ func ExampleConfig() *Config {
 						Label:     "Bob (kb co-author)",
 					}},
 					Remote: &DocumentRootGitRemoteConfig{
-						URL:         "aimee@pocket.hollowoak.net:Thane/knowledge.git",
-						Branch:      "main",
-						Mode:        "bidirectional",
-						Interval:    "60s",
-						TrustAnchor: "~/.thane/keys/kb.allowed_signers",
+						URL:      "aimee@pocket.hollowoak.net:Thane/knowledge.git",
+						Branch:   "main",
+						Mode:     "bidirectional",
+						Interval: "60s",
 						Auth: DocumentRootGitRemoteAuthConfig{
 							SSHKey:     "~/.thane/keys/transport_ed25519",
 							KnownHosts: "~/.thane/ssh/known_hosts",

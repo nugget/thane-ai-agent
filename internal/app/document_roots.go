@@ -203,6 +203,25 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			}
 			opts.RootRevisers[root] = reviser
 		}
+
+		// A remote-backed root gets a syncer driving the fast-forward-only
+		// engine on the writer's store — the same store the writer and reviser
+		// use, so its lock serializes sync against local writes. Sync needs the
+		// signing store, so a remote requires sign_commits.
+		if rootCfg.Git.Remote != nil {
+			if writer == nil {
+				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s.git.remote requires sign_commits (the sync engine needs the signing store)", root)
+			}
+			if a.syncRegistry == nil {
+				a.syncRegistry = newSyncStateRegistry()
+			}
+			resolve := func(p string) string { return resolvePath(p, resolver) }
+			syncer, err := buildDocRootSyncer(root, rootCfg.Git, writer.store, a.syncRegistry, resolve, logger)
+			if err != nil {
+				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s.git.remote: %w", root, err)
+			}
+			a.docRootSyncers = append(a.docRootSyncers, syncer)
+		}
 	}
 	return opts, nil
 }

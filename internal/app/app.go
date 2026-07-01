@@ -94,6 +94,8 @@ type App struct {
 	factStore                 *knowledge.Store
 	documentStore             *documents.Store
 	documentTools             *documents.Tools
+	docRootSyncers            []*docRootSyncer
+	syncRegistry              *syncStateRegistry
 	contactStore              *contacts.Store
 	watchlistStore            *awareness.WatchlistStore
 	loopQueue                 *loopqueue.Store

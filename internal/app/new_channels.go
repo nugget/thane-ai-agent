@@ -325,6 +325,22 @@ func (a *App) initChannels(s *newState) error {
 				go docStore.RunRefresher(ctx)
 				return nil
 			})
+
+			// Remote-backed roots sync on their own cadence. Wire the
+			// post-fast-forward re-index to the document store (now that it
+			// exists) and launch each syncer under the app lifecycle.
+			if len(a.docRootSyncers) > 0 {
+				refresh := func(ctx context.Context) error { return docStore.Refresh(ctx) }
+				for _, syncer := range a.docRootSyncers {
+					syncer.refresh = refresh
+				}
+				a.deferWorker("docroot-sync", func(ctx context.Context) error {
+					for _, syncer := range a.docRootSyncers {
+						go syncer.Run(ctx)
+					}
+					return nil
+				})
+			}
 			roots := sortedDocumentRootNames(documentRoots)
 			attrs := append([]slog.Attr{slog.Any("roots", roots)}, documentRootPolicyAttrs(docOptions, roots)...)
 			a.logger.LogAttrs(context.Background(), slog.LevelInfo, "document index enabled", attrs...)

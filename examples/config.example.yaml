@@ -342,7 +342,7 @@ roots:
         # TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
         # verification checks against. It must live outside the synced tree so a
         # fetched commit can never rewrite the trust set. See #1135.
-        trust_anchor: ~/.thane/keys/kb.allowed_signers
+        trust_anchor: ""
         # Auth carries transport credentials only — never commit-signing
         # material.
         auth:
