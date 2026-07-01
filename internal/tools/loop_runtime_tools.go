@@ -31,6 +31,7 @@ func (r *Registry) ConfigureLoopRuntimeTools(deps LoopRuntimeToolDeps) {
 	r.liveLoopRegistry = deps.Registry
 	r.launchLoop = deps.LaunchLoop
 	r.registerLoopRuntimeTools()
+	r.registerLoopContainers()
 }
 
 func (r *Registry) registerLoopRuntimeTools() {

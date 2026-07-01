@@ -389,7 +389,8 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 
 | Tool | Description |
 |------|-------------|
-| `loop_status` | Snapshot of currently running loops. |
+| `loop_status` | Snapshot of currently running loops, plus a parent→child `tree` projection over the whole registry. |
+| `loop_containers` | Placement directory of container loops (intent, child/descendant counts, conferred tags, sample children) — the loop-graph analog of `doc_roots`. |
 | `set_next_sleep` | From inside a service loop, request the next sleep duration. |
 | `spawn_loop` | Launch an ad-hoc loop from a definition and input. |
 | `stop_loop` | Stop a running loop. |
