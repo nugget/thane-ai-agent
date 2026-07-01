@@ -367,18 +367,24 @@ func (l *Loop) waitForEvent(ctx context.Context) (any, error) {
 		done <- waitResult{event: event, err: err}
 	}()
 
-	select {
-	case result := <-done:
-		return result.event, result.err
-	case <-l.wakeCh:
-		cancel()
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	for {
+		select {
+		case result := <-done:
+			return result.event, result.err
+		case <-l.wakeCh:
+			cancel()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return notifyWakeEvent{}, nil
+		case <-ctx.Done():
+			cancel()
+			return nil, ctx.Err()
+		case <-l.retuneCh:
+			// A retune is not an event: promote and keep waiting so
+			// conformance never burns an iteration.
+			l.promoteRetune()
 		}
-		return notifyWakeEvent{}, nil
-	case <-ctx.Done():
-		cancel()
-		return nil, ctx.Err()
 	}
 }
 
@@ -387,8 +393,10 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 	// loop next fires; clear it on wake so a processing loop never reports a
 	// stale deadline. A wakeCh notification can cut the sleep short — this is
 	// the *scheduled* deadline, not a guarantee.
+	start := time.Now()
+	deadline := start.Add(d)
 	l.mu.Lock()
-	l.sleepUntil = time.Now().Add(d)
+	l.sleepUntil = deadline
 	l.currentSleep = d
 	l.mu.Unlock()
 	defer func() {
@@ -398,15 +406,52 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 		l.mu.Unlock()
 	}()
 
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	case <-l.wakeCh:
-		return true
+	for {
+		timer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+			return true
+		case <-l.wakeCh:
+			timer.Stop()
+			return true
+		case <-l.retuneCh:
+			timer.Stop()
+			// Promote the pending retune and re-clamp this sleep as if
+			// the new envelope had governed it from the start: the
+			// planned duration is re-clamped (not re-jittered) into the
+			// edited envelope, and an overdue deadline wakes the loop
+			// now. A stale signal (retune already promoted at a run-loop
+			// promote point) re-clamps against an unchanged envelope — a
+			// no-op. An unset envelope (SleepMax zero: event-driven
+			// wait-error backoff) is left alone rather than clamped to
+			// zero, which would burn an iteration.
+			l.mu.Lock()
+			promoted := l.promoteRetuneLocked()
+			nd := d
+			if min := l.config.SleepMin; nd < min {
+				nd = min
+			}
+			if max := l.config.SleepMax; max > 0 && nd > max {
+				nd = max
+			}
+			deadline = start.Add(nd)
+			l.sleepUntil = deadline
+			l.currentSleep = nd
+			l.mu.Unlock()
+			if promoted {
+				l.deps.Logger.Info("loop retune applied",
+					"loop_id", l.id,
+					"loop_name", l.config.Name,
+					"resleep", nd.Round(time.Second).String(),
+				)
+			}
+			if !time.Now().Before(deadline) {
+				return true
+			}
+		}
 	}
 }
 
@@ -422,10 +467,16 @@ func (l *Loop) sleep(ctx context.Context, d time.Duration) bool {
 // drains the envelopes), false on context cancellation (the loop
 // should exit).
 func (l *Loop) waitForWake(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-l.wakeCh:
-		return true
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-l.wakeCh:
+			return true
+		case <-l.retuneCh:
+			// A retune is not a wake: promote and keep waiting so
+			// conformance never burns an iteration.
+			l.promoteRetune()
+		}
 	}
 }

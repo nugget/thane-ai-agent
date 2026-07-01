@@ -45,6 +45,10 @@ type LoopView struct {
 	Eligible     bool    `json:"eligible"`
 	EventDriven  bool    `json:"event_driven"`
 	HandlerOnly  bool    `json:"handler_only"`
+	// PendingRetune is true while a queued retune has not yet been promoted
+	// into the live config — in practice only while an in-flight turn is
+	// finishing under its previous config. Omitted when false.
+	PendingRetune bool `json:"pending_retune,omitempty"`
 
 	// ---- lifecycle / time (delta-oriented) ----
 	StartedDelta  *string `json:"started_delta"`
@@ -244,6 +248,7 @@ func applyLiveTelemetry(v *LoopView, s Status, now time.Time) {
 	// Take it from the Status so a running definition-backed row matches a
 	// FromStatus row exactly instead of re-deriving it from the spec operation.
 	v.EventDriven = s.EventDriven
+	v.PendingRetune = s.PendingRetune
 
 	iterations := s.Iterations
 	attempts := s.Attempts

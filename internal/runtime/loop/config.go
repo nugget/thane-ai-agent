@@ -611,6 +611,11 @@ type Status struct {
 	// (the persistable form that blocks on notification arrivals
 	// instead of a periodic sleep).
 	EventDriven bool `json:"event_driven,omitempty"`
+	// PendingRetune is true while a queued retune ([Loop.QueueRetune])
+	// has not yet been promoted into the live config — in practice only
+	// while an in-flight turn is finishing under its previous config.
+	// Sleeping and waiting loops promote (near-)immediately.
+	PendingRetune bool `json:"pending_retune,omitempty"`
 	// RecentIterations holds up to 10 completed iteration snapshots
 	// (newest first), used by the dashboard timeline.
 	RecentIterations []IterationSnapshot `json:"recent_iterations,omitempty"`

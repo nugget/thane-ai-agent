@@ -353,7 +353,14 @@ func staleRunningLoopNotice(name string, op looppkg.Operation) string {
 	if op == looppkg.OperationContainer {
 		return fmt.Sprintf("%q is currently running and keeps its launched-time config; changes from this write apply only after a full relaunch — NOT on the next wake. A container with live children cannot be stopped in place: reparent or stop its children first, then stop_loop and loop_definition_launch (or restart the process).", name)
 	}
-	return fmt.Sprintf("%q is currently running and keeps its launched-time config; changes from this write apply only after a full relaunch (stop_loop then loop_definition_launch, or process restart) — NOT on the loop's next wake.", name)
+	return fmt.Sprintf("%q is currently running and keeps its launched-time config; changes from this write apply only after a full relaunch (stop_loop then loop_definition_launch, or process restart) — NOT on the loop's next wake. For scalar retunes (task, model, instructions, sleep envelope, supervisor, max_iter), loop_definition_update applies live without a relaunch.", name)
+}
+
+// retuneAppliedNotice confirms live conformance after a successful
+// [looppkg.Loop.QueueRetune]: the stored spec and the running loop now
+// agree, with the sole exception of a turn already in flight.
+func retuneAppliedNotice(name string) string {
+	return fmt.Sprintf("%q is running; the edit is applied live — the next turn embodies it (a turn already in flight finishes under its previous config, and an in-flight sleep re-clamps to an edited envelope, waking now if overdue).", name)
 }
 
 // reusedRunningLoopLaunchNotice is the launch-side counterpart: the launch

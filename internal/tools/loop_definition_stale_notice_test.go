@@ -104,7 +104,12 @@ func TestLoopDefinitionSetNoNoticeWhenLoopNotRunning(t *testing.T) {
 	}
 }
 
-func TestLoopDefinitionUpdateNoticeWhenLoopRunning(t *testing.T) {
+// TestLoopDefinitionUpdateAppliesLiveRetune pins the conformance contract
+// (#1153): editing a running loop's scalar fields reaches the live instance
+// via QueueRetune — no relaunch — and the result says so. The harness loop is
+// registered but not started, so the engine promotes inline and the live
+// config is observable immediately.
+func TestLoopDefinitionUpdateAppliesLiveRetune(t *testing.T) {
 	deps, live := noticeHarness(t)
 	seedOverlayUpdateTarget(t, deps)
 	registerRunningLoop(t, live, "update_target")
@@ -117,9 +122,24 @@ func TestLoopDefinitionUpdateNoticeWhenLoopRunning(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &env); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
+	if env["retune"] != "applied" {
+		t.Errorf("retune = %v, want applied", env["retune"])
+	}
 	notice, _ := env["notice"].(string)
-	if !strings.Contains(notice, "currently running") || !strings.Contains(notice, "launched-time config") {
-		t.Errorf("notice = %q, want the running-loop stale-config contract", notice)
+	if !strings.Contains(notice, "applied live") {
+		t.Errorf("notice = %q, want the applied-live confirmation", notice)
+	}
+	// The live loop's config conformed to the stored spec.
+	running := live.GetByName("update_target")
+	if running == nil {
+		t.Fatal("live loop missing")
+	}
+	st := running.Status()
+	if st.Config.Task != "tweaked task" {
+		t.Errorf("live task = %q, want the retuned %q", st.Config.Task, "tweaked task")
+	}
+	if st.PendingRetune {
+		t.Error("pending_retune = true after promote, want false")
 	}
 }
 

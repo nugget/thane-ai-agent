@@ -332,6 +332,18 @@ type Loop struct {
 	// pendingNotifies are one-shot envelopes injected into the next
 	// iteration prompt or handler context.
 	pendingNotifies []pendingNotify
+
+	// pendingRetune holds a validated replacement Spec queued by
+	// [Loop.QueueRetune] whose hot-swappable scalar fields have not yet
+	// been promoted into config. Non-nil only until the next promote
+	// point — in practice, only while an in-flight turn finishes under
+	// its previous config.
+	pendingRetune *Spec
+
+	// retuneCh nudges the run goroutine's current blocking phase (sleep
+	// or wait) to promote a pending retune without burning an iteration.
+	// Buffered size 1 coalesces; a stale signal is a harmless no-op.
+	retuneCh chan struct{}
 }
 
 // New creates a loop with the given configuration and dependencies.
@@ -365,11 +377,12 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 	id, _ := uuid.NewV7()
 
 	return &Loop{
-		id:     id.String(),
-		config: cfg,
-		deps:   deps,
-		state:  StatePending,
-		wakeCh: make(chan struct{}, 1),
+		id:       id.String(),
+		config:   cfg,
+		deps:     deps,
+		state:    StatePending,
+		wakeCh:   make(chan struct{}, 1),
+		retuneCh: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -714,6 +727,7 @@ func (l *Loop) Status() Status {
 		LastSupervisorTrigger: l.lastSupervisorTrigger,
 		HandlerOnly:           l.config.Handler != nil,
 		EventDriven:           l.isEventDriven(),
+		PendingRetune:         l.pendingRetune != nil,
 		Config:                cfgCopy,
 	}
 	l.mu.Unlock()
@@ -799,6 +813,181 @@ func (l *Loop) SetSubscriptions(subs []EntitySubscription) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.config.Subscriptions = cloneEntitySubscriptions(subs)
+}
+
+// QueueRetune queues a validated replacement spec whose hot-swappable
+// scalar fields — task, sleep envelope, jitter, max_iter, supervisor
+// knobs, and the profile-derived request shaping (model, instructions,
+// quality_floor, mission) — are promoted into the running loop's config
+// at the next safe point, so the live loop conforms to its stored
+// definition without a relaunch (#1153). Promotion never tears an
+// in-flight turn: a turn that has already started finishes under the
+// config it launched with, and the promotion lands the moment it
+// completes. A sleeping loop promotes (near-)immediately and re-clamps
+// its in-flight sleep against the edited envelope, waking now if
+// already overdue; a waiting event-driven loop promotes without being
+// woken. Structural fields (operation, outputs, parent, subscriptions,
+// tags, completion) are deliberately NOT promoted — they are compiled
+// into closures and graph identity at spawn and still require a
+// relaunch. Subscriptions have their own live path,
+// [Loop.SetSubscriptions].
+//
+// Beyond the structural fields, a handful of plain-data config scalars
+// are also deliberately NOT promoted because they sit outside the
+// retune tier: top-level exclude_tools, routing_factors,
+// delegation_gating, fallback_content, on_retrigger, intent (spec-level
+// fields owned by the full-replace path), and max_duration (compiled
+// into the run context's deadline at start). MaxIter IS promoted and
+// counts this instance's lifetime attempts: retuning it at or below the
+// attempts already consumed stops the loop at its next wake — a
+// relaunch resets the count.
+//
+// Durability is the caller's responsibility — persist the spec before
+// invoking (mirroring [Loop.SetSubscriptions]), so a crash between
+// persist and promote converges at the next hydration.
+func (l *Loop) QueueRetune(spec Spec) error {
+	// Compile through the same path a spawn takes so defaults and
+	// envelope sanity match what a relaunch would have produced; reject
+	// rather than promote a config the engine would have refused at New.
+	cfg := spec.ToConfig()
+	cfg.applyDefaults()
+
+	l.mu.Lock()
+	// Run shape is identity: a definition whose operation drifted from
+	// the running instance (possible via loop_definition_set, which never
+	// relaunches) cannot conform in place. Promoting across the drift is
+	// actively dangerous — an event-driven spec carries a zero sleep
+	// envelope, which would turn a live timer loop into a zero-sleep
+	// iteration storm. Timer-driven shapes (service, request_reply,
+	// background_task, legacy empty) share one envelope contract and may
+	// retune each other.
+	if retuneShape(cfg.Operation) != retuneShape(l.config.Operation) {
+		liveOp := l.config.Operation
+		l.mu.Unlock()
+		return fmt.Errorf("loop: retune operation %q does not match the running loop's operation %q; an operation change requires a relaunch", cfg.Operation, liveOp)
+	}
+	if l.stopped {
+		name := l.config.Name
+		l.mu.Unlock()
+		return fmt.Errorf("loop: %q is stopped or stopping; relaunch to apply the new spec", name)
+	}
+	// A template loop's task arrives per-launch and its stored spec
+	// carries none: validate against the effective task so an unrelated
+	// retune is not rejected. Promotion leaves the override in place for
+	// this case (see promoteRetuneLocked).
+	if cfg.Task == "" && l.taskOverride != "" {
+		cfg.Task = l.taskOverride
+	}
+	if err := cfg.validate(); err != nil {
+		l.mu.Unlock()
+		return err
+	}
+	// A finished run goroutine (max_iter reached, run cancelled) has no
+	// promote point left; reject so callers fall back to relaunch
+	// guidance instead of a forever-dangling pending flag. Containers
+	// close done at Start and take the inline path below.
+	if l.started && l.config.Operation != OperationContainer && l.done != nil {
+		select {
+		case <-l.done:
+			name := l.config.Name
+			l.mu.Unlock()
+			return fmt.Errorf("loop: %q has finished its run; relaunch to apply the new spec", name)
+		default:
+		}
+	}
+
+	clone := cloneSpec(spec)
+	l.pendingRetune = &clone
+	// With no run goroutine (never started, or a container — containers
+	// never run), there is no unlocked config reader to race with and no
+	// promote point that would ever fire: promote inline so the pending
+	// state cannot dangle.
+	if !l.started || l.config.Operation == OperationContainer {
+		l.promoteRetuneLocked()
+		l.mu.Unlock()
+		return nil
+	}
+	l.mu.Unlock()
+
+	select {
+	case l.retuneCh <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// retuneShape classifies an operation for retune identity: the
+// timer-driven shapes (service, request_reply, background_task, and the
+// legacy empty operation) share one sleep-envelope contract and may
+// retune each other, while event_driven and container are each their own
+// shape — crossing into or out of them changes the run loop's control
+// flow and requires a relaunch.
+func retuneShape(op Operation) Operation {
+	switch op {
+	case OperationEventDriven, OperationContainer:
+		return op
+	default:
+		return OperationService
+	}
+}
+
+// promoteRetune promotes a pending retune under the lock and logs the
+// application. MUST be called only from the run goroutine (or before it
+// exists): the iteration path reads l.config without the lock, so after
+// Start the run goroutine is the config's sole writer.
+func (l *Loop) promoteRetune() {
+	l.mu.Lock()
+	promoted := l.promoteRetuneLocked()
+	l.mu.Unlock()
+	if promoted {
+		l.deps.Logger.Info("loop retune applied",
+			"loop_id", l.id,
+			"loop_name", l.config.Name,
+		)
+	}
+}
+
+// promoteRetuneLocked applies the pending retune's hot-swappable fields
+// to the live config. Caller holds l.mu. The field list mirrors what
+// [NewFromSpec] derives from a Spec, restricted to plain data — no
+// closures, no graph identity, no fields owned by another live path.
+func (l *Loop) promoteRetuneLocked() bool {
+	if l.pendingRetune == nil {
+		return false
+	}
+	spec := l.pendingRetune
+	l.pendingRetune = nil
+
+	fresh := spec.ToConfig()
+	fresh.applyDefaults()
+	if fresh.Task != "" {
+		l.config.Task = fresh.Task
+		// A retuned task must actually win: buildTaskTurn prefers a
+		// launch-time taskOverride, which would otherwise shadow the
+		// retune forever. An empty retune task (template loop whose task
+		// arrives per-launch) leaves both the task and its override
+		// untouched.
+		l.taskOverride = ""
+	}
+	l.config.SleepMin = fresh.SleepMin
+	l.config.SleepMax = fresh.SleepMax
+	l.config.SleepDefault = fresh.SleepDefault
+	l.config.Jitter = fresh.Jitter
+	l.config.MaxIter = fresh.MaxIter
+	l.config.Supervisor = fresh.Supervisor
+	l.config.SupervisorProb = fresh.SupervisorProb
+	l.config.SupervisorProfile = fresh.SupervisorProfile
+	// Rebuild the profile-derived request shaping, but keep the spawn-time
+	// InitialTags and RuntimeTools: tags are a structural (relaunch-tier)
+	// field and runtime tools are compiled by hydration — the raw stored
+	// spec carries neither, and taking them from it would wipe live state
+	// the retune does not own (InitialTags also gates SkipTagFilter).
+	prevBase := l.requestBase
+	l.requestBase = spec.profileRequest()
+	l.requestBase.InitialTags = prevBase.InitialTags
+	l.requestBase.RuntimeTools = prevBase.RuntimeTools
+	l.requestInstructions = spec.Profile.Instructions
+	return true
 }
 
 // Subscriptions returns a defensive copy of the loop's current
@@ -1440,6 +1629,11 @@ func (l *Loop) run(ctx context.Context) {
 		l.currentConvID = ""
 		l.llmContext = nil
 		l.mu.Unlock()
+
+		// Promote a retune that landed mid-turn now that the turn is
+		// done, so the post-turn sleep computation and every later read
+		// see the new config.
+		l.promoteRetune()
 
 		if noOp {
 			iterLog.Debug("handler returned no-op, skipping iteration accounting")

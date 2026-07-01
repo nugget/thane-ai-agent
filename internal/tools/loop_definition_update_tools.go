@@ -164,9 +164,28 @@ func (r *Registry) handleLoopDefinitionUpdate(ctx context.Context, args map[stri
 		"updated_fields": sortedStringKeys(changes),
 		"definition":     viewDef,
 	}
+	// The retune conformance path (#1153): the same instance survived the
+	// commit, so push the merged spec's hot-swappable scalars into the live
+	// loop. Promotion is turn-boundary-safe inside the engine; a rejection
+	// (operation drift, stopped/finished instance) falls back to honest
+	// relaunch guidance — without recommending this tool back to itself.
 	if prior != nil {
 		if after := r.runningLoopByName(name); after != nil && after.ID() == prior.ID() {
-			result["notice"] = staleRunningLoopNotice(name, spec.Operation)
+			if retuneErr := after.QueueRetune(spec); retuneErr != nil {
+				result["notice"] = fmt.Sprintf("The edit is persisted, but it could not be applied to the running loop (%v). %q keeps its launched-time config; the edit takes effect at the next relaunch (stop_loop then loop_definition_launch, or process restart).", retuneErr, name)
+			} else {
+				result["retune"] = "applied"
+				notice := retuneAppliedNotice(name)
+				// MaxIter counts this instance's lifetime attempts: a cap at
+				// or below what is already consumed stops the loop at its
+				// next wake. Applied conformance, but say it loudly.
+				if spec.MaxIter > 0 {
+					if st := after.Status(); st.Attempts >= spec.MaxIter {
+						notice += fmt.Sprintf(" Warning: max_iter %d is at or below this instance's %d attempts — the loop will stop at its next wake; relaunch to reset the count.", spec.MaxIter, st.Attempts)
+					}
+				}
+				result["notice"] = notice
+			}
 		}
 	}
 	return ldMarshalToolJSON(result)
