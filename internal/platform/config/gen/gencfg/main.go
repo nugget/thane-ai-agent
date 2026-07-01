@@ -46,6 +46,7 @@ var optionalKeys = map[string]bool{
 	"identity":        true,
 	"attachments":     true,
 	"provenance":      true,
+	"signing":         true,
 	"forge":           true,
 	"email":           true,
 	"archive":         true,
