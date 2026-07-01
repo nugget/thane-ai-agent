@@ -13,7 +13,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
-	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // CoreContextProvider reads curated core identity documents for prompt
@@ -132,28 +131,6 @@ func (p *CoreContextProvider) updateProvenanceStore(store *provenance.Store) {
 	p.mu.Lock()
 	p.provenanceStore = store
 	p.mu.Unlock()
-}
-
-// TagContextBucket keeps compatibility output in continuity when a
-// CoreContextProvider is explicitly registered as a context provider.
-// Normal prompt assembly renders core files as first-class stable
-// sections before runtime context.
-func (p *CoreContextProvider) TagContextBucket() agentctx.ContextBucket {
-	return agentctx.ContextBucketContinuity
-}
-
-// TagContext returns core context for compatibility with the
-// context-provider interface.
-func (p *CoreContextProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	sections := p.promptSections(ctx)
-	if len(sections) == 0 {
-		return "", nil
-	}
-	var sb strings.Builder
-	for _, section := range sections {
-		promptfmt.AppendMarkdownSection(&sb, 3, section.title, section.content)
-	}
-	return strings.TrimSpace(sb.String()), nil
 }
 
 func (p *CoreContextProvider) preambleSections(ctx context.Context) []corePromptSection {

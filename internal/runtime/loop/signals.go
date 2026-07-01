@@ -73,22 +73,6 @@ func NotifyEnvelopesFromContext(ctx context.Context) []messages.Envelope {
 	return out
 }
 
-// WakeTagsFromContext returns the iteration-scoped capability tags
-// carried on the envelopes that woke the current loop iteration, if any.
-// Handler-based loops can use this to observe source-classified tags
-// (for example contacts → "owner", MQTT topic → "security") that the
-// loop runtime has already folded into the iteration's Request.InitialTags
-// for task-built turns.
-func WakeTagsFromContext(ctx context.Context) []string {
-	tags, _ := ctx.Value(wakeTagsContextKey{}).([]string)
-	if len(tags) == 0 {
-		return nil
-	}
-	out := make([]string, len(tags))
-	copy(out, tags)
-	return out
-}
-
 func withNotifyEnvelopes(ctx context.Context, envs []messages.Envelope) context.Context {
 	if len(envs) == 0 {
 		return ctx
