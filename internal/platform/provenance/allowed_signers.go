@@ -158,10 +158,18 @@ func opensshTime(rfc3339 string) (string, error) {
 // canonicalKeyBlob parses an authorized_keys-form public key and returns its
 // canonical "keytype base64" form with the comment stripped, so keys that
 // differ only by comment or surrounding whitespace compare equal.
+//
+// It rejects any value carrying more than one key: ssh.ParseAuthorizedKey
+// parses only the first line and returns the remainder in rest, so a value
+// with an embedded newline and a second key would otherwise be silently
+// accepted (and its second key dropped on render) — refuse it instead.
 func canonicalKeyBlob(key string) (string, error) {
-	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
+	pub, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(key))
 	if err != nil {
 		return "", fmt.Errorf("not a valid SSH public key: %w", err)
+	}
+	if strings.TrimSpace(string(rest)) != "" {
+		return "", fmt.Errorf("value must contain exactly one SSH public key")
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }

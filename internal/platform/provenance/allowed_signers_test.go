@@ -123,6 +123,12 @@ func TestRenderAllowedSigners_Rejections(t *testing.T) {
 			ops:   []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, ValidAfter: "nope"}},
 			want:  "valid_after",
 		},
+		{
+			name:  "operator key smuggles a second key via embedded newline",
+			agent: testAgentKey,
+			ops:   []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey + "\n" + testBobKey}},
+			want:  "exactly one SSH public key",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
