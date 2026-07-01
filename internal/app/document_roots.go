@@ -302,6 +302,15 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		return nil, fmt.Errorf("doc_roots.%s bootstrap birth commit: %w", root, err)
 	}
 
+	// Render the repo's .allowed_signers as the union of the agent key and
+	// the operator keys the operator declared (shared plus this root's own),
+	// committing an update only when the set changed. This is what makes an
+	// operator's key trusted so they can co-author a signed root.
+	operators := buildTrustedSigners(a.cfg.Signing.AllowedSigners, gitCfg.AllowedSigners)
+	if _, err := store.ReconcileAllowedSigners(bootstrapCtx, operators); err != nil {
+		return nil, fmt.Errorf("doc_roots.%s reconcile allowed_signers: %w", root, err)
+	}
+
 	logger.Info("document root provenance enabled",
 		"root", root,
 		"repo", store.Path(),
@@ -342,6 +351,26 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 		return nil, fmt.Errorf("initialize git verifier for document root %s: %w", root, err)
 	}
 	return &documentRootProvenanceVerifier{verifier: verifier, prefix: prefix}, nil
+}
+
+// buildTrustedSigners flattens the shared and per-root operator allowed-signer
+// config into provenance.TrustedSigner values for rendering. Order does not
+// matter — the renderer canonicalizes, deduplicates, and sorts — so the two
+// lists are simply concatenated (shared first).
+func buildTrustedSigners(shared, perRoot []config.AllowedSigner) []provenance.TrustedSigner {
+	out := make([]provenance.TrustedSigner, 0, len(shared)+len(perRoot))
+	for _, list := range [][]config.AllowedSigner{shared, perRoot} {
+		for _, s := range list {
+			out = append(out, provenance.TrustedSigner{
+				Principal:   s.Principal,
+				PublicKey:   s.Key,
+				Comment:     s.Label,
+				ValidAfter:  s.ValidAfter,
+				ValidBefore: s.ValidBefore,
+			})
+		}
+	}
+	return out
 }
 
 func configureRepoLocalAllowedSigners(root, repoPath string, logger *slog.Logger) error {
