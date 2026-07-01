@@ -314,17 +314,13 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 	// Boot-time round-trip: confirm HEAD actually verifies against the trust
 	// file we just rendered, so a malformed signer line or an OpenSSH version
 	// that can't parse a rendered option fails loudly now instead of silently
-	// blocking reads later. Honor the root's verification policy — hard-fail a
-	// required root, warn a warn root, skip when verification is off.
-	switch strings.TrimSpace(gitCfg.VerifySignatures) {
-	case "required":
-		if err := store.VerifyHead(bootstrapCtx); err != nil {
-			return nil, fmt.Errorf("doc_roots.%s allowed_signers boot verification: %w", root, err)
-		}
-	case "warn":
-		if err := store.VerifyHead(bootstrapCtx); err != nil {
-			logger.Warn("document root allowed_signers boot verification failed",
-				"root", root, "error", err)
+	// blocking reads later. Only worth running where verification is actually
+	// consumed; the policy mapping (fail vs. warn) lives in applyBootVerification.
+	mode := documents.VerificationMode(strings.TrimSpace(gitCfg.VerifySignatures))
+	switch mode {
+	case documents.VerificationRequired, documents.VerificationWarn:
+		if err := applyBootVerification(mode, root, store.VerifyHead(bootstrapCtx), logger); err != nil {
+			return nil, err
 		}
 	}
 
@@ -368,6 +364,26 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 		return nil, fmt.Errorf("initialize git verifier for document root %s: %w", root, err)
 	}
 	return &documentRootProvenanceVerifier{verifier: verifier, prefix: prefix}, nil
+}
+
+// applyBootVerification maps a boot-time VerifyHead result onto the root's
+// verification policy: a required root fails to construct, a warn root logs and
+// continues, and any other mode is a no-op. A nil verifyErr is always a no-op,
+// so callers can pass the VerifyHead result directly.
+func applyBootVerification(mode documents.VerificationMode, root string, verifyErr error, logger *slog.Logger) error {
+	if verifyErr == nil {
+		return nil
+	}
+	switch mode {
+	case documents.VerificationRequired:
+		return fmt.Errorf("doc_roots.%s allowed_signers boot verification: %w", root, verifyErr)
+	case documents.VerificationWarn:
+		logger.Warn("document root allowed_signers boot verification failed",
+			"root", root, "error", verifyErr)
+		return nil
+	default:
+		return nil
+	}
 }
 
 // buildTrustedSigners flattens the shared and per-root operator allowed-signer
