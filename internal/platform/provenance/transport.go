@@ -32,16 +32,21 @@ type FetchOptions struct {
 	SSHCommand string
 }
 
-// Fetch fetches opts.Branch from opts.RemoteURL into the local
-// remote-tracking ref refs/remotes/origin/<Branch>. It writes nothing else:
-// HEAD, the index, and the worktree are untouched, and FETCH_HEAD is not
-// written. Fetch does not take the store lock — it is a read-from-network
-// operation whose only local effect is the tracking ref — so callers may run
-// it concurrently with local reads and before entering the write critical
-// section.
+// Fetch fetches opts.Branch from opts.RemoteURL into the local remote-tracking
+// ref refs/remotes/origin/<Branch>. It writes nothing else: HEAD, the index,
+// and the worktree are untouched, and FETCH_HEAD is not written.
 //
-// The operation is bounded by [remoteTimeout] regardless of the deadline on
-// ctx, so an unresponsive remote cannot block indefinitely.
+// Fetch deliberately does NOT take the store lock. It is a network operation,
+// and holding the write mutex across a remote round-trip would serialize every
+// document write behind it — the wedge the sync design exists to avoid. This is
+// safe because a fetch's only local effects are new objects and the
+// remote-tracking ref, neither of which the index/worktree/HEAD-based write
+// path touches, so it cannot corrupt a concurrent commit. The sync engine
+// re-establishes a consistent view by re-reading HEAD and the tracking ref
+// under the lock after the fetch returns.
+//
+// The operation is bounded by [remoteTimeout] (or the caller's own deadline,
+// whichever is sooner), so an unresponsive remote cannot block indefinitely.
 func (s *Store) Fetch(ctx context.Context, opts FetchOptions) error {
 	if strings.TrimSpace(opts.RemoteURL) == "" {
 		return fmt.Errorf("fetch: remote url is empty")
@@ -50,6 +55,9 @@ func (s *Store) Fetch(ctx context.Context, opts FetchOptions) error {
 		return err
 	}
 	if err := checkRevisionArg("branch", opts.Branch); err != nil {
+		return fmt.Errorf("fetch: %w", err)
+	}
+	if err := s.checkBranchName(ctx, opts.Branch); err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
 
@@ -81,10 +89,21 @@ func (s *Store) Fetch(ctx context.Context, opts FetchOptions) error {
 // The four combinations map directly onto the sync state machine: (0,0) is in
 // sync, (>0,0) is a local-only lead to push, (0,>0) is a clean fast-forward
 // to pull, and (>0,>0) is divergence that fast-forward-only sync refuses.
+//
+// Unlike [Store.Fetch], AheadBehind is a purely local read with no network
+// round-trip, so it takes the store lock to read a consistent HEAD and
+// tracking-ref snapshot, staying serialized with concurrent commits like the
+// other read methods.
 func (s *Store) AheadBehind(ctx context.Context, branch string) (ahead, behind int, err error) {
 	if err := checkRevisionArg("branch", branch); err != nil {
 		return 0, 0, err
 	}
+	if err := s.checkBranchName(ctx, branch); err != nil {
+		return 0, 0, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var out bytes.Buffer
 	if err := s.git(ctx, nil, &out, "rev-list", "--left-right", "--count",
@@ -134,10 +153,22 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// checkBranchName rejects a value that is not a well-formed branch name.
+// checkRevisionArg only stops option injection; a value like "main..other" or
+// "HEAD~1" still passes it yet is rev-spec syntax, not a branch — and it is
+// interpolated into the fetch refspec destination and the ahead/behind revspec.
+// git check-ref-format validates the full branch ref shape.
+func (s *Store) checkBranchName(ctx context.Context, branch string) error {
+	if err := s.git(ctx, nil, nil, "check-ref-format", "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("invalid branch name %q: %w", branch, err)
+	}
+	return nil
+}
+
 // checkRemoteArg rejects a remote url that git could mistake for an option.
 // A legitimate url (ssh, https, or a path) never begins with "-";
 // --end-of-options guards the command line as well, but rejecting early gives
-// a clearer error and defends the ahead/behind path that reads the same value.
+// a clearer error.
 func checkRemoteArg(kind, url string) error {
 	url = strings.TrimSpace(url)
 	if url == "" {

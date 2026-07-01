@@ -122,6 +122,8 @@ func TestFetchRejectsBadArgs(t *testing.T) {
 		{"option-like url", FetchOptions{RemoteURL: "--upload-pack=evil", Branch: "main"}},
 		{"empty branch", FetchOptions{RemoteURL: "https://example.com/r.git", Branch: ""}},
 		{"option-like branch", FetchOptions{RemoteURL: "https://example.com/r.git", Branch: "-x"}},
+		{"revspec branch", FetchOptions{RemoteURL: "https://example.com/r.git", Branch: "main..other"}},
+		{"tilde branch", FetchOptions{RemoteURL: "https://example.com/r.git", Branch: "HEAD~1"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,8 +136,10 @@ func TestFetchRejectsBadArgs(t *testing.T) {
 
 func TestAheadBehindRejectsBadBranch(t *testing.T) {
 	s := &Store{path: t.TempDir(), logger: slog.Default()}
-	if _, _, err := s.AheadBehind(context.Background(), "-x"); err == nil {
-		t.Fatal("AheadBehind(\"-x\") = nil, want error")
+	for _, branch := range []string{"-x", "main..other", "HEAD~1", "a b"} {
+		if _, _, err := s.AheadBehind(context.Background(), branch); err == nil {
+			t.Fatalf("AheadBehind(%q) = nil, want error", branch)
+		}
 	}
 }
 
