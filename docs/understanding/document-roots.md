@@ -7,11 +7,15 @@ That starts with **document roots**: named directories in config that
 tell Thane which local collections matter.
 
 ```yaml
-paths:
+roots:
   kb: ./knowledge
   scratchpad: ./scratchpad
   dossiers: ~/Vaults/private-dossiers
 ```
+
+> The legacy `paths:` / `doc_roots:` split is still parsed with a
+> deprecation warning but cannot be combined with `roots:`. Prefer
+> `roots:`, which keeps a root's path and its policy in one entry.
 
 Each entry gives a directory a stable identity. Instead of treating your
 files as one anonymous pile, Thane can understand that some notes live
@@ -62,8 +66,8 @@ The cleaner the boundary, the easier it is for Thane to stay oriented.
 
 You do not need any special indexing section or separate feature flag.
 
-If a directory is listed in `paths:` and exists on disk, it becomes one
-of Thane's managed local document collections.
+If a directory is listed under `roots:` and exists on disk, it becomes
+one of Thane's managed local document collections.
 
 Example:
 
@@ -71,7 +75,7 @@ Example:
 workspace:
   path: ~/Thane
 
-paths:
+roots:
   kb: ~/Thane/knowledge
   scratchpad: ~/Thane/scratchpad
   dossiers: ~/Vaults/private-dossiers
@@ -84,19 +88,17 @@ time.
 
 ## Root Policy
 
-Most roots do not need extra policy. If a root is listed in `paths:` and
-exists on disk, Thane indexes markdown in that root and managed document
-tools may write it.
+Most roots do not need extra policy. If a root is listed under `roots:`
+as a bare string and exists on disk, Thane indexes markdown in that root
+and managed document tools may write it.
 
-When a root needs a stronger contract, add `doc_roots:`:
+When a root needs a stronger contract, give its entry the full mapping
+form with policy fields:
 
 ```yaml
-paths:
-  kb: ~/Thane/knowledge
-  scratchpad: ~/Thane/scratchpad
-
-doc_roots:
+roots:
   kb:
+    path: ~/Thane/knowledge
     authoring: managed
     git:
       enabled: true
@@ -104,6 +106,7 @@ doc_roots:
       verify_signatures: warn
       signing_key: ~/.ssh/id_ed25519
   scratchpad:
+    path: ~/Thane/scratchpad
     indexing: false
     authoring: managed
 ```

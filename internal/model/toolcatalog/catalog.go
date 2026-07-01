@@ -97,12 +97,16 @@ type BuiltinTagSpec struct {
 	// `owner`) without being a menu.
 	Protected bool
 
-	// Parents lists the menu tag(s) this leaf appears under in the
+	// Parents lists the menu tag(s) a leaf appears under in the intended
 	// hierarchical capability menu. Multi-valued because some leaves
-	// legitimately serve more than one menu (e.g. `files` is
-	// reachable from both development and knowledge). Omitted for
-	// menus themselves and for tags that don't fit any menu — those
-	// surface as top-level entries in the menu rendering.
+	// legitimately serve more than one menu (e.g. `files` is reachable
+	// from both development and knowledge). Omitted for menus themselves
+	// and for tags that don't fit any menu.
+	//
+	// Reserved: Parents is authored on every leaf and validated by the
+	// catalog invariant test, but no renderer consumes it yet — the
+	// hierarchical menu that would group leaves beneath their parents has
+	// not shipped. Until it does, menu navigation flows through NextTags.
 	Parents []string
 }
 

@@ -156,12 +156,14 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	return sb.String(), nil
 }
 
-// renderLoopSubscription adapts a loop.EntitySubscription into the
-// same rendering pipeline the watchlist providers use. The
-// intermediate WatchedSubscription is a thin shim — once the
-// migration is complete and WatchedSubscription is no longer used
-// as a storage type elsewhere, the renderer can take fields
-// directly.
+// renderLoopSubscription adapts a loop.EntitySubscription into the same
+// rendering pipeline the always-visible watchlist providers use, mapping it
+// onto WatchedSubscription. The two are deliberately distinct representations,
+// not a migration in flight: WatchedSubscription is the SQLite row type for
+// the always-visible watchlist (it carries Scope and ExpiresAt), while
+// loop.EntitySubscription is the loop-scoped attribute on Spec. The shared
+// renderer consumes the WatchedSubscription shape so both sources render
+// identically.
 func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, sub looppkg.EntitySubscription, now time.Time, registries *renderRegistries) string {
 	w := watchedFromLoopSubscription(sub)
 	state, err := p.ha.GetState(ctx, w.EntityID)
@@ -175,8 +177,9 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 	return renderWatchedState(ctx, p.ha, p.logger, w, state, now, registries)
 }
 
-// watchedFromLoopSubscription adapts a loop.EntitySubscription into the
-// WatchedSubscription shim the shared render/expansion path consumes.
+// watchedFromLoopSubscription maps a loop.EntitySubscription onto the
+// WatchedSubscription shape the shared render/expansion path consumes. The two
+// types stay distinct by design (see renderLoopSubscription).
 func watchedFromLoopSubscription(sub looppkg.EntitySubscription) WatchedSubscription {
 	return WatchedSubscription{
 		EntityID: sub.EntityID,

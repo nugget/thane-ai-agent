@@ -186,13 +186,9 @@ Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
 workspace:
   path: ~/Thane
 
-paths:
-  kb: ~/Thane/knowledge
-  scratchpad: ~/Thane/scratchpad
-  dossiers: ~/Vaults/private-dossiers
-
-doc_roots:
+roots:
   kb:
+    path: ~/Thane/knowledge
     authoring: managed
     git:
       enabled: true
@@ -200,19 +196,30 @@ doc_roots:
       verify_signatures: warn
       signing_key: ~/.ssh/id_ed25519
   dossiers:
+    path: ~/Vaults/private-dossiers
     authoring: read_only
   scratchpad:
+    path: ~/Thane/scratchpad
     indexing: false
     authoring: managed
 ```
 
-Any directory listed in `paths:` becomes a named local collection that
-Thane can keep track of.
+Each entry under `roots:` names one local collection Thane keeps track
+of, combining its `path` with optional per-root policy: whether Thane
+indexes it, whether managed document tools may write to it, and whether
+writes should go through a signed git history. An entry may be a bare
+string when it needs no policy beyond its path:
 
-Use `paths:` to name the collection. Use `doc_roots:` only when that
-collection needs policy: whether Thane indexes it, whether managed
-document tools may write to it, and whether writes should go through a
-signed git history.
+```yaml
+roots:
+  kb: ~/Thane/knowledge
+```
+
+> **Deprecated:** the older `paths:` / `doc_roots:` split — one block to
+> name the path, a second to attach policy — is still parsed but emits a
+> deprecation warning and cannot appear in the same config as `roots:`.
+> Migrate each `paths:` entry and its matching `doc_roots:` policy into a
+> single `roots:` entry.
 
 `authoring` accepts `managed`, `read_only`, or `restricted`. `managed`
 is the default and allows document tools and loop-declared output tools
