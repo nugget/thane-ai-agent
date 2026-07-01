@@ -328,7 +328,12 @@ func (a *App) initChannels(s *newState) error {
 
 			// Remote-backed roots sync on their own cadence. Wire the
 			// post-fast-forward re-index to the document store (now that it
-			// exists) and launch each syncer under the app lifecycle.
+			// exists) and launch each syncer under the app lifecycle. The
+			// re-index is a best-effort nudge: Store.Refresh is throttled and
+			// covers all roots, so it may no-op right after a recent refresh —
+			// but the periodic refresher re-indexes within refreshInterval
+			// regardless, so a fast-forward's content becomes visible promptly
+			// either way.
 			if len(a.docRootSyncers) > 0 {
 				refresh := func(ctx context.Context) error { return docStore.Refresh(ctx) }
 				for _, syncer := range a.docRootSyncers {

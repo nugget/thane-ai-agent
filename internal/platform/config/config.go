@@ -1007,9 +1007,14 @@ type DocumentRootGitRemoteConfig struct {
 	// not by config Load); "0" disables the timer (manual/trigger-only).
 	Interval string `yaml:"interval,omitempty"`
 
-	// TrustAnchor is the out-of-tree OpenSSH allowed_signers file that
-	// verification checks against. It must live outside the synced tree so a
-	// fetched commit can never rewrite the trust set. See #1135.
+	// TrustAnchor is an OPTIONAL out-of-tree OpenSSH allowed_signers file for
+	// verification. It is not required: by default verification uses the
+	// in-tree .allowed_signers (rendered from signing.allowed_signers), which
+	// the sync engine checks safely because a fetch never rewrites the
+	// worktree before the incoming range is verified. An out-of-tree anchor is
+	// extra hardening for those who want the trust set removed from the synced
+	// tree entirely — but it is not yet wired: set it and the root is refused
+	// at construction. See #1135, #1147.
 	TrustAnchor string `yaml:"trust_anchor,omitempty"`
 
 	// Auth carries transport credentials only — never commit-signing
@@ -2883,13 +2888,11 @@ func validateGitRemote(root string, git DocumentRootGitConfig) error {
 	if key := strings.TrimSpace(r.Auth.SSHKey); key != "" && key == strings.TrimSpace(git.SigningKey) {
 		return fmt.Errorf("%s.auth.ssh_key must not be the same key as git.signing_key: transport auth and commit signing are separate", label)
 	}
-	// Verification needs an out-of-tree trust anchor; without it the
-	// operator's own signed history would read as untrusted and the root
-	// would boot permanently blocked.
-	verify := strings.TrimSpace(git.VerifySignatures)
-	if (verify == "warn" || verify == "required") && strings.TrimSpace(r.TrustAnchor) == "" {
-		return fmt.Errorf("%s.trust_anchor is required when verify_signatures is %q: it must be an out-of-tree allowed_signers file", label, verify)
-	}
+	// trust_anchor is optional: verification defaults to the in-tree
+	// .allowed_signers (rendered from signing.allowed_signers), which the sync
+	// engine checks safely because a fetch never rewrites the worktree before
+	// the incoming range is verified. An out-of-tree anchor is optional extra
+	// hardening; it is validated where it is consumed, not here.
 	return nil
 }
 
