@@ -758,11 +758,19 @@ func (a *App) loopViewByID(loopID string) (looppkg.LoopView, bool) {
 	if !ok {
 		return looppkg.LoopView{}, false
 	}
+	// Prefer the definition view (policy/eligibility/effective_* resolved), but
+	// only when it resolves to THIS exact loop. Loop names are not unique — the
+	// live registry keys by id while the definition view is name-keyed — so a
+	// same-named sibling could otherwise have its row returned for the wrong id.
 	if view := a.loopDefinitionView(); view != nil {
-		if def, ok := looppkg.FindDefinitionView(view, st.Name); ok && def.Loop != nil {
+		if def, ok := looppkg.FindDefinitionView(view, st.Name); ok &&
+			def.Loop != nil && def.Loop.ID != nil && *def.Loop.ID == loopID {
 			return *def.Loop, true
 		}
 	}
+	// Ephemeral loop (no definition), or a name collision the name-keyed view
+	// can't disambiguate: project the id-precise Status directly. This is the
+	// rare path, so its extra Statuses() walk is not on the common hot path.
 	resolver := looppkg.NewLoopViewResolver(a.loopRegistry.Statuses(), nil, time.Now())
 	return resolver.FromStatus(st), true
 }
