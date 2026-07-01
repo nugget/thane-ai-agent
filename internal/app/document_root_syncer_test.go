@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,10 @@ func TestParseSyncInterval(t *testing.T) {
 		wantErr bool
 	}{
 		{"", defaultSyncInterval, false},
+		{"   ", defaultSyncInterval, false}, // whitespace-only trims to empty
 		{"0", 0, false},
 		{"30s", 30 * time.Second, false},
+		{"60s ", 60 * time.Second, false}, // trailing space (validation trims)
 		{"5m", 5 * time.Minute, false},
 		{"nonsense", 0, true},
 	}
@@ -118,6 +121,29 @@ func TestBuildSyncRequest(t *testing.T) {
 		}
 		if req.Mode != provenance.SyncModeBidirectional {
 			t.Error("Mode != bidirectional for 'bidirectional ' (trailing space)")
+		}
+	})
+
+	t.Run("trimmed url branch and ssh paths", func(t *testing.T) {
+		req := buildSyncRequest(config.DocumentRootGitConfig{
+			VerifySignatures: "required",
+			Remote: &config.DocumentRootGitRemoteConfig{
+				URL:    " git@example.com:o/r.git ",
+				Branch: " trunk ",
+				Mode:   "bidirectional",
+				Auth:   config.DocumentRootGitRemoteAuthConfig{SSHKey: " /k ", KnownHosts: " /kh "},
+			},
+		}, identity)
+		if req.RemoteURL != "git@example.com:o/r.git" {
+			t.Errorf("RemoteURL = %q, want trimmed", req.RemoteURL)
+		}
+		if req.Branch != "trunk" {
+			t.Errorf("Branch = %q, want trimmed trunk", req.Branch)
+		}
+		// The built ssh command must reference the trimmed key/known_hosts,
+		// never the padded values.
+		if !strings.Contains(req.SSHCommand, "'/k'") || !strings.Contains(req.SSHCommand, "'/kh'") {
+			t.Errorf("SSHCommand = %q, want trimmed key/known_hosts", req.SSHCommand)
 		}
 	})
 }

@@ -25,6 +25,7 @@ const (
 // leaving the root sync-on-demand only. validateGitRemote has already checked
 // that a non-empty value parses, so an error here is defensive.
 func parseSyncInterval(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw) // match validateGitRemote, which trims first
 	if raw == "" {
 		return defaultSyncInterval, nil
 	}
@@ -37,10 +38,11 @@ func parseSyncInterval(raw string) (time.Duration, error) {
 // The out-of-tree trust anchor, if any, is a store-construction concern and is
 // not carried here.
 func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) string) provenance.SyncRequest {
-	// Trim before comparing: validateGitRemote validates these fields trimmed,
-	// so a value like "required " (a quoted trailing space in YAML) is accepted
-	// by config Load. An untrimmed compare here would fail open — dropping
-	// verification, or silently downgrading bidirectional to fetch-only.
+	// Trim every field before use: validateGitRemote validates these trimmed,
+	// so a quoted trailing space in YAML ("required ", "bidirectional ", a
+	// padded url/branch/key path) is accepted by config Load. An untrimmed
+	// consume here would fail open — dropping verification, downgrading to
+	// fetch-only, or producing a broken remote/branch/GIT_SSH_COMMAND.
 	verify := strings.TrimSpace(gitCfg.VerifySignatures)
 	remote := gitCfg.Remote
 	req := provenance.SyncRequest{
@@ -51,8 +53,8 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 	if remote == nil {
 		return req
 	}
-	req.RemoteURL = remote.URL
-	if b := remote.Branch; b != "" {
+	req.RemoteURL = strings.TrimSpace(remote.URL)
+	if b := strings.TrimSpace(remote.Branch); b != "" {
 		req.Branch = b
 	}
 	if strings.TrimSpace(remote.Mode) == "bidirectional" {
@@ -62,8 +64,10 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 	// transport credentials is the signal (known_hosts is required for an SSH
 	// url, so at least one is set). It is harmless for https, which git runs
 	// without consulting GIT_SSH_COMMAND.
-	if remote.Auth.SSHKey != "" || remote.Auth.KnownHosts != "" {
-		req.SSHCommand = provenance.BuildSSHCommand(resolve(remote.Auth.SSHKey), resolve(remote.Auth.KnownHosts))
+	sshKey := strings.TrimSpace(remote.Auth.SSHKey)
+	knownHosts := strings.TrimSpace(remote.Auth.KnownHosts)
+	if sshKey != "" || knownHosts != "" {
+		req.SSHCommand = provenance.BuildSSHCommand(resolve(sshKey), resolve(knownHosts))
 	}
 	return req
 }
