@@ -221,6 +221,11 @@ func (r *Registry) handleLoopDefinitionLint(_ context.Context, args map[string]a
 	if errText != "" {
 		resp["error"] = errText
 	}
+	if view, verr := currentLoopDefinitionView(r); verr == nil {
+		if advisory := placementAdvisoryFromView(spec.Name, spec.Tags, spec.ParentName, view); advisory != nil {
+			resp["placement_advisory"] = advisory
+		}
+	}
 	return ldMarshalToolJSON(resp)
 }
 

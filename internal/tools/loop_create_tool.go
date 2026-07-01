@@ -34,7 +34,7 @@ func (r *Registry) registerThaneLoopCreate() {
 			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
 			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; they do NOT wake the loop (an event_driven loop's wake is wired separately). " +
-			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared.",
+			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
 			"instructions", "sleep_min", "sleep_max", "sleep_default", "jitter",
@@ -135,6 +135,9 @@ func (r *Registry) createLoopContainer(ctx context.Context, args map[string]any,
 		"parent_name":          parentName,
 		"parent_loop_id":       parentID,
 		"tags":                 tags,
+	}
+	if advisory := r.livePlacementAdvisory(name, tags, parentName); advisory != nil {
+		result["placement_advisory"] = advisory
 	}
 	r.attachCreatedLoopView(result, launchResult.LoopID)
 	return ldMarshalToolJSON(result)
@@ -311,6 +314,9 @@ func (r *Registry) createLoopExecuting(ctx context.Context, args map[string]any,
 			"sleep_default": envelope.sleepDefault.String(),
 			"jitter":        envelope.jitter,
 		}
+	}
+	if advisory := r.livePlacementAdvisory(name, tags, parentName); advisory != nil {
+		result["placement_advisory"] = advisory
 	}
 	r.attachCreatedLoopView(result, launchResult.LoopID)
 	return ldMarshalToolJSON(result)
