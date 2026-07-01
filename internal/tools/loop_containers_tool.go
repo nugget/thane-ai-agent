@@ -21,7 +21,7 @@ func (r *Registry) registerLoopContainers() {
 		return
 	}
 	r.Register(&Tool{
-		Name: "loop_containers",
+		Name:        "loop_containers",
 		Description: "List the container loops — the grouping nodes that new loops nest under — as a placement directory (the loop-graph analog of doc_roots). Each entry carries the container's intent, how many loops it holds directly (child_count) and transitively (descendant_count), the capability tags it confers to everything nested under it (confers_tags), and a sample of its children by name. Use this before creating a loop to decide where it belongs: pick the container whose confers_tags and intent match the new loop's purpose, then pass its name as parent_name to thane_loop_create.",
 		Parameters: map[string]any{
 			"type":       "object",
