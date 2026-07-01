@@ -124,6 +124,17 @@ func ExampleConfig() *Config {
 						Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+3xdUdsJA9XoATiuDErHwn2cDSIO1U1/t+BuN6P3Gv",
 						Label:     "Bob (kb co-author)",
 					}},
+					Remote: &DocumentRootGitRemoteConfig{
+						URL:         "aimee@pocket.hollowoak.net:Thane/knowledge.git",
+						Branch:      "main",
+						Mode:        "bidirectional",
+						Interval:    "60s",
+						TrustAnchor: "~/.thane/keys/kb.allowed_signers",
+						Auth: DocumentRootGitRemoteAuthConfig{
+							SSHKey:     "~/.thane/keys/transport_ed25519",
+							KnownHosts: "~/.thane/ssh/known_hosts",
+						},
+					},
 				},
 			},
 			"scratchpad": {
