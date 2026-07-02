@@ -320,33 +320,6 @@ func TestBuildDocumentStoreOptionsVerifierUsesRepoLocalAllowedSigners(t *testing
 	}
 }
 
-func TestConfigureRepoLocalAllowedSignersBestEffortGitConfig(t *testing.T) {
-	targetPath := t.TempDir()
-	allowedPath := filepath.Join(targetPath, ".allowed_signers")
-	if err := os.WriteFile(allowedPath, []byte("thane@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForConfigOnly\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile .allowed_signers: %v", err)
-	}
-
-	if err := configureRepoLocalAllowedSigners("kb", targetPath, slog.Default()); err != nil {
-		t.Fatalf("configureRepoLocalAllowedSigners() = %v, want nil despite non-git dir", err)
-	}
-}
-
-func TestConfigureRepoLocalAllowedSignersRejectsNonRegularFile(t *testing.T) {
-	targetPath := t.TempDir()
-	if err := os.Mkdir(filepath.Join(targetPath, ".allowed_signers"), 0o755); err != nil {
-		t.Fatalf("Mkdir .allowed_signers: %v", err)
-	}
-
-	err := configureRepoLocalAllowedSigners("kb", targetPath, slog.Default())
-	if err == nil {
-		t.Fatal("configureRepoLocalAllowedSigners() returned nil, want non-regular file error")
-	}
-	if !strings.Contains(err.Error(), "must be a regular file") {
-		t.Fatalf("error = %v, want regular-file message", err)
-	}
-}
-
 // TestBuildDocumentStoreOptionsNonBootstrapMissingDirStillErrors
 // preserves the original behavior for non-bootstrap configs: a
 // missing directory without git+sign_commits stays an error, since
@@ -405,32 +378,6 @@ func TestApplyBootVerification(t *testing.T) {
 				t.Fatalf("applyBootVerification = %v, want nil", err)
 			}
 		})
-	}
-}
-
-func TestRootPrefixWithinRepo(t *testing.T) {
-	t.Parallel()
-
-	rootDir := t.TempDir()
-	repo := filepath.Join(rootDir, "repo")
-	child := filepath.Join(repo, "knowledge", "kb")
-	prefix, err := rootPrefixWithinRepo(repo, child)
-	if err != nil {
-		t.Fatalf("rootPrefixWithinRepo child: %v", err)
-	}
-	if prefix != "knowledge/kb" {
-		t.Fatalf("prefix = %q, want knowledge/kb", prefix)
-	}
-	prefix, err = rootPrefixWithinRepo(repo, repo)
-	if err != nil {
-		t.Fatalf("rootPrefixWithinRepo same: %v", err)
-	}
-	if prefix != "" {
-		t.Fatalf("same-root prefix = %q, want empty", prefix)
-	}
-	_, err = rootPrefixWithinRepo(filepath.Join(rootDir, "other"), child)
-	if err == nil {
-		t.Fatal("rootPrefixWithinRepo outside repo returned nil, want error")
 	}
 }
 
