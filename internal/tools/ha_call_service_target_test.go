@@ -145,3 +145,64 @@ func containsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+func TestHACallService_DataCannotOverrideAddressing(t *testing.T) {
+	// data.entity_id would silently clobber the verified addressing and
+	// desync the reported result from the wire (PR #1189 review).
+	fake := targetTestServer(t)
+	reg := fake.registry(t)
+
+	_, err := reg.Execute(context.Background(), "ha_call_service",
+		`{"domain":"light","service":"turn_on","entity_id":"light.office_main","data":{"entity_id":"light.nonexistent","brightness_pct":50}}`)
+	if err == nil {
+		t.Fatal("addressing keys in data must be rejected")
+	}
+	if !strings.Contains(err.Error(), "data.entity_id is addressing") {
+		t.Errorf("error should teach where addressing belongs, got %q", err.Error())
+	}
+	if len(fake.servicePayloads) != 0 {
+		t.Errorf("no call may reach HA; got %v", fake.servicePayloads)
+	}
+}
+
+func TestHACallService_NonObjectTargetTeaches(t *testing.T) {
+	fake := targetTestServer(t)
+	reg := fake.registry(t)
+
+	_, err := reg.Execute(context.Background(), "ha_call_service",
+		`{"domain":"light","service":"turn_on","target":"office"}`)
+	if err == nil {
+		t.Fatal("string target must error, not fall through to the generic message")
+	}
+	if !strings.Contains(err.Error(), "target must be an object") {
+		t.Errorf("error should name the real problem, got %q", err.Error())
+	}
+}
+
+func TestHACallService_TargetEntityTypoIsRecoverable(t *testing.T) {
+	// Consistency with the single-entity path: an unknown target entity
+	// returns the did-you-mean envelope as a RESULT, not a tool error.
+	fake := targetTestServer(t)
+	reg := fake.registry(t)
+
+	out, err := reg.Execute(context.Background(), "ha_call_service",
+		`{"domain":"light","service":"turn_on","target":{"entity_id":"light.office_mian"}}`)
+	if err != nil {
+		t.Fatalf("typo'd target entity must be recoverable, got error: %v", err)
+	}
+	var envelope struct {
+		Found      bool `json:"found"`
+		Candidates []struct {
+			EntityID string `json:"entity_id"`
+		} `json:"candidates"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &envelope); uerr != nil {
+		t.Fatalf("expected not-found envelope, got: %s", out)
+	}
+	if envelope.Found || len(envelope.Candidates) == 0 {
+		t.Errorf("envelope should carry did-you-mean candidates: %s", out)
+	}
+	if len(fake.servicePayloads) != 0 {
+		t.Errorf("no call may reach HA on a typo; got %v", fake.servicePayloads)
+	}
+}

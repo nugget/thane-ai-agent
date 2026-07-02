@@ -34,21 +34,34 @@ type haCallServiceResult struct {
 // the order the resolver processes them.
 var haTargetKeys = []string{"entity_id", "device_id", "area_id", "floor_id", "label_id"}
 
+// targetResolution is resolveServiceTarget's outcome. When Suggestion
+// is non-empty the resolution stopped on an unknown target entity and
+// Suggestion carries the same recoverable did-you-mean envelope the
+// single-entity path returns — the handler returns it as the tool
+// result (not an error), keeping typo recovery consistent across both
+// addressing forms.
+type targetResolution struct {
+	Resolved   map[string]any
+	Suggestion string
+}
+
 // resolveServiceTarget validates and resolves a target block. IDs pass
-// through; for areas, floors, labels, and devices a human name (or area
-// alias) resolves to its ID case-insensitively, because the model often
-// holds the name ("Office") before the ID ("office"). Unknown
-// references fail fast with the known names — HA itself silently
-// no-ops an unknown area_id, which is the phantom-success failure mode
-// this tool exists to prevent.
-func (r *Registry) resolveServiceTarget(ctx context.Context, raw map[string]any) (map[string]any, error) {
-	resolved := make(map[string]any, len(raw))
+// through; for areas, floors, labels, and devices a human name (or
+// area/floor alias) resolves to its ID case-insensitively, because the
+// model often holds the name ("Office") before the ID ("office").
+// Unknown references fail fast with the known names — HA itself
+// silently no-ops an unknown area_id, which is the phantom-success
+// failure mode this tool exists to prevent. Each registry is fetched
+// once per call (and served from the client's TTL cache besides), no
+// matter how many values a key carries.
+func (r *Registry) resolveServiceTarget(ctx context.Context, raw map[string]any) (targetResolution, error) {
 	for key := range raw {
 		if !slicesContains(haTargetKeys, key) {
-			return nil, fmt.Errorf("unknown target key %q; valid keys: %s", key, strings.Join(haTargetKeys, ", "))
+			return targetResolution{}, fmt.Errorf("unknown target key %q; valid keys: %s", key, strings.Join(haTargetKeys, ", "))
 		}
 	}
 
+	resolved := make(map[string]any, len(raw))
 	for _, key := range haTargetKeys {
 		rawVal, ok := raw[key]
 		if !ok {
@@ -56,19 +69,34 @@ func (r *Registry) resolveServiceTarget(ctx context.Context, raw map[string]any)
 		}
 		values, err := stringOrList(rawVal)
 		if err != nil {
-			return nil, fmt.Errorf("target.%s: %w", key, err)
+			return targetResolution{}, fmt.Errorf("target.%s: %w", key, err)
 		}
 		if len(values) == 0 {
 			continue
 		}
-		out := make([]string, 0, len(values))
-		for _, v := range values {
-			id, err := r.resolveTargetValue(ctx, key, v)
-			if err != nil {
-				return nil, err
+
+		var out []string
+		switch key {
+		case "entity_id":
+			for _, v := range values {
+				// Same phantom-success guard as the single-entity
+				// path, with the same recoverable outcome: HA accepts
+				// unknown entity ids and silently no-ops.
+				if _, err := r.ha.GetState(ctx, v); err != nil {
+					if IsHAEntityNotFound(err) {
+						return targetResolution{Suggestion: SuggestEntityNotFound(ctx, r.ha, v)}, nil
+					}
+					return targetResolution{}, fmt.Errorf("verify target entity %q: %w", v, err)
+				}
+				out = append(out, v)
 			}
-			out = append(out, id)
+		default:
+			out, err = r.resolveRegistryTargets(ctx, key, values)
+			if err != nil {
+				return targetResolution{}, err
+			}
 		}
+
 		if len(out) == 1 {
 			resolved[key] = out[0]
 		} else {
@@ -76,111 +104,105 @@ func (r *Registry) resolveServiceTarget(ctx context.Context, raw map[string]any)
 		}
 	}
 	if len(resolved) == 0 {
-		return nil, fmt.Errorf("target must set at least one of: %s", strings.Join(haTargetKeys, ", "))
+		return targetResolution{}, fmt.Errorf("target must set at least one of: %s", strings.Join(haTargetKeys, ", "))
 	}
-	return resolved, nil
+	return targetResolution{Resolved: resolved}, nil
 }
 
-func (r *Registry) resolveTargetValue(ctx context.Context, key, value string) (string, error) {
-	switch key {
-	case "entity_id":
-		// Same phantom-success guard as the single-entity path: HA
-		// accepts unknown entity ids and silently no-ops.
-		if _, err := r.ha.GetState(ctx, value); err != nil {
-			if IsHAEntityNotFound(err) {
-				return "", fmt.Errorf("target entity %q not found: %s", value, SuggestEntityNotFound(ctx, r.ha, value))
-			}
-			return "", fmt.Errorf("verify target entity %q: %w", value, err)
+// registryTargetEntry is one resolvable row of a registry: its ID plus
+// the names and aliases a caller may reference it by.
+type registryTargetEntry struct {
+	id      string
+	matches []string
+}
+
+// resolveRegistryTargets resolves every value for one registry-backed
+// target key against a single registry fetch.
+func (r *Registry) resolveRegistryTargets(ctx context.Context, key string, values []string) ([]string, error) {
+	entries, kind, err := r.registryTargetEntries(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s %q: %w", kind, values[0], err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if len(e.matches) > 0 {
+			names = append(names, e.matches[0])
 		}
-		return value, nil
+	}
+
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		id, ok := matchRegistryTarget(entries, v)
+		if !ok {
+			return nil, fmt.Errorf("unknown %s %q; known %ss: %s", kind, v, kind, joinCapped(names, 15))
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func matchRegistryTarget(entries []registryTargetEntry, value string) (string, bool) {
+	for _, e := range entries {
+		if e.id == value {
+			return e.id, true
+		}
+	}
+	lower := strings.ToLower(value)
+	for _, e := range entries {
+		for _, m := range e.matches {
+			if strings.ToLower(m) == lower {
+				return e.id, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (r *Registry) registryTargetEntries(ctx context.Context, key string) ([]registryTargetEntry, string, error) {
+	switch key {
 	case "area_id":
 		areas, err := r.ha.GetAreas(ctx)
 		if err != nil {
-			return "", fmt.Errorf("resolve area %q: %w", value, err)
+			return nil, "area", err
 		}
-		names := make([]string, 0, len(areas))
+		entries := make([]registryTargetEntry, 0, len(areas))
 		for _, a := range areas {
-			if a.AreaID == value {
-				return value, nil
-			}
-			names = append(names, a.Name)
+			entries = append(entries, registryTargetEntry{id: a.AreaID, matches: append([]string{a.Name}, a.Aliases...)})
 		}
-		lower := strings.ToLower(value)
-		for _, a := range areas {
-			if strings.ToLower(a.Name) == lower {
-				return a.AreaID, nil
-			}
-			for _, alias := range a.Aliases {
-				if strings.ToLower(alias) == lower {
-					return a.AreaID, nil
-				}
-			}
-		}
-		return "", fmt.Errorf("unknown area %q; known areas: %s", value, joinCapped(names, 15))
+		return entries, "area", nil
 	case "floor_id":
 		floors, err := r.ha.GetFloorRegistry(ctx)
 		if err != nil {
-			return "", fmt.Errorf("resolve floor %q: %w", value, err)
+			return nil, "floor", err
 		}
-		names := make([]string, 0, len(floors))
+		entries := make([]registryTargetEntry, 0, len(floors))
 		for _, f := range floors {
-			if f.FloorID == value {
-				return value, nil
-			}
-			names = append(names, f.Name)
+			entries = append(entries, registryTargetEntry{id: f.FloorID, matches: append([]string{f.Name}, f.Aliases...)})
 		}
-		lower := strings.ToLower(value)
-		for _, f := range floors {
-			if strings.ToLower(f.Name) == lower {
-				return f.FloorID, nil
-			}
-			for _, alias := range f.Aliases {
-				if strings.ToLower(alias) == lower {
-					return f.FloorID, nil
-				}
-			}
-		}
-		return "", fmt.Errorf("unknown floor %q; known floors: %s", value, joinCapped(names, 15))
+		return entries, "floor", nil
 	case "label_id":
 		labels, err := r.ha.GetLabelRegistry(ctx)
 		if err != nil {
-			return "", fmt.Errorf("resolve label %q: %w", value, err)
+			return nil, "label", err
 		}
-		names := make([]string, 0, len(labels))
+		entries := make([]registryTargetEntry, 0, len(labels))
 		for _, l := range labels {
-			if l.LabelID == value {
-				return value, nil
-			}
-			names = append(names, l.Name)
+			entries = append(entries, registryTargetEntry{id: l.LabelID, matches: []string{l.Name}})
 		}
-		lower := strings.ToLower(value)
-		for _, l := range labels {
-			if strings.ToLower(l.Name) == lower {
-				return l.LabelID, nil
-			}
-		}
-		return "", fmt.Errorf("unknown label %q; known labels: %s", value, joinCapped(names, 15))
+		return entries, "label", nil
 	case "device_id":
 		devices, err := r.ha.GetDeviceRegistry(ctx)
 		if err != nil {
-			return "", fmt.Errorf("resolve device %q: %w", value, err)
+			return nil, "device", err
 		}
-		names := make([]string, 0, len(devices))
+		entries := make([]registryTargetEntry, 0, len(devices))
 		for _, d := range devices {
-			if d.ID == value {
-				return value, nil
-			}
-			names = append(names, string(d.Name))
+			entries = append(entries, registryTargetEntry{id: d.ID, matches: []string{string(d.Name)}})
 		}
-		lower := strings.ToLower(value)
-		for _, d := range devices {
-			if strings.ToLower(string(d.Name)) == lower {
-				return d.ID, nil
-			}
-		}
-		return "", fmt.Errorf("unknown device %q; known devices: %s", value, joinCapped(names, 15))
+		return entries, "device", nil
 	}
-	return value, nil
+	return nil, key, fmt.Errorf("unsupported registry target key %q", key)
 }
 
 func haCallServiceResponse(domain, service, entityID string, target map[string]any, changed []homeassistant.State) string {

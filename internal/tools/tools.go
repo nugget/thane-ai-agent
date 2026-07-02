@@ -1421,7 +1421,18 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	domain, _ := args["domain"].(string)
 	service, _ := args["service"].(string)
 	entityID, _ := args["entity_id"].(string)
-	targetRaw, hasTarget := args["target"].(map[string]any)
+
+	// A present-but-malformed target must say so, not fall through to
+	// the generic "provide entity_id or target" error.
+	var targetRaw map[string]any
+	hasTarget := false
+	if rawTarget, present := args["target"]; present {
+		obj, ok := rawTarget.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("target must be an object like {\"area_id\": \"office\"}, got %T", rawTarget)
+		}
+		targetRaw, hasTarget = obj, true
+	}
 
 	if domain == "" || service == "" {
 		return "", fmt.Errorf("domain and service are required")
@@ -1434,6 +1445,20 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	}
 
 	data := map[string]any{}
+
+	// Merge service data FIRST, and refuse addressing keys inside it:
+	// data.entity_id would silently override the verified/resolved
+	// addressing below, reintroducing the phantom-success no-op and
+	// making the reported result disagree with what went to HA.
+	if extra, ok := args["data"].(map[string]any); ok {
+		for k, v := range extra {
+			if slicesContains(haTargetKeys, k) {
+				return "", fmt.Errorf("data.%s is addressing, not service data — use entity_id or target for addressing", k)
+			}
+			data[k] = v
+		}
+	}
+
 	var resolvedTarget map[string]any
 
 	if entityID != "" {
@@ -1449,19 +1474,15 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 		}
 		data["entity_id"] = entityID
 	} else {
-		var err error
-		resolvedTarget, err = r.resolveServiceTarget(ctx, targetRaw)
+		resolution, err := r.resolveServiceTarget(ctx, targetRaw)
 		if err != nil {
 			return "", err
 		}
-		for k, v := range resolvedTarget {
-			data[k] = v
+		if resolution.Suggestion != "" {
+			return resolution.Suggestion, nil
 		}
-	}
-
-	// Merge additional data
-	if extra, ok := args["data"].(map[string]any); ok {
-		for k, v := range extra {
+		resolvedTarget = resolution.Resolved
+		for k, v := range resolvedTarget {
 			data[k] = v
 		}
 	}
