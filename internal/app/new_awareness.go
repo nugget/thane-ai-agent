@@ -65,12 +65,14 @@ func (a *App) initAwareness(s *newState) error {
 	wmProvider := memory.NewWorkingMemoryProvider(a.wmStore, tools.ConversationIDFromContext)
 	a.loop.RegisterAlwaysContextProvider(wmProvider)
 
-	// Message-channel verbatim tail + older-sessions context. Gated on
-	// the message_channel capability tag, asserted by Signal (and
-	// future Matrix/iMessage) inbound bridges. Output sits in CONTINUITY
-	// CONTEXT (uncached) per docs/prompt-caching.md — the delta
-	// timestamps tick every turn so it's intrinsically uncacheable,
-	// but the cached prefix above stays warm.
+	// Message-channel older-sessions catalog. Gated on the
+	// message_channel capability tag, asserted by Signal (and future
+	// Matrix/iMessage) inbound bridges. Verbatim history is NOT
+	// injected here — stored history already reaches the model as
+	// role-native messages (#1160). Output sits in CONTINUITY CONTEXT
+	// (uncached) per docs/prompt-caching.md — the delta timestamps
+	// tick every turn so it's intrinsically uncacheable, but the
+	// cached prefix above stays warm.
 	messageChannelProvider := memory.NewMessageChannelProvider(
 		a.archiveStore,
 		tools.ConversationIDFromContext,
