@@ -33,6 +33,22 @@ func TestSyncStateRegistry(t *testing.T) {
 	}
 }
 
+func TestSyncStateRegistryZeroValue(t *testing.T) {
+	var r SyncStateRegistry
+
+	if prev, ok := r.RecordState(SyncState{Name: "kb", OK: true, Outcome: SyncClean}); ok {
+		t.Fatalf("RecordState on zero value replaced %+v, want no previous state", prev)
+	}
+	if st, ok := r.Get("kb"); !ok || st.Outcome != SyncClean {
+		t.Fatalf("Get(kb) after zero-value RecordState = %+v, ok=%v", st, ok)
+	}
+
+	r.AdvanceRemote("kb", "sha1")
+	if got := r.LastKnownRemote("kb"); got != "sha1" {
+		t.Fatalf("LastKnownRemote(kb) after zero-value AdvanceRemote = %q, want sha1", got)
+	}
+}
+
 // TestSyncStateRegistryConcurrent exercises a syncer loop racing an
 // operability surface under -race.
 func TestSyncStateRegistryConcurrent(t *testing.T) {

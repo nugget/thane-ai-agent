@@ -51,6 +51,7 @@ func NewSyncStateRegistry() *SyncStateRegistry {
 func (r *SyncStateRegistry) RecordState(st SyncState) (SyncState, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureLocked()
 	prev, ok := r.state[st.Name]
 	r.state[st.Name] = st
 	return prev, ok
@@ -64,6 +65,7 @@ func (r *SyncStateRegistry) AdvanceRemote(name, sha string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureLocked()
 	r.lastRemote[name] = sha
 }
 
@@ -93,4 +95,13 @@ func (r *SyncStateRegistry) All() []SyncState {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (r *SyncStateRegistry) ensureLocked() {
+	if r.state == nil {
+		r.state = make(map[string]SyncState)
+	}
+	if r.lastRemote == nil {
+		r.lastRemote = make(map[string]string)
+	}
 }
