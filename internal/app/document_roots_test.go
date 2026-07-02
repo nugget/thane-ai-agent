@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -384,7 +385,9 @@ func TestApplyBootVerification(t *testing.T) {
 func TestDocumentRootProvenanceWriterDoesNotCleanEscapesIntoPrefix(t *testing.T) {
 	t.Parallel()
 
-	writer := &documentRootProvenanceWriter{prefix: "knowledge/kb"}
+	writer := &documentRootProvenanceWriter{checkout: &checkout.Signed{
+		Root: checkout.Root{Prefix: "knowledge/kb"},
+	}}
 	if got := writer.storeFilename("notes/doc.md"); got != "knowledge/kb/notes/doc.md" {
 		t.Fatalf("storeFilename(valid) = %q, want prefixed path", got)
 	}

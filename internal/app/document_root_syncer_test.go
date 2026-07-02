@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
 
 func testLogger() *slog.Logger {
@@ -65,7 +65,7 @@ func TestBuildSyncRequest(t *testing.T) {
 		if req.Branch != "main" {
 			t.Errorf("Branch = %q, want default main", req.Branch)
 		}
-		if req.Mode != provenance.SyncModeBidirectional {
+		if req.Mode != checkout.SyncModeBidirectional {
 			t.Errorf("Mode = %v, want bidirectional", req.Mode)
 		}
 		if !req.RequireVerify {
@@ -88,7 +88,7 @@ func TestBuildSyncRequest(t *testing.T) {
 		if req.Branch != "trunk" {
 			t.Errorf("Branch = %q, want trunk", req.Branch)
 		}
-		if req.Mode != provenance.SyncModeFetch {
+		if req.Mode != checkout.SyncModeFetch {
 			t.Errorf("Mode = %v, want fetch", req.Mode)
 		}
 		if !req.RequireVerify {
@@ -119,7 +119,7 @@ func TestBuildSyncRequest(t *testing.T) {
 		if !req.RequireVerify {
 			t.Error("RequireVerify = false for 'required ' (trailing space); must fail closed to true")
 		}
-		if req.Mode != provenance.SyncModeBidirectional {
+		if req.Mode != checkout.SyncModeBidirectional {
 			t.Error("Mode != bidirectional for 'bidirectional ' (trailing space)")
 		}
 	})
@@ -188,7 +188,7 @@ func TestBuildDocRootSyncer(t *testing.T) {
 		if s.root != "kb" || s.interval != 30*time.Second {
 			t.Errorf("root=%q interval=%v, want kb/30s", s.root, s.interval)
 		}
-		if s.request.Mode != provenance.SyncModeBidirectional || !s.request.RequireVerify {
+		if s.request.Mode != checkout.SyncModeBidirectional || !s.request.RequireVerify {
 			t.Errorf("request = %+v, want bidirectional + RequireVerify", s.request)
 		}
 		if s.registry != reg {
@@ -207,9 +207,9 @@ func TestSyncStateRegistry(t *testing.T) {
 		t.Error("get on empty registry returned ok")
 	}
 
-	r.setState(syncState{Root: "kb", OK: true, Outcome: provenance.SyncClean})
-	r.setState(syncState{Root: "apex", OK: true, Outcome: provenance.SyncFastForwarded})
-	if st, ok := r.get("kb"); !ok || st.Outcome != provenance.SyncClean {
+	r.setState(syncState{Root: "kb", OK: true, Outcome: checkout.SyncClean})
+	r.setState(syncState{Root: "apex", OK: true, Outcome: checkout.SyncFastForwarded})
+	if st, ok := r.get("kb"); !ok || st.Outcome != checkout.SyncClean {
 		t.Errorf("get(kb) = %+v, ok=%v", st, ok)
 	}
 
@@ -235,7 +235,7 @@ func TestSyncStateRegistryConcurrent(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 1000; i++ {
-			r.setState(syncState{Root: "kb", Outcome: provenance.SyncClean})
+			r.setState(syncState{Root: "kb", Outcome: checkout.SyncClean})
 			r.advanceRemote("kb", "sha")
 		}
 		close(done)
@@ -251,15 +251,15 @@ func TestSyncStateRegistryConcurrent(t *testing.T) {
 // fakeEngine returns scripted results for successive Sync calls and records the
 // requests it received.
 type fakeEngine struct {
-	results []provenance.SyncResult
+	results []checkout.SyncResult
 	errs    []error
-	calls   []provenance.SyncRequest
+	calls   []checkout.SyncRequest
 }
 
-func (f *fakeEngine) Sync(_ context.Context, req provenance.SyncRequest) (provenance.SyncResult, error) {
+func (f *fakeEngine) Sync(_ context.Context, req checkout.SyncRequest) (checkout.SyncResult, error) {
 	i := len(f.calls)
 	f.calls = append(f.calls, req)
-	var res provenance.SyncResult
+	var res checkout.SyncResult
 	var err error
 	if i < len(f.results) {
 		res = f.results[i]
@@ -274,7 +274,7 @@ func newTestSyncer(engine syncEngine, reg *syncStateRegistry, refresh func(conte
 	return &docRootSyncer{
 		root:     "kb",
 		engine:   engine,
-		request:  provenance.SyncRequest{Branch: "main", Mode: provenance.SyncModeBidirectional, RequireVerify: true},
+		request:  checkout.SyncRequest{Branch: "main", Mode: checkout.SyncModeBidirectional, RequireVerify: true},
 		refresh:  refresh,
 		registry: reg,
 		logger:   testLogger(),
@@ -284,14 +284,14 @@ func newTestSyncer(engine syncEngine, reg *syncStateRegistry, refresh func(conte
 func TestRunOnceFastForwardReindexesAndAdvances(t *testing.T) {
 	reg := newSyncStateRegistry()
 	refreshes := 0
-	eng := &fakeEngine{results: []provenance.SyncResult{
-		{Outcome: provenance.SyncFastForwarded, Behind: 2, LocalHead: "l", RemoteHead: "rA"},
-		{Outcome: provenance.SyncClean, LocalHead: "rA", RemoteHead: "rA"},
+	eng := &fakeEngine{results: []checkout.SyncResult{
+		{Outcome: checkout.SyncFastForwarded, Behind: 2, LocalHead: "l", RemoteHead: "rA"},
+		{Outcome: checkout.SyncClean, LocalHead: "rA", RemoteHead: "rA"},
 	}}
 	s := newTestSyncer(eng, reg, func(context.Context) error { refreshes++; return nil })
 
 	st := s.runOnce(context.Background())
-	if !st.OK || st.Outcome != provenance.SyncFastForwarded {
+	if !st.OK || st.Outcome != checkout.SyncFastForwarded {
 		t.Fatalf("state = %+v, want ok fast_forwarded", st)
 	}
 	if refreshes != 1 {
@@ -318,13 +318,13 @@ func TestRunOnceRemoteBehindDoesNotAdvanceOrReindex(t *testing.T) {
 	reg := newSyncStateRegistry()
 	reg.advanceRemote("kb", "rA") // a prior legitimate remote head
 	refreshes := 0
-	eng := &fakeEngine{results: []provenance.SyncResult{
-		{Outcome: provenance.SyncRemoteBehind, LocalHead: "l", RemoteHead: "rOld", Detail: "rewound"},
+	eng := &fakeEngine{results: []checkout.SyncResult{
+		{Outcome: checkout.SyncRemoteBehind, LocalHead: "l", RemoteHead: "rOld", Detail: "rewound"},
 	}}
 	s := newTestSyncer(eng, reg, func(context.Context) error { refreshes++; return nil })
 
 	st := s.runOnce(context.Background())
-	if st.Outcome != provenance.SyncRemoteBehind {
+	if st.Outcome != checkout.SyncRemoteBehind {
 		t.Fatalf("outcome = %q, want remote_behind", st.Outcome)
 	}
 	if refreshes != 0 {
@@ -340,14 +340,14 @@ func TestRunOnceRemoteBehindDoesNotAdvanceOrReindex(t *testing.T) {
 // outcomes advance it; refused outcomes leave it untouched so a later rewind
 // stays detectable.
 func TestRunOnceAdvanceBaseline(t *testing.T) {
-	accepted := []provenance.SyncOutcome{provenance.SyncClean, provenance.SyncFastForwarded, provenance.SyncPushed}
-	refused := []provenance.SyncOutcome{provenance.SyncDiverged, provenance.SyncBlocked, provenance.SyncRemoteBehind}
+	accepted := []checkout.SyncOutcome{checkout.SyncClean, checkout.SyncFastForwarded, checkout.SyncPushed}
+	refused := []checkout.SyncOutcome{checkout.SyncDiverged, checkout.SyncBlocked, checkout.SyncRemoteBehind}
 
 	for _, oc := range accepted {
 		t.Run("advances_on_"+string(oc), func(t *testing.T) {
 			reg := newSyncStateRegistry()
 			reg.advanceRemote("kb", "prior")
-			eng := &fakeEngine{results: []provenance.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
+			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
 			newTestSyncer(eng, reg, nil).runOnce(context.Background())
 			if got := reg.lastKnownRemote("kb"); got != "new" {
 				t.Errorf("lastKnownRemote = %q, want advanced to new for accepted outcome %q", got, oc)
@@ -358,7 +358,7 @@ func TestRunOnceAdvanceBaseline(t *testing.T) {
 		t.Run("holds_on_"+string(oc), func(t *testing.T) {
 			reg := newSyncStateRegistry()
 			reg.advanceRemote("kb", "prior")
-			eng := &fakeEngine{results: []provenance.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
+			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
 			newTestSyncer(eng, reg, nil).runOnce(context.Background())
 			if got := reg.lastKnownRemote("kb"); got != "prior" {
 				t.Errorf("lastKnownRemote = %q, want held at prior for refused outcome %q", got, oc)
@@ -369,13 +369,13 @@ func TestRunOnceAdvanceBaseline(t *testing.T) {
 
 func TestRunOnceNotifiesOnAttentionTransitions(t *testing.T) {
 	reg := newSyncStateRegistry()
-	eng := &fakeEngine{results: []provenance.SyncResult{
-		{Outcome: provenance.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
-		{Outcome: provenance.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
-		{Outcome: provenance.SyncBlocked, RemoteHead: "r2", Detail: "first untrusted commit def456"},
-		{Outcome: provenance.SyncDiverged, RemoteHead: "r3", Detail: "local and remote diverged"},
-		{Outcome: provenance.SyncFastForwarded, RemoteHead: "r3"},
-		{Outcome: provenance.SyncClean, RemoteHead: "r3"},
+	eng := &fakeEngine{results: []checkout.SyncResult{
+		{Outcome: checkout.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
+		{Outcome: checkout.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
+		{Outcome: checkout.SyncBlocked, RemoteHead: "r2", Detail: "first untrusted commit def456"},
+		{Outcome: checkout.SyncDiverged, RemoteHead: "r3", Detail: "local and remote diverged"},
+		{Outcome: checkout.SyncFastForwarded, RemoteHead: "r3"},
+		{Outcome: checkout.SyncClean, RemoteHead: "r3"},
 	}}
 	s := newTestSyncer(eng, reg, nil)
 	var transitions []syncStateTransition
@@ -394,13 +394,13 @@ func TestRunOnceNotifiesOnAttentionTransitions(t *testing.T) {
 	tests := []struct {
 		i       int
 		kind    syncTransitionKind
-		outcome provenance.SyncOutcome
+		outcome checkout.SyncOutcome
 		detail  string
 	}{
-		{0, syncTransitionAttentionRequired, provenance.SyncBlocked, "first untrusted commit abc123"},
-		{1, syncTransitionAttentionRequired, provenance.SyncBlocked, "first untrusted commit def456"},
-		{2, syncTransitionAttentionRequired, provenance.SyncDiverged, "local and remote diverged"},
-		{3, syncTransitionRecovered, provenance.SyncFastForwarded, ""},
+		{0, syncTransitionAttentionRequired, checkout.SyncBlocked, "first untrusted commit abc123"},
+		{1, syncTransitionAttentionRequired, checkout.SyncBlocked, "first untrusted commit def456"},
+		{2, syncTransitionAttentionRequired, checkout.SyncDiverged, "local and remote diverged"},
+		{3, syncTransitionRecovered, checkout.SyncFastForwarded, ""},
 	}
 	for _, tt := range tests {
 		tr := transitions[tt.i]
@@ -409,7 +409,7 @@ func TestRunOnceNotifiesOnAttentionTransitions(t *testing.T) {
 				tt.i, tr.Kind, tr.Current.Outcome, tr.Current.Detail, tt.kind, tt.outcome, tt.detail)
 		}
 	}
-	if transitions[3].Previous.Outcome != provenance.SyncDiverged {
+	if transitions[3].Previous.Outcome != checkout.SyncDiverged {
 		t.Fatalf("recovery previous outcome = %q, want diverged", transitions[3].Previous.Outcome)
 	}
 }
@@ -428,7 +428,7 @@ func TestRunReturnsOnCancel(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := newSyncStateRegistry()
-			eng := &fakeEngine{results: []provenance.SyncResult{{Outcome: provenance.SyncClean, RemoteHead: "r"}}}
+			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: checkout.SyncClean, RemoteHead: "r"}}}
 			s := newTestSyncer(eng, reg, nil)
 			s.interval = tc.interval
 			ctx, cancel := context.WithCancel(context.Background())

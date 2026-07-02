@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
-	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
 
 // defaultSyncBranch and defaultSyncInterval are applied where a root's
@@ -33,12 +33,12 @@ func parseSyncInterval(raw string) (time.Duration, error) {
 	return time.ParseDuration(raw)
 }
 
-// buildSyncRequest maps a root's git config onto a [provenance.SyncRequest].
+// buildSyncRequest maps a root's git config onto a [checkout.SyncRequest].
 // resolve expands a configured path (~, environment variables) — the caller
 // supplies the paths.Resolver-backed closure; tests pass an identity function.
 // The out-of-tree trust anchor, if any, is a store-construction concern and is
 // not carried here.
-func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) string) provenance.SyncRequest {
+func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) string) checkout.SyncRequest {
 	// Trim every field before use: validateGitRemote validates these trimmed,
 	// so a quoted trailing space in YAML ("required ", "bidirectional ", a
 	// padded url/branch/key path) is accepted by config Load. An untrimmed
@@ -46,9 +46,9 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 	// fetch-only, or producing a broken remote/branch/GIT_SSH_COMMAND.
 	verify := strings.TrimSpace(gitCfg.VerifySignatures)
 	remote := gitCfg.Remote
-	req := provenance.SyncRequest{
+	req := checkout.SyncRequest{
 		Branch:        defaultSyncBranch,
-		Mode:          provenance.SyncModeFetch,
+		Mode:          checkout.SyncModeFetch,
 		RequireVerify: verify == "warn" || verify == "required",
 	}
 	if remote == nil {
@@ -59,7 +59,7 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 		req.Branch = b
 	}
 	if strings.TrimSpace(remote.Mode) == "bidirectional" {
-		req.Mode = provenance.SyncModeBidirectional
+		req.Mode = checkout.SyncModeBidirectional
 	}
 	// GIT_SSH_COMMAND is only meaningful for an SSH remote; presence of ssh
 	// transport credentials is the signal (known_hosts is required for an SSH
@@ -68,7 +68,7 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 	sshKey := strings.TrimSpace(remote.Auth.SSHKey)
 	knownHosts := strings.TrimSpace(remote.Auth.KnownHosts)
 	if sshKey != "" || knownHosts != "" {
-		req.SSHCommand = provenance.BuildSSHCommand(resolve(sshKey), resolve(knownHosts))
+		req.SSHCommand = checkout.BuildSSHCommand(resolve(sshKey), resolve(knownHosts))
 	}
 	return req
 }
@@ -111,7 +111,7 @@ func buildDocRootSyncer(root string, gitCfg config.DocumentRootGitConfig, engine
 type syncState struct {
 	Root       string
 	OK         bool // false when the last pass errored operationally
-	Outcome    provenance.SyncOutcome
+	Outcome    checkout.SyncOutcome
 	Ahead      int
 	Behind     int
 	LocalHead  string
@@ -189,10 +189,10 @@ func (r *syncStateRegistry) all() []syncState {
 }
 
 // syncEngine is the sync surface a docRootSyncer drives — satisfied by
-// *provenance.Store. The interface keeps runOnce unit-testable with a fake,
+// *checkout.Signed. The interface keeps runOnce unit-testable with a fake,
 // without a live git repository.
 type syncEngine interface {
-	Sync(ctx context.Context, req provenance.SyncRequest) (provenance.SyncResult, error)
+	Sync(ctx context.Context, req checkout.SyncRequest) (checkout.SyncResult, error)
 }
 
 type syncTransitionKind string
@@ -218,8 +218,8 @@ type syncTransitionNotifier func(context.Context, syncStateTransition) error
 type docRootSyncer struct {
 	root             string
 	engine           syncEngine
-	request          provenance.SyncRequest // LastKnownRemote is filled per pass
-	interval         time.Duration          // 0 disables the ticker (sync-on-demand only)
+	request          checkout.SyncRequest // LastKnownRemote is filled per pass
+	interval         time.Duration        // 0 disables the ticker (sync-on-demand only)
 	refresh          func(context.Context) error
 	notifyTransition syncTransitionNotifier
 	registry         *syncStateRegistry
@@ -279,9 +279,9 @@ func classifySyncStateTransition(prev syncState, hadPrev bool, current syncState
 	return syncStateTransition{}, false
 }
 
-func syncOutcomeNeedsAttention(outcome provenance.SyncOutcome) bool {
+func syncOutcomeNeedsAttention(outcome checkout.SyncOutcome) bool {
 	switch outcome {
-	case provenance.SyncBlocked, provenance.SyncDiverged, provenance.SyncRemoteBehind:
+	case checkout.SyncBlocked, checkout.SyncDiverged, checkout.SyncRemoteBehind:
 		return true
 	default:
 		return false
@@ -312,7 +312,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	st.Detail = res.Detail
 
 	switch res.Outcome {
-	case provenance.SyncBlocked, provenance.SyncDiverged, provenance.SyncRemoteBehind:
+	case checkout.SyncBlocked, checkout.SyncDiverged, checkout.SyncRemoteBehind:
 		s.logger.Warn("document root sync needs attention",
 			"root", s.root, "outcome", res.Outcome, "detail", res.Detail)
 	default:
@@ -322,7 +322,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 
 	// A fast-forward moved the worktree; re-index so reads see the new content
 	// without waiting for the periodic refresher.
-	if res.Outcome == provenance.SyncFastForwarded && s.refresh != nil {
+	if res.Outcome == checkout.SyncFastForwarded && s.refresh != nil {
 		if rerr := s.refresh(ctx); rerr != nil && ctx.Err() == nil {
 			s.logger.Warn("re-index after sync fast-forward failed", "root", s.root, "error", rerr)
 		}
@@ -335,7 +335,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	// the baseline to a head thane never accepted, or a later real rewind of
 	// the true line would escape detection and be pushed over.
 	switch res.Outcome {
-	case provenance.SyncClean, provenance.SyncFastForwarded, provenance.SyncPushed:
+	case checkout.SyncClean, checkout.SyncFastForwarded, checkout.SyncPushed:
 		s.registry.advanceRemote(s.root, res.RemoteHead)
 	}
 	return st

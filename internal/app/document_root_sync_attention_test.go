@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
-	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
@@ -39,7 +39,7 @@ func TestDocRootSyncAttentionNotifierSendsCoreWake(t *testing.T) {
 		Current: syncState{
 			Root:       "kb",
 			OK:         true,
-			Outcome:    provenance.SyncBlocked,
+			Outcome:    checkout.SyncBlocked,
 			Ahead:      0,
 			Behind:     2,
 			LocalHead:  "local",
@@ -80,7 +80,7 @@ func TestDocRootSyncAttentionNotifierSendsCoreWake(t *testing.T) {
 	if event.Source != "document_root_sync" || event.Type != string(syncTransitionAttentionRequired) {
 		t.Fatalf("event = %#v, want document_root_sync attention event", event)
 	}
-	if event.Metadata["root"] != "kb" || event.Metadata["outcome"] != string(provenance.SyncBlocked) || event.Metadata["detail"] != "first untrusted commit abc123" {
+	if event.Metadata["root"] != "kb" || event.Metadata["outcome"] != string(checkout.SyncBlocked) || event.Metadata["detail"] != "first untrusted commit abc123" {
 		t.Fatalf("event metadata = %#v", event.Metadata)
 	}
 	changedDetail := transition
@@ -96,13 +96,13 @@ func TestDocRootSyncRecoveryWakeIsNotSupervisorForced(t *testing.T) {
 		Previous: syncState{
 			Root:    "kb",
 			OK:      true,
-			Outcome: provenance.SyncBlocked,
+			Outcome: checkout.SyncBlocked,
 			Detail:  "first untrusted commit abc123",
 		},
 		Current: syncState{
 			Root:    "kb",
 			OK:      true,
-			Outcome: provenance.SyncFastForwarded,
+			Outcome: checkout.SyncFastForwarded,
 		},
 		HasPrevious: true,
 	})
