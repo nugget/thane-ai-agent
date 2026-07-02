@@ -39,7 +39,11 @@ type SignedSpec struct {
 type Signed struct {
 	Root
 
-	Name  string
+	// Name is the caller-facing checkout identifier used in logs and
+	// sync-state reporting.
+	Name string
+	// Store is the provenance engine for this checkout — the write,
+	// sync, and history surface callers use once the checkout is open.
 	Store *provenance.Store
 }
 

@@ -132,10 +132,15 @@ type FileHistory struct {
 	RecentEdits []EditEntry
 }
 
-// EditEntry represents a single commit in a file's history.
+// EditEntry is one commit in a file's history, as carried in
+// [FileHistory.RecentEdits] (newest first). The store's history readers
+// construct it; revision tools and provenance views render it.
 type EditEntry struct {
-	Hash      string
-	Message   string
+	// Hash is the full commit SHA of the edit.
+	Hash string
+	// Message is the commit's subject line as recorded by the writer.
+	Message string
+	// Timestamp is the commit time recorded in the repository.
 	Timestamp time.Time
 }
 

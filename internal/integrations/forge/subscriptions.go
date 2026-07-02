@@ -18,27 +18,84 @@ const (
 	subscriptionIndexKey  = "subscriptions"
 )
 
-// ProjectSubscription tracks releases and/or commits for one repository and
-// delivers new events to an existing loop.
+// ProjectSubscription tracks releases and/or commits for one repository
+// and delivers new events to an existing loop. The subscription tools
+// author it, the poller advances its cursor fields each cycle, and the
+// optional checkout fields — always configured as a pair — additionally
+// keep a local read-only mirror of the repository in sync so loops can
+// read source without network calls.
 type ProjectSubscription struct {
-	ID                string                  `json:"subscription_id"`
-	Account           string                  `json:"account"`
-	Repo              string                  `json:"repo"`
-	Name              string                  `json:"name"`
-	URL               string                  `json:"url,omitempty"`
-	Branch            string                  `json:"branch,omitempty"`
-	CheckoutPath      string                  `json:"local_checkout,omitempty"`
-	CheckoutRemoteURL string                  `json:"checkout_remote_url,omitempty"`
-	TrackReleases     bool                    `json:"track_releases"`
-	TrackCommits      bool                    `json:"track_commits"`
-	WakeTarget        messages.LoopWakeTarget `json:"wake_loop"`
-	LastRelease       string                  `json:"last_release,omitempty"`
-	LastCommit        string                  `json:"last_commit,omitempty"`
-	LatestRelease     string                  `json:"latest_release,omitempty"`
-	LatestCommit      string                  `json:"latest_commit,omitempty"`
-	LastSyncedSHA     string                  `json:"last_synced_sha,omitempty"`
-	LastChecked       time.Time               `json:"last_checked,omitempty"`
-	CreatedAt         time.Time               `json:"created_at"`
+	// ID uniquely identifies the subscription across its lifetime;
+	// tools use it for update and delete targeting.
+	ID string `json:"subscription_id"`
+
+	// Account names the configured forge account whose credentials and
+	// host serve this subscription's API calls.
+	Account string `json:"account"`
+
+	// Repo is the owner/name slug of the repository being watched.
+	Repo string `json:"repo"`
+
+	// Name is the operator- or model-chosen display label for the
+	// subscription, used in event payloads and status output.
+	Name string `json:"name"`
+
+	// URL is the repository's browse URL, carried for display and
+	// event enrichment. Empty when the forge doesn't report one.
+	URL string `json:"url,omitempty"`
+
+	// Branch restricts commit tracking to one branch. Empty means the
+	// repository's default branch.
+	Branch string `json:"branch,omitempty"`
+
+	// CheckoutPath is the absolute path of the local read-only mirror
+	// checkout. Empty disables the checkout features for this
+	// subscription.
+	CheckoutPath string `json:"local_checkout,omitempty"`
+
+	// CheckoutRemoteURL is the git remote the local mirror fetches
+	// from. Set exactly when a checkout is configured; the
+	// subscription tools validate and store it alongside the path.
+	CheckoutRemoteURL string `json:"checkout_remote_url,omitempty"`
+
+	// TrackReleases enables release polling for this subscription.
+	TrackReleases bool `json:"track_releases"`
+
+	// TrackCommits enables commit polling for this subscription.
+	TrackCommits bool `json:"track_commits"`
+
+	// WakeTarget names the loop that receives new forge events for
+	// this subscription via the message bus.
+	WakeTarget messages.LoopWakeTarget `json:"wake_loop"`
+
+	// LastRelease is the poller's release cursor — the marker of the
+	// newest release already delivered. Releases at or before it are
+	// not re-announced. Empty until the first release is seen.
+	LastRelease string `json:"last_release,omitempty"`
+
+	// LastCommit is the poller's commit cursor — the SHA of the newest
+	// commit already delivered. Empty until the first commit is seen.
+	LastCommit string `json:"last_commit,omitempty"`
+
+	// LatestRelease is the display title of the newest release seen,
+	// carried for status output; the cursor twin is LastRelease.
+	LatestRelease string `json:"latest_release,omitempty"`
+
+	// LatestCommit is the display title of the newest commit seen,
+	// carried for status output; the cursor twin is LastCommit.
+	LatestCommit string `json:"latest_commit,omitempty"`
+
+	// LastSyncedSHA is the remote head SHA at the last successful
+	// mirror-checkout sync. Empty when no checkout is configured or no
+	// sync has completed yet.
+	LastSyncedSHA string `json:"last_synced_sha,omitempty"`
+
+	// LastChecked is when the poller last completed a poll for this
+	// subscription, successful or not. Zero before the first poll.
+	LastChecked time.Time `json:"last_checked,omitempty"`
+
+	// CreatedAt is when the subscription was authored.
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // SubscriptionStore persists forge project subscriptions in opstate.
