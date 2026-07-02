@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -122,8 +124,31 @@ func (s *ShellExec) Exec(ctx context.Context, command string, timeoutSec int) (*
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Execute via shell
+	// Execute via shell. The command runs in its own process group and
+	// the deadline kills the whole group: CommandContext alone signals
+	// only the direct sh child, and orphaned grandchildren would keep
+	// the stdout/stderr pipes open, blocking Wait past the timeout
+	// indefinitely (#1167). WaitDelay backstops anything that escapes
+	// the group (e.g. a double-forked daemon) by abandoning the pipes
+	// after a grace period instead of hanging the agent turn.
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Start only arms the cancel watchdog after the process has
+		// started, so Process is non-nil here under current os/exec
+		// semantics — the guard is cheap insurance against that
+		// contract shifting. ESRCH means the group is already gone,
+		// which is success, not an error to surface through Wait.
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = 5 * time.Second
 	if s.workingDir != "" {
 		cmd.Dir = s.workingDir
 	}
