@@ -3,10 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
-	"path"
-	"path/filepath"
-	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
@@ -23,7 +21,7 @@ type documentRootProvenanceReviser struct {
 var _ documents.RootReviser = (*documentRootProvenanceReviser)(nil)
 
 func (r *documentRootProvenanceReviser) storeFilename(filename string) string {
-	return repoPrefixedFilename(r.prefix, filename)
+	return checkout.RepoFilename(r.prefix, filename)
 }
 
 func (r *documentRootProvenanceReviser) Resolve(ctx context.Context, filename, selector string) (documents.RevisionRef, error) {
@@ -124,18 +122,4 @@ func revisionSignerFromProvenance(cs provenance.CommitSigner) documents.Revision
 		KeyFingerprint: cs.KeyFingerprint,
 		Reason:         cs.Reason,
 	}
-}
-
-// repoPrefixedFilename joins a root-relative filename onto the repo prefix
-// (when the git repo is a parent of the root), leaving traversal/absolute
-// inputs untouched so downstream validation can reject them.
-func repoPrefixedFilename(prefix, filename string) string {
-	clean := filepath.ToSlash(filepath.Clean(filename))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
-		return clean
-	}
-	if prefix == "" || prefix == "." {
-		return clean
-	}
-	return path.Join(prefix, clean)
 }
