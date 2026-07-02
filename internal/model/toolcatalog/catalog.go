@@ -236,6 +236,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"contact_import_vcf":          {CanonicalID: "native:contact_import_vcf", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"contact_list":                {CanonicalID: "native:contact_list", Source: NativeToolSource, Tags: []string{"contacts"}},
 	"ha_list_entities":            {CanonicalID: "native:ha_list_entities", Source: NativeToolSource, Tags: []string{"ha"}},
+	"ha_automation_traces":        {CanonicalID: "native:ha_automation_traces", Source: NativeToolSource, Tags: []string{"ha"}},
 	"ha_list_services":            {CanonicalID: "native:ha_list_services", Source: NativeToolSource, Tags: []string{"ha"}},
 	"ha_search_states":            {CanonicalID: "native:ha_search_states", Source: NativeToolSource, Tags: []string{"ha"}},
 	"get_area_activity":           {CanonicalID: "native:get_area_activity", Source: NativeToolSource, Tags: []string{"ha"}},

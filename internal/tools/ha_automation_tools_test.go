@@ -22,6 +22,8 @@ type fakeHAServer struct {
 	mu           sync.Mutex
 	states       []homeassistant.State
 	services     []homeassistant.ServiceDomain
+	traces       map[string][]map[string]any
+	traceDetails map[string]map[string]any
 	configs      map[string]map[string]any
 	areas        []map[string]any
 	floors       []map[string]any
@@ -233,6 +235,20 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 	defer f.mu.Unlock()
 
 	switch msgType {
+	case "trace/list":
+		itemID, _ := msg["item_id"].(string)
+		list := f.traces[itemID]
+		if list == nil {
+			list = []map[string]any{}
+		}
+		return list, true
+	case "trace/get":
+		runID, _ := msg["run_id"].(string)
+		detail, ok := f.traceDetails[runID]
+		if !ok {
+			return nil, false
+		}
+		return detail, true
 	case "validate_config":
 		return f.validations, true
 	case "config/area_registry/list":

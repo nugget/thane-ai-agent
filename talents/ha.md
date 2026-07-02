@@ -419,6 +419,19 @@ labels, aliases, icon). Read this before updating — config updates
 are merged shallowly, so you want to know what's there before
 modifying.
 
+## Debug a run: ha_automation_traces
+
+When an automation misfires — or right after you create or update one —
+`ha_automation_traces` shows what actually happened. Bare (with `id` or
+`entity_id`): recent runs newest-first, each with what triggered it,
+how it ended (`finished`, `failed_conditions`, `error`), duration, and
+any error. Pass a `run_id` from that listing for the full step-by-step
+trace in execution order — which trigger fired, each condition's
+result, what every action did. HA keeps traces only for a handful of
+recent runs, so an empty list usually means "hasn't fired lately," not
+"broken." Activity counts from `ha_automation_list` tell you *whether*
+it fires; traces tell you *why it did what it did*.
+
 ## Author a new automation
 
 `ha_automation_create` takes a full HA automation object:
