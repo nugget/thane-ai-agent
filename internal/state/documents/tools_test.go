@@ -65,7 +65,7 @@ func TestDocumentToolsUseDeltaTimeFields(t *testing.T) {
 		Root:            "kb",
 		Query:           "note",
 		FrontmatterKeys: []string{"created"},
-		ModifiedAfter:   "-3600s",
+		ModifiedAfter:   "-1h",
 	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -108,8 +108,8 @@ func TestModelDeltaValueCountsSkipsUnparseableTimestamps(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("modelDeltaValueCounts() = %#v, want one parsed delta", got)
 	}
-	if got[0].Value != "-3600s" || got[0].Count != 2 {
-		t.Fatalf("modelDeltaValueCounts()[0] = %#v, want -3600s count 2", got[0])
+	if got[0].Value != "-1h" || got[0].Count != 2 {
+		t.Fatalf("modelDeltaValueCounts()[0] = %#v, want -1h count 2", got[0])
 	}
 }
 
@@ -126,8 +126,8 @@ func TestModelFrontmatterSkipsUnparseableTimestampValues(t *testing.T) {
 	if _, ok := got["created_delta"]; ok {
 		t.Fatalf("modelFrontmatter() = %#v, should omit unparseable created_delta", got)
 	}
-	if values := got["updated_delta"]; len(values) != 1 || values[0] != "-7200s" {
-		t.Fatalf("updated_delta = %#v, want [-7200s]", values)
+	if values := got["updated_delta"]; len(values) != 1 || values[0] != "-2h" {
+		t.Fatalf("updated_delta = %#v, want [-2h]", values)
 	}
 	if values := got["status"]; len(values) != 1 || values[0] != "open" {
 		t.Fatalf("status = %#v, want [open]", values)
@@ -145,9 +145,9 @@ func TestModelFrontmatterNormalizesTimestampAliases(t *testing.T) {
 	}, now)
 
 	tests := map[string]string{
-		"created_delta":   "-3600s",
-		"updated_delta":   "-7200s",
-		"generated_delta": "-10800s",
+		"created_delta":   "-1h",
+		"updated_delta":   "-2h",
+		"generated_delta": "-3h",
 	}
 	for key, want := range tests {
 		if values := got[key]; len(values) != 1 || values[0] != want {
@@ -165,8 +165,8 @@ func TestModelFrontmatterCanonicalTimestampWinsOverAlias(t *testing.T) {
 		"created_at": {now.Add(-2 * time.Hour).Format(time.RFC3339)},
 	}, now)
 
-	if values := got["created_delta"]; len(values) != 1 || values[0] != "-3600s" {
-		t.Fatalf("created_delta = %#v, want canonical created value [-3600s]", values)
+	if values := got["created_delta"]; len(values) != 1 || values[0] != "-1h" {
+		t.Fatalf("created_delta = %#v, want canonical created value [-1h]", values)
 	}
 }
 

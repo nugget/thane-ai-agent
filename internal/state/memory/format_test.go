@@ -92,8 +92,8 @@ func TestFormatSessionsList_StableSchema(t *testing.T) {
 	}
 
 	closed := parsed.Sessions[0]
-	if closed.Started != "-7200s" {
-		t.Errorf("closed.Started = %q, want -7200s", closed.Started)
+	if closed.Started != "-2h" {
+		t.Errorf("closed.Started = %q, want -2h", closed.Started)
 	}
 	if closed.Ended != "-1800s" {
 		t.Errorf("closed.Ended = %q, want -1800s", closed.Ended)
@@ -447,8 +447,8 @@ func TestFormatSearchResults_StructurePreserved(t *testing.T) {
 	if r.Match.SessionID != "s_xyz" {
 		t.Errorf("match.SessionID = %q, want s_xyz", r.Match.SessionID)
 	}
-	if r.Match.T != "-7200s" {
-		t.Errorf("match.T = %q, want -7200s", r.Match.T)
+	if r.Match.T != "-2h" {
+		t.Errorf("match.T = %q, want -2h", r.Match.T)
 	}
 	if len(r.ContextBefore) != 1 || len(r.ContextAfter) != 1 {
 		t.Errorf("context shape mismatch: before=%d after=%d", len(r.ContextBefore), len(r.ContextAfter))
