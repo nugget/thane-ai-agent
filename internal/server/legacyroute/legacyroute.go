@@ -58,6 +58,14 @@ func (a Alias) DeprecatedSinceTime() time.Time { return mustDate(a.DeprecatedSin
 // panic-on-malformed contract as [Alias.DeprecatedSinceTime].
 func (a Alias) RemoveAfterTime() time.Time { return mustDate(a.RemoveAfter) }
 
+// SunsetTime is the instant the alias is expected to become
+// unavailable: the start of the day *after* RemoveAfter. RemoveAfter is
+// the last date the alias is guaranteed to work ("removable once this
+// date has passed"), so the client-facing Sunset header and the CI
+// removal gate agree on one boundary — both treat the alias as live
+// through the end of the RemoveAfter day and removable from this instant.
+func (a Alias) SunsetTime() time.Time { return a.RemoveAfterTime().Add(24 * time.Hour) }
+
 func mustDate(s string) time.Time {
 	t, err := time.ParseInLocation(dateLayout, s, time.UTC)
 	if err != nil {
@@ -71,22 +79,25 @@ func mustDate(s string) time.Time {
 //
 //   - Deprecation (RFC 9745): a Structured Field Date, "@<unix-seconds>"
 //     at the deprecation date.
-//   - Sunset (RFC 8594): an HTTP-date at the removal date.
+//   - Sunset (RFC 8594): an HTTP-date at [Alias.SunsetTime] — the moment
+//     the alias becomes removable, matching the CI gate's boundary.
 //   - Link: rel="successor-version" pointing at the canonical path so a
 //     client can discover the replacement programmatically.
 func (a Alias) DeprecationHeaders() http.Header {
 	h := http.Header{}
 	h.Set("Deprecation", "@"+strconv.FormatInt(a.DeprecatedSinceTime().Unix(), 10))
-	h.Set("Sunset", a.RemoveAfterTime().UTC().Format(http.TimeFormat))
+	h.Set("Sunset", a.SunsetTime().UTC().Format(http.TimeFormat))
 	h.Set("Link", "<"+a.Canonical+">; rel=\"successor-version\"")
 	return h
 }
 
-// Lookup returns the alias registered for path, if any. Callers use it to
-// decide whether an inbound request arrived on a deprecated route.
-func Lookup(path string) (Alias, bool) {
+// Lookup returns the alias registered for the given method and path, if
+// any. Matching on both fields (not path alone) keeps the API consistent
+// with the method-aware [Alias.Route] and lets a future deprecated REST
+// path be aliased on one method without shadowing the others.
+func Lookup(method, path string) (Alias, bool) {
 	for _, a := range Aliases {
-		if a.Path == path {
+		if a.Method == method && a.Path == path {
 			return a, true
 		}
 	}

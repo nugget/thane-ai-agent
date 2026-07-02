@@ -97,8 +97,8 @@ views). The OpenAI-compatible shim runs on its own port (see below).
 Deprecated aliases (currently the two legacy WebSocket paths above) are
 declared in one place — the `internal/server/legacyroute` registry — which is
 the single source for the mux route wiring, the OpenAPI route-coverage
-allowlist, and a build-date gate. Each entry carries a `DeprecatedSince` date, a
-`RemoveAfter` date (a six-month window for first-party clients), and its
+allowlist, and a current-date CI gate. Each entry carries a `DeprecatedSince`
+date, a `RemoveAfter` date (a six-month window for first-party clients), and its
 tracking issue.
 
 A connection on a deprecated alias is logged (`legacy websocket alias in use`,
@@ -107,9 +107,10 @@ removal, and the client is signalled three ways: an RFC 8594 `Sunset` header and
 RFC 9745 `Deprecation` header on the upgrade response, a `Link` header with
 `rel="successor-version"` pointing at the canonical path, and an in-band
 `deprecation` object in the `auth_ok` message for clients that don't surface
-handshake headers. A CI test fails once an alias is past its `RemoveAfter` date,
-forcing either removal or a justified extension; culling is a one-line registry
-edit that drops the route and the allowlist entry together.
+handshake headers. A CI test (comparing the current date, since `go test` has no
+build stamp) fails once an alias is past its `RemoveAfter` date, forcing either
+removal or a justified extension; culling is a one-line registry edit that drops
+the route and the allowlist entry together.
 
 ## Port 8081 — OpenAI-Compatible API
 

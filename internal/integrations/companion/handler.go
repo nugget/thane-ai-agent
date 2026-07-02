@@ -73,7 +73,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// RFC 8594 Sunset / RFC 9745 Deprecation headers to the 101 upgrade
 	// response. gorilla's Upgrade emits only the headers passed here (it
 	// does not copy w.Header()), so the signal must ride the third arg.
-	alias, isLegacy := legacyroute.Lookup(r.URL.Path)
+	alias, isLegacy := legacyroute.Lookup(r.Method, r.URL.Path)
 	var upgradeHeader http.Header
 	if isLegacy {
 		upgradeHeader = alias.DeprecationHeaders()

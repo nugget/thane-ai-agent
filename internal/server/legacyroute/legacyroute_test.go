@@ -13,10 +13,12 @@ func TestRegistryWellFormed(t *testing.T) {
 		if a.Method == "" || !strings.HasPrefix(a.Path, "/") {
 			t.Errorf("alias %+v: Method must be set and Path must be rooted", a)
 		}
-		if seen[a.Path] {
-			t.Errorf("alias %q: duplicate path in registry", a.Path)
+		// De-dupe by the method+path route, not the path alone, so the
+		// same path may be deprecated on distinct methods.
+		if seen[a.Route()] {
+			t.Errorf("alias %q: duplicate route in registry", a.Route())
 		}
-		seen[a.Path] = true
+		seen[a.Route()] = true
 
 		if a.Canonical == a.Path {
 			t.Errorf("alias %q: Canonical must differ from the deprecated path", a.Path)
@@ -77,8 +79,10 @@ func TestDeprecationHeaders(t *testing.T) {
 	if got := h.Get("Deprecation"); got != wantDep {
 		t.Errorf("Deprecation = %q, want %q", got, wantDep)
 	}
-	// RFC 8594 Sunset: HTTP-date at the removal date.
-	wantSunset := time.Date(2026, 12, 25, 0, 0, 0, 0, time.UTC).Format("Mon, 02 Jan 2006 15:04:05 GMT")
+	// RFC 8594 Sunset: HTTP-date at the start of the day AFTER
+	// RemoveAfter — the moment the alias becomes removable, aligned with
+	// the CI gate.
+	wantSunset := time.Date(2026, 12, 26, 0, 0, 0, 0, time.UTC).Format("Mon, 02 Jan 2006 15:04:05 GMT")
 	if got := h.Get("Sunset"); got != wantSunset {
 		t.Errorf("Sunset = %q, want %q", got, wantSunset)
 	}
@@ -88,10 +92,13 @@ func TestDeprecationHeaders(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	if _, ok := Lookup("/v1/companion/ws"); !ok {
+	if _, ok := Lookup("GET", "/v1/companion/ws"); !ok {
 		t.Error("Lookup missed a registered alias")
 	}
-	if _, ok := Lookup("/v1/realtime/ws"); ok {
+	if _, ok := Lookup("GET", "/v1/realtime/ws"); ok {
 		t.Error("Lookup matched the canonical path, which is not an alias")
+	}
+	if _, ok := Lookup("POST", "/v1/companion/ws"); ok {
+		t.Error("Lookup matched on a different method than the registered alias")
 	}
 }
