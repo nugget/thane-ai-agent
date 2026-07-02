@@ -331,11 +331,12 @@ a guessed entity_id.
 ## Low-level: ha_call_service
 
 Unsure of a service name or its fields? `ha_list_services` is the
-catalog: bare call for a directory of every domain's service names,
-`domain` (or `"domain.service"`) for full field detail — descriptions,
-required flags, examples, and whether the service accepts a target
-block. Check it before guessing; a wrong service name costs a failed
-call.
+catalog: bare call for a directory of every domain's service names;
+`domain` for full field detail on all of that domain's services;
+`"domain.service"` (e.g. `"light.turn_on"`) for just that one service —
+descriptions, required flags, examples, and whether it accepts a
+target block. Check it before guessing; a wrong service name costs a
+failed call.
 
 `ha_call_service` requires the exact entity_id:
 

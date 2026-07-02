@@ -60,12 +60,15 @@ type haServiceField struct {
 // payload honest: the bare call returns a name directory; domain (and
 // service) scope in the full field schemas.
 func (r *Registry) registerHAListServices() {
+	if r.ha == nil {
+		return
+	}
 	r.Register(&Tool{
 		Name: "ha_list_services",
 		Description: "Discover what Home Assistant services can be called. " +
 			"Without arguments: a directory of every domain and its service names. " +
 			"With domain: full detail for that domain's services — description, fields (with required/example), and whether the service accepts a target block (area/floor/label/device/entity). " +
-			"With domain and service: just that service. " +
+			"With a specific service — either domain plus service, or just service in the combined \"light.turn_on\" form — returns that single service. " +
 			"Use this before ha_call_service when unsure of a service name or its fields.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -76,7 +79,7 @@ func (r *Registry) registerHAListServices() {
 				},
 				"service": map[string]any{
 					"type":        "string",
-					"description": "With domain: return just this service. Accepts \"turn_on\" or the combined \"light.turn_on\" form.",
+					"description": "Return just this one service. Accepts \"turn_on\" (paired with domain) or the self-contained combined form \"light.turn_on\" with no domain argument needed.",
 				},
 			},
 		},
@@ -134,7 +137,7 @@ func (r *Registry) handleHAListServices(ctx context.Context, args map[string]any
 	for _, d := range catalog {
 		known = append(known, d.Domain)
 	}
-	return "", fmt.Errorf("domain %q has no services; known domains: %s", domain, strings.Join(known, ", "))
+	return "", fmt.Errorf("unknown domain %q; known domains: %s", domain, strings.Join(known, ", "))
 }
 
 func haServicesIndexResult(catalog []homeassistant.ServiceDomain) string {
