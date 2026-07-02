@@ -28,6 +28,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 	"github.com/nugget/thane-ai-agent/internal/server/openapi"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
@@ -520,13 +521,17 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// First-party realtime WebSocket. /v1/realtime/ws is the canonical path
-	// (per native.yaml); /v1/companion/ws and /v1/platform/ws are legacy
-	// aliases for existing thane-agent-macos installs.
+	// First-party realtime WebSocket. /v1/realtime/ws is the canonical
+	// path (per native.yaml); the legacy aliases for existing
+	// thane-agent-macos installs are wired from the legacyroute registry
+	// so the routes, the coverage allowlist, and the sunset gate share
+	// one source of truth (#1084). The handler emits deprecation signals
+	// and usage telemetry when a connection arrives on an alias.
 	if s.companionHandler != nil {
 		mux.Handle("GET /v1/realtime/ws", s.companionHandler)
-		mux.Handle("GET /v1/companion/ws", s.companionHandler)
-		mux.Handle("GET /v1/platform/ws", s.companionHandler)
+		for _, alias := range legacyroute.Aliases {
+			mux.Handle(alias.Route(), s.companionHandler)
+		}
 	}
 
 	// When a WebServerRegistrar is wired in, it owns "/" and related

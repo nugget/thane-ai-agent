@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,15 +17,19 @@ import (
 const serverSource = "../api/server.go"
 
 // routeAllowlist are routes registered on the native mux that are intentionally
-// absent from native.yaml:
-//   - "GET /" is the JSON root / dashboard fallback, not an API resource.
-//   - /v1/companion/ws and /v1/platform/ws are legacy WebSocket aliases kept
-//     for existing thane-agent-macos installs; the canonical, documented path
-//     is /v1/realtime/ws.
-var routeAllowlist = map[string]bool{
-	"GET /":                true,
-	"GET /v1/companion/ws": true,
-	"GET /v1/platform/ws":  true,
+// absent from native.yaml. "GET /" is the JSON root / dashboard fallback, not
+// an API resource. The legacy WebSocket aliases are derived from the
+// legacyroute registry (#1084) — the same list server.go wires the routes from
+// — so a new or culled alias updates the routes and this allowlist together,
+// with no second hand-maintained copy to drift.
+var routeAllowlist = buildRouteAllowlist()
+
+func buildRouteAllowlist() map[string]bool {
+	m := map[string]bool{"GET /": true}
+	for _, a := range legacyroute.Aliases {
+		m[a.Route()] = true
+	}
+	return m
 }
 
 // muxRouteRe matches the Go 1.22 method-pattern literals that register handlers
