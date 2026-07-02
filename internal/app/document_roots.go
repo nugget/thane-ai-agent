@@ -220,7 +220,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s.git.remote requires sign_commits (the sync engine needs the signing store)", root)
 			}
 			if a.syncRegistry == nil {
-				a.syncRegistry = newSyncStateRegistry()
+				a.syncRegistry = checkout.NewSyncStateRegistry()
 			}
 			resolve := func(p string) string { return resolvePath(p, resolver) }
 			syncer, err := buildDocRootSyncer(root, rootCfg.Git, writer.checkout, a.syncRegistry, resolve, logger)

@@ -70,13 +70,13 @@ func docRootSyncTransitionConcern(transition syncStateTransition) string {
 	switch transition.Kind {
 	case syncTransitionAttentionRequired:
 		if detail := strings.TrimSpace(st.Detail); detail != "" {
-			return fmt.Sprintf("Document root sync requires core review: root %q entered %s: %s", st.Root, st.Outcome, detail)
+			return fmt.Sprintf("Document root sync requires core review: root %q entered %s: %s", st.Name, st.Outcome, detail)
 		}
-		return fmt.Sprintf("Document root sync requires core review: root %q entered %s.", st.Root, st.Outcome)
+		return fmt.Sprintf("Document root sync requires core review: root %q entered %s.", st.Name, st.Outcome)
 	case syncTransitionRecovered:
-		return fmt.Sprintf("Document root sync recovered: root %q is %s after %s.", st.Root, st.Outcome, transition.Previous.Outcome)
+		return fmt.Sprintf("Document root sync recovered: root %q is %s after %s.", st.Name, st.Outcome, transition.Previous.Outcome)
 	default:
-		return fmt.Sprintf("Document root sync changed state for root %q.", st.Root)
+		return fmt.Sprintf("Document root sync changed state for root %q.", st.Name)
 	}
 }
 
@@ -94,14 +94,14 @@ func docRootSyncTransitionAction(transition syncStateTransition) string {
 func docRootSyncTransitionID(transition syncStateTransition) string {
 	st := transition.Current
 	h := sha256.Sum256([]byte(strings.Join([]string{
-		st.Root,
+		st.Name,
 		string(transition.Kind),
 		string(st.Outcome),
 		strings.TrimSpace(st.Detail),
 		string(transition.Previous.Outcome),
 		strings.TrimSpace(transition.Previous.Detail),
 	}, "\x00")))
-	return fmt.Sprintf("%s:%s:%s:%x", st.Root, transition.Kind, st.Outcome, h[:8])
+	return fmt.Sprintf("%s:%s:%s:%x", st.Name, transition.Kind, st.Outcome, h[:8])
 }
 
 func docRootSyncTransitionTitle(transition syncStateTransition) string {
@@ -118,15 +118,15 @@ func docRootSyncTransitionTitle(transition syncStateTransition) string {
 func docRootSyncTransitionSummary(transition syncStateTransition) string {
 	st := transition.Current
 	if st.Detail == "" {
-		return fmt.Sprintf("root=%s outcome=%s", st.Root, st.Outcome)
+		return fmt.Sprintf("root=%s outcome=%s", st.Name, st.Outcome)
 	}
-	return fmt.Sprintf("root=%s outcome=%s detail=%s", st.Root, st.Outcome, st.Detail)
+	return fmt.Sprintf("root=%s outcome=%s detail=%s", st.Name, st.Outcome, st.Detail)
 }
 
 func docRootSyncTransitionMetadata(transition syncStateTransition) map[string]string {
 	st := transition.Current
 	meta := map[string]string{
-		"root":        st.Root,
+		"root":        st.Name,
 		"outcome":     string(st.Outcome),
 		"ahead":       strconv.Itoa(st.Ahead),
 		"behind":      strconv.Itoa(st.Behind),

@@ -37,7 +37,7 @@ func TestDocRootSyncAttentionNotifierSendsCoreWake(t *testing.T) {
 	transition := syncStateTransition{
 		Kind: syncTransitionAttentionRequired,
 		Current: syncState{
-			Root:       "kb",
+			Name:       "kb",
 			OK:         true,
 			Outcome:    checkout.SyncBlocked,
 			Ahead:      0,
@@ -94,13 +94,13 @@ func TestDocRootSyncRecoveryWakeIsNotSupervisorForced(t *testing.T) {
 	env := docRootSyncTransitionEnvelope(looppkg.CoreAttentionTarget{LoopID: "loop-1"}, syncStateTransition{
 		Kind: syncTransitionRecovered,
 		Previous: syncState{
-			Root:    "kb",
+			Name:    "kb",
 			OK:      true,
 			Outcome: checkout.SyncBlocked,
 			Detail:  "first untrusted commit abc123",
 		},
 		Current: syncState{
-			Root:    "kb",
+			Name:    "kb",
 			OK:      true,
 			Outcome: checkout.SyncFastForwarded,
 		},
