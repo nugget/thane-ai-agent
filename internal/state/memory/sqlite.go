@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -418,25 +419,95 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 	return messages
 }
 
-// MarkCompacted marks messages as compacted.
-func (s *SQLiteStore) MarkCompacted(conversationID string, before time.Time) error {
-	_, err := s.db.Exec(`
-		UPDATE messages
-		SET status = 'compacted'
-		WHERE conversation_id = ? AND timestamp < ? AND status = 'active' AND role != 'system'
-	`, conversationID, before)
-	return err
+// GetActiveCompactionSummaries returns the active compaction-summary
+// system messages for a conversation, oldest first. The prefix match
+// distinguishes summaries from other system rows (session handoffs,
+// notices) without a schema change. A query error is surfaced so the
+// caller can abort rather than mistake a transient failure for "no
+// prior summaries" and stack a fresh one.
+func (s *SQLiteStore) GetActiveCompactionSummaries(conversationID string) ([]Message, error) {
+	rows, err := s.db.Query(`
+		SELECT id, role, content, timestamp
+		FROM messages
+		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
+		  AND content LIKE ? || '%'
+		ORDER BY timestamp ASC
+	`, conversationID, CompactionSummaryPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("query compaction summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan compaction summary: %w", err)
+		}
+		messages = append(messages, m)
+	}
+	return messages, rows.Err()
 }
 
-// AddCompactionSummary adds a compaction summary message.
-func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error {
-	now := time.Now()
-	msgID, _ := uuid.NewV7()
+// ApplyCompaction atomically marks the given messages compacted and
+// inserts the replacement summary at summaryTS, in one transaction.
+// Splitting these into two writes risks losing active history if the
+// insert fails after the mark (and, with summary folding, could drop
+// the conversation's only summary) — so they commit or roll back
+// together.
+func (s *SQLiteStore) ApplyCompaction(conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error {
+	msgID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate summary ID: %w", err)
+	}
 
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin compaction tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if len(compactedIDs) > 0 {
+		placeholders := make([]string, len(compactedIDs))
+		args := make([]any, 0, len(compactedIDs)+1)
+		args = append(args, conversationID)
+		for i, id := range compactedIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`
+			UPDATE messages
+			SET status = 'compacted'
+			WHERE conversation_id = ? AND id IN (%s)
+		`, strings.Join(placeholders, ",")), args...); err != nil {
+			return fmt.Errorf("mark compacted: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
 		VALUES (?, ?, 'system', ?, ?, ?, 'active')
-	`, msgID.String(), conversationID, summary, now, llm.EstimateTokens(summary))
+	`, msgID.String(), conversationID, summary, summaryTS, llm.EstimateTokens(summary)); err != nil {
+		return fmt.Errorf("insert summary: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// AddCompactionSummary adds a compaction summary message stamped now.
+// Used for session handoffs and other unpositioned system notes; the
+// compactor itself uses ApplyCompaction to place the summary at the
+// compacted region's position atomically with the mark.
+func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error {
+	msgID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate summary ID: %w", err)
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
+		VALUES (?, ?, 'system', ?, ?, ?, 'active')
+	`, msgID.String(), conversationID, summary, time.Now(), llm.EstimateTokens(summary))
 
 	return err
 }

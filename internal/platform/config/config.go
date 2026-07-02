@@ -226,6 +226,11 @@ type Config struct {
 	// memory files and recent conversation history).
 	Episodic EpisodicConfig `yaml:"episodic"`
 
+	// Compaction bounds per-conversation working memory: once a
+	// conversation's active token count crosses the trigger, older
+	// history folds into a single summary message.
+	Compaction CompactionConfig `yaml:"compaction"`
+
 	// Agent configures agent loop behavior, including orchestrator
 	// tool gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
@@ -1309,6 +1314,15 @@ type ExtractionConfig struct {
 	// TimeoutSeconds is the maximum time allowed for a single extraction
 	// call. Default: 30.
 	TimeoutSeconds int `yaml:"timeout_seconds"`
+}
+
+// CompactionConfig controls when conversation compaction runs.
+type CompactionConfig struct {
+	// MaxTokens is the conversation token budget compaction defends;
+	// compaction triggers at 70% of it. Default: 32000. The previous
+	// hardcoded 8000 compacted interactive conversations far too
+	// early for modern context windows (#1168).
+	MaxTokens int `yaml:"max_tokens"`
 }
 
 // EpisodicConfig configures episodic memory context injection. When
@@ -2431,6 +2445,9 @@ func (c *Config) applyDefaults() {
 
 	if c.Episodic.LookbackDays == 0 {
 		c.Episodic.LookbackDays = 2
+	}
+	if c.Compaction.MaxTokens == 0 {
+		c.Compaction.MaxTokens = 32000
 	}
 	if c.Episodic.HistoryTokens == 0 {
 		c.Episodic.HistoryTokens = 4000

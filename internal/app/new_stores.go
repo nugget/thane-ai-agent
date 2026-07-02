@@ -353,7 +353,7 @@ func (a *App) initStores(s *newState) error {
 	// messages to stay within the model's context window. Routes through
 	// the model router for quality-aware model selection.
 	compactionConfig := memory.CompactionConfig{
-		MaxTokens:            8000,
+		MaxTokens:            a.cfg.Compaction.MaxTokens,
 		TriggerRatio:         0.7, // Compact at 70% of MaxTokens
 		KeepRecent:           10,  // Preserve the last 10 messages verbatim
 		MinMessagesToCompact: 15,  // Don't bother compacting tiny conversations

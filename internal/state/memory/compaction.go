@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
@@ -12,7 +13,7 @@ import (
 
 // CompactionConfig controls compaction behavior.
 type CompactionConfig struct {
-	MaxTokens            int     // Context window size
+	MaxTokens            int     // Conversation token budget compaction defends
 	TriggerRatio         float64 // Trigger compaction at this ratio (e.g., 0.7 = 70%)
 	KeepRecent           int     // Number of recent messages to always keep
 	MinMessagesToCompact int     // Minimum messages before considering compaction
@@ -21,19 +22,27 @@ type CompactionConfig struct {
 // DefaultCompactionConfig returns sensible defaults.
 func DefaultCompactionConfig() CompactionConfig {
 	return CompactionConfig{
-		MaxTokens:            8000, // Conservative default
-		TriggerRatio:         0.7,  // Trigger at 70% full
-		KeepRecent:           10,   // Keep last 10 messages
-		MinMessagesToCompact: 20,   // Don't compact tiny conversations
+		MaxTokens:            32000, // See config `compaction.max_tokens` (#1168)
+		TriggerRatio:         0.7,   // Trigger at 70% full
+		KeepRecent:           10,    // Keep last 10 messages
+		MinMessagesToCompact: 20,    // Don't compact tiny conversations
 	}
 }
+
+// CompactionSummaryPrefix marks a stored system message as a compaction
+// summary. It is both the render prefix and the discriminator that
+// separates summaries from other system rows (e.g. session handoffs),
+// so folding can find prior summaries without a schema change.
+const CompactionSummaryPrefix = "[Conversation Summary]"
 
 // CompactableStore is the interface for stores that support compaction.
 type CompactableStore interface {
 	GetTokenCount(conversationID string) int
 	GetMessagesForCompaction(conversationID string, keep int) []Message
-	MarkCompacted(conversationID string, before time.Time) error
-	AddCompactionSummary(conversationID, summary string) error
+	GetActiveCompactionSummaries(conversationID string) ([]Message, error)
+	// ApplyCompaction atomically marks compactedIDs compacted and
+	// inserts the replacement summary at summaryTS.
+	ApplyCompaction(conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error
 }
 
 // WorkingMemoryReader is the subset of WorkingMemoryStore needed by the
@@ -50,6 +59,14 @@ type Compactor struct {
 	summarizer    Summarizer
 	workingMemory WorkingMemoryReader // optional — include in compaction prompt
 	logger        *slog.Logger
+
+	// inFlight single-flights compaction per conversation. The
+	// summarize step is a slow LLM call, and without the guard every
+	// turn that lands during one compaction spawns another — all
+	// reading overlapping history and each stacking its own summary
+	// (#1168 defect 1).
+	mu       sync.Mutex
+	inFlight map[string]bool
 }
 
 // Summarizer generates summaries from messages. When workingMemory is
@@ -66,6 +83,7 @@ func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Su
 		config:     config,
 		summarizer: summarizer,
 		logger:     logger,
+		inFlight:   make(map[string]bool),
 	}
 }
 
@@ -86,10 +104,61 @@ func (c *Compactor) NeedsCompaction(conversationID string) bool {
 	return tokenCount > c.CompactionThreshold()
 }
 
-// Compact performs compaction on a conversation.
+// tryAcquire marks the conversation as compacting, returning false when
+// a compaction is already in flight for it.
+func (c *Compactor) tryAcquire(conversationID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inFlight[conversationID] {
+		return false
+	}
+	c.inFlight[conversationID] = true
+	return true
+}
+
+func (c *Compactor) release(conversationID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.inFlight, conversationID)
+}
+
+// Compact performs compaction on a conversation: it folds any prior
+// summary together with the older messages into a single fresh summary,
+// marks the folded rows compacted, and inserts the summary at the
+// compacted region's temporal position so it renders at the head of
+// surviving history rather than interleaved into the live dialogue.
+// Concurrent calls for the same conversation coalesce — the extras
+// return nil without doing work.
 func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
+	if !c.tryAcquire(conversationID) {
+		c.logger.Debug("compaction already in flight; skipping",
+			"conversation_id", conversationID)
+		return nil
+	}
+	defer c.release(conversationID)
+
+	// Re-check under the flight guard: the trigger that queued this
+	// call may predate a compaction that just finished.
+	if !c.NeedsCompaction(conversationID) {
+		return nil
+	}
+
 	// Get messages to compact (older ones)
 	messages := c.store.GetMessagesForCompaction(conversationID, c.config.KeepRecent)
+
+	// Snap the compaction boundary to a turn edge: a trailing user
+	// message here means its reply sits in the keep window (or hasn't
+	// arrived), and compacting the question while keeping the answer
+	// orphans the reply (#1168 defect 4). Bounding memory outranks
+	// turn integrity, though — if the trim would starve compaction
+	// (e.g. a long user monologue), keep the untrimmed set.
+	trimmed := messages
+	for len(trimmed) > 0 && trimmed[len(trimmed)-1].Role == "user" {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	if len(trimmed) >= c.config.MinMessagesToCompact || len(messages) < c.config.MinMessagesToCompact {
+		messages = trimmed
+	}
 
 	c.logger.Debug("compaction check",
 		"conversation_id", conversationID,
@@ -109,15 +178,26 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		return nil // Not enough to bother
 	}
 
+	// Fold prior summaries into this pass so exactly one summary row
+	// exists per conversation. Without the fold, summaries are
+	// immortal (they are system rows, which compaction never selects)
+	// and keep the token count pinned above the trigger — a ratchet
+	// that squashes every ~15 fresh messages into yet another stacked
+	// summary (#1168 defect 2). Priors prepend to the summarizer input
+	// so their content carries forward through the new summary. A read
+	// error here must abort: treating it as "no priors" would insert a
+	// fresh summary and re-stack, the exact failure the fold prevents.
+	priors, err := c.store.GetActiveCompactionSummaries(conversationID)
+	if err != nil {
+		return fmt.Errorf("read prior summaries: %w", err)
+	}
+	folded := make([]Message, 0, len(priors)+len(messages))
+	folded = append(folded, priors...)
+	folded = append(folded, messages...)
+
 	// Messages persist in the unified table with lifecycle status.
 	// Compaction marks them as 'compacted' — they're never deleted and
 	// remain searchable in the archive. No separate archive step needed.
-
-	// Find the cutoff time (last message being compacted)
-	var cutoffTime time.Time
-	if len(messages) > 0 {
-		cutoffTime = messages[len(messages)-1].Timestamp
-	}
 
 	// Read working memory for inclusion in the compaction prompt.
 	var workingMem string
@@ -133,22 +213,27 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	}
 
 	// Generate summary
-	summary, err := c.summarizer.Summarize(ctx, messages, workingMem)
+	summary, err := c.summarizer.Summarize(ctx, folded, workingMem)
 	if err != nil {
 		return fmt.Errorf("summarize: %w", err)
 	}
 
 	// Format as a system message
-	formattedSummary := formatCompactionSummary(messages, summary)
+	formattedSummary := formatCompactionSummary(folded, summary)
 
-	// Mark old messages as compacted
-	if err := c.store.MarkCompacted(conversationID, cutoffTime.Add(time.Millisecond)); err != nil {
-		return fmt.Errorf("mark compacted: %w", err)
+	// Apply atomically: mark exactly the rows the summarizer saw
+	// (by ID, so a wall-clock cutoff can't sweep in rows written
+	// mid-compaction) and insert the replacement summary at the
+	// folded region's earliest timestamp — so it sorts at the head of
+	// surviving history rather than interleaved into the live exchange
+	// (#1168 defect 3). A single transaction means a mid-write failure
+	// can't strand history without its summary (#1168, PR #1170 review).
+	ids := make([]string, len(folded))
+	for i, m := range folded {
+		ids[i] = m.ID
 	}
-
-	// Add summary message
-	if err := c.store.AddCompactionSummary(conversationID, formattedSummary); err != nil {
-		return fmt.Errorf("add summary: %w", err)
+	if err := c.store.ApplyCompaction(conversationID, ids, formattedSummary, folded[0].Timestamp); err != nil {
+		return fmt.Errorf("apply compaction: %w", err)
 	}
 
 	return nil
@@ -164,7 +249,7 @@ func formatCompactionSummary(messages []Message, summary string) string {
 	endTime := messages[len(messages)-1].Timestamp
 
 	var sb strings.Builder
-	sb.WriteString("[Conversation Summary]\n")
+	sb.WriteString(CompactionSummaryPrefix + "\n")
 	sb.WriteString(fmt.Sprintf("Period: %s to %s\n",
 		startTime.Format("2006-01-02 15:04"),
 		endTime.Format("2006-01-02 15:04")))
@@ -200,7 +285,9 @@ func NewLLMSummarizer(llmFunc func(ctx context.Context, prompt string) (string, 
 
 // Summarize generates a summary of the messages using an LLM. When
 // workingMemory is non-empty, it is included in the prompt so the
-// summarizer preserves experiential context through compaction.
+// summarizer preserves experiential context through compaction. Prior
+// compaction summaries arrive as leading system-role messages and fold
+// into the new summary through the same transcript rendering.
 func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message, workingMemory string) (string, error) {
 	// Build conversation text
 	var sb strings.Builder
