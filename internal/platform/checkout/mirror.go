@@ -17,6 +17,8 @@ import (
 // DefaultMirrorSyncTimeout bounds one mirror fetch/reset pass.
 const DefaultMirrorSyncTimeout = 2 * time.Minute
 
+const mirrorOwnedConfigKey = "checkout.mirror"
+
 // MirrorSpec describes a read-only mirror checkout.
 type MirrorSpec struct {
 	// Name is a caller-facing identifier used in logs and errors.
@@ -105,6 +107,9 @@ func (m *Mirror) Sync(ctx context.Context, req MirrorSyncRequest) (MirrorSyncRes
 	if err := m.fetch(ctx, req, branch); err != nil {
 		return MirrorSyncResult{}, err
 	}
+	if err := m.removeFetchHead(ctx); err != nil {
+		return MirrorSyncResult{}, err
+	}
 	remoteRef := "refs/remotes/origin/" + branch
 	remoteHead, err := m.revParse(ctx, remoteRef)
 	if err != nil {
@@ -191,7 +196,7 @@ func (m *Mirror) ensureRepo(ctx context.Context) error {
 	if ok, err := m.isGitWorktree(ctx); err != nil {
 		return err
 	} else if ok {
-		return nil
+		return m.requireMirrorOwned(ctx)
 	}
 	empty, err := isEmptyDir(m.WorktreePath)
 	if err != nil {
@@ -202,6 +207,31 @@ func (m *Mirror) ensureRepo(ctx context.Context) error {
 	}
 	if err := m.git(ctx, nil, nil, nil, "init"); err != nil {
 		return fmt.Errorf("%s: initialize mirror repository: %w", m.Name, err)
+	}
+	if err := m.markMirrorOwned(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Mirror) markMirrorOwned(ctx context.Context) error {
+	if err := m.git(ctx, nil, nil, nil, "config", mirrorOwnedConfigKey, "true"); err != nil {
+		return fmt.Errorf("%s: mark mirror repository owned: %w", m.Name, err)
+	}
+	return nil
+}
+
+func (m *Mirror) requireMirrorOwned(ctx context.Context) error {
+	var out bytes.Buffer
+	err := m.git(ctx, nil, nil, &out, "config", "--bool", "--get", mirrorOwnedConfigKey)
+	if err != nil {
+		if isGitExit(err, 1) {
+			return fmt.Errorf("%s: mirror path %s is an existing git checkout but is not marked as mirror-owned; refusing destructive reset/clean", m.Name, m.WorktreePath)
+		}
+		return fmt.Errorf("%s: inspect mirror ownership marker: %w", m.Name, err)
+	}
+	if strings.TrimSpace(out.String()) != "true" {
+		return fmt.Errorf("%s: mirror path %s has %s=%q, want true; refusing destructive reset/clean", m.Name, m.WorktreePath, mirrorOwnedConfigKey, strings.TrimSpace(out.String()))
 	}
 	return nil
 }
@@ -224,7 +254,7 @@ func (m *Mirror) fetch(ctx context.Context, req MirrorSyncRequest, branch string
 		env = []string{"GIT_SSH_COMMAND=" + req.SSHCommand}
 	}
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
-	if err := m.git(ctx, env, nil, nil, "fetch", "--no-tags", "--prune", "--end-of-options", strings.TrimSpace(req.RemoteURL), refspec); err != nil {
+	if err := m.git(ctx, env, nil, nil, "fetch", "--no-tags", "--prune", "--no-write-fetch-head", "--end-of-options", strings.TrimSpace(req.RemoteURL), refspec); err != nil {
 		return fmt.Errorf("%s: fetch mirror branch %q: %w", m.Name, branch, err)
 	}
 	return nil
@@ -264,6 +294,32 @@ func (m *Mirror) removeOriginConfig(ctx context.Context) error {
 		return fmt.Errorf("%s: remove origin config: %w", m.Name, err)
 	}
 	return nil
+}
+
+func (m *Mirror) removeFetchHead(ctx context.Context) error {
+	fetchHead, err := m.gitPath(ctx, "FETCH_HEAD")
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(fetchHead); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s: remove FETCH_HEAD transport trace: %w", m.Name, err)
+	}
+	return nil
+}
+
+func (m *Mirror) gitPath(ctx context.Context, name string) (string, error) {
+	var out bytes.Buffer
+	if err := m.git(ctx, nil, nil, &out, "rev-parse", "--git-path", name); err != nil {
+		return "", fmt.Errorf("%s: resolve git path %s: %w", m.Name, name, err)
+	}
+	p := strings.TrimSpace(out.String())
+	if p == "" {
+		return "", fmt.Errorf("%s: git path %s resolved to empty path", m.Name, name)
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(m.WorktreePath, p)
+	}
+	return p, nil
 }
 
 func (m *Mirror) git(ctx context.Context, env []string, stdin io.Reader, stdout io.Writer, args ...string) error {
@@ -309,9 +365,12 @@ func isGitExit(err error, code int) bool {
 
 func sanitizeGitArgs(args []string) []string {
 	out := append([]string(nil), args...)
-	for i, arg := range out {
-		if arg == "--end-of-options" && i+1 < len(out) && i > 0 && out[i-1] == "--prune" {
-			out[i+1] = "<remote>"
+	if len(out) > 0 && out[0] == "fetch" {
+		for i, arg := range out {
+			if arg == "--end-of-options" && i+1 < len(out) {
+				out[i+1] = "<remote>"
+				break
+			}
 		}
 	}
 	return out

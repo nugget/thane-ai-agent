@@ -37,9 +37,10 @@ func TestMirrorSyncInitializesWithoutPersistingRemote(t *testing.T) {
 	if got := readMirrorFile(t, worktree, "README.md"); got != "one\n" {
 		t.Fatalf("README.md = %q, want source content", got)
 	}
-	if remoteURL := mirrorGitOptional(t, worktree, "config", "--get", "remote.origin.url"); remoteURL != "" {
-		t.Fatalf("remote.origin.url = %q, want no persisted remote", remoteURL)
+	if got := mirrorGitOptional(t, worktree, "config", "--bool", "--get", mirrorOwnedConfigKey); got != "true" {
+		t.Fatalf("%s = %q, want true", mirrorOwnedConfigKey, got)
 	}
+	assertMirrorDidNotPersistRemoteURL(t, worktree, source)
 }
 
 func TestMirrorSyncResetsAndCleansLocalWorktree(t *testing.T) {
@@ -60,6 +61,9 @@ func TestMirrorSyncResetsAndCleansLocalWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("local\n"), 0o644); err != nil {
 		t.Fatalf("write scratch.txt: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git", "FETCH_HEAD"), []byte(source+"\tbranch 'main' of "+source+"\n"), 0o644); err != nil {
+		t.Fatalf("write stale FETCH_HEAD: %v", err)
+	}
 	commitMirrorFile(t, source, "README.md", "two\n", "advance")
 	remoteHead := mirrorHead(t, source)
 
@@ -76,6 +80,7 @@ func TestMirrorSyncResetsAndCleansLocalWorktree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(worktree, "scratch.txt")); !os.IsNotExist(err) {
 		t.Fatalf("scratch.txt still exists after mirror clean; stat err=%v", err)
 	}
+	assertMirrorDidNotPersistRemoteURL(t, worktree, source)
 }
 
 func TestMirrorSyncAcceptsRemoteRewrite(t *testing.T) {
@@ -134,6 +139,39 @@ func TestMirrorSyncRejectsNonEmptyNonRepo(t *testing.T) {
 	}
 }
 
+func TestMirrorSyncRejectsUnmarkedGitWorktree(t *testing.T) {
+	source := newMirrorSourceRepo(t)
+	commitMirrorFile(t, source, "README.md", "one\n", "initial")
+	worktree := newMirrorSourceRepo(t)
+	commitMirrorFile(t, worktree, "README.md", "local\n", "local")
+	originURL := "https://example.invalid/repo.git"
+	runMirrorGit(t, worktree, "remote", "add", "origin", originURL)
+	if err := os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write scratch.txt: %v", err)
+	}
+
+	mirror, err := OpenMirror(MirrorSpec{Name: "thane", WorktreePath: worktree})
+	if err != nil {
+		t.Fatalf("OpenMirror: %v", err)
+	}
+	_, err = mirror.Sync(t.Context(), MirrorSyncRequest{RemoteURL: source, Branch: "main"})
+	if err == nil {
+		t.Fatal("Sync returned nil, want unmarked git checkout error")
+	}
+	if !strings.Contains(err.Error(), "not marked as mirror-owned") {
+		t.Fatalf("error = %v, want mirror ownership marker message", err)
+	}
+	if got := mirrorGitOptional(t, worktree, "config", "--get", "remote.origin.url"); got != originURL {
+		t.Fatalf("remote.origin.url = %q, want preserved %q", got, originURL)
+	}
+	if got := readMirrorFile(t, worktree, "README.md"); got != "local\n" {
+		t.Fatalf("README.md = %q, want local content preserved", got)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "scratch.txt")); err != nil {
+		t.Fatalf("scratch.txt was removed despite rejected mirror sync: %v", err)
+	}
+}
+
 func newMirrorSourceRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -185,6 +223,24 @@ func mirrorGitOptional(t *testing.T, dir string, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(stdout.String())
+}
+
+func assertMirrorDidNotPersistRemoteURL(t *testing.T, worktree, remoteURL string) {
+	t.Helper()
+	if got := mirrorGitOptional(t, worktree, "config", "--get", "remote.origin.url"); got != "" {
+		t.Fatalf("remote.origin.url = %q, want no persisted remote", got)
+	}
+	fetchHeadPath := filepath.Join(worktree, ".git", "FETCH_HEAD")
+	b, err := os.ReadFile(fetchHeadPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		t.Fatalf("read FETCH_HEAD: %v", err)
+	}
+	if strings.Contains(string(b), remoteURL) {
+		t.Fatalf("FETCH_HEAD contains remote URL %q: %q", remoteURL, b)
+	}
 }
 
 func runMirrorGit(t *testing.T, dir string, args ...string) string {
