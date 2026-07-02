@@ -21,6 +21,7 @@ type fakeHAServer struct {
 
 	mu           sync.Mutex
 	states       []homeassistant.State
+	services     []homeassistant.ServiceDomain
 	configs      map[string]map[string]any
 	areas        []map[string]any
 	floors       []map[string]any
@@ -58,6 +59,7 @@ func newFakeHAServer(t *testing.T) *fakeHAServer {
 	mux.HandleFunc("/api/states/", f.handleState)
 	mux.HandleFunc("/api/config/automation/config/", f.handleAutomationConfig)
 	mux.HandleFunc("/api/services/", f.handleServiceCall)
+	mux.HandleFunc("/api/services", f.handleServicesCatalog)
 
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
@@ -79,6 +81,16 @@ func (f *fakeHAServer) registry(t *testing.T) *Registry {
 	t.Cleanup(func() { _ = ws.Close() })
 
 	return NewRegistry(client, nil)
+}
+
+func (f *fakeHAServer) handleServicesCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	writeJSON(f.t, w, f.services)
 }
 
 func (f *fakeHAServer) handleStates(w http.ResponseWriter, r *http.Request) {
