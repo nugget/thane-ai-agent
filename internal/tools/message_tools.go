@@ -3,9 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
@@ -169,13 +167,6 @@ func coreAttentionToolParameters() map[string]any {
 	}
 }
 
-type coreAttentionTarget struct {
-	LoopID     string     `json:"loop_id"`
-	LoopName   string     `json:"loop_name"`
-	Reason     string     `json:"reason"`
-	LastActive *time.Time `json:"last_active,omitempty"`
-}
-
 func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[string]any) (string, error) {
 	if r.messageBus == nil {
 		return "", fmt.Errorf("message bus is not configured")
@@ -184,122 +175,24 @@ func (r *Registry) handleRequestCoreAttention(ctx context.Context, args map[stri
 	if concern == "" {
 		return "", fmt.Errorf("concern is required")
 	}
-	target, err := r.resolveCoreAttentionTarget()
-	if err != nil {
-		return "", err
-	}
 
-	payload := messages.LoopNotifyPayload{
-		Kind:            "core_attention_request",
+	result, err := looppkg.WakeCoreLoop(ctx, r.liveLoopRegistry, r.messageBus, looppkg.CoreWakeRequest{
+		From:            senderIdentityFromContext(ctx),
+		Kind:            looppkg.CoreAttentionRequestKind,
 		Concern:         concern,
 		SuggestedAction: toolargs.TrimmedString(args, "suggested_action"),
 		Context:         toolargs.TrimmedString(args, "context"),
+		Priority:        messagePriorityArg(args),
 		ForceSupervisor: true,
-	}
-
-	env := messages.Envelope{
-		From: senderIdentityFromContext(ctx),
-		To: messages.Destination{
-			Kind:     messages.DestinationLoop,
-			Target:   target.LoopID,
-			Selector: messages.SelectorID,
-		},
-		Type:     messages.TypeSignal,
-		Payload:  payload,
-		Priority: messagePriorityArg(args),
-		Scope:    []string{"core_attention"},
-	}
-
-	result, err := r.messageBus.Send(ctx, env)
+	})
 	if err != nil {
 		return "", err
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status":   "ok",
-		"target":   target,
-		"delivery": result,
+		"target":   result.Target,
+		"delivery": result.Delivery,
 	})
-}
-
-func (r *Registry) resolveCoreAttentionTarget() (coreAttentionTarget, error) {
-	if r.liveLoopRegistry == nil {
-		return coreAttentionTarget{}, fmt.Errorf("core attention target unavailable: loop registry is not configured")
-	}
-	statuses := r.liveLoopRegistry.Statuses()
-	if len(statuses) == 0 {
-		return coreAttentionTarget{}, fmt.Errorf("core attention target unavailable: no live loops are registered")
-	}
-	if target, ok := newestCoreAttentionTarget(statuses, func(st looppkg.Status) bool {
-		return metadataFlag(st.Config.Metadata, "core_attention_target") ||
-			metadataEquals(st.Config.Metadata, "attention_role", "core") ||
-			metadataEquals(st.Config.Metadata, "role", "core")
-	}, "metadata_core_attention_target"); ok {
-		return target, nil
-	}
-	if target, ok := newestCoreAttentionTarget(statuses, func(st looppkg.Status) bool {
-		return metadataEquals(st.Config.Metadata, "category", "channel") && metadataFlag(st.Config.Metadata, "is_owner")
-	}, "recent_owner_channel"); ok {
-		return target, nil
-	}
-	return coreAttentionTarget{}, fmt.Errorf("core attention target unavailable: no loop has metadata core_attention_target=true and no active owner channel loop was found")
-}
-
-func newestCoreAttentionTarget(statuses []looppkg.Status, accept func(looppkg.Status) bool, reason string) (coreAttentionTarget, bool) {
-	matches := make([]looppkg.Status, 0, len(statuses))
-	for _, st := range statuses {
-		if st.ID == "" || st.Name == "" || !accept(st) {
-			continue
-		}
-		matches = append(matches, st)
-	}
-	if len(matches) == 0 {
-		return coreAttentionTarget{}, false
-	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		iActive := loopStatusLastActive(matches[i])
-		jActive := loopStatusLastActive(matches[j])
-		if iActive.Equal(jActive) {
-			return matches[i].ID < matches[j].ID
-		}
-		return iActive.After(jActive)
-	})
-	st := matches[0]
-	return coreAttentionTarget{
-		LoopID:     st.ID,
-		LoopName:   st.Name,
-		Reason:     reason,
-		LastActive: optionalTime(loopStatusLastActive(st)),
-	}, true
-}
-
-func optionalTime(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	return &t
-}
-
-func loopStatusLastActive(st looppkg.Status) time.Time {
-	if !st.LastWakeAt.IsZero() {
-		return st.LastWakeAt
-	}
-	if !st.StartedAt.IsZero() {
-		return st.StartedAt
-	}
-	return time.Time{}
-}
-
-func metadataFlag(meta map[string]string, key string) bool {
-	switch strings.ToLower(strings.TrimSpace(meta[key])) {
-	case "1", "t", "true", "y", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func metadataEquals(meta map[string]string, key, want string) bool {
-	return strings.EqualFold(strings.TrimSpace(meta[key]), want)
 }
 
 func senderIdentityFromContext(ctx context.Context) messages.Identity {

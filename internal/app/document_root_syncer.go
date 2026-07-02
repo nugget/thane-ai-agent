@@ -136,11 +136,14 @@ func newSyncStateRegistry() *syncStateRegistry {
 	}
 }
 
-// setState records the latest observed state for a root.
-func (r *syncStateRegistry) setState(st syncState) {
+// setState records the latest observed state for a root and returns the state
+// it replaced, if any.
+func (r *syncStateRegistry) setState(st syncState) (syncState, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	prev, ok := r.state[st.Root]
 	r.state[st.Root] = st
+	return prev, ok
 }
 
 // advanceRemote records the remote head a root legitimately accepted, so the
@@ -192,19 +195,36 @@ type syncEngine interface {
 	Sync(ctx context.Context, req provenance.SyncRequest) (provenance.SyncResult, error)
 }
 
+type syncTransitionKind string
+
+const (
+	syncTransitionAttentionRequired syncTransitionKind = "attention_required"
+	syncTransitionRecovered         syncTransitionKind = "recovered"
+)
+
+type syncStateTransition struct {
+	Kind        syncTransitionKind
+	Previous    syncState
+	Current     syncState
+	HasPrevious bool
+}
+
+type syncTransitionNotifier func(context.Context, syncStateTransition) error
+
 // docRootSyncer runs timed fast-forward-only sync for one git-remote-backed
 // document root. It threads the last-seen remote head into each pass (for
 // rewind detection), records the outcome in the registry, and re-indexes the
 // root after a fast-forward moves the worktree.
 type docRootSyncer struct {
-	root     string
-	engine   syncEngine
-	request  provenance.SyncRequest // LastKnownRemote is filled per pass
-	interval time.Duration          // 0 disables the ticker (sync-on-demand only)
-	refresh  func(context.Context) error
-	registry *syncStateRegistry
-	logger   *slog.Logger
-	now      func() time.Time // injectable clock; nil uses time.Now
+	root             string
+	engine           syncEngine
+	request          provenance.SyncRequest // LastKnownRemote is filled per pass
+	interval         time.Duration          // 0 disables the ticker (sync-on-demand only)
+	refresh          func(context.Context) error
+	notifyTransition syncTransitionNotifier
+	registry         *syncStateRegistry
+	logger           *slog.Logger
+	now              func() time.Time // injectable clock; nil uses time.Now
 }
 
 func (s *docRootSyncer) clock() time.Time {
@@ -212,6 +232,60 @@ func (s *docRootSyncer) clock() time.Time {
 		return s.now()
 	}
 	return time.Now()
+}
+
+func (s *docRootSyncer) recordState(ctx context.Context, st syncState) {
+	prev, hadPrev := s.registry.setState(st)
+	if s.notifyTransition == nil {
+		return
+	}
+	transition, ok := classifySyncStateTransition(prev, hadPrev, st)
+	if !ok {
+		return
+	}
+	if err := s.notifyTransition(ctx, transition); err != nil && ctx.Err() == nil {
+		s.logger.Warn("document root sync attention wake failed",
+			"root", st.Root,
+			"outcome", st.Outcome,
+			"transition", transition.Kind,
+			"detail", st.Detail,
+			"error", err)
+	}
+}
+
+func classifySyncStateTransition(prev syncState, hadPrev bool, current syncState) (syncStateTransition, bool) {
+	if !current.OK {
+		return syncStateTransition{}, false
+	}
+	if syncOutcomeNeedsAttention(current.Outcome) {
+		if !hadPrev || !prev.OK || prev.Outcome != current.Outcome || strings.TrimSpace(prev.Detail) != strings.TrimSpace(current.Detail) {
+			return syncStateTransition{
+				Kind:        syncTransitionAttentionRequired,
+				Previous:    prev,
+				Current:     current,
+				HasPrevious: hadPrev,
+			}, true
+		}
+		return syncStateTransition{}, false
+	}
+	if hadPrev && prev.OK && syncOutcomeNeedsAttention(prev.Outcome) {
+		return syncStateTransition{
+			Kind:        syncTransitionRecovered,
+			Previous:    prev,
+			Current:     current,
+			HasPrevious: true,
+		}, true
+	}
+	return syncStateTransition{}, false
+}
+
+func syncOutcomeNeedsAttention(outcome provenance.SyncOutcome) bool {
+	switch outcome {
+	case provenance.SyncBlocked, provenance.SyncDiverged, provenance.SyncRemoteBehind:
+		return true
+	default:
+		return false
+	}
 }
 
 // runOnce performs one sync pass, records the result, and re-indexes on a
@@ -227,7 +301,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 		st.OK = false
 		st.Detail = err.Error()
 		s.logger.Warn("document root sync failed", "root", s.root, "error", err)
-		s.registry.setState(st)
+		s.recordState(ctx, st)
 		return st
 	}
 
@@ -254,7 +328,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 		}
 	}
 
-	s.registry.setState(st)
+	s.recordState(ctx, st)
 	// Advance the rewind baseline only for outcomes where the remote head was
 	// legitimately accepted as authoritative (in sync, or integrated). A
 	// refused outcome — diverged, blocked, or remote_behind — must NOT advance
