@@ -2,6 +2,7 @@ package promptfmt
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -137,7 +138,16 @@ func parseDeltaTerms(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid offset %q: %w", s, err)
 		}
-		total += time.Duration(n) * unit
+		// Terms are model-supplied; reject magnitudes that would wrap
+		// time.Duration instead of silently returning garbage.
+		if n > int64(math.MaxInt64)/int64(unit) {
+			return 0, fmt.Errorf("invalid offset %q: term %s%c is too large to represent", s, body[:i], body[i])
+		}
+		term := time.Duration(n) * unit
+		if total > time.Duration(math.MaxInt64)-term {
+			return 0, fmt.Errorf("invalid offset %q: terms sum past the representable range", s)
+		}
+		total += term
 		body = body[i+1:]
 	}
 	return total, nil

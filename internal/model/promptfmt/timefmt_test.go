@@ -229,6 +229,26 @@ func TestParseTimeOrDelta(t *testing.T) {
 			input:   "-5d9y",
 			wantErr: true,
 		},
+		{
+			name:    "term multiplication would wrap duration",
+			input:   "+9223372036854775807s",
+			wantErr: true,
+		},
+		{
+			name:    "term multiplication would wrap at coarse unit",
+			input:   "+15251w",
+			wantErr: true,
+		},
+		{
+			name:    "term sum would wrap duration",
+			input:   "+106751d106751d",
+			wantErr: true,
+		},
+		{
+			name:  "largest representable day count parses",
+			input: "-106751d",
+			want:  now.Add(-106751 * 24 * time.Hour),
+		},
 	}
 
 	for _, tt := range tests {
