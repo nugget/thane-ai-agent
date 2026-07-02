@@ -39,9 +39,10 @@ const CompactionSummaryPrefix = "[Conversation Summary]"
 type CompactableStore interface {
 	GetTokenCount(conversationID string) int
 	GetMessagesForCompaction(conversationID string, keep int) []Message
-	GetActiveCompactionSummaries(conversationID string) []Message
-	MarkCompactedByIDs(conversationID string, ids []string) error
-	AddCompactionSummaryAt(conversationID, summary string, ts time.Time) error
+	GetActiveCompactionSummaries(conversationID string) ([]Message, error)
+	// ApplyCompaction atomically marks compactedIDs compacted and
+	// inserts the replacement summary at summaryTS.
+	ApplyCompaction(conversationID string, compactedIDs []string, summary string, summaryTS time.Time) error
 }
 
 // WorkingMemoryReader is the subset of WorkingMemoryStore needed by the
@@ -183,8 +184,13 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	// and keep the token count pinned above the trigger — a ratchet
 	// that squashes every ~15 fresh messages into yet another stacked
 	// summary (#1168 defect 2). Priors prepend to the summarizer input
-	// so their content carries forward through the new summary.
-	priors := c.store.GetActiveCompactionSummaries(conversationID)
+	// so their content carries forward through the new summary. A read
+	// error here must abort: treating it as "no priors" would insert a
+	// fresh summary and re-stack, the exact failure the fold prevents.
+	priors, err := c.store.GetActiveCompactionSummaries(conversationID)
+	if err != nil {
+		return fmt.Errorf("read prior summaries: %w", err)
+	}
 	folded := make([]Message, 0, len(priors)+len(messages))
 	folded = append(folded, priors...)
 	folded = append(folded, messages...)
@@ -215,23 +221,19 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	// Format as a system message
 	formattedSummary := formatCompactionSummary(folded, summary)
 
-	// Mark exactly the rows that were summarized — by ID, not by a
-	// wall-clock cutoff that can slice through rows the summarizer
-	// never saw.
+	// Apply atomically: mark exactly the rows the summarizer saw
+	// (by ID, so a wall-clock cutoff can't sweep in rows written
+	// mid-compaction) and insert the replacement summary at the
+	// folded region's earliest timestamp — so it sorts at the head of
+	// surviving history rather than interleaved into the live exchange
+	// (#1168 defect 3). A single transaction means a mid-write failure
+	// can't strand history without its summary (#1168, PR #1170 review).
 	ids := make([]string, len(folded))
 	for i, m := range folded {
 		ids[i] = m.ID
 	}
-	if err := c.store.MarkCompactedByIDs(conversationID, ids); err != nil {
-		return fmt.Errorf("mark compacted: %w", err)
-	}
-
-	// The summary takes the folded region's earliest timestamp so it
-	// sorts where the region was, at the head of surviving history. A
-	// now() stamp would interleave it into the middle of the live
-	// exchange (#1168 defect 3).
-	if err := c.store.AddCompactionSummaryAt(conversationID, formattedSummary, folded[0].Timestamp); err != nil {
-		return fmt.Errorf("add summary: %w", err)
+	if err := c.store.ApplyCompaction(conversationID, ids, formattedSummary, folded[0].Timestamp); err != nil {
+		return fmt.Errorf("apply compaction: %w", err)
 	}
 
 	return nil

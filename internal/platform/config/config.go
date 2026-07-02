@@ -1316,10 +1316,6 @@ type ExtractionConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 }
 
-// EpisodicConfig configures episodic memory context injection. When
-// configured, the agent receives curated daily notes plus a JSON
-// catalog of recent closed sessions in its system prompt, giving it
-// continuity and discoverable archive entry points across sessions.
 // CompactionConfig controls when conversation compaction runs.
 type CompactionConfig struct {
 	// MaxTokens is the conversation token budget compaction defends;
@@ -1329,6 +1325,10 @@ type CompactionConfig struct {
 	MaxTokens int `yaml:"max_tokens"`
 }
 
+// EpisodicConfig configures episodic memory context injection. When
+// configured, the agent receives curated daily notes plus a JSON
+// catalog of recent closed sessions in its system prompt, giving it
+// continuity and discoverable archive entry points across sessions.
 type EpisodicConfig struct {
 	// DailyDir is the directory containing daily memory files named
 	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory

@@ -110,8 +110,12 @@ func TestCompaction_SingleFlightCoalescesConcurrentRuns(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatalf("first Compact: %v", err)
 	}
-	if got := len(store.GetActiveCompactionSummaries("conv-1")); got != 1 {
-		t.Errorf("active summaries = %d, want exactly 1", got)
+	got, err := store.GetActiveCompactionSummaries("conv-1")
+	if err != nil {
+		t.Fatalf("GetActiveCompactionSummaries: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("active summaries = %d, want exactly 1", len(got))
 	}
 }
 
@@ -135,7 +139,10 @@ func TestCompaction_FoldsPriorSummariesIntoOne(t *testing.T) {
 		t.Fatalf("second Compact: %v", err)
 	}
 
-	summaries := store.GetActiveCompactionSummaries("conv-1")
+	summaries, err := store.GetActiveCompactionSummaries("conv-1")
+	if err != nil {
+		t.Fatalf("GetActiveCompactionSummaries: %v", err)
+	}
 	if len(summaries) != 1 {
 		t.Fatalf("active summaries = %d, want exactly 1 (priors must fold, not stack)", len(summaries))
 	}
@@ -177,22 +184,32 @@ func TestCompaction_SummaryTakesCompactedRegionPosition(t *testing.T) {
 
 func TestCompaction_BoundarySnapsToTurnEdge(t *testing.T) {
 	base := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	// 7 pairs (14 msgs, u,a,…,a) plus one trailing lone user makes an
+	// ODD count of 15. With KeepRecent=4 the candidate set is the first
+	// 11, whose last element is that penultimate user turn — so the
+	// boundary genuinely lands mid-turn and the trim has something to
+	// do. An even count would end the candidate set on an assistant and
+	// exercise nothing (PR #1170 review).
 	store := newCompactionTestStore(t, "conv-1", base, 7)
-	// Arrange the boundary to fall right after a user message: with
-	// KeepRecent=4, the candidate set ends on the user half of the
-	// 5th-from-last exchange.
-	ts := base.Add(30 * time.Minute)
-	insertMessageAt(t, store, "conv-1", "user", "dangling question whose answer is in the keep window", ts)
-	insertMessageAt(t, store, "conv-1", "assistant", "the answer that must not be orphaned", ts.Add(time.Minute))
+	insertMessageAt(t, store, "conv-1", "user", "dangling question whose answer is in the keep window", base.Add(30*time.Minute))
+
+	// Premise guard: without the trim, this candidate set ends on a
+	// user, so its reply (an assistant, kept) would be orphaned. If a
+	// config change moves the boundary, fail loudly rather than pass
+	// vacuously.
+	candidate := store.GetMessagesForCompaction("conv-1", 4)
+	if n := len(candidate); n == 0 || candidate[n-1].Role != "user" {
+		t.Fatalf("test premise broken: candidate set must end on a user turn to exercise the trim; got %d messages ending on %q", n, lastRole(candidate))
+	}
 
 	c := compactorFor(store, &countingSummarizer{})
 	if err := c.Compact(context.Background(), "conv-1"); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 
-	// Every surviving non-summary message run must not START with an
-	// orphaned assistant reply: the message right after the summary is
-	// either a user message or nothing.
+	// The message right after the summary must not be an orphaned
+	// assistant reply — the trim keeps the dangling user (and its
+	// answer) together in active history.
 	messages := store.GetMessages("conv-1")
 	if len(messages) < 2 {
 		t.Fatalf("unexpectedly few messages: %d", len(messages))
@@ -200,6 +217,13 @@ func TestCompaction_BoundarySnapsToTurnEdge(t *testing.T) {
 	if messages[1].Role == "assistant" {
 		t.Errorf("first message after summary is an assistant reply (%q) — turn pair split", messages[1].Content[:min(40, len(messages[1].Content))])
 	}
+}
+
+func lastRole(msgs []Message) string {
+	if len(msgs) == 0 {
+		return "(none)"
+	}
+	return msgs[len(msgs)-1].Role
 }
 
 func TestCompaction_ReleasesFlightGuardOnSkip(t *testing.T) {
