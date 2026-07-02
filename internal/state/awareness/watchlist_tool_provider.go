@@ -67,7 +67,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"properties": map[string]any{
 					"entity_id": map[string]any{
 						"type":        "string",
-						"description": "The Home Assistant entity ID to subscribe to (e.g., sensor.office_temperature, weather.home), or a glob pattern (e.g., binary_sensor.*door*, *_temperature) to watch every matching entity, re-expanded live each turn (capped per turn).",
+						"description": "What to subscribe to. Any of: a concrete entity ID (sensor.office_temperature); a glob (binary_sensor.*door*, *_temperature); or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> (e.g. area:office) — which watches that group's current members, re-resolved live each turn so membership follows the home as devices move (capped per turn like globs). Use ha_registry_search to find area/label/floor IDs.",
 					},
 					"tags": map[string]any{
 						"type":        "array",
