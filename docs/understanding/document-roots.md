@@ -115,6 +115,28 @@ Policy is deliberately attached to the root, not to individual tools or
 prompts. A loop-declared output, a direct document write, and the
 corpus-aware intake flow should all meet the same root contract.
 
+Source checkouts can also be named roots, even though they are not
+document corpora. For a forge-maintained local checkout, use a read-only
+root with indexing disabled:
+
+```yaml
+workspace:
+  path: ~/Thane
+
+roots:
+  thanecode:
+    path: ~/Thane/checkouts/thane
+    indexing: false
+    authoring: read_only
+```
+
+Point `forge_repo_follow.local_checkout` at the same path. The `doc_*`
+tools will not browse or search that source tree when `indexing: false`,
+but raw file tools resolve the prefix: `file_read` can read
+`thanecode:go.mod`, while `file_search` and `file_grep` can traverse the
+checkout. Keep these roots under `workspace.path`, or add their directory
+to `workspace.read_only_dirs` if they live elsewhere.
+
 The current policy fields are:
 
 - `indexing`: set `false` when a root may be written/read by exact ref

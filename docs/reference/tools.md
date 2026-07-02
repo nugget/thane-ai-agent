@@ -159,6 +159,9 @@ Managed document roots (`core:`, `kb:`, `generated:`, `scratchpad:`,
 custom prefixes) are browsed through these tools rather than via raw
 filesystem access. See
 [Document Roots](../understanding/document-roots.md).
+For source-code checkouts, configure a read-only root with
+`indexing: false` and use the `file_*` tools against that prefix; the
+document index is markdown-oriented.
 
 `doc_roots` includes each root's policy summary: indexing status,
 authoring mode, git/signature expectations, and current verification
@@ -251,7 +254,12 @@ Owner channel activity recency is reported with delta fields such as
 | `file_tree` | Render a directory tree. |
 | `create_temp_file` | Create a temp file with a labelled path. |
 
-`file_stat` reports modification recency as `modified_delta`.
+File tools resolve configured root prefixes such as `kb:` or
+`thanecode:` before applying the workspace sandbox. A forge-maintained
+checkout is searchable through these tools when its `local_checkout` path
+is also declared as a read-only root under `workspace.path` or included
+in `workspace.read_only_dirs`. `file_stat` reports modification recency
+as `modified_delta`.
 
 ## `shell` — host command execution
 
