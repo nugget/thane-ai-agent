@@ -100,10 +100,13 @@ tagging strategy.
 Repository event subscriptions are managed with `forge_repo_follow`,
 `forge_repo_unfollow`, and `forge_repo_subscriptions`. Each subscription
 tracks new releases, commits, or both with high-water marks stored in
-opstate.
+opstate. A subscription may also carry `local_checkout`, a path maintained
+as a read-only mirror checkout by the poller before event delivery.
 
 Unlike legacy pollers that start a fresh generic conversation, forge
 subscriptions require `wake_loop`. New `release` and `commit` events are
 delivered to the named loop as structured event-source notifications, so the
 receiving `thane_loop_create` or other `thane_` loop remains the owner of durable
-documents and corpus conventions.
+documents and corpus conventions. When a local checkout is configured,
+event metadata includes `local_checkout` and `last_synced_sha`, and
+unfollowing the subscription leaves the checkout on disk.

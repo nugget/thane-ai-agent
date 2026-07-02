@@ -21,21 +21,24 @@ const (
 // ProjectSubscription tracks releases and/or commits for one repository and
 // delivers new events to an existing loop.
 type ProjectSubscription struct {
-	ID            string                  `json:"subscription_id"`
-	Account       string                  `json:"account"`
-	Repo          string                  `json:"repo"`
-	Name          string                  `json:"name"`
-	URL           string                  `json:"url,omitempty"`
-	Branch        string                  `json:"branch,omitempty"`
-	TrackReleases bool                    `json:"track_releases"`
-	TrackCommits  bool                    `json:"track_commits"`
-	WakeTarget    messages.LoopWakeTarget `json:"wake_loop"`
-	LastRelease   string                  `json:"last_release,omitempty"`
-	LastCommit    string                  `json:"last_commit,omitempty"`
-	LatestRelease string                  `json:"latest_release,omitempty"`
-	LatestCommit  string                  `json:"latest_commit,omitempty"`
-	LastChecked   time.Time               `json:"last_checked,omitempty"`
-	CreatedAt     time.Time               `json:"created_at"`
+	ID                string                  `json:"subscription_id"`
+	Account           string                  `json:"account"`
+	Repo              string                  `json:"repo"`
+	Name              string                  `json:"name"`
+	URL               string                  `json:"url,omitempty"`
+	Branch            string                  `json:"branch,omitempty"`
+	CheckoutPath      string                  `json:"local_checkout,omitempty"`
+	CheckoutRemoteURL string                  `json:"checkout_remote_url,omitempty"`
+	TrackReleases     bool                    `json:"track_releases"`
+	TrackCommits      bool                    `json:"track_commits"`
+	WakeTarget        messages.LoopWakeTarget `json:"wake_loop"`
+	LastRelease       string                  `json:"last_release,omitempty"`
+	LastCommit        string                  `json:"last_commit,omitempty"`
+	LatestRelease     string                  `json:"latest_release,omitempty"`
+	LatestCommit      string                  `json:"latest_commit,omitempty"`
+	LastSyncedSHA     string                  `json:"last_synced_sha,omitempty"`
+	LastChecked       time.Time               `json:"last_checked,omitempty"`
+	CreatedAt         time.Time               `json:"created_at"`
 }
 
 // SubscriptionStore persists forge project subscriptions in opstate.

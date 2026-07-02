@@ -42,6 +42,10 @@ func (r *Registry) registerForgeSubscriptionTools() {
 					"type":        "boolean",
 					"description": "Whether to report new commits on branch/ref. Defaults to true.",
 				},
+				"local_checkout": map[string]any{
+					"type":        "string",
+					"description": "Optional absolute or working-directory-relative path to keep as a read-only mirror checkout. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
+				},
 				"wake_loop": forgeWakeLoopDefinition(),
 			},
 			"required": []string{"repo", "wake_loop"},

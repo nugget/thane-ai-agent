@@ -17,7 +17,7 @@ type ForgeProvider interface {
 	// --- Repositories ---
 
 	// GetRepository retrieves repository metadata used by subscription
-	// setup, such as the default branch and web URL.
+	// setup, such as the default branch, web URL, and clone URL.
 	GetRepository(ctx context.Context, repo string) (*Repository, error)
 
 	// ListReleases returns recent repository releases, newest first.

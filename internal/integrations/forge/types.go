@@ -22,6 +22,8 @@ type Repository struct {
 	DefaultBranch string
 	// URL is the web URL for the repository.
 	URL string
+	// CloneURL is the git transport URL for cloning or fetching.
+	CloneURL string
 }
 
 // Release represents a repository release.

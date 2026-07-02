@@ -3,10 +3,12 @@ package forge
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 )
 
 type repoFollowResponse struct {
@@ -19,8 +21,10 @@ type repoFollowResponse struct {
 	TrackReleases  bool                    `json:"track_releases"`
 	TrackCommits   bool                    `json:"track_commits"`
 	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
+	LocalCheckout  string                  `json:"local_checkout,omitempty"`
 	LatestRelease  string                  `json:"latest_release,omitempty"`
 	LatestCommit   string                  `json:"latest_commit,omitempty"`
+	LastSyncedSHA  string                  `json:"last_synced_sha,omitempty"`
 }
 
 type repoSubscriptionEntry struct {
@@ -33,8 +37,10 @@ type repoSubscriptionEntry struct {
 	TrackReleases  bool                    `json:"track_releases"`
 	TrackCommits   bool                    `json:"track_commits"`
 	WakeLoop       messages.LoopWakeTarget `json:"wake_loop"`
+	LocalCheckout  string                  `json:"local_checkout,omitempty"`
 	LatestRelease  string                  `json:"latest_release,omitempty"`
 	LatestCommit   string                  `json:"latest_commit,omitempty"`
+	LastSyncedSHA  string                  `json:"last_synced_sha,omitempty"`
 	LastChecked    string                  `json:"last_checked,omitempty"`
 	Created        string                  `json:"created,omitempty"`
 }
@@ -45,8 +51,10 @@ type repoSubscriptionsResponse struct {
 }
 
 type repoUnfollowResponse struct {
-	Action         string `json:"action"`
-	SubscriptionID string `json:"subscription_id"`
+	Action           string `json:"action"`
+	SubscriptionID   string `json:"subscription_id"`
+	LocalCheckout    string `json:"local_checkout,omitempty"`
+	CheckoutRetained bool   `json:"checkout_retained,omitempty"`
 }
 
 // HandleRepoFollow follows a repository and wakes an existing loop when new
@@ -80,9 +88,30 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		return "", fmt.Errorf("repository %s not found", repo)
 	}
 
-	branch := stringArg(args, "branch")
+	branch := strings.TrimSpace(stringArg(args, "branch"))
 	if branch == "" {
 		branch = meta.DefaultBranch
+	}
+	localCheckout := strings.TrimSpace(stringArg(args, "local_checkout"))
+	checkoutRemoteURL := ""
+	subscriptionID := SubscriptionID(acct, repo, branch, wakeTarget)
+	if localCheckout != "" {
+		if branch == "" {
+			return "", fmt.Errorf("local_checkout requires branch because repository %s has no default branch; set branch", repo)
+		}
+		checkoutRemoteURL = repositoryCheckoutRemoteURL(meta)
+		if checkoutRemoteURL == "" {
+			return "", fmt.Errorf("local_checkout requires a clone URL for repository %s", repo)
+		}
+		mirror, err := checkout.OpenMirror(checkout.MirrorSpec{
+			Name:         "forge subscription " + subscriptionID,
+			WorktreePath: localCheckout,
+			Logger:       t.logger,
+		})
+		if err != nil {
+			return "", err
+		}
+		localCheckout = mirror.WorktreePath
 	}
 	trackReleases := boolArg(args, "track_releases", true)
 	trackCommits := boolArg(args, "track_commits", true)
@@ -97,17 +126,19 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 
 	now := time.Now().UTC()
 	sub := ProjectSubscription{
-		ID:            SubscriptionID(acct, repo, branch, wakeTarget),
-		Account:       acct,
-		Repo:          repo,
-		Name:          name,
-		URL:           meta.URL,
-		Branch:        branch,
-		TrackReleases: trackReleases,
-		TrackCommits:  trackCommits,
-		WakeTarget:    wakeTarget,
-		LastChecked:   now,
-		CreatedAt:     now,
+		ID:                subscriptionID,
+		Account:           acct,
+		Repo:              repo,
+		Name:              name,
+		URL:               meta.URL,
+		Branch:            branch,
+		CheckoutPath:      localCheckout,
+		CheckoutRemoteURL: checkoutRemoteURL,
+		TrackReleases:     trackReleases,
+		TrackCommits:      trackCommits,
+		WakeTarget:        wakeTarget,
+		LastChecked:       now,
+		CreatedAt:         now,
 	}
 
 	if trackReleases {
@@ -146,8 +177,10 @@ func (t *Tools) HandleRepoFollow(ctx context.Context, args map[string]any) (stri
 		TrackReleases:  sub.TrackReleases,
 		TrackCommits:   sub.TrackCommits,
 		WakeLoop:       sub.WakeTarget,
+		LocalCheckout:  sub.CheckoutPath,
 		LatestRelease:  sub.LatestRelease,
 		LatestCommit:   sub.LatestCommit,
+		LastSyncedSHA:  sub.LastSyncedSHA,
 	})
 }
 
@@ -160,12 +193,18 @@ func (t *Tools) HandleRepoUnfollow(_ context.Context, args map[string]any) (stri
 	if id == "" {
 		return "", fmt.Errorf("subscription_id is required")
 	}
+	sub, err := t.subscriptions.Get(id)
+	if err != nil {
+		return "", err
+	}
 	if err := t.subscriptions.Remove(id); err != nil {
 		return "", err
 	}
 	return marshalResponse(repoUnfollowResponse{
-		Action:         "unfollowed",
-		SubscriptionID: id,
+		Action:           "unfollowed",
+		SubscriptionID:   id,
+		LocalCheckout:    sub.CheckoutPath,
+		CheckoutRetained: sub.CheckoutPath != "",
 	})
 }
 
@@ -192,8 +231,10 @@ func (t *Tools) HandleRepoSubscriptions(_ context.Context, _ map[string]any) (st
 			TrackReleases:  sub.TrackReleases,
 			TrackCommits:   sub.TrackCommits,
 			WakeLoop:       sub.WakeTarget,
+			LocalCheckout:  sub.CheckoutPath,
 			LatestRelease:  sub.LatestRelease,
 			LatestCommit:   sub.LatestCommit,
+			LastSyncedSHA:  sub.LastSyncedSHA,
 		}
 		if !sub.LastChecked.IsZero() {
 			entry.LastChecked = promptfmt.FormatDeltaOnly(sub.LastChecked, now)
@@ -220,4 +261,11 @@ func boolArg(args map[string]any, key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func repositoryCheckoutRemoteURL(meta *Repository) string {
+	if meta == nil {
+		return ""
+	}
+	return firstNonEmpty(meta.CloneURL, meta.URL)
 }
