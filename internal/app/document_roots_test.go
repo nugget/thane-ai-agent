@@ -396,6 +396,58 @@ func TestDocumentRootProvenanceWriterDoesNotCleanEscapesIntoPrefix(t *testing.T)
 	}
 }
 
+func TestDocumentRootProvenanceWriterMisconfiguredCheckoutReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		writer *documentRootProvenanceWriter
+		call   func(*testing.T, *documentRootProvenanceWriter) error
+	}{
+		{
+			name:   "nil writer write",
+			writer: nil,
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing checkout write",
+			writer: &documentRootProvenanceWriter{},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing store write",
+			writer: &documentRootProvenanceWriter{checkout: &checkout.Signed{}},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing store delete",
+			writer: &documentRootProvenanceWriter{checkout: &checkout.Signed{}},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Delete(t.Context(), "doc.md", "message")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.call(t, tt.writer)
+			if err == nil {
+				t.Fatal("writer operation returned nil, want configuration error")
+			}
+			if !strings.Contains(err.Error(), "signed checkout is not configured") {
+				t.Fatalf("error = %q, want signed-checkout configuration error", err)
+			}
+		})
+	}
+}
+
 // TestDocumentRootProvenanceReviser exercises the app adapter that bridges a
 // provenance.Reader to documents.RootReviser against a real signed repo.
 func TestDocumentRootProvenanceReviser(t *testing.T) {

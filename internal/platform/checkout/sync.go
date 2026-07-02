@@ -23,7 +23,8 @@ const (
 type SyncOutcome = provenance.SyncOutcome
 
 const (
-	// SyncClean means local and remote already agree.
+	// SyncClean means local and remote already agree, or a fetch-only sync saw
+	// local commits that do not need pushing.
 	SyncClean = provenance.SyncClean
 	// SyncFastForwarded means the local branch was advanced to the remote.
 	SyncFastForwarded = provenance.SyncFastForwarded

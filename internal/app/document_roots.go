@@ -26,15 +26,30 @@ type documentRootProvenanceVerifier struct {
 }
 
 func (w *documentRootProvenanceWriter) Write(ctx context.Context, filename, content, message string) error {
-	return w.checkout.Store.Write(ctx, w.storeFilename(filename), content, message)
+	store, err := w.store()
+	if err != nil {
+		return err
+	}
+	return store.Write(ctx, w.storeFilename(filename), content, message)
 }
 
 func (w *documentRootProvenanceWriter) Delete(ctx context.Context, filename, message string) error {
-	return w.checkout.Store.Delete(ctx, w.storeFilename(filename), message)
+	store, err := w.store()
+	if err != nil {
+		return err
+	}
+	return store.Delete(ctx, w.storeFilename(filename), message)
 }
 
 func (w *documentRootProvenanceWriter) storeFilename(filename string) string {
 	return w.checkout.RepoFilename(filename)
+}
+
+func (w *documentRootProvenanceWriter) store() (*provenance.Store, error) {
+	if w == nil || w.checkout == nil || w.checkout.Store == nil {
+		return nil, fmt.Errorf("document root signed checkout is not configured")
+	}
+	return w.checkout.Store, nil
 }
 
 func (v *documentRootProvenanceVerifier) Verify(ctx context.Context, filename string) (documents.SignatureVerification, error) {
