@@ -372,8 +372,8 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	if summary["kind"] != "numeric" {
 		t.Fatalf("kind = %#v, want numeric", summary["kind"])
 	}
-	if summary["lookback"] != "-86400s" {
-		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	if summary["lookback"] != "-24h" {
+		t.Fatalf("lookback = %#v, want -24h", summary["lookback"])
 	}
 	if summary["trend"] != "rising" {
 		t.Fatalf("trend = %#v, want rising", summary["trend"])
@@ -586,8 +586,8 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	if summary["kind"] != "discrete" {
 		t.Fatalf("kind = %#v, want discrete", summary["kind"])
 	}
-	if summary["lookback"] != "-86400s" {
-		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	if summary["lookback"] != "-24h" {
+		t.Fatalf("lookback = %#v, want -24h", summary["lookback"])
 	}
 	if summary["change_count"] != float64(2) {
 		t.Fatalf("change_count = %#v, want 2", summary["change_count"])

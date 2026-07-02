@@ -493,8 +493,8 @@ func TestFormatPerson(t *testing.T) {
 	if parsed["state"] != "home" {
 		t.Error("missing state")
 	}
-	if parsed["since"] != "-3600s" {
-		t.Errorf("since = %v, want -3600s", parsed["since"])
+	if parsed["since"] != "-1h" {
+		t.Errorf("since = %v, want -1h", parsed["since"])
 	}
 }
 

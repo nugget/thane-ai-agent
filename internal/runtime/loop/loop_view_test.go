@@ -75,10 +75,10 @@ func TestLoopViewResolver_FromStatus_RunningService(t *testing.T) {
 	if len(v.EffectiveTags) != 2 || v.EffectiveTags[0].From != "travel" {
 		t.Errorf("EffectiveTags = %#v, want inheritance provenance carried through", v.EffectiveTags)
 	}
-	// Signed exact-second deltas per the model-facing convention: 4h12m =
-	// 15120s ago, last wake 47s ago.
-	if v.StartedDelta == nil || *v.StartedDelta != "-15120s" {
-		t.Errorf("StartedDelta = %v, want -15120s", v.StartedDelta)
+	// Signed tiered deltas per the model-facing convention: 4h12m ago
+	// renders hours+minutes, last wake 47s ago stays exact seconds.
+	if v.StartedDelta == nil || *v.StartedDelta != "-4h12m" {
+		t.Errorf("StartedDelta = %v, want -4h12m", v.StartedDelta)
 	}
 	if v.LastWakeDelta == nil || *v.LastWakeDelta != "-47s" {
 		t.Errorf("LastWakeDelta = %v, want -47s", v.LastWakeDelta)
@@ -99,8 +99,8 @@ func TestLoopViewResolver_FromStatus_NextWake(t *testing.T) {
 		CurrentSleep: 99 * time.Minute,
 		Config:       Config{Operation: OperationService},
 	})
-	if sleeping.NextWakeDelta == nil || *sleeping.NextWakeDelta != "+5940s" {
-		t.Errorf("NextWakeDelta = %v, want +5940s", sleeping.NextWakeDelta)
+	if sleeping.NextWakeDelta == nil || *sleeping.NextWakeDelta != "+1h39m" {
+		t.Errorf("NextWakeDelta = %v, want +1h39m", sleeping.NextWakeDelta)
 	}
 	// Unsigned seconds (a duration magnitude), not a delta: 99m = 5940s.
 	if sleeping.CurrentSleepDuration == nil || *sleeping.CurrentSleepDuration != "5940s" {
@@ -278,8 +278,8 @@ func TestDefinitionViewResolver_FromDefinition_RunningOverlaysLive(t *testing.T)
 	if v.ContextFillPct == nil || *v.ContextFillPct != 10 { // 20000*100/200000
 		t.Errorf("ContextFillPct = %v, want 10", v.ContextFillPct)
 	}
-	if v.StartedDelta == nil || *v.StartedDelta != "-7200s" {
-		t.Errorf("StartedDelta = %v, want -7200s", v.StartedDelta)
+	if v.StartedDelta == nil || *v.StartedDelta != "-2h" {
+		t.Errorf("StartedDelta = %v, want -2h", v.StartedDelta)
 	}
 	if len(v.EffectiveTags) != 1 || v.EffectiveTags[0].Tag != "water" {
 		t.Errorf("EffectiveTags = %#v, want the live inheritance overlaid", v.EffectiveTags)
