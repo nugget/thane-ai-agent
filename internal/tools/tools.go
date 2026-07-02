@@ -121,6 +121,7 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 	r.registerBuiltins()
 	r.registerFindEntity()     // Smart entity discovery
 	r.registerHASearchStates() // Predicate search across live state
+	r.registerHAListServices() // Service-catalog discovery (#1177)
 	r.registerHAAutomationTools()
 	return r
 }
