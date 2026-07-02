@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 )
 
 const (
@@ -68,7 +69,17 @@ func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.L
 // ServeHTTP upgrades the connection to WebSocket, performs the auth
 // handshake, and runs the heartbeat and read loops for the provider.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	// If the client reached us on a deprecated path alias, attach the
+	// RFC 8594 Sunset / RFC 9745 Deprecation headers to the 101 upgrade
+	// response. gorilla's Upgrade emits only the headers passed here (it
+	// does not copy w.Header()), so the signal must ride the third arg.
+	alias, isLegacy := legacyroute.Lookup(r.Method, r.URL.Path)
+	var upgradeHeader http.Header
+	if isLegacy {
+		upgradeHeader = alias.DeprecationHeaders()
+	}
+
+	conn, err := upgrader.Upgrade(w, r, upgradeHeader)
 	if err != nil {
 		h.logger.Error("companion websocket upgrade failed", "error", err)
 		return
@@ -85,6 +96,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Usage telemetry — the linchpin for a data-driven cull (#1084). A
+	// legacy alias cannot be safely removed until this shows its usage
+	// has dropped to zero, so log every connection with client identity.
+	var deprecation *deprecationNotice
+	if isLegacy {
+		h.logger.Warn("legacy websocket alias in use",
+			"path", r.URL.Path,
+			"canonical", alias.Canonical,
+			"account", provider.Account,
+			"client_id", provider.ClientID,
+			"client_name", provider.ClientName,
+			"sunset_on", alias.RemoveAfter,
+			"issue", alias.Issue,
+		)
+		deprecation = &deprecationNotice{
+			DeprecatedSince: alias.DeprecatedSince,
+			SunsetOn:        alias.RemoveAfter,
+			CanonicalPath:   alias.Canonical,
+			Issue:           alias.Issue,
+		}
+	}
+
 	// Register the provider before confirming to the client, so the
 	// registry is consistent by the time the client reads auth_ok.
 	h.registry.Add(provider)
@@ -95,9 +128,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if err := writeJSONWithDeadline(conn, writeWait, authOK{
-		Type:       typeAuthOK,
-		ProviderID: provider.ID,
-		Account:    provider.Account,
+		Type:        typeAuthOK,
+		ProviderID:  provider.ID,
+		Account:     provider.Account,
+		Deprecation: deprecation,
 	}); err != nil {
 		return
 	}
