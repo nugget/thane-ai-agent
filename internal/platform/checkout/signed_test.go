@@ -81,3 +81,22 @@ func TestOpenSignedBootstrapsAndReconciles(t *testing.T) {
 		t.Fatalf("VerifyTree: %v", err)
 	}
 }
+
+func TestOpenSignedResolveRootErrorNamesCheckout(t *testing.T) {
+	rootDir := t.TempDir()
+	errRepo := filepath.Join(rootDir, "other")
+	worktree := filepath.Join(rootDir, "repo", "kb")
+
+	_, err := OpenSigned(t.Context(), SignedSpec{
+		Name:           "kb",
+		WorktreePath:   worktree,
+		RepoPath:       errRepo,
+		SigningKeyPath: filepath.Join(rootDir, "missing_key"),
+	})
+	if err == nil {
+		t.Fatal("OpenSigned() error = nil, want root relationship error")
+	}
+	if !strings.Contains(err.Error(), "kb: resolve root") {
+		t.Fatalf("error = %v, want checkout name context", err)
+	}
+}

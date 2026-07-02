@@ -35,7 +35,9 @@ type Verified struct {
 }
 
 // OpenVerified opens an existing checkout for verification and revision reads.
-// It never initializes the repository or writes commits.
+// It never initializes the repository or writes commits. It may best-effort
+// update repo-local git config so command-line verification uses the checkout's
+// repo-local .allowed_signers file by default.
 func OpenVerified(ctx context.Context, spec VerifySpec) (*Verified, error) {
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
@@ -50,7 +52,7 @@ func OpenVerified(ctx context.Context, spec VerifySpec) (*Verified, error) {
 	}
 	root, err := ResolveRoot(repoPath, spec.WorktreePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: resolve root: %w", name, err)
 	}
 	logger := spec.Logger
 	if logger == nil {

@@ -62,7 +62,7 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	}
 	root, err := ResolveRoot(repoPath, spec.WorktreePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: resolve root: %w", name, err)
 	}
 
 	signer, err := provenance.NewSSHFileSigner(signingKey)

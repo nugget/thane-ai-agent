@@ -34,3 +34,21 @@ func TestConfigureRepoLocalAllowedSignersRejectsNonRegularFile(t *testing.T) {
 		t.Fatalf("error = %v, want regular-file message", err)
 	}
 }
+
+func TestOpenVerifiedResolveRootErrorNamesCheckout(t *testing.T) {
+	rootDir := t.TempDir()
+	errRepo := filepath.Join(rootDir, "other")
+	worktree := filepath.Join(rootDir, "repo", "kb")
+
+	_, err := OpenVerified(t.Context(), VerifySpec{
+		Name:         "kb",
+		WorktreePath: worktree,
+		RepoPath:     errRepo,
+	})
+	if err == nil {
+		t.Fatal("OpenVerified() error = nil, want root relationship error")
+	}
+	if !strings.Contains(err.Error(), "kb: resolve root") {
+		t.Fatalf("error = %v, want checkout name context", err)
+	}
+}
