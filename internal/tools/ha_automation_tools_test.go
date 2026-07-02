@@ -26,6 +26,9 @@ type fakeHAServer struct {
 	traceDetails    map[string]map[string]any
 	servicePayloads []map[string]any
 	serviceChanged  []homeassistant.State
+	targetTriggers  []string
+	targetConds     []string
+	targetServices  []string
 	configs         map[string]map[string]any
 	areas           []map[string]any
 	floors          []map[string]any
@@ -247,6 +250,21 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 	defer f.mu.Unlock()
 
 	switch msgType {
+	case "get_triggers_for_target":
+		if f.targetTriggers == nil {
+			return []string{}, true
+		}
+		return f.targetTriggers, true
+	case "get_conditions_for_target":
+		if f.targetConds == nil {
+			return []string{}, true
+		}
+		return f.targetConds, true
+	case "get_services_for_target":
+		if f.targetServices == nil {
+			return []string{}, true
+		}
+		return f.targetServices, true
 	case "trace/list":
 		itemID, _ := msg["item_id"].(string)
 		list := f.traces[itemID]
