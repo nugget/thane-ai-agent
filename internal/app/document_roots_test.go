@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/identity"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
@@ -384,12 +385,66 @@ func TestApplyBootVerification(t *testing.T) {
 func TestDocumentRootProvenanceWriterDoesNotCleanEscapesIntoPrefix(t *testing.T) {
 	t.Parallel()
 
-	writer := &documentRootProvenanceWriter{prefix: "knowledge/kb"}
+	writer := &documentRootProvenanceWriter{checkout: &checkout.Signed{
+		Root: checkout.Root{Prefix: "knowledge/kb"},
+	}}
 	if got := writer.storeFilename("notes/doc.md"); got != "knowledge/kb/notes/doc.md" {
 		t.Fatalf("storeFilename(valid) = %q, want prefixed path", got)
 	}
 	if got := writer.storeFilename("../outside.md"); got != "../outside.md" {
 		t.Fatalf("storeFilename(escape) = %q, want provenance validator to see escape", got)
+	}
+}
+
+func TestDocumentRootProvenanceWriterMisconfiguredCheckoutReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		writer *documentRootProvenanceWriter
+		call   func(*testing.T, *documentRootProvenanceWriter) error
+	}{
+		{
+			name:   "nil writer write",
+			writer: nil,
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing checkout write",
+			writer: &documentRootProvenanceWriter{},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing store write",
+			writer: &documentRootProvenanceWriter{checkout: &checkout.Signed{}},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Write(t.Context(), "doc.md", "content", "message")
+			},
+		},
+		{
+			name:   "missing store delete",
+			writer: &documentRootProvenanceWriter{checkout: &checkout.Signed{}},
+			call: func(t *testing.T, w *documentRootProvenanceWriter) error {
+				return w.Delete(t.Context(), "doc.md", "message")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.call(t, tt.writer)
+			if err == nil {
+				t.Fatal("writer operation returned nil, want configuration error")
+			}
+			if !strings.Contains(err.Error(), "signed checkout is not configured") {
+				t.Fatalf("error = %q, want signed-checkout configuration error", err)
+			}
+		})
 	}
 }
 

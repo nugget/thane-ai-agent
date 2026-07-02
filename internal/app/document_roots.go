@@ -17,8 +17,7 @@ import (
 )
 
 type documentRootProvenanceWriter struct {
-	store  *provenance.Store
-	prefix string
+	checkout *checkout.Signed
 }
 
 type documentRootProvenanceVerifier struct {
@@ -27,15 +26,30 @@ type documentRootProvenanceVerifier struct {
 }
 
 func (w *documentRootProvenanceWriter) Write(ctx context.Context, filename, content, message string) error {
-	return w.store.Write(ctx, w.storeFilename(filename), content, message)
+	store, err := w.store()
+	if err != nil {
+		return err
+	}
+	return store.Write(ctx, w.storeFilename(filename), content, message)
 }
 
 func (w *documentRootProvenanceWriter) Delete(ctx context.Context, filename, message string) error {
-	return w.store.Delete(ctx, w.storeFilename(filename), message)
+	store, err := w.store()
+	if err != nil {
+		return err
+	}
+	return store.Delete(ctx, w.storeFilename(filename), message)
 }
 
 func (w *documentRootProvenanceWriter) storeFilename(filename string) string {
-	return checkout.RepoFilename(w.prefix, filename)
+	return w.checkout.RepoFilename(filename)
+}
+
+func (w *documentRootProvenanceWriter) store() (*provenance.Store, error) {
+	if w == nil || w.checkout == nil || w.checkout.Store == nil {
+		return nil, fmt.Errorf("document root signed checkout is not configured")
+	}
+	return w.checkout.Store, nil
 }
 
 func (v *documentRootProvenanceVerifier) Verify(ctx context.Context, filename string) (documents.SignatureVerification, error) {
@@ -186,7 +200,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 		var reviser *documentRootProvenanceReviser
 		switch {
 		case writer != nil:
-			reviser = &documentRootProvenanceReviser{reader: writer.store, prefix: writer.prefix}
+			reviser = &documentRootProvenanceReviser{reader: writer.checkout.Reader(), prefix: writer.checkout.Prefix}
 		case verifier != nil:
 			reviser = &documentRootProvenanceReviser{reader: verifier.verifier, prefix: verifier.prefix}
 		}
@@ -209,7 +223,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 				a.syncRegistry = newSyncStateRegistry()
 			}
 			resolve := func(p string) string { return resolvePath(p, resolver) }
-			syncer, err := buildDocRootSyncer(root, rootCfg.Git, writer.store, a.syncRegistry, resolve, logger)
+			syncer, err := buildDocRootSyncer(root, rootCfg.Git, writer.checkout, a.syncRegistry, resolve, logger)
 			if err != nil {
 				return documents.StoreOptions{}, fmt.Errorf("doc_roots.%s.git.remote: %w", root, err)
 			}
@@ -327,7 +341,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		"repo", signed.Store.Path(),
 		"prefix", signed.Prefix,
 	)
-	return &documentRootProvenanceWriter{store: signed.Store, prefix: signed.Prefix}, nil
+	return &documentRootProvenanceWriter{checkout: signed}, nil
 }
 
 func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
