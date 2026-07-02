@@ -24,10 +24,11 @@ const forgePollFetchLimit = 100
 // SubscriptionPoller checks followed forge projects for new releases and
 // commits, then wakes the loop declared by each subscription.
 type SubscriptionPoller struct {
-	manager *Manager
-	store   *SubscriptionStore
-	bus     *messages.Bus
-	logger  *slog.Logger
+	manager      *Manager
+	store        *SubscriptionStore
+	bus          *messages.Bus
+	logger       *slog.Logger
+	checkoutSync func(context.Context, ProjectSubscription) (string, error)
 }
 
 // NewSubscriptionPoller creates a poller for forge project subscriptions.
@@ -36,10 +37,11 @@ func NewSubscriptionPoller(manager *Manager, store *SubscriptionStore, bus *mess
 		logger = slog.Default()
 	}
 	return &SubscriptionPoller{
-		manager: manager,
-		store:   store,
-		bus:     bus,
-		logger:  logger,
+		manager:      manager,
+		store:        store,
+		bus:          bus,
+		logger:       logger,
+		checkoutSync: mirrorSubscriptionCheckoutSyncer{logger: logger}.Sync,
 	}
 }
 
@@ -186,6 +188,19 @@ func (p *SubscriptionPoller) checkSubscription(ctx context.Context, sub ProjectS
 		}
 	}
 
+	if strings.TrimSpace(sub.CheckoutPath) != "" {
+		checkoutSync := p.checkoutSync
+		if checkoutSync == nil {
+			checkoutSync = mirrorSubscriptionCheckoutSyncer{logger: p.logger}.Sync
+		}
+		remoteHead, err := checkoutSync(ctx, sub)
+		if err != nil {
+			return sub, nil, 0, 0, fmt.Errorf("sync local checkout: %w", err)
+		}
+		sub.LastSyncedSHA = remoteHead
+		annotateSubscriptionEvents(events, sub)
+	}
+
 	sub.LastChecked = time.Now().UTC()
 	return sub, events, newReleaseCount, newCommitCount, nil
 }
@@ -231,6 +246,9 @@ func (p *SubscriptionPoller) dispatchEvents(ctx context.Context, sub ProjectSubs
 func initialBatchProgress(sub, final ProjectSubscription, events []messages.LoopEventPayload) ProjectSubscription {
 	progress := sub
 	progress.LastChecked = final.LastChecked
+	progress.CheckoutPath = final.CheckoutPath
+	progress.CheckoutRemoteURL = final.CheckoutRemoteURL
+	progress.LastSyncedSHA = final.LastSyncedSHA
 	hasReleaseEvents := false
 	hasCommitEvents := false
 	for _, event := range events {
@@ -400,21 +418,6 @@ func commitEvent(sub ProjectSubscription, commit *Commit) messages.LoopEventPayl
 		ObservedAt: commitTime(commit),
 		Metadata:   metadata,
 	}
-}
-
-func subscriptionMetadata(sub ProjectSubscription) map[string]string {
-	metadata := map[string]string{
-		"subscription_id": sub.ID,
-		"account":         sub.Account,
-		"repo":            sub.Repo,
-	}
-	if sub.Branch != "" {
-		metadata["branch"] = sub.Branch
-	}
-	if sub.Name != "" {
-		metadata["name"] = sub.Name
-	}
-	return metadata
 }
 
 func releaseMarker(release *Release) string {

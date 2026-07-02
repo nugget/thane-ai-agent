@@ -85,6 +85,7 @@ func (g *GitHub) GetRepository(ctx context.Context, repo string) (*Repository, e
 		FullName:      ghRepo.GetFullName(),
 		DefaultBranch: ghRepo.GetDefaultBranch(),
 		URL:           ghRepo.GetHTMLURL(),
+		CloneURL:      ghRepo.GetCloneURL(),
 	}, nil
 }
 

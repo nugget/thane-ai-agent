@@ -321,13 +321,18 @@ Attachment list and search results report arrival recency as
 | `forge_pr_request_review` | Request reviewers on a PR. |
 | `forge_react` | Add an emoji reaction to an issue/PR/comment. |
 | `forge_search` | Search code and issues across the forge. |
-| `forge_repo_follow` | Follow a repository for release/commit events and wake an existing loop. |
+| `forge_repo_follow` | Follow a repository for release/commit events, optionally maintain a local mirror checkout, and wake an existing loop. |
 | `forge_repo_unfollow` | Stop following a repository event subscription. |
 | `forge_repo_subscriptions` | List repository event subscriptions and target loops. |
 
 Repository subscriptions require `wake_loop` so event handling is owned by
 an existing loop, usually one created with `thane_loop_create`
-(`operation: service`) for a specific managed document.
+(`operation: service`) for a specific managed document. Pass
+`local_checkout` when the loop should read a local mirror checkout; the
+poller syncs that checkout before delivering repository events. The path
+must be empty or an existing Thane-owned mirror checkout; non-empty
+directories and unmarked git checkouts are refused. Unfollowing leaves
+the checkout on disk.
 
 ## `scheduler` — time-based tasks
 
