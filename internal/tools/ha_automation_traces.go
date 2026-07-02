@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	defaultHATraceRunLimit      = 10
-	maxHATraceRunLimit          = 25
-	haTracesTruncationNote      = "Result exceeded the tool byte cap; pass run_id for one run's detail, or lower limit."
-	haTraceVariablesOmittedNote = "Step variable snapshots are omitted; results and errors are shown per step."
+	defaultHATraceRunLimit        = 10
+	maxHATraceRunLimit            = 25
+	haTracesSummaryTruncationNote = "Result exceeded the tool byte cap; pass run_id for one run's detail, or lower limit."
+	haTracesDetailTruncationNote  = "Run detail exceeded the tool byte cap; later steps were cut from this preview. The run block at the top (last_step, error) still shows where the run ended."
+	haTraceVariablesOmittedNote   = "Step variable snapshots are omitted; results and errors are shown per step."
 )
 
 // haTraceRunsResult is the summary shape: recent runs of one
@@ -162,7 +163,7 @@ func haTraceRunsView(resolved resolvedAutomation, runs []homeassistant.Automatio
 	for _, run := range runs {
 		out.Runs = append(out.Runs, haTraceRunSummaryView(run, now))
 	}
-	return toIndentedJSONWithTruncationNote(out, haTracesTruncationNote)
+	return toIndentedJSONWithTruncationNote(out, haTracesSummaryTruncationNote)
 }
 
 func haTraceRunSummaryView(run homeassistant.AutomationTraceSummary, now time.Time) haTraceRunView {
@@ -226,5 +227,5 @@ func haTraceDetailView(resolved resolvedAutomation, detail *homeassistant.Automa
 		Note:       haTraceVariablesOmittedNote,
 		Steps:      steps,
 	}
-	return toIndentedJSONWithTruncationNote(out, haTracesTruncationNote)
+	return toIndentedJSONWithTruncationNote(out, haTracesDetailTruncationNote)
 }
