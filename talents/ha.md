@@ -455,55 +455,82 @@ it fires; traces tell you *why it did what it did*.
 
 ## Author a new automation
 
-`ha_automation_create` takes a full HA automation object:
+Home Assistant (2026.7+) authors automations around *intent*, not
+device internals. A purpose-specific trigger describes what you want
+to happen — "motion in the office," "a battery got low" — and targets
+an area, floor, label, or set of entities. The automation then follows
+the home as it changes: move a sensor into the office and the "motion
+in the office" trigger picks it up, no re-authoring. Prefer this form.
+
+`ha_automation_vocabulary` lists what a target supports — its purpose
+triggers, conditions, and services, in the `domain.name` form the
+config takes. Call it first; the vocabulary is per-install because
+integrations register their own.
 
 ```json
 {
   "config": {
-    "alias": "Driveway camera notification",
-    "description": "Notify when the driveway camera sees motion at night",
-    "trigger": [
-      {
-        "platform": "state",
-        "entity_id": "binary_sensor.driveway_motion",
-        "to": "on"
-      }
+    "alias": "Office lights on with motion after dark",
+    "description": "When anyone moves in the office after sunset, bring the office lights up — so the room is never dark when occupied.",
+    "triggers": [
+      { "trigger": "motion.detected", "target": { "area_id": "office" } }
     ],
-    "condition": [
-      {
-        "condition": "sun",
-        "after": "sunset",
-        "before": "sunrise"
-      }
+    "conditions": [
+      { "condition": "sun.is_below_horizon" }
     ],
-    "action": [
-      {
-        "service": "notify.mobile_app_pixel",
-        "data": {
-          "message": "Driveway motion detected"
-        }
-      }
+    "actions": [
+      { "action": "light.turn_on", "target": { "area_id": "office" } }
     ],
     "mode": "single"
   },
   "metadata": {
-    "area_id": "driveway",
-    "label_ids": ["security"]
+    "area_id": "office",
+    "label_ids": ["lighting"]
+  }
+}
+```
+
+The purpose trigger targets the *area*, not a specific
+`binary_sensor.*`. That is the durable choice — entity-ID triggers
+break the moment a device is renamed or replaced.
+
+**2026.7 renames** — use the current names: `battery.became_low`,
+`vacuum.returned_to_dock`, `update.became_available`,
+`climate.is_target_temperature`.
+
+Classic platform triggers still work and are the right tool when no
+purpose trigger fits (a raw MQTT topic, a template, a specific
+webhook). Like purpose triggers, each is an entry in `config.triggers`
+— never a top-level `trigger` field on the config:
+
+```json
+{
+  "config": {
+    "triggers": [
+      { "trigger": "state", "entity_id": "binary_sensor.driveway_motion", "to": "on" }
+    ]
   }
 }
 ```
 
 The `config` key holds the raw HA automation object — preserve
-HA-native field names (alias, description, trigger, condition,
-action, mode). The `metadata` key holds entity registry overrides;
-prefer the `_id` suffixed variants (`area_id`, `label_ids`,
-`category_id`) over their friendly-name siblings.
+HA-native field names. The `metadata` key holds entity registry
+overrides; prefer the `_id` variants (`area_id`, `label_ids`,
+`category_id`).
 
-**Before authoring**: use `ha_registry_search` to find real area
-IDs, label IDs, and entity IDs. Don't guess — typos in entity_ids
-inside a trigger silently break the automation the same way they
-silently break `ha_call_service`. The automation will register, return
-success, and never fire.
+**Author it well.** Every automation you create should read like a
+careful operator wrote it: a real `alias` and a `description` that
+states the intent (not "Automation 7"), an `area_id`, and `label_ids`
+where they apply. The metadata is courtesy to whoever opens the HA UI
+and context you yourself read back later.
+
+**Before authoring**: resolve real IDs. `ha_automation_vocabulary`
+gives you valid trigger/condition/service identifiers for a target;
+`ha_registry_search` finds area, label, and entity IDs. Purpose
+triggers targeting an area sidestep the classic failure mode — a typo
+in an `entity_id` inside a trigger silently breaks the automation:
+it registers, returns success, and never fires. After creating, use
+`ha_automation_traces` to confirm it does what you intended.
 
 ## Update an existing automation
 
