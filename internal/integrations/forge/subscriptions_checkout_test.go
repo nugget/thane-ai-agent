@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,56 @@ func TestSubscriptionStoreLocalCheckoutRoundTrip(t *testing.T) {
 			got.CheckoutPath, got.CheckoutRemoteURL, got.LastSyncedSHA,
 			sub.CheckoutPath, sub.CheckoutRemoteURL, sub.LastSyncedSHA,
 		)
+	}
+}
+
+func TestHandleRepoFollowRejectsLocalCheckoutWithoutCloneURL(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSubscriptionStore(t)
+	provider := &mockProvider{
+		name: "test",
+		getRepositoryResult: &Repository{
+			FullName:      "owner/repo",
+			DefaultBranch: "main",
+			URL:           "https://github.com/owner/repo",
+		},
+		listCommitsResult: []*Commit{{SHA: "abcdef123", Date: time.Now()}},
+	}
+	tools := newTestTools(provider, "owner")
+	tools.subscriptions = store
+
+	_, err := tools.HandleRepoFollow(context.Background(), map[string]any{
+		"repo":           "repo",
+		"track_releases": false,
+		"track_commits":  true,
+		"local_checkout": t.TempDir(),
+		"wake_loop":      map[string]any{"name": "repo_curator"},
+	})
+	if err == nil {
+		t.Fatal("expected local_checkout without clone URL to fail")
+	}
+	if !strings.Contains(err.Error(), "requires a clone URL") {
+		t.Fatalf("error = %q, want clone URL guidance", err)
+	}
+}
+
+func TestSubscriptionCheckoutSyncRequiresRemoteURL(t *testing.T) {
+	t.Parallel()
+
+	syncer := mirrorSubscriptionCheckoutSyncer{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_, err := syncer.Sync(context.Background(), ProjectSubscription{
+		ID:           "sub",
+		Repo:         "owner/repo",
+		Branch:       "main",
+		URL:          "https://github.com/owner/repo",
+		CheckoutPath: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected missing checkout_remote_url to fail")
+	}
+	if !strings.Contains(err.Error(), "no checkout_remote_url") {
+		t.Fatalf("error = %q, want checkout_remote_url guidance", err)
 	}
 }
 

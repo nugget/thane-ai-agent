@@ -329,8 +329,10 @@ Repository subscriptions require `wake_loop` so event handling is owned by
 an existing loop, usually one created with `thane_loop_create`
 (`operation: service`) for a specific managed document. Pass
 `local_checkout` when the loop should read a local mirror checkout; the
-poller syncs that checkout before delivering repository events and leaves
-the checkout on disk when the subscription is unfollowed.
+poller syncs that checkout before delivering repository events. The path
+must be empty or an existing Thane-owned mirror checkout; non-empty
+directories and unmarked git checkouts are refused. Unfollowing leaves
+the checkout on disk.
 
 ## `scheduler` — time-based tasks
 

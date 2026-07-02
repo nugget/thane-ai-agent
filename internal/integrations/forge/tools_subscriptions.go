@@ -267,5 +267,5 @@ func repositoryCheckoutRemoteURL(meta *Repository) string {
 	if meta == nil {
 		return ""
 	}
-	return firstNonEmpty(meta.CloneURL, meta.URL)
+	return strings.TrimSpace(meta.CloneURL)
 }

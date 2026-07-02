@@ -56,9 +56,6 @@ func (s mirrorSubscriptionCheckoutSyncer) Sync(ctx context.Context, sub ProjectS
 	}
 	remoteURL := strings.TrimSpace(sub.CheckoutRemoteURL)
 	if remoteURL == "" {
-		remoteURL = strings.TrimSpace(sub.URL)
-	}
-	if remoteURL == "" {
 		return "", fmt.Errorf("subscription %s has local_checkout=%q but no checkout_remote_url", sub.ID, localCheckout)
 	}
 	branch := strings.TrimSpace(sub.Branch)

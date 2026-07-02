@@ -101,7 +101,9 @@ Repository event subscriptions are managed with `forge_repo_follow`,
 `forge_repo_unfollow`, and `forge_repo_subscriptions`. Each subscription
 tracks new releases, commits, or both with high-water marks stored in
 opstate. A subscription may also carry `local_checkout`, a path maintained
-as a read-only mirror checkout by the poller before event delivery.
+as a read-only mirror checkout by the poller before event delivery. That
+path must be empty or an existing Thane-owned mirror checkout; non-empty
+directories and unmarked git checkouts are refused.
 
 Unlike legacy pollers that start a fresh generic conversation, forge
 subscriptions require `wake_loop`. New `release` and `commit` events are

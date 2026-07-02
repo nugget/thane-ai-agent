@@ -44,7 +44,7 @@ func (r *Registry) registerForgeSubscriptionTools() {
 				},
 				"local_checkout": map[string]any{
 					"type":        "string",
-					"description": "Optional absolute or working-directory-relative path to keep as a read-only mirror checkout. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
+					"description": "Optional absolute or working-directory-relative path to keep as a read-only mirror checkout. The path must be empty or an existing Thane-owned mirror checkout; non-empty directories and unmarked git checkouts are refused. The subscription poller syncs this path before waking the loop and leaves it on disk when unfollowed.",
 				},
 				"wake_loop": forgeWakeLoopDefinition(),
 			},
