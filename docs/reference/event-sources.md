@@ -112,3 +112,8 @@ receiving `thane_loop_create` or other `thane_` loop remains the owner of durabl
 documents and corpus conventions. When a local checkout is configured,
 event metadata includes `local_checkout` and `last_synced_sha`, and
 unfollowing the subscription leaves the checkout on disk.
+
+To make the checkout easy for the receiving loop to read, declare the
+same path as a read-only root such as `thanecode:` with `indexing: false`.
+The loop can then use `file_read`, `file_search`, and `file_grep` against
+that prefix while the subscription keeps the worktree current.

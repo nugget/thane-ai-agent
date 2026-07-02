@@ -1028,6 +1028,53 @@ func TestResolvePath_KBPrefix_ReadViaFileRead(t *testing.T) {
 	}
 }
 
+func TestFileTools_CodeRootPrefixReadSearchAndGrep(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	codeRoot := filepath.Join(workspace, "checkouts", "thane")
+	sourceDir := filepath.Join(codeRoot, "internal", "tools")
+	if err := os.MkdirAll(sourceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(sourceDir, "file_tools.go")
+	source := "package tools\n\nfunc NewFileTools() {}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ft.SetResolver(paths.New(map[string]string{"thanecode": codeRoot}))
+	ctx := context.Background()
+
+	content, err := ft.Read(ctx, "thanecode:internal/tools/file_tools.go", 0, 0)
+	if err != nil {
+		t.Fatalf("Read(thanecode:internal/tools/file_tools.go): %v", err)
+	}
+	if !strings.Contains(content, "func NewFileTools") {
+		t.Fatalf("read content = %q, want source file content", content)
+	}
+
+	found, err := ft.Search(ctx, "thanecode:", "*.go", 5)
+	if err != nil {
+		t.Fatalf("Search(thanecode:, *.go): %v", err)
+	}
+	if !strings.Contains(found, filepath.Join("checkouts", "thane", "internal", "tools", "file_tools.go")) {
+		t.Fatalf("search result = %q, want code root file", found)
+	}
+
+	grep, err := ft.Grep(ctx, "thanecode:", "NewFileTools", 5, false)
+	if err != nil {
+		t.Fatalf("Grep(thanecode:, NewFileTools): %v", err)
+	}
+	if !strings.Contains(grep, "file_tools.go:3:func NewFileTools() {}") {
+		t.Fatalf("grep result = %q, want matching source line", grep)
+	}
+}
+
 func TestResolvePath_MultiplePrefixes(t *testing.T) {
 	workspace, err := os.MkdirTemp("", "thane-file-test-*")
 	if err != nil {

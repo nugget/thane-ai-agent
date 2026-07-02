@@ -202,6 +202,10 @@ roots:
     path: ~/Thane/scratchpad
     indexing: false
     authoring: managed
+  thanecode:
+    path: ~/Thane/checkouts/thane
+    indexing: false
+    authoring: read_only
 ```
 
 Each entry under `roots:` names one local collection Thane keeps track
@@ -225,6 +229,28 @@ roots:
 is the default and allows document tools and loop-declared output tools
 to write the root. `read_only` blocks managed writes. `restricted`
 reserves the root for narrower future flows.
+
+Code checkouts that are maintained by forge subscriptions are good
+read-only roots. Point `forge_repo_follow.local_checkout` at the same
+path, set `indexing: false` because source trees are not markdown
+corpora, and use file tools such as `file_read`, `file_search`, and
+`file_grep` with the root prefix:
+
+```yaml
+workspace:
+  path: ~/Thane
+
+roots:
+  thanecode:
+    path: ~/Thane/checkouts/thane
+    indexing: false
+    authoring: read_only
+```
+
+With that configuration, `thanecode:internal/app/new.go` resolves to the
+maintained checkout. Keep checkout roots under `workspace.path`; if a
+read-only root must live elsewhere, also include that directory in
+`workspace.read_only_dirs` so raw file tools can traverse it.
 
 `git.sign_commits` turns each managed document write/delete into a
 signed git commit. By default the root itself is the repository; set
