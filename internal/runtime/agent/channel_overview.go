@@ -97,6 +97,13 @@ type channelEntry struct {
 	LoopID       string `json:"loop_id,omitempty"`
 	ConvID       string `json:"conv_id,omitempty"`
 	YouAreHere   bool   `json:"you_are_here,omitempty"`
+
+	// fullLoopID carries the untruncated loop ID for sort tie-breaking.
+	// LoopID above is an 8-rune display prefix — UUIDv7 prefixes collide
+	// for every loop created in the same ~65s window (e.g. a restart
+	// hydration burst), so it cannot anchor a total order. Unexported,
+	// so encoding/json omits it from the rendered entry.
+	fullLoopID string
 }
 
 // TagContext returns a compact JSON channel overview for injection into
@@ -141,9 +148,10 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 		}
 
 		e := channelEntry{
-			Channel: subsystem,
-			State:   l.State,
-			LoopID:  promptfmt.ShortIDPrefix(l.ID),
+			Channel:    subsystem,
+			State:      l.State,
+			LoopID:     promptfmt.ShortIDPrefix(l.ID),
+			fullLoopID: l.ID,
 		}
 
 		// Skip parent loops (no per-conversation identity).
@@ -225,7 +233,7 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 		if a.ConvID != b.ConvID {
 			return a.ConvID < b.ConvID
 		}
-		return a.LoopID < b.LoopID
+		return a.fullLoopID < b.fullLoopID
 	})
 
 	data, err := json.Marshal(entries)

@@ -214,3 +214,55 @@ func TestChannelOverview_NilPhoneResolver(t *testing.T) {
 		t.Errorf("sender should still be set: got %q", entries[0].Sender)
 	}
 }
+
+func TestChannelOverview_SortTieBreaksOnFullLoopID(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 29, 15, 0, 0, 0, time.UTC)
+
+	// Two loops whose UUIDv7 IDs share the same 8-rune display prefix —
+	// the norm for loops created in the same ~65s window (e.g. restart
+	// hydration) — and identical channel/sender/conv sort keys. Fed in
+	// descending full-ID order; output must sort ascending by full ID.
+	p := NewChannelOverviewProvider(ChannelOverviewConfig{
+		Loops: &mockLoopSource{loops: []LoopSnapshot{
+			// State is the observable marker for order: it differs per
+			// loop but plays no part in the sort key.
+			{
+				ID: "019f2400-ffff-7000-8000-000000000002", Name: "matrix/b",
+				State:    "sleeping",
+				Metadata: map[string]string{"subsystem": "matrix", "category": "channel"},
+			},
+			{
+				ID: "019f2400-aaaa-7000-8000-000000000001", Name: "matrix/a",
+				State:    "waiting",
+				Metadata: map[string]string{"subsystem": "matrix", "category": "channel"},
+			},
+		}},
+	})
+	p.nowFunc = func() time.Time { return now }
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonStr := strings.TrimSpace(strings.TrimPrefix(got, "### Channel Overview\n\n"))
+	var entries []channelEntry
+	if err := json.Unmarshal([]byte(jsonStr), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].LoopID != entries[1].LoopID {
+		t.Fatalf("test premise broken: display prefixes differ (%q vs %q)", entries[0].LoopID, entries[1].LoopID)
+	}
+	// The unexported tie-break field must not leak into the JSON.
+	if strings.Contains(jsonStr, "fullLoopID") || strings.Contains(jsonStr, "000000000001\",\"full") {
+		t.Errorf("full loop ID leaked into rendered JSON:\n%s", jsonStr)
+	}
+	// Ascending full-ID order: the -aaaa- loop (state=waiting) sorts
+	// first even though it arrived second.
+	if entries[0].State != "waiting" || entries[1].State != "sleeping" {
+		t.Errorf("order = [%s, %s], want [waiting, sleeping] (full-ID ascending)", entries[0].State, entries[1].State)
+	}
+}
