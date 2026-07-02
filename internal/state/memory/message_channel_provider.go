@@ -125,40 +125,47 @@ func (p *MessageChannelProvider) TagContext(ctx context.Context, _ agentctx.Cont
 	return sb.String(), nil
 }
 
+// olderSessionsMaxScan bounds how many candidate rows one turn will
+// examine while filling the catalog. A conversation would need this
+// many consecutive zero-message sessions before the cutoff to starve
+// the catalog; when the ceiling is hit the result is marked as having
+// more, so the drop is never silent.
+const olderSessionsMaxScan = 500
+
 // olderSessions returns closed, non-empty sessions on the given
-// conversation that ended before the cutoff, newest first, capped at
-// SessionsLimit. Active sessions and sessions ending after the cutoff
-// are excluded because their messages are still in the model's working
-// message list; zero-message sessions are excluded as noise. The
-// second return reports whether qualifying sessions were dropped by
-// the limit, so the catalog can mark itself truncated.
+// conversation that ended before the cutoff, most recently ended
+// first, capped at SessionsLimit. Active and in-window sessions are
+// excluded in SQL because their messages are still in the model's
+// working message list; zero-message sessions are filtered here as
+// noise (message counts can live on a separate DB connection, so the
+// filter cannot be pushed into the session query). The second return
+// reports whether qualifying sessions beyond the limit are known or
+// possible, so the catalog can mark itself truncated.
 func (p *MessageChannelProvider) olderSessions(conversationID string, cutoff time.Time) ([]*Session, bool, error) {
-	// Over-fetch so the cutoff and empty-session filters still have
-	// enough candidates to fill the limit. Empty sessions are common
-	// on quiet conversations (session rotation without traffic), so
-	// the buffer is generous. When even the over-fetch is exhausted,
-	// deeper qualifying sessions can go uncounted — acceptable, since
-	// the truncated flag is already set well before that point.
-	sessions, err := p.archive.ListSessions(conversationID, p.cfg.SessionsLimit*8)
-	if err != nil {
-		return nil, false, err
+	pageSize := p.cfg.SessionsLimit * 4
+	if pageSize < 20 {
+		pageSize = 20
 	}
 	out := make([]*Session, 0, p.cfg.SessionsLimit)
-	qualifying := 0
-	for _, s := range sessions {
-		if s.EndedAt == nil {
-			continue
+	for offset := 0; offset < olderSessionsMaxScan; offset += pageSize {
+		page, err := p.archive.ListClosedSessionsEndedBefore(conversationID, cutoff, pageSize, offset)
+		if err != nil {
+			return out, false, err
 		}
-		if !s.EndedAt.Before(cutoff) {
-			continue
-		}
-		if s.MessageCount == 0 {
-			continue
-		}
-		qualifying++
-		if len(out) < p.cfg.SessionsLimit {
+		for _, s := range page {
+			if s.MessageCount == 0 {
+				continue
+			}
+			if len(out) >= p.cfg.SessionsLimit {
+				// One qualifying session beyond the limit proves
+				// the catalog is a window.
+				return out, true, nil
+			}
 			out = append(out, s)
 		}
+		if len(page) < pageSize {
+			return out, false, nil
+		}
 	}
-	return out, qualifying > len(out), nil
+	return out, true, nil
 }

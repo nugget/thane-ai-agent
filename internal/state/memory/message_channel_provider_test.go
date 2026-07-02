@@ -209,6 +209,65 @@ func TestMessageChannelProvider_CapsSessionsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestMessageChannelProvider_DeepNoiseDoesNotStarveCatalog(t *testing.T) {
+	// A long run of empty rotation sessions must not push qualifying
+	// sessions out of reach: the provider pages past noise instead of
+	// scanning a fixed window (PR #1164 review).
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	// Two real sessions, ended long ago.
+	oldA := closedSession(t, archive, insert, "conv-1", now.Add(-100*time.Hour), now.Add(-99*time.Hour), 1)
+	oldB := closedSession(t, archive, insert, "conv-1", now.Add(-98*time.Hour), now.Add(-97*time.Hour), 1)
+	// 45 empty sessions between them and the cutoff — more than two
+	// pages of noise at the default page size of 20.
+	for i := range 45 {
+		started := now.Add(-time.Duration(96-i) * time.Hour)
+		closedSession(t, archive, insert, "conv-1", started, started.Add(30*time.Minute), 0)
+	}
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	sessions, truncated := olderSessionsFromOutput(t, got)
+	if len(sessions) != 2 {
+		t.Fatalf("older sessions len = %d, want 2 (noise must not starve the catalog):\n%s", len(sessions), got)
+	}
+	if sessions[0].ID != oldB.ID || sessions[1].ID != oldA.ID {
+		t.Errorf("session order = [%q, %q], want [%q, %q]", sessions[0].ID, sessions[1].ID, oldB.ID, oldA.ID)
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false when every qualifying session is listed")
+	}
+}
+
+func TestMessageChannelProvider_OrdersByEndedAtNotStartedAt(t *testing.T) {
+	// The catalog contract is most-recently-ENDED first. A session
+	// that started earlier but ended later must sort ahead of one
+	// that started later but ended sooner.
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	longRunning := closedSession(t, archive, insert, "conv-1", now.Add(-10*time.Hour), now.Add(-2*time.Hour), 1)
+	quick := closedSession(t, archive, insert, "conv-1", now.Add(-6*time.Hour), now.Add(-5*time.Hour), 1)
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	sessions, _ := olderSessionsFromOutput(t, got)
+	if len(sessions) != 2 {
+		t.Fatalf("older sessions len = %d, want 2:\n%s", len(sessions), got)
+	}
+	if sessions[0].ID != longRunning.ID || sessions[1].ID != quick.ID {
+		t.Errorf("session order = [%q, %q], want [%q(ended -2h), %q(ended -5h)]",
+			sessions[0].ID, sessions[1].ID, longRunning.ID, quick.ID)
+	}
+}
+
 func TestMessageChannelProvider_AllSessionsFilteredIsSilent(t *testing.T) {
 	provider, archive, insert := newMessageChannelTestSetup(t)
 	now := time.Now()

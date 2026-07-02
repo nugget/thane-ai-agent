@@ -2258,6 +2258,53 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 	return sessions, nil
 }
 
+// ListClosedSessionsEndedBefore returns closed sessions on the given
+// conversation whose ended_at is strictly before cutoff, most recently
+// ended first, with message counts populated. Paginated by limit and
+// offset so callers that filter rows out (e.g. dropping empty
+// sessions) can scan deeper instead of working from a fixed window.
+// Time bounds and ordering go through SQLite's datetime() because
+// stored session timestamps mix RFC3339 local-offset and driver-native
+// forms; raw text comparison would misorder them (#761).
+func (s *ArchiveStore) ListClosedSessionsEndedBefore(conversationID string, cutoff time.Time, limit, offset int) ([]*Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
+		FROM sessions
+		WHERE conversation_id = ? AND ended_at IS NOT NULL
+		  AND datetime(ended_at) < datetime(?)
+		ORDER BY datetime(ended_at) DESC, datetime(started_at) DESC
+		LIMIT ? OFFSET ?
+	`, conversationID, cutoff.UTC().Format(time.RFC3339Nano), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list closed sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	s.populateMessageCounts(sessions)
+	return sessions, nil
+}
+
 // ListChildSessions returns sessions whose parent_session_id matches
 // the given ID, ordered chronologically. Used by the session inspector
 // to show delegate sub-sessions.
