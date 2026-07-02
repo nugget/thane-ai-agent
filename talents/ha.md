@@ -338,7 +338,28 @@ descriptions, required flags, examples, and whether it accepts a
 target block. Check it before guessing; a wrong service name costs a
 failed call.
 
-`ha_call_service` requires the exact entity_id:
+`ha_call_service` addresses one verified entity_id, or fans out with a
+`target` block. Multi-device intent is ONE call, not N: "turn off the
+office lights" is a single call targeting the area —
+
+```json
+{
+  "domain": "light",
+  "service": "turn_off",
+  "target": { "area_id": "Office" }
+}
+```
+
+Targets take `entity_id`, `device_id`, `area_id`, `floor_id`, and
+`label_id` (string or array each), and areas/floors/labels/devices
+accept human names as well as registry IDs — names resolve against the
+registry, and unknown references fail fast with the known names instead
+of HA's silent no-op. HA skips hidden entities in area/floor/label
+targets; that's the operator's curation, not a bug. The response
+reports which entities actually changed state — zero changes with a
+note usually means everything was already in the requested state.
+
+Single-entity form, with the exact entity_id:
 
 ```json
 {

@@ -799,8 +799,10 @@ func (r *Registry) registerBuiltins() {
 
 	// Call service (low-level, use ha_control_device for voice commands)
 	r.Register(&Tool{
-		Name:        "ha_call_service",
-		Description: "Low-level Home Assistant service call. Only use if you already have the exact entity_id. For voice commands, use ha_control_device instead.",
+		Name: "ha_call_service",
+		Description: "Low-level Home Assistant service call. Address one verified entity_id, OR a target block to fan out across an area, floor, label, or device in a single call — \"turn off the office lights\" is one call with target.area_id, not N entity calls. " +
+			"ha_list_services shows which services accept targets (accepts_target). HA skips hidden entities in area/floor/label targets — that is operator curation, not an error. " +
+			"For voice-style commands against one device, prefer ha_control_device.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -814,14 +816,25 @@ func (r *Registry) registerBuiltins() {
 				},
 				"entity_id": map[string]any{
 					"type":        "string",
-					"description": "The EXACT entity ID (must be verified, not guessed)",
+					"description": "The EXACT entity ID (must be verified, not guessed). Provide this or target.",
+				},
+				"target": map[string]any{
+					"type":        "object",
+					"description": "Fan-out addressing: any of entity_id, device_id, area_id, floor_id, label_id (string or array each). Areas, floors, labels, and devices accept human names (\"Office\") as well as registry IDs — names resolve case-insensitively, unknown references fail fast with the known names. Provide this or entity_id.",
+					"properties": map[string]any{
+						"entity_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"device_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"area_id":   map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"floor_id":  map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"label_id":  map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+					},
 				},
 				"data": map[string]any{
 					"type":        "object",
 					"description": "Additional service data (e.g., brightness, temperature)",
 				},
 			},
-			"required": []string{"domain", "service", "entity_id"},
+			"required": []string{"domain", "service"},
 		},
 		Handler: r.handleCallService,
 	})
@@ -1408,24 +1421,42 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	domain, _ := args["domain"].(string)
 	service, _ := args["service"].(string)
 	entityID, _ := args["entity_id"].(string)
+	targetRaw, hasTarget := args["target"].(map[string]any)
 
-	if domain == "" || service == "" || entityID == "" {
-		return "", fmt.Errorf("domain, service, and entity_id are required")
+	if domain == "" || service == "" {
+		return "", fmt.Errorf("domain and service are required")
+	}
+	if entityID == "" && !hasTarget {
+		return "", fmt.Errorf("provide entity_id (one verified entity) or target (fan out by area/floor/label/device)")
+	}
+	if entityID != "" && hasTarget {
+		return "", fmt.Errorf("provide entity_id or target, not both; put the entity in target.entity_id to combine it with other selectors")
 	}
 
-	// HA accepts a service call for an unknown entity_id and silently
-	// no-ops, so a typo'd or stale id otherwise vanishes without feedback.
-	// Probe the entity first (a 404 here is authoritative) and return a
-	// recoverable "did you mean?" suggestion instead of a phantom success.
-	if _, err := r.ha.GetState(ctx, entityID); err != nil {
-		if IsHAEntityNotFound(err) {
-			return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+	data := map[string]any{}
+	var resolvedTarget map[string]any
+
+	if entityID != "" {
+		// HA accepts a service call for an unknown entity_id and silently
+		// no-ops, so a typo'd or stale id otherwise vanishes without feedback.
+		// Probe the entity first (a 404 here is authoritative) and return a
+		// recoverable "did you mean?" suggestion instead of a phantom success.
+		if _, err := r.ha.GetState(ctx, entityID); err != nil {
+			if IsHAEntityNotFound(err) {
+				return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+			}
+			return "", fmt.Errorf("verify entity_id %q before calling %s.%s: %w", entityID, domain, service, err)
 		}
-		return "", fmt.Errorf("verify entity_id %q before calling %s.%s: %w", entityID, domain, service, err)
-	}
-
-	data := map[string]any{
-		"entity_id": entityID,
+		data["entity_id"] = entityID
+	} else {
+		var err error
+		resolvedTarget, err = r.resolveServiceTarget(ctx, targetRaw)
+		if err != nil {
+			return "", err
+		}
+		for k, v := range resolvedTarget {
+			data[k] = v
+		}
 	}
 
 	// Merge additional data
@@ -1435,11 +1466,12 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 		}
 	}
 
-	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
+	changed, err := r.ha.CallServiceWithResponse(ctx, domain, service, data)
+	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Successfully called %s.%s on %s", domain, service, entityID), nil
+	return haCallServiceResponse(domain, service, entityID, resolvedTarget, changed), nil
 }
 
 func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any) (string, error) {
