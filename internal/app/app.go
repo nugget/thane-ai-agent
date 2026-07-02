@@ -30,6 +30,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"github.com/nugget/thane-ai-agent/internal/platform/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -95,7 +96,7 @@ type App struct {
 	documentStore             *documents.Store
 	documentTools             *documents.Tools
 	docRootSyncers            []*docRootSyncer
-	syncRegistry              *syncStateRegistry
+	syncRegistry              *checkout.SyncStateRegistry
 	contactStore              *contacts.Store
 	watchlistStore            *awareness.WatchlistStore
 	loopQueue                 *loopqueue.Store

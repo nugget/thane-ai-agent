@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
@@ -74,14 +72,14 @@ func buildSyncRequest(gitCfg config.DocumentRootGitConfig, resolve func(string) 
 }
 
 // buildDocRootSyncer constructs a per-root syncer from a root's git config,
-// driving the given engine (the root's provenance store). It returns (nil, nil)
-// when the root has no remote block. resolve expands configured paths.
+// driving the given checkout sync engine. It returns (nil, nil) when the root
+// has no remote block. resolve expands configured paths.
 //
 // An out-of-tree trust_anchor is not yet wired: the default is the in-tree
 // .allowed_signers (which the sync engine verifies safely, since a fetch never
 // rewrites the worktree before verification), so a configured trust_anchor is
 // refused rather than silently ignored.
-func buildDocRootSyncer(root string, gitCfg config.DocumentRootGitConfig, engine syncEngine, registry *syncStateRegistry, resolve func(string) string, logger *slog.Logger) (*docRootSyncer, error) {
+func buildDocRootSyncer(root string, gitCfg config.DocumentRootGitConfig, engine syncEngine, registry *checkout.SyncStateRegistry, resolve func(string) string, logger *slog.Logger) (*docRootSyncer, error) {
 	remote := gitCfg.Remote
 	if remote == nil {
 		return nil, nil
@@ -106,87 +104,7 @@ func buildDocRootSyncer(root string, gitCfg config.DocumentRootGitConfig, engine
 	}, nil
 }
 
-// syncState is the in-memory, per-root observed state of remote sync. It is
-// re-derived every pass (never persisted) and read by the operability surface.
-type syncState struct {
-	Root       string
-	OK         bool // false when the last pass errored operationally
-	Outcome    checkout.SyncOutcome
-	Ahead      int
-	Behind     int
-	LocalHead  string
-	RemoteHead string
-	Detail     string // reason for a blocked/diverged/remote_behind outcome, or the error message
-	LastSyncAt time.Time
-}
-
-// syncStateRegistry holds per-root sync state and the remote head observed on
-// each root's previous pass (for the engine's rewind detection). It is safe
-// for concurrent access: the syncer loop writes, the operability surface reads.
-type syncStateRegistry struct {
-	mu         sync.Mutex
-	state      map[string]syncState
-	lastRemote map[string]string
-}
-
-func newSyncStateRegistry() *syncStateRegistry {
-	return &syncStateRegistry{
-		state:      make(map[string]syncState),
-		lastRemote: make(map[string]string),
-	}
-}
-
-// setState records the latest observed state for a root and returns the state
-// it replaced, if any.
-func (r *syncStateRegistry) setState(st syncState) (syncState, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	prev, ok := r.state[st.Root]
-	r.state[st.Root] = st
-	return prev, ok
-}
-
-// advanceRemote records the remote head a root legitimately accepted, so the
-// next pass can detect a rewind past it. The caller advances it only for
-// accepted outcomes (clean / fast-forwarded / pushed); a refused outcome
-// (diverged, blocked, remote_behind) leaves it untouched, so the rewind keeps
-// being detected until the operator resolves it.
-func (r *syncStateRegistry) advanceRemote(root, sha string) {
-	if sha == "" {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.lastRemote[root] = sha
-}
-
-// lastKnownRemote returns the remote head recorded for a root's previous pass,
-// or "" if none.
-func (r *syncStateRegistry) lastKnownRemote(root string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.lastRemote[root]
-}
-
-// get returns the recorded state for a root.
-func (r *syncStateRegistry) get(root string) (syncState, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, ok := r.state[root]
-	return st, ok
-}
-
-// all returns every recorded state, sorted by root for a stable listing.
-func (r *syncStateRegistry) all() []syncState {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]syncState, 0, len(r.state))
-	for _, st := range r.state {
-		out = append(out, st)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Root < out[j].Root })
-	return out
-}
+type syncState = checkout.SyncState
 
 // syncEngine is the sync surface a docRootSyncer drives — satisfied by
 // *checkout.Signed. The interface keeps runOnce unit-testable with a fake,
@@ -222,7 +140,7 @@ type docRootSyncer struct {
 	interval         time.Duration        // 0 disables the ticker (sync-on-demand only)
 	refresh          func(context.Context) error
 	notifyTransition syncTransitionNotifier
-	registry         *syncStateRegistry
+	registry         *checkout.SyncStateRegistry
 	logger           *slog.Logger
 	now              func() time.Time // injectable clock; nil uses time.Now
 }
@@ -235,7 +153,7 @@ func (s *docRootSyncer) clock() time.Time {
 }
 
 func (s *docRootSyncer) recordState(ctx context.Context, st syncState) {
-	prev, hadPrev := s.registry.setState(st)
+	prev, hadPrev := s.registry.RecordState(st)
 	if s.notifyTransition == nil {
 		return
 	}
@@ -245,7 +163,7 @@ func (s *docRootSyncer) recordState(ctx context.Context, st syncState) {
 	}
 	if err := s.notifyTransition(ctx, transition); err != nil && ctx.Err() == nil {
 		s.logger.Warn("document root sync attention wake failed",
-			"root", st.Root,
+			"root", st.Name,
 			"outcome", st.Outcome,
 			"transition", transition.Kind,
 			"detail", st.Detail,
@@ -293,10 +211,10 @@ func syncOutcomeNeedsAttention(outcome checkout.SyncOutcome) bool {
 // as state (OK=false) and retried on the next pass.
 func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	req := s.request
-	req.LastKnownRemote = s.registry.lastKnownRemote(s.root)
+	req.LastKnownRemote = s.registry.LastKnownRemote(s.root)
 
 	res, err := s.engine.Sync(ctx, req)
-	st := syncState{Root: s.root, LastSyncAt: s.clock()}
+	st := syncState{Name: s.root, LastSyncAt: s.clock()}
 	if err != nil {
 		st.OK = false
 		st.Detail = err.Error()
@@ -336,7 +254,7 @@ func (s *docRootSyncer) runOnce(ctx context.Context) syncState {
 	// the true line would escape detection and be pushed over.
 	switch res.Outcome {
 	case checkout.SyncClean, checkout.SyncFastForwarded, checkout.SyncPushed:
-		s.registry.advanceRemote(s.root, res.RemoteHead)
+		s.registry.AdvanceRemote(s.root, res.RemoteHead)
 	}
 	return st
 }

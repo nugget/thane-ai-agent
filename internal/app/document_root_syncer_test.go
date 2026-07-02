@@ -149,7 +149,7 @@ func TestBuildSyncRequest(t *testing.T) {
 }
 
 func TestBuildDocRootSyncer(t *testing.T) {
-	reg := newSyncStateRegistry()
+	reg := checkout.NewSyncStateRegistry()
 	identity := func(s string) string { return s }
 
 	t.Run("nil remote yields nil syncer", func(t *testing.T) {
@@ -197,57 +197,6 @@ func TestBuildDocRootSyncer(t *testing.T) {
 	})
 }
 
-func TestSyncStateRegistry(t *testing.T) {
-	r := newSyncStateRegistry()
-
-	if got := r.lastKnownRemote("kb"); got != "" {
-		t.Errorf("lastKnownRemote on empty = %q, want empty", got)
-	}
-	if _, ok := r.get("kb"); ok {
-		t.Error("get on empty registry returned ok")
-	}
-
-	r.setState(syncState{Root: "kb", OK: true, Outcome: checkout.SyncClean})
-	r.setState(syncState{Root: "apex", OK: true, Outcome: checkout.SyncFastForwarded})
-	if st, ok := r.get("kb"); !ok || st.Outcome != checkout.SyncClean {
-		t.Errorf("get(kb) = %+v, ok=%v", st, ok)
-	}
-
-	all := r.all()
-	if len(all) != 2 || all[0].Root != "apex" || all[1].Root != "kb" {
-		t.Fatalf("all() not sorted by root: %+v", all)
-	}
-
-	r.advanceRemote("kb", "sha1")
-	if got := r.lastKnownRemote("kb"); got != "sha1" {
-		t.Errorf("lastKnownRemote(kb) = %q, want sha1", got)
-	}
-	r.advanceRemote("kb", "") // no-op
-	if got := r.lastKnownRemote("kb"); got != "sha1" {
-		t.Errorf("advanceRemote with empty sha changed value to %q", got)
-	}
-}
-
-// TestSyncStateRegistryConcurrent exercises the writer (syncer loop) racing the
-// reader (operability surface) under -race.
-func TestSyncStateRegistryConcurrent(t *testing.T) {
-	r := newSyncStateRegistry()
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < 1000; i++ {
-			r.setState(syncState{Root: "kb", Outcome: checkout.SyncClean})
-			r.advanceRemote("kb", "sha")
-		}
-		close(done)
-	}()
-	for i := 0; i < 1000; i++ {
-		_ = r.all()
-		_, _ = r.get("kb")
-		_ = r.lastKnownRemote("kb")
-	}
-	<-done
-}
-
 // fakeEngine returns scripted results for successive Sync calls and records the
 // requests it received.
 type fakeEngine struct {
@@ -270,7 +219,7 @@ func (f *fakeEngine) Sync(_ context.Context, req checkout.SyncRequest) (checkout
 	return res, err
 }
 
-func newTestSyncer(engine syncEngine, reg *syncStateRegistry, refresh func(context.Context) error) *docRootSyncer {
+func newTestSyncer(engine syncEngine, reg *checkout.SyncStateRegistry, refresh func(context.Context) error) *docRootSyncer {
 	return &docRootSyncer{
 		root:     "kb",
 		engine:   engine,
@@ -282,7 +231,7 @@ func newTestSyncer(engine syncEngine, reg *syncStateRegistry, refresh func(conte
 }
 
 func TestRunOnceFastForwardReindexesAndAdvances(t *testing.T) {
-	reg := newSyncStateRegistry()
+	reg := checkout.NewSyncStateRegistry()
 	refreshes := 0
 	eng := &fakeEngine{results: []checkout.SyncResult{
 		{Outcome: checkout.SyncFastForwarded, Behind: 2, LocalHead: "l", RemoteHead: "rA"},
@@ -297,7 +246,7 @@ func TestRunOnceFastForwardReindexesAndAdvances(t *testing.T) {
 	if refreshes != 1 {
 		t.Errorf("refresh called %d times after fast-forward, want 1", refreshes)
 	}
-	if got := reg.lastKnownRemote("kb"); got != "rA" {
+	if got := reg.LastKnownRemote("kb"); got != "rA" {
 		t.Errorf("lastKnownRemote = %q, want rA", got)
 	}
 
@@ -315,8 +264,8 @@ func TestRunOnceFastForwardReindexesAndAdvances(t *testing.T) {
 }
 
 func TestRunOnceRemoteBehindDoesNotAdvanceOrReindex(t *testing.T) {
-	reg := newSyncStateRegistry()
-	reg.advanceRemote("kb", "rA") // a prior legitimate remote head
+	reg := checkout.NewSyncStateRegistry()
+	reg.AdvanceRemote("kb", "rA") // a prior legitimate remote head
 	refreshes := 0
 	eng := &fakeEngine{results: []checkout.SyncResult{
 		{Outcome: checkout.SyncRemoteBehind, LocalHead: "l", RemoteHead: "rOld", Detail: "rewound"},
@@ -331,7 +280,7 @@ func TestRunOnceRemoteBehindDoesNotAdvanceOrReindex(t *testing.T) {
 		t.Errorf("refresh called on remote_behind, want 0")
 	}
 	// The rewind baseline must NOT advance, so the rewind keeps being detected.
-	if got := reg.lastKnownRemote("kb"); got != "rA" {
+	if got := reg.LastKnownRemote("kb"); got != "rA" {
 		t.Errorf("lastKnownRemote = %q, want unchanged rA", got)
 	}
 }
@@ -345,22 +294,22 @@ func TestRunOnceAdvanceBaseline(t *testing.T) {
 
 	for _, oc := range accepted {
 		t.Run("advances_on_"+string(oc), func(t *testing.T) {
-			reg := newSyncStateRegistry()
-			reg.advanceRemote("kb", "prior")
+			reg := checkout.NewSyncStateRegistry()
+			reg.AdvanceRemote("kb", "prior")
 			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
 			newTestSyncer(eng, reg, nil).runOnce(context.Background())
-			if got := reg.lastKnownRemote("kb"); got != "new" {
+			if got := reg.LastKnownRemote("kb"); got != "new" {
 				t.Errorf("lastKnownRemote = %q, want advanced to new for accepted outcome %q", got, oc)
 			}
 		})
 	}
 	for _, oc := range refused {
 		t.Run("holds_on_"+string(oc), func(t *testing.T) {
-			reg := newSyncStateRegistry()
-			reg.advanceRemote("kb", "prior")
+			reg := checkout.NewSyncStateRegistry()
+			reg.AdvanceRemote("kb", "prior")
 			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: oc, RemoteHead: "new"}}}
 			newTestSyncer(eng, reg, nil).runOnce(context.Background())
-			if got := reg.lastKnownRemote("kb"); got != "prior" {
+			if got := reg.LastKnownRemote("kb"); got != "prior" {
 				t.Errorf("lastKnownRemote = %q, want held at prior for refused outcome %q", got, oc)
 			}
 		})
@@ -368,7 +317,7 @@ func TestRunOnceAdvanceBaseline(t *testing.T) {
 }
 
 func TestRunOnceNotifiesOnAttentionTransitions(t *testing.T) {
-	reg := newSyncStateRegistry()
+	reg := checkout.NewSyncStateRegistry()
 	eng := &fakeEngine{results: []checkout.SyncResult{
 		{Outcome: checkout.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
 		{Outcome: checkout.SyncBlocked, RemoteHead: "r1", Detail: "first untrusted commit abc123"},
@@ -427,7 +376,7 @@ func TestRunReturnsOnCancel(t *testing.T) {
 		{"ticker", time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reg := newSyncStateRegistry()
+			reg := checkout.NewSyncStateRegistry()
 			eng := &fakeEngine{results: []checkout.SyncResult{{Outcome: checkout.SyncClean, RemoteHead: "r"}}}
 			s := newTestSyncer(eng, reg, nil)
 			s.interval = tc.interval
@@ -448,7 +397,7 @@ func TestRunReturnsOnCancel(t *testing.T) {
 }
 
 func TestRunOnceErrorRecordsState(t *testing.T) {
-	reg := newSyncStateRegistry()
+	reg := checkout.NewSyncStateRegistry()
 	eng := &fakeEngine{errs: []error{context.DeadlineExceeded}}
 	s := newTestSyncer(eng, reg, nil)
 
@@ -459,7 +408,7 @@ func TestRunOnceErrorRecordsState(t *testing.T) {
 	if st.Detail == "" {
 		t.Error("Detail empty on error, want the error message")
 	}
-	if got, ok := reg.get("kb"); !ok || got.OK {
+	if got, ok := reg.Get("kb"); !ok || got.OK {
 		t.Errorf("registry state = %+v, ok=%v; want recorded not-OK", got, ok)
 	}
 }
