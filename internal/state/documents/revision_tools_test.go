@@ -121,6 +121,13 @@ func TestToolsAt_TrustedAndUnverified(t *testing.T) {
 	if got.VerifyStatus != "trusted" || !strings.Contains(got.Body, "hello body") || got.UnverifiedBody != "" {
 		t.Fatalf("trusted at = status %q, body %q, unverified %q", got.VerifyStatus, got.Body, got.UnverifiedBody)
 	}
+	// Tool contract: doc_at names its revision timestamp "timestamp",
+	// matching doc_history/doc_diff — one name for one concept across
+	// the revision-tool family. Guard against the old "as_of" key
+	// regressing back in.
+	if !strings.Contains(out, `"timestamp"`) || strings.Contains(out, `"as_of"`) {
+		t.Fatalf("doc_at output must use \"timestamp\" (not \"as_of\"):\n%s", out)
+	}
 
 	// An untrusted revision ships its content under unverified_body.
 	untrustedRev := newest

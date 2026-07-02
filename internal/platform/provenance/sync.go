@@ -77,11 +77,11 @@ type SyncRequest struct {
 // classification, Ahead/Behind and the two head SHAs are populated (they feed
 // the operability layer's reporting and its deferred rewind detector); a pass
 // blocked before then — a detached HEAD or a branch mismatch, caught before
-// the heads are resolved — leaves them zero and explains why in Detail. Detail
-// carries the reason for any Blocked or Diverged outcome.
+// the heads are resolved — leaves them zero and explains why in Detail.
 type SyncResult struct {
-	// Outcome classifies what the pass observed and did (up to date,
-	// fast-forwarded, blocked, diverged, remote behind).
+	// Outcome classifies what the pass observed and did — one of the
+	// SyncOutcome constants (clean, fast_forwarded, pushed, diverged,
+	// blocked, remote_behind).
 	Outcome SyncOutcome
 
 	// Ahead counts local commits the remote does not have. Non-zero
@@ -101,8 +101,8 @@ type SyncResult struct {
 	// resolving heads.
 	RemoteHead string
 
-	// Detail is the human-readable reason for a Blocked or Diverged
-	// outcome; empty on clean outcomes.
+	// Detail is the human-readable reason for any refusing outcome
+	// (blocked, diverged, remote_behind); empty when the pass succeeded.
 	Detail string
 }
 
