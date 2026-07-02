@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
+	"github.com/nugget/thane-ai-agent/internal/platform/checkout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -95,13 +95,15 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, err
 	}
 
-	signer, err := provenance.NewSSHSignerFromKey(signing.PrivateKey)
+	signed, err := checkout.OpenSigned(ctx, checkout.SignedSpec{
+		Name:            "core.identity",
+		WorktreePath:    absCoreDir,
+		SigningKeyPath:  filepath.Join(absCoreDir, SigningPrivateKeyFile),
+		SkipBirthCommit: true,
+		Logger:          logger.With("component", "core_identity_checkout"),
+	})
 	if err != nil {
-		return nil, err
-	}
-	store, err := provenance.New(absCoreDir, signer, logger)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open core identity checkout: %w", err)
 	}
 
 	policy, err := renderCoreConfig(instanceName, now, signing, channelCA)
@@ -109,7 +111,7 @@ func BootstrapCore(ctx context.Context, coreDir, instanceName string, logger *sl
 		return nil, err
 	}
 
-	if err := store.WriteFiles(ctx, map[string]string{
+	if err := signed.Store.WriteFiles(ctx, map[string]string{
 		".gitignore":         coreGitIgnore,
 		".allowed_signers":   fmt.Sprintf("thane@provenance.local %s\n", strings.TrimSpace(signing.Public)),
 		SigningPublicKeyFile: signing.Public,
