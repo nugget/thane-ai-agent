@@ -82,37 +82,39 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	// Signal entry.
-	sig := entries[0]
-	if sig.Channel != "signal" {
-		t.Errorf("entry[0].channel = %q, want signal", sig.Channel)
-	}
-	if sig.Contact != "nugget" {
-		t.Errorf("entry[0].contact = %q, want nugget", sig.Contact)
-	}
-	if sig.Sender != "+15551234567" {
-		t.Errorf("entry[0].sender = %q, want +15551234567", sig.Sender)
-	}
-	if sig.State != "waiting" {
-		t.Errorf("entry[0].state = %q, want waiting", sig.State)
-	}
-	if sig.LastActivity != "-120s" {
-		t.Errorf("entry[0].last_activity = %q, want -120s", sig.LastActivity)
-	}
-	if sig.ConvID != "signal-15551234567" {
-		t.Errorf("entry[0].conv_id = %q, want signal-15551234567", sig.ConvID)
-	}
-
-	// OWU entry.
-	owu := entries[1]
+	// Entries sort by channel name, so owu precedes signal regardless
+	// of registry arrival order.
+	owu, sig := entries[0], entries[1]
 	if owu.Channel != "owu" {
-		t.Errorf("entry[1].channel = %q, want owu", owu.Channel)
+		t.Errorf("entry[0].channel = %q, want owu", owu.Channel)
 	}
 	if owu.DisplayName != "home-automation" {
-		t.Errorf("entry[1].display_name = %q, want home-automation", owu.DisplayName)
+		t.Errorf("entry[0].display_name = %q, want home-automation", owu.DisplayName)
 	}
 	if owu.ConvID != "owu-xyz" {
-		t.Errorf("entry[1].conv_id = %q, want owu-xyz", owu.ConvID)
+		t.Errorf("entry[0].conv_id = %q, want owu-xyz", owu.ConvID)
+	}
+	if owu.LastActivity != "-4h" {
+		t.Errorf("entry[0].last_activity = %q, want -4h", owu.LastActivity)
+	}
+
+	if sig.Channel != "signal" {
+		t.Errorf("entry[1].channel = %q, want signal", sig.Channel)
+	}
+	if sig.Contact != "nugget" {
+		t.Errorf("entry[1].contact = %q, want nugget", sig.Contact)
+	}
+	if sig.Sender != "+15551234567" {
+		t.Errorf("entry[1].sender = %q, want +15551234567", sig.Sender)
+	}
+	if sig.State != "waiting" {
+		t.Errorf("entry[1].state = %q, want waiting", sig.State)
+	}
+	if sig.LastActivity != "-120s" {
+		t.Errorf("entry[1].last_activity = %q, want -120s", sig.LastActivity)
+	}
+	if sig.ConvID != "signal-15551234567" {
+		t.Errorf("entry[1].conv_id = %q, want signal-15551234567", sig.ConvID)
 	}
 }
 
@@ -210,5 +212,57 @@ func TestChannelOverview_NilPhoneResolver(t *testing.T) {
 	}
 	if entries[0].Sender != "+15559999999" {
 		t.Errorf("sender should still be set: got %q", entries[0].Sender)
+	}
+}
+
+func TestChannelOverview_SortTieBreaksOnFullLoopID(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 3, 29, 15, 0, 0, 0, time.UTC)
+
+	// Two loops whose UUIDv7 IDs share the same 8-rune display prefix —
+	// the norm for loops created in the same ~65s window (e.g. restart
+	// hydration) — and identical channel/sender/conv sort keys. Fed in
+	// descending full-ID order; output must sort ascending by full ID.
+	p := NewChannelOverviewProvider(ChannelOverviewConfig{
+		Loops: &mockLoopSource{loops: []LoopSnapshot{
+			// State is the observable marker for order: it differs per
+			// loop but plays no part in the sort key.
+			{
+				ID: "019f2400-ffff-7000-8000-000000000002", Name: "matrix/b",
+				State:    "sleeping",
+				Metadata: map[string]string{"subsystem": "matrix", "category": "channel"},
+			},
+			{
+				ID: "019f2400-aaaa-7000-8000-000000000001", Name: "matrix/a",
+				State:    "waiting",
+				Metadata: map[string]string{"subsystem": "matrix", "category": "channel"},
+			},
+		}},
+	})
+	p.nowFunc = func() time.Time { return now }
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonStr := strings.TrimSpace(strings.TrimPrefix(got, "### Channel Overview\n\n"))
+	var entries []channelEntry
+	if err := json.Unmarshal([]byte(jsonStr), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].LoopID != entries[1].LoopID {
+		t.Fatalf("test premise broken: display prefixes differ (%q vs %q)", entries[0].LoopID, entries[1].LoopID)
+	}
+	// The unexported tie-break field must not leak into the JSON.
+	if strings.Contains(jsonStr, "fullLoopID") || strings.Contains(jsonStr, "000000000001\",\"full") {
+		t.Errorf("full loop ID leaked into rendered JSON:\n%s", jsonStr)
+	}
+	// Ascending full-ID order: the -aaaa- loop (state=waiting) sorts
+	// first even though it arrived second.
+	if entries[0].State != "waiting" || entries[1].State != "sleeping" {
+		t.Errorf("order = [%s, %s], want [waiting, sleeping] (full-ID ascending)", entries[0].State, entries[1].State)
 	}
 }

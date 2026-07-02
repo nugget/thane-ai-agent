@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,9 @@ func TestContextProvider_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
-	if out != `{"companions":[]}` {
-		t.Errorf("empty registry: got %q, want explicit empty array", out)
+	want := "### Connected Companions\n\n{\"companions\":[]}\n"
+	if out != want {
+		t.Errorf("empty registry: got %q, want headed explicit empty array", out)
 	}
 }
 
@@ -52,8 +54,9 @@ func TestContextProvider_ListsConnected(t *testing.T) {
 		t.Fatalf("TagContext: %v", err)
 	}
 
+	payload := strings.TrimSpace(strings.TrimPrefix(out, "### Connected Companions\n\n"))
 	var ctx companionContextJSON
-	if err := json.Unmarshal([]byte(out), &ctx); err != nil {
+	if err := json.Unmarshal([]byte(payload), &ctx); err != nil {
 		t.Fatalf("decode context: %v (%s)", err, out)
 	}
 	if len(ctx.Companions) != 1 {

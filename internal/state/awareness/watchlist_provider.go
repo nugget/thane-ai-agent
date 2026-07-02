@@ -115,9 +115,9 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 		return "", nil
 	}
 	return "### Watched Entities\n\n" +
-		"_This is a keyhole onto a few subscribed entities, not the house. " +
-		"For anything wider — another room, a device, live state, history, " +
-		"control, or automations — activate the `ha` capability tag._\n\n" +
+		"Live state for explicitly subscribed entities only. Wider Home " +
+		"Assistant access (other rooms, devices, history, control, " +
+		"automations) is behind the `ha` capability tag.\n\n" +
 		body.String(), nil
 }
 
