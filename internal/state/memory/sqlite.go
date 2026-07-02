@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -418,25 +419,75 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 	return messages
 }
 
-// MarkCompacted marks messages as compacted.
-func (s *SQLiteStore) MarkCompacted(conversationID string, before time.Time) error {
-	_, err := s.db.Exec(`
+// MarkCompactedByIDs marks exactly the given messages as compacted.
+// Compaction identifies rows by ID rather than a wall-clock cutoff so
+// the compacted set is precisely what the summarizer saw — a timestamp
+// cutoff can slice through turns and rows written mid-compaction.
+func (s *SQLiteStore) MarkCompactedByIDs(conversationID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, conversationID)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	_, err := s.db.Exec(fmt.Sprintf(`
 		UPDATE messages
 		SET status = 'compacted'
-		WHERE conversation_id = ? AND timestamp < ? AND status = 'active' AND role != 'system'
-	`, conversationID, before)
+		WHERE conversation_id = ? AND id IN (%s)
+	`, strings.Join(placeholders, ",")), args...)
 	return err
 }
 
-// AddCompactionSummary adds a compaction summary message.
+// GetActiveCompactionSummaries returns the active compaction-summary
+// system messages for a conversation, oldest first. The prefix match
+// distinguishes summaries from other system rows (session handoffs,
+// notices) without a schema change.
+func (s *SQLiteStore) GetActiveCompactionSummaries(conversationID string) []Message {
+	rows, err := s.db.Query(`
+		SELECT id, role, content, timestamp
+		FROM messages
+		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
+		  AND content LIKE ? || '%'
+		ORDER BY timestamp ASC
+	`, conversationID, CompactionSummaryPrefix)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
+			continue
+		}
+		messages = append(messages, m)
+	}
+	return messages
+}
+
+// AddCompactionSummary adds a compaction summary message stamped now.
+// Used for session handoffs and other unpositioned system notes; the
+// compactor itself uses AddCompactionSummaryAt to place the summary at
+// the compacted region's position.
 func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error {
-	now := time.Now()
+	return s.AddCompactionSummaryAt(conversationID, summary, time.Now())
+}
+
+// AddCompactionSummaryAt adds a compaction summary message with an
+// explicit timestamp, so a summary can occupy the temporal position of
+// the region it replaces instead of landing mid-dialogue at now().
+func (s *SQLiteStore) AddCompactionSummaryAt(conversationID, summary string, ts time.Time) error {
 	msgID, _ := uuid.NewV7()
 
 	_, err := s.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
 		VALUES (?, ?, 'system', ?, ?, ?, 'active')
-	`, msgID.String(), conversationID, summary, now, llm.EstimateTokens(summary))
+	`, msgID.String(), conversationID, summary, ts, llm.EstimateTokens(summary))
 
 	return err
 }

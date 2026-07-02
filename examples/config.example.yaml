@@ -528,6 +528,16 @@ talents_dir: ./talents
 #   catalog is rendered. Default: 4000.
 #   history_tokens: 4000
 #
+# Compaction bounds per-conversation working memory: once a
+# conversation's active token count crosses the trigger, older
+# history folds into a single summary message.
+compaction:
+  # MaxTokens is the conversation token budget compaction defends;
+  # compaction triggers at 70% of it. Default: 32000. The previous
+  # hardcoded 8000 compacted interactive conversations far too
+  # early for modern context windows (#1168).
+  max_tokens: 0
+#
 # (optional) Agent configures agent loop behavior, including orchestrator
 # agent:
 #   OrchestratorTools lists tool names to advertise when
