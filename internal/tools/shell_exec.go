@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -133,7 +134,19 @@ func (s *ShellExec) Exec(ctx context.Context, command string, timeoutSec int) (*
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// Start only arms the cancel watchdog after the process has
+		// started, so Process is non-nil here under current os/exec
+		// semantics — the guard is cheap insurance against that
+		// contract shifting. ESRCH means the group is already gone,
+		// which is success, not an error to surface through Wait.
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
 	}
 	cmd.WaitDelay = 5 * time.Second
 	if s.workingDir != "" {
