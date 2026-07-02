@@ -178,7 +178,7 @@ func (t *Tools) At(ctx context.Context, args AtArgs) (string, error) {
 		Ref:          args.Ref,
 		Rev:          rev.Short,
 		Index:        rev.Index,
-		AsOf:         rev.Timestamp.UTC().Format(time.RFC3339),
+		Timestamp:    rev.Timestamp.UTC().Format(time.RFC3339),
 		Age:          promptfmt.FormatDeltaOnly(rev.Timestamp, now),
 		VerifyStatus: revisionVerifyStatus(rev.Signer),
 		Signer:       toModelRevisionSigner(rev.Signer),
@@ -234,7 +234,7 @@ type modelRevisionAt struct {
 	Ref            string               `json:"ref"`
 	Rev            string               `json:"rev"`
 	Index          int                  `json:"index"`
-	AsOf           string               `json:"as_of"`
+	Timestamp      string               `json:"timestamp"`
 	Age            string               `json:"age,omitempty"`
 	VerifyStatus   string               `json:"verify_status"`
 	Signer         *modelRevisionSigner `json:"signer,omitempty"`

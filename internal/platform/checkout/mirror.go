@@ -33,7 +33,11 @@ type MirrorSpec struct {
 // branch. It never records the remote URL in .git/config; every sync supplies
 // transport details for that command only.
 type Mirror struct {
-	Name         string
+	// Name is the caller-facing checkout identifier used in logs and
+	// sync-state reporting.
+	Name string
+	// WorktreePath is the absolute path of the mirrored working tree
+	// callers read from.
 	WorktreePath string
 
 	logger *slog.Logger
