@@ -16,7 +16,7 @@ func TestFormatDelta(t *testing.T) {
 		{
 			name: "past 1 hour",
 			t:    now.Add(-1 * time.Hour),
-			want: "(-3600s)",
+			want: "(-1h)",
 		},
 		{
 			name: "past 54 minutes 7 seconds",
@@ -26,7 +26,7 @@ func TestFormatDelta(t *testing.T) {
 		{
 			name: "future 1 hour",
 			t:    now.Add(1 * time.Hour),
-			want: "2026-03-07T13:00:00Z (+3600s)",
+			want: "2026-03-07T13:00:00Z (+1h)",
 		},
 		{
 			name: "exactly now",
@@ -41,7 +41,7 @@ func TestFormatDelta(t *testing.T) {
 		{
 			name: "future 24 hours",
 			t:    now.Add(24 * time.Hour),
-			want: "2026-03-08T12:00:00Z (+86400s)",
+			want: "2026-03-08T12:00:00Z (+24h)",
 		},
 	}
 
@@ -66,7 +66,7 @@ func TestFormatDeltaOnly(t *testing.T) {
 		{
 			name: "past 1 hour",
 			t:    now.Add(-1 * time.Hour),
-			want: "-3600s",
+			want: "-1h",
 		},
 		{
 			name: "future 30 minutes",
@@ -79,9 +79,39 @@ func TestFormatDeltaOnly(t *testing.T) {
 			want: "-0s",
 		},
 		{
-			name: "past 1 day",
+			name: "past 1 day renders hours under the two-day tier",
 			t:    now.Add(-24 * time.Hour),
-			want: "-86400s",
+			want: "-24h",
+		},
+		{
+			name: "past 59 minutes 59 seconds stays exact seconds",
+			t:    now.Add(-59*time.Minute - 59*time.Second),
+			want: "-3599s",
+		},
+		{
+			name: "past 26 hours 45 minutes",
+			t:    now.Add(-26*time.Hour - 45*time.Minute - 30*time.Second),
+			want: "-26h45m",
+		},
+		{
+			name: "past 47 hours 59 minutes stays hours",
+			t:    now.Add(-47*time.Hour - 59*time.Minute),
+			want: "-47h59m",
+		},
+		{
+			name: "past 5 days 9 hours",
+			t:    now.Add(-5*24*time.Hour - 9*time.Hour - 51*time.Minute),
+			want: "-5d9h",
+		},
+		{
+			name: "past exactly 3 days",
+			t:    now.Add(-3 * 24 * time.Hour),
+			want: "-3d",
+		},
+		{
+			name: "future 2 hours 30 minutes",
+			t:    now.Add(2*time.Hour + 30*time.Minute),
+			want: "+2h30m",
 		},
 	}
 
@@ -173,6 +203,51 @@ func TestParseTimeOrDelta(t *testing.T) {
 			name:    "unknown unit",
 			input:   "-7y",
 			wantErr: true,
+		},
+		{
+			name:  "compound days and hours",
+			input: "-5d9h",
+			want:  now.Add(-5*24*time.Hour - 9*time.Hour),
+		},
+		{
+			name:  "compound hours and minutes",
+			input: "-26h45m",
+			want:  now.Add(-26*time.Hour - 45*time.Minute),
+		},
+		{
+			name:  "compound future",
+			input: "+2h30m",
+			want:  now.Add(2*time.Hour + 30*time.Minute),
+		},
+		{
+			name:    "compound with trailing digits missing unit",
+			input:   "-5d9",
+			wantErr: true,
+		},
+		{
+			name:    "compound with bad unit in second term",
+			input:   "-5d9y",
+			wantErr: true,
+		},
+		{
+			name:    "term multiplication would wrap duration",
+			input:   "+9223372036854775807s",
+			wantErr: true,
+		},
+		{
+			name:    "term multiplication would wrap at coarse unit",
+			input:   "+15251w",
+			wantErr: true,
+		},
+		{
+			name:    "term sum would wrap duration",
+			input:   "+106751d106751d",
+			wantErr: true,
+		},
+		{
+			name:  "largest representable day count parses",
+			input: "-106751d",
+			want:  now.Add(-106751 * 24 * time.Hour),
 		},
 	}
 

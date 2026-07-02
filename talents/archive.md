@@ -56,9 +56,11 @@ conversation*? The split is clean once named.
 
 ## Result envelopes and byte caps
 
-All archive tools return JSON envelopes with delta-second timestamps
-(`-3600s` = an hour ago). All four enforce per-tool byte caps that
-truncate gracefully when results exceed the budget:
+All archive tools return JSON envelopes with delta timestamps —
+exact seconds under an hour (`-3247s`), hours+minutes beyond that
+(`-26h45m`), days+hours past two days (`-5d9h`). All four enforce
+per-tool byte caps that truncate gracefully when results exceed the
+budget:
 
 - `truncated: true` in the envelope means the result was clipped —
   narrow the query (tighter time range, more specific phrase,

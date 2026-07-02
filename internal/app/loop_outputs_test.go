@@ -136,7 +136,7 @@ Everything is calm.
 		t.Fatalf("renderLoopOutputContextWithNow: %v", err)
 	}
 
-	if !strings.Contains(ctx, `"updated_delta": "-7200s"`) {
+	if !strings.Contains(ctx, `"updated_delta": "-2h"`) {
 		t.Fatalf("output context missing delta freshness:\n%s", ctx)
 	}
 	for _, unwanted := range []string{

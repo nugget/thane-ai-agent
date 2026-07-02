@@ -197,7 +197,7 @@ against the whole corpus are usually too broad to be useful:
 ```
 
 `modified_after` and `modified_before` take RFC3339 timestamps or signed
-deltas (`-604800s` = past week). Search returns compact summaries with
+deltas (`-7d` = past week). Search returns compact summaries with
 refs, not bodies — pipe a ref to `documents_read` to actually read the
 hit.
 
