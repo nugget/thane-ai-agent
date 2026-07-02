@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,40 @@ func newMessageChannelTestSetup(t *testing.T) (*MessageChannelProvider, *Archive
 	return provider, archive, insert
 }
 
+// closedSession creates a closed session with n messages, started and
+// ended at the given offsets from now.
+func closedSession(t *testing.T, archive *ArchiveStore, insert func(convID, sessID, role, content string, ts time.Time), convID string, started, ended time.Time, n int) *Session {
+	t.Helper()
+	sess, err := archive.StartSessionAt(convID, started)
+	if err != nil {
+		t.Fatalf("StartSessionAt: %v", err)
+	}
+	for i := range n {
+		insert(convID, sess.ID, "user", fmt.Sprintf("msg-%d-%s", i, sess.ID), started.Add(time.Duration(i)*time.Minute))
+	}
+	if err := archive.EndSessionAt(sess.ID, "idle", ended); err != nil {
+		t.Fatalf("EndSessionAt: %v", err)
+	}
+	return sess
+}
+
+// olderSessionsFromOutput parses the Older Sessions fenced JSON block.
+func olderSessionsFromOutput(t *testing.T, got string) (sessions []SessionView, truncated bool) {
+	t.Helper()
+	blocks := extractFencedJSON(got)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 fenced JSON block, got %d:\n%s", len(blocks), got)
+	}
+	var parsed struct {
+		Sessions  []SessionView `json:"sessions"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(blocks[0]), &parsed); err != nil {
+		t.Fatalf("unmarshal older sessions block: %v", err)
+	}
+	return parsed.Sessions, parsed.Truncated
+}
+
 func TestMessageChannelProvider_NoConversationIDIsSilent(t *testing.T) {
 	provider, _, _ := newMessageChannelTestSetup(t)
 
@@ -72,107 +107,46 @@ func TestMessageChannelProvider_NoConversationIDIsSilent(t *testing.T) {
 	}
 }
 
-func TestMessageChannelProvider_EmitsBothBlocks(t *testing.T) {
+func TestMessageChannelProvider_EmitsNoVerbatimHistory(t *testing.T) {
+	// Stored history reaches the model as role-native messages in its
+	// working message list. The provider must not emit a second
+	// in-prompt transcript (#1160 finding 1) — only the session
+	// catalog.
 	provider, archive, insert := newMessageChannelTestSetup(t)
 	now := time.Now()
 
-	// Closed older session 2 days ago — should appear in Older Sessions.
-	older, err := archive.StartSessionAt("conv-1", now.Add(-48*time.Hour))
-	if err != nil {
-		t.Fatalf("StartSessionAt older: %v", err)
-	}
-	if err := archive.EndSessionAt(older.ID, "idle", now.Add(-47*time.Hour)); err != nil {
-		t.Fatalf("EndSessionAt older: %v", err)
-	}
-	insert("conv-1", older.ID, "user", "ancient", now.Add(-47*time.Hour))
-
-	// Recent CLOSED session whose tail falls in the verbatim window.
-	recent, err := archive.StartSessionAt("conv-1", now.Add(-25*time.Minute))
-	if err != nil {
-		t.Fatalf("StartSessionAt recent: %v", err)
-	}
-	if err := archive.EndSessionAt(recent.ID, "idle", now.Add(-15*time.Minute)); err != nil {
-		t.Fatalf("EndSessionAt recent: %v", err)
-	}
-	insert("conv-1", recent.ID, "user", "recent-1", now.Add(-20*time.Minute))
-	insert("conv-1", recent.ID, "assistant", "recent-2", now.Add(-19*time.Minute))
-
-	// Active session with no messages — exists so the provider has
-	// something to exclude. Mirrors a fresh conversation turn where
-	// the model is about to reply.
-	if _, err := archive.StartSessionAt("conv-1", now.Add(-1*time.Minute)); err != nil {
-		t.Fatalf("StartSessionAt active: %v", err)
-	}
+	closedSession(t, archive, insert, "conv-1", now.Add(-48*time.Hour), now.Add(-47*time.Hour), 2)
 
 	ctx := providerCtxWithConvID(context.Background(), "conv-1")
 	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
-	if !strings.Contains(got, "## Recent Conversation") {
-		t.Errorf("output missing Recent Conversation block:\n%s", got)
+	if strings.Contains(got, "## Recent Conversation") {
+		t.Errorf("output contains removed Recent Conversation block:\n%s", got)
 	}
-	if !strings.Contains(got, "recent-1") || !strings.Contains(got, "recent-2") {
-		t.Errorf("verbatim tail missing recent messages:\n%s", got)
+	if strings.Contains(got, "msg-0-") {
+		t.Errorf("output leaked verbatim message content:\n%s", got)
 	}
-}
-
-func TestMessageChannelProvider_ExcludesActiveSessionMessages(t *testing.T) {
-	// Active session messages are already in the model's working
-	// message list. The verbatim tail must drop them so the model
-	// doesn't see them twice.
-	provider, archive, insert := newMessageChannelTestSetup(t)
-	now := time.Now()
-
-	// Closed prior session that should appear in the tail.
-	prior, err := archive.StartSessionAt("conv-1", now.Add(-25*time.Minute))
-	if err != nil {
-		t.Fatalf("StartSessionAt prior: %v", err)
-	}
-	if err := archive.EndSessionAt(prior.ID, "idle", now.Add(-15*time.Minute)); err != nil {
-		t.Fatalf("EndSessionAt prior: %v", err)
-	}
-	insert("conv-1", prior.ID, "user", "prior-msg", now.Add(-20*time.Minute))
-
-	// Active session — these messages should NOT appear in the tail.
-	active, err := archive.StartSessionAt("conv-1", now.Add(-2*time.Minute))
-	if err != nil {
-		t.Fatalf("StartSessionAt active: %v", err)
-	}
-	insert("conv-1", active.ID, "user", "active-msg", now.Add(-1*time.Minute))
-
-	ctx := providerCtxWithConvID(context.Background(), "conv-1")
-	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
-	if err != nil {
-		t.Fatalf("TagContext: %v", err)
-	}
-	if !strings.Contains(got, "prior-msg") {
-		t.Errorf("tail missing prior-session message:\n%s", got)
-	}
-	if strings.Contains(got, "active-msg") {
-		t.Errorf("tail leaked active-session message — duplicates the model's working list:\n%s", got)
+	if !strings.Contains(got, "## Older Sessions") {
+		t.Errorf("output missing Older Sessions block:\n%s", got)
 	}
 }
 
-func TestMessageChannelProvider_OlderSessionsExcludesActiveAndInWindow(t *testing.T) {
+func TestMessageChannelProvider_OlderSessionsExcludesActiveInWindowAndEmpty(t *testing.T) {
 	provider, archive, insert := newMessageChannelTestSetup(t)
 	now := time.Now()
 
-	// Active session — should not appear in older sessions.
+	// Active session — messages are in the working list; must not appear.
 	if _, err := archive.StartSessionAt("conv-1", now.Add(-1*time.Minute)); err != nil {
 		t.Fatalf("StartSessionAt active: %v", err)
 	}
-	// Closed but EndedAt inside the verbatim window — should not appear in older.
-	inWindow, err := archive.StartSessionAt("conv-1", now.Add(-25*time.Minute))
-	if err != nil {
-		t.Fatalf("StartSessionAt inWindow: %v", err)
-	}
-	if err := archive.EndSessionAt(inWindow.ID, "idle", now.Add(-15*time.Minute)); err != nil {
-		t.Fatalf("EndSessionAt inWindow: %v", err)
-	}
-	insert("conv-1", inWindow.ID, "user", "in-window", now.Add(-20*time.Minute))
-
-	// Closed and EndedAt BEFORE the verbatim window — should appear.
+	// Closed but ended inside RecentWindow — still in the working list;
+	// must not appear.
+	inWindow := closedSession(t, archive, insert, "conv-1", now.Add(-25*time.Minute), now.Add(-15*time.Minute), 1)
+	// Closed before the window but empty — rotation noise; must not appear.
+	empty := closedSession(t, archive, insert, "conv-1", now.Add(-4*time.Hour), now.Add(-3*time.Hour), 0)
+	// Closed before the window with substance — the one entry expected.
 	older, err := archive.StartSessionAt("conv-1", now.Add(-3*time.Hour))
 	if err != nil {
 		t.Fatalf("StartSessionAt older: %v", err)
@@ -180,36 +154,137 @@ func TestMessageChannelProvider_OlderSessionsExcludesActiveAndInWindow(t *testin
 	if err := archive.SetSessionMetadata(older.ID, &SessionMetadata{OneLiner: "freezer alarm"}, "Freezer alarm troubleshooting", []string{"home-automation"}); err != nil {
 		t.Fatalf("SetSessionMetadata: %v", err)
 	}
+	insert("conv-1", older.ID, "user", "old-msg", now.Add(-2*time.Hour))
 	if err := archive.EndSessionAt(older.ID, "idle", now.Add(-2*time.Hour)); err != nil {
 		t.Fatalf("EndSessionAt older: %v", err)
 	}
-	insert("conv-1", older.ID, "user", "old-msg", now.Add(-2*time.Hour))
 
 	ctx := providerCtxWithConvID(context.Background(), "conv-1")
 	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
 	if err != nil {
 		t.Fatalf("TagContext: %v", err)
 	}
-	if !strings.Contains(got, "## Older Sessions") {
-		t.Fatalf("output missing Older Sessions block:\n%s", got)
+	sessions, truncated := olderSessionsFromOutput(t, got)
+	if len(sessions) != 1 {
+		t.Fatalf("older sessions len = %d, want 1 (in-window %s and empty %s must be excluded):\n%s",
+			len(sessions), inWindow.ID, empty.ID, got)
 	}
-	// Parse the JSON in the older sessions block to confirm exactly
-	// the right session IDs are present.
-	jsonBlocks := extractFencedJSON(got)
-	if len(jsonBlocks) < 2 {
-		t.Fatalf("expected 2 fenced JSON blocks, got %d:\n%s", len(jsonBlocks), got)
+	if sessions[0].ID != older.ID {
+		t.Errorf("older session id = %q, want %q", sessions[0].ID, older.ID)
 	}
-	var olderParsed struct {
-		Sessions []SessionView `json:"sessions"`
+	if truncated {
+		t.Errorf("truncated = true, want false for a single entry")
 	}
-	if err := json.Unmarshal([]byte(jsonBlocks[len(jsonBlocks)-1]), &olderParsed); err != nil {
-		t.Fatalf("unmarshal older block: %v", err)
+}
+
+func TestMessageChannelProvider_CapsSessionsNewestFirst(t *testing.T) {
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	// Eight closed non-empty sessions, oldest first. Default limit is 5.
+	var ids []string
+	for i := range 8 {
+		started := now.Add(-time.Duration(30-i) * time.Hour)
+		sess := closedSession(t, archive, insert, "conv-1", started, started.Add(30*time.Minute), 1)
+		ids = append(ids, sess.ID)
 	}
-	if len(olderParsed.Sessions) != 1 {
-		t.Fatalf("older sessions len = %d, want 1", len(olderParsed.Sessions))
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
 	}
-	if olderParsed.Sessions[0].ID != older.ID {
-		t.Errorf("older session id = %q, want %q", olderParsed.Sessions[0].ID, older.ID)
+	sessions, truncated := olderSessionsFromOutput(t, got)
+	if len(sessions) != 5 {
+		t.Fatalf("older sessions len = %d, want 5:\n%s", len(sessions), got)
+	}
+	// Newest first: the last five created, in reverse creation order.
+	for i, want := range []string{ids[7], ids[6], ids[5], ids[4], ids[3]} {
+		if sessions[i].ID != want {
+			t.Errorf("sessions[%d].ID = %q, want %q", i, sessions[i].ID, want)
+		}
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true when the limit drops sessions")
+	}
+}
+
+func TestMessageChannelProvider_DeepNoiseDoesNotStarveCatalog(t *testing.T) {
+	// A long run of empty rotation sessions must not push qualifying
+	// sessions out of reach: the provider pages past noise instead of
+	// scanning a fixed window (PR #1164 review).
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	// Two real sessions, ended long ago.
+	oldA := closedSession(t, archive, insert, "conv-1", now.Add(-100*time.Hour), now.Add(-99*time.Hour), 1)
+	oldB := closedSession(t, archive, insert, "conv-1", now.Add(-98*time.Hour), now.Add(-97*time.Hour), 1)
+	// 45 empty sessions between them and the cutoff — more than two
+	// pages of noise at the default page size of 20.
+	for i := range 45 {
+		started := now.Add(-time.Duration(96-i) * time.Hour)
+		closedSession(t, archive, insert, "conv-1", started, started.Add(30*time.Minute), 0)
+	}
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	sessions, truncated := olderSessionsFromOutput(t, got)
+	if len(sessions) != 2 {
+		t.Fatalf("older sessions len = %d, want 2 (noise must not starve the catalog):\n%s", len(sessions), got)
+	}
+	if sessions[0].ID != oldB.ID || sessions[1].ID != oldA.ID {
+		t.Errorf("session order = [%q, %q], want [%q, %q]", sessions[0].ID, sessions[1].ID, oldB.ID, oldA.ID)
+	}
+	if truncated {
+		t.Errorf("truncated = true, want false when every qualifying session is listed")
+	}
+}
+
+func TestMessageChannelProvider_OrdersByEndedAtNotStartedAt(t *testing.T) {
+	// The catalog contract is most-recently-ENDED first. A session
+	// that started earlier but ended later must sort ahead of one
+	// that started later but ended sooner.
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	longRunning := closedSession(t, archive, insert, "conv-1", now.Add(-10*time.Hour), now.Add(-2*time.Hour), 1)
+	quick := closedSession(t, archive, insert, "conv-1", now.Add(-6*time.Hour), now.Add(-5*time.Hour), 1)
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	sessions, _ := olderSessionsFromOutput(t, got)
+	if len(sessions) != 2 {
+		t.Fatalf("older sessions len = %d, want 2:\n%s", len(sessions), got)
+	}
+	if sessions[0].ID != longRunning.ID || sessions[1].ID != quick.ID {
+		t.Errorf("session order = [%q, %q], want [%q(ended -2h), %q(ended -5h)]",
+			sessions[0].ID, sessions[1].ID, longRunning.ID, quick.ID)
+	}
+}
+
+func TestMessageChannelProvider_AllSessionsFilteredIsSilent(t *testing.T) {
+	provider, archive, insert := newMessageChannelTestSetup(t)
+	now := time.Now()
+
+	// Only rotation noise: an empty closed session and an active one.
+	closedSession(t, archive, insert, "conv-1", now.Add(-4*time.Hour), now.Add(-3*time.Hour), 0)
+	if _, err := archive.StartSessionAt("conv-1", now.Add(-1*time.Minute)); err != nil {
+		t.Fatalf("StartSessionAt active: %v", err)
+	}
+
+	ctx := providerCtxWithConvID(context.Background(), "conv-1")
+	got, err := provider.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty output when every session is filtered, got:\n%s", got)
 	}
 }
 
