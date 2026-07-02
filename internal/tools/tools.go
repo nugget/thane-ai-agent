@@ -123,6 +123,7 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 	r.registerHASearchStates() // Predicate search across live state
 	r.registerHAListServices() // Service-catalog discovery (#1177)
 	r.registerHAAutomationTools()
+	r.registerHAAutomationTraces() // Run-level debugging (#1178)
 	return r
 }
 
