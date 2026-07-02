@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -197,7 +198,7 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 			}
 		}
 
-		// Exact-second delta per issue #458.
+		// Tiered delta per the model-facing time convention (#458, #1160).
 		if !l.LastWakeAt.IsZero() {
 			e.LastActivity = promptfmt.FormatDeltaOnly(l.LastWakeAt, now)
 		}
@@ -208,6 +209,24 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 	if len(entries) == 0 {
 		return "", nil
 	}
+
+	// Deterministic order regardless of how the loop registry happens
+	// to iterate — the interface asks ChannelLoops() for sorted output,
+	// but prompt stability across turns must not rest on an upstream
+	// comment being honored.
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.Channel != b.Channel {
+			return a.Channel < b.Channel
+		}
+		if a.Sender != b.Sender {
+			return a.Sender < b.Sender
+		}
+		if a.ConvID != b.ConvID {
+			return a.ConvID < b.ConvID
+		}
+		return a.LoopID < b.LoopID
+	})
 
 	data, err := json.Marshal(entries)
 	if err != nil {

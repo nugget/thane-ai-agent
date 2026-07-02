@@ -32,10 +32,14 @@ func TestContextProvider_AccountConfig(t *testing.T) {
 		t.Error("should contain default owner")
 	}
 
-	// Should be valid JSON.
+	// Heading frames the block; the payload after it is valid JSON.
+	if !strings.HasPrefix(got, "### Forge Accounts\n\n") {
+		t.Fatalf("missing section heading, got: %s", got)
+	}
+	payload := strings.TrimPrefix(got, "### Forge Accounts\n\n")
 	var parsed map[string]any
-	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
-		t.Fatalf("output should be valid JSON: %v\nGot: %s", err, got)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(payload)), &parsed); err != nil {
+		t.Fatalf("payload should be valid JSON: %v\nGot: %s", err, got)
 	}
 }
 
@@ -69,8 +73,9 @@ func TestContextProvider_WithRecentOps(t *testing.T) {
 			Ago     string `json:"ago"`
 		} `json:"recent_operations"`
 	}
-	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
-		t.Fatalf("output should be valid JSON: %v\nGot: %s", err, got)
+	payload := strings.TrimSpace(strings.TrimPrefix(got, "### Forge Accounts\n\n"))
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		t.Fatalf("payload should be valid JSON: %v\nGot: %s", err, got)
 	}
 
 	if len(parsed.RecentOps) != 2 {

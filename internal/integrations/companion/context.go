@@ -90,5 +90,5 @@ func (p *ContextProvider) TagContext(_ context.Context, _ agentctx.ContextReques
 	if err != nil {
 		return "", fmt.Errorf("marshal companion context: %w", err)
 	}
-	return string(data), nil
+	return "### Connected Companions\n\n" + string(data) + "\n", nil
 }

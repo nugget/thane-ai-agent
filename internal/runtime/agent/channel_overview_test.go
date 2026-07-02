@@ -82,37 +82,39 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	// Signal entry.
-	sig := entries[0]
-	if sig.Channel != "signal" {
-		t.Errorf("entry[0].channel = %q, want signal", sig.Channel)
-	}
-	if sig.Contact != "nugget" {
-		t.Errorf("entry[0].contact = %q, want nugget", sig.Contact)
-	}
-	if sig.Sender != "+15551234567" {
-		t.Errorf("entry[0].sender = %q, want +15551234567", sig.Sender)
-	}
-	if sig.State != "waiting" {
-		t.Errorf("entry[0].state = %q, want waiting", sig.State)
-	}
-	if sig.LastActivity != "-120s" {
-		t.Errorf("entry[0].last_activity = %q, want -120s", sig.LastActivity)
-	}
-	if sig.ConvID != "signal-15551234567" {
-		t.Errorf("entry[0].conv_id = %q, want signal-15551234567", sig.ConvID)
-	}
-
-	// OWU entry.
-	owu := entries[1]
+	// Entries sort by channel name, so owu precedes signal regardless
+	// of registry arrival order.
+	owu, sig := entries[0], entries[1]
 	if owu.Channel != "owu" {
-		t.Errorf("entry[1].channel = %q, want owu", owu.Channel)
+		t.Errorf("entry[0].channel = %q, want owu", owu.Channel)
 	}
 	if owu.DisplayName != "home-automation" {
-		t.Errorf("entry[1].display_name = %q, want home-automation", owu.DisplayName)
+		t.Errorf("entry[0].display_name = %q, want home-automation", owu.DisplayName)
 	}
 	if owu.ConvID != "owu-xyz" {
-		t.Errorf("entry[1].conv_id = %q, want owu-xyz", owu.ConvID)
+		t.Errorf("entry[0].conv_id = %q, want owu-xyz", owu.ConvID)
+	}
+	if owu.LastActivity != "-4h" {
+		t.Errorf("entry[0].last_activity = %q, want -4h", owu.LastActivity)
+	}
+
+	if sig.Channel != "signal" {
+		t.Errorf("entry[1].channel = %q, want signal", sig.Channel)
+	}
+	if sig.Contact != "nugget" {
+		t.Errorf("entry[1].contact = %q, want nugget", sig.Contact)
+	}
+	if sig.Sender != "+15551234567" {
+		t.Errorf("entry[1].sender = %q, want +15551234567", sig.Sender)
+	}
+	if sig.State != "waiting" {
+		t.Errorf("entry[1].state = %q, want waiting", sig.State)
+	}
+	if sig.LastActivity != "-120s" {
+		t.Errorf("entry[1].last_activity = %q, want -120s", sig.LastActivity)
+	}
+	if sig.ConvID != "signal-15551234567" {
+		t.Errorf("entry[1].conv_id = %q, want signal-15551234567", sig.ConvID)
 	}
 }
 
