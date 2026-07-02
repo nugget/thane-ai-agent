@@ -500,10 +500,17 @@ break the moment a device is renamed or replaced.
 
 Classic platform triggers still work and are the right tool when no
 purpose trigger fits (a raw MQTT topic, a template, a specific
-webhook):
+webhook). Like purpose triggers, each is an entry in `config.triggers`
+— never a top-level `trigger` field on the config:
 
 ```json
-{ "trigger": "state", "entity_id": "binary_sensor.driveway_motion", "to": "on" }
+{
+  "config": {
+    "triggers": [
+      { "trigger": "state", "entity_id": "binary_sensor.driveway_motion", "to": "on" }
+    ]
+  }
+}
 ```
 
 The `config` key holds the raw HA automation object — preserve

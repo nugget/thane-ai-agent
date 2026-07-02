@@ -255,7 +255,7 @@ func (r *Registry) registerHAAutomationTools() {
 
 	r.Register(&Tool{
 		Name: "ha_automation_create",
-		Description: "Create a Home Assistant automation directly from a raw HA automation object. Author triggers and conditions in the purpose-specific form when one fits — {\"trigger\": \"light.turned_off\", \"target\": {\"area_id\": \"office\"}} — so the automation describes intent and survives device changes; ha_automation_vocabulary lists the identifiers a target supports. Classic triggers ({\"trigger\": \"state\", ...}) remain fully supported for cases the purpose vocabulary doesn't cover. " +
+		Description: "Create a Home Assistant automation directly from a raw HA automation object. Each trigger is an entry in the config.triggers array, each condition in config.conditions, each action in config.actions. Author triggers and conditions in the purpose-specific form when one fits — a config.triggers entry of {\"trigger\": \"light.turned_off\", \"target\": {\"area_id\": \"office\"}} — so the automation describes intent and survives device changes; ha_automation_vocabulary lists the identifiers a target supports. Classic triggers (a config.triggers entry of {\"trigger\": \"state\", ...}) remain fully supported for cases the purpose vocabulary doesn't cover. " +
 			"Supports the full depth of triggers, conditions, actions, variables, mode, max, and use_blueprint. Optional metadata can set area, labels, icon, aliases, category_id, hidden state, and entity_id rename after creation.",
 		Parameters: map[string]any{
 			"type": "object",

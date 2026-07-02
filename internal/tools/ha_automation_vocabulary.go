@@ -22,7 +22,7 @@ type haVocabularyResult struct {
 	Note       string         `json:"note"`
 }
 
-const haVocabularyNote = "Use these in ha_automation_create: a purpose trigger is {\"trigger\": \"<identifier>\", \"target\": {...}} — same target shape as this call. ha_list_services has field detail for the services."
+const haVocabularyNote = "Use these in ha_automation_create: each identifier is one ENTRY in the config.triggers or config.conditions array — {\"trigger\": \"<identifier>\", \"target\": {...}} for a trigger, {\"condition\": \"<identifier>\", \"target\": {...}} for a condition (same target shape as this call). Services go in config.actions as {\"action\": \"<identifier>\", ...}; ha_list_services has their field detail."
 
 // registerHAAutomationVocabulary wires ha_automation_vocabulary: the
 // discovery half of 2026.7 purpose-trigger authoring. The editor shows
