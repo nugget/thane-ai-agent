@@ -19,23 +19,25 @@ type fakeHAServer struct {
 	server   *httptest.Server
 	upgrader websocket.Upgrader
 
-	mu           sync.Mutex
-	states       []homeassistant.State
-	services     []homeassistant.ServiceDomain
-	traces       map[string][]map[string]any
-	traceDetails map[string]map[string]any
-	configs      map[string]map[string]any
-	areas        []map[string]any
-	floors       []map[string]any
-	labels       []map[string]any
-	categories   map[string][]map[string]any
-	devices      []map[string]any
-	entityRows   []map[string]any
-	entityByID   map[string]map[string]any
-	logbook      []map[string]any
-	serviceCalls []string
-	validations  map[string]homeassistant.ConfigValidationResult
-	wsCalls      map[string]int
+	mu              sync.Mutex
+	states          []homeassistant.State
+	services        []homeassistant.ServiceDomain
+	traces          map[string][]map[string]any
+	traceDetails    map[string]map[string]any
+	servicePayloads []map[string]any
+	serviceChanged  []homeassistant.State
+	configs         map[string]map[string]any
+	areas           []map[string]any
+	floors          []map[string]any
+	labels          []map[string]any
+	categories      map[string][]map[string]any
+	devices         []map[string]any
+	entityRows      []map[string]any
+	entityByID      map[string]map[string]any
+	logbook         []map[string]any
+	serviceCalls    []string
+	validations     map[string]homeassistant.ConfigValidationResult
+	wsCalls         map[string]int
 }
 
 func newFakeHAServer(t *testing.T) *fakeHAServer {
@@ -163,6 +165,7 @@ func (f *fakeHAServer) handleServiceCall(w http.ResponseWriter, r *http.Request)
 	defer f.mu.Unlock()
 
 	f.serviceCalls = append(f.serviceCalls, strings.TrimPrefix(r.URL.Path, "/api/services/"))
+	f.servicePayloads = append(f.servicePayloads, payload)
 	entityID, _ := payload["entity_id"].(string)
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/turn_off"):
@@ -171,8 +174,17 @@ func (f *fakeHAServer) handleServiceCall(w http.ResponseWriter, r *http.Request)
 		f.setAutomationStateLocked(entityID, "on")
 	}
 
+	// Real HA answers a service call with the array of states the call
+	// changed; tests seed serviceChanged to simulate fan-out.
+	changed := f.serviceChanged
+	if changed == nil {
+		changed = []homeassistant.State{}
+		if entityID != "" {
+			changed = append(changed, homeassistant.State{EntityID: entityID, State: "on"})
+		}
+	}
 	w.WriteHeader(http.StatusOK)
-	writeJSON(f.t, w, map[string]any{"result": "ok"})
+	writeJSON(f.t, w, changed)
 }
 
 func (f *fakeHAServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
