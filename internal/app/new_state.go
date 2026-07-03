@@ -30,6 +30,11 @@ type newState struct {
 	// constructed in initAwareness.
 	personTracker *contacts.PresenceTracker
 
+	// Set in initAwareness once the state watcher exists; invoked by the
+	// watchlist tools' OnIngestChange hook to rebuild the ingestion
+	// filter from the registry (#1192). Nil until the watcher is wired.
+	ingestFilterRebuild func()
+
 	// Built in initAgentLoop, used by initChannels and initDelegation.
 	resolver *paths.Resolver
 

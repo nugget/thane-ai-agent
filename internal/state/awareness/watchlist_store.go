@@ -12,11 +12,40 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
+// Subscription modes: what a watched entry feeds. Render is the
+// classic watchlist behavior (per-turn context injection); ingest feeds
+// the state-change window's push pipeline without rendering every turn;
+// both does both. Stored in the options blob — absent means render, so
+// existing rows keep their behavior unchanged.
+const (
+	SubscriptionModeRender = "render"
+	SubscriptionModeIngest = "ingest"
+	SubscriptionModeBoth   = "both"
+)
+
+// normalizeSubscriptionMode maps stored/user mode strings to a
+// canonical value, treating empty as render. Returns "" for anything
+// unrecognized so callers can reject it.
+func normalizeSubscriptionMode(mode string) string {
+	switch mode {
+	case "", SubscriptionModeRender:
+		return SubscriptionModeRender
+	case SubscriptionModeIngest:
+		return SubscriptionModeIngest
+	case SubscriptionModeBoth:
+		return SubscriptionModeBoth
+	default:
+		return ""
+	}
+}
+
 // WatchedSubscription represents one entity subscription scope with its stored
-// options. Empty Scope means the entity is always visible.
+// options. Empty Scope means the entity is always visible. Mode is one
+// of the SubscriptionMode constants (never empty after decode).
 type WatchedSubscription struct {
 	EntityID  string
 	Scope     string
+	Mode      string
 	History   []int
 	Forecast  string
 	Include   *homeassistant.EntityMetadataIncludes
@@ -51,16 +80,17 @@ func (s *WatchlistStore) Add(entityID string) error {
 
 // AddWithOptions inserts or updates entity subscriptions with tag scopes,
 // historical offsets, optional weather forecast type, an optional TTL,
-// and optional HA entity metadata include flags. Empty tags means the
+// a subscription mode (render/ingest/both; empty means render), and
+// optional HA entity metadata include flags. Empty tags means the
 // entity is always visible in context.
-func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast string, includes ...homeassistant.EntityMetadataIncludes) error {
+func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast, mode string, includes ...homeassistant.EntityMetadataIncludes) error {
 	scopes := normalizeScopes(tags)
 	var include homeassistant.EntityMetadataIncludes
 	if len(includes) > 0 {
 		include = includes[0]
 	}
 
-	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast, include)
+	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast, mode, include)
 	if err != nil {
 		return fmt.Errorf("marshal options: %w", err)
 	}
@@ -85,6 +115,37 @@ func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history 
 		return fmt.Errorf("commit watchlist tx: %w", err)
 	}
 	return nil
+}
+
+// IngestGlobs returns the entity ids/globs of always-visible rows whose
+// mode feeds the state-change window (ingest or both), excluding
+// expired entries. This is the runtime source of the StateWatcher's
+// ingestion filter — the registry replacement for the retired
+// homeassistant.subscribe config globs (#1192). Expired TTL rows drop
+// out at the next rebuild rather than instantly.
+func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT entity_id, options FROM watched_entity_subscriptions WHERE scope = ''`)
+	if err != nil {
+		return nil, fmt.Errorf("query ingest globs: %w", err)
+	}
+	defer rows.Close()
+
+	var globs []string
+	for rows.Next() {
+		var entityID, optsJSON string
+		if err := rows.Scan(&entityID, &optsJSON); err != nil {
+			return nil, err
+		}
+		opts := parseWatchlistOptions(optsJSON)
+		if opts.expired(now) {
+			continue
+		}
+		if opts.Mode == SubscriptionModeIngest || opts.Mode == SubscriptionModeBoth {
+			globs = append(globs, entityID)
+		}
+	}
+	return globs, rows.Err()
 }
 
 // Remove deletes all subscriptions for an entity. Non-existent IDs are a no-op.
@@ -284,6 +345,7 @@ func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]W
 		subs = append(subs, WatchedSubscription{
 			EntityID:  entityID,
 			Scope:     scope,
+			Mode:      opts.Mode,
 			History:   append([]int(nil), opts.History...),
 			Forecast:  opts.Forecast,
 			Include:   opts.Include.Clone(),
@@ -335,6 +397,7 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 type watchlistOptions struct {
 	History   []int
 	Forecast  string
+	Mode      string
 	Include   *homeassistant.EntityMetadataIncludes
 	ExpiresAt *time.Time
 }
@@ -342,19 +405,29 @@ type watchlistOptions struct {
 type watchlistOptionsWire struct {
 	History   []int                                 `json:"history,omitempty"`
 	Forecast  string                                `json:"forecast,omitempty"`
+	Mode      string                                `json:"mode,omitempty"`
 	Include   *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
 	ExpiresAt string                                `json:"expires_at,omitempty"`
 }
 
-func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string, include homeassistant.EntityMetadataIncludes) ([]byte, error) {
+func marshalWatchlistOptions(history []int, ttlSeconds int, forecast, mode string, include homeassistant.EntityMetadataIncludes) ([]byte, error) {
 	forecast, err := normalizeForecastType(forecast)
 	if err != nil {
 		return nil, err
+	}
+	normalizedMode := normalizeSubscriptionMode(mode)
+	if normalizedMode == "" {
+		return nil, fmt.Errorf("mode must be one of render, ingest, or both; got %q", mode)
 	}
 	wire := watchlistOptionsWire{
 		History:  append([]int(nil), history...),
 		Forecast: forecast,
 		Include:  (&include).Clone(),
+	}
+	// Render is the absent-field default so pre-mode rows and new
+	// default rows serialize identically.
+	if normalizedMode != SubscriptionModeRender {
+		wire.Mode = normalizedMode
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -367,14 +440,15 @@ func marshalWatchlistOptions(history []int, ttlSeconds int, forecast string, inc
 
 func parseWatchlistOptions(optsJSON string) watchlistOptions {
 	if optsJSON == "" || optsJSON == "{}" {
-		return watchlistOptions{}
+		return watchlistOptions{Mode: SubscriptionModeRender}
 	}
 	var wire watchlistOptionsWire
 	if err := json.Unmarshal([]byte(optsJSON), &wire); err != nil {
-		return watchlistOptions{}
+		return watchlistOptions{Mode: SubscriptionModeRender}
 	}
 	out := watchlistOptions{
 		History: append([]int(nil), wire.History...),
+		Mode:    normalizeSubscriptionMode(wire.Mode),
 		Include: wire.Include.Clone(),
 	}
 	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {

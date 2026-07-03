@@ -31,6 +31,13 @@ Choose the next move deliberately:
   All expansions are capped per turn and report truncation when they
   overflow; scope to a smaller area/label/floor rather than watching the
   whole house. Use `ha_registry_search` to find area/label/floor IDs.
+- Pass `mode` to choose what a subscription feeds: `render` (default)
+  injects live state each turn; `ingest` feeds the recent-state-changes
+  window only — the entity's transitions appear there without spending
+  per-turn context on its full state; `both` does both. Ingest is the
+  right shape for "I want to notice when this changes" without carrying
+  it every turn. Ingest accepts entity ids and globs (not
+  area/label/floor targets), and the ingest registry is capped.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read

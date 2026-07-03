@@ -118,7 +118,7 @@ func TestProvider_RendersIncludedEntityMetadata(t *testing.T) {
 		Labels:      true,
 		Description: true,
 	}
-	if err := store.AddWithOptions(state.EntityID, nil, nil, 0, "", include); err != nil {
+	if err := store.AddWithOptions(state.EntityID, nil, nil, 0, "", "", include); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 	p.SetRegistryClient(&fakeRegistries{
@@ -351,7 +351,7 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
+	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -418,7 +418,7 @@ func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "hourly"); err != nil {
+	if err := store.AddWithOptions("weather.home", nil, nil, 0, "hourly", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -478,7 +478,7 @@ func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "daily"); err != nil {
+	if err := store.AddWithOptions("weather.home", nil, nil, 0, "daily", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -565,7 +565,7 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -624,7 +624,7 @@ func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
+	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 

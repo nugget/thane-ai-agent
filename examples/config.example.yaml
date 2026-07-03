@@ -72,21 +72,12 @@ homeassistant:
   # default; "0" disables caching (always refetch). Live entity state
   # is never cached.
   registry_cache_ttl: ""
-  # Subscribe configures WebSocket event subscriptions for real-time
-  # state change monitoring. When entity_globs is non-empty, only
-  # matching entities are processed; when empty, all state changes
-  # are accepted.
-  subscribe:
-    # EntityGlobs is a list of glob patterns (using path.Match syntax)
-    # that select which entity IDs to process. Examples: "person.*",
-    # "binary_sensor.*door*", "light.living_room". An empty list
-    # means all entities are accepted.
-    entity_globs:
-      - person.*
-      - binary_sensor.*door*
-    # RateLimitPerMinute caps how many state changes per entity are
-    # forwarded per minute. Zero means no rate limiting.
-    rate_limit_per_minute: 10
+  # IngestRateLimitPerMinute caps how many state changes per entity
+  # the state watcher forwards per minute. Zero means no rate
+  # limiting. The ingestion *filter* is runtime state (ingest-mode
+  # entity subscriptions, #1192); this protective limit stays
+  # operator policy in config.
+  ingest_rate_limit_per_minute: 10
 # Models configures LLM providers, model routing, and the default model.
 models:
   # Default is the model name used when no specific model is requested.
