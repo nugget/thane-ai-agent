@@ -485,10 +485,11 @@ tags from the MCP config's `default_tags` or configuration-side tag
 overrides; they do not have a compiled-in entry in
 `internal/model/toolcatalog/catalog.go`.
 
-The primary MCP server in typical deployments is
-[`ha-mcp`](https://github.com/karimkhaleel/ha-mcp), which exposes
-a broad set of Home Assistant tools beyond Thane's native set. `include_tools`
-filtering in the config narrows the bridged surface.
+Home Assistant needs no MCP bridge: the native `ha_*` tool set above is
+the complete HA surface (the `ha-mcp` bridge was retired in v0.10.2 once
+native parity landed). MCP remains the extension path for capabilities
+Thane doesn't implement natively; `include_tools` filtering in the config
+narrows the bridged surface.
 
 See [Delegation & MCP](../understanding/delegation.md) for
 configuration details.

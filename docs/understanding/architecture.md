@@ -217,8 +217,8 @@ the chat completions API works out of the box. Open WebUI, custom
 scripts, other agents.
 
 **MCP** (Model Context Protocol) means external tool servers bridge
-into the agent loop without writing Go code. ha-mcp alone adds 90+
-Home Assistant tools.
+into the agent loop without writing Go code — the extension path for
+capabilities Thane doesn't implement natively.
 
 **CardDAV** means contacts sync natively with macOS, iOS, and
 Thunderbird. No export/import workflow, no proprietary sync.
