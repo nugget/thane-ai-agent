@@ -150,7 +150,23 @@ func expandGlobSubscription(
 		return ""
 	}
 	sort.Strings(matchedIDs)
-	return renderExpandedMatches(ctx, ha, logger, sub, pattern, matchedIDs, stateByID, now, registries, maxExpansion)
+	globMarker := func(matched, shown int) string {
+		return formatGlobTruncation(pattern, matched, shown)
+	}
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, maxExpansion, globMarker)
+}
+
+// formatGlobTruncation renders the marker appended when a glob matched
+// more entities than the per-turn cap, telling the model to narrow the
+// pattern. Registry targets get their own marker (formatTargetTruncation).
+func formatGlobTruncation(pattern string, matched, shown int) string {
+	return promptfmt.MarshalCompact(map[string]any{
+		"glob":      pattern,
+		"matched":   matched,
+		"shown":     shown,
+		"truncated": true,
+		"note":      "glob matched more entities than the per-turn cap; narrow the pattern to see the rest",
+	})
 }
 
 // formatGlobFetchError renders the marker emitted when the live state

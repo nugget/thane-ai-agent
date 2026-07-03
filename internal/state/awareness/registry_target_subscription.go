@@ -76,24 +76,30 @@ func expandRegistryTargetSubscription(
 		return ""
 	}
 
-	return renderExpandedMatches(ctx, ha, logger, sub, label, matchedIDs, stateByID, now, registries, maxExpansion)
+	truncationMarker := func(matched, shown int) string {
+		return formatTargetTruncation(label, matched, shown)
+	}
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, maxExpansion, truncationMarker)
 }
 
 // renderExpandedMatches is the shared tail of glob and registry-target
 // expansion: render each matched id with the subscription's options,
-// honoring the per-turn cap and appending a truncation marker when more
-// matched than shown. matchedIDs must already be sorted and filtered.
+// honoring the per-turn cap and appending a caller-supplied truncation
+// marker when more matched than shown. matchedIDs must already be sorted
+// and filtered. The marker is passed in (not derived here) so glob and
+// registry targets keep their own schema and wording — a glob says
+// "narrow the pattern," an area/label/floor says "scope smaller."
 func renderExpandedMatches(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
 	sub WatchedSubscription,
-	label string,
 	matchedIDs []string,
 	stateByID map[string]*homeassistant.State,
 	now time.Time,
 	registries *renderRegistries,
 	maxExpansion int,
+	truncationMarker func(matched, shown int) string,
 ) string {
 	total := len(matchedIDs)
 	truncated := false
@@ -110,7 +116,7 @@ func renderExpandedMatches(
 		sb.WriteByte('\n')
 	}
 	if truncated {
-		sb.WriteString(formatTargetTruncation(label, total, len(matchedIDs)))
+		sb.WriteString(truncationMarker(total, len(matchedIDs)))
 		sb.WriteByte('\n')
 	}
 	return sb.String()

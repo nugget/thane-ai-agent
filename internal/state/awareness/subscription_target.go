@@ -54,7 +54,13 @@ func ParseSubscriptionTarget(raw string) SubscriptionTarget {
 	raw = strings.TrimSpace(raw)
 	if prefix, value, ok := strings.Cut(raw, ":"); ok {
 		if kind, known := registryTargetPrefixes[prefix]; known {
-			return SubscriptionTarget{Kind: kind, Value: strings.TrimSpace(value)}
+			// An empty id after the prefix ("area:") is a malformed
+			// target, not a wildcard. Falling through renders it as a
+			// bogus concrete entity (a clean not-found signal) rather
+			// than silently matching every entity with no area/floor.
+			if v := strings.TrimSpace(value); v != "" {
+				return SubscriptionTarget{Kind: kind, Value: v}
+			}
 		}
 	}
 	if homeassistant.IsEntityGlob(raw) {

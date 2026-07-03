@@ -21,6 +21,8 @@ func TestParseSubscriptionTarget(t *testing.T) {
 		{"label:critical_lights", TargetLabel, "critical_lights"},
 		{"floor:upstairs", TargetFloor, "upstairs"},
 		{"weather.home", TargetEntity, "weather.home"}, // dot, not a glob or prefix
+		{"area:", TargetEntity, "area:"},               // empty id: malformed, not a wildcard-all
+		{"floor: ", TargetEntity, "floor:"},            // whitespace-only id: same
 	}
 	for _, c := range cases {
 		got := ParseSubscriptionTarget(c.raw)
