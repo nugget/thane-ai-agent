@@ -130,6 +130,10 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatVacuum(state, now)
 	case "update":
 		return formatUpdate(state, now)
+	case "alarm_control_panel":
+		return formatAlarmControlPanel(state, now)
+	case "event":
+		return formatEvent(state, now)
 	default:
 		return formatDefault(state, now)
 	}

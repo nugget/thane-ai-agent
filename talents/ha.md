@@ -123,9 +123,11 @@ entity_id is already in hand:
 }
 ```
 
-The fastest path when the entity_id is already known. Returns the
-state value plus all attributes (brightness, color, last_changed,
-etc.).
+The fastest path when the entity_id is already known. Returns a
+curated, class-aware projection — semantic state plus the attributes
+that matter for that class (a climate entity shows mode, current,
+target, and hvac_action; a lock shows battery and jammed-vs-unlocked;
+an event shows what fired and when) — not a raw attribute dump.
 
 Add `include` when physical-world metadata would improve reasoning:
 
