@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -133,19 +132,24 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		if sub.IsExpired(now) {
 			continue
 		}
-		if homeassistant.IsEntityGlob(sub.EntityID) {
+		target := ParseSubscriptionTarget(sub.EntityID)
+		switch {
+		case target.Kind == TargetGlob:
 			states, statesErr := snap.get(ctx)
 			// Pass alreadyVisible so a loop glob (e.g. sensor.*) doesn't
 			// re-render entities the always-visible watchlist already
 			// injects — same dedup the concrete path applies below.
 			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
-			continue
+		case target.IsRegistryTarget():
+			states, statesErr := snap.get(ctx)
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), target, states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
+		default:
+			if _, dup := alreadyVisible[sub.EntityID]; dup {
+				continue
+			}
+			body.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
+			body.WriteByte('\n')
 		}
-		if _, dup := alreadyVisible[sub.EntityID]; dup {
-			continue
-		}
-		body.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
-		body.WriteByte('\n')
 	}
 	if body.Len() == 0 {
 		return "", nil
