@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,18 +16,25 @@ import (
 
 // WatchlistTools is the [tools.Provider] for the add_entity_subscription,
 // list_entity_subscriptions, and remove_entity_subscription tools. It
-// owns the watchlist store the handlers read/write and an optional
-// callback invoked when new scoped tags are introduced (so the caller
-// can wire up tag-specific context providers on demand).
+// owns the watchlist store the handlers read/write and an optional HA
+// registry client used to preview what a glob or area/label/floor target
+// expands to at the moment it is authored — so the model learns
+// immediately that area:office matches three entities, or that a typo'd
+// area:atrium matches none.
 type WatchlistTools struct {
-	store  *WatchlistStore
-	logger *slog.Logger
+	store    *WatchlistStore
+	registry HARegistryClient
+	logger   *slog.Logger
 }
 
 // WatchlistToolsConfig captures the dependencies for [NewWatchlistTools].
 type WatchlistToolsConfig struct {
 	// Store is the persistent watchlist store. Required.
 	Store *WatchlistStore
+	// Registry is the HA client used to preview a target's current
+	// membership when a subscription is authored or listed. Optional:
+	// when nil, subscriptions still work but carry no expansion preview.
+	Registry HARegistryClient
 	// Logger defaults to slog.Default when nil.
 	Logger *slog.Logger
 }
@@ -43,8 +51,9 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 		logger = slog.Default()
 	}
 	return &WatchlistTools{
-		store:  cfg.Store,
-		logger: logger,
+		store:    cfg.Store,
+		registry: cfg.Registry,
+		logger:   logger,
 	}
 }
 
@@ -61,7 +70,8 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"This tool adds always-visible subscriptions: the entity appears on every turn regardless of which loop or capability tags are active — this is how you, or a conversation, watch an entity in your own field of view. " +
 				"For a specific named loop's view use update_entity_subscriptions; from inside a loop's own turn use watch_entity. " +
 				"Optional tags carry lens-style classifiers on the subscription itself for future filtering; they no longer act as a scope binding. " +
-				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed.",
+				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed. " +
+				"For a glob or area/label/floor target, the result reports how many entities it currently matches (with a sample) — and flags a zero-member expansion, which almost always means a typo'd id or an empty group.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -96,7 +106,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 		},
 		{
 			Name:        "list_entity_subscriptions",
-			Description: "List always-visible entity subscriptions used for live context injection — entities that are surfaced on every turn regardless of which loop or capability tags are active. For per-loop subscriptions, call loop_definition_get and read the spec's subscriptions field; effective inherited subscriptions are surfaced there too.",
+			Description: "List always-visible entity subscriptions used for live context injection — entities that are surfaced on every turn regardless of which loop or capability tags are active. Each glob or area/label/floor subscription carries an expansion object with its current member count and a sample, so a subscription that currently matches nothing is visible at a glance. For per-loop subscriptions, call loop_definition_get and read the spec's subscriptions field; effective inherited subscriptions are surfaced there too.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -135,7 +145,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 	}
 }
 
-func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map[string]any) (string, error) {
+func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args map[string]any) (string, error) {
 	entityID, _ := args["entity_id"].(string)
 	if entityID == "" {
 		return "", fmt.Errorf("entity_id is required")
@@ -206,12 +216,36 @@ func (w *WatchlistTools) handleAddEntitySubscription(_ context.Context, args map
 	}
 	msg += "."
 
+	// Author-time expansion preview: for a glob or area/label/floor
+	// target, report what it matches right now so the model isn't left
+	// guessing — and a zero-member expansion is flagged loudly, since it
+	// is almost always a typo'd id that would otherwise inject nothing
+	// forever. A concrete entity_id is its own membership and needs none.
+	if target := ParseSubscriptionTarget(entityID); target.Kind != TargetEntity {
+		exp, perr := previewTargetExpansion(newRenderRegistries(ctx, w.registry), target)
+		switch {
+		case perr != nil:
+			w.logger.Warn("subscription target expansion preview failed",
+				"entity_id", entityID, "error", perr)
+		case exp == nil:
+			// No registry client wired — subscription stands without a preview.
+		case exp.Count == 0:
+			msg += " Note: this target matches no entities right now —" +
+				" check the id (a likely typo or an empty group); it will" +
+				" inject nothing until it has members."
+		default:
+			msg += fmt.Sprintf(" Currently matches %d %s: %s%s.",
+				exp.Count, entityNoun(exp.Count), strings.Join(exp.Sample, ", "),
+				moreMembersSuffix(exp.Count, len(exp.Sample)))
+		}
+	}
+
 	w.logger.Info("entity subscription added",
 		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "include", include, "ttl_seconds", ttlSeconds)
 	return msg, nil
 }
 
-func (w *WatchlistTools) handleListEntitySubscriptions(_ context.Context, args map[string]any) (string, error) {
+func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args map[string]any) (string, error) {
 	tag, _ := args["tag"].(string)
 	entityID, _ := args["entity_id"].(string)
 
@@ -221,6 +255,9 @@ func (w *WatchlistTools) handleListEntitySubscriptions(_ context.Context, args m
 	}
 
 	now := time.Now()
+	// One registries bundle shared across the whole list: it fetches each
+	// registry once and every glob/registry target's expansion reuses it.
+	registries := newRenderRegistries(ctx, w.registry)
 	items := make([]map[string]any, 0, len(subs))
 	for _, sub := range subs {
 		if entityID != "" && sub.EntityID != entityID {
@@ -242,6 +279,23 @@ func (w *WatchlistTools) handleListEntitySubscriptions(_ context.Context, args m
 		}
 		if sub.ExpiresAt != nil {
 			item["expires_delta"] = promptfmt.FormatDeltaOnly(*sub.ExpiresAt, now)
+		}
+		// Show each glob/registry target's current expansion so a
+		// silently-empty subscription is visible at a glance.
+		if target := ParseSubscriptionTarget(sub.EntityID); target.Kind != TargetEntity {
+			if exp, err := previewTargetExpansion(registries, target); err != nil {
+				w.logger.Warn("subscription target expansion preview failed",
+					"entity_id", sub.EntityID, "error", err)
+			} else if exp != nil {
+				expObj := map[string]any{"count": exp.Count}
+				if len(exp.Sample) > 0 {
+					expObj["sample"] = exp.Sample
+				}
+				if exp.Count == 0 {
+					expObj["note"] = "matches no entities right now — likely a typo'd id or an empty group"
+				}
+				item["expansion"] = expObj
+			}
 		}
 		items = append(items, item)
 	}
@@ -281,6 +335,80 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(_ context.Context, args 
 		return fmt.Sprintf("Stopped watching %s in scopes %v.", entityID, tags), nil
 	}
 	return fmt.Sprintf("Stopped watching %s.", entityID), nil
+}
+
+// previewSampleSize is how many member ids a target-expansion preview
+// carries as a concrete sample alongside the count.
+const previewSampleSize = 5
+
+// targetExpansion is the author-time membership preview for a glob or
+// registry-backed subscription target: how many entities it matches right
+// now and a sample of them.
+type targetExpansion struct {
+	Count  int
+	Sample []string
+}
+
+// previewTargetExpansion resolves a glob or area/label/floor target's
+// current membership against the registry so add/list can advertise the
+// expansion and flag a zero-member target as a likely mistake. It returns
+// nil (no error) when there is no registry client wired, or when the
+// target is a concrete entity_id that is its own membership and needs no
+// preview. Membership is registry truth, not state-filtered: a member
+// that is momentarily stateless is still a real member, and "matches
+// zero" is exactly the typo signal worth surfacing.
+func previewTargetExpansion(registries *renderRegistries, target SubscriptionTarget) (*targetExpansion, error) {
+	if registries == nil {
+		return nil, nil
+	}
+	var members []string
+	switch target.Kind {
+	case TargetArea, TargetLabel, TargetFloor:
+		resolver, err := newMembershipResolver(registries)
+		if err != nil {
+			return nil, err
+		}
+		members = resolver.members(target)
+	case TargetGlob:
+		entities, err := registries.entities()
+		if err != nil {
+			return nil, err
+		}
+		for id := range entities {
+			ok, err := homeassistant.MatchEntityGlob(target.Value, id)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				members = append(members, id)
+			}
+		}
+		sort.Strings(members)
+	default:
+		return nil, nil
+	}
+	sample := members
+	if len(sample) > previewSampleSize {
+		sample = sample[:previewSampleSize]
+	}
+	return &targetExpansion{Count: len(members), Sample: append([]string(nil), sample...)}, nil
+}
+
+// entityNoun agrees "entity"/"entities" with a count.
+func entityNoun(n int) string {
+	if n == 1 {
+		return "entity"
+	}
+	return "entities"
+}
+
+// moreMembersSuffix renders " (+N more)" when a sample is shorter than
+// the full membership, and "" when the sample is the whole set.
+func moreMembersSuffix(total, shown int) string {
+	if total > shown {
+		return fmt.Sprintf(" (+%d more)", total-shown)
+	}
+	return ""
 }
 
 func parseWatchlistTagArgs(raw any) ([]string, error) {

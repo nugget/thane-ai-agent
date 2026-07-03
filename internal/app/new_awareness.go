@@ -107,10 +107,18 @@ func (a *App) initAwareness(s *newState) error {
 		logger.Info("entity watchlist context enabled")
 	}
 
-	a.loop.Tools().RegisterProvider(awareness.NewWatchlistTools(awareness.WatchlistToolsConfig{
+	watchlistCfg := awareness.WatchlistToolsConfig{
 		Store:  watchlistStore,
 		Logger: logger,
-	}))
+	}
+	// Only set Registry when the HA client is present. a.ha is a concrete
+	// *homeassistant.Client, so assigning a nil one into the interface
+	// field would make a non-nil interface wrapping a nil pointer — the
+	// preview would then dereference it instead of skipping cleanly.
+	if a.ha != nil {
+		watchlistCfg.Registry = a.ha
+	}
+	a.loop.Tools().RegisterProvider(awareness.NewWatchlistTools(watchlistCfg))
 
 	if a.ha != nil {
 		a.loop.Tools().RegisterProvider(awareness.NewAreaActivityTools(awareness.AreaActivityToolsConfig{

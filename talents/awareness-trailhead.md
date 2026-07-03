@@ -23,10 +23,14 @@ Choose the next move deliberately:
   "watch the office," not "watch these specific sensors": its membership
   is re-resolved from the registry every turn, so it follows the home —
   move a device into the office and the `area:office` watch picks it up,
-  no re-authoring. All expansions are capped per turn and report
-  truncation when they overflow; scope to a smaller area/label/floor
-  rather than watching the whole house. Use `ha_registry_search` to find
-  area/label/floor IDs.
+  no re-authoring. When you subscribe to a glob or organizational target,
+  the result reports how many entities it matches right now, with a
+  sample — and flags a zero-member expansion, which almost always means a
+  typo'd id or an empty group. Read that back: if `area:office` was meant
+  to catch three sensors and matches zero, fix the id before moving on.
+  All expansions are capped per turn and report truncation when they
+  overflow; scope to a smaller area/label/floor rather than watching the
+  whole house. Use `ha_registry_search` to find area/label/floor IDs.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read
