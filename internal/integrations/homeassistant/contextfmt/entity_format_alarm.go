@@ -11,10 +11,11 @@ import (
 // Panel state is already semantic (disarmed, armed_home, armed_away,
 // armed_night, armed_vacation, arming, pending, triggered), so no
 // translation is needed — the curation is the attributes a security
-// decision actually wants: who changed it last, and whether disarming
-// needs a code (the model should never suggest an arm/disarm flow the
-// panel will refuse). Attribute names per the current HA
-// alarm_control_panel documentation.
+// decision actually wants: who changed it last, and whether *arming*
+// requires a code (code_arm_required; disarming a panel virtually
+// always does — the flag says whether arming shares that requirement,
+// so the model never proposes an arming flow the panel will refuse).
+// Attribute names per the current HA alarm_control_panel documentation.
 type alarmContext struct {
 	Entity          string `json:"entity"`
 	Name            string `json:"name,omitempty"`
