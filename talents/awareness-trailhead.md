@@ -15,12 +15,18 @@ Choose the next move deliberately:
 
 - Use `list_entity_subscriptions` to see what this loop is already carrying.
 - Use `add_entity_subscription` when a room, device, person, or live state
-  should auto-load while the work continues. The `entity_id` accepts a
-  glob (e.g. `binary_sensor.*door*`, `*_temperature`) to follow a whole
-  set: it is re-expanded against live entities every turn, so newly-added
-  matches join automatically. A glob is capped per turn and reports
-  truncation when it matches more than the cap — keep patterns narrow so
-  the watch stays a focus, not a firehose.
+  should auto-load while the work continues. The `entity_id` accepts more
+  than a single entity: a glob (`binary_sensor.*door*`, `*_temperature`)
+  to follow entities by name, or an organizational target —
+  `area:<area_id>`, `label:<label_id>`, `floor:<floor_id>` (e.g.
+  `area:office`). Prefer the organizational form when the intent is
+  "watch the office," not "watch these specific sensors": its membership
+  is re-resolved from the registry every turn, so it follows the home —
+  move a device into the office and the `area:office` watch picks it up,
+  no re-authoring. All expansions are capped per turn and report
+  truncation when they overflow; scope to a smaller area/label/floor
+  rather than watching the whole house. Use `ha_registry_search` to find
+  area/label/floor IDs.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read

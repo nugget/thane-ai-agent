@@ -101,15 +101,20 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	// this turn) yields no bare header.
 	var body strings.Builder
 	for _, sub := range subs {
-		if homeassistant.IsEntityGlob(sub.EntityID) {
+		target := ParseSubscriptionTarget(sub.EntityID)
+		switch {
+		case target.Kind == TargetGlob:
 			states, statesErr := snap.get(ctx)
 			// No exclusion set — this provider IS the always-visible
 			// surface, so there is nothing upstream to dedup against.
 			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.maxGlobExpansion, nil))
-			continue
+		case target.IsRegistryTarget():
+			states, statesErr := snap.get(ctx)
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.maxGlobExpansion, nil))
+		default:
+			body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
+			body.WriteByte('\n')
 		}
-		body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
-		body.WriteByte('\n')
 	}
 	if body.Len() == 0 {
 		return "", nil

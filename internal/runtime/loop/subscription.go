@@ -24,8 +24,12 @@ import (
 // future lens routing) and are not load-bearing for the loop→
 // subscription binding.
 type EntitySubscription struct {
-	// EntityID is the Home Assistant entity identifier, e.g.
-	// "sensor.upstairs_temperature" or "weather.home".
+	// EntityID is the subscription target: a concrete Home Assistant
+	// entity ("sensor.upstairs_temperature"), a glob
+	// ("binary_sensor.*door*"), or an organizational target
+	// ("area:office", "label:critical", "floor:upstairs") whose members
+	// are re-resolved from the registry each render. The field name is
+	// historical; the awareness renderer parses the kind.
 	EntityID string `yaml:"entity_id" json:"entity_id"`
 
 	// History is the list of look-back windows (in seconds) the
