@@ -34,12 +34,12 @@ type DeviceSnapshotRequest struct {
 	Include homeassistant.EntityMetadataIncludes
 }
 
-// maxDeviceOtherEntities caps the Configuration and Diagnostic groups so
+// maxDeviceNoisyGroupEntities caps the Configuration and Diagnostic groups so
 // a device that exposes a long tail of tuning knobs and health counters
 // can't flood the prompt. Controls and Sensors are inherently small and
 // stay uncapped; overflow is reported via the per-group
 // *_truncated_count fields. Mirrors area_activity's stable-bucket cap.
-const maxDeviceOtherEntities = 15
+const maxDeviceNoisyGroupEntities = 15
 
 // ComputeDeviceSnapshot resolves a device, gathers its child entities +
 // states, groups them the way Home Assistant's device page does, and
@@ -153,8 +153,8 @@ func ComputeDeviceSnapshot(ctx context.Context, client DeviceSnapshotClient, req
 	// counters. Cap them (with an honest per-group truncation count) so
 	// the instrument panel stays legible; Controls and Sensors are
 	// inherently small and stay uncapped.
-	configTruncated := truncateGroup(&cls.configuration, maxDeviceOtherEntities)
-	diagnosticTruncated := truncateGroup(&cls.diagnostic, maxDeviceOtherEntities)
+	configTruncated := truncateGroup(&cls.configuration, maxDeviceNoisyGroupEntities)
+	diagnosticTruncated := truncateGroup(&cls.diagnostic, maxDeviceNoisyGroupEntities)
 
 	if req.Include.Any() {
 		attachAreaEntityMetadata(resolver, req.Include, children, statesByID,

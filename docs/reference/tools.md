@@ -122,7 +122,7 @@ becoming default context clutter.
 | `ha_list_entities` | Browse entities by domain and/or entity_id glob (e.g. `binary_sensor.*door*`), with optional HA metadata. |
 | `ha_search_states` | Predicate search across live entity state (state value, numeric attribute, domain, area). |
 | `get_area_activity` | Whole-area snapshot: floor context + entities grouped by salience + transition timeline + filtered counts, with optional per-entity metadata. |
-| `ha_device` | Whole-device snapshot: device identity (manufacturer/model/firmware/area/integration) + every child entity with semantic state grouped by salience + availability rollup, resolved by id or name, with optional per-entity metadata. |
+| `ha_device` | Whole-device snapshot: the full device-info card (manufacturer/model/firmware/serial/MAC connections/area/labels/integration) + every child entity grouped the way HA's device page groups them (controls/sensors/configuration/diagnostic), with hidden entities shown marked, per-group truncation counts, and an availability rollup; resolved by id or name, with optional per-entity metadata. |
 | `ha_history` | Recorder trend for one entity over a lookback window: numeric min/max/start/end/delta/trend or a discrete change summary, optionally trending a numeric attribute instead of the state. |
 | `ha_home_snapshot` | Curated whole-home overview: anomalies, security/openings, presence, climate (energy optional), salience-first with an at-a-glance summary and a quiet status, plus optional per-entity metadata. |
 | `ha_call_service` | Direct HA service invocation. |

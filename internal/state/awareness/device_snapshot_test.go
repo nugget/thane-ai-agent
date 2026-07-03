@@ -418,7 +418,7 @@ func TestComputeDeviceSnapshot_CapsConfigurationGroup(t *testing.T) {
 		devices: []homeassistant.DeviceRegistryEntry{{ID: "dev_zwave", Name: "Z-Wave Switch", AreaID: "office"}},
 		states:  map[string]*homeassistant.State{},
 	}
-	const configCount = maxDeviceOtherEntities + 4
+	const configCount = maxDeviceNoisyGroupEntities + 4
 	for i := 0; i < configCount; i++ {
 		id := fmt.Sprintf("number.zwave_param_%02d", i)
 		client.entities = append(client.entities, homeassistant.EntityRegistryEntry{
@@ -434,11 +434,44 @@ func TestComputeDeviceSnapshot_CapsConfigurationGroup(t *testing.T) {
 	payload := decodeDevicePayload(t, out)
 
 	config, _ := payload["configuration"].([]any)
-	if len(config) != maxDeviceOtherEntities {
-		t.Errorf("configuration length = %d, want cap %d", len(config), maxDeviceOtherEntities)
+	if len(config) != maxDeviceNoisyGroupEntities {
+		t.Errorf("configuration length = %d, want cap %d", len(config), maxDeviceNoisyGroupEntities)
 	}
-	if payload["configuration_truncated_count"] != float64(configCount-maxDeviceOtherEntities) {
-		t.Errorf("configuration_truncated_count = %#v, want %d", payload["configuration_truncated_count"], configCount-maxDeviceOtherEntities)
+	if payload["configuration_truncated_count"] != float64(configCount-maxDeviceNoisyGroupEntities) {
+		t.Errorf("configuration_truncated_count = %#v, want %d", payload["configuration_truncated_count"], configCount-maxDeviceNoisyGroupEntities)
+	}
+}
+
+// The Diagnostic group caps the same way Configuration does — a device
+// with a long tail of health counters stays legible, with an honest
+// diagnostic_truncated_count.
+func TestComputeDeviceSnapshot_CapsDiagnosticGroup(t *testing.T) {
+	client := &fakeDeviceClient{
+		areas:   []homeassistant.Area{{AreaID: "office", Name: "Office"}},
+		devices: []homeassistant.DeviceRegistryEntry{{ID: "dev_zwave", Name: "Z-Wave Switch", AreaID: "office"}},
+		states:  map[string]*homeassistant.State{},
+	}
+	const diagCount = maxDeviceNoisyGroupEntities + 3
+	for i := 0; i < diagCount; i++ {
+		id := fmt.Sprintf("sensor.zwave_diag_%02d", i)
+		client.entities = append(client.entities, homeassistant.EntityRegistryEntry{
+			EntityID: id, DeviceID: "dev_zwave", EntityCategory: "diagnostic",
+		})
+		client.states[id] = mkState(id, fmt.Sprintf("%d", i), nil)
+	}
+
+	out, err := ComputeDeviceSnapshot(context.Background(), client, DeviceSnapshotRequest{Device: "dev_zwave"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeDeviceSnapshot: %v", err)
+	}
+	payload := decodeDevicePayload(t, out)
+
+	diag, _ := payload["diagnostic"].([]any)
+	if len(diag) != maxDeviceNoisyGroupEntities {
+		t.Errorf("diagnostic length = %d, want cap %d", len(diag), maxDeviceNoisyGroupEntities)
+	}
+	if payload["diagnostic_truncated_count"] != float64(diagCount-maxDeviceNoisyGroupEntities) {
+		t.Errorf("diagnostic_truncated_count = %#v, want %d", payload["diagnostic_truncated_count"], diagCount-maxDeviceNoisyGroupEntities)
 	}
 }
 
