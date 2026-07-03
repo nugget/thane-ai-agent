@@ -204,11 +204,26 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
 			return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; subscribe the target with mode render, or list its member entities", mode)
 		}
+		// The ingestion filter reads only always-visible rows; a
+		// tag-scoped ingest subscription would sit in the store doing
+		// nothing. Reject rather than silently no-op.
+		if len(tags) > 0 {
+			return "", fmt.Errorf("mode %q subscriptions are always-visible and cannot carry tags — drop the tags, or use mode render for a tag-scoped subscription", mode)
+		}
 		globs, err := w.store.IngestGlobs(time.Now())
 		if err != nil {
 			return "", fmt.Errorf("count ingest entries: %w", err)
 		}
-		if len(globs) >= maxIngestEntries {
+		// Re-adding an existing entry updates it in place and doesn't
+		// grow the registry; the cap gates only genuinely new entries.
+		exists := false
+		for _, g := range globs {
+			if g == entityID {
+				exists = true
+				break
+			}
+		}
+		if !exists && len(globs) >= maxIngestEntries {
 			return "", fmt.Errorf("ingest registry is at its cap (%d entries) — remove entries before adding more; a broad glob covers more for less", maxIngestEntries)
 		}
 	}

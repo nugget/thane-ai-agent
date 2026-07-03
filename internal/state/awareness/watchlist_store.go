@@ -388,9 +388,16 @@ func parseWatchlistOptions(optsJSON string) watchlistOptions {
 	if err := json.Unmarshal([]byte(optsJSON), &wire); err != nil {
 		return watchlistOptions{Mode: SubscriptionModeRender}
 	}
+	mode := normalizeSubscriptionMode(wire.Mode)
+	if mode == "" {
+		// An unrecognized stored mode (a future value, or corruption)
+		// degrades to render — the legacy behavior — keeping the struct
+		// contract that Mode is never empty after decode.
+		mode = SubscriptionModeRender
+	}
 	out := watchlistOptions{
 		History: append([]int(nil), wire.History...),
-		Mode:    normalizeSubscriptionMode(wire.Mode),
+		Mode:    mode,
 		Include: wire.Include.Clone(),
 	}
 	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {

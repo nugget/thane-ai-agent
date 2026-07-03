@@ -301,10 +301,10 @@ func (a *App) initAwareness(s *newState) error {
 	// client-side. Person entity IDs are auto-merged so the person
 	// tracker receives state changes regardless of the registry.
 	if a.haWS != nil {
-		buildIngestFilter := func() *homeassistant.EntityFilter {
+		buildIngestFilter := func() (*homeassistant.EntityFilter, error) {
 			globs, err := watchlistStore.IngestGlobs(time.Now())
 			if err != nil {
-				logger.Warn("ingest registry read failed; keeping previous filter shape", "error", err)
+				return nil, err
 			}
 			if s.personTracker != nil {
 				globs = append(globs, s.personTracker.EntityIDs()...)
@@ -312,11 +312,25 @@ func (a *App) initAwareness(s *newState) error {
 			if len(globs) == 0 {
 				// Nothing registered must mean ingest nothing — an empty
 				// EntityFilter would mean ingest everything.
-				return homeassistant.NewEntityFilterMatchNone(logger)
+				return homeassistant.NewEntityFilterMatchNone(logger), nil
 			}
-			return homeassistant.NewEntityFilter(globs, logger)
+			return homeassistant.NewEntityFilter(globs, logger), nil
 		}
-		filter := buildIngestFilter()
+		filter, err := buildIngestFilter()
+		if err != nil {
+			// A failed registry read at boot degrades to the person
+			// floor — the tracker must not go deaf — and says so.
+			logger.Warn("ingest registry read failed at startup; ingesting the person-entity floor only", "error", err)
+			var personGlobs []string
+			if s.personTracker != nil {
+				personGlobs = s.personTracker.EntityIDs()
+			}
+			if len(personGlobs) == 0 {
+				filter = homeassistant.NewEntityFilterMatchNone(logger)
+			} else {
+				filter = homeassistant.NewEntityFilter(personGlobs, logger)
+			}
+		}
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.IngestRateLimitPerMinute)
 
 		// Compose handler: state window and person tracker both see
@@ -333,7 +347,17 @@ func (a *App) initAwareness(s *newState) error {
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
 		a.haStateWatcher = watcher
-		s.ingestFilterRebuild = func() { watcher.SetFilter(buildIngestFilter()) }
+		s.ingestFilterRebuild = func() {
+			rebuilt, err := buildIngestFilter()
+			if err != nil {
+				// A transient read failure keeps the previous filter —
+				// genuinely, by not swapping — rather than narrowing
+				// ingestion on bad luck.
+				logger.Warn("ingest registry read failed; keeping the previous ingestion filter", "error", err)
+				return
+			}
+			watcher.SetFilter(rebuilt)
+		}
 		logger.Info("state watcher configured",
 			"ingest_rate_limit_per_minute", cfg.HomeAssistant.IngestRateLimitPerMinute,
 		)

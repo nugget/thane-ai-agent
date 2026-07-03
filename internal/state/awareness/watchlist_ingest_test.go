@@ -123,6 +123,16 @@ func TestIngestModeToolFlow(t *testing.T) {
 		t.Errorf("OnIngestChange fired %d times, want 1", fired)
 	}
 
+	// Tag-scoped ingest rows would sit in the store doing nothing
+	// (the filter reads only always-visible rows) — rejected loudly.
+	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{
+		"entity_id": "sensor.tagged",
+		"mode":      "ingest",
+		"tags":      []any{"focus"},
+	}); err == nil || !strings.Contains(err.Error(), "cannot carry tags") {
+		t.Errorf("tag-scoped ingest should error, got: %v", err)
+	}
+
 	// Registry targets can't feed the ingestion filter.
 	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{
 		"entity_id": "area:office",
@@ -169,6 +179,36 @@ func TestIngestCap(t *testing.T) {
 		"mode":      "ingest",
 	}); err == nil || !strings.Contains(err.Error(), "cap") {
 		t.Errorf("over-cap add should error, got: %v", err)
+	}
+
+	// Re-adding an existing entry at the cap is an in-place update,
+	// not growth — it must pass.
+	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{
+		"entity_id": "sensor.ingest_xaa",
+		"mode":      "ingest",
+		"history":   []any{600},
+	}); err != nil {
+		t.Errorf("re-add at cap should succeed as an update: %v", err)
+	}
+}
+
+// An unrecognized stored mode degrades to render, keeping the decode
+// contract (Mode never empty) and legacy behavior.
+func TestUnknownStoredModeDecodesAsRender(t *testing.T) {
+	store := newIngestStore(t)
+	if err := store.Add("sensor.future"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := store.db.Exec(
+		`UPDATE watched_entity_subscriptions SET options = '{"mode":"telepathy"}' WHERE entity_id = 'sensor.future'`); err != nil {
+		t.Fatalf("plant unknown mode: %v", err)
+	}
+	subs, err := store.ListUntaggedSubscriptions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(subs) != 1 || subs[0].Mode != SubscriptionModeRender {
+		t.Errorf("unknown mode decoded as %q, want render", subs[0].Mode)
 	}
 }
 
