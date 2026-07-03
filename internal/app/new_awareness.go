@@ -8,6 +8,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
@@ -148,10 +149,15 @@ func (a *App) initAwareness(s *newState) error {
 			stateWindowLoc = parsed
 		}
 	}
+	// contextfmt.SemanticState routes transitions through the canonical
+	// class-aware projection so the window reads closed→open for a
+	// garage_door, not off→on — injected here because contextfmt imports
+	// the homeassistant package and the provider cannot import it back.
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
 		stateWindowLoc,
+		contextfmt.SemanticState,
 		logger,
 	)
 	a.loop.RegisterAlwaysContextProvider(stateWindowProvider)
@@ -302,9 +308,9 @@ func (a *App) initAwareness(s *newState) error {
 		// every state change that passes the filter and rate limiter.
 		var handler homeassistant.StateWatchHandler
 		if s.personTracker != nil {
-			handler = func(entityID, oldState, newState string) {
-				stateWindowProvider.HandleStateChange(entityID, oldState, newState)
-				s.personTracker.HandleStateChange(entityID, oldState, newState)
+			handler = func(entityID, oldState, newState, deviceClass string) {
+				stateWindowProvider.HandleStateChange(entityID, oldState, newState, deviceClass)
+				s.personTracker.HandleStateChange(entityID, oldState, newState, deviceClass)
 			}
 		} else {
 			handler = stateWindowProvider.HandleStateChange

@@ -437,7 +437,7 @@ func TestHydrateLoopDefinitionSpec_HAStateWatcher(t *testing.T) {
 
 	eventsCh := make(chan homeassistant.Event, 1)
 	var handled int
-	watcher := homeassistant.NewStateWatcher(eventsCh, nil, nil, func(entityID, oldState, newState string) {
+	watcher := homeassistant.NewStateWatcher(eventsCh, nil, nil, func(entityID, oldState, newState, _ string) {
 		handled++
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 

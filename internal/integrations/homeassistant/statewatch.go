@@ -10,8 +10,12 @@ import (
 
 // StateWatchHandler is called for each state change that passes the
 // entity filter and rate limiter. The handler receives the entity ID,
-// old state string, and new state string.
-type StateWatchHandler func(entityID, oldState, newState string)
+// old state string, new state string, and the entity's device_class.
+// deviceClass comes from the new state's attributes — HA writes the
+// operator's "Show as" override there, so it is the effective key for
+// class-aware rendering (a garage bay shows garage_door, not the
+// integration's original class). Empty when the entity has none.
+type StateWatchHandler func(entityID, oldState, newState, deviceClass string)
 
 // EntityFilter selects which entity IDs to process using glob patterns.
 // An empty filter matches all entities.
@@ -247,6 +251,11 @@ func (w *StateWatcher) handleEvent(ev Event) bool {
 		oldState = data.OldState.State
 	}
 
-	w.handler(data.EntityID, oldState, data.NewState.State)
+	deviceClass := ""
+	if dc, ok := data.NewState.Attributes["device_class"].(string); ok {
+		deviceClass = dc
+	}
+
+	w.handler(data.EntityID, oldState, data.NewState.State, deviceClass)
 	return true
 }

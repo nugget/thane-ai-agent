@@ -13,12 +13,16 @@ import (
 )
 
 // StateWindowEntry records a single state transition observed from the Home
-// Assistant WebSocket event stream.
+// Assistant WebSocket event stream. DeviceClass is the effective
+// device_class at event time (carrying the operator's "Show as"
+// override), kept so the render can translate raw states into
+// class-aware labels.
 type StateWindowEntry struct {
-	EntityID  string
-	OldState  string
-	NewState  string
-	Timestamp time.Time
+	EntityID    string
+	OldState    string
+	NewState    string
+	DeviceClass string
+	Timestamp   time.Time
 }
 
 // StateWindowProvider maintains a rolling window of recent state changes and
@@ -34,14 +38,24 @@ type StateWindowProvider struct {
 	loc     *time.Location
 	nowFunc func() time.Time
 	logger  *slog.Logger
+	// translate maps (domain, deviceClass, rawState) to the class-aware
+	// label the model should read (garage_door "on" → "open"). Injected
+	// at construction — the canonical table lives in contextfmt, which
+	// imports this package, so the dependency must point inward. Nil
+	// means raw states pass through untranslated.
+	translate func(domain, deviceClass, state string) string
 }
 
 // NewStateWindowProvider creates a state window provider with the given
 // buffer capacity and maximum entry age. The loc parameter controls the
 // timezone used when formatting future-event timestamps in the context
-// output; nil falls back to time.Local. Entries older than maxAge are
-// filtered out at read time in TagContext.
-func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Location, logger *slog.Logger) *StateWindowProvider {
+// output; nil falls back to time.Local. translate is the class-aware
+// state translation applied when rendering transitions (normally
+// contextfmt.SemanticState, so a garage_door reads closed→open rather
+// than off→on — the same language every other entity-emitting surface
+// uses); nil renders raw states. Entries older than maxAge are filtered
+// out at read time in TagContext.
+func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Location, translate func(domain, deviceClass, state string) string, logger *slog.Logger) *StateWindowProvider {
 	if maxEntries <= 0 {
 		maxEntries = 50
 	}
@@ -55,11 +69,12 @@ func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Loca
 		logger = slog.Default()
 	}
 	return &StateWindowProvider{
-		entries: make([]StateWindowEntry, maxEntries),
-		maxAge:  maxAge,
-		loc:     loc,
-		nowFunc: time.Now,
-		logger:  logger,
+		entries:   make([]StateWindowEntry, maxEntries),
+		maxAge:    maxAge,
+		loc:       loc,
+		translate: translate,
+		nowFunc:   time.Now,
+		logger:    logger,
 	}
 }
 
@@ -72,7 +87,7 @@ func (p *StateWindowProvider) TagContextBucket() agentctx.ContextBucket {
 // HandleStateChange records a state transition in the circular buffer.
 // It matches the homeassistant.StateWatchHandler function signature and
 // can be composed directly into the state watcher handler chain.
-func (p *StateWindowProvider) HandleStateChange(entityID, oldState, newState string) {
+func (p *StateWindowProvider) HandleStateChange(entityID, oldState, newState, deviceClass string) {
 	// Filter no-op transitions (device tracker refreshes, etc.).
 	if oldState == newState {
 		return
@@ -82,10 +97,11 @@ func (p *StateWindowProvider) HandleStateChange(entityID, oldState, newState str
 
 	p.mu.Lock()
 	p.entries[p.head] = StateWindowEntry{
-		EntityID:  entityID,
-		OldState:  oldState,
-		NewState:  newState,
-		Timestamp: now,
+		EntityID:    entityID,
+		OldState:    oldState,
+		NewState:    newState,
+		DeviceClass: deviceClass,
+		Timestamp:   now,
 	}
 	p.head = (p.head + 1) % len(p.entries)
 	if p.count < len(p.entries) {
@@ -127,10 +143,21 @@ func (p *StateWindowProvider) TagContext(_ context.Context, _ agentctx.ContextRe
 		if e.Timestamp.Before(cutoff) {
 			continue
 		}
+		from, to := e.OldState, e.NewState
+		if p.translate != nil {
+			// Render class-aware labels so the model reads closed→open,
+			// not off→on, for a garage_door — matching every other
+			// entity-emitting surface. An entity's first observation has
+			// an empty OldState; translation passes unmapped values
+			// through, so that stays empty.
+			domain, _, _ := strings.Cut(e.EntityID, ".")
+			from = p.translate(domain, e.DeviceClass, from)
+			to = p.translate(domain, e.DeviceClass, to)
+		}
 		entries = append(entries, stateChangeJSON{
 			Entity: e.EntityID,
-			From:   e.OldState,
-			To:     e.NewState,
+			From:   from,
+			To:     to,
 			Ago:    promptfmt.FormatDeltaOnly(e.Timestamp, now),
 		})
 	}
