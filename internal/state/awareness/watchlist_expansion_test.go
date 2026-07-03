@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,17 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 )
+
+// failingRegistryClient wraps a working registry fixture but errors on
+// the entity-registry read, so target-expansion previews fail the way a
+// transient HA registry outage would.
+type failingRegistryClient struct {
+	*fakeDeviceClient
+}
+
+func (failingRegistryClient) GetEntityRegistry(context.Context) ([]homeassistant.EntityRegistryEntry, error) {
+	return nil, fmt.Errorf("registry unavailable")
+}
 
 // expansionRegistryClient is a small HARegistryClient fixture whose
 // entities populate a couple of areas, for exercising the author-time
@@ -200,5 +212,64 @@ func TestListEntitySubscriptions_IncludesExpansion(t *testing.T) {
 	concrete := got.Items[byID["sensor.office_temp"]]
 	if concrete.Expansion != nil {
 		t.Errorf("concrete entity should have no expansion: %#v", concrete.Expansion)
+	}
+}
+
+func TestAddEntitySubscription_PreviewFailureIsSurfaced(t *testing.T) {
+	client := failingRegistryClient{expansionRegistryClient()}
+	p, store := setupWatchlistProviderWithRegistry(t, client)
+
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "area:office",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// A failed preview must be spoken, not swallowed into a bare
+	// "Now watching …" that reads as a validated subscribe.
+	if !strings.Contains(result, "couldn't preview") {
+		t.Errorf("result = %q, want a preview-failure note", result)
+	}
+	// The subscription still records — a transient read failure shouldn't
+	// lose the intent.
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "area:office" {
+		t.Errorf("store.List() = %v, want [area:office]", ids)
+	}
+}
+
+func TestListEntitySubscriptions_PreviewFailureMarked(t *testing.T) {
+	client := failingRegistryClient{expansionRegistryClient()}
+	p, _ := setupWatchlistProviderWithRegistry(t, client)
+	ctx := context.Background()
+
+	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{"entity_id": "area:office"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	result, err := p.handleListEntitySubscriptions(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var got struct {
+		Items []struct {
+			EntityID  string `json:"entity_id"`
+			Expansion *struct {
+				Unavailable bool   `json:"unavailable"`
+				Note        string `json:"note"`
+			} `json:"expansion"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, result)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(got.Items))
+	}
+	if got.Items[0].Expansion == nil || !got.Items[0].Expansion.Unavailable {
+		t.Errorf("expansion = %#v, want an unavailable marker", got.Items[0].Expansion)
 	}
 }
