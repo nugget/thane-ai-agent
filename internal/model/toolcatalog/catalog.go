@@ -162,6 +162,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"doc_at":                      {CanonicalID: "native:doc_at", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_browse":                  {CanonicalID: "native:doc_browse", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_commit":                  {CanonicalID: "native:doc_commit", Source: NativeToolSource, Tags: []string{"documents"}},
+	"doc_create":                  {CanonicalID: "native:doc_create", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_copy":                    {CanonicalID: "native:doc_copy", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_copy_section":            {CanonicalID: "native:doc_copy_section", Source: NativeToolSource, Tags: []string{"documents"}},
 	"doc_delete":                  {CanonicalID: "native:doc_delete", Source: NativeToolSource, Tags: []string{"documents"}},

@@ -186,9 +186,10 @@ or signed deltas like `-604800s`.
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
-| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it. |
-| `doc_commit` | Commit an approved `doc_intake` result through managed mutations. |
-| `doc_write` | Write or replace a document. |
+| `doc_create` | Create a new document safely: corpus collision check + normalized placement + write in one call; declines with an analysis when a similar document exists. |
+| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
+| `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
+| `doc_write` | Replace a document's content (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
 | `doc_edit` | Targeted edit within a document. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |

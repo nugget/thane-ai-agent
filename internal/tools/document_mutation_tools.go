@@ -15,7 +15,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:                 "doc_write",
-		Description:          "Create or replace a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths.",
+		Description:          "Write (replace) a managed markdown document by semantic ref like `kb:article.md`. This tool owns frontmatter integrity for title, description, tags, created, and updated timestamps, and it can append a stamped entry to a standard `Journal` section so the model can think in documents instead of filesystem paths. For brand-new documents prefer doc_create, which collision-checks the corpus and normalizes placement first — doc_write creating a fresh ref is for destinations that are already deliberate.",
 		ContentResolveExempt: []string{"ref", "title", "description", "tags", "frontmatter"},
 		Parameters: map[string]any{
 			"type": "object",

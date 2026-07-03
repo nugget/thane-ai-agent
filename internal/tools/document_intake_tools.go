@@ -9,8 +9,73 @@ import (
 
 func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 	r.Register(&Tool{
+		Name: "doc_create",
+		Description: "Create a new managed markdown document safely — the default way to make a document exist. Runs the corpus-aware placement analysis (related-document search, title/tags/path normalization, root policy) and, when placement is clean, writes the document in the same call. " +
+			"When a similar document already exists or policy wants review, nothing is written: the result comes back created=false with the analysis and an intake_id for doc_commit. " +
+			"Prefer this over doc_write for any brand-new document; doc_write's create is for destinations that are already deliberate.",
+		ContentResolveExempt: []string{"root", "title", "ref", "tags", "path_prefix"},
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"root": map[string]any{
+					"type":        "string",
+					"description": "Target managed root without trailing colon, such as `kb` or `scratchpad`. Required unless only one document root exists.",
+				},
+				"body": map[string]any{
+					"type":        "string",
+					"description": "Complete markdown body for the new document. Written as-is when placement is clean.",
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Optional title hint; the tool may normalize it against corpus conventions.",
+				},
+				"ref": map[string]any{
+					"type":        "string",
+					"description": "Optional explicit document ref such as `kb:network/unifi/vlans.md`. Use only when the destination is already intentional.",
+				},
+				"tags": map[string]any{
+					"type":        "array",
+					"description": "Optional desired tags, normalized against observed corpus vocabulary.",
+					"items":       map[string]any{"type": "string"},
+				},
+				"path_prefix": map[string]any{
+					"type":        "string",
+					"description": "Optional directory hint inside the root, such as `network/unifi`.",
+				},
+				"intent": map[string]any{
+					"type":        "string",
+					"description": "Optional note on what the document is for; improves placement analysis.",
+				},
+			},
+			"required": []string{"body"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			// The vocabulary invariant: every document tool's markdown
+			// parameter is named body (#1201).
+			if _, hasContent := args["content"]; hasContent {
+				return "", fmt.Errorf("doc_create has no %q parameter — markdown goes in %q (every document tool takes body)", "content", "body")
+			}
+			body, _ := args["body"].(string)
+			root, _ := args["root"].(string)
+			title, _ := args["title"].(string)
+			ref, _ := args["ref"].(string)
+			pathPrefix, _ := args["path_prefix"].(string)
+			intent, _ := args["intent"].(string)
+			return dt.Create(ctx, documents.CreateArgs{
+				Root:         root,
+				Body:         body,
+				DesiredTitle: title,
+				DesiredRef:   ref,
+				Tags:         documentStringSliceArg(args["tags"]),
+				PathPrefix:   pathPrefix,
+				Intent:       intent,
+			})
+		},
+	})
+
+	r.Register(&Tool{
 		Name:                 "doc_intake",
-		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it. Use this before creating new knowledge documents: it searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit.",
+		Description:          "Analyze where proposed new knowledge belongs in a managed markdown corpus before writing it — the deliberate two-step flow. It searches related documents, normalizes title/tags/path, checks root policy, and returns an intake_id plus a commit_plan for doc_commit. For the common create case, doc_create runs this analysis and commits in one call; reach for doc_intake when you want to inspect the plan first or when the knowledge may belong in an existing document (update/append).",
 		ContentResolveExempt: []string{"root", "desired_title", "desired_ref", "tags", "path_prefix"},
 		Parameters: map[string]any{
 			"type": "object",

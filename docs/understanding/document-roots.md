@@ -203,8 +203,11 @@ signed history.
 
 ## Corpus-Aware Intake
 
-When Thane is about to create durable knowledge, the safest first step
-is `doc_intake`, not guessing a new filename. Intake looks at the target
+When Thane is about to create durable knowledge, the default path is
+`doc_create`, which runs the intake analysis and writes in one call
+when placement is clean — no filename guessing, and the collision check
+rides the create verb itself. The two-step `doc_intake` → `doc_commit`
+form remains for inspecting the plan first. Intake looks at the target
 root, searches related documents, checks observed tag vocabulary and
 path patterns, and returns a proposed destination with a recommended
 action:

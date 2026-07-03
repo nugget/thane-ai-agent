@@ -290,3 +290,114 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// doc_create's clean path: unique knowledge, ready placement — one call
+// analyzes and writes, returning the commit result.
+func TestDocumentCreateCleanPathWritesInOneCall(t *testing.T) {
+	t.Parallel()
+
+	tools, _ := newIntakeTools(t, nil)
+	ctx := context.Background()
+
+	out, err := tools.Create(ctx, CreateArgs{
+		Root:         "kb",
+		DesiredTitle: "Water Softener Service Log",
+		Tags:         []string{"home"},
+		Body:         "# Water Softener Service Log\n\nSalt refilled; next check due in six weeks.",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	var commit CommitResult
+	if err := json.Unmarshal([]byte(out), &commit); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if commit.Action != IntakeActionCreateNew || commit.Status != "committed" || commit.Ref == "" {
+		t.Fatalf("commit = %#v, want committed create_new with a ref", commit)
+	}
+	doc, err := tools.store.Read(ctx, commit.Ref)
+	if err != nil {
+		t.Fatalf("Read created doc: %v", err)
+	}
+	if !strings.Contains(doc.Body, "Salt refilled") {
+		t.Fatalf("body = %q, want the provided body written", doc.Body)
+	}
+	if doc.Title != "Water Softener Service Log" {
+		t.Fatalf("title = %q, want normalized title", doc.Title)
+	}
+}
+
+// doc_create against a near-duplicate: nothing is written, the analysis
+// comes back created=false with an intake_id, and doc_commit completes
+// the flow deliberately — the COTA-collision scenario from #1038.
+func TestDocumentCreateDeclinesOnSimilarCorpus(t *testing.T) {
+	t.Parallel()
+
+	tools, _ := newIntakeTools(t, nil)
+	ctx := context.Background()
+	body := "# VLAN Guide\n\nHome network VLAN layout for trusted, IoT, and camera segments."
+	if _, err := tools.store.Write(ctx, WriteArgs{
+		Ref:   "kb:network/vlans.md",
+		Title: "VLAN Guide",
+		Tags:  []string{"network", "vlans"},
+		Body:  &body,
+	}); err != nil {
+		t.Fatalf("seed Write: %v", err)
+	}
+
+	out, err := tools.Create(ctx, CreateArgs{
+		Root:         "kb",
+		DesiredTitle: "VLAN Guide",
+		Tags:         []string{"network", "vlans"},
+		Body:         body,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	var declined struct {
+		Created bool         `json:"created"`
+		Note    string       `json:"note"`
+		Intake  IntakeResult `json:"intake"`
+	}
+	if err := json.Unmarshal([]byte(out), &declined); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if declined.Created {
+		t.Fatal("Create wrote despite a near-duplicate; want created=false")
+	}
+	if declined.Intake.IntakeID == "" || declined.Note == "" {
+		t.Fatalf("declined result missing intake_id or note: %+v", declined)
+	}
+	// The duplicate must not exist as a second document.
+	if declined.Intake.ProposedRef != "" && declined.Intake.ProposedRef != "kb:network/vlans.md" {
+		if _, err := tools.store.Read(ctx, declined.Intake.ProposedRef); err == nil {
+			t.Fatalf("declined create still wrote %s", declined.Intake.ProposedRef)
+		}
+	}
+
+	// The two-step affordance completes from the same intake_id.
+	if _, err := tools.Commit(ctx, CommitArgs{
+		IntakeID: declined.Intake.IntakeID,
+		Action:   IntakeActionUpdateExisting,
+		Body:     "Additional VLAN operational detail via doc_create decline flow.",
+		Confirm:  true,
+	}); err != nil {
+		t.Fatalf("Commit after declined create: %v", err)
+	}
+	doc, err := tools.store.Read(ctx, "kb:network/vlans.md")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !strings.Contains(doc.Body, "decline flow") {
+		t.Fatalf("update did not land: %q", doc.Body)
+	}
+}
+
+func TestDocumentCreateRequiresBody(t *testing.T) {
+	t.Parallel()
+
+	tools, _ := newIntakeTools(t, nil)
+	if _, err := tools.Create(context.Background(), CreateArgs{Root: "kb", DesiredTitle: "Empty"}); err == nil || !strings.Contains(err.Error(), "body is required") {
+		t.Fatalf("Create without body error = %v, want body-required", err)
+	}
+}
