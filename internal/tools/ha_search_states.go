@@ -83,7 +83,7 @@ func (r *Registry) registerHASearchStates() {
 				"state": map[string]any{
 					"type":        []string{"string", "array"},
 					"items":       map[string]any{"type": "string"},
-					"description": "Match entities whose current state is one of these values. Accepts a single string (\"on\") or an array ([\"unavailable\",\"unknown\"]).",
+					"description": "Match entities whose current state is one of these values. Accepts a single string (\"on\") or an array ([\"unavailable\",\"unknown\"]). Filter by the raw HA state (\"on\"/\"off\"); results render the class-aware label (a garage_door reads \"open\", not \"on\"), so filter on \"on\" even when you expect \"open\".",
 				},
 				"domain": map[string]any{
 					"type":        "string",
@@ -231,7 +231,7 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 	items := make([]haListEntityItem, 0, len(candidates))
 	for i := range candidates {
 		s := candidates[i]
-		item := haListEntityItem{EntityID: s.EntityID, State: s.State}
+		item := haListEntityItem{EntityID: s.EntityID, State: haSemanticState(s)}
 		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly

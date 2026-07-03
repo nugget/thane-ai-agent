@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
@@ -118,6 +119,22 @@ func haRecencyDelta(s homeassistant.State, now time.Time) (since, updated string
 		updated = promptfmt.FormatDeltaOnly(s.LastUpdated, now)
 	}
 	return since, updated
+}
+
+// haSemanticState returns the class-aware state label for an entity — the
+// same translation the canonical contextfmt projection applies, so
+// ha_search_states and ha_list_entities express a garage_door binary_sensor
+// as "open" (not "on"), a moisture sensor as "wet"/"dry", and round numeric
+// states by device_class, exactly like ha_get_state and the snapshot tools.
+// HA writes the operator's "Show as" device_class override into the state's
+// attributes, so the state-attribute class is already the effective one.
+// Sentinel (unavailable/unknown) and unmapped states pass through unchanged.
+func haSemanticState(s homeassistant.State) string {
+	return contextfmt.SemanticState(
+		contextfmt.EntityDomain(s.EntityID),
+		contextfmt.AttrString(s.Attributes, "device_class"),
+		s.State,
+	)
 }
 
 // EntityMetadataIncludeParameter returns the shared JSON schema
