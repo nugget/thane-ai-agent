@@ -193,10 +193,11 @@ func (t *PresenceTracker) Initialize(ctx context.Context, ha StateGetter) error 
 
 // HandleStateChange updates the tracked person's state when a
 // state_changed event is received. It matches the
-// homeassistant.StateWatchHandler function signature. Untracked
-// entities and no-change events are silently ignored. Room data is
-// cleared when a person transitions to "not_home".
-func (t *PresenceTracker) HandleStateChange(entityID, _, newState string) {
+// homeassistant.StateWatchHandler function signature; the old-state and
+// device_class arguments are unused. Untracked entities and no-change
+// events are silently ignored. Room data is cleared when a person
+// transitions to "not_home".
+func (t *PresenceTracker) HandleStateChange(entityID, _, newState, _ string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

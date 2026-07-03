@@ -30,7 +30,7 @@ func advancingClock(start time.Time, step time.Duration) func() time.Time {
 }
 
 func TestProvider_EmptyBuffer(t *testing.T) {
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -43,10 +43,10 @@ func TestProvider_EmptyBuffer(t *testing.T) {
 
 func TestProvider_SingleEntry(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	p.nowFunc = fixedClock(now)
 
-	p.HandleStateChange("binary_sensor.front_door", "off", "on")
+	p.HandleStateChange("binary_sensor.front_door", "off", "on", "")
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -72,13 +72,13 @@ func TestProvider_SingleEntry(t *testing.T) {
 
 func TestProvider_MultipleEntries_NewestFirst(t *testing.T) {
 	base := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	clock := advancingClock(base, time.Minute)
 	p.nowFunc = clock
 
-	p.HandleStateChange("sensor.temp", "20", "21")
-	p.HandleStateChange("light.living_room", "on", "off")
-	p.HandleStateChange("person.nugget", "not_home", "home")
+	p.HandleStateChange("sensor.temp", "20", "21", "")
+	p.HandleStateChange("light.living_room", "on", "off", "")
+	p.HandleStateChange("person.nugget", "not_home", "home", "")
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -98,16 +98,16 @@ func TestProvider_MultipleEntries_NewestFirst(t *testing.T) {
 
 func TestProvider_CircularEviction(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(3, time.Hour, time.UTC, nil)
+	p := NewStateWindowProvider(3, time.Hour, nil, nil)
 	clock := advancingClock(now, time.Minute)
 	p.nowFunc = clock
 
 	// Fill buffer with 5 entries; only last 3 should survive.
-	p.HandleStateChange("entity.a", "0", "1")
-	p.HandleStateChange("entity.b", "0", "1")
-	p.HandleStateChange("entity.c", "0", "1")
-	p.HandleStateChange("entity.d", "0", "1")
-	p.HandleStateChange("entity.e", "0", "1")
+	p.HandleStateChange("entity.a", "0", "1", "")
+	p.HandleStateChange("entity.b", "0", "1", "")
+	p.HandleStateChange("entity.c", "0", "1", "")
+	p.HandleStateChange("entity.d", "0", "1", "")
+	p.HandleStateChange("entity.e", "0", "1", "")
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -131,15 +131,15 @@ func TestProvider_CircularEviction(t *testing.T) {
 
 func TestProvider_AgeEviction(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 10*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 10*time.Minute, nil, nil)
 
 	// Insert an entry 15 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-15 * time.Minute))
-	p.HandleStateChange("sensor.old", "0", "1")
+	p.HandleStateChange("sensor.old", "0", "1", "")
 
 	// Insert a recent entry.
 	p.nowFunc = fixedClock(now.Add(-2 * time.Minute))
-	p.HandleStateChange("sensor.recent", "0", "1")
+	p.HandleStateChange("sensor.recent", "0", "1", "")
 
 	// Read at "now" — old entry should be filtered out.
 	p.nowFunc = fixedClock(now)
@@ -158,12 +158,12 @@ func TestProvider_AgeEviction(t *testing.T) {
 
 func TestProvider_AllExpired(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 5*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 5*time.Minute, nil, nil)
 
 	// Insert entries 10 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-10 * time.Minute))
-	p.HandleStateChange("sensor.a", "0", "1")
-	p.HandleStateChange("sensor.b", "0", "1")
+	p.HandleStateChange("sensor.a", "0", "1", "")
+	p.HandleStateChange("sensor.b", "0", "1", "")
 
 	// Read at "now" — all entries expired.
 	p.nowFunc = fixedClock(now)
@@ -178,11 +178,11 @@ func TestProvider_AllExpired(t *testing.T) {
 
 func TestProvider_DeltaFormat(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 
 	// Insert an entry 5 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-5 * time.Minute))
-	p.HandleStateChange("sensor.test", "a", "b")
+	p.HandleStateChange("sensor.test", "a", "b", "")
 
 	// Read at "now" — should show 300 second delta.
 	p.nowFunc = fixedClock(now)
@@ -197,14 +197,14 @@ func TestProvider_DeltaFormat(t *testing.T) {
 }
 
 func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
-	p := NewStateWindowProvider(100, time.Hour, time.UTC, nil)
+	p := NewStateWindowProvider(100, time.Hour, nil, nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.HandleStateChange("sensor.concurrent", "0", "1")
+			p.HandleStateChange("sensor.concurrent", "0", "1", "")
 		}()
 	}
 	wg.Wait()
@@ -220,15 +220,15 @@ func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
 
 func TestProvider_SameStateSuppressed(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	p.nowFunc = fixedClock(now)
 
 	// Same→same should be filtered.
-	p.HandleStateChange("person.nugget", "home", "home")
-	p.HandleStateChange("sensor.temp", "20", "20")
+	p.HandleStateChange("person.nugget", "home", "home", "")
+	p.HandleStateChange("sensor.temp", "20", "20", "")
 
 	// Real transition should be recorded.
-	p.HandleStateChange("light.office", "off", "on")
+	p.HandleStateChange("light.office", "off", "on", "")
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -255,7 +255,39 @@ func TestProvider_NilDefaults(t *testing.T) {
 	if p.maxAge != 30*time.Minute {
 		t.Errorf("expected default maxAge=30m, got %v", p.maxAge)
 	}
-	if p.loc != time.Local {
-		t.Error("expected time.Local as default location")
+	if p.translate != nil {
+		t.Error("expected nil translate to stay nil (raw passthrough)")
+	}
+}
+
+// With a semantic translator wired, transitions render class-aware
+// labels; without one, raw states pass through. The real vocabulary is
+// asserted end-to-end in statewindow_semantic_test.go (external package,
+// since contextfmt imports this one).
+func TestStateWindow_SemanticTranslatorApplied(t *testing.T) {
+	p := NewStateWindowProvider(10, 30*time.Minute, func(domain, deviceClass, state string) string {
+		if domain == "binary_sensor" && deviceClass == "garage_door" {
+			switch state {
+			case "on":
+				return "open"
+			case "off":
+				return "closed"
+			}
+		}
+		return state
+	}, nil)
+
+	p.HandleStateChange("binary_sensor.garage", "off", "on", "garage_door")
+	p.HandleStateChange("sensor.temp", "20", "21", "temperature")
+
+	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(got, `"from":"closed"`) || !strings.Contains(got, `"to":"open"`) {
+		t.Errorf("garage transition not translated:\n%s", got)
+	}
+	if !strings.Contains(got, `"from":"20"`) || !strings.Contains(got, `"to":"21"`) {
+		t.Errorf("numeric transition should pass through:\n%s", got)
 	}
 }

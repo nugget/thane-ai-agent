@@ -143,7 +143,7 @@ func TestTracker_HandleStateChange(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 
 	// State changes to not_home.
-	tracker.HandleStateChange("person.alice", "home", "not_home")
+	tracker.HandleStateChange("person.alice", "home", "not_home", "")
 
 	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, `"state":"away"`) {
@@ -155,8 +155,8 @@ func TestTracker_HandleStateChange_IgnoresUntracked(t *testing.T) {
 	tracker := NewPresenceTracker([]string{"person.alice"}, "UTC", nil)
 
 	// Should not panic or affect tracked entities.
-	tracker.HandleStateChange("person.unknown", "home", "not_home")
-	tracker.HandleStateChange("light.kitchen", "off", "on")
+	tracker.HandleStateChange("person.unknown", "home", "not_home", "")
+	tracker.HandleStateChange("light.kitchen", "off", "on", "")
 
 	result, _ := tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if !strings.Contains(result, "- **Alice**: unknown") {
@@ -181,7 +181,7 @@ func TestTracker_HandleStateChange_SameState(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 
 	// Same state — Since should NOT update.
-	tracker.HandleStateChange("person.alice", "home", "home")
+	tracker.HandleStateChange("person.alice", "home", "home", "")
 
 	tracker.mu.RLock()
 	p := tracker.people["person.alice"]
@@ -218,7 +218,7 @@ func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
 	}
 
 	// Transition to not_home should clear room.
-	tracker.HandleStateChange("person.alice", "home", "not_home")
+	tracker.HandleStateChange("person.alice", "home", "not_home", "")
 
 	result, _ = tracker.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if strings.Contains(result, `"room"`) {
@@ -497,7 +497,7 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 				if i%2 == 0 {
 					state = "not_home"
 				}
-				tracker.HandleStateChange("person.alice", "", state)
+				tracker.HandleStateChange("person.alice", "", state, "")
 			}
 		}()
 	}
