@@ -6,13 +6,15 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 )
 
 // semanticStateFixture registers a garage_door binary_sensor (the prod bug:
 // operator "Show as: Garage Door" → device_class garage_door, which HA writes
-// into the state attributes), a plain binary_sensor with no device_class, and
-// a numeric sensor — so we can prove ha_search_states / ha_list_entities carry
-// the same class-aware translation ha_get_state and the snapshots already do.
+// into the state attributes) and a plain binary_sensor with no device_class —
+// so we can prove ha_search_states / ha_list_entities carry the same
+// class-aware translation ha_get_state and the snapshots already do. Numeric
+// rounding parity is covered separately in TestHASemanticState_MatchesContextfmt.
 func semanticStateFixture(t *testing.T) *Registry {
 	t.Helper()
 	fake := newFakeHAServer(t)
@@ -75,5 +77,29 @@ func TestHASearchStates_TranslatesDeviceClassState(t *testing.T) {
 
 	if got, ok := itemStateByID(res.Items, "binary_sensor.zone25_garage_bay_3"); !ok || got != "open" {
 		t.Errorf("garage_door state = %q (found=%v), want \"open\"", got, ok)
+	}
+}
+
+// haSemanticState must be exactly the canonical contextfmt projection — the
+// whole point is that search/list match ha_get_state and the snapshots. This
+// covers the numeric-rounding branch (rounded by device_class) that the
+// binary_sensor cases above don't reach.
+func TestHASemanticState_MatchesContextfmt(t *testing.T) {
+	cases := []homeassistant.State{
+		{EntityID: "binary_sensor.garage", State: "on", Attributes: map[string]any{"device_class": "garage_door"}},
+		{EntityID: "sensor.office_temperature", State: "72.13", Attributes: map[string]any{"device_class": "temperature"}},
+		{EntityID: "binary_sensor.mystery", State: "on"},                                               // no device_class → passthrough
+		{EntityID: "sensor.unavail", State: "unavailable"},                                             // sentinel → passthrough
+		{EntityID: "cover.front", State: "open", Attributes: map[string]any{"device_class": "garage"}}, // non-binary domain
+	}
+	for _, s := range cases {
+		want := contextfmt.SemanticState(
+			contextfmt.EntityDomain(s.EntityID),
+			contextfmt.AttrString(s.Attributes, "device_class"),
+			s.State,
+		)
+		if got := haSemanticState(s); got != want {
+			t.Errorf("haSemanticState(%s state=%q) = %q, want %q (contextfmt parity)", s.EntityID, s.State, got, want)
+		}
 	}
 }

@@ -83,7 +83,7 @@ func (r *Registry) registerHASearchStates() {
 				"state": map[string]any{
 					"type":        []string{"string", "array"},
 					"items":       map[string]any{"type": "string"},
-					"description": "Match entities whose current state is one of these values. Accepts a single string (\"on\") or an array ([\"unavailable\",\"unknown\"]). Filter by the raw HA state (\"on\"/\"off\"); results render the class-aware label (a garage_door reads \"open\", not \"on\"), so filter on \"on\" even when you expect \"open\".",
+					"description": "Match entities whose current state is one of these values — the raw HA state (a binary_sensor is \"on\"/\"off\", a cover \"open\"/\"closed\", a lock \"locked\"/\"unlocked\"). Accepts a single string (\"on\") or an array ([\"unavailable\",\"unknown\"]). Results may render a class-aware label (a garage_door binary_sensor shows \"open\" for raw \"on\"), so filter on the raw value even when the displayed label differs.",
 				},
 				"domain": map[string]any{
 					"type":        "string",
