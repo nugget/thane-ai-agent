@@ -11,6 +11,12 @@ import (
 // carries as a concrete sample alongside the count.
 const previewSampleSize = 5
 
+// maxIngestEntries caps the ingestion registry (#1192): the guardrail
+// that keeps a runaway subscription loop from feeding the state-change
+// window an unbounded glob set. Globs make the cap generous — one
+// pattern covers a family of entities.
+const maxIngestEntries = 64
+
 // targetExpansion is the author-time membership preview for a glob or
 // registry-backed subscription target: how many entities it matches right
 // now and a sample of them.

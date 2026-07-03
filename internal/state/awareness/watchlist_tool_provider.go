@@ -21,9 +21,10 @@ import (
 // immediately that area:office matches three entities, or that a typo'd
 // area:atrium matches none.
 type WatchlistTools struct {
-	store    *WatchlistStore
-	registry HARegistryClient
-	logger   *slog.Logger
+	store          *WatchlistStore
+	registry       HARegistryClient
+	onIngestChange func()
+	logger         *slog.Logger
 }
 
 // WatchlistToolsConfig captures the dependencies for [NewWatchlistTools].
@@ -34,6 +35,11 @@ type WatchlistToolsConfig struct {
 	// membership when a subscription is authored or listed. Optional:
 	// when nil, subscriptions still work but carry no expansion preview.
 	Registry HARegistryClient
+	// OnIngestChange is invoked after any mutation that may affect the
+	// state-watcher ingestion filter (an ingest/both-mode add, or any
+	// removal), so the wiring can rebuild the filter from the registry.
+	// Optional.
+	OnIngestChange func()
 	// Logger defaults to slog.Default when nil.
 	Logger *slog.Logger
 }
@@ -50,9 +56,10 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 		logger = slog.Default()
 	}
 	return &WatchlistTools{
-		store:    cfg.Store,
-		registry: cfg.Registry,
-		logger:   logger,
+		store:          cfg.Store,
+		registry:       cfg.Registry,
+		onIngestChange: cfg.OnIngestChange,
+		logger:         logger,
 	}
 }
 
@@ -96,6 +103,11 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					"ttl_seconds": map[string]any{
 						"type":        "integer",
 						"description": "Optional expiration in seconds. After this TTL elapses, the subscription is automatically removed from future context injection.",
+					},
+					"mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"render", "ingest", "both"},
+						"description": "What the subscription feeds. render (default): inject live state into context each turn. ingest: feed the recent-state-changes window only — the entity's transitions appear there without per-turn state injection. both: do both. ingest/both accept entity ids and globs, not area/label/floor targets.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -180,18 +192,62 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if err != nil {
 		return "", err
 	}
+	rawMode, _ := args["mode"].(string)
+	mode := normalizeSubscriptionMode(rawMode)
+	if mode == "" {
+		return "", fmt.Errorf("mode must be one of render, ingest, or both; got %q", rawMode)
+	}
+	if mode != SubscriptionModeRender {
+		// The ingestion filter speaks the EntityFilter's native
+		// vocabulary: concrete ids and globs. Registry targets would be
+		// silently approximated, so they are rejected outright (#1192).
+		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+			return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; subscribe the target with mode render, or list its member entities", mode)
+		}
+		// The ingestion filter reads only always-visible rows; a
+		// tag-scoped ingest subscription would sit in the store doing
+		// nothing. Reject rather than silently no-op.
+		if len(tags) > 0 {
+			return "", fmt.Errorf("mode %q subscriptions are always-visible and cannot carry tags — drop the tags, or use mode render for a tag-scoped subscription", mode)
+		}
+		globs, err := w.store.IngestGlobs(time.Now())
+		if err != nil {
+			return "", fmt.Errorf("count ingest entries: %w", err)
+		}
+		// Re-adding an existing entry updates it in place and doesn't
+		// grow the registry; the cap gates only genuinely new entries.
+		exists := false
+		for _, g := range globs {
+			if g == entityID {
+				exists = true
+				break
+			}
+		}
+		if !exists && len(globs) >= maxIngestEntries {
+			return "", fmt.Errorf("ingest registry is at its cap (%d entries) — remove entries before adding more; a broad glob covers more for less", maxIngestEntries)
+		}
+	}
 
-	if len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet && !include.Any() {
+	if mode == SubscriptionModeRender && len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet && !include.Any() {
 		if err := w.store.Add(entityID); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	} else {
-		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast, include); err != nil {
+		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast, mode, include); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 	}
+	if mode != SubscriptionModeRender && w.onIngestChange != nil {
+		w.onIngestChange()
+	}
 
 	msg := fmt.Sprintf("Now watching %s", entityID)
+	switch mode {
+	case SubscriptionModeIngest:
+		msg += " (mode: ingest — transitions feed the recent-state-changes window; no per-turn state render)"
+	case SubscriptionModeBoth:
+		msg += " (mode: both — transitions feed the recent-state-changes window and live state renders each turn)"
+	}
 	if len(tags) > 0 {
 		msg += fmt.Sprintf(" (scoped to tags: %v)", tags)
 	}
@@ -271,6 +327,7 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 		item := map[string]any{
 			"entity_id":      sub.EntityID,
 			"scope":          sub.Scope,
+			"mode":           sub.Mode,
 			"always_visible": sub.Scope == "",
 		}
 		if len(sub.History) > 0 {
@@ -342,6 +399,9 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(_ context.Context, args 
 		return "", fmt.Errorf("remove from watchlist: %w", err)
 	}
 
+	if w.onIngestChange != nil {
+		w.onIngestChange()
+	}
 	w.logger.Info("entity subscription removed", "entity_id", entityID, "tags", tags)
 	if len(tags) > 0 {
 		return fmt.Sprintf("Stopped watching %s in scopes %v.", entityID, tags), nil

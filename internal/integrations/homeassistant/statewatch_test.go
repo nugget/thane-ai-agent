@@ -359,3 +359,36 @@ func TestStateWatcher_DeliversDeviceClass(t *testing.T) {
 		t.Errorf("device_class for classless entity = %q, want empty", classes["light.kitchen"])
 	}
 }
+
+// The ingestion filter is a dynamic registry (#1192): SetFilter swaps
+// the gate at runtime with no HA re-subscription — the next event sees
+// the new filter. Match-none is distinct from empty (which matches all).
+func TestStateWatcher_SetFilterLiveSwap(t *testing.T) {
+	watcher := NewStateWatcher(nil, NewEntityFilter([]string{"lock.*"}, nil), nil, func(_, _, _, _ string) {}, nil)
+
+	if !watcher.HandleEvent(makeStateEvent(t, "lock.front", "locked", "unlocked")) {
+		t.Fatal("lock.front should pass the initial filter")
+	}
+	if watcher.HandleEvent(makeStateEvent(t, "light.office", "off", "on")) {
+		t.Fatal("light.office should be filtered initially")
+	}
+
+	watcher.SetFilter(NewEntityFilter([]string{"light.*"}, nil))
+	if watcher.HandleEvent(makeStateEvent(t, "lock.front", "unlocked", "locked")) {
+		t.Fatal("lock.front should be filtered after the swap")
+	}
+	if !watcher.HandleEvent(makeStateEvent(t, "light.office", "on", "off")) {
+		t.Fatal("light.office should pass after the swap")
+	}
+
+	// Nothing registered must mean ingest nothing.
+	watcher.SetFilter(NewEntityFilterMatchNone(nil))
+	if watcher.HandleEvent(makeStateEvent(t, "light.office", "off", "on")) {
+		t.Fatal("match-none filter should drop everything")
+	}
+	// And SetFilter(nil) defaults to match-none, not match-all.
+	watcher.SetFilter(nil)
+	if watcher.HandleEvent(makeStateEvent(t, "lock.front", "locked", "unlocked")) {
+		t.Fatal("nil filter should default to match-none")
+	}
+}

@@ -114,7 +114,7 @@ func TestStore_RemoveNonExistent(t *testing.T) {
 func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.AddWithOptions("weather.home", []string{"weather_focus", "interactive", "weather_focus"}, []int{600, 3600}, 300, "daily"); err != nil {
+	if err := store.AddWithOptions("weather.home", []string{"weather_focus", "interactive", "weather_focus"}, []int{600, 3600}, 300, "daily", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestStore_AddWithOptionsScopedSubscriptions(t *testing.T) {
 func TestStore_AddWithOptionsRejectsInvalidForecast(t *testing.T) {
 	store := setupTestStore(t)
 
-	err := store.AddWithOptions("weather.home", nil, nil, 0, "monthly")
+	err := store.AddWithOptions("weather.home", nil, nil, 0, "monthly", "")
 	if err == nil {
 		t.Fatal("expected invalid forecast error")
 	}
@@ -173,7 +173,7 @@ func TestStore_RemoveWithScopesPreservesOtherSubscriptions(t *testing.T) {
 	if err := store.Add("sensor.battery"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, ""); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestStore_UntaggedEntityIDSet(t *testing.T) {
 	}
 	// Tagged → NOT in the always-visible set even though the
 	// entity_id matches a candidate.
-	if err := store.AddWithOptions("sensor.tagged_only", []string{"focus"}, nil, 0, ""); err != nil {
+	if err := store.AddWithOptions("sensor.tagged_only", []string{"focus"}, nil, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 

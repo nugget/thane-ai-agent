@@ -39,7 +39,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
@@ -1066,25 +1065,12 @@ type HomeAssistantConfig struct {
 	// is never cached.
 	RegistryCacheTTL string `yaml:"registry_cache_ttl,omitempty"`
 
-	// Subscribe configures WebSocket event subscriptions for real-time
-	// state change monitoring. When entity_globs is non-empty, only
-	// matching entities are processed; when empty, all state changes
-	// are accepted.
-	Subscribe SubscribeConfig `yaml:"subscribe"`
-}
-
-// SubscribeConfig configures entity-level filtering and rate limiting
-// for Home Assistant WebSocket state_changed event subscriptions.
-type SubscribeConfig struct {
-	// EntityGlobs is a list of glob patterns (using path.Match syntax)
-	// that select which entity IDs to process. Examples: "person.*",
-	// "binary_sensor.*door*", "light.living_room". An empty list
-	// means all entities are accepted.
-	EntityGlobs []string `yaml:"entity_globs"`
-
-	// RateLimitPerMinute caps how many state changes per entity are
-	// forwarded per minute. Zero means no rate limiting.
-	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
+	// IngestRateLimitPerMinute caps how many state changes per entity
+	// the state watcher forwards per minute. Zero means no rate
+	// limiting. The ingestion *filter* is runtime state (ingest-mode
+	// entity subscriptions, #1192); this protective limit stays
+	// operator policy in config.
+	IngestRateLimitPerMinute int `yaml:"ingest_rate_limit_per_minute"`
 }
 
 // Configured reports whether both URL and Token are set. A partial
@@ -3180,16 +3166,13 @@ func (c *Config) validateMCP() error {
 	return nil
 }
 
-// validateSubscribe checks the Home Assistant subscribe configuration
-// for consistency.
+// validateSubscribe checks the Home Assistant state-watch ingestion
+// configuration for consistency. The ingestion filter itself moved to a
+// runtime registry (#1192); only the protective rate limit remains in
+// config.
 func (c *Config) validateSubscribe() error {
-	for i, glob := range c.HomeAssistant.Subscribe.EntityGlobs {
-		if err := homeassistant.ValidateEntityGlob(glob); err != nil {
-			return fmt.Errorf("homeassistant.subscribe.entity_globs[%d] %q: invalid glob pattern: %w", i, glob, err)
-		}
-	}
-	if c.HomeAssistant.Subscribe.RateLimitPerMinute < 0 {
-		return fmt.Errorf("homeassistant.subscribe.rate_limit_per_minute %d must be non-negative", c.HomeAssistant.Subscribe.RateLimitPerMinute)
+	if c.HomeAssistant.IngestRateLimitPerMinute < 0 {
+		return fmt.Errorf("homeassistant.ingest_rate_limit_per_minute %d must be non-negative", c.HomeAssistant.IngestRateLimitPerMinute)
 	}
 	return nil
 }
