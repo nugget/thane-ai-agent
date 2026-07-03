@@ -131,6 +131,16 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 		existingRecord = record
 	}
 
+	// A new document with no body at all is almost never intent — it is
+	// the signature of arguments that missed the schema (a misnamed body
+	// parameter is silently absent here). "Omit to preserve the existing
+	// body" is meaningless on a create, so require the body explicitly;
+	// an empty string remains the documented way to create one blank. A
+	// journal-entry-only write is the one legitimate bodiless create.
+	if !existed && args.Body == nil && strings.TrimSpace(args.JournalEntry) == "" {
+		return nil, fmt.Errorf("creating %s requires body — this write would produce an empty document (pass body, or an explicit empty string to create one blank)", args.Ref)
+	}
+
 	now := time.Now()
 	body := ""
 	if args.Body != nil {

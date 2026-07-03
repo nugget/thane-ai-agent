@@ -44,7 +44,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown body content to write. Omit to preserve the existing body; pass an empty string to intentionally clear it.",
+					"description": "Markdown body content to write. Omit to preserve an existing document's body; pass an empty string to intentionally clear it. Creating a new document requires body. (This tool's parameter is body — doc_edit is the tool that takes content.)",
 				},
 				"journal_entry": map[string]any{
 					"type":        "string",
@@ -57,6 +57,18 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			ref, _ := args["ref"].(string)
 			if ref == "" {
 				return "", fmt.Errorf("ref is required")
+			}
+			// Confusable-parameter guards: doc_edit's vocabulary on
+			// doc_write previously vanished silently — the unknown key was
+			// ignored, an empty document was written, and success was
+			// returned. A prod archivist run lost three dossiers this way
+			// (the model sent content + mode: replace_body). Fail fast
+			// with a redirect so the model self-corrects on retry.
+			if _, hasContent := args["content"]; hasContent {
+				return "", fmt.Errorf("doc_write has no %q parameter — markdown goes in %q. (doc_edit is the tool whose body edits take %q.) Re-call doc_write with body, or use doc_edit", "content", "body", "content")
+			}
+			if _, hasMode := args["mode"]; hasMode {
+				return "", fmt.Errorf("doc_write has no %q parameter — it always creates or replaces the whole document. For mode-based edits (replace_body, append_body, upsert_section, ...) use doc_edit", "mode")
 			}
 			title, _ := args["title"].(string)
 			description, _ := args["description"].(string)
@@ -132,6 +144,12 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			}
 			if mode == "" {
 				return "", fmt.Errorf("mode is required")
+			}
+			// Mirror of doc_write's confusable guard: doc_write's body on
+			// doc_edit would be silently ignored and the edit would apply
+			// with empty content.
+			if _, hasBody := args["body"]; hasBody {
+				return "", fmt.Errorf("doc_edit has no %q parameter — markdown for body and section edits goes in %q. (doc_write is the tool that takes %q.)", "body", "content", "body")
 			}
 			content, _ := args["content"].(string)
 			section, _ := args["section"].(string)
