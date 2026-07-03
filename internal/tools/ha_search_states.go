@@ -202,7 +202,7 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 		// Fail open: without visibility info, keep the search usable and
 		// show everything rather than erroring. filterHiddenStates treats
 		// a nil map as "no visibility info, no filtering."
-		r.logger.Warn("ha_search_states: visibility filter degraded; entity registry unavailable", "error", regErr)
+		r.log().Warn("ha_search_states: visibility filter degraded; entity registry unavailable", "error", regErr)
 	} else {
 		visEntries = entries
 	}

@@ -138,6 +138,18 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler, logger *s
 	return r
 }
 
+// log returns the registry's logger, defaulting to [slog.Default] when
+// unset. Shallow-copy constructors (FilteredCopy, WithRuntimeTools,
+// FilterByTags, NewEmptyRegistry) may leave logger nil, so handlers use
+// this rather than r.logger directly — a degraded-path warning must
+// never itself panic.
+func (r *Registry) log() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
+}
+
 // SetFactTools adds fact management tools to the registry.
 func (r *Registry) SetFactTools(ft *knowledge.Tools) {
 	r.factTools = ft
@@ -1000,6 +1012,7 @@ func (r *Registry) FilteredCopy(names []string) *Registry {
 		tools:           make(map[string]*Tool, len(names)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for _, name := range names {
 		if t := r.tools[name]; t != nil {
@@ -1020,6 +1033,7 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 		tools:           make(map[string]*Tool, len(r.tools)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		if !skip[name] {
@@ -1041,6 +1055,7 @@ func (r *Registry) WithRuntimeTools(runtime []*Tool) *Registry {
 		tools:           make(map[string]*Tool, len(r.tools)+len(runtime)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		filtered.tools[name] = t
@@ -1080,6 +1095,7 @@ func (r *Registry) WithDynamicTools(extra []*Tool, tagAdditions map[string][]str
 	filtered := &Registry{
 		tools:           make(map[string]*Tool, len(r.tools)+len(extra)),
 		contentResolver: r.contentResolver,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		filtered.tools[name] = t
@@ -1174,6 +1190,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 			tools:           make(map[string]*Tool, len(r.tools)),
 			contentResolver: r.contentResolver,
 			tagIndex:        r.tagIndex,
+			logger:          r.logger,
 		}
 		for name, t := range r.tools {
 			filtered.tools[name] = t
@@ -1192,6 +1209,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 		tools:           make(map[string]*Tool, len(allowed)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		if allowed[name] || t.Core {
@@ -1378,7 +1396,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	// "no visibility info, no filtering") rather than erroring the tool.
 	visEntries, regErr := entityRegistryByID(ctx, r.ha)
 	if regErr != nil {
-		r.logger.Warn("ha_list_entities: visibility filter degraded; entity registry unavailable", "error", regErr)
+		r.log().Warn("ha_list_entities: visibility filter degraded; entity registry unavailable", "error", regErr)
 		visEntries = nil
 	}
 
