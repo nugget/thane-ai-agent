@@ -165,6 +165,17 @@ threshold questions. This is the right reach instead of fanning out
 many `ha_get_state` calls or listing a whole domain and eyeballing it.
 Add `include` for area/device/label/visibility metadata on each match.
 
+**Hidden entities.** `ha_search_states` and `ha_list_entities` default
+to the entities the operator lets Home Assistant show — hidden ones
+(the diagnostics and config an operator curated off their dashboards)
+are excluded, and their count comes back as `hidden_excluded` so you
+know they exist. Respect that default: hidden is operator intent, not
+an obstacle. When you specifically need them — a device's power draw,
+a diagnostic sensor — pass `include_hidden: true` (each returned hidden
+entity is marked `hidden`), or read the one entity directly with
+`ha_get_state`, or inspect the whole device with `ha_device`, which
+shows everything a device exposes the way HA's device page does.
+
 ## Enumerate a domain or name pattern
 
 `ha_list_entities` enumerates by domain:

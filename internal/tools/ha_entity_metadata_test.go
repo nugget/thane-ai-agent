@@ -211,9 +211,13 @@ func TestHAListEntitiesMetadataHydratesOnlyReturnedEntities(t *testing.T) {
 	}
 
 	reg := fake.registry(t)
+	// include_hidden so the hidden temperature sensor stays in scope —
+	// this test is about metadata hydration over the page, not the
+	// visibility default (covered separately).
 	result, err := reg.Execute(context.Background(), "ha_list_entities", `{
 		"domain": "sensor",
 		"limit": 2,
+		"include_hidden": true,
 		"include": {"description": true, "visibility": true}
 	}`)
 	if err != nil {
@@ -247,11 +251,16 @@ func TestHAListEntitiesMetadataHydratesOnlyReturnedEntities(t *testing.T) {
 	entityGetCalls := fake.wsCalls["config/entity_registry/get"]
 	entityListCalls := fake.wsCalls["config/entity_registry/list"]
 	fake.mu.Unlock()
+	// Metadata hydration stays page-scoped: only the 2 returned rows get
+	// a per-entity registry fetch, not all 3 candidates.
 	if entityGetCalls != 2 {
-		t.Fatalf("entity registry get calls = %d, want 2", entityGetCalls)
+		t.Fatalf("entity registry get calls = %d, want 2 (metadata hydrates only the returned page)", entityGetCalls)
 	}
-	if entityListCalls != 0 {
-		t.Fatalf("entity registry list calls = %d, want 0", entityListCalls)
+	// Visibility filtering reads the bulk registry once (#1185, accepted
+	// cost — the registry is TTL-cached). It is the only bulk list call;
+	// metadata still hydrates per-returned-row above.
+	if entityListCalls != 1 {
+		t.Fatalf("entity registry list calls = %d, want 1 (visibility read)", entityListCalls)
 	}
 }
 

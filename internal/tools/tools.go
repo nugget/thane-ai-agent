@@ -751,6 +751,10 @@ func (r *Registry) registerBuiltins() {
 					"type":        "integer",
 					"description": "Maximum number of entities to return (default 20, max 100)",
 				},
+				"include_hidden": map[string]any{
+					"type":        "boolean",
+					"description": "By default, operator-hidden entities (registry hidden_by) are excluded and their count reported as hidden_excluded. Set true to include them, each marked hidden.",
+				},
 				"include": EntityMetadataIncludeParameter(),
 			},
 			// Encode the handler's "at least one of domain or pattern"
@@ -1350,8 +1354,17 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return "", err
 	}
+	includeHidden, _ := args["include_hidden"].(bool)
 
 	states, err := r.ha.GetStates(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Visibility needs the registry snapshot before the limit so hidden
+	// entities are dropped (or marked) up front rather than padding the
+	// page. Registry is TTL-cached (#1185).
+	visEntries, err := entityRegistryByID(ctx, r.ha)
 	if err != nil {
 		return "", err
 	}
@@ -1360,6 +1373,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	var matchEntityIDs []string
 	var matchStates []homeassistant.State
 	total := 0
+	hiddenExcluded := 0
 	now := time.Now()
 	prefix := ""
 	if domain != "" {
@@ -1374,6 +1388,10 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 				continue
 			}
 		}
+		if !includeHidden && isEntityHidden(visEntries[s.EntityID]) {
+			hiddenExcluded++
+			continue
+		}
 		total++
 		if len(matches) >= limit {
 			continue
@@ -1385,6 +1403,9 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly
+		}
+		if includeHidden {
+			item.Hidden = isEntityHidden(visEntries[s.EntityID])
 		}
 		matches = append(matches, item)
 		matchEntityIDs = append(matchEntityIDs, s.EntityID)
@@ -1401,12 +1422,13 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	}
 
 	result := haListEntitiesResult{
-		Domain:    domain,
-		Pattern:   pattern,
-		Count:     len(matches),
-		Total:     total,
-		Truncated: total > len(matches),
-		Items:     matches,
+		Domain:         domain,
+		Pattern:        pattern,
+		Count:          len(matches),
+		Total:          total,
+		Truncated:      total > len(matches),
+		HiddenExcluded: hiddenExcluded,
+		Items:          matches,
 	}
 	return toIndentedJSONWithTruncationNote(result, haListEntitiesTruncationNote), nil
 }
