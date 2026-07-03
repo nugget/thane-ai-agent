@@ -109,7 +109,7 @@ func (t *Tools) Commit(ctx context.Context, args CommitArgs) (string, error) {
 		out, err = t.store.Edit(ctx, EditArgs{
 			Ref:     ref,
 			Mode:    mode,
-			Content: body,
+			Body:    body,
 			Section: section,
 			Heading: heading,
 		})

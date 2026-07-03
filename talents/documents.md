@@ -285,7 +285,7 @@ section-level upsert/delete.
   "mode": "upsert_section",
   "section": "VLAN 30 — IoT",
   "level": 2,
-  "content": "VLAN 30 carries IoT devices. DHCP pool: 10.30.0.0/24. No outbound WAN.\n"
+  "body": "VLAN 30 carries IoT devices. DHCP pool: 10.30.0.0/24. No outbound WAN.\n"
 }
 ```
 

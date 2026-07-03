@@ -87,17 +87,23 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"content": map[string]any{
+						"body": map[string]any{
 							"type":        "string",
 							"description": "Complete markdown body for this output. This replaces the document body as the current authoritative state.",
 						},
 					},
-					"required": []string{"content"},
+					"required": []string{"body"},
 				},
 				Handler: func(ctx context.Context, args map[string]any) (string, error) {
-					content, _ := args["content"].(string)
+					// Rename guard: this tool's parameter was unified with the
+					// document tools' body. A loop mid-conversation may replay
+					// the old key from its own history — teach, don't eat.
+					if _, hasContent := args["content"]; hasContent {
+						return "", fmt.Errorf("this tool's markdown parameter is %q (renamed from %q for consistency with the doc tools) — re-call with body", "body", "content")
+					}
+					content, _ := args["body"].(string)
 					if strings.TrimSpace(content) == "" {
-						return "", fmt.Errorf("content is required")
+						return "", fmt.Errorf("body is required")
 					}
 					result, err := store.Write(ctx, documents.WriteArgs{
 						Ref:  output.Ref,

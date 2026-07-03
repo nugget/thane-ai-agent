@@ -73,7 +73,7 @@ func TestStoreEditUpsertSectionPreservesCreated(t *testing.T) {
 		Ref:     "kb:system.md",
 		Mode:    "upsert_section",
 		Section: "Observations",
-		Content: "Fresh note.",
+		Body:    "Fresh note.",
 	})
 	if err != nil {
 		t.Fatalf("Edit: %v", err)

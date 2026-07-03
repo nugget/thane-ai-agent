@@ -42,7 +42,7 @@ type WriteArgs struct {
 type EditArgs struct {
 	Ref         string              `json:"ref"`
 	Mode        string              `json:"mode"`
-	Content     string              `json:"content,omitempty"`
+	Body        string              `json:"body,omitempty"`
 	Section     string              `json:"section,omitempty"`
 	Heading     string              `json:"heading,omitempty"`
 	Level       int                 `json:"level,omitempty"`
@@ -200,13 +200,13 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 	case "metadata":
 		// metadata-only update
 	case "replace_body":
-		editedBody = trimDocumentBody(args.Content)
+		editedBody = trimDocumentBody(args.Body)
 	case "append_body":
-		editedBody = appendDocumentBody(body, args.Content)
+		editedBody = appendDocumentBody(body, args.Body)
 	case "prepend_body":
-		editedBody = prependDocumentBody(body, args.Content)
+		editedBody = prependDocumentBody(body, args.Body)
 	case "upsert_section":
-		editedBody, sectionName, err = upsertDocumentSection(body, args.Section, args.Heading, args.Level, args.Content)
+		editedBody, sectionName, err = upsertDocumentSection(body, args.Section, args.Heading, args.Level, args.Body)
 		if err != nil {
 			return nil, err
 		}

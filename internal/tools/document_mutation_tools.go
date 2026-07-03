@@ -44,7 +44,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown body content to write. Omit to preserve an existing document's body; pass an empty string to intentionally clear it. Creating a new document requires body. (This tool's parameter is body — doc_edit is the tool that takes content.)",
+					"description": "Markdown body content to write. Omit to preserve an existing document's body; pass an empty string to intentionally clear it. Creating a new document requires body. Every document tool's markdown parameter is named body.",
 				},
 				"journal_entry": map[string]any{
 					"type":        "string",
@@ -65,7 +65,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			// (the model sent content + mode: replace_body). Fail fast
 			// with a redirect so the model self-corrects on retry.
 			if _, hasContent := args["content"]; hasContent {
-				return "", fmt.Errorf("doc_write has no %q parameter — markdown goes in %q. (doc_edit is the tool whose body edits take %q.) Re-call doc_write with body, or use doc_edit", "content", "body", "content")
+				return "", fmt.Errorf("doc_write has no %q parameter — markdown goes in %q (every document tool takes body). Re-call with body", "content", "body")
 			}
 			if _, hasMode := args["mode"]; hasMode {
 				return "", fmt.Errorf("doc_write has no %q parameter — it always creates or replaces the whole document. For mode-based edits (replace_body, append_body, upsert_section, ...) use doc_edit", "mode")
@@ -99,9 +99,9 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 					"type":        "string",
 					"description": "Edit mode: `metadata`, `replace_body`, `append_body`, `prepend_body`, `upsert_section`, or `delete_section`.",
 				},
-				"content": map[string]any{
+				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown content for body or section edits.",
+					"description": "Markdown text for body or section edits — the same parameter name doc_write uses.",
 				},
 				"section": map[string]any{
 					"type":        "string",
@@ -145,13 +145,14 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			if mode == "" {
 				return "", fmt.Errorf("mode is required")
 			}
-			// Mirror of doc_write's confusable guard: doc_write's body on
-			// doc_edit would be silently ignored and the edit would apply
-			// with empty content.
-			if _, hasBody := args["body"]; hasBody {
-				return "", fmt.Errorf("doc_edit has no %q parameter — markdown for body and section edits goes in %q. (doc_write is the tool that takes %q.)", "body", "content", "body")
+			// Rename guard: doc_edit's text parameter was unified with
+			// doc_write's as body (the content/body split silently ate a
+			// write's markdown — see doc_write's guard). Teach the rename
+			// instead of silently ignoring the old key.
+			if _, hasContent := args["content"]; hasContent {
+				return "", fmt.Errorf("doc_edit's markdown parameter is %q (the %q parameter was renamed for consistency with doc_write) — re-call with body", "body", "content")
 			}
-			content, _ := args["content"].(string)
+			content, _ := args["body"].(string)
 			section, _ := args["section"].(string)
 			heading, _ := args["heading"].(string)
 			title, _ := args["title"].(string)
@@ -159,7 +160,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 			return dt.Edit(ctx, documents.EditArgs{
 				Ref:         ref,
 				Mode:        mode,
-				Content:     content,
+				Body:        content,
 				Section:     section,
 				Heading:     heading,
 				Level:       numericArg(args["level"], 2, 6),
