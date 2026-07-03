@@ -91,7 +91,7 @@ Tool calls execute — in parallel where possible. Results feed back into
 the next iteration. Tool calls can be:
 
 - **Native tools** (80+ built-in: HA control, email, contacts, memory, files, etc.)
-- **MCP tools** (bridged from external servers like ha-mcp)
+- **MCP tools** (bridged from external MCP servers)
 - **Runtime tools** generated for this specific loop run, such as declared
   document output tools
 - **Delegation** (spawning a local model to execute a multi-step task)
