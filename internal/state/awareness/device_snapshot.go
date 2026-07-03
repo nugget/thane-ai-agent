@@ -195,11 +195,12 @@ func truncateGroup(group *[]map[string]any, limit int) int {
 }
 
 // buildDeviceResolver assembles the metadata resolver for the device
-// snapshot. Areas are always fetched so device identity can carry the
-// resolved area name; labels and floors are pulled only when the
-// include projection asks for them. devices is reused from the caller's
-// already-fetched device registry rather than re-fetched. Mirrors the
-// gated-fetch pattern in ComputeAreaActivity.
+// snapshot. Areas and labels are always fetched so the device's own
+// identity card can carry its resolved area name and label names by
+// default (a device view is where those belong); floors are pulled only
+// when the include projection asks for them. devices is reused from the
+// caller's already-fetched device registry rather than re-fetched.
+// Mirrors the gated-fetch pattern in ComputeAreaActivity.
 func buildDeviceResolver(
 	ctx context.Context,
 	client DeviceSnapshotClient,
@@ -210,12 +211,9 @@ func buildDeviceResolver(
 	if err != nil {
 		return homeassistant.EntityMetadataResolver{}, fmt.Errorf("ha_device: get areas: %w", err)
 	}
-	var labels []homeassistant.LabelRegistryEntry
-	if include.Labels {
-		labels, err = client.GetLabelRegistry(ctx)
-		if err != nil {
-			return homeassistant.EntityMetadataResolver{}, fmt.Errorf("ha_device: get labels: %w", err)
-		}
+	labels, err := client.GetLabelRegistry(ctx)
+	if err != nil {
+		return homeassistant.EntityMetadataResolver{}, fmt.Errorf("ha_device: get labels: %w", err)
 	}
 	var floors []homeassistant.FloorRegistryEntry
 	if include.Area {

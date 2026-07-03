@@ -442,6 +442,48 @@ func TestComputeDeviceSnapshot_CapsConfigurationGroup(t *testing.T) {
 	}
 }
 
+// The device-info card — area and the device's own labels — rides on the
+// identity block by default (no include projection needed), because a
+// device view is exactly where that context belongs.
+func TestComputeDeviceSnapshot_IdentityCarriesLabelsAndArea(t *testing.T) {
+	client := &fakeDeviceClient{
+		areas: []homeassistant.Area{{AreaID: "office", Name: "Office"}},
+		labels: []homeassistant.LabelRegistryEntry{
+			{LabelID: "label_hvac", Name: "HVAC", Color: "blue"},
+		},
+		devices: []homeassistant.DeviceRegistryEntry{{
+			ID: "dev_thermo", Name: "Ecobee Thermostat", AreaID: "office",
+			Labels: []string{"label_hvac"},
+		}},
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "climate.thermostat", DeviceID: "dev_thermo"},
+		},
+		states: map[string]*homeassistant.State{
+			"climate.thermostat": mkState("climate.thermostat", "heat", nil),
+		},
+	}
+	out, err := ComputeDeviceSnapshot(context.Background(), client, DeviceSnapshotRequest{Device: "dev_thermo"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeDeviceSnapshot: %v", err)
+	}
+	payload := decodeDevicePayload(t, out)
+	identity, ok := payload["identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("identity missing or wrong type: %#v", payload["identity"])
+	}
+	if identity["area_name"] != "Office" {
+		t.Errorf("identity.area_name = %#v, want Office (no include needed)", identity["area_name"])
+	}
+	labels, ok := identity["labels"].([]any)
+	if !ok || len(labels) != 1 {
+		t.Fatalf("identity.labels = %#v, want 1 label by default", identity["labels"])
+	}
+	label0, _ := labels[0].(map[string]any)
+	if label0["name"] != "HVAC" {
+		t.Errorf("identity.labels[0].name = %#v, want HVAC", label0["name"])
+	}
+}
+
 func TestComputeDeviceSnapshot_RequiresDevice(t *testing.T) {
 	if _, err := ComputeDeviceSnapshot(context.Background(), thermostatClient(), DeviceSnapshotRequest{}, testNow); err == nil {
 		t.Error("expected error when device is empty")

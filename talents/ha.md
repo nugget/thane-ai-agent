@@ -74,8 +74,9 @@ expose", or "is this device healthy":
 }
 ```
 
-Returns the device identity (manufacturer/model/firmware/serial/area/
-integration/via_device) plus every child entity it owns, grouped exactly
+Returns the full device-info card — manufacturer, model, firmware,
+serial, network connections (MAC and friends), area, labels, integration,
+and via_device — plus every child entity it owns, grouped exactly
 the way Home Assistant's own device page groups them — `controls` (the
 actionable primaries: lights, switches, climate), `sensors` (the
 read-only primaries), `configuration` (tuning knobs), and `diagnostic`

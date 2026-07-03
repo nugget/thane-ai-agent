@@ -275,3 +275,93 @@ func TestEntityMetadataResolverAppliesFloorAlias(t *testing.T) {
 		t.Fatalf("Building = %#v, want floor metadata exposed as building", got.Area.Building)
 	}
 }
+
+func TestDeviceMetadataDeviceInfoCard(t *testing.T) {
+	t.Parallel()
+
+	resolver := NewEntityMetadataResolver(
+		[]Area{{AreaID: "office", Name: "Office"}},
+		[]LabelRegistryEntry{
+			{LabelID: "label_critical", Name: "Critical", Color: "red"},
+			{LabelID: "label_zwave", Name: "Z-Wave"},
+		},
+		nil,
+	)
+
+	device := &DeviceRegistryEntry{
+		ID:           "device_1",
+		NameByUser:   "Office Overhead Lights",
+		Manufacturer: "Inovelli",
+		Model:        "VZM31-SN",
+		SWVersion:    "2.15",
+		SerialNumber: "0xA1B2C3",
+		AreaID:       "office",
+		Labels:       []string{"label_zwave", "label_critical"},
+		Connections:  [][]flexString{{"mac", "aa:bb:cc:dd:ee:ff"}, {"zigbee", "00:12:4b:00:1c"}},
+	}
+
+	got := resolver.DeviceMetadata(device)
+	if got == nil {
+		t.Fatal("DeviceMetadata returned nil")
+	}
+	// Pre-existing identity fields still project.
+	if got.Manufacturer != "Inovelli" || got.Model != "VZM31-SN" {
+		t.Errorf("vendor/model = %q/%q, want Inovelli/VZM31-SN", got.Manufacturer, got.Model)
+	}
+	if got.SWVersion != "2.15" || got.SerialNumber != "0xA1B2C3" {
+		t.Errorf("firmware/serial = %q/%q, want 2.15/0xA1B2C3", got.SWVersion, got.SerialNumber)
+	}
+	if got.AreaID != "office" || got.AreaName != "Office" {
+		t.Errorf("area = %q/%q, want office/Office", got.AreaID, got.AreaName)
+	}
+	// New: network connections (the MAC and friends), keyed by type.
+	if got.Connections["mac"] != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("connections.mac = %q, want the MAC", got.Connections["mac"])
+	}
+	if got.Connections["zigbee"] != "00:12:4b:00:1c" {
+		t.Errorf("connections.zigbee = %q, want the zigbee id", got.Connections["zigbee"])
+	}
+	// New: the device's own labels, resolved to names and sorted by id.
+	if len(got.Labels) != 2 {
+		t.Fatalf("labels = %#v, want 2", got.Labels)
+	}
+	if got.Labels[0].ID != "label_critical" || got.Labels[0].Name != "Critical" || got.Labels[0].Color != "red" {
+		t.Errorf("labels[0] = %#v, want Critical/red", got.Labels[0])
+	}
+	if got.Labels[1].ID != "label_zwave" || got.Labels[1].Name != "Z-Wave" {
+		t.Errorf("labels[1] = %#v, want Z-Wave", got.Labels[1])
+	}
+}
+
+func TestPerEntityDeviceSubBlockStaysLean(t *testing.T) {
+	t.Parallel()
+
+	// The device-info card (connections + labels) belongs on a direct
+	// device view, not repeated under every entity the device owns. The
+	// per-entity device sub-block must stay lean even with full includes.
+	resolver := NewEntityMetadataResolver(
+		[]Area{{AreaID: "office", Name: "Office"}},
+		[]LabelRegistryEntry{{LabelID: "label_zwave", Name: "Z-Wave"}},
+		[]DeviceRegistryEntry{{
+			ID:          "device_1",
+			NameByUser:  "Hub",
+			AreaID:      "office",
+			Labels:      []string{"label_zwave"},
+			Connections: [][]flexString{{"mac", "aa:bb:cc:dd:ee:ff"}},
+		}},
+	)
+
+	got := resolver.MetadataForEntity(&EntityRegistryEntry{
+		EntityID: "light.office",
+		DeviceID: "device_1",
+	}, &State{EntityID: "light.office", State: "on"}, AllEntityMetadataIncludes())
+	if got == nil || got.Device == nil {
+		t.Fatalf("MetadataForEntity returned %#v, want device sub-block", got)
+	}
+	if got.Device.Connections != nil {
+		t.Errorf("per-entity device.connections = %#v, want nil (card is device-view only)", got.Device.Connections)
+	}
+	if got.Device.Labels != nil {
+		t.Errorf("per-entity device.labels = %#v, want nil (card is device-view only)", got.Device.Labels)
+	}
+}

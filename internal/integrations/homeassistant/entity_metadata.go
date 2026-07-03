@@ -153,6 +153,13 @@ type EntityDeviceMetadata struct {
 	EntryType        string `json:"entry_type,omitempty"`
 	DisabledBy       string `json:"disabled_by,omitempty"`
 	ConfigurationURL string `json:"configuration_url,omitempty"`
+	// Connections and Labels complete the device-info card for surfaces
+	// that describe a device directly (the ha_device snapshot). They are
+	// populated by [EntityMetadataResolver.DeviceMetadata], not by the
+	// per-entity device sub-block, which stays lean. Connections maps the
+	// network-connection type to its value (e.g. {"mac": "aa:bb:.."}).
+	Connections map[string]string     `json:"connections,omitempty"`
+	Labels      []EntityLabelMetadata `json:"labels,omitempty"`
 }
 
 // EntityLabelMetadata is one resolved HA label with its source
@@ -425,15 +432,78 @@ func cloneIntPtr(src *int) *int {
 }
 
 // DeviceMetadata projects model-facing metadata for a single device —
-// identity, firmware, area, and the resolved area name. It exposes the
-// same device projection the per-entity resolver uses, for surfaces
-// (e.g. the ha_device snapshot) that describe a device directly rather
-// than an entity owned by it. Returns nil for a nil device.
+// identity, firmware, area, and the resolved area name — plus the full
+// device-info card (network connections and the device's own labels)
+// that a direct device view wants. It builds on the same lean projection
+// the per-entity resolver uses, then enriches it with the fields that
+// belong on a device page but would be noise repeated under every entity.
+// Returns nil for a nil device.
 func (r EntityMetadataResolver) DeviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {
 	if device == nil {
 		return nil
 	}
-	return r.deviceMetadata(device)
+	out := r.deviceMetadata(device)
+	out.Connections = deviceConnections(device)
+	out.Labels = r.deviceLabels(device)
+	return out
+}
+
+// deviceConnections projects HA's connection tuples into a type→value
+// map (e.g. {"mac": "aa:bb:cc:.."}). HA stores connections as a set of
+// [type, value] pairs; a device typically carries at most one per type,
+// so a map gives the model named access ("the mac") over a list. Returns
+// nil when the device has no connections.
+func deviceConnections(device *DeviceRegistryEntry) map[string]string {
+	if len(device.Connections) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(device.Connections))
+	for _, pair := range device.Connections {
+		if len(pair) != 2 {
+			continue
+		}
+		kind, value := string(pair[0]), string(pair[1])
+		if kind == "" || value == "" {
+			continue
+		}
+		out[kind] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// deviceLabels resolves a device's own labels to their registry names,
+// sorted by id for stable output. Returns nil when the device carries no
+// labels. Unlike labelsForEntity this is device-only — a device view's
+// labels are the device's, with no entity/area aggregation to attribute.
+func (r EntityMetadataResolver) deviceLabels(device *DeviceRegistryEntry) []EntityLabelMetadata {
+	if len(device.Labels) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(device.Labels))
+	for _, id := range device.Labels {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	out := make([]EntityLabelMetadata, 0, len(ids))
+	for _, id := range ids {
+		label := EntityLabelMetadata{ID: id}
+		if registry := r.labelsByID[id]; registry != nil {
+			label.Name = registry.Name
+			label.Description = registry.Description
+			label.Icon = registry.Icon
+			label.Color = registry.Color
+		}
+		out = append(out, label)
+	}
+	return out
 }
 
 func (r EntityMetadataResolver) deviceMetadata(device *DeviceRegistryEntry) *EntityDeviceMetadata {

@@ -45,8 +45,8 @@ func (a *DeviceSnapshotTools) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{
 			Name: "ha_device",
-			Description: "Get a full snapshot of one Home Assistant device as a unit — its identity " +
-				"(manufacturer/model/firmware/serial/area/integration/via_device) and every child entity it exposes, " +
+			Description: "Get a full snapshot of one Home Assistant device as a unit — its device-info card " +
+				"(manufacturer/model/firmware/serial/network connections like MAC/area/labels/integration/via_device) and every child entity it exposes, " +
 				"grouped exactly the way HA's device page groups them: controls (actionable primaries), sensors (read-only), " +
 				"configuration (tuning knobs), and diagnostic (health counters), plus an availability rollup (how many entities are reporting). " +
 				"Explicit inspection, so it also shows hidden entities (marked hidden:true) that the enumeration tools omit. " +
