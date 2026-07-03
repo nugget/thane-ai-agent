@@ -1429,7 +1429,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		}
 		item := haListEntityItem{
 			EntityID: s.EntityID,
-			State:    s.State,
+			State:    haSemanticState(s),
 		}
 		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
