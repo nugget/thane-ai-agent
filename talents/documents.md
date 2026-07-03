@@ -247,11 +247,34 @@ teaser: "Body, section, or metadata changes inside one existing document."
 
 Three tools, each owning a different mutation shape.
 
-## Replace or create — `doc_write`
+## Create a new document — `doc_create`
 
-Use when the document should hold *exactly* this body. Creates the
-document if the ref doesn't exist yet. Owns `title`, `description`,
-`tags`, `created`, `updated`:
+The default way to make a document exist. One call collision-checks the
+corpus (related documents, title/tags/path normalization, root policy)
+and writes when placement is clean:
+
+```json
+{
+  "root": "kb",
+  "title": "VLAN renumbering decision",
+  "tags": ["network"],
+  "body": "# VLAN renumbering decision\n\nGuest VLAN moved from 50 to 40...\n"
+}
+```
+
+When a similar document already exists, nothing is written — the result
+comes back `created: false` with the analysis and an `intake_id`:
+review `related_documents`, then `doc_commit` with the intake_id
+(update the existing doc, or `confirm: true` to create anyway), or
+adjust and re-call. Creating safely is the default, not something to
+remember.
+
+## Replace — `doc_write`
+
+Use when an existing document should hold *exactly* this body. It can
+also create at a fresh ref, but that skips the collision check — reach
+for `doc_create` unless the destination is already deliberate. Owns
+`title`, `description`, `tags`, `created`, `updated`:
 
 ```json
 {
@@ -428,9 +451,11 @@ teaser: "Introduce brand-new knowledge into the corpus — intake decides title/
 
 A two-step pipeline for proposing new managed knowledge: `doc_intake`
 analyzes where the knowledge belongs, then `doc_commit` performs the
-mutation through the approved plan. Use this instead of `doc_write`
-when the document doesn't exist yet and you want the system to decide
-the title, path, tags, and target action.
+mutation through the approved plan. For the common create case,
+`doc_create` runs this same analysis and commits in one call — reach
+for the two-step form when you want to inspect the plan before
+committing, or when the knowledge likely belongs in an *existing*
+document (update/append) rather than a new one.
 
 ## Step 1 — propose and analyze
 

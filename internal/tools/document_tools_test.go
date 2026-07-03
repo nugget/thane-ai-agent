@@ -485,3 +485,46 @@ func TestDocWriteCreateRequiresBody(t *testing.T) {
 		t.Fatalf("explicit empty-body create should succeed: %v", err)
 	}
 }
+
+// doc_create is the default create verb (#1038): one call collision-
+// checks and writes. It carries the unified body vocabulary (#1201).
+func TestDocCreateHandlerWritesAndGuardsVocabulary(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	createTool := reg.Get("doc_create")
+	if createTool == nil {
+		t.Fatal("doc_create not registered")
+	}
+
+	out, err := createTool.Handler(context.Background(), map[string]any{
+		"root":  "kb",
+		"title": "Fence Charger Notes",
+		"body":  "# Fence Charger Notes\n\nSouth paddock charger reads 7.2kV after the storm.",
+	})
+	if err != nil {
+		t.Fatalf("doc_create: %v", err)
+	}
+	var commit struct {
+		Ref    string `json:"ref"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(out), &commit); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out)
+	}
+	if commit.Status != "committed" || commit.Ref == "" {
+		t.Fatalf("result = %s, want committed with ref", out)
+	}
+	if _, err := store.Read(context.Background(), commit.Ref); err != nil {
+		t.Fatalf("created doc unreadable: %v", err)
+	}
+
+	// The unified vocabulary holds here too.
+	_, err = createTool.Handler(context.Background(), map[string]any{
+		"root":    "kb",
+		"content": "markdown in the wrong parameter",
+	})
+	if err == nil || !strings.Contains(err.Error(), "body") {
+		t.Errorf("doc_create with content should teach body, got: %v", err)
+	}
+}

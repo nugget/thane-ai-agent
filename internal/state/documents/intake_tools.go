@@ -9,6 +9,88 @@ import (
 	"time"
 )
 
+// CreateArgs is the one-call create verb: corpus-aware intake analysis
+// plus an immediate managed write when the placement is clean.
+type CreateArgs struct {
+	Root         string   `json:"root,omitempty"`
+	Body         string   `json:"body"`
+	DesiredTitle string   `json:"desired_title,omitempty"`
+	DesiredRef   string   `json:"desired_ref,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	PathPrefix   string   `json:"path_prefix,omitempty"`
+	Intent       string   `json:"intent,omitempty"`
+}
+
+// createDeclinedResult wraps the intake analysis when doc_create stops
+// short of writing, so "nothing was created" is an explicit statement
+// the model reads rather than an inference it might skip.
+type createDeclinedResult struct {
+	Created bool         `json:"created"`
+	Note    string       `json:"note"`
+	Intake  IntakeResult `json:"intake"`
+}
+
+// Create is the default create path: it runs the same corpus-aware
+// intake analysis as doc_intake and, when the placement is clean —
+// ready status, create_new recommendation, no confirmation required —
+// commits the document in the same call. When the corpus pushes back
+// (a similar document exists, root policy wants review), nothing is
+// written; the analysis comes back with created=false and an intake_id
+// so doc_commit can proceed deliberately. This puts the collision
+// check on the verb models actually reach for (#1038): creating safely
+// is the default, not an act of discipline.
+func (t *Tools) Create(ctx context.Context, args CreateArgs) (string, error) {
+	if t == nil || t.store == nil {
+		return "", fmt.Errorf("document index not configured")
+	}
+	body := strings.TrimSpace(args.Body)
+	if body == "" {
+		return "", fmt.Errorf("body is required — doc_create writes the full document when placement is clean")
+	}
+	intent := strings.TrimSpace(args.Intent)
+	if intent == "" {
+		intent = "create a new document"
+	}
+	result, err := t.store.Intake(ctx, IntakeArgs{
+		Root:         args.Root,
+		Intent:       intent,
+		BodySnippet:  body,
+		DesiredTitle: args.DesiredTitle,
+		DesiredRef:   args.DesiredRef,
+		Tags:         args.Tags,
+		PathPrefix:   args.PathPrefix,
+	})
+	if err != nil {
+		return "", err
+	}
+	t.rememberIntake(result)
+
+	clean := result.Status == IntakeReady &&
+		result.RecommendedAction == IntakeActionCreateNew &&
+		!result.CommitPlan.RequiresConfirmation &&
+		result.ProposedRef != ""
+	if !clean {
+		note := "Nothing was created. The corpus analysis recommends " +
+			string(result.RecommendedAction) + " — review related_documents, then either " +
+			"doc_commit with this intake_id and confirm=true (a cautioned intake requires " +
+			"confirmation for any mutating action, even the recommended one) " +
+			"or adjust and call doc_create again."
+		if result.Status == IntakeRefused {
+			note = "Nothing was created: " + result.Reason
+		}
+		return marshalToolResult(createDeclinedResult{
+			Created: false,
+			Note:    note,
+			Intake:  *result,
+		})
+	}
+	return t.Commit(ctx, CommitArgs{
+		IntakeID: result.IntakeID,
+		Action:   IntakeActionCreateNew,
+		Body:     body,
+	})
+}
+
 // Intake analyzes where new knowledge should land in a managed corpus.
 func (t *Tools) Intake(ctx context.Context, args IntakeArgs) (string, error) {
 	if t == nil || t.store == nil {
