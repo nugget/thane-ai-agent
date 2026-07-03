@@ -15,6 +15,33 @@ type containerTagSet struct {
 	tags []string
 }
 
+// LoopPlacementAdvisoryCandidate is one container the placement
+// advisory suggests as a better parent, with the tag overlap that
+// motivates it.
+type LoopPlacementAdvisoryCandidate struct {
+	// Container is the suggested parent container's name.
+	Container string `json:"container"`
+	// Rationale is the human-readable reason this container matches.
+	Rationale string `json:"rationale"`
+	// SharedTags is the sorted set of tags the loop and container share.
+	SharedTags []string `json:"shared_tags"`
+}
+
+// LoopPlacementAdvisory is the non-blocking placement suggestion
+// attached to loop creation and lint results when a tagged loop lands
+// at the structural root while existing containers declare tags it
+// shares. Field declaration order matches the previous map output's
+// alphabetical marshal order so the JSON is byte-identical across the
+// typed-schema introduction (#1173).
+type LoopPlacementAdvisory struct {
+	// Candidates are the overlapping containers, sorted by name.
+	Candidates []LoopPlacementAdvisoryCandidate `json:"candidates"`
+	// CurrentParent is where the loop is currently parented (the root).
+	CurrentParent string `json:"current_parent"`
+	// Message summarizes the suggestion for the model.
+	Message string `json:"message"`
+}
+
 // buildPlacementAdvisory returns a non-blocking placement suggestion (#1102
 // Tier 2 — the loop-graph analog of doc_intake's recommendation + caution)
 // when a tagged loop lands at the structural root yet existing containers
@@ -22,7 +49,7 @@ type containerTagSet struct {
 // Returns nil when the loop is not at root, declares no tags, or nothing
 // overlaps — the field is present only when it has something to say, and it
 // never blocks creation.
-func buildPlacementAdvisory(loopName, parentName string, loopTags []string, containers []containerTagSet) map[string]any {
+func buildPlacementAdvisory(loopName, parentName string, loopTags []string, containers []containerTagSet) *LoopPlacementAdvisory {
 	if !placementAtRoot(parentName) || len(loopTags) == 0 {
 		return nil
 	}
@@ -36,7 +63,7 @@ func buildPlacementAdvisory(loopName, parentName string, loopTags []string, cont
 	sorted := append([]containerTagSet(nil), containers...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
 
-	candidates := make([]map[string]any, 0)
+	candidates := make([]LoopPlacementAdvisoryCandidate, 0)
 	for _, c := range sorted {
 		if c.name == loopName {
 			// Never suggest a loop nest under itself — relevant when the loop
@@ -54,22 +81,22 @@ func buildPlacementAdvisory(loopName, parentName string, loopTags []string, cont
 			continue
 		}
 		sort.Strings(shared)
-		candidates = append(candidates, map[string]any{
-			"container":   c.name,
-			"shared_tags": shared,
-			"rationale":   fmt.Sprintf("declares %s, which this loop also has", quotedTagList(shared)),
+		candidates = append(candidates, LoopPlacementAdvisoryCandidate{
+			Container:  c.name,
+			SharedTags: shared,
+			Rationale:  fmt.Sprintf("declares %s, which this loop also has", quotedTagList(shared)),
 		})
 	}
 	if len(candidates) == 0 {
 		return nil
 	}
 
-	return map[string]any{
-		"message": fmt.Sprintf(
+	return &LoopPlacementAdvisory{
+		Message: fmt.Sprintf(
 			"This loop is parented to %q (the root), but %d existing container(s) declare tags it shares — consider setting parent_name to one of them so the loop nests under it and inherits its context.",
 			looppkg.CoreLoopName, len(candidates)),
-		"current_parent": looppkg.CoreLoopName,
-		"candidates":     candidates,
+		CurrentParent: looppkg.CoreLoopName,
+		Candidates:    candidates,
 	}
 }
 
@@ -92,7 +119,7 @@ func quotedTagList(tags []string) string {
 // livePlacementAdvisory computes the advisory for the loop-creation path from
 // the live container set (the loops a live spawn can actually nest under).
 // Returns nil when the live registry is unavailable or nothing applies.
-func (r *Registry) livePlacementAdvisory(loopName string, loopTags []string, parentName string) map[string]any {
+func (r *Registry) livePlacementAdvisory(loopName string, loopTags []string, parentName string) *LoopPlacementAdvisory {
 	if !placementAtRoot(parentName) || len(loopTags) == 0 {
 		return nil
 	}
@@ -112,7 +139,7 @@ func (r *Registry) livePlacementAdvisory(loopName string, loopTags []string, par
 
 // placementAdvisoryFromView computes the advisory for the lint path from the
 // stored definition set (lint is a dry-run over definitions, not live loops).
-func placementAdvisoryFromView(loopName string, loopTags []string, parentName string, view *looppkg.DefinitionRegistryView) map[string]any {
+func placementAdvisoryFromView(loopName string, loopTags []string, parentName string, view *looppkg.DefinitionRegistryView) *LoopPlacementAdvisory {
 	if !placementAtRoot(parentName) || len(loopTags) == 0 || view == nil {
 		return nil
 	}
