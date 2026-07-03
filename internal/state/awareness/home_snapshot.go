@@ -255,8 +255,9 @@ func homeAnomalyDomain(domain string) bool {
 // several nested zones at once and State reports only the *smallest*,
 // so someone in a zone inside the home (State = that zone's name) is
 // still home — a bare State comparison would miscount them as away.
-// When the attribute is absent (pre-2026.7 HA, scanner-derived person
-// entities), fall back to the State string.
+// When the attribute is absent (a pre-2026.7 HA, or a tracker source
+// that doesn't populate it), fall back to the State string rather than
+// assuming any particular wire shape.
 func presenceIsHome(state *homeassistant.State) bool {
 	if raw, ok := state.Attributes["in_zones"].([]any); ok {
 		for _, z := range raw {

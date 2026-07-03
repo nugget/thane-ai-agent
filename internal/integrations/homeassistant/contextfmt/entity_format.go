@@ -285,15 +285,15 @@ func attrString(attrs map[string]any, key string) string {
 	return ""
 }
 
-// attrBool extracts a boolean attribute, returning false if missing or
-// not a bool.
 // attrStringSlice extracts a []string attribute (JSON decodes arrays as
-// []any). Non-string elements are skipped; a missing or empty attribute
-// returns nil.
-func attrStringSlice(attrs map[string]any, key string) []string {
-	raw, ok := attrs[key].([]any)
-	if !ok || len(raw) == 0 {
-		return nil
+// []any). ok reports whether the attribute exists as an array at all, so
+// callers can distinguish present-but-empty (a real, informative value —
+// e.g. an away person's in_zones: []) from an absent attribute. The
+// returned slice is never nil when ok; non-string elements are skipped.
+func attrStringSlice(attrs map[string]any, key string) (values []string, ok bool) {
+	raw, isArray := attrs[key].([]any)
+	if !isArray {
+		return nil, false
 	}
 	out := make([]string, 0, len(raw))
 	for _, v := range raw {
@@ -301,12 +301,11 @@ func attrStringSlice(attrs map[string]any, key string) []string {
 			out = append(out, s)
 		}
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return out, true
 }
 
+// attrBool extracts a boolean attribute, returning false if missing or
+// not a bool.
 func attrBool(attrs map[string]any, key string) bool {
 	if v, ok := attrs[key].(bool); ok {
 		return v
@@ -326,17 +325,21 @@ type personContext struct {
 	// several zones at once (nested zones); State reports only the
 	// smallest, so "is she home" reads from in_zones, not State — a
 	// person whose State is a nested zone's name is still home when
-	// zone.home is in this list.
-	InZones []string `json:"in_zones,omitempty"`
+	// zone.home is in this list. Pointer so present-but-empty (away: HA
+	// reports in_zones: []) renders an explicit [] rather than being
+	// omitted — absence means the source doesn't speak in_zones at all.
+	InZones *[]string `json:"in_zones,omitempty"`
 }
 
 func formatPerson(state *homeassistant.State, now time.Time) string {
 	pc := personContext{
-		Entity:  state.EntityID,
-		State:   state.State,
-		Since:   promptfmt.FormatDeltaOnly(state.LastChanged, now),
-		Source:  attrString(state.Attributes, "source"),
-		InZones: attrStringSlice(state.Attributes, "in_zones"),
+		Entity: state.EntityID,
+		State:  state.State,
+		Since:  promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Source: attrString(state.Attributes, "source"),
+	}
+	if zones, ok := attrStringSlice(state.Attributes, "in_zones"); ok {
+		pc.InZones = &zones
 	}
 	return promptfmt.MarshalCompact(pc)
 }

@@ -71,7 +71,19 @@ func TestFormatPersonCarriesInZones(t *testing.T) {
 		t.Errorf("in_zones = %v, want [zone.pool_house zone.home]", pc.InZones)
 	}
 
-	// Without the attribute (scanner-derived person), the field is omitted.
+	// Present-but-empty (HA 2026.7 away): renders an explicit [] so the
+	// model can tell "in no zone" apart from "source doesn't report zones".
+	away := &homeassistant.State{
+		EntityID:    "person.carol",
+		State:       "not_home",
+		Attributes:  map[string]any{"in_zones": []any{}},
+		LastChanged: now,
+	}
+	if out := Format(away, now); !strings.Contains(out, `"in_zones":[]`) {
+		t.Errorf("present-but-empty in_zones should render []: %s", out)
+	}
+
+	// Without the attribute entirely, the field is omitted.
 	bare := &homeassistant.State{EntityID: "person.bob", State: "not_home", LastChanged: now}
 	if out := Format(bare, now); strings.Contains(out, "in_zones") {
 		t.Errorf("in_zones should be omitted when absent: %s", out)
