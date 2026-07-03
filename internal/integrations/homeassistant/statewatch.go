@@ -20,8 +20,20 @@ type StateWatchHandler func(entityID, oldState, newState, deviceClass string)
 // EntityFilter selects which entity IDs to process using glob patterns.
 // An empty filter matches all entities.
 type EntityFilter struct {
-	patterns []string
-	logger   *slog.Logger
+	patterns  []string
+	matchNone bool
+	logger    *slog.Logger
+}
+
+// NewEntityFilterMatchNone returns a filter that matches no entities.
+// Distinct from an empty pattern list, which matches everything: with a
+// runtime-managed ingestion registry, "nothing registered" must mean
+// ingest nothing, not ingest the whole firehose.
+func NewEntityFilterMatchNone(logger *slog.Logger) *EntityFilter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &EntityFilter{matchNone: true, logger: logger}
 }
 
 // NewEntityFilter creates an entity filter from glob patterns. Patterns
@@ -37,6 +49,9 @@ func NewEntityFilter(globs []string, logger *slog.Logger) *EntityFilter {
 // Match reports whether the entity ID matches at least one pattern.
 // If no patterns are configured, Match always returns true.
 func (f *EntityFilter) Match(entityID string) bool {
+	if f.matchNone {
+		return false
+	}
 	if len(f.patterns) == 0 {
 		return true
 	}
@@ -133,11 +148,25 @@ func (r *EntityRateLimiter) Cleanup() {
 // WebSocket event channel, applies entity filtering and rate limiting,
 // and dispatches matching events to a handler.
 type StateWatcher struct {
-	events  <-chan Event
-	filter  *EntityFilter
-	limiter *EntityRateLimiter
-	handler StateWatchHandler
-	logger  *slog.Logger
+	events   <-chan Event
+	filterMu sync.RWMutex
+	filter   *EntityFilter
+	limiter  *EntityRateLimiter
+	handler  StateWatchHandler
+	logger   *slog.Logger
+}
+
+// SetFilter swaps the ingestion filter at runtime. The WebSocket
+// subscription is a firehose filtered client-side, so changing the
+// filter needs no HA re-subscription — the next event simply sees the
+// new gate. Safe for concurrent use with Run.
+func (w *StateWatcher) SetFilter(filter *EntityFilter) {
+	if filter == nil {
+		filter = NewEntityFilterMatchNone(w.logger)
+	}
+	w.filterMu.Lock()
+	w.filter = filter
+	w.filterMu.Unlock()
 }
 
 // NewStateWatcher creates a state watcher that consumes events from the
@@ -237,7 +266,10 @@ func (w *StateWatcher) handleEvent(ev Event) bool {
 		return false
 	}
 
-	if !w.filter.Match(data.EntityID) {
+	w.filterMu.RLock()
+	filter := w.filter
+	w.filterMu.RUnlock()
+	if !filter.Match(data.EntityID) {
 		return false
 	}
 

@@ -243,10 +243,10 @@ func TestListEntitySubscriptions_ReturnsScopedSubscriptions(t *testing.T) {
 	if err := store.Add("sensor.always_on"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, []int{600}, 300, ""); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, []int{600}, 300, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
-	if err := store.AddWithOptions("weather.home", []string{"weather_focus"}, nil, 0, "daily"); err != nil {
+	if err := store.AddWithOptions("weather.home", []string{"weather_focus"}, nil, 0, "daily", ""); err != nil {
 		t.Fatalf("AddWithOptions weather: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestRemoveEntitySubscription_ScopedRemovalKeepsOtherSubscriptions(t *testin
 	if err := store.Add("sensor.battery"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, ""); err != nil {
+	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, "", ""); err != nil {
 		t.Fatalf("AddWithOptions: %v", err)
 	}
 

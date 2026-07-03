@@ -61,10 +61,9 @@ func ExampleConfig() *Config {
 		HomeAssistant: HomeAssistantConfig{
 			URL:   "https://your-homeassistant.local:8123",
 			Token: "your-long-lived-access-token",
-			Subscribe: SubscribeConfig{
-				EntityGlobs:        []string{"person.*", "binary_sensor.*door*"},
-				RateLimitPerMinute: 10,
-			},
+			// Which entities feed the state-change window is runtime
+			// state: add_entity_subscription with mode "ingest" (#1192).
+			IngestRateLimitPerMinute: 10,
 		},
 
 		Models: ModelsConfig{

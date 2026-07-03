@@ -83,6 +83,16 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}
+	// Ingest-only entries feed the state-change window's push pipeline;
+	// they don't render per-turn state here (#1192).
+	rendered := subs[:0]
+	for _, sub := range subs {
+		if sub.Mode == SubscriptionModeIngest {
+			continue
+		}
+		rendered = append(rendered, sub)
+	}
+	subs = rendered
 	if len(subs) == 0 {
 		return "", nil
 	}
