@@ -75,13 +75,21 @@ expose", or "is this device healthy":
 ```
 
 Returns the device identity (manufacturer/model/firmware/serial/area/
-integration/via_device) plus every child entity it owns, with semantic
-state grouped by salience (anomalies first, then active, ambient, then
-the rest) and an availability rollup (how many of its entities are
-reporting). Resolves by `device_id` or by name — user-assigned or
-registry name, with a substring fallback, returning candidates when a
-name is ambiguous. Reach for this instead of discovering a device's
-child entities one `ha_get_state` at a time.
+integration/via_device) plus every child entity it owns, grouped exactly
+the way Home Assistant's own device page groups them — `controls` (the
+actionable primaries: lights, switches, climate), `sensors` (the
+read-only primaries), `configuration` (tuning knobs), and `diagnostic`
+(health counters) — with an availability rollup (how many entities are
+reporting). This is explicit inspection, so unlike the enumeration tools
+it shows **hidden** entities too, each marked `"hidden": true`: naming a
+device means you want its whole instrument panel, including the config
+and diagnostic entities HA keeps off its generated dashboards. The
+`configuration` and `diagnostic` groups are capped for a device with a
+long tail of knobs, with an honest `*_truncated_count`. Resolves by
+`device_id` or by name — user-assigned or registry name, with a
+substring fallback, returning candidates when a name is ambiguous. Reach
+for this instead of discovering a device's child entities one
+`ha_get_state` at a time.
 
 ## Find one entity by description
 

@@ -61,9 +61,12 @@ func mkState(id, state string, attrs map[string]any) *homeassistant.State {
 	return &homeassistant.State{EntityID: id, State: state, Attributes: attrs}
 }
 
-// thermostatClient builds a device with a rich, mixed-salience set of
-// child entities including one sentinel (unavailable) and one with no
-// state at all, for the multi-entity / availability tests.
+// thermostatClient builds a device whose children populate all four of
+// HA's device-page groups — a control (climate), read-only sensors, a
+// config entity (aux-heat switch, entity_category=config), and two
+// diagnostics (battery + signal, entity_category=diagnostic) — including
+// one sentinel (unavailable) and one with no state at all, for the
+// grouping / availability tests.
 func thermostatClient() *fakeDeviceClient {
 	return &fakeDeviceClient{
 		areas: []homeassistant.Area{{AreaID: "office", Name: "Office"}},
@@ -86,8 +89,11 @@ func thermostatClient() *fakeDeviceClient {
 			{EntityID: "sensor.thermostat_temp", DeviceID: "dev_thermo", DeviceClass: "temperature"},
 			{EntityID: "sensor.thermostat_humidity", DeviceID: "dev_thermo", DeviceClass: "humidity"},
 			{EntityID: "binary_sensor.thermostat_motion", DeviceID: "dev_thermo", DeviceClass: "motion"},
-			{EntityID: "sensor.thermostat_battery", DeviceID: "dev_thermo", DeviceClass: "battery"},
-			{EntityID: "sensor.thermostat_signal", DeviceID: "dev_thermo", DeviceClass: "signal_strength"},
+			// entity_category=config → a switch that would otherwise be a
+			// control lands in Configuration, proving category wins over domain.
+			{EntityID: "switch.thermostat_aux_heat", DeviceID: "dev_thermo", EntityCategory: "config"},
+			{EntityID: "sensor.thermostat_battery", DeviceID: "dev_thermo", DeviceClass: "battery", EntityCategory: "diagnostic"},
+			{EntityID: "sensor.thermostat_signal", DeviceID: "dev_thermo", DeviceClass: "signal_strength", EntityCategory: "diagnostic"},
 			// Belongs to a different device — must not appear.
 			{EntityID: "light.hall", DeviceID: "dev_other"},
 		},
@@ -96,6 +102,7 @@ func thermostatClient() *fakeDeviceClient {
 			"sensor.thermostat_temp":          mkState("sensor.thermostat_temp", "72", map[string]any{"device_class": "temperature"}),
 			"sensor.thermostat_humidity":      mkState("sensor.thermostat_humidity", "40", map[string]any{"device_class": "humidity"}),
 			"binary_sensor.thermostat_motion": mkState("binary_sensor.thermostat_motion", "off", map[string]any{"device_class": "motion"}),
+			"switch.thermostat_aux_heat":      mkState("switch.thermostat_aux_heat", "off", nil),
 			"sensor.thermostat_battery":       mkState("sensor.thermostat_battery", "unavailable", map[string]any{"device_class": "battery"}),
 			// sensor.thermostat_signal intentionally absent → no_state.
 			"light.hall": mkState("light.hall", "on", nil),
@@ -112,7 +119,10 @@ func decodeDevicePayload(t *testing.T, raw string) map[string]any {
 	return payload
 }
 
-// bucketEntities returns the entity_ids present in a named bucket.
+// deviceGroups are HA's four device-page groups, in output order.
+var deviceGroups = []string{"controls", "sensors", "configuration", "diagnostic"}
+
+// bucketEntities returns the entity_ids present in a named group.
 func bucketEntities(payload map[string]any, bucket string) []string {
 	list, _ := payload[bucket].([]any)
 	out := make([]string, 0, len(list))
@@ -151,7 +161,7 @@ func TestComputeDeviceSnapshot_ByID(t *testing.T) {
 		t.Errorf("integration = %#v, want ecobee", payload["integration"])
 	}
 	// The cross-device entity must never leak into the snapshot.
-	for _, bucket := range []string{"anomalies", "active", "ambient", "other"} {
+	for _, bucket := range deviceGroups {
 		if contains(bucketEntities(payload, bucket), "light.hall") {
 			t.Errorf("light.hall (other device) leaked into %s", bucket)
 		}
@@ -174,40 +184,51 @@ func TestComputeDeviceSnapshot_ByName(t *testing.T) {
 	}
 }
 
-func TestComputeDeviceSnapshot_MultiEntityAndAvailability(t *testing.T) {
+func TestComputeDeviceSnapshot_GroupsAndAvailability(t *testing.T) {
 	out, err := ComputeDeviceSnapshot(context.Background(), thermostatClient(), DeviceSnapshotRequest{Device: "dev_thermo"}, testNow)
 	if err != nil {
 		t.Fatalf("ComputeDeviceSnapshot: %v", err)
 	}
 	payload := decodeDevicePayload(t, out)
 
-	if got := payload["entity_count"]; got != float64(6) {
-		t.Errorf("entity_count = %#v, want 6", got)
+	if got := payload["entity_count"]; got != float64(7) {
+		t.Errorf("entity_count = %#v, want 7", got)
 	}
 
 	avail, ok := payload["availability"].(map[string]any)
 	if !ok {
 		t.Fatalf("availability missing or wrong type: %#v", payload["availability"])
 	}
-	if avail["reporting"] != float64(4) || avail["total"] != float64(6) {
-		t.Errorf("availability = %#v, want reporting 4 / total 6", avail)
+	// 5 reporting (climate, temp, humidity, motion, aux_heat); battery is
+	// a sentinel and signal has no state, so neither counts as reporting.
+	if avail["reporting"] != float64(5) || avail["total"] != float64(7) {
+		t.Errorf("availability = %#v, want reporting 5 / total 7", avail)
 	}
 
-	active := bucketEntities(payload, "active")
-	if !contains(active, "climate.thermostat") {
-		t.Errorf("active = %v, want climate.thermostat", active)
+	// Controls: the actionable primary.
+	controls := bucketEntities(payload, "controls")
+	if !contains(controls, "climate.thermostat") {
+		t.Errorf("controls = %v, want climate.thermostat", controls)
 	}
-	ambient := bucketEntities(payload, "ambient")
-	if !contains(ambient, "sensor.thermostat_temp") || !contains(ambient, "sensor.thermostat_humidity") {
-		t.Errorf("ambient = %v, want temp + humidity", ambient)
+	// Sensors: read-only primaries (temperature, humidity, motion).
+	sensors := bucketEntities(payload, "sensors")
+	if !contains(sensors, "sensor.thermostat_temp") ||
+		!contains(sensors, "sensor.thermostat_humidity") ||
+		!contains(sensors, "binary_sensor.thermostat_motion") {
+		t.Errorf("sensors = %v, want temp + humidity + motion", sensors)
 	}
-	other := bucketEntities(payload, "other")
-	if !contains(other, "binary_sensor.thermostat_motion") {
-		t.Errorf("other = %v, want binary_sensor.thermostat_motion", other)
+	// Configuration: entity_category=config wins over the switch domain.
+	config := bucketEntities(payload, "configuration")
+	if !contains(config, "switch.thermostat_aux_heat") {
+		t.Errorf("configuration = %v, want switch.thermostat_aux_heat", config)
 	}
-	anomalies := bucketEntities(payload, "anomalies")
-	if !contains(anomalies, "sensor.thermostat_battery") || !contains(anomalies, "sensor.thermostat_signal") {
-		t.Errorf("anomalies = %v, want battery (sentinel) + signal (no_state)", anomalies)
+	if contains(controls, "switch.thermostat_aux_heat") {
+		t.Errorf("config switch leaked into controls: %v", controls)
+	}
+	// Diagnostic: battery (sentinel) + signal (no_state) still group here.
+	diagnostic := bucketEntities(payload, "diagnostic")
+	if !contains(diagnostic, "sensor.thermostat_battery") || !contains(diagnostic, "sensor.thermostat_signal") {
+		t.Errorf("diagnostic = %v, want battery + signal", diagnostic)
 	}
 
 	unavailable, _ := payload["unavailable"].([]any)
@@ -272,14 +293,14 @@ func TestComputeDeviceSnapshot_IncludeMetadata(t *testing.T) {
 		t.Fatalf("ComputeDeviceSnapshot: %v", err)
 	}
 	payload := decodeDevicePayload(t, out)
-	active, _ := payload["active"].([]any)
-	if len(active) == 0 {
-		t.Fatalf("expected an active entity to enrich:\n%s", out)
+	controls, _ := payload["controls"].([]any)
+	if len(controls) == 0 {
+		t.Fatalf("expected a control entity to enrich:\n%s", out)
 	}
-	obj, _ := active[0].(map[string]any)
+	obj, _ := controls[0].(map[string]any)
 	meta, ok := obj["metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected metadata on active entity, got %#v", obj["metadata"])
+		t.Fatalf("expected metadata on control entity, got %#v", obj["metadata"])
 	}
 	if meta["description"] != "Main floor thermostat" {
 		t.Errorf("metadata.description = %#v, want Main floor thermostat", meta["description"])
@@ -292,7 +313,7 @@ func TestComputeDeviceSnapshot_NoIncludeNoMetadata(t *testing.T) {
 		t.Fatalf("ComputeDeviceSnapshot: %v", err)
 	}
 	payload := decodeDevicePayload(t, out)
-	for _, bucket := range []string{"anomalies", "active", "ambient", "other"} {
+	for _, bucket := range deviceGroups {
 		list, _ := payload[bucket].([]any)
 		for _, item := range list {
 			if obj, ok := item.(map[string]any); ok {
@@ -327,10 +348,97 @@ func TestComputeDeviceSnapshot_DisabledChildExcluded(t *testing.T) {
 	if payload["disabled_count"] != float64(1) {
 		t.Errorf("disabled_count = %#v, want 1", payload["disabled_count"])
 	}
-	for _, bucket := range []string{"anomalies", "active", "ambient", "other"} {
+	for _, bucket := range deviceGroups {
 		if contains(bucketEntities(payload, bucket), "sensor.widget_legacy") {
 			t.Errorf("disabled entity rendered in %s", bucket)
 		}
+	}
+}
+
+// findEntity returns the rendered object for an entity_id across every
+// device group, or nil if it isn't present.
+func findEntity(payload map[string]any, entityID string) map[string]any {
+	for _, group := range deviceGroups {
+		list, _ := payload[group].([]any)
+		for _, item := range list {
+			obj, ok := item.(map[string]any)
+			if ok && obj["entity"] == entityID {
+				return obj
+			}
+		}
+	}
+	return nil
+}
+
+// A device view is explicit inspection: unlike the enumeration tools it
+// shows hidden entities, marked, so the model sees the whole instrument
+// panel the way HA's device page does.
+func TestComputeDeviceSnapshot_ShowsHiddenEntitiesMarked(t *testing.T) {
+	client := &fakeDeviceClient{
+		areas:   []homeassistant.Area{{AreaID: "office", Name: "Office"}},
+		devices: []homeassistant.DeviceRegistryEntry{{ID: "dev_dimmer", Name: "Office Overhead Lights", AreaID: "office"}},
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "light.office_overhead", DeviceID: "dev_dimmer"},
+			// Operator-hidden config knob — off HA's generated dashboards
+			// but present on the device page.
+			{EntityID: "number.office_overhead_ramp_rate", DeviceID: "dev_dimmer", EntityCategory: "config", HiddenBy: "user"},
+		},
+		states: map[string]*homeassistant.State{
+			"light.office_overhead":            mkState("light.office_overhead", "on", nil),
+			"number.office_overhead_ramp_rate": mkState("number.office_overhead_ramp_rate", "3", nil),
+		},
+	}
+	out, err := ComputeDeviceSnapshot(context.Background(), client, DeviceSnapshotRequest{Device: "dev_dimmer"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeDeviceSnapshot: %v", err)
+	}
+	payload := decodeDevicePayload(t, out)
+
+	hidden := findEntity(payload, "number.office_overhead_ramp_rate")
+	if hidden == nil {
+		t.Fatalf("hidden entity missing from device view:\n%s", out)
+	}
+	if hidden["hidden"] != true {
+		t.Errorf("hidden entity not marked hidden: %#v", hidden)
+	}
+	visible := findEntity(payload, "light.office_overhead")
+	if visible == nil {
+		t.Fatalf("visible entity missing:\n%s", out)
+	}
+	if _, marked := visible["hidden"]; marked {
+		t.Errorf("visible entity wrongly marked hidden: %#v", visible)
+	}
+}
+
+// The noisy groups (Configuration, Diagnostic) are capped with an honest
+// overflow count so a device with dozens of tuning knobs stays legible.
+func TestComputeDeviceSnapshot_CapsConfigurationGroup(t *testing.T) {
+	client := &fakeDeviceClient{
+		areas:   []homeassistant.Area{{AreaID: "office", Name: "Office"}},
+		devices: []homeassistant.DeviceRegistryEntry{{ID: "dev_zwave", Name: "Z-Wave Switch", AreaID: "office"}},
+		states:  map[string]*homeassistant.State{},
+	}
+	const configCount = maxDeviceOtherEntities + 4
+	for i := 0; i < configCount; i++ {
+		id := fmt.Sprintf("number.zwave_param_%02d", i)
+		client.entities = append(client.entities, homeassistant.EntityRegistryEntry{
+			EntityID: id, DeviceID: "dev_zwave", EntityCategory: "config",
+		})
+		client.states[id] = mkState(id, fmt.Sprintf("%d", i), nil)
+	}
+
+	out, err := ComputeDeviceSnapshot(context.Background(), client, DeviceSnapshotRequest{Device: "dev_zwave"}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeDeviceSnapshot: %v", err)
+	}
+	payload := decodeDevicePayload(t, out)
+
+	config, _ := payload["configuration"].([]any)
+	if len(config) != maxDeviceOtherEntities {
+		t.Errorf("configuration length = %d, want cap %d", len(config), maxDeviceOtherEntities)
+	}
+	if payload["configuration_truncated_count"] != float64(configCount-maxDeviceOtherEntities) {
+		t.Errorf("configuration_truncated_count = %#v, want %d", payload["configuration_truncated_count"], configCount-maxDeviceOtherEntities)
 	}
 }
 

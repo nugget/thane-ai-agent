@@ -34,19 +34,20 @@ type DeviceSnapshotRequest struct {
 	Include homeassistant.EntityMetadataIncludes
 }
 
-// maxDeviceOtherEntities caps the least-salient ("other") bucket so a
-// device that exposes a long tail of config/diagnostic sensors can't
-// flood the prompt. Anomalies, active, and ambient buckets are
-// inherently small and stay uncapped; overflow on "other" is reported
-// via other_truncated_count. Mirrors area_activity's stable-bucket cap.
+// maxDeviceOtherEntities caps the Configuration and Diagnostic groups so
+// a device that exposes a long tail of tuning knobs and health counters
+// can't flood the prompt. Controls and Sensors are inherently small and
+// stay uncapped; overflow is reported via the per-group
+// *_truncated_count fields. Mirrors area_activity's stable-bucket cap.
 const maxDeviceOtherEntities = 15
 
 // ComputeDeviceSnapshot resolves a device, gathers its child entities +
-// states, buckets them by salience, and returns a single JSON object
-// describing the device for model consumption. The output leads with
-// device identity and an availability rollup, then the entities grouped
-// most-actionable-first (anomalies → active → ambient → other), matching
-// the model-facing-context conventions used by the area snapshot.
+// states, groups them the way Home Assistant's device page does, and
+// returns a single JSON object describing the device for model
+// consumption. The output leads with device identity and an availability
+// rollup, then the entities in HA's four device-page groups — Controls,
+// Sensors, Configuration, Diagnostic — so the model reads a device as its
+// whole instrument panel, the same structure a human sees in HA.
 func ComputeDeviceSnapshot(ctx context.Context, client DeviceSnapshotClient, req DeviceSnapshotRequest, now time.Time) (string, error) {
 	if client == nil {
 		return "", fmt.Errorf("ha_device: client is required")
@@ -147,34 +148,50 @@ func ComputeDeviceSnapshot(ctx context.Context, client DeviceSnapshotClient, req
 		payload["unavailable"] = cls.unavailable
 	}
 
-	otherTruncated := 0
-	if len(cls.other) > maxDeviceOtherEntities {
-		otherTruncated = len(cls.other) - maxDeviceOtherEntities
-		cls.other = cls.other[:maxDeviceOtherEntities]
-	}
+	// Configuration and Diagnostic are the noisy groups — a single
+	// Z-Wave device can expose dozens of tuning knobs and health
+	// counters. Cap them (with an honest per-group truncation count) so
+	// the instrument panel stays legible; Controls and Sensors are
+	// inherently small and stay uncapped.
+	configTruncated := truncateGroup(&cls.configuration, maxDeviceOtherEntities)
+	diagnosticTruncated := truncateGroup(&cls.diagnostic, maxDeviceOtherEntities)
 
 	if req.Include.Any() {
 		attachAreaEntityMetadata(resolver, req.Include, children, statesByID,
-			cls.anomalies, cls.active, cls.ambient, cls.other)
+			cls.controls, cls.sensors, cls.configuration, cls.diagnostic)
 	}
 
-	if len(cls.anomalies) > 0 {
-		payload["anomalies"] = cls.anomalies
+	if len(cls.controls) > 0 {
+		payload["controls"] = cls.controls
 	}
-	if len(cls.active) > 0 {
-		payload["active"] = cls.active
+	if len(cls.sensors) > 0 {
+		payload["sensors"] = cls.sensors
 	}
-	if len(cls.ambient) > 0 {
-		payload["ambient"] = cls.ambient
+	if len(cls.configuration) > 0 {
+		payload["configuration"] = cls.configuration
 	}
-	if len(cls.other) > 0 {
-		payload["other"] = cls.other
+	if configTruncated > 0 {
+		payload["configuration_truncated_count"] = configTruncated
 	}
-	if otherTruncated > 0 {
-		payload["other_truncated_count"] = otherTruncated
+	if len(cls.diagnostic) > 0 {
+		payload["diagnostic"] = cls.diagnostic
+	}
+	if diagnosticTruncated > 0 {
+		payload["diagnostic_truncated_count"] = diagnosticTruncated
 	}
 
 	return promptfmt.MarshalCompact(payload), nil
+}
+
+// truncateGroup caps a device group in place, returning how many entries
+// were dropped so the caller can advertise the overflow.
+func truncateGroup(group *[]map[string]any, limit int) int {
+	if len(*group) <= limit {
+		return 0
+	}
+	dropped := len(*group) - limit
+	*group = (*group)[:limit]
+	return dropped
 }
 
 // buildDeviceResolver assembles the metadata resolver for the device
@@ -214,57 +231,100 @@ func buildDeviceResolver(
 	return homeassistant.NewEntityMetadataResolverWithFloorAlias(areas, labels, devices, floors, floorAlias), nil
 }
 
-// deviceChildBuckets holds the salience-grouped render of a device's
-// child entities plus the availability rollup.
-type deviceChildBuckets struct {
-	anomalies   []map[string]any
-	active      []map[string]any
-	ambient     []map[string]any
-	other       []map[string]any
-	reporting   int      // children with a live, non-sentinel state
-	unavailable []string // entity_ids missing a state or in a sentinel state
+// deviceControlDomains are the entity domains Home Assistant treats as
+// device Controls — the actionable primaries. Uncategorized entities
+// outside this set are read-only Sensors. Config/diagnostic entities go
+// to their own groups regardless of domain (see [deviceGroupFor]).
+var deviceControlDomains = map[string]bool{
+	"light": true, "switch": true, "fan": true, "climate": true,
+	"cover": true, "lock": true, "media_player": true, "vacuum": true,
+	"number": true, "select": true, "button": true, "siren": true,
+	"valve": true, "humidifier": true, "water_heater": true,
+	"lawn_mower": true, "alarm_control_panel": true, "camera": true,
+	"remote": true, "text": true, "date": true, "time": true,
+	"datetime": true, "scene": true, "script": true, "automation": true,
+	"input_boolean": true, "input_number": true, "input_select": true,
+	"input_text": true, "input_datetime": true, "input_button": true,
+	"update": true,
 }
 
-// classifyDeviceChildren buckets a device's child entities by salience,
-// reusing the same per-entity render and classification predicates the
-// area snapshot uses so the two views stay consistent. Unlike the area
-// classifier there is no recent-changes window — a device view answers
-// "what does this device expose and is it healthy" rather than "what
-// happened in this room lately."
-func classifyDeviceChildren(children []areaMember, statesByID map[string]*homeassistant.State, now time.Time) deviceChildBuckets {
-	var b deviceChildBuckets
+// deviceGroupFor places an entity into one of Home Assistant's device-
+// page groups. Configuration and Diagnostic follow the registry's
+// entity_category; the uncategorized primaries split into Controls
+// (actionable domains) and Sensors (read-only) — the exact structure a
+// human sees on a device page.
+func deviceGroupFor(entry homeassistant.EntityRegistryEntry) string {
+	switch entry.EntityCategory {
+	case "config":
+		return "configuration"
+	case "diagnostic":
+		return "diagnostic"
+	}
+	if deviceControlDomains[entityDomain(entry.EntityID)] {
+		return "controls"
+	}
+	return "sensors"
+}
+
+// deviceChildGroups holds a device's child entities grouped the way HA's
+// device page groups them, plus the availability rollup. Controls and
+// Sensors are the primary affordances; Configuration and Diagnostic are
+// the categorized entities HA keeps off its generated dashboards but
+// shows on the device page — which is why a device view surfaces them.
+type deviceChildGroups struct {
+	controls      []map[string]any
+	sensors       []map[string]any
+	configuration []map[string]any
+	diagnostic    []map[string]any
+	reporting     int      // children with a live, non-sentinel state
+	unavailable   []string // entity_ids missing a state or in a sentinel state
+}
+
+// classifyDeviceChildren groups a device's child entities into HA's four
+// device-page groups, reusing the area snapshot's per-entity render so
+// the two views stay consistent. It mirrors the HA device page: every
+// entity the device exposes is shown (including hidden ones, marked, and
+// the config/diagnostic entities the generated dashboard omits), because
+// inspecting a device by name is explicit intent — you want its whole
+// instrument panel, not the curated subset.
+func classifyDeviceChildren(children []areaMember, statesByID map[string]*homeassistant.State, now time.Time) deviceChildGroups {
+	var g deviceChildGroups
 	for _, m := range children {
 		state := statesByID[m.entry.EntityID]
+		var rendered map[string]any
 		if state == nil {
-			b.anomalies = append(b.anomalies, map[string]any{
+			rendered = map[string]any{
 				"entity":    m.entry.EntityID,
 				"available": false,
 				"reason":    "no_state",
-			})
-			b.unavailable = append(b.unavailable, m.entry.EntityID)
-			continue
+			}
+			g.unavailable = append(g.unavailable, m.entry.EntityID)
+		} else {
+			rendered = renderEntityForArea(state, now)
+			if isSentinelState(state.State) {
+				g.unavailable = append(g.unavailable, m.entry.EntityID)
+			} else {
+				g.reporting++
+			}
 		}
-		rendered := renderEntityForArea(state, now)
-		switch {
-		case isSentinelState(state.State):
-			b.anomalies = append(b.anomalies, rendered)
-			b.unavailable = append(b.unavailable, m.entry.EntityID)
-		case isAlarmAnomaly(state, m.entry):
-			b.anomalies = append(b.anomalies, rendered)
-			b.reporting++
-		case isActive(state, m.entry):
-			b.active = append(b.active, rendered)
-			b.reporting++
-		case isAmbientNumeric(state, m.entry):
-			b.ambient = append(b.ambient, rendered)
-			b.reporting++
+		// Mark operator-hidden entities so the model can see this one is
+		// off HA's generated surfaces even though the device view shows it.
+		if m.entry.HiddenBy != "" {
+			rendered["hidden"] = true
+		}
+		switch deviceGroupFor(m.entry) {
+		case "controls":
+			g.controls = append(g.controls, rendered)
+		case "configuration":
+			g.configuration = append(g.configuration, rendered)
+		case "diagnostic":
+			g.diagnostic = append(g.diagnostic, rendered)
 		default:
-			b.other = append(b.other, rendered)
-			b.reporting++
+			g.sensors = append(g.sensors, rendered)
 		}
 	}
-	sort.Strings(b.unavailable)
-	return b
+	sort.Strings(g.unavailable)
+	return g
 }
 
 // resolveDevice matches a device by id, then by case-insensitive
