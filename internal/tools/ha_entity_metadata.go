@@ -20,21 +20,83 @@ type haEntityMetadataBundle struct {
 }
 
 type haListEntitiesResult struct {
-	Domain    string             `json:"domain,omitempty"`
-	Pattern   string             `json:"pattern,omitempty"`
-	Count     int                `json:"count"`
-	Total     int                `json:"total"`
-	Truncated bool               `json:"truncated,omitempty"`
-	Items     []haListEntityItem `json:"items"`
+	Domain    string `json:"domain,omitempty"`
+	Pattern   string `json:"pattern,omitempty"`
+	Count     int    `json:"count"`
+	Total     int    `json:"total"`
+	Truncated bool   `json:"truncated,omitempty"`
+	// HiddenExcluded counts entities dropped from this result because
+	// the operator hid them (registry hidden_by). It advertises their
+	// existence so the model knows more is inspectable via include_hidden
+	// or an explicit read — the count is never silently zero-filled.
+	HiddenExcluded int                `json:"hidden_excluded,omitempty"`
+	Items          []haListEntityItem `json:"items"`
 }
 
 type haListEntityItem struct {
-	EntityID     string                        `json:"entity_id"`
-	FriendlyName string                        `json:"friendly_name,omitempty"`
-	State        string                        `json:"state"`
-	Since        string                        `json:"since,omitempty"`
-	Updated      string                        `json:"updated,omitempty"`
-	Metadata     *homeassistant.EntityMetadata `json:"metadata,omitempty"`
+	EntityID     string `json:"entity_id"`
+	FriendlyName string `json:"friendly_name,omitempty"`
+	State        string `json:"state"`
+	Since        string `json:"since,omitempty"`
+	Updated      string `json:"updated,omitempty"`
+	// Hidden is set when the operator has hidden this entity from HA's
+	// generated surfaces (registry hidden_by). It is only populated on
+	// a result that surfaced a hidden entity via include_hidden, so the
+	// model can see the entity is off the default view — never silently
+	// blended in with visible ones.
+	Hidden   bool                          `json:"hidden,omitempty"`
+	Metadata *homeassistant.EntityMetadata `json:"metadata,omitempty"`
+}
+
+// isEntityHidden reports whether a registry entry marks the entity
+// hidden (hidden_by set). A nil entry — an entity with no registry row —
+// is treated as visible: hidden is an explicit operator action, not a
+// default.
+func isEntityHidden(entry *homeassistant.EntityRegistryEntry) bool {
+	return entry != nil && entry.HiddenBy != ""
+}
+
+// filterHiddenStates partitions candidate states by the operator's HA
+// Visible flag, mirroring HA's own generated-surface behavior. When
+// includeHidden is false, hidden entities are dropped and counted — the
+// count is advertised so their existence is never silent, and the model
+// can reach for an explicit read (ha_get_state, ha_device) to see them.
+// When true, all pass and the caller marks the hidden ones. entries is
+// the registry snapshot keyed by entity_id; a nil map (registry
+// unavailable) leaves every candidate visible rather than hiding the
+// whole world on a transient failure.
+func filterHiddenStates(candidates []homeassistant.State, entries map[string]*homeassistant.EntityRegistryEntry, includeHidden bool) (kept []homeassistant.State, hiddenCount int) {
+	if includeHidden || entries == nil {
+		return candidates, 0
+	}
+	kept = candidates[:0]
+	for _, s := range candidates {
+		if isEntityHidden(entries[s.EntityID]) {
+			hiddenCount++
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return kept, hiddenCount
+}
+
+// entityRegistryByID fetches the full entity registry as a lookup map,
+// for visibility filtering independent of any metadata projection. The
+// registry is TTL-cached, so this shares the fetch with a metadata
+// bundle built in the same turn.
+func entityRegistryByID(ctx context.Context, ha *homeassistant.Client) (map[string]*homeassistant.EntityRegistryEntry, error) {
+	if ha == nil {
+		return nil, nil
+	}
+	entries, err := ha.GetEntityRegistry(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get entity registry: %w", err)
+	}
+	byID := make(map[string]*homeassistant.EntityRegistryEntry, len(entries))
+	for i := range entries {
+		byID[entries[i].EntityID] = &entries[i]
+	}
+	return byID, nil
 }
 
 // haRecencyDelta returns the delta-formatted recency signals for an entity

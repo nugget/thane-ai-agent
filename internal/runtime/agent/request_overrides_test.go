@@ -289,7 +289,7 @@ func TestToolTimeout_CancelsToolExecution(t *testing.T) {
 	}
 
 	timeoutCh := make(chan error, 1)
-	reg := tools.NewRegistry(nil, nil)
+	reg := tools.NewRegistry(nil, nil, nil)
 	reg.Register(&tools.Tool{
 		Name:        "slow_tool",
 		Description: "slow tool",

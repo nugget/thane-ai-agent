@@ -132,7 +132,7 @@ func TestRun_SendsStoredHistoryAsMessages(t *testing.T) {
 		logger: slog.Default(),
 		memory: mem,
 		llm:    mock,
-		tools:  tools.NewRegistry(nil, nil),
+		tools:  tools.NewRegistry(nil, nil, nil),
 		model:  "test-model",
 	}
 
@@ -183,7 +183,7 @@ func TestRun_UsesConfiguredClockForStoredHistoryAgeLabels(t *testing.T) {
 		logger:  slog.Default(),
 		memory:  mem,
 		llm:     mock,
-		tools:   tools.NewRegistry(nil, nil),
+		tools:   tools.NewRegistry(nil, nil, nil),
 		model:   "test-model",
 		nowFunc: func() time.Time { return now },
 	}

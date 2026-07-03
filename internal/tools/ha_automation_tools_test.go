@@ -87,7 +87,7 @@ func (f *fakeHAServer) registry(t *testing.T) *Registry {
 	}
 	t.Cleanup(func() { _ = ws.Close() })
 
-	return NewRegistry(client, nil)
+	return NewRegistry(client, nil, nil)
 }
 
 func (f *fakeHAServer) handleServicesCatalog(w http.ResponseWriter, r *http.Request) {

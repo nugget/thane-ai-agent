@@ -28,11 +28,15 @@ var haSearchStateComparisons = map[string]func(a, b float64) bool{
 }
 
 type haSearchStatesResult struct {
-	Count     int                  `json:"count"`
-	Total     int                  `json:"total"`
-	Truncated bool                 `json:"truncated,omitempty"`
-	Filters   haSearchStateFilters `json:"filters"`
-	Items     []haListEntityItem   `json:"items"`
+	Count     int  `json:"count"`
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated,omitempty"`
+	// HiddenExcluded counts hidden entities dropped from this result
+	// (registry hidden_by); advertised so their existence is never
+	// silent. Pass include_hidden to surface them (marked).
+	HiddenExcluded int                  `json:"hidden_excluded,omitempty"`
+	Filters        haSearchStateFilters `json:"filters"`
+	Items          []haListEntityItem   `json:"items"`
 }
 
 // haSearchStateFilters echoes the resolved filter set back to the model
@@ -106,6 +110,10 @@ func (r *Registry) registerHASearchStates() {
 					"type":        "integer",
 					"description": "Maximum matches to return (default 20, max 100).",
 				},
+				"include_hidden": map[string]any{
+					"type":        "boolean",
+					"description": "By default, entities the operator hid from Home Assistant's dashboards (registry hidden_by) are excluded, and their count is reported as hidden_excluded. Set true to include them (each marked hidden). Hidden entities are usually diagnostics/config an operator curated away — respect that default unless you specifically need them.",
+				},
 				"include": EntityMetadataIncludeParameter(),
 			},
 		},
@@ -125,6 +133,7 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return "", err
 	}
+	includeHidden, _ := args["include_hidden"].(bool)
 
 	states, err := r.ha.GetStates(ctx)
 	if err != nil {
@@ -181,6 +190,25 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 		candidates = filtered
 	}
 
+	// Visibility filter (pre-limit, so a page never comes back
+	// half-empty after hidden entities are dropped). Discovery defaults
+	// to the operator's Visible set; include_hidden opts in and marks
+	// what it surfaces. Reuse the area bundle's registry snapshot when
+	// present, else fetch it — the registry is TTL-cached (#1185).
+	visEntries := map[string]*homeassistant.EntityRegistryEntry(nil)
+	if bundle != nil {
+		visEntries = bundle.entries
+	} else if entries, regErr := entityRegistryByID(ctx, r.ha); regErr != nil {
+		// Fail open: without visibility info, keep the search usable and
+		// show everything rather than erroring. filterHiddenStates treats
+		// a nil map as "no visibility info, no filtering."
+		r.log().Warn("ha_search_states: visibility filter degraded; entity registry unavailable", "error", regErr)
+	} else {
+		visEntries = entries
+	}
+	var hiddenExcluded int
+	candidates, hiddenExcluded = filterHiddenStates(candidates, visEntries, includeHidden)
+
 	total := len(candidates)
 	if len(candidates) > q.limit {
 		candidates = candidates[:q.limit]
@@ -208,6 +236,9 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly
 		}
+		if includeHidden {
+			item.Hidden = isEntityHidden(visEntries[s.EntityID])
+		}
 		// Render output metadata using the CALLER's include (not the
 		// working set the area filter may have widened), so an area
 		// filter doesn't leak area metadata the caller didn't request.
@@ -218,11 +249,12 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 	}
 
 	result := haSearchStatesResult{
-		Count:     len(items),
-		Total:     total,
-		Truncated: total > len(items),
-		Filters:   q.filters(),
-		Items:     items,
+		Count:          len(items),
+		Total:          total,
+		Truncated:      total > len(items),
+		HiddenExcluded: hiddenExcluded,
+		Filters:        q.filters(),
+		Items:          items,
 	}
 	return toIndentedJSONWithTruncationNote(result, haSearchStatesTruncationNote), nil
 }
