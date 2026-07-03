@@ -286,6 +286,22 @@ rises:
   next move is "tell someone about this," activate notifications;
   HA's tools are about state and control, not interruption.
 
+## Presence and zones
+
+Person entities carry `in_zones` — the full list of zones someone is in
+right now (zones nest, so it can be several at once). The `state` field
+reports only the *smallest* zone: a person in a zone inside the home
+shows that zone's name as state, and `zone.home` in their `in_zones` is
+what says they're still home. Read membership from `in_zones`, not from
+`state == "home"`.
+
+For the reverse question — "who's in zone X" — read the zone entity
+itself: its state is the live occupant count and its `persons` attribute
+lists them (`ha_get_state` on `zone.home`, or `ha_list_entities` with
+`domain: zone` to survey every zone at once). No person-by-person sweep
+needed. Person entities whose location comes from presence scanners
+carry no coordinates — never assume `latitude`/`longitude` exist.
+
 ## Cross-references
 
 - For sustained entity attention across loop iterations, bounce to

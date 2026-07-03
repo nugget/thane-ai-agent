@@ -287,6 +287,26 @@ func attrString(attrs map[string]any, key string) string {
 
 // attrBool extracts a boolean attribute, returning false if missing or
 // not a bool.
+// attrStringSlice extracts a []string attribute (JSON decodes arrays as
+// []any). Non-string elements are skipped; a missing or empty attribute
+// returns nil.
+func attrStringSlice(attrs map[string]any, key string) []string {
+	raw, ok := attrs[key].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func attrBool(attrs map[string]any, key string) bool {
 	if v, ok := attrs[key].(bool); ok {
 		return v
@@ -302,14 +322,21 @@ type personContext struct {
 	State  string `json:"state"`
 	Since  string `json:"since"`
 	Source string `json:"source,omitempty"`
+	// InZones is HA 2026.7's multi-zone membership. A person can be in
+	// several zones at once (nested zones); State reports only the
+	// smallest, so "is she home" reads from in_zones, not State — a
+	// person whose State is a nested zone's name is still home when
+	// zone.home is in this list.
+	InZones []string `json:"in_zones,omitempty"`
 }
 
 func formatPerson(state *homeassistant.State, now time.Time) string {
 	pc := personContext{
-		Entity: state.EntityID,
-		State:  state.State,
-		Since:  promptfmt.FormatDeltaOnly(state.LastChanged, now),
-		Source: attrString(state.Attributes, "source"),
+		Entity:  state.EntityID,
+		State:   state.State,
+		Since:   promptfmt.FormatDeltaOnly(state.LastChanged, now),
+		Source:  attrString(state.Attributes, "source"),
+		InZones: attrStringSlice(state.Attributes, "in_zones"),
 	}
 	return promptfmt.MarshalCompact(pc)
 }
