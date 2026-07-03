@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	_ "modernc.org/sqlite"
@@ -135,11 +136,22 @@ func TestSubjectContextProvider_GetContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newTestStore(t)
 
-			// Populate
-			for _, f := range tt.facts {
+			// Populate. Pin updated_at deterministically afterwards:
+			// GetBySubjects orders by updated_at DESC (second precision)
+			// with a key tiebreak, so Set calls that straddle a second
+			// boundary reorder the facts and maxFacts truncation drops a
+			// different one per run (the CI flake: fact3 landing one
+			// second after fact1/fact2 evicted fact2). Earlier-listed
+			// facts are pinned newer, so truncation keeps listed order.
+			base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			for i, f := range tt.facts {
 				_, err := store.Set(f.category, f.key, f.value, "test", 1.0, f.subjects, "")
 				if err != nil {
 					t.Fatalf("Set(%s/%s): %v", f.category, f.key, err)
+				}
+				ts := base.Add(-time.Duration(i) * time.Minute)
+				if _, err := store.db.Exec(`UPDATE facts SET updated_at = ? WHERE key = ?`, ts, f.key); err != nil {
+					t.Fatalf("pin updated_at for %s: %v", f.key, err)
 				}
 			}
 
