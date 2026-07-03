@@ -198,11 +198,13 @@ func (r *Registry) handleSearchStates(ctx context.Context, args map[string]any) 
 	visEntries := map[string]*homeassistant.EntityRegistryEntry(nil)
 	if bundle != nil {
 		visEntries = bundle.entries
+	} else if entries, regErr := entityRegistryByID(ctx, r.ha); regErr != nil {
+		// Fail open: without visibility info, keep the search usable and
+		// show everything rather than erroring. filterHiddenStates treats
+		// a nil map as "no visibility info, no filtering."
+		r.logger.Warn("ha_search_states: visibility filter degraded; entity registry unavailable", "error", regErr)
 	} else {
-		visEntries, err = entityRegistryByID(ctx, r.ha)
-		if err != nil {
-			return "", err
-		}
+		visEntries = entries
 	}
 	var hiddenExcluded int
 	candidates, hiddenExcluded = filterHiddenStates(candidates, visEntries, includeHidden)

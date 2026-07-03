@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ type Registry struct {
 	tagIndex           map[string][]string // tag → tool names
 	ha                 *homeassistant.Client
 	scheduler          *scheduler.Scheduler
+	logger             *slog.Logger
 	factTools          *knowledge.Tools
 	contactTools       *contacts.Tools
 	emailTools         *email.Tools
@@ -112,11 +114,19 @@ func NewEmptyRegistry() *Registry {
 }
 
 // NewRegistry creates a tool registry with HA integration.
-func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry {
+// NewRegistry builds the native tool registry. logger is the
+// subsystem/loop logger tool handlers emit to (degraded-path warnings,
+// etc.); pass nil in tests or contexts without one and it falls back to
+// [slog.Default].
+func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler, logger *slog.Logger) *Registry {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	r := &Registry{
 		tools:     make(map[string]*Tool),
 		ha:        ha,
 		scheduler: sched,
+		logger:    logger,
 	}
 	r.registerBuiltins()
 	r.registerFindEntity()     // Smart entity discovery
@@ -1363,10 +1373,13 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 
 	// Visibility needs the registry snapshot before the limit so hidden
 	// entities are dropped (or marked) up front rather than padding the
-	// page. Registry is TTL-cached (#1185).
-	visEntries, err := entityRegistryByID(ctx, r.ha)
-	if err != nil {
-		return "", err
+	// page. Registry is TTL-cached (#1185). Fail open on a registry
+	// error: keep enumeration usable and show everything (nil map =
+	// "no visibility info, no filtering") rather than erroring the tool.
+	visEntries, regErr := entityRegistryByID(ctx, r.ha)
+	if regErr != nil {
+		r.logger.Warn("ha_list_entities: visibility filter degraded; entity registry unavailable", "error", regErr)
+		visEntries = nil
 	}
 
 	var matches []haListEntityItem

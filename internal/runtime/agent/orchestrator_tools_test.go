@@ -92,7 +92,7 @@ func hasName(names []string, target string) bool {
 // built-in tools plus the given additional tool names. Tools are no-ops;
 // only their names matter for gating tests.
 func buildTestLoop(mock *mockLLM, extraNames []string) *Loop {
-	reg := tools.NewRegistry(nil, nil)
+	reg := tools.NewRegistry(nil, nil, nil)
 	for _, name := range extraNames {
 		n := name // capture
 		reg.Register(&tools.Tool{

@@ -44,7 +44,7 @@ func (m *rawTextMockLLM) ChatStream(_ context.Context, model string, msgs []llm.
 func (m *rawTextMockLLM) Ping(_ context.Context) error { return nil }
 
 func buildTestLoopWithClient(client llm.Client, extraNames []string, model string) *Loop {
-	reg := tools.NewRegistry(nil, nil)
+	reg := tools.NewRegistry(nil, nil, nil)
 	for _, name := range extraNames {
 		n := name
 		reg.Register(&tools.Tool{

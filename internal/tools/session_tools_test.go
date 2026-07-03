@@ -75,7 +75,7 @@ func TestSessionClose_CarryForwardAlias(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &mockSessionManager{}
-			reg := NewRegistry(nil, nil)
+			reg := NewRegistry(nil, nil, nil)
 			reg.SetSessionManager(mgr)
 
 			tool := reg.Get("session_close")
@@ -120,7 +120,7 @@ func TestSessionClose_HonestResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &mockSessionManager{}
-			reg := NewRegistry(nil, nil)
+			reg := NewRegistry(nil, nil, nil)
 			reg.SetSessionManager(mgr)
 
 			tool := reg.Get("session_close")

@@ -104,3 +104,17 @@ func TestHASearchStates_DefaultExcludesHidden(t *testing.T) {
 		t.Errorf("include_hidden count/excluded = %d/%d, want 3/0", got2.Count, got2.HiddenExcluded)
 	}
 }
+
+func TestFilterHiddenStates_FailsOpenOnNilRegistry(t *testing.T) {
+	// A nil entries map models an unavailable registry: visibility
+	// filtering fails open (everything visible, nothing marked), so a
+	// transient registry error never hides the world (PR #1194 review).
+	states := []homeassistant.State{
+		{EntityID: "light.a", State: "on"},
+		{EntityID: "light.b", State: "off"},
+	}
+	kept, hidden := filterHiddenStates(states, nil, false)
+	if len(kept) != 2 || hidden != 0 {
+		t.Fatalf("nil registry: kept=%d hidden=%d, want 2/0 (fail open)", len(kept), hidden)
+	}
+}
