@@ -285,13 +285,16 @@ section-level upsert/delete.
   "mode": "upsert_section",
   "section": "VLAN 30 — IoT",
   "level": 2,
-  "content": "VLAN 30 carries IoT devices. DHCP pool: 10.30.0.0/24. No outbound WAN.\n"
+  "body": "VLAN 30 carries IoT devices. DHCP pool: 10.30.0.0/24. No outbound WAN.\n"
 }
 ```
 
 Section edits target by heading text or slug. The upsert mode inserts
 if the section is missing, replaces if present; the delete mode removes
-the named section entirely.
+the named section entirely. In section modes, `body` carries only that
+one section's text — never the whole document; the rest of the document
+is untouched. (For whole-document rewrites, `body` is the full new
+document body, same as `doc_write`.)
 
 ## Rolling journal — `doc_journal_update`
 

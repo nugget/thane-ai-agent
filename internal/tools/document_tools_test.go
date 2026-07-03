@@ -363,3 +363,125 @@ func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// The prod incident (2026-07-02): the archivist model called doc_write
+// with doc_edit's vocabulary — {"content": <full dossier>, "mode":
+// "replace_body", "ref": ...}. The unknown keys were silently ignored,
+// an empty document was created, and success was returned; three
+// dossiers' content survived only in the tool-call log. These guards
+// turn that silent data loss into a self-correcting error.
+func TestDocWriteRejectsDocEditVocabulary(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	writeTool := reg.Get("doc_write")
+
+	// The exact prod argument shape.
+	_, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":     "kb:dossiers/entity-binary_sensor-zone25_garage_bay_3.md",
+		"content": "# Dossier: full content that must not be lost",
+		"mode":    "replace_body",
+	})
+	if err == nil {
+		t.Fatal("doc_write with content+mode succeeded; want a redirect error")
+	}
+	if !strings.Contains(err.Error(), "body") {
+		t.Errorf("error should teach the body parameter: %v", err)
+	}
+	// Nothing may be created by the failed call.
+	if _, readErr := store.Read(context.Background(), "kb:dossiers/entity-binary_sensor-zone25_garage_bay_3.md"); readErr == nil {
+		t.Error("failed doc_write still created a document")
+	}
+
+	// mode alone (even with a valid body) is doc_edit vocabulary.
+	_, err = writeTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:notes/mode-guard.md",
+		"body": "real body",
+		"mode": "append_body",
+	})
+	if err == nil || !strings.Contains(err.Error(), "doc_edit") {
+		t.Errorf("doc_write with mode should redirect to doc_edit, got: %v", err)
+	}
+}
+
+// doc_edit's text parameter is unified with doc_write's as body; the
+// legacy content key gets a rename-teaching error instead of being
+// silently ignored (a model replaying old history would otherwise
+// apply an edit with empty text).
+func TestDocEditTakesBodyAndTeachesContentRename(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	writeTool := reg.Get("doc_write")
+	editTool := reg.Get("doc_edit")
+
+	if _, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:notes/unified.md",
+		"body": "original",
+	}); err != nil {
+		t.Fatalf("seed doc_write: %v", err)
+	}
+
+	// The unified vocabulary: body works on doc_edit.
+	if _, err := editTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:notes/unified.md",
+		"mode": "replace_body",
+		"body": "replaced via body",
+	}); err != nil {
+		t.Fatalf("doc_edit with body: %v", err)
+	}
+	record, err := store.Read(context.Background(), "kb:notes/unified.md")
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if strings.TrimSpace(record.Body) != "replaced via body" {
+		t.Fatalf("body = %q, want replacement applied", record.Body)
+	}
+
+	// The legacy key teaches the rename and applies nothing.
+	_, err = editTool.Handler(context.Background(), map[string]any{
+		"ref":     "kb:notes/unified.md",
+		"mode":    "replace_body",
+		"content": "must not be applied",
+	})
+	if err == nil || !strings.Contains(err.Error(), "renamed") {
+		t.Errorf("doc_edit with content should teach the rename, got: %v", err)
+	}
+	record, err = store.Read(context.Background(), "kb:notes/unified.md")
+	if err != nil {
+		t.Fatalf("Read after rejected edit: %v", err)
+	}
+	if strings.TrimSpace(record.Body) != "replaced via body" {
+		t.Errorf("rejected edit still mutated the document: %q", record.Body)
+	}
+}
+
+// Creating a new document requires body: an omitted body means
+// "preserve", which is meaningless on a create and is the signature of
+// arguments that missed the schema. An explicit empty string stays the
+// documented way to create a blank document.
+func TestDocWriteCreateRequiresBody(t *testing.T) {
+	t.Parallel()
+
+	reg, store := newTestDocumentRegistry(t)
+	writeTool := reg.Get("doc_write")
+
+	_, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":   "kb:notes/bodiless-create.md",
+		"title": "Bodiless",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires body") {
+		t.Fatalf("bodiless create should error, got: %v", err)
+	}
+	if _, readErr := store.Read(context.Background(), "kb:notes/bodiless-create.md"); readErr == nil {
+		t.Error("failed bodiless create still produced a document")
+	}
+
+	// Explicit empty string: intentional blank create still works.
+	if _, err := writeTool.Handler(context.Background(), map[string]any{
+		"ref":  "kb:notes/intentional-blank.md",
+		"body": "",
+	}); err != nil {
+		t.Fatalf("explicit empty-body create should succeed: %v", err)
+	}
+}

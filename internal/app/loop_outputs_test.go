@@ -62,7 +62,7 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 
 	_, err = hydrated.RuntimeTools[0].Handler(context.Background(), map[string]any{
-		"content": "## Current Sense\n\nEverything is calm.",
+		"body": "## Current Sense\n\nEverything is calm.",
 	})
 	if err != nil {
 		t.Fatalf("replace output handler: %v", err)
