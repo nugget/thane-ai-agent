@@ -72,7 +72,8 @@ func (t *Tools) Create(ctx context.Context, args CreateArgs) (string, error) {
 	if !clean {
 		note := "Nothing was created. The corpus analysis recommends " +
 			string(result.RecommendedAction) + " — review related_documents, then either " +
-			"doc_commit with this intake_id (confirm=true if overriding the recommendation) " +
+			"doc_commit with this intake_id and confirm=true (a cautioned intake requires " +
+			"confirmation for any mutating action, even the recommended one) " +
 			"or adjust and call doc_create again."
 		if result.Status == IntakeRefused {
 			note = "Nothing was created: " + result.Reason

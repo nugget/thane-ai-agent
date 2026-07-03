@@ -23,7 +23,7 @@ func registerDocumentIntakeTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Complete markdown body for the new document. Written as-is when placement is clean.",
+					"description": "Complete markdown body for the new document, written when placement is clean (outer whitespace is trimmed; frontmatter is managed by the tool).",
 				},
 				"title": map[string]any{
 					"type":        "string",
