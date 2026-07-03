@@ -30,7 +30,7 @@ func advancingClock(start time.Time, step time.Duration) func() time.Time {
 }
 
 func TestProvider_EmptyBuffer(t *testing.T) {
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
 	if err != nil {
@@ -43,7 +43,7 @@ func TestProvider_EmptyBuffer(t *testing.T) {
 
 func TestProvider_SingleEntry(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	p.nowFunc = fixedClock(now)
 
 	p.HandleStateChange("binary_sensor.front_door", "off", "on", "")
@@ -72,7 +72,7 @@ func TestProvider_SingleEntry(t *testing.T) {
 
 func TestProvider_MultipleEntries_NewestFirst(t *testing.T) {
 	base := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	clock := advancingClock(base, time.Minute)
 	p.nowFunc = clock
 
@@ -98,7 +98,7 @@ func TestProvider_MultipleEntries_NewestFirst(t *testing.T) {
 
 func TestProvider_CircularEviction(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(3, time.Hour, time.UTC, nil, nil)
+	p := NewStateWindowProvider(3, time.Hour, nil, nil)
 	clock := advancingClock(now, time.Minute)
 	p.nowFunc = clock
 
@@ -131,7 +131,7 @@ func TestProvider_CircularEviction(t *testing.T) {
 
 func TestProvider_AgeEviction(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 10*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 10*time.Minute, nil, nil)
 
 	// Insert an entry 15 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-15 * time.Minute))
@@ -158,7 +158,7 @@ func TestProvider_AgeEviction(t *testing.T) {
 
 func TestProvider_AllExpired(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 5*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 5*time.Minute, nil, nil)
 
 	// Insert entries 10 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-10 * time.Minute))
@@ -178,7 +178,7 @@ func TestProvider_AllExpired(t *testing.T) {
 
 func TestProvider_DeltaFormat(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 
 	// Insert an entry 5 minutes ago.
 	p.nowFunc = fixedClock(now.Add(-5 * time.Minute))
@@ -197,7 +197,7 @@ func TestProvider_DeltaFormat(t *testing.T) {
 }
 
 func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
-	p := NewStateWindowProvider(100, time.Hour, time.UTC, nil, nil)
+	p := NewStateWindowProvider(100, time.Hour, nil, nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -220,7 +220,7 @@ func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
 
 func TestProvider_SameStateSuppressed(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil, nil)
+	p := NewStateWindowProvider(10, 30*time.Minute, nil, nil)
 	p.nowFunc = fixedClock(now)
 
 	// Same→same should be filtered.
@@ -248,15 +248,15 @@ func TestProvider_SameStateSuppressed(t *testing.T) {
 
 func TestProvider_NilDefaults(t *testing.T) {
 	// Verify constructor handles zero/nil values gracefully.
-	p := NewStateWindowProvider(0, 0, nil, nil, nil)
+	p := NewStateWindowProvider(0, 0, nil, nil)
 	if len(p.entries) != 50 {
 		t.Errorf("expected default maxEntries=50, got %d", len(p.entries))
 	}
 	if p.maxAge != 30*time.Minute {
 		t.Errorf("expected default maxAge=30m, got %v", p.maxAge)
 	}
-	if p.loc != time.Local {
-		t.Error("expected time.Local as default location")
+	if p.translate != nil {
+		t.Error("expected nil translate to stay nil (raw passthrough)")
 	}
 }
 
@@ -265,7 +265,7 @@ func TestProvider_NilDefaults(t *testing.T) {
 // asserted end-to-end in statewindow_semantic_test.go (external package,
 // since contextfmt imports this one).
 func TestStateWindow_SemanticTranslatorApplied(t *testing.T) {
-	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, func(domain, deviceClass, state string) string {
+	p := NewStateWindowProvider(10, 30*time.Minute, func(domain, deviceClass, state string) string {
 		if domain == "binary_sensor" && deviceClass == "garage_door" {
 			switch state {
 			case "on":

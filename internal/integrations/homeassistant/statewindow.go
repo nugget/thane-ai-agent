@@ -35,7 +35,6 @@ type StateWindowProvider struct {
 	head    int                // next write position
 	count   int                // entries currently stored (≤ len(entries))
 	maxAge  time.Duration
-	loc     *time.Location
 	nowFunc func() time.Time
 	logger  *slog.Logger
 	// translate maps (domain, deviceClass, rawState) to the class-aware
@@ -47,23 +46,18 @@ type StateWindowProvider struct {
 }
 
 // NewStateWindowProvider creates a state window provider with the given
-// buffer capacity and maximum entry age. The loc parameter controls the
-// timezone used when formatting future-event timestamps in the context
-// output; nil falls back to time.Local. translate is the class-aware
+// buffer capacity and maximum entry age. translate is the class-aware
 // state translation applied when rendering transitions (normally
 // contextfmt.SemanticState, so a garage_door reads closed→open rather
 // than off→on — the same language every other entity-emitting surface
 // uses); nil renders raw states. Entries older than maxAge are filtered
 // out at read time in TagContext.
-func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Location, translate func(domain, deviceClass, state string) string, logger *slog.Logger) *StateWindowProvider {
+func NewStateWindowProvider(maxEntries int, maxAge time.Duration, translate func(domain, deviceClass, state string) string, logger *slog.Logger) *StateWindowProvider {
 	if maxEntries <= 0 {
 		maxEntries = 50
 	}
 	if maxAge <= 0 {
 		maxAge = 30 * time.Minute
-	}
-	if loc == nil {
-		loc = time.Local
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -71,7 +65,6 @@ func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Loca
 	return &StateWindowProvider{
 		entries:   make([]StateWindowEntry, maxEntries),
 		maxAge:    maxAge,
-		loc:       loc,
 		translate: translate,
 		nowFunc:   time.Now,
 		logger:    logger,

@@ -19,7 +19,7 @@ import (
 // binary_sensor shown as garage_door must render closed→open in the
 // ambient state window, matching every other entity-emitting surface.
 func TestStateWindow_ContextfmtVocabularyEndToEnd(t *testing.T) {
-	p := homeassistant.NewStateWindowProvider(10, 30*time.Minute, time.UTC, contextfmt.SemanticState, nil)
+	p := homeassistant.NewStateWindowProvider(10, 30*time.Minute, contextfmt.SemanticState, nil)
 
 	p.HandleStateChange("binary_sensor.zone25_garage_bay_3", "off", "on", "garage_door")
 	p.HandleStateChange("binary_sensor.leak", "off", "on", "moisture")

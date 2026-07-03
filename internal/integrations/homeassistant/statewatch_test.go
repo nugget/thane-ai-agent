@@ -332,7 +332,21 @@ func TestStateWatcher_DeliversDeviceClass(t *testing.T) {
 	events <- Event{Type: "state_changed", Data: raw}
 	events <- makeStateEvent(t, "light.kitchen", "off", "on") // no device_class
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll until both events land instead of a fixed sleep, so the test
+	// stays deterministic under slow CI rather than timing-sensitive.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(classes)
+		mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("watcher processed %d/2 events before deadline", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	cancel()
 	<-done
 

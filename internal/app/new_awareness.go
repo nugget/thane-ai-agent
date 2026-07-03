@@ -143,12 +143,6 @@ func (a *App) initAwareness(s *newState) error {
 	// --- State change window ---
 	// Maintains a rolling buffer of recent HA state changes, injected
 	// into the system prompt on every agent run for ambient awareness.
-	stateWindowLoc := time.Local
-	if cfg.Timezone != "" {
-		if parsed, err := time.LoadLocation(cfg.Timezone); err == nil {
-			stateWindowLoc = parsed
-		}
-	}
 	// contextfmt.SemanticState routes transitions through the canonical
 	// class-aware projection so the window reads closed→open for a
 	// garage_door, not off→on — injected here because contextfmt imports
@@ -156,7 +150,6 @@ func (a *App) initAwareness(s *newState) error {
 	stateWindowProvider := homeassistant.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
-		stateWindowLoc,
 		contextfmt.SemanticState,
 		logger,
 	)
