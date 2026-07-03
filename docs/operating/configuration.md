@@ -364,17 +364,15 @@ filesystem record.
 ```yaml
 mcp:
   servers:
-    - name: home-assistant
+    - name: github
       transport: stdio
-      command: /opt/homebrew/bin/uvx
-      args: ["ha-mcp@latest"]
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
       env:
-        - "HOMEASSISTANT_URL=https://homeassistant.local"
-        - "HOMEASSISTANT_TOKEN=your_token"
+        - "GITHUB_PERSONAL_ACCESS_TOKEN=your_token"
       include_tools:
-        - ha_search_entities
-        - ha_get_state
-        - ha_call_service
+        - search_code
+        - issue_read
 ```
 
 Optional. Extends Thane's capabilities via the Model Context Protocol.

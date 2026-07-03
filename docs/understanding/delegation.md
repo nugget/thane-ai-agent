@@ -70,7 +70,7 @@ The `talents/delegation.md` talent contains:
 - Which capability tags and tool families exist
 - Patterns to follow (search, act, verify for HA)
 - Anti-patterns to avoid (multi-entity delegations, `ha_list_entities` abuse)
-- Known quirks (ha-mcp `return_response` errors, silent `ha_call_service` failures)
+- Known quirks (e.g. silent `ha_call_service` failures)
 
 The frontier model writes precise delegation instructions without ever seeing
 the tool schemas — it knows the tools exist from the talent, and it knows the
@@ -86,17 +86,15 @@ the agent loop. This extends Thane's capabilities without writing Go code.
 ```yaml
 mcp:
   servers:
-    - name: home-assistant
+    - name: github
       transport: stdio
-      command: /opt/homebrew/bin/uvx
-      args: ["ha-mcp@latest"]
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
       env:
-        - "HOMEASSISTANT_URL=https://homeassistant.local"
-        - "HOMEASSISTANT_TOKEN=your_token"
+        - "GITHUB_PERSONAL_ACCESS_TOKEN=your_token"
       include_tools:
-        - ha_search_entities
-        - ha_get_state
-        - ha_call_service
+        - search_code
+        - issue_read
         # ... selective inclusion keeps context manageable
 ```
 
@@ -105,12 +103,15 @@ available tools via the MCP protocol, filters to `include_tools` (if
 specified), and bridges filtered tools into the agent loop as
 `mcp_{server}_{tool}` functions.
 
-### ha-mcp
+### A note on Home Assistant
 
-[ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides 90+ Home
-Assistant tools — far more than Thane's native HA tools. With
-`include_tools` filtering, you select the high-value tools to keep delegate
-context manageable.
+HA does not go through MCP. Earlier deployments bridged
+[ha-mcp](https://github.com/karimkhaleel/ha-mcp) for capabilities the
+native tools lacked; the native `ha_*` set reached full parity in
+v0.10.2 (search, targeting, traces, service discovery, vocabulary) and
+the bridge was retired — telemetry showed the model had already stopped
+reaching for it. MCP is for capabilities Thane doesn't implement
+natively.
 
 ### Adding MCP Servers
 
