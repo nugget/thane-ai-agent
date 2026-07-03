@@ -291,7 +291,10 @@ section-level upsert/delete.
 
 Section edits target by heading text or slug. The upsert mode inserts
 if the section is missing, replaces if present; the delete mode removes
-the named section entirely.
+the named section entirely. In section modes, `body` carries only that
+one section's text — never the whole document; the rest of the document
+is untouched. (For whole-document rewrites, `body` is the full new
+document body, same as `doc_write`.)
 
 ## Rolling journal — `doc_journal_update`
 
