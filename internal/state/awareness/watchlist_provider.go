@@ -76,7 +76,7 @@ func (p *WatchlistProvider) SetRegistryClient(registries HARegistryClient) {
 // formatted as compact JSON with relevant attributes. Default domains
 // use a markdown line with state and unit. All timestamps use delta
 // format per #458.
-func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+func (p *WatchlistProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	// Always-visible entities only. Loop-owned rows are rendered by
 	// [LoopSubscriptionProvider] after walking the ancestor chain, and
 	// system-owned rows (the person-entity ingestion floor) never
@@ -86,10 +86,13 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}
 	// Ingest-only entries feed the state-change window's push pipeline;
-	// they don't render per-turn state here (#1192).
+	// they don't render per-turn state here (#1192). Tag-gated entries
+	// render only while their capability tag is active (#1213) — the
+	// macro-set lens: one tag activation surfaces the subject's
+	// documents and its entities together.
 	subs := make([]looppkg.EntitySubscription, 0, len(rows))
 	for _, row := range rows {
-		if !row.RendersState() {
+		if !row.RendersState() || !row.GateOpen(req.ActiveTags) {
 			continue
 		}
 		subs = append(subs, row.EntitySubscription)

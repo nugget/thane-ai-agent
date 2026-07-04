@@ -459,3 +459,42 @@ func TestBuildLoopFocusTools_WatchEntityModeAndSelfOnly(t *testing.T) {
 		t.Fatalf("unknown mode error = %v, want vocabulary teaching", err)
 	}
 }
+
+// TestBuildLoopFocusTools_WatchEntityRequiresTag covers the #1213
+// gate on the in-loop door: it lands on the spec, and the
+// render-only boundary rejects ingest-feeding combinations.
+func TestBuildLoopFocusTools_WatchEntityRequiresTag(t *testing.T) {
+	t.Parallel()
+	m := newFakeMutator()
+	tools := buildLoopFocusToolsWithMutator("watcher_loop", m.Mutate)
+
+	var watch *looppkg.RuntimeTool
+	for i, rt := range tools {
+		if rt.Name == "watch_entity" {
+			watch = &tools[i]
+			break
+		}
+	}
+	if watch == nil {
+		t.Fatal("watch_entity tool not generated")
+	}
+
+	if _, err := watch.Handler(context.Background(), map[string]any{
+		"entity_id":    "sensor.stock_tank_level",
+		"requires_tag": " ranch_water ",
+	}); err != nil {
+		t.Fatalf("gated watch: %v", err)
+	}
+	subs := m.subs["watcher_loop"]
+	if len(subs) != 1 || subs[0].RequiresTag != "ranch_water" {
+		t.Fatalf("subs = %+v, want trimmed requires_tag on the spec", subs)
+	}
+
+	if _, err := watch.Handler(context.Background(), map[string]any{
+		"entity_id":    "binary_sensor.pump_running",
+		"requires_tag": "ranch_water",
+		"mode":         "both",
+	}); err == nil || !strings.Contains(err.Error(), "render") {
+		t.Fatalf("ingest-feeding+requires_tag error = %v, want render-only teaching", err)
+	}
+}

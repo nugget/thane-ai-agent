@@ -353,46 +353,75 @@ func TestStore_MigratesLegacyScopeColumn(t *testing.T) {
 	}
 }
 
-// TestStore_GlobalEntityIDSet covers the narrow dedup lookup used by
+// TestStore_GlobalEntityGates covers the narrow dedup lookup used by
 // [LoopSubscriptionProvider]: it must return only the candidates
-// present in the always-visible (owner=”) tier, ignore owned rows
-// for the same entity_id, and skip the TTL cleanup side effect that
-// [ListOwner] performs.
-func TestStore_GlobalEntityIDSet(t *testing.T) {
+// present in the always-visible (owner=”) tier — each with its
+// RequiresTag gate so the caller can ignore gated-off rows — ignore
+// owned rows for the same entity_id, and skip the TTL cleanup side
+// effect that [ListOwner] performs.
+func TestStore_GlobalEntityGates(t *testing.T) {
 	store := setupTestStore(t)
 
-	// Global → in the always-visible set.
+	// Global ungated → present with an empty gate.
 	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
 		t.Fatalf("upsert: %v", err)
+	}
+	// Global gated → present with its gate exposed.
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
+		t.Fatalf("upsert gated: %v", err)
 	}
 	// Loop-owned → NOT in the always-visible set even though the
 	// entity_id matches a candidate.
 	if err := store.Upsert("focus-loop", looppkg.EntitySubscription{EntityID: "sensor.owned_only"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
+	// Rows that never render must not appear at all: ingest-only mode
+	// and elapsed TTL (Copilot #1214).
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.capture_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
+		t.Fatalf("upsert ingest-only: %v", err)
+	}
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID:   "sensor.elapsed",
+		TTLSeconds: 60,
+		AddedAt:    time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert elapsed: %v", err)
+	}
 
-	set, err := store.GlobalEntityIDSet([]string{
+	gates, err := store.GlobalEntityGates([]string{
 		"sensor.always_on",
+		"sensor.lensed",
 		"sensor.owned_only",
+		"sensor.capture_only",
+		"sensor.elapsed",
 		"sensor.unknown",
 	})
 	if err != nil {
-		t.Fatalf("GlobalEntityIDSet: %v", err)
+		t.Fatalf("GlobalEntityGates: %v", err)
 	}
-	if _, ok := set["sensor.always_on"]; !ok {
-		t.Errorf("missing sensor.always_on in result: %v", set)
+	if gate, ok := gates["sensor.always_on"]; !ok || gate != "" {
+		t.Errorf("sensor.always_on gate = %q,%v, want present and ungated", gate, ok)
 	}
-	if _, ok := set["sensor.owned_only"]; ok {
-		t.Errorf("sensor.owned_only leaked through despite loop ownership: %v", set)
+	if gate, ok := gates["sensor.lensed"]; !ok || gate != "ranch_water" {
+		t.Errorf("sensor.lensed gate = %q,%v, want ranch_water", gate, ok)
 	}
-	if _, ok := set["sensor.unknown"]; ok {
-		t.Errorf("sensor.unknown leaked through despite not being subscribed: %v", set)
+	if _, ok := gates["sensor.owned_only"]; ok {
+		t.Errorf("sensor.owned_only leaked through despite loop ownership: %v", gates)
+	}
+	if _, ok := gates["sensor.capture_only"]; ok {
+		t.Errorf("ingest-only row leaked into the dedup set: %v", gates)
+	}
+	if _, ok := gates["sensor.elapsed"]; ok {
+		t.Errorf("expired row leaked into the dedup set: %v", gates)
+	}
+	if _, ok := gates["sensor.unknown"]; ok {
+		t.Errorf("sensor.unknown leaked through despite not being subscribed: %v", gates)
 	}
 
 	// Empty candidate list returns an empty (non-nil) map.
-	empty, err := store.GlobalEntityIDSet(nil)
+	empty, err := store.GlobalEntityGates(nil)
 	if err != nil {
-		t.Fatalf("GlobalEntityIDSet(nil): %v", err)
+		t.Fatalf("GlobalEntityGates(nil): %v", err)
 	}
 	if empty == nil || len(empty) != 0 {
 		t.Errorf("want empty non-nil map, got %#v", empty)
@@ -400,11 +429,11 @@ func TestStore_GlobalEntityIDSet(t *testing.T) {
 
 	// Duplicates and empty strings in the candidate list are
 	// tolerated (deduped + filtered before the SQL IN clause).
-	set2, err := store.GlobalEntityIDSet([]string{"sensor.always_on", "sensor.always_on", ""})
+	gates2, err := store.GlobalEntityGates([]string{"sensor.always_on", "sensor.always_on", ""})
 	if err != nil {
-		t.Fatalf("GlobalEntityIDSet dedup: %v", err)
+		t.Fatalf("GlobalEntityGates dedup: %v", err)
 	}
-	if len(set2) != 1 {
-		t.Errorf("want exactly 1 entry after dedup, got %v", set2)
+	if len(gates2) != 1 {
+		t.Errorf("want exactly 1 entry after dedup, got %v", gates2)
 	}
 }

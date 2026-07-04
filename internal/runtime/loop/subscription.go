@@ -71,6 +71,16 @@ type EntitySubscription struct {
 	// non-container loop the flag is inert (nothing inherits from
 	// non-containers).
 	SelfOnly bool `yaml:"self_only,omitempty" json:"self_only,omitempty"`
+
+	// RequiresTag gates rendering on a capability tag: when set, the
+	// subscription renders only while that tag is active in the
+	// consuming context (see [EntitySubscription.GateOpen]). Empty
+	// means unconditional — today's default. The gate is render-only:
+	// combining it with an ingest-feeding mode is rejected at every
+	// authoring door and at JSON hydration, and the ingestion filter
+	// ignores gated rows as a backstop, so capture never depends on
+	// tag state (#1213).
+	RequiresTag string `yaml:"requires_tag,omitempty" json:"requires_tag,omitempty"`
 }
 
 // IsExpired reports whether this subscription's TTL has elapsed
@@ -160,6 +170,15 @@ func (s EntitySubscription) RendersState() bool {
 	return s.Mode != SubscriptionModeIngest
 }
 
+// GateOpen reports whether the subscription's RequiresTag gate admits
+// rendering for a context with the given active capability tags. An
+// ungated subscription is always admitted; a gated one only while its
+// tag is active. Callers pass the assembly request's ActiveTags — a
+// nil map simply means no tags are active, closing every gate.
+func (s EntitySubscription) GateOpen(activeTags map[string]bool) bool {
+	return s.RequiresTag == "" || activeTags[s.RequiresTag]
+}
+
 // NormalizeSubscriptionForecast returns the canonical forecast
 // value for persisted subscriptions. "none" and empty collapse to
 // "" (meaning "no forecast fetch"); the three real HA forecast
@@ -213,6 +232,15 @@ func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]E
 			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): %w", i, sub.EntityID, err)
 		}
 		sub.Mode = mode
+		sub.RequiresTag = strings.TrimSpace(sub.RequiresTag)
+		// The gate is render-only (#1213): rejecting the combination
+		// here makes the invariant uniform across every JSON-hydrated
+		// spec (loop_definition_set, persisted records), matching the
+		// tool boundaries; the awareness IngestGlobs skip remains the
+		// backstop for rows that arrive by other routes.
+		if sub.RequiresTag != "" && sub.FeedsIngest() {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): requires_tag gates rendering only and cannot combine with mode %q — drop requires_tag, or use mode render", i, sub.EntityID, sub.Mode)
+		}
 		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
 			sub.AddedAt = now
 		}

@@ -350,3 +350,70 @@ func TestRegistryAncestorSubscriptionsHonorsSelfOnly(t *testing.T) {
 		t.Error("container's own SelfOnly subscription missing from its own effective set")
 	}
 }
+
+// TestEntitySubscriptionGateOpen covers the #1213 render gate: an
+// ungated subscription always renders; a gated one only while its
+// capability tag is active, with a nil tag set closing every gate.
+func TestEntitySubscriptionGateOpen(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		sub    EntitySubscription
+		active map[string]bool
+		want   bool
+	}{
+		{"ungated with nil tags", EntitySubscription{EntityID: "a"}, nil, true},
+		{"ungated with tags active", EntitySubscription{EntityID: "a"}, map[string]bool{"x": true}, true},
+		{"gated with nil tags", EntitySubscription{EntityID: "a", RequiresTag: "x"}, nil, false},
+		{"gated with tag inactive", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"y": true}, false},
+		{"gated with tag active", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"x": true}, true},
+		{"gated with tag explicitly false", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"x": false}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sub.GateOpen(tc.active); got != tc.want {
+				t.Errorf("GateOpen = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadTrimsRequiresTag verifies hydration
+// canonicalizes the gate alongside forecast and mode.
+func TestNormalizeSubscriptionsOnLoadTrimsRequiresTag(t *testing.T) {
+	t.Parallel()
+
+	got, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", RequiresTag: "  ranch_water  "},
+	}, time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("normalizeSubscriptionsOnLoad: %v", err)
+	}
+	if got[0].RequiresTag != "ranch_water" {
+		t.Errorf("requires_tag = %q, want trimmed", got[0].RequiresTag)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadRejectsGatedIngest makes the
+// render-only invariant uniform at hydration: a JSON-hydrated spec
+// (loop_definition_set, persisted records) cannot carry a gated
+// ingest-feeding subscription any more than the tool doors can.
+func TestNormalizeSubscriptionsOnLoadRejectsGatedIngest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	for _, mode := range []string{SubscriptionModeIngest, SubscriptionModeBoth} {
+		if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+			{EntityID: "binary_sensor.pump_running", Mode: mode, RequiresTag: "ranch_water"},
+		}, now); err == nil {
+			t.Errorf("mode %q with requires_tag survived hydration, want rejection", mode)
+		}
+	}
+	// The render-mode combination stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.tank", RequiresTag: "ranch_water"},
+	}, now); err != nil {
+		t.Errorf("gated render subscription rejected at hydration: %v", err)
+	}
+}

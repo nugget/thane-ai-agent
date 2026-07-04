@@ -82,14 +82,15 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 	out := make([]looppkg.EntitySubscription, 0, len(entities))
 	for _, e := range entities {
 		out = append(out, looppkg.EntitySubscription{
-			EntityID:   e.EntityID,
-			History:    append([]int(nil), e.History...),
-			Forecast:   e.Forecast,
-			Include:    EntityMetadataIncludesPointer(e.Include),
-			TTLSeconds: e.TTLSeconds,
-			AddedAt:    addedAt,
-			Mode:       e.Mode,
-			SelfOnly:   e.SelfOnly,
+			EntityID:    e.EntityID,
+			History:     append([]int(nil), e.History...),
+			Forecast:    e.Forecast,
+			Include:     EntityMetadataIncludesPointer(e.Include),
+			TTLSeconds:  e.TTLSeconds,
+			AddedAt:     addedAt,
+			Mode:        e.Mode,
+			SelfOnly:    e.SelfOnly,
+			RequiresTag: e.RequiresTag,
 		})
 	}
 	return out
@@ -98,13 +99,14 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 // curateEntity is the parsed shape of one element from the thane_loop_create
 // "entities" parameter. Fields mirror the unified subscription options.
 type curateEntity struct {
-	EntityID   string
-	History    []int
-	Forecast   string
-	Include    homeassistant.EntityMetadataIncludes
-	TTLSeconds int
-	Mode       string
-	SelfOnly   bool
+	EntityID    string
+	History     []int
+	Forecast    string
+	Include     homeassistant.EntityMetadataIncludes
+	TTLSeconds  int
+	Mode        string
+	SelfOnly    bool
+	RequiresTag string
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
@@ -195,6 +197,18 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				return nil, fmt.Errorf("%s[%d].self_only: must be a boolean, got %T", fieldName, i, rawSelfOnly)
 			}
 			ent.SelfOnly = selfOnly
+		}
+		if rawRequiresTag, present := obj["requires_tag"]; present && rawRequiresTag != nil {
+			requiresTag, ok := rawRequiresTag.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].requires_tag: must be a string, got %T", fieldName, i, rawRequiresTag)
+			}
+			ent.RequiresTag = strings.TrimSpace(requiresTag)
+		}
+		// The gate is render-only: capture must never depend on tag
+		// state (#1213).
+		if ent.RequiresTag != "" && (ent.Mode == looppkg.SubscriptionModeIngest || ent.Mode == looppkg.SubscriptionModeBoth) {
+			return nil, fmt.Errorf("%s[%d]: requires_tag gates rendering only and cannot combine with mode %q — drop requires_tag, or use mode render", fieldName, i, ent.Mode)
 		}
 		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
 		if err != nil {

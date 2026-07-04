@@ -102,6 +102,14 @@ truncation marker when it matches more than the cap. This works across
 `add_entity_subscription`, `watch_entity`, and
 `thane_loop_create.entities`.
 
+A subscription may carry `requires_tag`, a capability tag gating its
+visibility: it renders only while that tag is active in the consuming
+context. This is the macro-set lens — one tag activation surfaces a
+subject's tagged documents and its related entities together. The gate
+is render-only (rejected with `mode: ingest`/`both`, and the ingestion
+filter ignores gated rows), optional, and deliberately not the default
+path: ungated subscriptions remain the norm.
+
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, `description`, and `visibility`, or
 `all: true`. Enabled metadata is resolved through the native HA registries and

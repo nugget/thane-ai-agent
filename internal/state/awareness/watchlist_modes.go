@@ -44,6 +44,13 @@ func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
 			continue
 		}
+		// Tag-gated rows never feed capture: the gate is render-only
+		// by design (#1213), and the tool boundaries reject the
+		// combination — this skip is the defensive backstop for rows
+		// that arrive by other routes (hand-authored specs).
+		if sub.RequiresTag != "" {
+			continue
+		}
 		if _, dup := seen[entityID]; dup {
 			continue
 		}

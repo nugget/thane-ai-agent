@@ -1135,3 +1135,49 @@ func TestThaneCurate_RejectsFractionalInteger(t *testing.T) {
 		t.Fatalf("whole-number floats should be accepted: %v", err)
 	}
 }
+
+// TestThaneCurate_EntityRequiresTag covers the #1213 gate on the
+// creation door: requires_tag lands on the spec subscription, and
+// combining it with an ingest-feeding mode is rejected with the
+// render-only teaching error.
+func TestThaneCurate_EntityRequiresTag(t *testing.T) {
+	t.Parallel()
+	rig := newCurateTestRig(t)
+
+	if _, err := rig.tool.Handler(context.Background(), map[string]any{
+		"name":      "ranch_water_watch",
+		"intent":    "Track stock-tank health.",
+		"operation": "service",
+		"sleep_min": "1h",
+		"sleep_max": "6h",
+		"entities": []any{
+			map[string]any{
+				"entity_id":    "sensor.stock_tank_level",
+				"requires_tag": "ranch_water",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("thane_loop_create: %v", err)
+	}
+	spec := rig.findCurateSpec(t, "ranch_water_watch")
+	if len(spec.Subscriptions) != 1 || spec.Subscriptions[0].RequiresTag != "ranch_water" {
+		t.Fatalf("Subscriptions = %+v, want requires_tag on the spec", spec.Subscriptions)
+	}
+
+	if _, err := rig.tool.Handler(context.Background(), map[string]any{
+		"name":      "ranch_water_watch_2",
+		"intent":    "Track stock-tank health.",
+		"operation": "service",
+		"sleep_min": "1h",
+		"sleep_max": "6h",
+		"entities": []any{
+			map[string]any{
+				"entity_id":    "binary_sensor.pump_running",
+				"requires_tag": "ranch_water",
+				"mode":         "ingest",
+			},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "render") {
+		t.Fatalf("ingest+requires_tag error = %v, want render-only teaching", err)
+	}
+}
