@@ -261,3 +261,62 @@ func TestLoopSubscriptionProviderGatedLeafShadowsUngatedAncestor(t *testing.T) {
 		t.Errorf("gated leaf declaration missing with its tag active: %q", out)
 	}
 }
+
+// TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows pins
+// the Copilot finding on #1214: an always-visible row that never
+// renders — ingest-only mode — must not suppress a loop's own render
+// of the same entity. Before GlobalEntityGates filtered on
+// RendersState, the entity would silently vanish from loop context
+// whenever the global tier used it for capture only.
+func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T) {
+	t.Parallel()
+
+	p, store, reg, _ := setupLoopSubProvider(t)
+
+	// Global row that feeds capture only; WatchlistProvider never
+	// renders it.
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID: "sensor.shared",
+		Mode:     looppkg.SubscriptionModeIngest,
+	}); err != nil {
+		t.Fatalf("seed ingest-only global: %v", err)
+	}
+
+	leaf, err := looppkg.New(looppkg.Config{
+		Name: "leaf",
+		Task: "t",
+		Subscriptions: []looppkg.EntitySubscription{
+			{EntityID: "sensor.shared"},
+		},
+	}, looppkg.Deps{Runner: noopRunnerForLoopSub{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := reg.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+	ctx := looppkg.WithLoopIDForTest(context.Background(), leaf.ID())
+
+	out, err := p.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(out, "sensor.shared") {
+		t.Errorf("ingest-only global row suppressed the loop's render: %q", out)
+	}
+
+	// mode both DOES render globally, so the dedup must apply.
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID: "sensor.shared",
+		Mode:     looppkg.SubscriptionModeBoth,
+	}); err != nil {
+		t.Fatalf("upgrade to both: %v", err)
+	}
+	out, err = p.TagContext(ctx, agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext (both): %v", err)
+	}
+	if strings.Contains(out, "sensor.shared") {
+		t.Errorf("loop double-rendered an entity the global tier renders (mode both): %q", out)
+	}
+}

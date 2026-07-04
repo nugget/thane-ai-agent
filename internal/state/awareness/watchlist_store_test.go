@@ -375,11 +375,25 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 	if err := store.Upsert("focus-loop", looppkg.EntitySubscription{EntityID: "sensor.owned_only"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
+	// Rows that never render must not appear at all: ingest-only mode
+	// and elapsed TTL (Copilot #1214).
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.capture_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
+		t.Fatalf("upsert ingest-only: %v", err)
+	}
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID:   "sensor.elapsed",
+		TTLSeconds: 60,
+		AddedAt:    time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert elapsed: %v", err)
+	}
 
 	gates, err := store.GlobalEntityGates([]string{
 		"sensor.always_on",
 		"sensor.lensed",
 		"sensor.owned_only",
+		"sensor.capture_only",
+		"sensor.elapsed",
 		"sensor.unknown",
 	})
 	if err != nil {
@@ -393,6 +407,12 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 	}
 	if _, ok := gates["sensor.owned_only"]; ok {
 		t.Errorf("sensor.owned_only leaked through despite loop ownership: %v", gates)
+	}
+	if _, ok := gates["sensor.capture_only"]; ok {
+		t.Errorf("ingest-only row leaked into the dedup set: %v", gates)
+	}
+	if _, ok := gates["sensor.elapsed"]; ok {
+		t.Errorf("expired row leaked into the dedup set: %v", gates)
 	}
 	if _, ok := gates["sensor.unknown"]; ok {
 		t.Errorf("sensor.unknown leaked through despite not being subscribed: %v", gates)

@@ -191,19 +191,21 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	)
 }
 
-// GlobalEntityGates returns, for each candidate present in the
-// always-visible tier (owner=”), that row's RequiresTag gate ("" for
-// an ungated row). Callers combine the gate with their own active-tag
-// set to decide whether the global tier will actually render the
-// entity this turn — a gated-off global row must not suppress a
-// loop-scoped render of the same entity (#1213). It performs a single
-// bounded IN-clause query and skips the TTL cleanup writes that
-// [WatchlistStore.ListOwner] does — this method is meant to be called
-// by sibling providers (e.g. [LoopSubscriptionProvider]) that only
-// need a dedup check against the always-visible set on every
-// iteration; the cleanup is left to the always-visible
-// [WatchlistProvider]'s own pass so we don't double-write deletes.
-// Returns an empty (non-nil) map when candidates is empty.
+// GlobalEntityGates returns, for each candidate whose always-visible
+// row (owner=”) can render at all — state-rendering mode, not expired
+// — that row's RequiresTag gate ("" for an ungated row). Rows that
+// never render (ingest-only, elapsed TTL) are omitted entirely, so
+// they cannot suppress a loop-scoped render of the same entity;
+// callers combine the returned gate with their own active-tag set for
+// the same reason — a gated-off global row renders nothing this turn
+// either (#1213). It performs a single bounded IN-clause query and
+// skips the TTL cleanup writes that [WatchlistStore.ListOwner] does —
+// this method is meant to be called by sibling providers (e.g.
+// [LoopSubscriptionProvider]) that only need a dedup check against
+// the always-visible set on every iteration; the cleanup is left to
+// the always-visible [WatchlistProvider]'s own pass so we don't
+// double-write deletes. Returns an empty (non-nil) map when
+// candidates is empty.
 func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]string, error) {
 	out := make(map[string]string, len(candidates))
 	if len(candidates) == 0 {
@@ -236,6 +238,7 @@ func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]stri
 		return nil, err
 	}
 	defer rows.Close()
+	now := time.Now().UTC()
 	for rows.Next() {
 		var (
 			id, optsJSON string
@@ -244,7 +247,14 @@ func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]stri
 		if err := rows.Scan(&id, &addedAt, &optsJSON); err != nil {
 			return nil, err
 		}
-		out[id] = parseSubscriptionOptions(optsJSON, addedAt.UTC()).RequiresTag
+		sub := parseSubscriptionOptions(optsJSON, addedAt.UTC())
+		// A row that never renders must not dedup anything: an
+		// ingest-only row feeds capture without a context block, and
+		// an expired row is gone at the next cleanup pass.
+		if !sub.RendersState() || sub.IsExpired(now) {
+			continue
+		}
+		out[id] = sub.RequiresTag
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

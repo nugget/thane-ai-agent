@@ -394,3 +394,26 @@ func TestNormalizeSubscriptionsOnLoadTrimsRequiresTag(t *testing.T) {
 		t.Errorf("requires_tag = %q, want trimmed", got[0].RequiresTag)
 	}
 }
+
+// TestNormalizeSubscriptionsOnLoadRejectsGatedIngest makes the
+// render-only invariant uniform at hydration: a JSON-hydrated spec
+// (loop_definition_set, persisted records) cannot carry a gated
+// ingest-feeding subscription any more than the tool doors can.
+func TestNormalizeSubscriptionsOnLoadRejectsGatedIngest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	for _, mode := range []string{SubscriptionModeIngest, SubscriptionModeBoth} {
+		if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+			{EntityID: "binary_sensor.pump_running", Mode: mode, RequiresTag: "ranch_water"},
+		}, now); err == nil {
+			t.Errorf("mode %q with requires_tag survived hydration, want rejection", mode)
+		}
+	}
+	// The render-mode combination stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.tank", RequiresTag: "ranch_water"},
+	}, now); err != nil {
+		t.Errorf("gated render subscription rejected at hydration: %v", err)
+	}
+}
