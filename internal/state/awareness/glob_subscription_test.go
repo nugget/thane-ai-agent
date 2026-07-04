@@ -10,6 +10,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func globTestHA() *fakeHA {
@@ -28,7 +29,7 @@ func globTestHA() *fakeHA {
 
 func TestProvider_GlobSubscriptionExpands(t *testing.T) {
 	p, store := setupTestProvider(t, globTestHA())
-	if err := store.Add("binary_sensor.*door*"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.*door*"}); err != nil {
 		t.Fatalf("add glob: %v", err)
 	}
 
@@ -54,7 +55,7 @@ func TestProvider_GlobSubscriptionExpands(t *testing.T) {
 func TestProvider_GlobSubscriptionCapAndTruncation(t *testing.T) {
 	p, store := setupTestProvider(t, globTestHA())
 	p.SetMaxGlobExpansion(2)
-	if err := store.Add("binary_sensor.*"); err != nil { // matches 3
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.*"}); err != nil { // matches 3
 		t.Fatalf("add glob: %v", err)
 	}
 
@@ -77,7 +78,7 @@ func TestProvider_GlobSubscriptionCapAndTruncation(t *testing.T) {
 
 func TestProvider_GlobSubscriptionEmptyIsSilent(t *testing.T) {
 	p, store := setupTestProvider(t, globTestHA())
-	if err := store.Add("climate.*"); err != nil { // matches nothing
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "climate.*"}); err != nil { // matches nothing
 		t.Fatalf("add glob: %v", err)
 	}
 
@@ -94,7 +95,7 @@ func TestProvider_GlobSubscriptionFetchErrorMarker(t *testing.T) {
 	ha := globTestHA()
 	ha.statesErr = errors.New("HA unavailable")
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("binary_sensor.*door*"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.*door*"}); err != nil {
 		t.Fatalf("add glob: %v", err)
 	}
 
@@ -121,7 +122,7 @@ func TestExpandGlobSubscription_ExcludesAlreadyVisible(t *testing.T) {
 		context.Background(),
 		globTestHA(),
 		slog.Default(),
-		WatchedSubscription{EntityID: "sensor.*"},
+		looppkg.EntitySubscription{EntityID: "sensor.*"},
 		states,
 		nil, // no fetch error
 		time.Now(),
@@ -139,10 +140,10 @@ func TestExpandGlobSubscription_ExcludesAlreadyVisible(t *testing.T) {
 
 func TestProvider_GlobAndConcreteMix(t *testing.T) {
 	p, store := setupTestProvider(t, globTestHA())
-	if err := store.Add("light.hall"); err != nil { // concrete
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "light.hall"}); err != nil { // concrete
 		t.Fatalf("add concrete: %v", err)
 	}
-	if err := store.Add("binary_sensor.*door*"); err != nil { // glob
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.*door*"}); err != nil { // glob
 		t.Fatalf("add glob: %v", err)
 	}
 

@@ -7,13 +7,36 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]string) {
+// fakeLoopMutator records owner-addressed mutations and applies them
+// to an in-memory per-loop subscription list, standing in for the
+// app-side spec mutator.
+type fakeLoopMutator struct {
+	subs  map[string][]looppkg.EntitySubscription
+	calls []string
+}
+
+func (f *fakeLoopMutator) mutate(_ context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
+	if f.subs == nil {
+		f.subs = make(map[string][]looppkg.EntitySubscription)
+	}
+	f.calls = append(f.calls, loopName)
+	next, err := mutate(f.subs[loopName])
+	if err != nil {
+		return nil, err
+	}
+	f.subs[loopName] = next
+	return next, nil
+}
+
+func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *fakeLoopMutator) {
 	t.Helper()
 	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
@@ -26,15 +49,12 @@ func setupWatchlistProvider(t *testing.T) (*WatchlistTools, *WatchlistStore, *[]
 		t.Fatalf("new store: %v", err)
 	}
 
-	// TagRegistrar is gone post-migration; the third return is kept
-	// so the tuple shape doesn't churn across all existing callers,
-	// but it points at an always-empty slice. New tests should not
-	// assert on it.
+	mutator := &fakeLoopMutator{}
 	p := NewWatchlistTools(WatchlistToolsConfig{
-		Store: store,
+		Store:       store,
+		LoopMutator: mutator.mutate,
 	})
-	var registered []string
-	return p, store, &registered
+	return p, store, mutator
 }
 
 func TestWatchlistTools_NameAndToolList(t *testing.T) {
@@ -105,21 +125,20 @@ func TestAddEntitySubscription_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain 'watching'", result)
 	}
 
-	ids, err := store.List()
+	rows, err := store.ListOwner("")
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		t.Fatalf("ListOwner: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != "sensor.temperature" {
-		t.Errorf("store.List() = %v, want [sensor.temperature]", ids)
+	if len(rows) != 1 || rows[0].EntityID != "sensor.temperature" {
+		t.Errorf("global rows = %+v, want [sensor.temperature]", rows)
 	}
 }
 
-func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
-	p, store, registered := setupWatchlistProvider(t)
+func TestAddEntitySubscription_WithTTLHistoryAndInclude(t *testing.T) {
+	p, store, _ := setupWatchlistProvider(t)
 
 	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
 		"entity_id":   "weather.home",
-		"tags":        []any{"battery_focus", "battery_focus"},
 		"history":     []any{60, 3600},
 		"forecast":    "hourly",
 		"ttl_seconds": 120,
@@ -138,29 +157,181 @@ func TestAddEntitySubscription_WithScopesTTLAndHistory(t *testing.T) {
 		t.Fatalf("result = %q, want include text", result)
 	}
 
-	// The pre-migration TagRegistrar callback is gone; this test no
-	// longer checks for it. The tags are recorded on the row itself
-	// (asserted below via ListByTag) instead.
-	_ = registered
-
-	subs, err := store.ListByTag("battery_focus")
+	rows, err := store.ListOwner("")
 	if err != nil {
-		t.Fatalf("ListByTag: %v", err)
+		t.Fatalf("ListOwner: %v", err)
 	}
-	if len(subs) != 1 {
-		t.Fatalf("ListByTag len = %d, want 1", len(subs))
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
-	if !slices.Equal(subs[0].History, []int{60, 3600}) {
-		t.Fatalf("history = %v, want [60 3600]", subs[0].History)
+	row := rows[0]
+	if !slices.Equal(row.History, []int{60, 3600}) {
+		t.Fatalf("history = %v, want [60 3600]", row.History)
 	}
-	if subs[0].Forecast != "hourly" {
-		t.Fatalf("forecast = %q, want hourly", subs[0].Forecast)
+	if row.Forecast != "hourly" {
+		t.Fatalf("forecast = %q, want hourly", row.Forecast)
 	}
-	if subs[0].ExpiresAt == nil {
-		t.Fatal("expected subscription expiration")
+	if row.TTLSeconds != 120 {
+		t.Fatalf("ttl = %d, want 120", row.TTLSeconds)
 	}
-	if subs[0].Include == nil || !subs[0].Include.Area || !subs[0].Include.Device {
-		t.Fatalf("include = %#v, want area+device", subs[0].Include)
+	if row.Include == nil || !row.Include.Area || !row.Include.Device {
+		t.Fatalf("include = %#v, want area+device", row.Include)
+	}
+}
+
+// TestAddEntitySubscription_RetiredTagsParam covers the #1209 teaching
+// error: the lens-tag vocabulary is gone and the error must point the
+// model at the owner parameter instead of silently ignoring tags.
+func TestAddEntitySubscription_RetiredTagsParam(t *testing.T) {
+	p, store, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.battery",
+		"tags":      []any{"battery_focus"},
+	})
+	if err == nil {
+		t.Fatal("expected teaching error for retired tags parameter")
+	}
+	if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("error = %q, want retirement + owner guidance", err.Error())
+	}
+
+	count, err := store.subscriptionCount()
+	if err != nil {
+		t.Fatalf("subscriptionCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("row count = %d, want 0 — a rejected call must not write", count)
+	}
+}
+
+func TestAddEntitySubscription_OwnerRoutesToLoopMutator(t *testing.T) {
+	p, store, mutator := setupWatchlistProvider(t)
+
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.kitchen_temp",
+		"owner":     "kitchen-watcher",
+		"self_only": true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, `Loop "kitchen-watcher"`) {
+		t.Fatalf("result = %q, want loop-owner phrasing", result)
+	}
+	if !slices.Equal(mutator.calls, []string{"kitchen-watcher"}) {
+		t.Fatalf("mutator calls = %v, want [kitchen-watcher]", mutator.calls)
+	}
+	subs := mutator.subs["kitchen-watcher"]
+	if len(subs) != 1 || subs[0].EntityID != "sensor.kitchen_temp" {
+		t.Fatalf("loop subs = %+v, want sensor.kitchen_temp", subs)
+	}
+	if !subs[0].SelfOnly {
+		t.Fatal("self_only not carried onto the loop subscription")
+	}
+	if subs[0].AddedAt.IsZero() {
+		t.Fatal("AddedAt not stamped on the loop subscription")
+	}
+
+	// The owner path must not write a global row; the registry mirror
+	// is the app-side persist hook's job.
+	count, err := store.subscriptionCount()
+	if err != nil {
+		t.Fatalf("subscriptionCount: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("store row count = %d, want 0 for owner-routed add", count)
+	}
+}
+
+func TestAddEntitySubscription_SelfOnlyRequiresOwner(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.kitchen_temp",
+		"self_only": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for self_only without owner")
+	}
+	if !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("error = %q, want owner guidance", err.Error())
+	}
+}
+
+func TestAddEntitySubscription_SystemOwnerRefused(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "person.alice",
+		"owner":     OwnerSystem,
+	})
+	if err == nil {
+		t.Fatal("expected reserved-owner error")
+	}
+	if !strings.Contains(err.Error(), "person.track") {
+		t.Fatalf("error = %q, want config pointer", err.Error())
+	}
+}
+
+func TestAddEntitySubscription_IngestModeFiresRebuildHook(t *testing.T) {
+	db, err := sql.Open("sqlite-thane", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := NewWatchlistStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	rebuilds := 0
+	p := NewWatchlistTools(WatchlistToolsConfig{
+		Store:          store,
+		OnIngestChange: func() { rebuilds++ },
+	})
+
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "binary_sensor.*door*",
+		"mode":      "ingest",
+	}); err != nil {
+		t.Fatalf("ingest add: %v", err)
+	}
+	if rebuilds != 1 {
+		t.Fatalf("rebuilds = %d, want 1 after ingest add", rebuilds)
+	}
+
+	globs, err := store.IngestGlobs(time.Now())
+	if err != nil {
+		t.Fatalf("IngestGlobs: %v", err)
+	}
+	if !slices.Equal(globs, []string{"binary_sensor.*door*"}) {
+		t.Fatalf("IngestGlobs = %v, want the new glob", globs)
+	}
+
+	// A render-mode add leaves the filter alone.
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.plain",
+	}); err != nil {
+		t.Fatalf("render add: %v", err)
+	}
+	if rebuilds != 1 {
+		t.Fatalf("rebuilds = %d, want no rebuild for render add", rebuilds)
+	}
+}
+
+func TestAddEntitySubscription_IngestRejectsRegistryTargets(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	_, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "area:office",
+		"mode":      "ingest",
+	})
+	if err == nil {
+		t.Fatal("expected registry-target rejection for ingest mode")
+	}
+	if !strings.Contains(err.Error(), "ingestion filter") {
+		t.Fatalf("error = %q, want ingestion-filter guidance", err.Error())
 	}
 }
 
@@ -214,45 +385,43 @@ func TestAddEntitySubscription_ForecastNoneClearsExistingOption(t *testing.T) {
 		t.Fatalf("result = %q, want forecast clearing note", result)
 	}
 
-	subs, err := store.ListUntaggedSubscriptions()
+	rows, err := store.ListOwner("")
 	if err != nil {
-		t.Fatalf("ListUntaggedSubscriptions: %v", err)
+		t.Fatalf("ListOwner: %v", err)
 	}
-	if len(subs) != 1 {
-		t.Fatalf("len(subs) = %d, want 1", len(subs))
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
-	if subs[0].Forecast != "" {
-		t.Fatalf("forecast = %q, want cleared", subs[0].Forecast)
+	if rows[0].Forecast != "" {
+		t.Fatalf("forecast = %q, want cleared", rows[0].Forecast)
 	}
 }
 
-func TestParseWatchlistTagArgs_IgnoresWhitespaceOnlyTags(t *testing.T) {
-	tags, err := parseWatchlistTagArgs([]any{"battery_focus", "   ", "\t", " interactive "})
-	if err != nil {
-		t.Fatalf("parseWatchlistTagArgs: %v", err)
-	}
-
-	if !slices.Equal(tags, []string{"battery_focus", "interactive"}) {
-		t.Fatalf("parseWatchlistTagArgs() = %v, want [battery_focus interactive]", tags)
-	}
-}
-
-func TestListEntitySubscriptions_ReturnsScopedSubscriptions(t *testing.T) {
+// TestListEntitySubscriptions_WholeTruth asserts the registry-wide
+// listing: global, loop-owned, and system rows all appear with their
+// owners, and the retired tag filter teaches instead of filtering.
+func TestListEntitySubscriptions_WholeTruth(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	if err := store.Add("sensor.always_on"); err != nil {
-		t.Fatalf("Add: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
+		t.Fatalf("upsert global: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, []int{600}, 300, "", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("battery-watcher", looppkg.EntitySubscription{
+		EntityID:   "sensor.battery",
+		History:    []int{600},
+		TTLSeconds: 300,
+		AddedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert owned: %v", err)
 	}
-	if err := store.AddWithOptions("weather.home", []string{"weather_focus"}, nil, 0, "daily", ""); err != nil {
-		t.Fatalf("AddWithOptions weather: %v", err)
+	if err := store.Upsert(OwnerSystem, looppkg.EntitySubscription{
+		EntityID: "person.alice",
+		Mode:     looppkg.SubscriptionModeIngest,
+	}); err != nil {
+		t.Fatalf("upsert system: %v", err)
 	}
 
-	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{
-		"tag": "weather_focus",
-	})
+	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("handleListEntitySubscriptions: %v", err)
 	}
@@ -261,45 +430,61 @@ func TestListEntitySubscriptions_ReturnsScopedSubscriptions(t *testing.T) {
 		Count int `json:"count"`
 		Items []struct {
 			EntityID      string `json:"entity_id"`
-			Scope         string `json:"scope"`
+			Owner         string `json:"owner"`
+			Mode          string `json:"mode"`
 			AlwaysVisible bool   `json:"always_visible"`
-			Forecast      string `json:"forecast"`
 			ExpiresDelta  string `json:"expires_delta"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if payload.Count != 1 {
-		t.Fatalf("count = %d, want 1", payload.Count)
+	if payload.Count != 3 {
+		t.Fatalf("count = %d, want 3 (whole truth)", payload.Count)
 	}
-	if payload.Items[0].EntityID != "weather.home" || payload.Items[0].Scope != "weather_focus" {
-		t.Fatalf("item = %+v, want weather.home/weather_focus", payload.Items[0])
+	byEntity := make(map[string]struct {
+		Owner         string
+		Mode          string
+		AlwaysVisible bool
+		ExpiresDelta  string
+	}, len(payload.Items))
+	for _, item := range payload.Items {
+		byEntity[item.EntityID] = struct {
+			Owner         string
+			Mode          string
+			AlwaysVisible bool
+			ExpiresDelta  string
+		}{item.Owner, item.Mode, item.AlwaysVisible, item.ExpiresDelta}
 	}
-	if payload.Items[0].AlwaysVisible {
-		t.Fatal("tagged subscription should not be always visible")
+	if got := byEntity["sensor.always_on"]; got.Owner != "" || !got.AlwaysVisible || got.Mode != "render" {
+		t.Errorf("sensor.always_on = %+v, want global render row", got)
 	}
-	if payload.Items[0].Forecast != "daily" {
-		t.Fatalf("forecast = %q, want daily", payload.Items[0].Forecast)
+	if got := byEntity["sensor.battery"]; got.Owner != "battery-watcher" || got.AlwaysVisible || got.ExpiresDelta == "" {
+		t.Errorf("sensor.battery = %+v, want owned row with expiry", got)
+	}
+	if got := byEntity["person.alice"]; got.Owner != OwnerSystem || got.Mode != "ingest" {
+		t.Errorf("person.alice = %+v, want system ingest row", got)
 	}
 
+	// Owner filter narrows to one tier.
 	raw, err = p.handleListEntitySubscriptions(context.Background(), map[string]any{
-		"tag": "battery_focus",
+		"owner": "battery-watcher",
 	})
 	if err != nil {
-		t.Fatalf("handleListEntitySubscriptions battery_focus: %v", err)
+		t.Fatalf("owner-filtered list: %v", err)
 	}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		t.Fatalf("unmarshal battery payload: %v", err)
+		t.Fatalf("unmarshal filtered payload: %v", err)
 	}
-	if payload.Count != 1 {
-		t.Fatalf("battery count = %d, want 1", payload.Count)
+	if payload.Count != 1 || payload.Items[0].EntityID != "sensor.battery" {
+		t.Fatalf("filtered payload = %+v, want only sensor.battery", payload)
 	}
-	if payload.Items[0].EntityID != "sensor.battery" || payload.Items[0].Scope != "battery_focus" {
-		t.Fatalf("battery item = %+v, want sensor.battery/battery_focus", payload.Items[0])
-	}
-	if payload.Items[0].ExpiresDelta == "" {
-		t.Fatal("expected expires_delta for TTL-backed subscription")
+
+	// The retired tag filter teaches rather than silently filtering.
+	if _, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{
+		"tag": "battery_focus",
+	}); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("tag filter error = %v, want retirement teaching", err)
 	}
 }
 
@@ -318,8 +503,8 @@ func TestRemoveEntitySubscription_MissingEntityID(t *testing.T) {
 func TestRemoveEntitySubscription_Success(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	if err := store.Add("sensor.temperature"); err != nil {
-		t.Fatalf("add: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
+		t.Fatalf("upsert: %v", err)
 	}
 
 	result, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
@@ -332,49 +517,58 @@ func TestRemoveEntitySubscription_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain entity_id", result)
 	}
 
-	ids, err := store.List()
+	rows, err := store.ListOwner("")
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		t.Fatalf("ListOwner: %v", err)
 	}
-	if len(ids) != 0 {
-		t.Errorf("store.List() = %v, want empty", ids)
+	if len(rows) != 0 {
+		t.Errorf("global rows = %v, want empty", rows)
 	}
 }
 
-func TestRemoveEntitySubscription_ScopedRemovalKeepsOtherSubscriptions(t *testing.T) {
-	p, store, _ := setupWatchlistProvider(t)
+func TestRemoveEntitySubscription_OwnerRoutesToLoopMutator(t *testing.T) {
+	p, store, mutator := setupWatchlistProvider(t)
 
-	if err := store.Add("sensor.battery"); err != nil {
-		t.Fatalf("Add: %v", err)
+	// A same-named global row must survive an owner-routed remove.
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
+		t.Fatalf("upsert global: %v", err)
 	}
-	if err := store.AddWithOptions("sensor.battery", []string{"battery_focus"}, nil, 0, "", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	mutator.subs = map[string][]looppkg.EntitySubscription{
+		"battery-watcher": {{EntityID: "sensor.battery"}},
 	}
 
 	result, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
 		"entity_id": "sensor.battery",
-		"tags":      []any{"battery_focus"},
+		"owner":     "battery-watcher",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "scopes [battery_focus]") {
-		t.Fatalf("result = %q, want scoped-removal text", result)
+	if !strings.Contains(result, `Loop "battery-watcher"`) {
+		t.Fatalf("result = %q, want loop-owner phrasing", result)
+	}
+	if len(mutator.subs["battery-watcher"]) != 0 {
+		t.Fatalf("loop subs = %+v, want empty", mutator.subs["battery-watcher"])
+	}
+	if ids := globalEntityIDs(t, store); !slices.Equal(ids, []string{"sensor.battery"}) {
+		t.Fatalf("global tier = %v, want untouched", ids)
+	}
+}
+
+func TestRemoveEntitySubscription_SystemAndTagsGuards(t *testing.T) {
+	p, _, _ := setupWatchlistProvider(t)
+
+	if _, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "person.alice",
+		"owner":     OwnerSystem,
+	}); err == nil || !strings.Contains(err.Error(), "person.track") {
+		t.Fatalf("system remove error = %v, want config pointer", err)
 	}
 
-	untagged, err := store.ListUntagged()
-	if err != nil {
-		t.Fatalf("ListUntagged: %v", err)
-	}
-	if !slices.Equal(untagged, []string{"sensor.battery"}) {
-		t.Fatalf("ListUntagged() = %v, want [sensor.battery]", untagged)
-	}
-
-	tagged, err := store.ListByTag("battery_focus")
-	if err != nil {
-		t.Fatalf("ListByTag: %v", err)
-	}
-	if len(tagged) != 0 {
-		t.Fatalf("ListByTag(battery_focus) = %v, want empty", tagged)
+	if _, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.battery",
+		"tags":      []any{"battery_focus"},
+	}); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("tags remove error = %v, want retirement teaching", err)
 	}
 }

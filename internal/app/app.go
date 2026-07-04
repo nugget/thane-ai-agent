@@ -180,6 +180,13 @@ type App struct {
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
 
+	// Set in initAwareness once the state watcher exists; invoked
+	// after any subscription-registry mutation (tool writes, spec
+	// mirroring) to rebuild the ingestion filter from the registry
+	// (#1192). Nil until the watcher is wired — mutations that land
+	// earlier are simply no-ops.
+	ingestFilterRebuild func()
+
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 

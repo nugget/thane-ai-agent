@@ -81,9 +81,9 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `add_entity_subscription` | Watch an HA entity so its state is injected into context each turn. |
-| `list_entity_subscriptions` | List current watchlist subscriptions (scoped and always-visible). |
-| `remove_entity_subscription` | Remove a watched entity or a scoped subscription. |
+| `add_entity_subscription` | Subscribe to an HA entity. Ownership is a parameter: no `owner` = always-visible; `owner: <loop name>` lands on that loop's spec. |
+| `list_entity_subscriptions` | List the whole subscription registry: always-visible, loop-owned, and system-seeded rows, each with its owner. |
+| `remove_entity_subscription` | Remove a subscription; `owner` addresses a loop's own entry, system rows are config-owned and refuse removal. |
 
 Subscription expiry is reported as `expires_delta`, not a raw timestamp,
 so the model does not need to do clock arithmetic.
@@ -99,8 +99,8 @@ An entity subscription's `entity_id` may be a glob (e.g.
 subscription is re-expanded against live entities every turn — newly
 matching entities join automatically — and is capped per turn, emitting a
 truncation marker when it matches more than the cap. This works across
-`add_entity_subscription`, `watch_entity`, `thane_loop_create.entities`, and
-`update_entity_subscriptions`.
+`add_entity_subscription`, `watch_entity`, and
+`thane_loop_create.entities`.
 
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, `description`, and `visibility`, or
@@ -416,7 +416,6 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 | `loop_definition_launch` | Launch a persistent loop from a definition. |
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
-| `update_entity_subscriptions` | Add or remove Home Assistant entity subscriptions on a running loop. |
 
 ## `mqtt` — wake subscriptions
 

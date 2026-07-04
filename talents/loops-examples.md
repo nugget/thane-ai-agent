@@ -25,7 +25,8 @@ below.
   sleep envelope, profile, supervisor settings, conditions, metadata.
 
 If a peer loop already owns the topic, prefer extending it (via
-`update_entity_subscriptions`) over launching a parallel watcher.
+`add_entity_subscription` with `owner` set to its name) over
+launching a parallel watcher.
 
 ## Choose the shape of work
 
@@ -196,9 +197,9 @@ when its scope should shift.
 
 2. **The watcher runs at its own pace** inside the envelope, tuning
    via `set_next_sleep` and adjusting its own watch set via
-   `update_entity_subscriptions` (same loop-scoped tool the operator
-   uses in step 4 to push focus down, just called by the watcher
-   against its own name). You don't interact during this phase.
+   `watch_entity` / `unwatch_entity` (the in-loop door — no name
+   needed, the loop is baked in). You don't interact during this
+   phase.
 
 3. **The watcher pulls you in when something matters** via
    `request_core_attention`. This forces a supervisor turn on your
@@ -218,22 +219,21 @@ when its scope should shift.
    delivery command. You decide whether to notify, defer, or absorb.
 
 4. **You push new focus down when something matters** via
-   `update_entity_subscriptions`. Adds or removes entities on the
+   `add_entity_subscription` / `remove_entity_subscription` with
+   `owner` naming the loop. Each call adjusts one entity on the
    running loop's watch set in place.
 
    ```json
    {
-     "name": "server_closet_guardian",
-     "add": [
-       {"entity_id": "sensor.closet_ac_state", "history": [3600]},
-       {"entity_id": "binary_sensor.utility_brownout"}
-     ]
+     "entity_id": "sensor.closet_ac_state",
+     "owner": "server_closet_guardian",
+     "history": [3600]
    }
    ```
 
-   The watcher sees the new entities on its next wake. Use
-   `remove: ["entity_id", ...]` to retire watches you no longer care
-   about.
+   The watcher sees the new entity on its next wake. Use
+   `remove_entity_subscription` with the same `owner` to retire
+   watches you no longer care about.
 
 For event-driven wakes (a new release on a repo, a new feed entry),
 producer tools like `forge_repo_follow` and `media_follow` take a

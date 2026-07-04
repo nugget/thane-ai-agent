@@ -55,8 +55,8 @@ func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 
 	p, store, reg, _ := setupLoopSubProvider(t)
 
-	// Always-visible subscription via the store (no scope).
-	if err := store.Add("sensor.shared"); err != nil {
+	// Always-visible subscription via the store (owner "").
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.shared"}); err != nil {
 		t.Fatalf("seed always-visible: %v", err)
 	}
 

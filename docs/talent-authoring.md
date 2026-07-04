@@ -416,14 +416,15 @@ TestRepoTalentToolReferences` and let the test surface the miss.
 
 ### Wrong-data-store substitution
 
-This bit PR-A: `add_entity_subscription` and
-`remove_entity_subscription` are real tools, but they mutate the
-*conversation-wide* always-visible subscription set. The loop-scoped
-subscription set (the one a `thane_loop_create` service loop creates) is mutated
-by `update_entity_subscriptions`. The talent said "adjust the watch
-set via add/remove" when the watch set in question lived in a
-different store. The regression test can't catch this because both
-names ARE real tools. The author has to.
+This bit PR-A, back when the subscription surface was split across
+two stores: `add_entity_subscription` / `remove_entity_subscription`
+mutated the *conversation-wide* always-visible set, while the
+loop-scoped set was mutated by a separate `update_entity_subscriptions`
+tool. The talent said "adjust the watch set via add/remove" when the
+watch set in question lived in the other store. The regression test
+couldn't catch this because both names WERE real tools. The author has
+to. (#1209 later dissolved this particular trap — ownership became an
+`owner` parameter on one tool family — but the lesson generalizes.)
 
 When you cite a tool in a talent that mutates state, verify *which
 store* it mutates and whether that's the store the talent's reader

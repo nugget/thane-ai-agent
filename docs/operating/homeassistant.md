@@ -64,10 +64,13 @@ the workhorse for most HA interactions.
 
 ### WebSocket API
 
-Persistent connection for real-time `state_changed` events. Thane subscribes
-to entity patterns (e.g., `person.*`, `binary_sensor.*door*`) and receives
-instant notifications when state changes. This is the same mechanism used by
-the HA frontend and mobile apps — the official, first-class event bus.
+Persistent connection for real-time `state_changed` events. The event feed
+is gated client-side by the subscription registry: ingest-mode entity
+subscriptions (ids or globs like `binary_sensor.*door*`, added via
+`add_entity_subscription` from any owner) plus the system-seeded person
+floor from `person.track` decide what is captured. This is the same
+mechanism used by the HA frontend and mobile apps — the official,
+first-class event bus.
 
 WebSocket events can trigger agent wakes, enabling proactive behavior without
 polling.

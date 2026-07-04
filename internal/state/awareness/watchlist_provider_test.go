@@ -12,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	_ "modernc.org/sqlite"
 )
 
@@ -118,8 +119,8 @@ func TestProvider_RendersIncludedEntityMetadata(t *testing.T) {
 		Labels:      true,
 		Description: true,
 	}
-	if err := store.AddWithOptions(state.EntityID, nil, nil, 0, "", "", include); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: state.EntityID, Include: &include}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 	p.SetRegistryClient(&fakeRegistries{
 		areas: []homeassistant.Area{{
@@ -182,7 +183,7 @@ func TestProvider_SingleEntity(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.office_temperature"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -214,7 +215,7 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.broken"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.broken"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -265,10 +266,10 @@ func TestProvider_MultipleEntities(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.temperature"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := store.Add("binary_sensor.door"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -304,7 +305,7 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.raw"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.raw"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -351,8 +352,8 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.office_temperature", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -418,8 +419,8 @@ func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "hourly", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "hourly"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -478,8 +479,8 @@ func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "daily", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "daily"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -565,8 +566,8 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -624,8 +625,8 @@ func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, "", ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})

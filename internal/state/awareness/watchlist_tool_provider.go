@@ -10,19 +10,31 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
+// LoopSubscriptionMutator applies a transformation to a named loop's
+// Spec.Subscriptions, persisting the spec and patching the live loop.
+// The app wires its subscription mutator here so the owner-parameter
+// path of add/remove_entity_subscription routes through the same
+// single-writer persistence discipline watch_entity uses.
+type LoopSubscriptionMutator func(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error)
+
 // WatchlistTools is the [tools.Provider] for the add_entity_subscription,
-// list_entity_subscriptions, and remove_entity_subscription tools. It
-// owns the watchlist store the handlers read/write and an optional HA
-// registry client used to preview what a glob or area/label/floor target
-// expands to at the moment it is authored — so the model learns
-// immediately that area:office matches three entities, or that a typo'd
-// area:atrium matches none.
+// list_entity_subscriptions, and remove_entity_subscription tools — the
+// one tool family over the one subscription registry. Ownership is a
+// parameter: no owner means the always-visible tier, a loop name routes
+// to that loop's spec (compiled back into the registry on persist), and
+// the reserved system owner is read-only. An optional HA registry
+// client previews what a glob or area/label/floor target expands to at
+// the moment it is authored — so the model learns immediately that
+// area:office matches three entities, or that a typo'd area:atrium
+// matches none.
 type WatchlistTools struct {
 	store          *WatchlistStore
 	registry       HARegistryClient
+	loopMutator    LoopSubscriptionMutator
 	onIngestChange func()
 	logger         *slog.Logger
 }
@@ -35,6 +47,10 @@ type WatchlistToolsConfig struct {
 	// membership when a subscription is authored or listed. Optional:
 	// when nil, subscriptions still work but carry no expansion preview.
 	Registry HARegistryClient
+	// LoopMutator routes owner-addressed mutations onto the named
+	// loop's Spec.Subscriptions. Optional: when nil, the owner
+	// parameter returns a teaching error instead of mutating.
+	LoopMutator LoopSubscriptionMutator
 	// OnIngestChange is invoked after any mutation that may affect the
 	// state-watcher ingestion filter (an ingest/both-mode add, or any
 	// removal), so the wiring can rebuild the filter from the registry.
@@ -58,6 +74,7 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 	return &WatchlistTools{
 		store:          cfg.Store,
 		registry:       cfg.Registry,
+		loopMutator:    cfg.LoopMutator,
 		onIngestChange: cfg.OnIngestChange,
 		logger:         logger,
 	}
@@ -66,16 +83,26 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 // Name implements [tools.Provider].
 func (w *WatchlistTools) Name() string { return "awareness.watchlist" }
 
-// Tools implements [tools.Provider]. Returns the three watchlist
-// management tools with handlers bound to w's store.
+// retiredTagsError is the teaching error for the retired lens-tag
+// vocabulary (#1209): subscriptions are loop-owned now, and the
+// tag-scoped storage tier the parameters wrote is gone.
+func retiredTagsError(param string) error {
+	return fmt.Errorf("the %s parameter is retired: subscription tags and tag scoping no longer exist — a subscription is owned (always-visible, a loop via the owner parameter, or system); drop %s and use owner to address a loop's subscriptions", param, param)
+}
+
+// Tools implements [tools.Provider]. Returns the three subscription
+// registry tools with handlers bound to w's store.
 func (w *WatchlistTools) Tools() []*tools.Tool {
+	ownerParam := map[string]any{
+		"type":        "string",
+		"description": "Who owns the subscription. Omit for an always-visible subscription (appears on every turn — your own field of view). Pass a loop definition name to subscribe that loop instead: the entry lands on its spec's subscriptions and follows the loop's lifecycle. From inside a loop's own turn, prefer watch_entity (no name needed). The reserved owner \"system\" is read-only (runtime-seeded rows such as the person-presence ingestion floor, configured via person.track).",
+	}
 	return []*tools.Tool{
 		{
 			Name: "add_entity_subscription",
 			Description: "Subscribe to a Home Assistant entity so its live state is injected into the model's context. " +
-				"This tool adds always-visible subscriptions: the entity appears on every turn regardless of which loop or capability tags are active — this is how you, or a conversation, watch an entity in your own field of view. " +
-				"For a specific named loop's view use update_entity_subscriptions; from inside a loop's own turn use watch_entity. " +
-				"Optional tags carry lens-style classifiers on the subscription itself for future filtering; they no longer act as a scope binding. " +
+				"Without owner this adds an always-visible subscription: the entity appears on every turn — this is how you, or a conversation, watch an entity in your own field of view. " +
+				"With owner set to a loop definition name, the subscription lands on that loop's spec instead; from inside a loop's own turn use watch_entity. " +
 				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed. " +
 				"When Home Assistant is connected, a glob or area/label/floor target reports how many entities it currently matches (with a sample) — and flags a zero-member expansion, which almost always means a typo'd id or an empty group.",
 			Parameters: map[string]any{
@@ -85,11 +112,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"type":        "string",
 						"description": "What to subscribe to. Any of: a concrete entity ID (sensor.office_temperature); a glob (binary_sensor.*door*, *_temperature); or an organizational target — area:<area_id>, label:<label_id>, floor:<floor_id> (e.g. area:office) — which watches that group's current members, re-resolved live each turn so membership follows the home as devices move (capped per turn like globs). Use ha_registry_search to find area/label/floor IDs.",
 					},
-					"tags": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "Optional lens-style classifiers attached to the subscription. Not used to bind it to any loop — for that, use the loop-scoped tools.",
-					},
+					"owner": ownerParam,
 					"history": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "integer"},
@@ -109,6 +132,10 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"enum":        []string{"render", "ingest", "both"},
 						"description": "What the subscription feeds. render (default): inject live state into context each turn. ingest: feed the recent-state-changes window only — the entity's transitions appear there without per-turn state injection. both: do both. ingest/both accept entity ids and globs, not area/label/floor targets.",
 					},
+					"self_only": map[string]any{
+						"type":        "boolean",
+						"description": "Only meaningful with owner set to a container loop: true keeps the subscription out of descendant loops' inherited sets (the container still sees it). Default false — container subscriptions cascade.",
+					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
@@ -116,14 +143,16 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 			Handler: w.handleAddEntitySubscription,
 		},
 		{
-			Name:        "list_entity_subscriptions",
-			Description: "List always-visible entity subscriptions used for live context injection — entities that are surfaced on every turn regardless of which loop or capability tags are active. When Home Assistant is connected, each glob or area/label/floor subscription carries an expansion object with its current member count and a sample, so a subscription that currently matches nothing is visible at a glance. For per-loop subscriptions, call loop_definition_get and read the spec's subscriptions field; effective inherited subscriptions are surfaced there too.",
+			Name: "list_entity_subscriptions",
+			Description: "List the entity-subscription registry: every subscription with its owner — always-visible rows (owner \"\"), loop-owned rows compiled from loop specs, and system-seeded rows such as the person-presence ingestion floor. " +
+				"When Home Assistant is connected, each glob or area/label/floor subscription carries an expansion object with its current member count and a sample, so a subscription that currently matches nothing is visible at a glance. " +
+				"Inherited effective sets for a running loop (own + container ancestors') are surfaced by loop_definition_get on that loop's name.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"tag": map[string]any{
+					"owner": map[string]any{
 						"type":        "string",
-						"description": "Optional lens-tag filter. Only matches subscriptions that carry the given lens tag.",
+						"description": "Optional owner filter: \"\" is not a valid filter value (omit the parameter to list everything); pass a loop definition name, or \"system\" for runtime-seeded rows.",
 					},
 					"entity_id": map[string]any{
 						"type":        "string",
@@ -135,7 +164,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 		},
 		{
 			Name:        "remove_entity_subscription",
-			Description: "Remove an always-visible entity subscription. Touches only always-on rows; per-loop subscriptions are not affected (use unwatch_entity inside the loop, or update_entity_subscriptions by name).",
+			Description: "Remove an entity subscription. Without owner this removes an always-visible row; with owner set to a loop definition name it removes that loop's own spec entry (inherited entries from container ancestors are untouched — remove them on the ancestor). System-owned rows cannot be removed here; they re-seed from configuration.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -143,11 +172,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"type":        "string",
 						"description": "The Home Assistant entity ID to unsubscribe from.",
 					},
-					"tags": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "Optional lens-tag filter — when present, only removes always-visible rows that also carry one of these tags.",
-					},
+					"owner": ownerParam,
 				},
 				"required": []string{"entity_id"},
 			},
@@ -164,11 +189,15 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if err := homeassistant.ValidateEntityTarget(entityID); err != nil {
 		return "", fmt.Errorf("entity_id %q: invalid glob pattern: %w", entityID, err)
 	}
-
-	tags, err := parseWatchlistTagArgs(args["tags"])
-	if err != nil {
-		return "", err
+	if _, present := args["tags"]; present {
+		return "", retiredTagsError("tags")
 	}
+
+	owner := strings.TrimSpace(stringArg(args, "owner"))
+	if owner == OwnerSystem {
+		return "", fmt.Errorf("owner %q is reserved for runtime-seeded rows (the person-presence ingestion floor, configured via person.track) and cannot be written by tools; omit owner for an always-visible subscription or name a loop", OwnerSystem)
+	}
+
 	history, err := parseWatchlistHistoryArg(args["history"])
 	if err != nil {
 		return "", err
@@ -192,64 +221,64 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if err != nil {
 		return "", err
 	}
-	rawMode, _ := args["mode"].(string)
-	mode := normalizeSubscriptionMode(rawMode)
-	if mode == "" {
-		return "", fmt.Errorf("mode must be one of render, ingest, or both; got %q", rawMode)
+	rawMode := stringArg(args, "mode")
+	mode, err := looppkg.NormalizeSubscriptionMode(rawMode)
+	if err != nil {
+		return "", err
 	}
-	if mode != SubscriptionModeRender {
+	selfOnly, _ := args["self_only"].(bool)
+	if selfOnly && owner == "" {
+		return "", fmt.Errorf("self_only shapes container inheritance and applies to loop-owned subscriptions only; pass owner with a container loop's name, or drop self_only for an always-visible subscription")
+	}
+
+	sub := looppkg.EntitySubscription{
+		EntityID:   entityID,
+		History:    history,
+		Forecast:   forecast,
+		Include:    tools.EntityMetadataIncludesPointer(include),
+		TTLSeconds: ttlSeconds,
+		AddedAt:    time.Now().UTC(),
+		Mode:       mode,
+		SelfOnly:   selfOnly,
+	}
+
+	if sub.FeedsIngest() {
 		// The ingestion filter speaks the EntityFilter's native
 		// vocabulary: concrete ids and globs. Registry targets would be
 		// silently approximated, so they are rejected outright (#1192).
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
-			return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; subscribe the target with mode render, or list its member entities", mode)
+			return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; subscribe the target with mode render, or list its member entities", rawMode)
 		}
-		// The ingestion filter reads only always-visible rows; a
-		// tag-scoped ingest subscription would sit in the store doing
-		// nothing. Reject rather than silently no-op.
-		if len(tags) > 0 {
-			return "", fmt.Errorf("mode %q subscriptions are always-visible and cannot carry tags — drop the tags, or use mode render for a tag-scoped subscription", mode)
-		}
-		globs, err := w.store.IngestGlobs(time.Now())
-		if err != nil {
-			return "", fmt.Errorf("count ingest entries: %w", err)
-		}
-		// Re-adding an existing entry updates it in place and doesn't
-		// grow the registry; the cap gates only genuinely new entries.
-		exists := false
-		for _, g := range globs {
-			if g == entityID {
-				exists = true
-				break
-			}
-		}
-		if !exists && len(globs) >= maxIngestEntries {
-			return "", fmt.Errorf("ingest registry is at its cap (%d entries) — remove entries before adding more; a broad glob covers more for less", maxIngestEntries)
+		if err := CheckIngestCapacity(w.store, sub); err != nil {
+			return "", err
 		}
 	}
 
-	if mode == SubscriptionModeRender && len(tags) == 0 && len(history) == 0 && ttlSeconds == 0 && forecast == "" && !forecastSet && !include.Any() {
-		if err := w.store.Add(entityID); err != nil {
-			return "", fmt.Errorf("add to watchlist: %w", err)
+	if owner != "" {
+		if w.loopMutator == nil {
+			return "", fmt.Errorf("loop-owned subscriptions are not available in this runtime; omit owner for an always-visible subscription")
 		}
-	} else {
-		if err := w.store.AddWithOptions(entityID, tags, history, ttlSeconds, forecast, mode, include); err != nil {
-			return "", fmt.Errorf("add to watchlist: %w", err)
+		if _, err := w.loopMutator(ctx, owner, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+			return upsertLoopSubscription(current, sub), nil
+		}); err != nil {
+			return "", err
 		}
+	} else if err := w.store.Upsert("", sub); err != nil {
+		return "", fmt.Errorf("add to watchlist: %w", err)
 	}
-	if mode != SubscriptionModeRender && w.onIngestChange != nil {
+	if sub.FeedsIngest() && w.onIngestChange != nil {
 		w.onIngestChange()
 	}
 
 	msg := fmt.Sprintf("Now watching %s", entityID)
-	switch mode {
-	case SubscriptionModeIngest:
-		msg += " (mode: ingest — transitions feed the recent-state-changes window; no per-turn state render)"
-	case SubscriptionModeBoth:
-		msg += " (mode: both — transitions feed the recent-state-changes window and live state renders each turn)"
+	if owner != "" {
+		msg = fmt.Sprintf("Loop %q is now watching %s", owner, entityID)
 	}
-	if len(tags) > 0 {
-		msg += fmt.Sprintf(" (scoped to tags: %v)", tags)
+	switch mode {
+	case looppkg.SubscriptionModeIngest:
+		msg += " (mode: ingest — transitions feed the recent-state-changes window; no per-turn state render)"
+	case looppkg.SubscriptionModeBoth:
+		msg += " (mode: both — transitions feed the recent-state-changes window and live state renders each turn)"
 	}
 	if len(history) > 0 {
 		parts := make([]string, len(history))
@@ -265,6 +294,9 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 	if ttlSeconds > 0 {
 		msg += fmt.Sprintf(" (expires in %ds)", ttlSeconds)
+	}
+	if selfOnly {
+		msg += " (self_only: not inherited by descendant loops)"
 	}
 	if include.Any() {
 		msg += " (includes HA metadata)"
@@ -302,15 +334,27 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 
 	w.logger.Info("entity subscription added",
-		"entity_id", entityID, "tags", tags, "history", history, "forecast", forecast, "include", include, "ttl_seconds", ttlSeconds)
+		"entity_id", entityID, "owner", owner, "history", history, "forecast", forecast, "include", include, "ttl_seconds", ttlSeconds, "mode", mode, "self_only", selfOnly)
 	return msg, nil
 }
 
 func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args map[string]any) (string, error) {
-	tag, _ := args["tag"].(string)
+	if _, present := args["tag"]; present {
+		return "", retiredTagsError("tag")
+	}
+	ownerFilter, ownerSet := args["owner"].(string)
+	ownerFilter = strings.TrimSpace(ownerFilter)
 	entityID, _ := args["entity_id"].(string)
 
-	subs, err := w.store.ListSubscriptions(strings.TrimSpace(tag))
+	var (
+		rows []SubscriptionRow
+		err  error
+	)
+	if ownerSet && ownerFilter != "" {
+		rows, err = w.store.ListOwner(ownerFilter)
+	} else {
+		rows, err = w.store.ListAll()
+	}
 	if err != nil {
 		return "", fmt.Errorf("list watchlist subscriptions: %w", err)
 	}
@@ -319,38 +363,46 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 	// One registries bundle shared across the whole list: it fetches each
 	// registry once and every glob/registry target's expansion reuses it.
 	registries := newRenderRegistries(ctx, w.registry)
-	items := make([]map[string]any, 0, len(subs))
-	for _, sub := range subs {
-		if entityID != "" && sub.EntityID != entityID {
+	items := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if entityID != "" && row.EntityID != entityID {
 			continue
 		}
+		mode := row.Mode
+		if mode == "" {
+			mode = looppkg.SubscriptionModeRender
+		}
 		item := map[string]any{
-			"entity_id":      sub.EntityID,
-			"scope":          sub.Scope,
-			"mode":           sub.Mode,
-			"always_visible": sub.Scope == "",
+			"entity_id":      row.EntityID,
+			"owner":          row.Owner,
+			"mode":           mode,
+			"always_visible": row.Owner == "",
 		}
-		if len(sub.History) > 0 {
-			item["history"] = append([]int(nil), sub.History...)
+		if len(row.History) > 0 {
+			item["history"] = append([]int(nil), row.History...)
 		}
-		if sub.Forecast != "" {
-			item["forecast"] = sub.Forecast
+		if row.Forecast != "" {
+			item["forecast"] = row.Forecast
 		}
-		if sub.Include != nil && sub.Include.Any() {
-			item["include"] = sub.Include
+		if row.Include != nil && row.Include.Any() {
+			item["include"] = row.Include
 		}
-		if sub.ExpiresAt != nil {
-			item["expires_delta"] = promptfmt.FormatDeltaOnly(*sub.ExpiresAt, now)
+		if row.SelfOnly {
+			item["self_only"] = true
+		}
+		if row.TTLSeconds > 0 && !row.AddedAt.IsZero() {
+			expiresAt := row.AddedAt.Add(time.Duration(row.TTLSeconds) * time.Second)
+			item["expires_delta"] = promptfmt.FormatDeltaOnly(expiresAt, now)
 		}
 		// Show each glob/registry target's current expansion so a
 		// silently-empty subscription is visible at a glance.
-		if target := ParseSubscriptionTarget(sub.EntityID); target.Kind != TargetEntity {
+		if target := ParseSubscriptionTarget(row.EntityID); target.Kind != TargetEntity {
 			if exp, err := previewTargetExpansion(registries, target); err != nil {
 				// A failed read is marked, not omitted — an absent
 				// expansion would read as "not a registry target" rather
 				// than "couldn't resolve it this turn."
 				w.logger.Warn("subscription target expansion preview failed",
-					"entity_id", sub.EntityID, "error", err)
+					"entity_id", row.EntityID, "error", err)
 				item["expansion"] = map[string]any{
 					"unavailable": true,
 					"note":        "registry read failed this turn; membership unverified",
@@ -379,61 +431,74 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 	return string(payload), nil
 }
 
-func (w *WatchlistTools) handleRemoveEntitySubscription(_ context.Context, args map[string]any) (string, error) {
+func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, args map[string]any) (string, error) {
 	entityID, _ := args["entity_id"].(string)
 	if entityID == "" {
 		return "", fmt.Errorf("entity_id is required")
 	}
-
-	tags, err := parseWatchlistTagArgs(args["tags"])
-	if err != nil {
-		return "", err
+	if _, present := args["tags"]; present {
+		return "", retiredTagsError("tags")
 	}
 
-	if len(tags) > 0 {
-		err = w.store.RemoveWithScopes(entityID, tags)
-	} else {
-		err = w.store.Remove(entityID)
-	}
-	if err != nil {
-		return "", fmt.Errorf("remove from watchlist: %w", err)
+	owner := strings.TrimSpace(stringArg(args, "owner"))
+	switch {
+	case owner == OwnerSystem:
+		return "", fmt.Errorf("system-owned rows are seeded from configuration (person.track) and re-appear at the next startup; change the configuration instead of removing them here")
+	case owner != "":
+		if w.loopMutator == nil {
+			return "", fmt.Errorf("loop-owned subscriptions are not available in this runtime; omit owner to remove an always-visible subscription")
+		}
+		if _, err := w.loopMutator(ctx, owner, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
+			return dropLoopSubscription(current, entityID), nil
+		}); err != nil {
+			return "", err
+		}
+	default:
+		if err := w.store.Remove("", entityID); err != nil {
+			return "", fmt.Errorf("remove from watchlist: %w", err)
+		}
 	}
 
 	if w.onIngestChange != nil {
 		w.onIngestChange()
 	}
-	w.logger.Info("entity subscription removed", "entity_id", entityID, "tags", tags)
-	if len(tags) > 0 {
-		return fmt.Sprintf("Stopped watching %s in scopes %v.", entityID, tags), nil
+	w.logger.Info("entity subscription removed", "entity_id", entityID, "owner", owner)
+	if owner != "" {
+		return fmt.Sprintf("Loop %q stopped watching %s.", owner, entityID), nil
 	}
 	return fmt.Sprintf("Stopped watching %s.", entityID), nil
 }
 
-func parseWatchlistTagArgs(raw any) ([]string, error) {
-	rawTags, ok := raw.([]any)
-	if !ok {
-		return nil, nil
-	}
-	var tags []string
-	seen := make(map[string]bool)
-	for _, rt := range rawTags {
-		s, ok := rt.(string)
-		if !ok || s == "" {
+// upsertLoopSubscription replaces any existing entry for sub.EntityID
+// and appends fresh ones at the end — the same replace-don't-duplicate
+// contract watch_entity applies.
+func upsertLoopSubscription(current []looppkg.EntitySubscription, sub looppkg.EntitySubscription) []looppkg.EntitySubscription {
+	out := make([]looppkg.EntitySubscription, 0, len(current)+1)
+	for _, c := range current {
+		if c.EntityID == sub.EntityID {
 			continue
 		}
-		s = strings.TrimSpace(s)
-		if s == "" {
+		out = append(out, c)
+	}
+	return append(out, sub)
+}
+
+// dropLoopSubscription returns current minus the entry matching
+// entityID. Missing IDs are silently a no-op, matching unwatch_entity.
+func dropLoopSubscription(current []looppkg.EntitySubscription, entityID string) []looppkg.EntitySubscription {
+	out := make([]looppkg.EntitySubscription, 0, len(current))
+	for _, c := range current {
+		if c.EntityID == entityID {
 			continue
 		}
-		if strings.Contains(s, ",") {
-			return nil, fmt.Errorf("tag %q must not contain commas", s)
-		}
-		if !seen[s] {
-			seen[s] = true
-			tags = append(tags, s)
-		}
+		out = append(out, c)
 	}
-	return tags, nil
+	return out
+}
+
+func stringArg(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
 }
 
 func parseWatchlistForecastArg(raw any) (string, error) {
@@ -444,7 +509,7 @@ func parseWatchlistForecastArg(raw any) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("forecast must be a string")
 	}
-	return normalizeForecastType(value)
+	return looppkg.NormalizeSubscriptionForecast(value)
 }
 
 func parseWatchlistHistoryArg(raw any) ([]int, error) {

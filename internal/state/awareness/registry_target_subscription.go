@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // expandRegistryTargetSubscription renders an area/label/floor
@@ -28,7 +29,7 @@ func expandRegistryTargetSubscription(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	target SubscriptionTarget,
 	states []homeassistant.State,
 	statesErr error,
@@ -93,7 +94,7 @@ func renderExpandedMatches(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	matchedIDs []string,
 	stateByID map[string]*homeassistant.State,
 	now time.Time,

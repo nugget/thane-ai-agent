@@ -171,7 +171,14 @@ func (a *App) persistLoopDefinition(spec looppkg.Spec, updatedAt time.Time) erro
 	if a == nil || a.loopDefinitionStore == nil {
 		return nil
 	}
-	return a.loopDefinitionStore.Save(spec, updatedAt)
+	if err := a.loopDefinitionStore.Save(spec, updatedAt); err != nil {
+		return err
+	}
+	// Every spec write re-projects its Subscriptions into the
+	// awareness registry — the single-writer discipline that keeps
+	// the registry a faithful mirror (#1209).
+	a.mirrorLoopSubscriptions(spec)
+	return nil
 }
 
 func (a *App) deletePersistedLoopDefinition(name string) error {
@@ -184,6 +191,16 @@ func (a *App) deletePersistedLoopDefinition(name string) error {
 	if a.loopDefinitionPolicyStore != nil {
 		if err := a.loopDefinitionPolicyStore.Delete(name); err != nil {
 			return err
+		}
+	}
+	// Reap the definition's mirrored registry rows. Best-effort: the
+	// startup orphan sweep catches any miss.
+	if a.watchlistStore != nil && strings.TrimSpace(name) != "" {
+		if err := a.watchlistStore.RemoveAllForOwner(name); err != nil {
+			a.logger.Warn("failed to remove mirrored subscription rows for deleted definition",
+				"name", name, "error", err)
+		} else if a.ingestFilterRebuild != nil {
+			a.ingestFilterRebuild()
 		}
 	}
 	return nil
