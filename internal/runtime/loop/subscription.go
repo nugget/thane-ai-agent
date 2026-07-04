@@ -79,8 +79,28 @@ type EntitySubscription struct {
 	// combining it with an ingest-feeding mode is rejected at every
 	// authoring door and at JSON hydration, and the ingestion filter
 	// ignores gated rows as a backstop, so capture never depends on
-	// tag state (#1213).
+	// tag state (#1213). A gated subscription MAY carry a transition
+	// log: capture for the log runs unconditionally (so the log is
+	// warm when the tag activates) while its rendering follows the
+	// gate.
 	RequiresTag string `yaml:"requires_tag,omitempty" json:"requires_tag,omitempty"`
+
+	// Transitions asks the render to include the entity's last n
+	// observed state changes ({from, to, ago} in the class-aware
+	// vocabulary). Zero means no transition log. Declaring a log
+	// derives capture: the subscription's target joins the state
+	// watcher's ingestion filter automatically (#1210) — no
+	// user-facing mode required. Clamped to the per-subscription
+	// render cap; truncation is advertised.
+	Transitions int `yaml:"transitions,omitempty" json:"transitions,omitempty"`
+
+	// TransitionsWindowSeconds bounds the transition log to changes
+	// observed within the trailing window. Zero means no window
+	// bound — the per-entity retention's count bound is the only
+	// limit. May combine with Transitions (window-filtered last-n);
+	// set alone it renders every retained change inside the window,
+	// still clamped to the render cap.
+	TransitionsWindowSeconds int `yaml:"transitions_window_seconds,omitempty" json:"transitions_window_seconds,omitempty"`
 }
 
 // IsExpired reports whether this subscription's TTL has elapsed
@@ -164,6 +184,22 @@ func (s EntitySubscription) FeedsIngest() bool {
 	return s.Mode == SubscriptionModeIngest || s.Mode == SubscriptionModeBoth
 }
 
+// MaxSubscriptionTransitions caps how many transitions one
+// subscription may ask to render per turn (#1210). Authoring
+// boundaries reject a larger ask with a teaching error; the awareness
+// render clamps to it defensively for declarations arriving by other
+// routes. Lives here because the cap is a property of the declaration,
+// shared by every door that parses one.
+const MaxSubscriptionTransitions = 20
+
+// WantsTransitions reports whether this subscription declared a
+// transition log (last-n and/or windowed). A true result derives
+// capture: the target must reach the state watcher's ingestion
+// filter for the log to have anything to render (#1210).
+func (s EntitySubscription) WantsTransitions() bool {
+	return s.Transitions > 0 || s.TransitionsWindowSeconds > 0
+}
+
 // RendersState reports whether this subscription renders live state
 // into context each turn (mode render — stored as "" — or both).
 func (s EntitySubscription) RendersState() bool {
@@ -240,6 +276,19 @@ func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]E
 		// backstop for rows that arrive by other routes.
 		if sub.RequiresTag != "" && sub.FeedsIngest() {
 			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): requires_tag gates rendering only and cannot combine with mode %q — drop requires_tag, or use mode render", i, sub.EntityID, sub.Mode)
+		}
+		if sub.Transitions < 0 {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): transitions must be >= 0, got %d", i, sub.EntityID, sub.Transitions)
+		}
+		if sub.TransitionsWindowSeconds < 0 {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): transitions_window_seconds must be >= 0, got %d", i, sub.EntityID, sub.TransitionsWindowSeconds)
+		}
+		// The transition log is a render feature; an ingest-only mode
+		// renders nothing, so the combination declares a log nobody
+		// would ever see. Same uniform-hydration posture as the
+		// requires_tag combos.
+		if sub.WantsTransitions() && sub.Mode == SubscriptionModeIngest {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", i, sub.EntityID)
 		}
 		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
 			sub.AddedAt = now

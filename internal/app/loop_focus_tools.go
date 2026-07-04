@@ -84,7 +84,15 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					},
 					"requires_tag": map[string]any{
 						"type":        "string",
-						"description": "Optional capability tag gating visibility: the entity renders only while this tag is active. Render-only; incompatible with mode ingest/both.",
+						"description": "Optional capability tag gating visibility: the entity renders only while this tag is active. Render-only; incompatible with mode ingest/both (a transition log MAY be gated — capture continues, rendering follows the tag).",
+					},
+					"transitions": map[string]any{
+						"type":        "integer",
+						"description": "Include the entity's last n observed state changes in its rendered block ({from, to, ago}, class-aware). Declaring a log automatically feeds this entity into state-change capture. Capped per subscription; entity ids and globs only.",
+					},
+					"transitions_window_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Bound the transition log to changes within this trailing window (seconds); combine with transitions or set alone (still capped).",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -125,21 +133,45 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; watch the target with mode render, or list its member entities", stringMapValue(args, "mode"))
 				}
 				selfOnly, _ := args["self_only"].(bool)
+				transitions, err := intFromMap(args, "transitions")
+				if err != nil {
+					return "", fmt.Errorf("transitions: %w", err)
+				}
+				transitionsWindow, err := intFromMap(args, "transitions_window_seconds")
+				if err != nil {
+					return "", fmt.Errorf("transitions_window_seconds: %w", err)
+				}
+				if transitions < 0 || transitionsWindow < 0 {
+					return "", fmt.Errorf("transitions and transitions_window_seconds must be >= 0")
+				}
+				if transitions > looppkg.MaxSubscriptionTransitions {
+					return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", looppkg.MaxSubscriptionTransitions)
+				}
 				sub := looppkg.EntitySubscription{
-					EntityID:    entityID,
-					History:     history,
-					Forecast:    forecast,
-					Include:     tools.EntityMetadataIncludesPointer(include),
-					TTLSeconds:  ttlSeconds,
-					AddedAt:     time.Now().UTC(),
-					Mode:        mode,
-					SelfOnly:    selfOnly,
-					RequiresTag: strings.TrimSpace(stringMapValue(args, "requires_tag")),
+					EntityID:                 entityID,
+					History:                  history,
+					Forecast:                 forecast,
+					Include:                  tools.EntityMetadataIncludesPointer(include),
+					TTLSeconds:               ttlSeconds,
+					AddedAt:                  time.Now().UTC(),
+					Mode:                     mode,
+					SelfOnly:                 selfOnly,
+					RequiresTag:              strings.TrimSpace(stringMapValue(args, "requires_tag")),
+					Transitions:              transitions,
+					TransitionsWindowSeconds: transitionsWindow,
 				}
 				// The gate is render-only: capture must never depend
 				// on tag state (#1213).
 				if sub.RequiresTag != "" && sub.FeedsIngest() {
 					return "", fmt.Errorf("requires_tag gates rendering only and cannot combine with mode %q — capture does not follow tag state; drop requires_tag, or use mode render for a tag-gated watch", stringMapValue(args, "mode"))
+				}
+				if sub.WantsTransitions() {
+					if sub.Mode == looppkg.SubscriptionModeIngest {
+						return "", fmt.Errorf("a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both")
+					}
+					if awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+						return "", fmt.Errorf("a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — watch a concrete entity or glob for transitions")
+					}
 				}
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
 					return upsertSubscription(current, sub), nil

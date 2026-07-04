@@ -542,6 +542,14 @@ func thaneLoopCreateSchema() map[string]any {
 							"type":        "string",
 							"description": "Optional capability tag gating visibility: the entity renders only while this tag is active in the loop's context. Render-only; incompatible with mode ingest/both.",
 						},
+						"transitions": map[string]any{
+							"type":        "integer",
+							"description": "Include the entity's last n observed state changes in its rendered block ({from, to, ago}, class-aware). Declaring a log automatically feeds the entity into state-change capture. Capped per subscription; entity ids and globs only.",
+						},
+						"transitions_window_seconds": map[string]any{
+							"type":        "integer",
+							"description": "Bound the transition log to changes within this trailing window (seconds); combine with transitions or set alone (still capped).",
+						},
 						"include": EntityMetadataIncludeParameter(),
 					},
 					"required": []string{"entity_id"},

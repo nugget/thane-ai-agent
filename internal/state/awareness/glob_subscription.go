@@ -75,12 +75,16 @@ func renderWatchedState(
 	state *homeassistant.State,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 ) string {
 	state = watchlistStateWithForecast(ctx, ha, logger, sub, state, "failed to fetch watched weather forecast")
 
 	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(sub.EntityID, state, sub.Include))
 	content = enrichWithLastKnownGood(ctx, ha, content, state, now)
 	content = enrichUnavailable(content, state, registries)
+	if sub.WantsTransitions() {
+		content = mergeTransitionsIntoEntityContext(content, sub, transitions, now)
+	}
 	if len(sub.History) == 0 {
 		return content
 	}
@@ -128,6 +132,7 @@ func expandGlobSubscription(
 	statesErr error,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 	maxExpansion int,
 	exclude map[string]struct{},
 ) string {
@@ -154,7 +159,7 @@ func expandGlobSubscription(
 	globMarker := func(matched, shown int) string {
 		return formatGlobTruncation(pattern, matched, shown)
 	}
-	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, maxExpansion, globMarker)
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, transitions, maxExpansion, globMarker)
 }
 
 // formatGlobTruncation renders the marker appended when a glob matched

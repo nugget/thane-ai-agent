@@ -82,15 +82,17 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 	out := make([]looppkg.EntitySubscription, 0, len(entities))
 	for _, e := range entities {
 		out = append(out, looppkg.EntitySubscription{
-			EntityID:    e.EntityID,
-			History:     append([]int(nil), e.History...),
-			Forecast:    e.Forecast,
-			Include:     EntityMetadataIncludesPointer(e.Include),
-			TTLSeconds:  e.TTLSeconds,
-			AddedAt:     addedAt,
-			Mode:        e.Mode,
-			SelfOnly:    e.SelfOnly,
-			RequiresTag: e.RequiresTag,
+			EntityID:                 e.EntityID,
+			History:                  append([]int(nil), e.History...),
+			Forecast:                 e.Forecast,
+			Include:                  EntityMetadataIncludesPointer(e.Include),
+			TTLSeconds:               e.TTLSeconds,
+			AddedAt:                  addedAt,
+			Mode:                     e.Mode,
+			SelfOnly:                 e.SelfOnly,
+			RequiresTag:              e.RequiresTag,
+			Transitions:              e.Transitions,
+			TransitionsWindowSeconds: e.TransitionsWindowSeconds,
 		})
 	}
 	return out
@@ -99,14 +101,16 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 // curateEntity is the parsed shape of one element from the thane_loop_create
 // "entities" parameter. Fields mirror the unified subscription options.
 type curateEntity struct {
-	EntityID    string
-	History     []int
-	Forecast    string
-	Include     homeassistant.EntityMetadataIncludes
-	TTLSeconds  int
-	Mode        string
-	SelfOnly    bool
-	RequiresTag string
+	EntityID                 string
+	History                  []int
+	Forecast                 string
+	Include                  homeassistant.EntityMetadataIncludes
+	TTLSeconds               int
+	Mode                     string
+	SelfOnly                 bool
+	RequiresTag              string
+	Transitions              int
+	TransitionsWindowSeconds int
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
@@ -209,6 +213,34 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		// state (#1213).
 		if ent.RequiresTag != "" && (ent.Mode == looppkg.SubscriptionModeIngest || ent.Mode == looppkg.SubscriptionModeBoth) {
 			return nil, fmt.Errorf("%s[%d]: requires_tag gates rendering only and cannot combine with mode %q — drop requires_tag, or use mode render", fieldName, i, ent.Mode)
+		}
+		if rawTransitions, present := obj["transitions"]; present {
+			n, err := coerceInt(rawTransitions)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].transitions: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].transitions: must be >= 0", fieldName, i)
+			}
+			if n > looppkg.MaxSubscriptionTransitions {
+				return nil, fmt.Errorf("%s[%d].transitions: capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", fieldName, i, looppkg.MaxSubscriptionTransitions)
+			}
+			ent.Transitions = n
+		}
+		if rawWindow, present := obj["transitions_window_seconds"]; present {
+			n, err := coerceInt(rawWindow)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].transitions_window_seconds: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].transitions_window_seconds: must be >= 0", fieldName, i)
+			}
+			ent.TransitionsWindowSeconds = n
+		}
+		// A transition log is a render feature; an ingest-only mode
+		// renders nothing (#1210).
+		if (ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0) && ent.Mode == looppkg.SubscriptionModeIngest {
+			return nil, fmt.Errorf("%s[%d]: a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", fieldName, i)
 		}
 		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
 		if err != nil {

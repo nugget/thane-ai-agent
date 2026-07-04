@@ -2,6 +2,7 @@ package homeassistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -289,5 +290,114 @@ func TestStateWindow_SemanticTranslatorApplied(t *testing.T) {
 	}
 	if !strings.Contains(got, `"from":"20"`) || !strings.Contains(got, `"to":"21"`) {
 		t.Errorf("numeric transition should pass through:\n%s", got)
+	}
+}
+
+// TestRecentTransitions covers the per-entity retention rings behind
+// the shared window (#1210): newest-first ordering, class-aware
+// translation, window filtering, limit clamping with an honest
+// matched count, and isolation between entities.
+func TestRecentTransitions(t *testing.T) {
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	clock := now
+	translate := func(domain, deviceClass, state string) string {
+		if domain == "binary_sensor" && deviceClass == "garage_door" {
+			switch state {
+			case "on":
+				return "open"
+			case "off":
+				return "closed"
+			}
+		}
+		return state
+	}
+	p := NewStateWindowProvider(4, 30*time.Minute, translate, nil)
+	p.nowFunc = func() time.Time { return clock }
+
+	// Three garage transitions a minute apart, plus noise on another
+	// entity that must not bleed in — and enough shared-window churn
+	// (buffer cap 4) that the garage's oldest change is long gone from
+	// the shared ring.
+	for i := 0; i < 3; i++ {
+		p.HandleStateChange("binary_sensor.garage_bay_3", "off", "on", "garage_door")
+		clock = clock.Add(30 * time.Second)
+		p.HandleStateChange("binary_sensor.garage_bay_3", "on", "off", "garage_door")
+		clock = clock.Add(30 * time.Second)
+		p.HandleStateChange("sensor.noise", "1", "2", "")
+		p.HandleStateChange("sensor.noise", "2", "1", "")
+	}
+
+	transitions, matched := p.RecentTransitions("binary_sensor.garage_bay_3", 0, 0)
+	if matched != 6 || len(transitions) != 6 {
+		t.Fatalf("matched=%d len=%d, want 6/6 despite shared-window churn", matched, len(transitions))
+	}
+	// Newest first, class-aware labels.
+	if transitions[0].From != "open" || transitions[0].To != "closed" {
+		t.Errorf("newest = %s→%s, want open→closed", transitions[0].From, transitions[0].To)
+	}
+	if !transitions[0].At.After(transitions[5].At) {
+		t.Error("transitions not newest-first")
+	}
+
+	// Limit clamps the slice but matched stays honest.
+	limited, matchedLimited := p.RecentTransitions("binary_sensor.garage_bay_3", 2, 0)
+	if len(limited) != 2 || matchedLimited != 6 {
+		t.Errorf("limited len=%d matched=%d, want 2/6", len(limited), matchedLimited)
+	}
+
+	// Window filter: only changes in the last 61 seconds (the final
+	// on/off pair plus margin).
+	windowed, matchedWindowed := p.RecentTransitions("binary_sensor.garage_bay_3", 0, 61*time.Second)
+	if matchedWindowed != 2 || len(windowed) != 2 {
+		t.Errorf("windowed len=%d matched=%d, want 2/2", len(windowed), matchedWindowed)
+	}
+
+	// Unknown entity: empty, zero.
+	if tr, m := p.RecentTransitions("sensor.unknown", 0, 0); len(tr) != 0 || m != 0 {
+		t.Errorf("unknown entity = %v/%d, want empty", tr, m)
+	}
+}
+
+// TestRecentTransitionsPerEntityBound verifies the ring cap: the
+// oldest transitions fall off once an entity exceeds
+// perEntityTransitionCap retained changes.
+func TestRecentTransitionsPerEntityBound(t *testing.T) {
+	clock := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	p := NewStateWindowProvider(4, 30*time.Minute, nil, nil)
+	p.nowFunc = func() time.Time { return clock }
+
+	for i := 0; i < perEntityTransitionCap+8; i++ {
+		p.HandleStateChange("sensor.busy", fmt.Sprintf("%d", i), fmt.Sprintf("%d", i+1), "")
+		clock = clock.Add(time.Second)
+	}
+	transitions, matched := p.RecentTransitions("sensor.busy", 0, 0)
+	if matched != perEntityTransitionCap || len(transitions) != perEntityTransitionCap {
+		t.Fatalf("matched=%d len=%d, want ring cap %d", matched, len(transitions), perEntityTransitionCap)
+	}
+	// Newest retained change is the last write.
+	if transitions[0].To != fmt.Sprintf("%d", perEntityTransitionCap+8) {
+		t.Errorf("newest.To = %s, want the final write", transitions[0].To)
+	}
+}
+
+// TestRecentTransitionsEvictsLeastRecentlyUpdated verifies the
+// tracked-entity backstop: crossing maxTrackedEntities evicts the
+// entity whose ring was written longest ago.
+func TestRecentTransitionsEvictsLeastRecentlyUpdated(t *testing.T) {
+	clock := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	p := NewStateWindowProvider(4, 30*time.Minute, nil, nil)
+	p.nowFunc = func() time.Time { return clock }
+
+	p.HandleStateChange("sensor.stale", "a", "b", "")
+	for i := 0; i < maxTrackedEntities; i++ {
+		clock = clock.Add(time.Second)
+		p.HandleStateChange(fmt.Sprintf("sensor.fresh_%d", i), "a", "b", "")
+	}
+
+	if _, matched := p.RecentTransitions("sensor.stale", 0, 0); matched != 0 {
+		t.Errorf("stale entity survived eviction with %d retained changes", matched)
+	}
+	if _, matched := p.RecentTransitions(fmt.Sprintf("sensor.fresh_%d", maxTrackedEntities-1), 0, 0); matched != 1 {
+		t.Errorf("freshest entity missing after eviction pass: %d", matched)
 	}
 }

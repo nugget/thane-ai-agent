@@ -42,6 +42,17 @@ Choose the next move deliberately:
   right shape for "I want to notice when this changes" without carrying
   it every turn. Ingest accepts entity ids and globs (not
   area/label/floor targets), and the ingest registry is capped.
+- Pass `transitions` (and/or `transitions_window_seconds`) when the
+  entity's recent *changes* matter, not just its current state: the
+  rendered block gains its last-n transitions as `{from, to, ago}`,
+  and capture follows automatically — you never need `mode` for this.
+  Pick by question shape: the transition log answers "what just
+  happened to THIS entity" (survives the shared window's churn),
+  `history` summaries answer "what has it been doing" (numeric trends
+  over windows), and the shared recent-state-changes window answers
+  "what's been happening around the house." For "act the moment it
+  changes," that's a wake concern — use the event-driven wiring, not a
+  render option.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read

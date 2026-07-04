@@ -102,6 +102,17 @@ truncation marker when it matches more than the cap. This works across
 `add_entity_subscription`, `watch_entity`, and
 `thane_loop_create.entities`.
 
+A subscription may declare a transition log: `transitions: n` renders
+the entity's last n observed state changes inside its block
+(`{from, to, ago}`, class-aware, delta timestamps), and
+`transitions_window_seconds` bounds the log to a trailing window
+(usable together or alone; capped per subscription with truncation
+advertised). Declaring a log derives capture — the entity joins the
+state-change ingestion filter automatically, with per-entity bounded
+retention behind the shared window — so `mode: ingest` is never needed
+for it. Entity ids and globs only; complementary to `history` (numeric
+trend summaries) rather than a replacement.
+
 A subscription may carry `requires_tag`, a capability tag gating its
 visibility: it renders only while that tag is active in the consuming
 context. This is the macro-set lens — one tag activation surfaces a

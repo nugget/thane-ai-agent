@@ -142,7 +142,15 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					},
 					"requires_tag": map[string]any{
 						"type":        "string",
-						"description": "Optional capability tag gating visibility: the subscription renders only while this tag is active in the consuming context. Use it to build a macro set — one tag activation surfaces a subject's tagged documents and its related entities together, and deactivation drops both. Render-only: incompatible with mode ingest/both.",
+						"description": "Optional capability tag gating visibility: the subscription renders only while this tag is active in the consuming context. Use it to build a macro set — one tag activation surfaces a subject's tagged documents and its related entities together, and deactivation drops both. Render-only: incompatible with mode ingest/both (a transition log MAY be gated — its capture continues, only the rendering follows the tag).",
+					},
+					"transitions": map[string]any{
+						"type":        "integer",
+						"description": "Include the entity's last n observed state changes in its rendered block ({from, to, ago}, class-aware). Declaring a log automatically feeds this entity into the state-change capture — no mode needed. Capped per subscription; truncation is advertised. Entity ids and globs only.",
+					},
+					"transitions_window_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Bound the transition log to changes within this trailing window (seconds). Combine with transitions for window-filtered last-n, or set alone to render every retained change inside the window (still capped).",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -239,19 +247,48 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		return "", fmt.Errorf("self_only shapes container inheritance and applies to loop-owned subscriptions only; pass owner with a container loop's name, or drop self_only for an always-visible subscription")
 	}
 	requiresTag := strings.TrimSpace(stringArg(args, "requires_tag"))
-
-	sub := looppkg.EntitySubscription{
-		EntityID:    entityID,
-		History:     history,
-		Forecast:    forecast,
-		Include:     tools.EntityMetadataIncludesPointer(include),
-		TTLSeconds:  ttlSeconds,
-		AddedAt:     time.Now().UTC(),
-		Mode:        mode,
-		SelfOnly:    selfOnly,
-		RequiresTag: requiresTag,
+	transitions, err := watchlistIntArg(args["transitions"], "transitions")
+	if err != nil {
+		return "", err
+	}
+	transitionsWindow, err := watchlistIntArg(args["transitions_window_seconds"], "transitions_window_seconds")
+	if err != nil {
+		return "", err
+	}
+	if transitions < 0 || transitionsWindow < 0 {
+		return "", fmt.Errorf("transitions and transitions_window_seconds must be >= 0")
+	}
+	if transitions > maxTransitionsPerSubscription {
+		return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", maxTransitionsPerSubscription)
 	}
 
+	sub := looppkg.EntitySubscription{
+		EntityID:                 entityID,
+		History:                  history,
+		Forecast:                 forecast,
+		Include:                  tools.EntityMetadataIncludesPointer(include),
+		TTLSeconds:               ttlSeconds,
+		AddedAt:                  time.Now().UTC(),
+		Mode:                     mode,
+		SelfOnly:                 selfOnly,
+		RequiresTag:              requiresTag,
+		Transitions:              transitions,
+		TransitionsWindowSeconds: transitionsWindow,
+	}
+
+	if sub.WantsTransitions() {
+		// A transition log is a render feature; an ingest-only mode
+		// renders nothing, so the combination declares a log nobody
+		// would ever see.
+		if sub.Mode == looppkg.SubscriptionModeIngest {
+			return "", fmt.Errorf("a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both")
+		}
+		// Derived capture rides the ingestion filter, which speaks
+		// concrete ids and globs only (#1210).
+		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+			return "", fmt.Errorf("a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — subscribe a concrete entity or glob for transitions, or drop the transition options")
+		}
+	}
 	if sub.FeedsIngest() {
 		// The gate is render-only: capture must never depend on tag
 		// state, or the StateWatcher filter would flap with tag
@@ -265,9 +302,11 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
 			return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; subscribe the target with mode render, or list its member entities", rawMode)
 		}
-		if err := CheckIngestCapacity(w.store, sub); err != nil {
-			return "", err
-		}
+	}
+	// Both explicit ingest modes and transition-log derivation occupy
+	// ingestion-filter entries; the cap covers either route.
+	if err := CheckIngestCapacity(w.store, sub); err != nil {
+		return "", err
 	}
 
 	if owner != "" {
@@ -286,7 +325,9 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		if err := w.store.Upsert("", sub); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
-		if sub.FeedsIngest() && w.onIngestChange != nil {
+		// Explicit ingest modes and transition-log derivation both
+		// change the ingestion filter.
+		if (sub.FeedsIngest() || sub.WantsTransitions()) && w.onIngestChange != nil {
 			w.onIngestChange()
 		}
 	}
@@ -321,6 +362,16 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 	if requiresTag != "" {
 		msg += fmt.Sprintf(" (renders only while tag %q is active)", requiresTag)
+	}
+	if sub.WantsTransitions() {
+		switch {
+		case transitions > 0 && transitionsWindow > 0:
+			msg += fmt.Sprintf(" (transition log: last %d changes within %ds; capture follows automatically)", transitions, transitionsWindow)
+		case transitions > 0:
+			msg += fmt.Sprintf(" (transition log: last %d changes; capture follows automatically)", transitions)
+		default:
+			msg += fmt.Sprintf(" (transition log: changes within %ds, capped; capture follows automatically)", transitionsWindow)
+		}
 	}
 	if include.Any() {
 		msg += " (includes HA metadata)"
@@ -418,6 +469,12 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 		// it resolves per-consumer, and the list runs in one context.
 		if row.RequiresTag != "" {
 			item["requires_tag"] = row.RequiresTag
+		}
+		if row.Transitions > 0 {
+			item["transitions"] = row.Transitions
+		}
+		if row.TransitionsWindowSeconds > 0 {
+			item["transitions_window_seconds"] = row.TransitionsWindowSeconds
 		}
 		if row.TTLSeconds > 0 && !row.AddedAt.IsZero() {
 			expiresAt := row.AddedAt.Add(time.Duration(row.TTLSeconds) * time.Second)
