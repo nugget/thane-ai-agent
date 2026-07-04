@@ -529,6 +529,15 @@ func thaneLoopCreateSchema() map[string]any {
 							"type":        "integer",
 							"description": "Optional expiration in seconds; the subscription is auto-removed after it elapses.",
 						},
+						"mode": map[string]any{
+							"type":        "string",
+							"enum":        []string{"render", "ingest", "both"},
+							"description": "What the subscription feeds. render (default): live state in context each iteration. ingest: feed the recent-state-changes window only. both: both. ingest/both accept entity ids and globs, not area/label/floor targets.",
+						},
+						"self_only": map[string]any{
+							"type":        "boolean",
+							"description": "Meaningful on containers: true keeps this subscription out of descendant loops' inherited sets.",
+						},
 						"include": EntityMetadataIncludeParameter(),
 					},
 					"required": []string{"entity_id"},

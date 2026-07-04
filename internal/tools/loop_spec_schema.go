@@ -113,18 +113,19 @@ func loopSpecSchema(description string) map[string]any {
 			},
 			"subscriptions": map[string]any{
 				"type":        "array",
-				"description": "Entities surfaced in context every iteration; the effective set unions every container ancestor's subscriptions.",
+				"description": "Entities surfaced in context every iteration; the effective set unions every container ancestor's subscriptions (entries marked self_only stay out of descendants).",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"entity_id": map[string]any{"type": "string", "description": "Subscribed entity id (e.g. a Home Assistant entity)."},
+						"entity_id": map[string]any{"type": "string", "description": "Subscribed entity id (e.g. a Home Assistant entity), a glob, or an area:/label:/floor: target."},
 						"history":   map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Optional history windows to include."},
 						"forecast":  map[string]any{"type": "string", "enum": []string{"daily", "hourly", "twice_daily", "none"}, "description": "For weather.* entities, the Home Assistant forecast type to include."},
 						"ttl_seconds": map[string]any{
 							"type":        "integer",
 							"description": "Optional time-to-live; the subscription is dropped after this many seconds.",
 						},
-						"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional tags scoping the subscription."},
+						"mode":      map[string]any{"type": "string", "enum": []string{"render", "ingest", "both"}, "description": "What the subscription feeds: render (default) injects live state each iteration; ingest feeds the recent-state-changes window only; both does both."},
+						"self_only": map[string]any{"type": "boolean", "description": "On containers: true keeps this subscription out of descendant loops' inherited sets."},
 					},
 				},
 			},

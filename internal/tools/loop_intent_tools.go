@@ -65,58 +65,6 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 	}
 	r.loopIntentDeps = deps
 	r.registerThaneLoopCreate()
-	r.registerUpdateEntitySubscriptions()
-}
-
-// mutateLoopSubscriptions reads the current spec for loopName, calls
-// mutate to compute the next subscriptions, persists the updated
-// spec, and propagates the change to the live loop if one is
-// registered. Used by watch_entity, unwatch_entity, and
-// update_entity_subscriptions so runtime changes to subscriptions
-// survive restart and take effect on the next iteration.
-//
-// Returns the resulting subscription list (after mutation) along
-// with any error. Mutators that need to compute removed/added
-// deltas should diff against the pre-mutation list inside their
-// closure.
-func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
-	deps := r.loopIntentDeps
-	if deps.Registry == nil {
-		return nil, fmt.Errorf("loop definition registry not configured")
-	}
-	snap := deps.Registry.Snapshot()
-	existing, ok := looppkg.FindDefinition(snap, loopName)
-	if !ok {
-		return nil, (&looppkg.UnknownDefinitionError{Name: loopName})
-	}
-	if existing.Source == looppkg.DefinitionSourceConfig {
-		return nil, (&looppkg.ImmutableDefinitionError{Name: loopName})
-	}
-
-	next, err := mutate(existing.Spec.Subscriptions)
-	if err != nil {
-		return nil, err
-	}
-	newSpec := existing.Spec
-	newSpec.Subscriptions = next
-
-	updatedAt := time.Now().UTC()
-	if deps.PersistSpec != nil {
-		if err := deps.PersistSpec(newSpec, updatedAt); err != nil {
-			return nil, fmt.Errorf("persist loop definition: %w", err)
-		}
-	}
-	if err := deps.Registry.Upsert(newSpec, updatedAt); err != nil {
-		return nil, err
-	}
-	if deps.LiveRegistry != nil {
-		if live := deps.LiveRegistry.GetByName(loopName); live != nil {
-			live.SetSubscriptions(next)
-		}
-	}
-	// ctx reserved for future async hooks (e.g. notifying a watcher).
-	_ = ctx
-	return next, nil
 }
 
 // curateEntitiesToSubscriptions converts the parsed thane_loop_create
@@ -140,28 +88,31 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 			Include:    EntityMetadataIncludesPointer(e.Include),
 			TTLSeconds: e.TTLSeconds,
 			AddedAt:    addedAt,
+			Mode:       e.Mode,
+			SelfOnly:   e.SelfOnly,
 		})
 	}
 	return out
 }
 
 // curateEntity is the parsed shape of one element from the thane_loop_create
-// "entities" parameter. Fields mirror the watchlist subscription options.
+// "entities" parameter. Fields mirror the unified subscription options.
 type curateEntity struct {
 	EntityID   string
 	History    []int
 	Forecast   string
 	Include    homeassistant.EntityMetadataIncludes
 	TTLSeconds int
+	Mode       string
+	SelfOnly   bool
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
 // list. fieldName is the caller-facing name of the parameter
-// (e.g. "entities" for thane_loop_create, "add" for
-// update_entity_subscriptions) and is woven into every error message
-// so the model can see which argument failed validation.
-// Empty/missing returns nil. Invalid shapes return an actionable
-// error per the model-facing-tools doctrine.
+// (e.g. "entities" for thane_loop_create) and is woven into every
+// error message so the model can see which argument failed
+// validation. Empty/missing returns nil. Invalid shapes return an
+// actionable error per the model-facing-tools doctrine.
 func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 	if raw == nil {
 		return nil, nil
@@ -226,6 +177,24 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				return nil, fmt.Errorf("%s[%d].ttl_seconds: must be >= 0", fieldName, i)
 			}
 			ent.TTLSeconds = ttl
+		}
+		if rawMode, present := obj["mode"]; present && rawMode != nil {
+			modeStr, ok := rawMode.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].mode: must be a string, got %T", fieldName, i, rawMode)
+			}
+			mode, err := looppkg.NormalizeSubscriptionMode(modeStr)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].mode: %w", fieldName, i, err)
+			}
+			ent.Mode = mode
+		}
+		if rawSelfOnly, present := obj["self_only"]; present && rawSelfOnly != nil {
+			selfOnly, ok := rawSelfOnly.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].self_only: must be a boolean, got %T", fieldName, i, rawSelfOnly)
+			}
+			ent.SelfOnly = selfOnly
 		}
 		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
 		if err != nil {

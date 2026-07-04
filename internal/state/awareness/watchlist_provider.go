@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // StateGetter abstracts the Home Assistant client methods the watchlist
@@ -76,23 +77,23 @@ func (p *WatchlistProvider) SetRegistryClient(registries HARegistryClient) {
 // use a markdown line with state and unit. All timestamps use delta
 // format per #458.
 func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	// Always-visible entities only. Loop-scoped subscriptions live on
-	// Spec.Subscriptions and are rendered by [LoopSubscriptionProvider]
-	// after walking the ancestor chain.
-	subs, err := p.store.ListUntaggedSubscriptions()
+	// Always-visible entities only. Loop-owned rows are rendered by
+	// [LoopSubscriptionProvider] after walking the ancestor chain, and
+	// system-owned rows (the person-entity ingestion floor) never
+	// render — they are ingest-mode by construction.
+	rows, err := p.store.ListOwner("")
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}
 	// Ingest-only entries feed the state-change window's push pipeline;
 	// they don't render per-turn state here (#1192).
-	rendered := subs[:0]
-	for _, sub := range subs {
-		if sub.Mode == SubscriptionModeIngest {
+	subs := make([]looppkg.EntitySubscription, 0, len(rows))
+	for _, row := range rows {
+		if !row.RendersState() {
 			continue
 		}
-		rendered = append(rendered, sub)
+		subs = append(subs, row.EntitySubscription)
 	}
-	subs = rendered
 	if len(subs) == 0 {
 		return "", nil
 	}
@@ -136,7 +137,7 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 		body.String(), nil
 }
 
-func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
+func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub looppkg.EntitySubscription, now time.Time, registries *renderRegistries) string {
 	state, err := p.ha.GetState(ctx, sub.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch watched entity state",
@@ -152,7 +153,7 @@ func watchlistStateWithForecast(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	state *homeassistant.State,
 	warnMsg string,
 	extraLogFields ...any,

@@ -10,6 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func newIngestStore(t *testing.T) *WatchlistStore {
@@ -26,24 +27,33 @@ func newIngestStore(t *testing.T) *WatchlistStore {
 	return store
 }
 
-// The ingestion registry (#1192): ingest/both rows feed the state
-// watcher's filter; render rows and expired rows do not.
+// The ingestion registry (#1192, widened by #1209): ingest/both rows
+// from every owner feed the state watcher's filter; render rows,
+// expired rows, and registry targets do not.
 func TestIngestGlobs(t *testing.T) {
 	store := newIngestStore(t)
 	now := time.Now()
 
-	if err := store.AddWithOptions("binary_sensor.*_door", nil, nil, 0, "", SubscriptionModeIngest); err != nil {
-		t.Fatalf("add ingest glob: %v", err)
+	seed := []struct {
+		owner string
+		sub   looppkg.EntitySubscription
+	}{
+		{"", looppkg.EntitySubscription{EntityID: "binary_sensor.*_door", Mode: looppkg.SubscriptionModeIngest}},
+		{"", looppkg.EntitySubscription{EntityID: "lock.front", Mode: looppkg.SubscriptionModeBoth}},
+		{"", looppkg.EntitySubscription{EntityID: "sensor.render_only"}},
+		// Expired ingest row drops out of the rebuild.
+		{"", looppkg.EntitySubscription{EntityID: "sensor.expired", Mode: looppkg.SubscriptionModeIngest, TTLSeconds: 1, AddedAt: now}},
+		// Loop-owned ingest rows feed the filter too — #1209 widened the
+		// read from the always-visible tier to every owner.
+		{"alice", looppkg.EntitySubscription{EntityID: "sensor.loop_owned", Mode: looppkg.SubscriptionModeIngest}},
+		// Registry targets can't feed the EntityFilter (ids and globs
+		// only); the store tolerates the row but the rebuild skips it.
+		{"alice", looppkg.EntitySubscription{EntityID: "area:office", Mode: looppkg.SubscriptionModeIngest}},
 	}
-	if err := store.AddWithOptions("lock.front", nil, nil, 0, "", SubscriptionModeBoth); err != nil {
-		t.Fatalf("add both: %v", err)
-	}
-	if err := store.Add("sensor.render_only"); err != nil {
-		t.Fatalf("add render: %v", err)
-	}
-	// Expired ingest row drops out of the rebuild.
-	if err := store.AddWithOptions("sensor.expired", nil, nil, 1, "", SubscriptionModeIngest); err != nil {
-		t.Fatalf("add expiring: %v", err)
+	for _, s := range seed {
+		if err := store.Upsert(s.owner, s.sub); err != nil {
+			t.Fatalf("upsert %q/%s: %v", s.owner, s.sub.EntityID, err)
+		}
 	}
 
 	globs, err := store.IngestGlobs(now.Add(2 * time.Second))
@@ -51,40 +61,42 @@ func TestIngestGlobs(t *testing.T) {
 		t.Fatalf("IngestGlobs: %v", err)
 	}
 	got := strings.Join(globs, ",")
-	if !strings.Contains(got, "binary_sensor.*_door") || !strings.Contains(got, "lock.front") {
-		t.Errorf("globs = %v, want ingest + both rows", globs)
+	for _, want := range []string{"binary_sensor.*_door", "lock.front", "sensor.loop_owned"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("globs = %v, want %s (ingest/both rows across all owners)", globs, want)
+		}
 	}
-	if strings.Contains(got, "render_only") {
-		t.Errorf("render-only row leaked into ingest globs: %v", globs)
-	}
-	if strings.Contains(got, "expired") {
-		t.Errorf("expired row leaked into ingest globs: %v", globs)
+	for _, absent := range []string{"render_only", "expired", "area:office"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("%s leaked into ingest globs: %v", absent, globs)
+		}
 	}
 }
 
-// Mode survives the options round trip and defaults to render for
-// pre-mode rows (absent field).
+// Mode survives the options round trip; render is stored and decoded
+// as the canonical empty string (#1209), so a pre-mode row (absent
+// field) and an explicit render row are indistinguishable.
 func TestSubscriptionModeRoundTrip(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.AddWithOptions("sensor.a", nil, nil, 0, "", SubscriptionModeIngest); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.a", Mode: looppkg.SubscriptionModeIngest}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := store.Add("sensor.b"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.b"}); err != nil {
 		t.Fatalf("add plain: %v", err)
 	}
-	subs, err := store.ListUntaggedSubscriptions()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	modes := map[string]string{}
-	for _, s := range subs {
-		modes[s.EntityID] = s.Mode
+	for _, row := range rows {
+		modes[row.EntityID] = row.Mode
 	}
-	if modes["sensor.a"] != SubscriptionModeIngest {
+	if modes["sensor.a"] != looppkg.SubscriptionModeIngest {
 		t.Errorf("sensor.a mode = %q, want ingest", modes["sensor.a"])
 	}
-	if modes["sensor.b"] != SubscriptionModeRender {
-		t.Errorf("sensor.b mode = %q, want render default", modes["sensor.b"])
+	if modes["sensor.b"] != "" {
+		t.Errorf("sensor.b mode = %q, want \"\" (the canonical stored form of render)", modes["sensor.b"])
 	}
 }
 
@@ -123,14 +135,14 @@ func TestIngestModeToolFlow(t *testing.T) {
 		t.Errorf("OnIngestChange fired %d times, want 1", fired)
 	}
 
-	// Tag-scoped ingest rows would sit in the store doing nothing
-	// (the filter reads only always-visible rows) — rejected loudly.
+	// The tag tier is retired (#1209): any tags argument is rejected
+	// with a teaching error that points at owner instead.
 	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{
 		"entity_id": "sensor.tagged",
 		"mode":      "ingest",
 		"tags":      []any{"focus"},
-	}); err == nil || !strings.Contains(err.Error(), "cannot carry tags") {
-		t.Errorf("tag-scoped ingest should error, got: %v", err)
+	}); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Errorf("tags parameter should be rejected as retired, got: %v", err)
 	}
 
 	// Registry targets can't feed the ingestion filter.
@@ -145,7 +157,7 @@ func TestIngestModeToolFlow(t *testing.T) {
 	if _, err := p.handleAddEntitySubscription(ctx, map[string]any{
 		"entity_id": "sensor.x",
 		"mode":      "firehose",
-	}); err == nil || !strings.Contains(err.Error(), "render, ingest, or both") {
+	}); err == nil || !strings.Contains(err.Error(), "render, ingest, both") {
 		t.Errorf("bad mode should error, got: %v", err)
 	}
 
@@ -192,23 +204,27 @@ func TestIngestCap(t *testing.T) {
 	}
 }
 
-// An unrecognized stored mode degrades to render, keeping the decode
-// contract (Mode never empty) and legacy behavior.
+// An unrecognized stored mode degrades to render — decoded as the
+// canonical empty string (#1209) — keeping the legacy-tolerant read
+// posture the store has always had.
 func TestUnknownStoredModeDecodesAsRender(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.Add("sensor.future"); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.future"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	if _, err := store.db.Exec(
 		`UPDATE watched_entity_subscriptions SET options = '{"mode":"telepathy"}' WHERE entity_id = 'sensor.future'`); err != nil {
 		t.Fatalf("plant unknown mode: %v", err)
 	}
-	subs, err := store.ListUntaggedSubscriptions()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(subs) != 1 || subs[0].Mode != SubscriptionModeRender {
-		t.Errorf("unknown mode decoded as %q, want render", subs[0].Mode)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want one", rows)
+	}
+	if rows[0].Mode != "" || !rows[0].RendersState() {
+		t.Errorf("unknown mode decoded as %q, want the canonical render form \"\"", rows[0].Mode)
 	}
 }
 
@@ -216,15 +232,15 @@ func TestUnknownStoredModeDecodesAsRender(t *testing.T) {
 // watchlist context provider must skip them.
 func TestWatchlistProviderSkipsIngestOnlyRows(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.AddWithOptions("sensor.ingest_only", nil, nil, 0, "", SubscriptionModeIngest); err != nil {
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.ingest_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	subs, err := store.ListUntaggedSubscriptions()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(subs) != 1 || subs[0].Mode != SubscriptionModeIngest {
-		t.Fatalf("subs = %+v, want one ingest row", subs)
+	if len(rows) != 1 || rows[0].Mode != looppkg.SubscriptionModeIngest {
+		t.Fatalf("rows = %+v, want one ingest row", rows)
 	}
 	// Provider with a nil HA client renders nothing anyway on fetch,
 	// but the skip must happen before any state fetch: an ingest-only

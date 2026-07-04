@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant/contextfmt"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -86,10 +87,32 @@ func (a *App) initAwareness(s *newState) error {
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
 	// SQLite so the watchlist survives restarts. Shares thane.db. The
-	// store itself is constructed earlier in initStores so initChannels
-	// can wire it into thane_loop_create; here we register the runtime
-	// context providers that surface its rows into prompts.
+	// store itself is constructed earlier in initStores; here we
+	// register the runtime context providers that surface its rows
+	// into prompts.
 	watchlistStore := a.watchlistStore
+
+	// Person-entity ingestion floor: the tracked person entities are
+	// system-owned ingest subscriptions, re-seeded from person.track on
+	// every boot so config edits win. Expressing the floor as registry
+	// rows (instead of a hardcoded append onto the ingestion filter)
+	// makes list_entity_subscriptions tell the whole truth about what
+	// is being watched and ingested (#1209).
+	if watchlistStore != nil {
+		floor := make([]looppkg.EntitySubscription, 0, len(cfg.Person.Track))
+		for _, entityID := range cfg.Person.Track {
+			floor = append(floor, looppkg.EntitySubscription{
+				EntityID: entityID,
+				Mode:     looppkg.SubscriptionModeIngest,
+			})
+		}
+		if err := watchlistStore.ReplaceOwner(awareness.OwnerSystem, floor); err != nil {
+			// The degraded ingest-filter fallback below still feeds the
+			// person tracker directly, so a failed seed loses registry
+			// visibility, not presence tracking.
+			logger.Warn("failed to seed the person-entity ingestion floor", "error", err)
+		}
+	}
 
 	if a.ha != nil {
 		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
@@ -111,12 +134,17 @@ func (a *App) initAwareness(s *newState) error {
 	watchlistCfg := awareness.WatchlistToolsConfig{
 		Store:  watchlistStore,
 		Logger: logger,
-		// The watcher is constructed later in this function; the rebuild
-		// hook binds through newState so mutations that land before the
-		// watcher exists are simply no-ops.
+		// Owner-addressed mutations route through the same
+		// spec-mutation path watch_entity uses, so a loop-owned add
+		// persists the spec, patches the live loop, and re-mirrors
+		// the registry in one movement.
+		LoopMutator: a.mutateLoopSubscriptions,
+		// The watcher is constructed later in this function; the
+		// rebuild hook binds through the App field so mutations that
+		// land before the watcher exists are simply no-ops.
 		OnIngestChange: func() {
-			if s.ingestFilterRebuild != nil {
-				s.ingestFilterRebuild()
+			if a.ingestFilterRebuild != nil {
+				a.ingestFilterRebuild()
 			}
 		},
 	}
@@ -295,19 +323,16 @@ func (a *App) initAwareness(s *newState) error {
 	// --- State watcher ---
 	// Consumes state_changed events from the HA WebSocket and forwards
 	// them to the state window and person tracker. The ingestion filter
-	// is a dynamic registry (#1192): ingest/both-mode watchlist rows,
-	// rebuilt on every watchlist mutation via OnIngestChange — no HA
+	// is a dynamic registry (#1192): ingest/both-mode subscription rows
+	// from every owner, rebuilt on every registry mutation — no HA
 	// re-subscription needed, the WS feed is a firehose gated
-	// client-side. Person entity IDs are auto-merged so the person
-	// tracker receives state changes regardless of the registry.
+	// client-side. The person floor arrives through the registry too
+	// (system-owned rows seeded above), not a hardcoded append.
 	if a.haWS != nil {
 		buildIngestFilter := func() (*homeassistant.EntityFilter, error) {
 			globs, err := watchlistStore.IngestGlobs(time.Now())
 			if err != nil {
 				return nil, err
-			}
-			if s.personTracker != nil {
-				globs = append(globs, s.personTracker.EntityIDs()...)
 			}
 			if len(globs) == 0 {
 				// Nothing registered must mean ingest nothing — an empty
@@ -347,7 +372,7 @@ func (a *App) initAwareness(s *newState) error {
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
 		a.haStateWatcher = watcher
-		s.ingestFilterRebuild = func() {
+		a.ingestFilterRebuild = func() {
 			rebuilt, err := buildIngestFilter()
 			if err != nil {
 				// A transient read failure keeps the previous filter —

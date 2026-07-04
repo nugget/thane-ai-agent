@@ -804,8 +804,9 @@ func (l *Loop) SetActiveTagsFunc(fn func() []string) {
 }
 
 // SetSubscriptions replaces this loop's effective subscription list in
-// place. Used by runtime tools (watch_entity, unwatch_entity,
-// update_entity_subscriptions) so subscription changes take effect on
+// place. Used by the subscription mutators (watch_entity /
+// unwatch_entity, and add/remove_entity_subscription addressing this
+// loop via owner) so subscription changes take effect on
 // the next iteration without waiting for a stop/restart. Durability is
 // the caller's responsibility — the persisted spec is the source of
 // truth, and the caller is expected to persist before invoking this.

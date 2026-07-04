@@ -99,12 +99,12 @@ func TestAddEntitySubscription_ZeroMemberTargetFlagged(t *testing.T) {
 	}
 	// Flagged, not rejected — the subscription is still recorded so it can
 	// pick up members later (the point of a registry-tracking target).
-	ids, err := store.List()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != "area:atrium" {
-		t.Errorf("store.List() = %v, want [area:atrium] (flag, don't reject)", ids)
+	if len(rows) != 1 || rows[0].EntityID != "area:atrium" {
+		t.Errorf("ListOwner(\"\") = %v, want [area:atrium] (flag, don't reject)", rows)
 	}
 }
 
@@ -153,12 +153,12 @@ func TestAddEntitySubscription_NoRegistryClientNoPreview(t *testing.T) {
 	if strings.Contains(result, "Currently matches") {
 		t.Errorf("result = %q, want no expansion clause without a registry client", result)
 	}
-	ids, err := store.List()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != "binary_sensor.*door*" {
-		t.Errorf("store.List() = %v, want the glob subscription recorded", ids)
+	if len(rows) != 1 || rows[0].EntityID != "binary_sensor.*door*" {
+		t.Errorf("ListOwner(\"\") = %v, want the glob subscription recorded", rows)
 	}
 }
 
@@ -232,12 +232,12 @@ func TestAddEntitySubscription_PreviewFailureIsSurfaced(t *testing.T) {
 	}
 	// The subscription still records — a transient read failure shouldn't
 	// lose the intent.
-	ids, err := store.List()
+	rows, err := store.ListOwner("")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != "area:office" {
-		t.Errorf("store.List() = %v, want [area:office]", ids)
+	if len(rows) != 1 || rows[0].EntityID != "area:office" {
+		t.Errorf("ListOwner(\"\") = %v, want [area:office]", rows)
 	}
 }
 

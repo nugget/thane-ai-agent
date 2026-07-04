@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // defaultMaxGlobExpansion caps how many entities a single glob
@@ -70,7 +71,7 @@ func renderWatchedState(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	state *homeassistant.State,
 	now time.Time,
 	registries *renderRegistries,
@@ -122,7 +123,7 @@ func expandGlobSubscription(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	states []homeassistant.State,
 	statesErr error,
 	now time.Time,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -49,7 +50,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 	return []looppkg.RuntimeTool{
 		{
 			Name:               "watch_entity",
-			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart. Scope: this is the loop you are currently running; for an always-visible subscription in your own field of view use add_entity_subscription, and for a different named loop use update_entity_subscriptions.",
+			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches, mode ingest for transitions-only capture without a per-turn render. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart. Scope: this is the loop you are currently running; for an always-visible subscription in your own field of view — or to subscribe a different named loop — use add_entity_subscription (its owner parameter names the loop).",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -71,6 +72,15 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					"ttl_seconds": map[string]any{
 						"type":        "integer",
 						"description": "Optional auto-expiration in seconds. Use for bounded research tasks where the watch should fall off automatically.",
+					},
+					"mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"render", "ingest", "both"},
+						"description": "What the subscription feeds. render (default): live state in context each iteration. ingest: feed the recent-state-changes window only — transitions appear there without per-turn state injection. both: both. ingest/both accept entity ids and globs, not area/label/floor targets.",
+					},
+					"self_only": map[string]any{
+						"type":        "boolean",
+						"description": "Meaningful when this loop is a container: true keeps the subscription out of descendant loops' inherited sets.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -103,6 +113,14 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if err != nil {
 					return "", err
 				}
+				mode, err := looppkg.NormalizeSubscriptionMode(stringMapValue(args, "mode"))
+				if err != nil {
+					return "", err
+				}
+				if mode != "" && awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+					return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; watch the target with mode render, or list its member entities", stringMapValue(args, "mode"))
+				}
+				selfOnly, _ := args["self_only"].(bool)
 				now := time.Now().UTC()
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
 					return upsertSubscription(current, looppkg.EntitySubscription{
@@ -112,6 +130,8 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 						Include:    tools.EntityMetadataIncludesPointer(include),
 						TTLSeconds: ttlSeconds,
 						AddedAt:    now,
+						Mode:       mode,
+						SelfOnly:   selfOnly,
 					}), nil
 				})
 				if err != nil {

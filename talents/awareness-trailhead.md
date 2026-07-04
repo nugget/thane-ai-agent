@@ -13,7 +13,11 @@ turn.
 
 Choose the next move deliberately:
 
-- Use `list_entity_subscriptions` to see what this loop is already carrying.
+- Use `list_entity_subscriptions` to see the whole subscription
+  registry — every row carries its `owner`: `""` is the always-visible
+  tier (your own field of view), a loop name is that loop's own watch
+  set, and `system` marks runtime-seeded rows like the person-presence
+  ingestion floor (configured via `person.track`, read-only here).
 - Use `add_entity_subscription` when a room, device, person, or live state
   should auto-load while the work continues. The `entity_id` accepts more
   than a single entity: a glob (`binary_sensor.*door*`, `*_temperature`)
@@ -43,8 +47,14 @@ Choose the next move deliberately:
   `visibility` when hidden/enabled salience matters, and read
   `visibility.context_role` as the quick default-vs-forensic hint. Area
   metadata can carry the HA floor/building hierarchy too.
+- Pass `owner` to subscribe on behalf of a loop: the entry lands on
+  that loop's spec and follows its lifecycle (containers cascade
+  subscriptions to descendants unless the entry sets `self_only`).
+  From inside a loop's own turn, `watch_entity` does the same without
+  naming the loop.
 - Use `remove_entity_subscription` when the work is done. Stale
-  subscriptions are quiet clutter.
+  subscriptions are quiet clutter. The same `owner` addressing
+  applies.
 - If the work is a one-shot state check, use the currently visible HA or
   context tool directly instead of subscribing first.
 - If the next move is delivery, escalation, or interruption, activate

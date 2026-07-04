@@ -47,7 +47,7 @@ var loopDefinitionUpdateRedirects = map[string]string{
 	"operation":     "structural field; use loop_definition_set to rewrite the full spec",
 	"completion":    "structural field; use loop_definition_set to rewrite the full spec",
 	"outputs":       "list field; use loop_definition_set to rewrite the full spec",
-	"subscriptions": "list field; use loop_definition_set to rewrite the full spec",
+	"subscriptions": "use add_entity_subscription / remove_entity_subscription with owner set to this loop's name — they edit one entry in place; loop_definition_set rewrites the full spec if you really need wholesale replacement",
 	"tags":          "list field; use loop_definition_set to rewrite the full spec",
 	"exclude_tools": "list field; use loop_definition_set to rewrite the full spec",
 	"conditions":    "structured field; use loop_definition_set to rewrite the full spec",

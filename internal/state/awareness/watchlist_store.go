@@ -10,22 +10,28 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
-// WatchedSubscription represents one entity subscription scope with its stored
-// options. Empty Scope means the entity is always visible. Mode is one
-// of the SubscriptionMode constants (never empty after decode).
-type WatchedSubscription struct {
-	EntityID  string
-	Scope     string
-	Mode      string
-	History   []int
-	Forecast  string
-	Include   *homeassistant.EntityMetadataIncludes
-	ExpiresAt *time.Time
+// OwnerSystem is the reserved owner for rows the runtime seeds and
+// maintains itself — today the person-entity ingestion floor, re-seeded
+// from config at every boot. System rows are visible in
+// list_entity_subscriptions like any other row but refuse tool-driven
+// mutation; the configuration is their source of truth.
+const OwnerSystem = "system"
+
+// SubscriptionRow is one persisted registry entry: an owner plus the
+// unified subscription declaration. Owner ” means always-visible (the
+// global tier every turn renders), [OwnerSystem] marks runtime-seeded
+// rows, and any other value is the owning loop's definition name —
+// loop rows are compiled from Spec.Subscriptions and replaced whenever
+// the spec persists.
+type SubscriptionRow struct {
+	Owner string
+	looppkg.EntitySubscription
 }
 
-// WatchlistStore persists the set of watched entity subscriptions in SQLite.
+// WatchlistStore persists the entity-subscription registry in SQLite.
 type WatchlistStore struct {
 	db *sql.DB
 }
@@ -38,158 +44,163 @@ func NewWatchlistStore(db *sql.DB, logger *slog.Logger) (*WatchlistStore, error)
 	return &WatchlistStore{db: db}, nil
 }
 
-// Add inserts an entity into the watchlist with no scope or options.
-// Duplicates are silently ignored. Use [AddWithOptions] for richer
-// subscriptions.
-func (s *WatchlistStore) Add(entityID string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options)
-		 VALUES (?, '', '{}')
-		 ON CONFLICT(scope, entity_id) DO NOTHING`,
-		entityID,
-	)
-	return err
-}
-
-// AddWithOptions inserts or updates entity subscriptions with tag scopes,
-// historical offsets, optional weather forecast type, an optional TTL,
-// a subscription mode (render/ingest/both; empty means render), and
-// optional HA entity metadata include flags. Empty tags means the
-// entity is always visible in context.
-func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int, forecast, mode string, includes ...homeassistant.EntityMetadataIncludes) error {
-	scopes := normalizeScopes(tags)
-	var include homeassistant.EntityMetadataIncludes
-	if len(includes) > 0 {
-		include = includes[0]
+// Upsert inserts or replaces the subscription for (owner, entity_id).
+// A zero AddedAt is stamped with the current time so TTL countdown is
+// always anchored; re-upserting an entity restarts its TTL window.
+func (s *WatchlistStore) Upsert(owner string, sub looppkg.EntitySubscription) error {
+	if strings.TrimSpace(sub.EntityID) == "" {
+		return fmt.Errorf("entity_id is required")
 	}
-
-	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds, forecast, mode, include)
+	if sub.AddedAt.IsZero() {
+		sub.AddedAt = time.Now().UTC()
+	}
+	optsJSON, err := marshalSubscriptionOptions(sub)
 	if err != nil {
 		return fmt.Errorf("marshal options: %w", err)
 	}
-
-	tx, err := s.db.Begin()
+	_, err = s.db.Exec(`
+		INSERT INTO watched_entity_subscriptions (entity_id, owner, added_at, options)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(owner, entity_id) DO UPDATE SET
+			options = excluded.options,
+			added_at = excluded.added_at
+	`, sub.EntityID, strings.TrimSpace(owner), sub.AddedAt.UTC(), string(optsJSON))
 	if err != nil {
-		return fmt.Errorf("begin watchlist tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	for _, scope := range scopes {
-		if _, err := tx.Exec(`
-			INSERT INTO watched_entity_subscriptions (entity_id, scope, options)
-			VALUES (?, ?, ?)
-			ON CONFLICT(scope, entity_id) DO UPDATE SET options = excluded.options
-		`, entityID, scope, string(optsJSON)); err != nil {
-			return fmt.Errorf("upsert watchlist subscription for %s/%s: %w", entityID, scope, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit watchlist tx: %w", err)
+		return fmt.Errorf("upsert subscription %s/%s: %w", owner, sub.EntityID, err)
 	}
 	return nil
 }
 
-// Remove deletes all subscriptions for an entity. Non-existent IDs are a no-op.
-func (s *WatchlistStore) Remove(entityID string) error {
-	return s.RemoveWithScopes(entityID, nil)
-}
-
-// RemoveWithScopes deletes subscriptions for an entity. When scopes is empty,
-// all subscriptions for the entity are removed.
-func (s *WatchlistStore) RemoveWithScopes(entityID string, scopes []string) error {
-	if len(scopes) == 0 {
-		_, err := s.db.Exec(
-			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ?`,
-			entityID,
-		)
-		return err
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin watchlist delete tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	for _, scope := range normalizeScopes(scopes) {
-		if _, err := tx.Exec(
-			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ? AND scope = ?`,
-			entityID, scope,
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// RemoveAllForScope deletes every subscription whose scope matches the given
-// tag. Used to tear down loop-owned entity subscriptions when the owning loop
-// is deleted or when a replace-mode launch re-seeds its watch set.
-func (s *WatchlistStore) RemoveAllForScope(scope string) error {
-	scope = strings.TrimSpace(scope)
-	if scope == "" {
-		return fmt.Errorf("scope is required")
-	}
+// Remove deletes the subscription for (owner, entity_id). A missing
+// row is a no-op.
+func (s *WatchlistStore) Remove(owner, entityID string) error {
 	_, err := s.db.Exec(
-		`DELETE FROM watched_entity_subscriptions WHERE scope = ?`,
-		scope,
+		`DELETE FROM watched_entity_subscriptions WHERE owner = ? AND entity_id = ?`,
+		strings.TrimSpace(owner), entityID,
 	)
 	return err
 }
 
-// List returns all watched entity IDs in insertion order, deduplicated across
-// scoped subscriptions.
-func (s *WatchlistStore) List() ([]string, error) {
-	subs, err := s.ListSubscriptions("")
-	if err != nil {
-		return nil, err
+// RemoveAllForOwner deletes every subscription row belonging to the
+// given owner. Used when the owning loop definition is deleted and by
+// [WatchlistStore.ReplaceOwner]. The global tier (owner ”) is never
+// bulk-deleted; owner is required.
+func (s *WatchlistStore) RemoveAllForOwner(owner string) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner is required")
 	}
+	_, err := s.db.Exec(
+		`DELETE FROM watched_entity_subscriptions WHERE owner = ?`,
+		owner,
+	)
+	return err
+}
 
-	ids := make([]string, 0, len(subs))
-	seen := make(map[string]bool, len(subs))
+// ReplaceOwner atomically replaces the owner's rows with the given
+// subscription set — the compilation step that mirrors a loop spec's
+// Subscriptions into the registry (replace-on-persist, the same
+// lifecycle spec seeding implies). Entries that are already expired
+// are skipped rather than written and immediately reaped.
+func (s *WatchlistStore) ReplaceOwner(owner string, subs []looppkg.EntitySubscription) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner is required")
+	}
+	now := time.Now().UTC()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replace tx for %s: %w", owner, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(
+		`DELETE FROM watched_entity_subscriptions WHERE owner = ?`, owner,
+	); err != nil {
+		return fmt.Errorf("clear rows for %s: %w", owner, err)
+	}
 	for _, sub := range subs {
-		if seen[sub.EntityID] {
+		if strings.TrimSpace(sub.EntityID) == "" {
 			continue
 		}
-		seen[sub.EntityID] = true
-		ids = append(ids, sub.EntityID)
+		if sub.AddedAt.IsZero() {
+			sub.AddedAt = now
+		}
+		if sub.IsExpired(now) {
+			continue
+		}
+		optsJSON, err := marshalSubscriptionOptions(sub)
+		if err != nil {
+			return fmt.Errorf("marshal options for %s/%s: %w", owner, sub.EntityID, err)
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO watched_entity_subscriptions (entity_id, owner, added_at, options)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(owner, entity_id) DO UPDATE SET
+				options = excluded.options,
+				added_at = excluded.added_at
+		`, sub.EntityID, owner, sub.AddedAt.UTC(), string(optsJSON)); err != nil {
+			return fmt.Errorf("insert row for %s/%s: %w", owner, sub.EntityID, err)
+		}
 	}
-	return ids, nil
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace tx for %s: %w", owner, err)
+	}
+	return nil
 }
 
-// ListUntagged returns watched entities that have no capability scope
-// and are always visible in context regardless of active tags.
-func (s *WatchlistStore) ListUntagged() ([]string, error) {
-	subs, err := s.ListUntaggedSubscriptions()
+// Owners returns the distinct owners present in the registry,
+// excluding the global tier (”). Consumed by the startup orphan sweep
+// to find rows whose owning definition no longer exists.
+func (s *WatchlistStore) Owners() ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT owner FROM watched_entity_subscriptions WHERE owner != '' ORDER BY owner ASC`)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	ids := make([]string, 0, len(subs))
-	for _, sub := range subs {
-		ids = append(ids, sub.EntityID)
+	var owners []string
+	for rows.Next() {
+		var owner string
+		if err := rows.Scan(&owner); err != nil {
+			return nil, err
+		}
+		owners = append(owners, owner)
 	}
-	return ids, nil
+	return owners, rows.Err()
 }
 
-// ListUntaggedSubscriptions returns all always-visible subscriptions with their
-// stored options intact.
-func (s *WatchlistStore) ListUntaggedSubscriptions() ([]WatchedSubscription, error) {
-	return s.listScopedSubscriptions("")
+// ListAll returns every active subscription row across all owners in
+// insertion order. Expired rows are reaped as a side effect.
+func (s *WatchlistStore) ListAll() ([]SubscriptionRow, error) {
+	return s.scanActiveSubscriptions(
+		`SELECT entity_id, owner, added_at, options FROM watched_entity_subscriptions
+		 ORDER BY added_at ASC`)
 }
 
-// UntaggedEntityIDSet returns the subset of candidates that are
-// present in the always-visible watchlist (scope=”). It performs a
-// single bounded IN-clause query and skips the TTL cleanup writes
-// that [ListUntaggedSubscriptions] does — this method is meant to
-// be called by sibling providers (e.g.
-// [LoopSubscriptionProvider]) that only need a dedup check against
-// the always-visible set on every iteration; the cleanup is left
-// to the always-visible [WatchlistProvider]'s own pass so we don't
-// double-write deletes. Returns an empty (non-nil) map when
-// candidates is empty.
-func (s *WatchlistStore) UntaggedEntityIDSet(candidates []string) (map[string]struct{}, error) {
+// ListOwner returns the active subscription rows for one owner in
+// insertion order; ” selects the always-visible global tier. Expired
+// rows are reaped as a side effect.
+func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
+	return s.scanActiveSubscriptions(
+		`SELECT entity_id, owner, added_at, options FROM watched_entity_subscriptions
+		 WHERE owner = ? ORDER BY added_at ASC`,
+		strings.TrimSpace(owner),
+	)
+}
+
+// GlobalEntityIDSet returns the subset of candidates present in the
+// always-visible tier (owner=”). It performs a single bounded
+// IN-clause query and skips the TTL cleanup writes that
+// [WatchlistStore.ListOwner] does — this method is meant to be called
+// by sibling providers (e.g. [LoopSubscriptionProvider]) that only
+// need a dedup check against the always-visible set on every
+// iteration; the cleanup is left to the always-visible
+// [WatchlistProvider]'s own pass so we don't double-write deletes.
+// Returns an empty (non-nil) map when candidates is empty.
+func (s *WatchlistStore) GlobalEntityIDSet(candidates []string) (map[string]struct{}, error) {
 	out := make(map[string]struct{}, len(candidates))
 	if len(candidates) == 0 {
 		return out, nil
@@ -215,7 +226,7 @@ func (s *WatchlistStore) UntaggedEntityIDSet(candidates []string) (map[string]st
 	placeholders := strings.Repeat("?,", len(args))
 	placeholders = placeholders[:len(placeholders)-1]
 	query := `SELECT entity_id FROM watched_entity_subscriptions
-		 WHERE scope = '' AND entity_id IN (` + placeholders + `)`
+		 WHERE owner = '' AND entity_id IN (` + placeholders + `)`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -234,35 +245,7 @@ func (s *WatchlistStore) UntaggedEntityIDSet(candidates []string) (map[string]st
 	return out, nil
 }
 
-// ListByTag returns subscription rows for a given legacy scope tag.
-// Consumed by the one-shot startup migration that lifts legacy
-// scope_tag rows onto Spec.Subscriptions.
-func (s *WatchlistStore) ListByTag(tag string) ([]WatchedSubscription, error) {
-	return s.listScopedSubscriptions(tag)
-}
-
-// ListSubscriptions returns active subscriptions. When scope is empty, all
-// scopes are returned.
-func (s *WatchlistStore) ListSubscriptions(scope string) ([]WatchedSubscription, error) {
-	query := `SELECT entity_id, scope, options FROM watched_entity_subscriptions`
-	var args []any
-	if scope != "" {
-		query += ` WHERE scope = ?`
-		args = append(args, scope)
-	}
-	query += ` ORDER BY added_at ASC`
-	return s.scanActiveSubscriptions(query, args...)
-}
-
-func (s *WatchlistStore) listScopedSubscriptions(scope string) ([]WatchedSubscription, error) {
-	return s.scanActiveSubscriptions(
-		`SELECT entity_id, scope, options FROM watched_entity_subscriptions
-		 WHERE scope = ? ORDER BY added_at ASC`,
-		scope,
-	)
-}
-
-func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]WatchedSubscription, error) {
+func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]SubscriptionRow, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -271,28 +254,24 @@ func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]W
 
 	now := time.Now().UTC()
 	var (
-		subs    []WatchedSubscription
+		subs    []SubscriptionRow
 		expired []subscriptionKey
 	)
 	for rows.Next() {
-		var entityID, scope, optsJSON string
-		if err := rows.Scan(&entityID, &scope, &optsJSON); err != nil {
+		var (
+			entityID, owner, optsJSON string
+			addedAt                   time.Time
+		)
+		if err := rows.Scan(&entityID, &owner, &addedAt, &optsJSON); err != nil {
 			return nil, err
 		}
-		opts := parseWatchlistOptions(optsJSON)
-		if opts.expired(now) {
-			expired = append(expired, subscriptionKey{EntityID: entityID, Scope: scope})
+		sub := parseSubscriptionOptions(optsJSON, addedAt.UTC())
+		sub.EntityID = entityID
+		if sub.IsExpired(now) {
+			expired = append(expired, subscriptionKey{EntityID: entityID, Owner: owner})
 			continue
 		}
-		subs = append(subs, WatchedSubscription{
-			EntityID:  entityID,
-			Scope:     scope,
-			Mode:      opts.Mode,
-			History:   append([]int(nil), opts.History...),
-			Forecast:  opts.Forecast,
-			Include:   opts.Include.Clone(),
-			ExpiresAt: cloneTimePtr(opts.ExpiresAt),
-		})
+		subs = append(subs, SubscriptionRow{Owner: owner, EntitySubscription: sub})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -314,10 +293,10 @@ func (s *WatchlistStore) removeExpiredSubscriptions(keys []subscriptionKey) erro
 	defer func() { _ = tx.Rollback() }()
 	for _, key := range keys {
 		if _, err := tx.Exec(
-			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ? AND scope = ?`,
-			key.EntityID, key.Scope,
+			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ? AND owner = ?`,
+			key.EntityID, key.Owner,
 		); err != nil {
-			return fmt.Errorf("delete expired watchlist subscription %s/%s: %w", key.EntityID, key.Scope, err)
+			return fmt.Errorf("delete expired watchlist subscription %s/%s: %w", key.Owner, key.EntityID, err)
 		}
 	}
 	return tx.Commit()
@@ -325,7 +304,7 @@ func (s *WatchlistStore) removeExpiredSubscriptions(keys []subscriptionKey) erro
 
 type subscriptionKey struct {
 	EntityID string
-	Scope    string
+	Owner    string
 }
 
 func (s *WatchlistStore) subscriptionCount() (int, error) {
@@ -336,123 +315,87 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 	return count, nil
 }
 
-type watchlistOptions struct {
-	History   []int
-	Forecast  string
-	Mode      string
-	Include   *homeassistant.EntityMetadataIncludes
-	ExpiresAt *time.Time
+// subscriptionOptionsWire is the options-blob JSON shape. It carries
+// the declaration fields of [looppkg.EntitySubscription] that don't
+// have their own column; entity_id, owner, and added_at live on the
+// row. ExpiresAt is decode-only: pre-#1209 rows persisted an absolute
+// expiry instead of ttl_seconds, and the shim in
+// parseSubscriptionOptions converts it back against the row's
+// added_at so old TTLs keep counting down unchanged.
+type subscriptionOptionsWire struct {
+	History    []int                                 `json:"history,omitempty"`
+	Forecast   string                                `json:"forecast,omitempty"`
+	Mode       string                                `json:"mode,omitempty"`
+	Include    *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
+	TTLSeconds int                                   `json:"ttl_seconds,omitempty"`
+	SelfOnly   bool                                  `json:"self_only,omitempty"`
+	ExpiresAt  string                                `json:"expires_at,omitempty"`
 }
 
-type watchlistOptionsWire struct {
-	History   []int                                 `json:"history,omitempty"`
-	Forecast  string                                `json:"forecast,omitempty"`
-	Mode      string                                `json:"mode,omitempty"`
-	Include   *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
-	ExpiresAt string                                `json:"expires_at,omitempty"`
-}
-
-func marshalWatchlistOptions(history []int, ttlSeconds int, forecast, mode string, include homeassistant.EntityMetadataIncludes) ([]byte, error) {
-	forecast, err := normalizeForecastType(forecast)
+func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
+	forecast, err := looppkg.NormalizeSubscriptionForecast(sub.Forecast)
 	if err != nil {
 		return nil, err
 	}
-	normalizedMode := normalizeSubscriptionMode(mode)
-	if normalizedMode == "" {
-		return nil, fmt.Errorf("mode must be one of render, ingest, or both; got %q", mode)
+	mode, err := looppkg.NormalizeSubscriptionMode(sub.Mode)
+	if err != nil {
+		return nil, err
 	}
-	wire := watchlistOptionsWire{
-		History:  append([]int(nil), history...),
-		Forecast: forecast,
-		Include:  (&include).Clone(),
+	if sub.TTLSeconds < 0 {
+		return nil, fmt.Errorf("ttl_seconds must be >= 0, got %d", sub.TTLSeconds)
 	}
-	// Render is the absent-field default so pre-mode rows and new
-	// default rows serialize identically.
-	if normalizedMode != SubscriptionModeRender {
-		wire.Mode = normalizedMode
+	wire := subscriptionOptionsWire{
+		History:    append([]int(nil), sub.History...),
+		Forecast:   forecast,
+		Mode:       mode,
+		Include:    sub.Include.Clone(),
+		TTLSeconds: sub.TTLSeconds,
+		SelfOnly:   sub.SelfOnly,
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
 	}
-	if ttlSeconds > 0 {
-		wire.ExpiresAt = time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second).Format(time.RFC3339)
-	}
 	return json.Marshal(wire)
 }
 
-func parseWatchlistOptions(optsJSON string) watchlistOptions {
+// parseSubscriptionOptions decodes an options blob into the unified
+// declaration, anchored at the row's added_at. Unrecognized forecast
+// or mode values degrade to their defaults (no forecast / render)
+// rather than erroring — the legacy-tolerant read posture the store
+// has always had.
+func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.EntitySubscription {
+	sub := looppkg.EntitySubscription{AddedAt: addedAt}
 	if optsJSON == "" || optsJSON == "{}" {
-		return watchlistOptions{Mode: SubscriptionModeRender}
+		return sub
 	}
-	var wire watchlistOptionsWire
+	var wire subscriptionOptionsWire
 	if err := json.Unmarshal([]byte(optsJSON), &wire); err != nil {
-		return watchlistOptions{Mode: SubscriptionModeRender}
+		return sub
 	}
-	mode := normalizeSubscriptionMode(wire.Mode)
-	if mode == "" {
-		// An unrecognized stored mode (a future value, or corruption)
-		// degrades to render — the legacy behavior — keeping the struct
-		// contract that Mode is never empty after decode.
-		mode = SubscriptionModeRender
+	sub.History = append([]int(nil), wire.History...)
+	sub.Include = wire.Include.Clone()
+	sub.SelfOnly = wire.SelfOnly
+	if forecast, err := looppkg.NormalizeSubscriptionForecast(wire.Forecast); err == nil {
+		sub.Forecast = forecast
 	}
-	out := watchlistOptions{
-		History: append([]int(nil), wire.History...),
-		Mode:    mode,
-		Include: wire.Include.Clone(),
+	if mode, err := looppkg.NormalizeSubscriptionMode(wire.Mode); err == nil {
+		sub.Mode = mode
 	}
-	if forecast, err := normalizeForecastType(wire.Forecast); err == nil {
-		out.Forecast = forecast
-	}
-	if wire.ExpiresAt != "" {
+	if wire.TTLSeconds > 0 {
+		sub.TTLSeconds = wire.TTLSeconds
+	} else if wire.ExpiresAt != "" {
+		// Legacy absolute-expiry row: recover the TTL against the
+		// row's added_at anchor. An expiry at or before added_at
+		// (clock skew, an already-elapsed row) maps to a 1-second
+		// TTL so the expiry sweep reaps it on this pass instead of
+		// resurrecting it as immortal.
 		if ts, err := time.Parse(time.RFC3339, wire.ExpiresAt); err == nil {
-			ts = ts.UTC()
-			out.ExpiresAt = &ts
+			ttl := int(ts.UTC().Sub(addedAt).Seconds())
+			if ttl <= 0 {
+				ttl = 1
+			}
+			sub.TTLSeconds = ttl
 		}
 	}
-	return out
-}
-
-func (o watchlistOptions) expired(now time.Time) bool {
-	return o.ExpiresAt != nil && !o.ExpiresAt.After(now)
-}
-
-func normalizeScopes(tags []string) []string {
-	if len(tags) == 0 {
-		return []string{""}
-	}
-	var scopes []string
-	seen := make(map[string]bool, len(tags))
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || seen[tag] {
-			continue
-		}
-		seen[tag] = true
-		scopes = append(scopes, tag)
-	}
-	if len(scopes) == 0 {
-		return []string{""}
-	}
-	return scopes
-}
-
-func normalizeForecastType(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "", "none":
-		return "", nil
-	case "daily", "hourly", "twice_daily":
-		return value, nil
-	default:
-		return "", fmt.Errorf("forecast must be one of daily, hourly, twice_daily, or none")
-	}
-}
-
-func cloneTimePtr(src *time.Time) *time.Time {
-	if src == nil {
-		return nil
-	}
-	cp := *src
-	return &cp
+	return sub
 }

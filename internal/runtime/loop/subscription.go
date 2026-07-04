@@ -17,12 +17,13 @@ import (
 // loop's effective subscription list is the union of its own +
 // every container ancestor's, deduplicated by EntityID with first-wins
 // (own declarations take precedence over inherited ones) — see
-// [Registry.AncestorSubscriptions].
+// [Registry.AncestorSubscriptions]. A container exempts one entry from
+// that cascade with [EntitySubscription.SelfOnly].
 //
-// Lens tags belong on the subscription rather than on the loop. They
-// describe properties of the subscription itself (visibility scope,
-// future lens routing) and are not load-bearing for the loop→
-// subscription binding.
+// This is the one subscription declaration shape in the system: the
+// awareness registry persists the same struct as owner-keyed rows
+// (loop-owned rows are compiled from the spec at persist time), so the
+// spec, the registry, and the renderer speak a single vocabulary.
 type EntitySubscription struct {
 	// EntityID is the subscription target: a concrete Home Assistant
 	// entity ("sensor.upstairs_temperature"), a glob
@@ -51,16 +52,25 @@ type EntitySubscription struct {
 
 	// AddedAt is when the subscription first landed on the spec. Every
 	// write-side helper (thane_loop_create creation, watch_entity,
-	// update_entity_subscriptions add, the legacy-rows migration)
-	// stamps a real timestamp; the field exists to make TTL countdown
-	// meaningful. Hand-authored Specs that leave it zero will not
-	// expire — [IsExpired] treats zero as "never set, never ages."
+	// add_entity_subscription with an owner) stamps a real timestamp;
+	// the field exists to make TTL countdown meaningful. Hand-authored
+	// Specs that leave it zero will not expire — [IsExpired] treats
+	// zero as "never set, never ages."
 	AddedAt time.Time `yaml:"added_at,omitempty" json:"added_at,omitempty"`
 
-	// Tags carry lens-style classifiers (visibility, lens routing,
-	// future filtering). They are NOT used as a binding handle from
-	// loop to subscription — the binding is structural.
-	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	// Mode declares what the subscription feeds. Empty (the canonical
+	// form of "render") injects live state into context each turn;
+	// [SubscriptionModeIngest] feeds the recent-state-changes window's
+	// push pipeline without a per-turn render; [SubscriptionModeBoth]
+	// does both. Normalized on load by [normalizeSubscriptionsOnLoad].
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+
+	// SelfOnly exempts this entry from container inheritance: a
+	// container's SelfOnly subscription renders for the container
+	// itself but is not unioned into descendants' effective sets. On a
+	// non-container loop the flag is inert (nothing inherits from
+	// non-containers).
+	SelfOnly bool `yaml:"self_only,omitempty" json:"self_only,omitempty"`
 }
 
 // IsExpired reports whether this subscription's TTL has elapsed
@@ -81,17 +91,21 @@ func cloneEntitySubscriptions(src []EntitySubscription) []EntitySubscription {
 	}
 	out := make([]EntitySubscription, len(src))
 	for i, sub := range src {
-		out[i] = sub
-		if len(sub.History) > 0 {
-			out[i].History = append([]int(nil), sub.History...)
-		}
-		if len(sub.Tags) > 0 {
-			out[i].Tags = append([]string(nil), sub.Tags...)
-		}
-		if sub.Include != nil {
-			include := *sub.Include
-			out[i].Include = &include
-		}
+		out[i] = sub.Clone()
+	}
+	return out
+}
+
+// Clone returns a deep copy of the subscription (History and Include
+// are the only reference-typed fields).
+func (s EntitySubscription) Clone() EntitySubscription {
+	out := s
+	if len(s.History) > 0 {
+		out.History = append([]int(nil), s.History...)
+	}
+	if s.Include != nil {
+		include := *s.Include
+		out.Include = &include
 	}
 	return out
 }
@@ -102,6 +116,50 @@ func cloneEntitySubscriptions(src []EntitySubscription) []EntitySubscription {
 // against a freshly-typed string literal in user-facing surfaces.
 const EffectiveOriginSelf = "self"
 
+// Subscription modes: what a subscription feeds. The empty string is
+// the canonical stored form of "render" so pre-mode declarations and
+// new default declarations serialize identically; the named constant
+// exists for tool parameters and display.
+const (
+	// SubscriptionModeRender is the default: inject live state into
+	// model context each turn.
+	SubscriptionModeRender = "render"
+	// SubscriptionModeIngest feeds the recent-state-changes window's
+	// push pipeline only; no per-turn state render.
+	SubscriptionModeIngest = "ingest"
+	// SubscriptionModeBoth feeds the state-change window and renders
+	// live state each turn.
+	SubscriptionModeBoth = "both"
+)
+
+// NormalizeSubscriptionMode returns the canonical stored mode: empty
+// and "render" collapse to "" (render is the absent-field default),
+// ingest/both pass through, anything else is an actionable error.
+func NormalizeSubscriptionMode(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", SubscriptionModeRender:
+		return "", nil
+	case SubscriptionModeIngest:
+		return SubscriptionModeIngest, nil
+	case SubscriptionModeBoth:
+		return SubscriptionModeBoth, nil
+	default:
+		return "", fmt.Errorf("mode must be one of [render, ingest, both], got %q", raw)
+	}
+}
+
+// FeedsIngest reports whether this subscription feeds the
+// state-change window's push pipeline (mode ingest or both).
+func (s EntitySubscription) FeedsIngest() bool {
+	return s.Mode == SubscriptionModeIngest || s.Mode == SubscriptionModeBoth
+}
+
+// RendersState reports whether this subscription renders live state
+// into context each turn (mode render — stored as "" — or both).
+func (s EntitySubscription) RendersState() bool {
+	return s.Mode != SubscriptionModeIngest
+}
+
 // NormalizeSubscriptionForecast returns the canonical forecast
 // value for persisted subscriptions. "none" and empty collapse to
 // "" (meaning "no forecast fetch"); the three real HA forecast
@@ -111,10 +169,9 @@ const EffectiveOriginSelf = "self"
 // lets [Spec.UnmarshalJSON] guard hydration without depending on
 // the tools or awareness packages.
 //
-// Tool-boundary callers (thane_loop_create, update_entity_subscriptions,
-// watch_entity) and the awareness watchlist store have their own
-// normalizers that match this contract; consolidation is a
-// follow-up.
+// Tool-boundary callers (thane_loop_create, watch_entity) and the
+// awareness watchlist store have their own normalizers that match
+// this contract; consolidation is a follow-up.
 func NormalizeSubscriptionForecast(raw string) (string, error) {
 	v := strings.TrimSpace(raw)
 	switch v {
@@ -151,6 +208,11 @@ func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]E
 			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): %w", i, sub.EntityID, err)
 		}
 		sub.Forecast = forecast
+		mode, err := NormalizeSubscriptionMode(sub.Mode)
+		if err != nil {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): %w", i, sub.EntityID, err)
+		}
+		sub.Mode = mode
 		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
 			sub.AddedAt = now
 		}

@@ -589,26 +589,15 @@ func (a *App) initServers(s *newState) error {
 	// as first-class definitions via runtime spec hydration.
 	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
-			if err := a.migrateLegacyScopeTagSubscriptions(); err != nil {
-				// Promoted from Warn to hard error: a failed
-				// migration leaves subscription state partial —
-				// spec.Subscriptions populated, legacy
-				// scope_tag metadata still present, watchlist
-				// rows un-wiped. The next startup re-runs the
-				// migration. If an operator edits subscriptions
-				// between failed-migration restarts (via
-				// watch_entity / update_entity_subscriptions),
-				// mergeLegacySubscriptions re-adds the entities
-				// they removed because step 1 unions
-				// def.Spec.Subscriptions with the legacy rows
-				// that are still in the watchlist. Failing the
-				// startup loud forces operator attention while
-				// the migration is still a one-shot upgrade
-				// path; the migration is idempotent in the
-				// happy case, so a clean restart after fixing
-				// the underlying issue (DB connectivity,
-				// permissions, schema drift) resumes cleanly.
-				return fmt.Errorf("legacy scope_tag migration failed — subscription state may be partial; fix underlying error and restart: %w", err)
+			// Mirror every definition's subscriptions into the
+			// awareness registry and consciously drop orphaned rows
+			// (including anything the retired tag-scoped tier left
+			// behind). Non-fatal: the registry rows are a projection
+			// of the specs, per-spec persists keep re-projecting, and
+			// the next boot re-runs the full pass — a partial compile
+			// degrades visibility, not correctness.
+			if err := a.compileLoopSubscriptions(); err != nil {
+				logger.Warn("loop subscription compile incomplete", "error", err)
 			}
 			// Core is auto-created synchronously during initStores —
 			// before any deferred worker runs — so default-parenting
