@@ -51,10 +51,12 @@ type WatchlistToolsConfig struct {
 	// loop's Spec.Subscriptions. Optional: when nil, the owner
 	// parameter returns a teaching error instead of mutating.
 	LoopMutator LoopSubscriptionMutator
-	// OnIngestChange is invoked after any mutation that may affect the
-	// state-watcher ingestion filter (an ingest/both-mode add, or any
-	// removal), so the wiring can rebuild the filter from the registry.
-	// Optional.
+	// OnIngestChange is invoked after an always-visible-tier mutation
+	// that may affect the state-watcher ingestion filter (an
+	// ingest/both-mode add, or any removal), so the wiring can rebuild
+	// the filter from the registry. Owner-addressed mutations do NOT
+	// fire it — they persist the spec, and the app's persist hook
+	// re-mirrors the registry and rebuilds the filter there. Optional.
 	OnIngestChange func()
 	// Logger defaults to slog.Default when nil.
 	Logger *slog.Logger
@@ -258,16 +260,21 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		if w.loopMutator == nil {
 			return "", fmt.Errorf("loop-owned subscriptions are not available in this runtime; omit owner for an always-visible subscription")
 		}
+		// The mutator persists the spec, and the app's persist hook
+		// re-mirrors the registry and rebuilds the ingestion filter —
+		// no onIngestChange here or the filter would rebuild twice.
 		if _, err := w.loopMutator(ctx, owner, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
 			return upsertLoopSubscription(current, sub), nil
 		}); err != nil {
 			return "", err
 		}
-	} else if err := w.store.Upsert("", sub); err != nil {
-		return "", fmt.Errorf("add to watchlist: %w", err)
-	}
-	if sub.FeedsIngest() && w.onIngestChange != nil {
-		w.onIngestChange()
+	} else {
+		if err := w.store.Upsert("", sub); err != nil {
+			return "", fmt.Errorf("add to watchlist: %w", err)
+		}
+		if sub.FeedsIngest() && w.onIngestChange != nil {
+			w.onIngestChange()
+		}
 	}
 
 	msg := fmt.Sprintf("Now watching %s", entityID)
@@ -445,6 +452,9 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 	case owner == OwnerSystem:
 		return "", fmt.Errorf("system-owned rows are seeded from configuration (person.track) and re-appear at the next startup; change the configuration instead of removing them here")
 	case owner != "":
+		// The mutator persists the spec, and the app's persist hook
+		// re-mirrors the registry and rebuilds the ingestion filter —
+		// no onIngestChange here or the filter would rebuild twice.
 		if w.loopMutator == nil {
 			return "", fmt.Errorf("loop-owned subscriptions are not available in this runtime; omit owner to remove an always-visible subscription")
 		}
@@ -457,10 +467,12 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 		if err := w.store.Remove("", entityID); err != nil {
 			return "", fmt.Errorf("remove from watchlist: %w", err)
 		}
-	}
-
-	if w.onIngestChange != nil {
-		w.onIngestChange()
+		// Unconditional for global removes: the handler doesn't know
+		// whether the removed row fed the filter, and a spurious
+		// rebuild is cheaper than a stale one.
+		if w.onIngestChange != nil {
+			w.onIngestChange()
+		}
 	}
 	w.logger.Info("entity subscription removed", "entity_id", entityID, "owner", owner)
 	if owner != "" {

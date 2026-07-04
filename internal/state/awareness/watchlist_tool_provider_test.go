@@ -572,3 +572,62 @@ func TestRemoveEntitySubscription_SystemAndTagsGuards(t *testing.T) {
 		t.Fatalf("tags remove error = %v, want retirement teaching", err)
 	}
 }
+
+// TestOwnerMutationsDoNotFireIngestRebuild pins the division of
+// labor Copilot flagged on #1212: owner-addressed add/remove persist
+// the spec and the app's persist hook rebuilds the ingestion filter,
+// so the tool-side OnIngestChange must stay silent or the filter
+// rebuilds twice per mutation.
+func TestOwnerMutationsDoNotFireIngestRebuild(t *testing.T) {
+	db, err := sql.Open("sqlite-thane", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := NewWatchlistStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	mutator := &fakeLoopMutator{subs: map[string][]looppkg.EntitySubscription{
+		"battery-watcher": {{EntityID: "binary_sensor.low_battery"}},
+	}}
+	rebuilds := 0
+	p := NewWatchlistTools(WatchlistToolsConfig{
+		Store:          store,
+		LoopMutator:    mutator.mutate,
+		OnIngestChange: func() { rebuilds++ },
+	})
+
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "binary_sensor.oven_door",
+		"owner":     "battery-watcher",
+		"mode":      "ingest",
+	}); err != nil {
+		t.Fatalf("owner ingest add: %v", err)
+	}
+	if rebuilds != 0 {
+		t.Fatalf("rebuilds = %d after owner add, want 0 (the app's persist hook owns that rebuild)", rebuilds)
+	}
+
+	if _, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "binary_sensor.low_battery",
+		"owner":     "battery-watcher",
+	}); err != nil {
+		t.Fatalf("owner remove: %v", err)
+	}
+	if rebuilds != 0 {
+		t.Fatalf("rebuilds = %d after owner remove, want 0", rebuilds)
+	}
+
+	// The global tier still fires: removal there is the tool's own
+	// write and nothing else rebuilds on its behalf.
+	if _, err := p.handleRemoveEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "sensor.anything",
+	}); err != nil {
+		t.Fatalf("global remove: %v", err)
+	}
+	if rebuilds != 1 {
+		t.Fatalf("rebuilds = %d after global remove, want 1", rebuilds)
+	}
+}
