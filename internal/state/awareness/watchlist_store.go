@@ -191,17 +191,21 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	)
 }
 
-// GlobalEntityIDSet returns the subset of candidates present in the
-// always-visible tier (owner=”). It performs a single bounded
-// IN-clause query and skips the TTL cleanup writes that
+// GlobalEntityGates returns, for each candidate present in the
+// always-visible tier (owner=”), that row's RequiresTag gate ("" for
+// an ungated row). Callers combine the gate with their own active-tag
+// set to decide whether the global tier will actually render the
+// entity this turn — a gated-off global row must not suppress a
+// loop-scoped render of the same entity (#1213). It performs a single
+// bounded IN-clause query and skips the TTL cleanup writes that
 // [WatchlistStore.ListOwner] does — this method is meant to be called
 // by sibling providers (e.g. [LoopSubscriptionProvider]) that only
 // need a dedup check against the always-visible set on every
 // iteration; the cleanup is left to the always-visible
 // [WatchlistProvider]'s own pass so we don't double-write deletes.
 // Returns an empty (non-nil) map when candidates is empty.
-func (s *WatchlistStore) GlobalEntityIDSet(candidates []string) (map[string]struct{}, error) {
-	out := make(map[string]struct{}, len(candidates))
+func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]string, error) {
+	out := make(map[string]string, len(candidates))
 	if len(candidates) == 0 {
 		return out, nil
 	}
@@ -225,7 +229,7 @@ func (s *WatchlistStore) GlobalEntityIDSet(candidates []string) (map[string]stru
 	}
 	placeholders := strings.Repeat("?,", len(args))
 	placeholders = placeholders[:len(placeholders)-1]
-	query := `SELECT entity_id FROM watched_entity_subscriptions
+	query := `SELECT entity_id, added_at, options FROM watched_entity_subscriptions
 		 WHERE owner = '' AND entity_id IN (` + placeholders + `)`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -233,11 +237,14 @@ func (s *WatchlistStore) GlobalEntityIDSet(candidates []string) (map[string]stru
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var (
+			id, optsJSON string
+			addedAt      time.Time
+		)
+		if err := rows.Scan(&id, &addedAt, &optsJSON); err != nil {
 			return nil, err
 		}
-		out[id] = struct{}{}
+		out[id] = parseSubscriptionOptions(optsJSON, addedAt.UTC()).RequiresTag
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -323,13 +330,14 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 // parseSubscriptionOptions converts it back against the row's
 // added_at so old TTLs keep counting down unchanged.
 type subscriptionOptionsWire struct {
-	History    []int                                 `json:"history,omitempty"`
-	Forecast   string                                `json:"forecast,omitempty"`
-	Mode       string                                `json:"mode,omitempty"`
-	Include    *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
-	TTLSeconds int                                   `json:"ttl_seconds,omitempty"`
-	SelfOnly   bool                                  `json:"self_only,omitempty"`
-	ExpiresAt  string                                `json:"expires_at,omitempty"`
+	History     []int                                 `json:"history,omitempty"`
+	Forecast    string                                `json:"forecast,omitempty"`
+	Mode        string                                `json:"mode,omitempty"`
+	Include     *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
+	TTLSeconds  int                                   `json:"ttl_seconds,omitempty"`
+	SelfOnly    bool                                  `json:"self_only,omitempty"`
+	RequiresTag string                                `json:"requires_tag,omitempty"`
+	ExpiresAt   string                                `json:"expires_at,omitempty"`
 }
 
 func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
@@ -345,12 +353,13 @@ func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) 
 		return nil, fmt.Errorf("ttl_seconds must be >= 0, got %d", sub.TTLSeconds)
 	}
 	wire := subscriptionOptionsWire{
-		History:    append([]int(nil), sub.History...),
-		Forecast:   forecast,
-		Mode:       mode,
-		Include:    sub.Include.Clone(),
-		TTLSeconds: sub.TTLSeconds,
-		SelfOnly:   sub.SelfOnly,
+		History:     append([]int(nil), sub.History...),
+		Forecast:    forecast,
+		Mode:        mode,
+		Include:     sub.Include.Clone(),
+		TTLSeconds:  sub.TTLSeconds,
+		SelfOnly:    sub.SelfOnly,
+		RequiresTag: strings.TrimSpace(sub.RequiresTag),
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -375,6 +384,7 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	sub.History = append([]int(nil), wire.History...)
 	sub.Include = wire.Include.Clone()
 	sub.SelfOnly = wire.SelfOnly
+	sub.RequiresTag = strings.TrimSpace(wire.RequiresTag)
 	if forecast, err := looppkg.NormalizeSubscriptionForecast(wire.Forecast); err == nil {
 		sub.Forecast = forecast
 	}

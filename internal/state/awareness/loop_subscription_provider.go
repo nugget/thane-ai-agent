@@ -71,7 +71,7 @@ func (p *LoopSubscriptionProvider) SetRegistryClient(registries HARegistryClient
 // or the effective list is empty — each is a normal quiescent state,
 // not an error. Registered as an always-on provider via
 // [agent.Loop.RegisterAlwaysContextProvider].
-func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	if p.loops == nil {
 		return "", nil
 	}
@@ -93,7 +93,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	// would add an HA fetch and a redundant prompt block; the
 	// always-visible rendering wins because it would appear in
 	// every loop's context anyway. We use
-	// [WatchlistStore.GlobalEntityIDSet] (bounded IN-clause query,
+	// [WatchlistStore.GlobalEntityGates] (bounded IN-clause query,
 	// no TTL cleanup writes) so the dedup check costs one indexed
 	// scan over the loop's own candidate list rather than a full
 	// always-visible scan + cleanup pass — the cleanup is left to
@@ -107,13 +107,21 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		for _, sub := range subs {
 			candidates = append(candidates, sub.EntityID)
 		}
-		set, err := p.store.GlobalEntityIDSet(candidates)
+		gates, err := p.store.GlobalEntityGates(candidates)
 		if err != nil {
 			p.logger.Warn("loop subscription provider could not enumerate always-visible store",
 				"error", err,
 			)
 		} else {
-			alreadyVisible = set
+			// Only rows the global tier will actually render this turn
+			// suppress a loop-scoped render: a gated global row whose
+			// tag is inactive renders nothing, so the loop's own
+			// subscription for the same entity must still show (#1213).
+			for id, gate := range gates {
+				if gate == "" || req.ActiveTags[gate] {
+					alreadyVisible[id] = struct{}{}
+				}
+			}
 		}
 	}
 
@@ -134,7 +142,13 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		}
 		// Ingest-only entries feed the state-change window's push
 		// pipeline; they don't render per-turn state here (#1192).
-		if !sub.RendersState() {
+		// Tag-gated entries render only while their capability tag is
+		// active (#1213). First-wins dedup in the ancestor walk
+		// composes with the gate: a leaf's gated declaration shadows a
+		// container's ungated one for the same entity, so the entity
+		// is absent while the leaf's tag is off — the closest
+		// declaration wins, conditions included.
+		if !sub.RendersState() || !sub.GateOpen(req.ActiveTags) {
 			continue
 		}
 		target := ParseSubscriptionTarget(sub.EntityID)

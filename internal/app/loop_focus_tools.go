@@ -82,6 +82,10 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 						"type":        "boolean",
 						"description": "Meaningful when this loop is a container: true keeps the subscription out of descendant loops' inherited sets.",
 					},
+					"requires_tag": map[string]any{
+						"type":        "string",
+						"description": "Optional capability tag gating visibility: the entity renders only while this tag is active. Render-only; incompatible with mode ingest/both.",
+					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
@@ -121,18 +125,24 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; watch the target with mode render, or list its member entities", stringMapValue(args, "mode"))
 				}
 				selfOnly, _ := args["self_only"].(bool)
-				now := time.Now().UTC()
+				sub := looppkg.EntitySubscription{
+					EntityID:    entityID,
+					History:     history,
+					Forecast:    forecast,
+					Include:     tools.EntityMetadataIncludesPointer(include),
+					TTLSeconds:  ttlSeconds,
+					AddedAt:     time.Now().UTC(),
+					Mode:        mode,
+					SelfOnly:    selfOnly,
+					RequiresTag: strings.TrimSpace(stringMapValue(args, "requires_tag")),
+				}
+				// The gate is render-only: capture must never depend
+				// on tag state (#1213).
+				if sub.RequiresTag != "" && sub.FeedsIngest() {
+					return "", fmt.Errorf("requires_tag gates rendering only and cannot combine with mode %q — capture does not follow tag state; drop requires_tag, or use mode render for a tag-gated watch", stringMapValue(args, "mode"))
+				}
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
-					return upsertSubscription(current, looppkg.EntitySubscription{
-						EntityID:   entityID,
-						History:    history,
-						Forecast:   forecast,
-						Include:    tools.EntityMetadataIncludesPointer(include),
-						TTLSeconds: ttlSeconds,
-						AddedAt:    now,
-						Mode:       mode,
-						SelfOnly:   selfOnly,
-					}), nil
+					return upsertSubscription(current, sub), nil
 				})
 				if err != nil {
 					return "", err

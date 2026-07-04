@@ -86,10 +86,12 @@ func NewWatchlistTools(cfg WatchlistToolsConfig) *WatchlistTools {
 func (w *WatchlistTools) Name() string { return "awareness.watchlist" }
 
 // retiredTagsError is the teaching error for the retired lens-tag
-// vocabulary (#1209): subscriptions are loop-owned now, and the
-// tag-scoped storage tier the parameters wrote is gone.
+// vocabulary (#1209). It distinguishes the two things a model
+// reaching for the old parameter might actually mean: binding a
+// subscription to a loop (the owner parameter) and gating its
+// visibility on a capability tag (the requires_tag parameter, #1213).
 func retiredTagsError(param string) error {
-	return fmt.Errorf("the %s parameter is retired: subscription tags and tag scoping no longer exist — a subscription is owned (always-visible, a loop via the owner parameter, or system); drop %s and use owner to address a loop's subscriptions", param, param)
+	return fmt.Errorf("the %s parameter is retired: lens-tag scoping no longer exists — to bind a subscription to a loop use the owner parameter; to render it only while a capability tag is active use requires_tag", param)
 }
 
 // Tools implements [tools.Provider]. Returns the three subscription
@@ -137,6 +139,10 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 					"self_only": map[string]any{
 						"type":        "boolean",
 						"description": "Only meaningful with owner set to a container loop: true keeps the subscription out of descendant loops' inherited sets (the container still sees it). Default false — container subscriptions cascade.",
+					},
+					"requires_tag": map[string]any{
+						"type":        "string",
+						"description": "Optional capability tag gating visibility: the subscription renders only while this tag is active in the consuming context. Use it to build a macro set — one tag activation surfaces a subject's tagged documents and its related entities together, and deactivation drops both. Render-only: incompatible with mode ingest/both.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -232,19 +238,27 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if selfOnly && owner == "" {
 		return "", fmt.Errorf("self_only shapes container inheritance and applies to loop-owned subscriptions only; pass owner with a container loop's name, or drop self_only for an always-visible subscription")
 	}
+	requiresTag := strings.TrimSpace(stringArg(args, "requires_tag"))
 
 	sub := looppkg.EntitySubscription{
-		EntityID:   entityID,
-		History:    history,
-		Forecast:   forecast,
-		Include:    tools.EntityMetadataIncludesPointer(include),
-		TTLSeconds: ttlSeconds,
-		AddedAt:    time.Now().UTC(),
-		Mode:       mode,
-		SelfOnly:   selfOnly,
+		EntityID:    entityID,
+		History:     history,
+		Forecast:    forecast,
+		Include:     tools.EntityMetadataIncludesPointer(include),
+		TTLSeconds:  ttlSeconds,
+		AddedAt:     time.Now().UTC(),
+		Mode:        mode,
+		SelfOnly:    selfOnly,
+		RequiresTag: requiresTag,
 	}
 
 	if sub.FeedsIngest() {
+		// The gate is render-only: capture must never depend on tag
+		// state, or the StateWatcher filter would flap with tag
+		// activation (#1213).
+		if requiresTag != "" {
+			return "", fmt.Errorf("requires_tag gates rendering only and cannot combine with mode %q — capture does not follow tag state; drop requires_tag, or use mode render for a tag-gated subscription", rawMode)
+		}
 		// The ingestion filter speaks the EntityFilter's native
 		// vocabulary: concrete ids and globs. Registry targets would be
 		// silently approximated, so they are rejected outright (#1192).
@@ -304,6 +318,9 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 	if selfOnly {
 		msg += " (self_only: not inherited by descendant loops)"
+	}
+	if requiresTag != "" {
+		msg += fmt.Sprintf(" (renders only while tag %q is active)", requiresTag)
 	}
 	if include.Any() {
 		msg += " (includes HA metadata)"
@@ -396,6 +413,11 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 		}
 		if row.SelfOnly {
 			item["self_only"] = true
+		}
+		// The gate is shown verbatim with no open/closed judgment:
+		// it resolves per-consumer, and the list runs in one context.
+		if row.RequiresTag != "" {
+			item["requires_tag"] = row.RequiresTag
 		}
 		if row.TTLSeconds > 0 && !row.AddedAt.IsZero() {
 			expiresAt := row.AddedAt.Add(time.Duration(row.TTLSeconds) * time.Second)

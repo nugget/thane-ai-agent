@@ -631,3 +631,87 @@ func TestOwnerMutationsDoNotFireIngestRebuild(t *testing.T) {
 		t.Fatalf("rebuilds = %d after global remove, want 1", rebuilds)
 	}
 }
+
+// TestAddEntitySubscription_RequiresTag covers the #1213 gate at the
+// tool boundary: it round-trips onto the row, surfaces in the list,
+// and refuses to combine with ingest-feeding modes.
+func TestAddEntitySubscription_RequiresTag(t *testing.T) {
+	p, store, _ := setupWatchlistProvider(t)
+
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":    "sensor.stock_tank_level",
+		"requires_tag": "ranch_water",
+	})
+	if err != nil {
+		t.Fatalf("gated add: %v", err)
+	}
+	if !strings.Contains(result, `tag "ranch_water"`) {
+		t.Fatalf("result = %q, want gate acknowledgement", result)
+	}
+
+	rows, err := store.ListOwner("")
+	if err != nil {
+		t.Fatalf("ListOwner: %v", err)
+	}
+	if len(rows) != 1 || rows[0].RequiresTag != "ranch_water" {
+		t.Fatalf("rows = %+v, want requires_tag round-tripped", rows)
+	}
+
+	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var payload struct {
+		Items []struct {
+			EntityID    string `json:"entity_id"`
+			RequiresTag string `json:"requires_tag"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].RequiresTag != "ranch_water" {
+		t.Fatalf("list items = %+v, want requires_tag shown verbatim", payload.Items)
+	}
+
+	// Render-only: the gate cannot feed capture.
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":    "binary_sensor.pump_running",
+		"requires_tag": "ranch_water",
+		"mode":         "ingest",
+	}); err == nil || !strings.Contains(err.Error(), "render") {
+		t.Fatalf("ingest+requires_tag error = %v, want render-only teaching", err)
+	}
+}
+
+// TestIngestGlobsSkipsGatedRows is the defensive backstop for rows
+// that bypass the tool boundary (hand-authored specs): a gated row
+// never feeds the ingestion filter regardless of its mode.
+func TestIngestGlobsSkipsGatedRows(t *testing.T) {
+	p, store, _ := setupWatchlistProvider(t)
+	_ = p
+
+	// Write a gated ingest row directly through the store — the tool
+	// boundary would reject this combination.
+	if err := store.Upsert("alice-loop", looppkg.EntitySubscription{
+		EntityID:    "binary_sensor.gate_open",
+		Mode:        looppkg.SubscriptionModeIngest,
+		RequiresTag: "ranch_water",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := store.Upsert("alice-loop", looppkg.EntitySubscription{
+		EntityID: "binary_sensor.ungated",
+		Mode:     looppkg.SubscriptionModeIngest,
+	}); err != nil {
+		t.Fatalf("upsert ungated: %v", err)
+	}
+
+	globs, err := store.IngestGlobs(time.Now())
+	if err != nil {
+		t.Fatalf("IngestGlobs: %v", err)
+	}
+	if !slices.Equal(globs, []string{"binary_sensor.ungated"}) {
+		t.Fatalf("IngestGlobs = %v, want gated row skipped", globs)
+	}
+}

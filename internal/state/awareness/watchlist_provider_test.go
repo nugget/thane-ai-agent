@@ -680,3 +680,41 @@ func decodeWatchlistPayload(t *testing.T, got string) map[string]any {
 	}
 	return payload
 }
+
+// TestWatchlistProviderHonorsRequiresTag covers the #1213 render gate
+// on the always-visible tier: a gated row renders only while its
+// capability tag is active in the consuming context, and an ungated
+// row is unaffected either way.
+func TestWatchlistProviderHonorsRequiresTag(t *testing.T) {
+	ha := &fakeHA{states: map[string]*homeassistant.State{
+		"sensor.plain":  {EntityID: "sensor.plain", State: "1"},
+		"sensor.lensed": {EntityID: "sensor.lensed", State: "2"},
+	}}
+	p, store := setupTestProvider(t, ha)
+
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.plain"}); err != nil {
+		t.Fatalf("upsert plain: %v", err)
+	}
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
+		t.Fatalf("upsert lensed: %v", err)
+	}
+
+	out, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext (tag off): %v", err)
+	}
+	if !strings.Contains(out, "sensor.plain") {
+		t.Errorf("ungated row missing: %q", out)
+	}
+	if strings.Contains(out, "sensor.lensed") {
+		t.Errorf("gated row rendered with its tag inactive: %q", out)
+	}
+
+	out, err = p.TagContext(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"ranch_water": true}})
+	if err != nil {
+		t.Fatalf("TagContext (tag on): %v", err)
+	}
+	if !strings.Contains(out, "sensor.lensed") {
+		t.Errorf("gated row missing with its tag active: %q", out)
+	}
+}

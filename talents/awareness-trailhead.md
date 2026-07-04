@@ -52,6 +52,13 @@ Choose the next move deliberately:
   subscriptions to descendants unless the entry sets `self_only`).
   From inside a loop's own turn, `watch_entity` does the same without
   naming the loop.
+- Pass `requires_tag` to build a macro set: the subscription renders
+  only while that capability tag is active, so activating one tag
+  surfaces a subject's tagged documents and its related entities
+  together — and deactivating it drops both. The gate is render-only
+  (it cannot combine with `mode: ingest`/`both`) and is the exception,
+  not the default: an ungated subscription is the smooth path when the
+  entity should simply always be there.
 - Use `remove_entity_subscription` when the work is done. Stale
   subscriptions are quiet clutter. The same `owner` addressing
   applies.

@@ -538,6 +538,10 @@ func thaneLoopCreateSchema() map[string]any {
 							"type":        "boolean",
 							"description": "Meaningful on containers: true keeps this subscription out of descendant loops' inherited sets.",
 						},
+						"requires_tag": map[string]any{
+							"type":        "string",
+							"description": "Optional capability tag gating visibility: the entity renders only while this tag is active in the loop's context. Render-only; incompatible with mode ingest/both.",
+						},
 						"include": EntityMetadataIncludeParameter(),
 					},
 					"required": []string{"entity_id"},
