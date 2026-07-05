@@ -152,6 +152,14 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 						"type":        "integer",
 						"description": "Bound the transition log to changes within this trailing window (seconds). Combine with transitions for window-filtered last-n, or set alone to render every retained change inside the window (still capped).",
 					},
+					"wake": map[string]any{
+						"type":        "boolean",
+						"description": "Wake the owning loop when this entity changes — debounced and coalesced, so a chattering sensor becomes one wake carrying the latest change, never a wakestorm. Requires owner (an always-visible subscription has nobody to wake). Capture follows automatically. Entity ids and globs only; incompatible with requires_tag.",
+					},
+					"wake_debounce_seconds": map[string]any{
+						"type":        "integer",
+						"description": "How long this subscription's changes coalesce before waking its loop (default a few seconds). A loop's effective cadence follows its twitchiest wake subscription — one wake drains everything pending.",
+					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
@@ -261,6 +269,14 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if transitions > maxTransitionsPerSubscription {
 		return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", maxTransitionsPerSubscription)
 	}
+	wake, _ := args["wake"].(bool)
+	wakeDebounce, err := watchlistIntArg(args["wake_debounce_seconds"], "wake_debounce_seconds")
+	if err != nil {
+		return "", err
+	}
+	if wakeDebounce < 0 {
+		return "", fmt.Errorf("wake_debounce_seconds must be >= 0")
+	}
 
 	sub := looppkg.EntitySubscription{
 		EntityID:                 entityID,
@@ -274,8 +290,23 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		RequiresTag:              requiresTag,
 		Transitions:              transitions,
 		TransitionsWindowSeconds: transitionsWindow,
+		Wake:                     wake,
+		WakeDebounceSeconds:      wakeDebounce,
 	}
 
+	if sub.Wake {
+		// The wake feed awakens the OWNING loop; the always-visible
+		// tier has nobody to wake.
+		if owner == "" {
+			return "", fmt.Errorf("wake awakens the owning loop, and an always-visible subscription has no owner — pass owner with the loop to wake, or use watch_entity from inside it")
+		}
+		if requiresTag != "" {
+			return "", fmt.Errorf("wake cannot combine with requires_tag — waking must not follow tag state; drop one of the two")
+		}
+		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+			return "", fmt.Errorf("wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — subscribe a concrete entity or glob to wake on")
+		}
+	}
 	if sub.WantsTransitions() {
 		// A transition log is a render feature; an ingest-only mode
 		// renders nothing, so the combination declares a log nobody
@@ -359,6 +390,13 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 	if selfOnly {
 		msg += " (self_only: not inherited by descendant loops)"
+	}
+	if wake {
+		if wakeDebounce > 0 {
+			msg += fmt.Sprintf(" (wake: the loop wakes on change, coalesced over %ds)", wakeDebounce)
+		} else {
+			msg += " (wake: the loop wakes on change, debounced; capture follows automatically)"
+		}
 	}
 	if requiresTag != "" {
 		msg += fmt.Sprintf(" (renders only while tag %q is active)", requiresTag)
@@ -475,6 +513,12 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 		}
 		if row.TransitionsWindowSeconds > 0 {
 			item["transitions_window_seconds"] = row.TransitionsWindowSeconds
+		}
+		if row.Wake {
+			item["wake"] = true
+		}
+		if row.WakeDebounceSeconds > 0 {
+			item["wake_debounce_seconds"] = row.WakeDebounceSeconds
 		}
 		if row.TTLSeconds > 0 && !row.AddedAt.IsZero() {
 			expiresAt := row.AddedAt.Add(time.Duration(row.TTLSeconds) * time.Second)

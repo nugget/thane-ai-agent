@@ -627,11 +627,18 @@ func (a *App) initServers(s *newState) error {
 					"skipped_non_service", result.SkippedNonService,
 				)
 			}
-			// Drain any mqtt-wake queue partitions left pending by a
-			// crash while their debounce was armed (#1033). Runs here
-			// — after StartEnabledServices — so wake targets resolve.
+			// Drain any queued-wake partitions left pending by a
+			// crash while their debounce was armed (#1033/#1211).
+			// Runs here — after StartEnabledServices — so wake
+			// targets resolve. The subscription feeder also compiles
+			// its initial wake index now that loop-owned rows are
+			// mirrored.
 			if a.mqttWakeDispatch != nil {
 				a.mqttWakeDispatch.Sweep(ctx)
+			}
+			if a.subWakeFeeder != nil {
+				a.subWakeFeeder.Rebuild()
+				a.subWakeFeeder.Sweep(ctx)
 			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription

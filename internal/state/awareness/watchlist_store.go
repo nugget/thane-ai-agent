@@ -349,6 +349,8 @@ type subscriptionOptionsWire struct {
 	RequiresTag              string                                `json:"requires_tag,omitempty"`
 	Transitions              int                                   `json:"transitions,omitempty"`
 	TransitionsWindowSeconds int                                   `json:"transitions_window_seconds,omitempty"`
+	Wake                     bool                                  `json:"wake,omitempty"`
+	WakeDebounceSeconds      int                                   `json:"wake_debounce_seconds,omitempty"`
 	ExpiresAt                string                                `json:"expires_at,omitempty"`
 }
 
@@ -367,6 +369,9 @@ func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) 
 	if sub.Transitions < 0 || sub.TransitionsWindowSeconds < 0 {
 		return nil, fmt.Errorf("transitions and transitions_window_seconds must be >= 0, got %d/%d", sub.Transitions, sub.TransitionsWindowSeconds)
 	}
+	if sub.WakeDebounceSeconds < 0 {
+		return nil, fmt.Errorf("wake_debounce_seconds must be >= 0, got %d", sub.WakeDebounceSeconds)
+	}
 	wire := subscriptionOptionsWire{
 		History:                  append([]int(nil), sub.History...),
 		Forecast:                 forecast,
@@ -377,6 +382,8 @@ func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) 
 		RequiresTag:              strings.TrimSpace(sub.RequiresTag),
 		Transitions:              sub.Transitions,
 		TransitionsWindowSeconds: sub.TransitionsWindowSeconds,
+		Wake:                     sub.Wake,
+		WakeDebounceSeconds:      sub.WakeDebounceSeconds,
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -402,6 +409,10 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	sub.Include = wire.Include.Clone()
 	sub.SelfOnly = wire.SelfOnly
 	sub.RequiresTag = strings.TrimSpace(wire.RequiresTag)
+	sub.Wake = wire.Wake
+	if wire.WakeDebounceSeconds > 0 {
+		sub.WakeDebounceSeconds = wire.WakeDebounceSeconds
+	}
 	if wire.Transitions > 0 {
 		sub.Transitions = wire.Transitions
 	}

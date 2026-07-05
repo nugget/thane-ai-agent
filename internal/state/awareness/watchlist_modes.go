@@ -51,7 +51,7 @@ func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
 		// unconditionally so the log is warm when the tag activates —
 		// only its rendering follows the gate.
 		modeFeeds := sub.FeedsIngest() && sub.RequiresTag == ""
-		if !modeFeeds && !sub.WantsTransitions() {
+		if !modeFeeds && !sub.WantsTransitions() && !sub.Wake {
 			continue
 		}
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
@@ -74,7 +74,7 @@ func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
 // Call before persisting; the returned error teaches the recovery
 // move.
 func CheckIngestCapacity(store *WatchlistStore, sub looppkg.EntitySubscription) error {
-	if store == nil || (!sub.FeedsIngest() && !sub.WantsTransitions()) {
+	if store == nil || (!sub.FeedsIngest() && !sub.WantsTransitions() && !sub.Wake) {
 		return nil
 	}
 	globs, err := store.IngestGlobs(time.Now())

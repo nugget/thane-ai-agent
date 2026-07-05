@@ -550,6 +550,14 @@ func thaneLoopCreateSchema() map[string]any {
 							"type":        "integer",
 							"description": "Bound the transition log to changes within this trailing window (seconds); combine with transitions or set alone (still capped).",
 						},
+						"wake": map[string]any{
+							"type":        "boolean",
+							"description": "Wake this loop when the entity changes — debounced and coalesced; capture follows automatically. Entity ids and globs only; incompatible with requires_tag.",
+						},
+						"wake_debounce_seconds": map[string]any{
+							"type":        "integer",
+							"description": "How long changes coalesce before waking (default a few seconds).",
+						},
 						"include": EntityMetadataIncludeParameter(),
 					},
 					"required": []string{"entity_id"},

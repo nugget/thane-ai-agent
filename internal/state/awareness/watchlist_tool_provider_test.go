@@ -795,3 +795,79 @@ func TestAddEntitySubscription_TransitionOptions(t *testing.T) {
 		t.Fatalf("registry-target error = %v, want filter teaching", err)
 	}
 }
+
+// TestAddEntitySubscription_WakeOptions covers the #1211 boundary:
+// wake needs an owner, refuses the tag gate and registry targets,
+// round-trips onto the loop's spec, and surfaces in the list.
+func TestAddEntitySubscription_WakeOptions(t *testing.T) {
+	p, store, mutator := setupWatchlistProvider(t)
+
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "binary_sensor.gate",
+		"wake":      true,
+	}); err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("ownerless wake error = %v, want owner teaching", err)
+	}
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":    "binary_sensor.gate",
+		"owner":        "watcher",
+		"wake":         true,
+		"requires_tag": "ranch_water",
+	}); err == nil || !strings.Contains(err.Error(), "tag state") {
+		t.Fatalf("wake+requires_tag error = %v, want tag-state teaching", err)
+	}
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id": "area:office",
+		"owner":     "watcher",
+		"wake":      true,
+	}); err == nil || !strings.Contains(err.Error(), "ingestion filter") {
+		t.Fatalf("wake+registry-target error = %v, want filter teaching", err)
+	}
+
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":             "binary_sensor.gate",
+		"owner":                 "watcher",
+		"wake":                  true,
+		"wake_debounce_seconds": 30,
+	})
+	if err != nil {
+		t.Fatalf("wake add: %v", err)
+	}
+	if !strings.Contains(result, "wake") {
+		t.Fatalf("result = %q, want wake acknowledgement", result)
+	}
+	subs := mutator.subs["watcher"]
+	if len(subs) != 1 || !subs[0].Wake || subs[0].WakeDebounceSeconds != 30 {
+		t.Fatalf("loop subs = %+v, want wake options on the spec", subs)
+	}
+
+	// List surfaces wake rows (simulating the post-persist mirror).
+	if err := store.Upsert("watcher", subs[0]); err != nil {
+		t.Fatalf("mirror upsert: %v", err)
+	}
+	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var payload struct {
+		Items []struct {
+			Wake                bool `json:"wake"`
+			WakeDebounceSeconds int  `json:"wake_debounce_seconds"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Items) != 1 || !payload.Items[0].Wake || payload.Items[0].WakeDebounceSeconds != 30 {
+		t.Fatalf("list items = %+v, want wake surfaced", payload.Items)
+	}
+
+	// Wake rows occupy the derived-capture path.
+	globs, err := store.IngestGlobs(time.Now())
+	if err != nil {
+		t.Fatalf("IngestGlobs: %v", err)
+	}
+	if !slices.Equal(globs, []string{"binary_sensor.gate"}) {
+		t.Fatalf("IngestGlobs = %v, want wake-derived entry", globs)
+	}
+}
