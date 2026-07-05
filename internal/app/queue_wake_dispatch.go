@@ -11,9 +11,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
 
-// queueWakeDeliveryTimeout bounds each bus.Send during a drain. The
-// actual agent work happens in the target loop's next iteration on
-// its own clock — this only bounds the envelope-handoff hop.
+// queueWakeDeliveryTimeout bounds each of the dispatcher's queue
+// hops: the durable Enqueue at ingress and each bus.Send during a
+// drain. The actual agent work happens in the target loop's next
+// iteration on its own clock — this only bounds the handoff hops.
 const queueWakeDeliveryTimeout = 30 * time.Second
 
 // queueWakeDrainBatch bounds one Peek pass during a drain. The drain

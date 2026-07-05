@@ -22,14 +22,15 @@ import (
 const subWakePartitionPrefix = "sub-wake:"
 
 // wakeWatch is one compiled wake-feed entry: a subscription row that
-// declared wake, resolved to the loop it wakes and the debounce it
-// asked for. Glob targets match at event time via the shared glob
-// primitive.
+// declared wake, resolved to the loop it wakes. Per-subscription
+// debounce asks are folded into the owner's partition registration at
+// index-build time (the twitchiest governs), so the match path
+// carries no timing state. Glob targets match at event time via the
+// shared glob primitive.
 type wakeWatch struct {
-	owner    string
-	target   string // entity id or glob (registry targets are rejected upstream)
-	isGlob   bool
-	debounce time.Duration
+	owner  string
+	target string // entity id or glob (registry targets are rejected upstream)
+	isGlob bool
 }
 
 // subscriptionWakeFeeder implements the #1211 wake feed: state
@@ -130,14 +131,12 @@ func (f *subscriptionWakeFeeder) Rebuild() {
 				"owner", owner, "entity_id", row.EntityID)
 			continue
 		}
-		debounce := time.Duration(row.WakeDebounceSeconds) * time.Second
 		watches = append(watches, wakeWatch{
-			owner:    owner,
-			target:   row.EntityID,
-			isGlob:   homeassistant.IsEntityGlob(row.EntityID),
-			debounce: debounce,
+			owner:  owner,
+			target: row.EntityID,
+			isGlob: homeassistant.IsEntityGlob(row.EntityID),
 		})
-		effective := debounce
+		effective := time.Duration(row.WakeDebounceSeconds) * time.Second
 		if effective <= 0 {
 			effective = f.defaultDebounce
 		}
