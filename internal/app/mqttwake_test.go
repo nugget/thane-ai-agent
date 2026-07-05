@@ -366,3 +366,54 @@ func TestSanitizePayloadEmpty(t *testing.T) {
 		t.Errorf("sanitizePayload(nil) = %q, want empty", got)
 	}
 }
+
+// TestMQTTWakeConcurrentDrainsDeliverOnce pins the serialization fix
+// from Copilot #1216: Peek does not claim items, so a debounce fire
+// racing a boot Sweep over the same partition would replay the same
+// record twice without the per-partition drain mutex. A slow bus
+// route holds the first drain open while concurrent triggers pile up;
+// exactly one delivery must come out.
+func TestMQTTWakeConcurrentDrainsDeliverOnce(t *testing.T) {
+	bus := messages.NewBus(nil)
+	var (
+		mu        sync.Mutex
+		delivered int
+	)
+	bus.RegisterRoute(messages.DestinationLoop, func(_ context.Context, env messages.Envelope) (messages.DeliveryResult, error) {
+		time.Sleep(80 * time.Millisecond) // hold the drain open
+		mu.Lock()
+		delivered++
+		mu.Unlock()
+		return messages.DeliveryResult{Envelope: env, Status: messages.DeliveryDelivered}, nil
+	})
+
+	dispatcher := newTestDispatcher(t, bus, nil)
+	target := messages.LoopWakeTarget{Name: "slow_handler"}
+	record, err := json.Marshal(mqttQueuedWake{
+		Target: target,
+		Event:  messages.LoopEventPayload{Source: "mqtt_wake", Type: "message", ID: "mqtt-slow-1", Title: "a/topic"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := dispatcher.queue.Enqueue(context.Background(), mqttWakePartition(target), "mqtt:slow:a/topic", 1, record); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dispatcher.Sweep(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	got := delivered
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("delivered = %d, want exactly 1 (concurrent drains must serialize)", got)
+	}
+}

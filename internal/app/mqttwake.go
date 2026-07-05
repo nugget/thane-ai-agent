@@ -86,6 +86,12 @@ type mqttWakeDispatcher struct {
 
 	mu         sync.Mutex
 	registered map[string]bool
+	// draining serializes drains per partition: Peek does not claim
+	// items, so a debounce fire racing a boot Sweep (or a second
+	// fire) over the same partition would deliver the same records
+	// twice. One drain runs at a time; a follower blocks, then finds
+	// whatever the first left behind (usually nothing).
+	draining map[string]*sync.Mutex
 }
 
 func newMQTTWakeDispatcher(queue *loopqueue.Store, deps mqttWakeDeps, logger *slog.Logger) *mqttWakeDispatcher {
@@ -97,6 +103,7 @@ func newMQTTWakeDispatcher(queue *loopqueue.Store, deps mqttWakeDeps, logger *sl
 		deps:       deps,
 		logger:     logger,
 		registered: make(map[string]bool),
+		draining:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -228,7 +235,9 @@ func (d *mqttWakeDispatcher) resolveTarget(ws mqtt.WakeSubscription, topic strin
 
 // ensureRegistered lazily attaches the WakeOnEnqueue debounce for a
 // partition the first time traffic addresses it. Package defaults for
-// debounce/maxWait: coalesce a burst, never starve under chatter.
+// debounce/maxWait: coalesce a burst, never starve under chatter. The
+// fire callback must not block (loopqueue contract), so it hands off
+// to a goroutine that runs the serialized drain.
 func (d *mqttWakeDispatcher) ensureRegistered(partition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -236,7 +245,32 @@ func (d *mqttWakeDispatcher) ensureRegistered(partition string) {
 		return
 	}
 	d.registered[partition] = true
-	d.queue.SetWakeOnEnqueue(partition, d.debounce, d.maxWait, func() { d.drain(partition) })
+	d.queue.SetWakeOnEnqueue(partition, d.debounce, d.maxWait, func() {
+		go d.drainSerialized(partition)
+	})
+}
+
+// partitionLock returns the per-partition drain mutex, creating it on
+// first use.
+func (d *mqttWakeDispatcher) partitionLock(partition string) *sync.Mutex {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	lock, ok := d.draining[partition]
+	if !ok {
+		lock = &sync.Mutex{}
+		d.draining[partition] = lock
+	}
+	return lock
+}
+
+// drainSerialized runs drain under the partition's mutex so
+// concurrent triggers (debounce fire, boot sweep) cannot replay the
+// same un-acked records twice.
+func (d *mqttWakeDispatcher) drainSerialized(partition string) {
+	lock := d.partitionLock(partition)
+	lock.Lock()
+	defer lock.Unlock()
+	d.drain(partition)
 }
 
 // drain delivers a partition's pending records to the message bus in
@@ -331,7 +365,7 @@ func (d *mqttWakeDispatcher) Sweep(ctx context.Context) {
 	}
 	for _, partition := range partitions {
 		d.ensureRegistered(partition)
-		d.drain(partition)
+		d.drainSerialized(partition)
 	}
 	if len(partitions) > 0 {
 		d.logger.Info("mqtt wake boot sweep drained pending partitions", "partitions", len(partitions))

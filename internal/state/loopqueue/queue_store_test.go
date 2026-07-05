@@ -3,6 +3,8 @@ package loopqueue
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,5 +245,51 @@ func TestSetWakeOnEnqueueNilRemoves(t *testing.T) {
 	case <-fired:
 		t.Fatal("wake fired after deregistration")
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestWakeOnEnqueueArmFireRace hammers the arm path with concurrent
+// enqueues against a tiny debounce so timer expiry constantly races
+// re-arming — the window where Reset-on-AfterFunc could double-fire
+// (Copilot #1216). The generation guard must keep the count sane and
+// the state clean: fires never exceed enqueues, at least one fires,
+// and once traffic stops the count goes quiet (no stale late fires).
+func TestWakeOnEnqueueArmFireRace(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	var fires atomic.Int64
+	store.SetWakeOnEnqueue("racy", time.Millisecond, 5*time.Millisecond, func() {
+		fires.Add(1)
+	})
+
+	const workers, perWorker = 4, 50
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				if err := store.Enqueue(ctx, "racy", fmt.Sprintf("k:%d:%d", w, i), 0, []byte(`{}`)); err != nil {
+					t.Errorf("enqueue: %v", err)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// Let the final burst settle, then confirm the count is stable.
+	time.Sleep(50 * time.Millisecond)
+	settled := fires.Load()
+	if settled < 1 {
+		t.Fatal("no wake fired at all")
+	}
+	if settled > workers*perWorker {
+		t.Fatalf("fires = %d exceeds enqueues — duplicate callbacks leaked", settled)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if again := fires.Load(); again != settled {
+		t.Fatalf("stale late fire: count moved %d → %d after quiet", settled, again)
 	}
 }
