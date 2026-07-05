@@ -5,9 +5,10 @@ import "github.com/nugget/thane-ai-agent/internal/platform/database"
 // watchlistSchema declares the watched_entity_subscriptions table: the
 // one subscription registry, keyed by (owner, entity_id). The legacy
 // watched_entities migration was retired in #776; the scope→owner
-// rename (#1209) retired the tag-scoped tier — the column now names
-// the owning loop (” = always-visible, [OwnerSystem] = runtime-seeded)
-// instead of a capability-tag scope.
+// rename (#1209) retired the tag-scoped tier — the column names the
+// owning loop ([OwnerCore] = the always-visible tier, [OwnerSystem] =
+// runtime-seeded) instead of a capability-tag scope; #1208's closing
+// steps below re-home the formerly anonymous tier onto core.
 var watchlistSchema = database.Schema{
 	Name: "awareness/watchlist",
 	Steps: []database.MigrationStep{
