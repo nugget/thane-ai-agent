@@ -379,6 +379,13 @@ func (a *App) initServers(s *newState) error {
 			parentID:   &mqttParentID,
 		}
 
+		// MQTT wakes ride the shared loopqueue chassis (#1033):
+		// ingress enqueues per-target, the WakeOnEnqueue debounce
+		// coalesces bursts, and the dispatcher replays records onto
+		// the message bus. Stashed on the App so the loop-definition
+		// worker can run the boot recovery sweep once targets resolve.
+		a.mqttWakeDispatch = newMQTTWakeDispatcher(a.loopQueue, wakeDeps, logger)
+
 		// Wrap with the wake handler: wake-configured topics dispatch
 		// agent conversations, everything else falls through to the
 		// base handler above.
@@ -386,7 +393,7 @@ func (a *App) initServers(s *newState) error {
 			subStore,
 			baseMsgHandler,
 			logger,
-			wakeDeps,
+			a.mqttWakeDispatch,
 		))
 
 		// Register MQTT wake subscription tools via the provider.
@@ -619,6 +626,12 @@ func (a *App) initServers(s *newState) error {
 					"skipped_existing", result.SkippedExisting,
 					"skipped_non_service", result.SkippedNonService,
 				)
+			}
+			// Drain any mqtt-wake queue partitions left pending by a
+			// crash while their debounce was armed (#1033). Runs here
+			// — after StartEnabledServices — so wake targets resolve.
+			if a.mqttWakeDispatch != nil {
+				a.mqttWakeDispatch.Sweep(ctx)
 			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription

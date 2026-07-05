@@ -44,6 +44,8 @@ func (w *WakeTools) Tools() []*tools.Tool {
 			Name: "mqtt_wake_add",
 			Description: `Add a runtime MQTT wake subscription. Matching messages are delivered as event-source notifications to the loop named in wake_loop; the target loop's next iteration sees the message in its pending notifications and runs under its own Spec.Profile. Use this for "topic X → metacog", "topic Y → research_watcher", and similar attention-routing patterns. If you don't have a custom handler loop in mind, point wake_loop at the built-in mqtt-default-handler.
 
+Delivery is durable and burst-safe: matching messages queue per target with a short debounced wake, so a storm on one topic coalesces (latest payload wins per topic) into a single wake instead of one iteration per message. A message payload may also self-address by including a target_loop field (a loop definition name): when it resolves, the wake routes to that loop instead of wake_loop — so one shared wake topic can serve many automation-authored targets; an unresolvable target_loop falls back to wake_loop.
+
 The subscription is persisted and a live SUBSCRIBE is sent to the broker; if the broker is not currently connected it activates on the next reconnect.
 
 Topic conventions: Use thane/{device_name}/wake/{purpose} for instance-directed wakes. Subscribe to external topics directly for shared events (e.g., frigate/+/events). MQTT wildcards: + matches one level, # matches remaining levels (must be last segment).`,

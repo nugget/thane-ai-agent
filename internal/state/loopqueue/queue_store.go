@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -41,6 +42,12 @@ type Item struct {
 // wraps.
 type Store struct {
 	db *sql.DB
+
+	// WakeOnEnqueue seam (#1033): per-consumer debounced wake
+	// registrations, armed at the Enqueue chokepoint. See
+	// [Store.SetWakeOnEnqueue].
+	wakeMu sync.Mutex
+	wakes  map[string]*wakeRegistration
 }
 
 // NewStore creates a loop-queue store, running migrations on first use.
@@ -85,6 +92,11 @@ func (s *Store) Enqueue(ctx context.Context, consumerLoop, dedupKey string, prio
 	if err != nil {
 		return fmt.Errorf("loopqueue: enqueue %s/%s: %w", consumerLoop, dedupKey, err)
 	}
+	// The single chokepoint the WakeOnEnqueue seam attaches to: an
+	// event-driven consumer's registration turns this durable write
+	// into a debounced wake (#1033). Self-paced consumers have no
+	// registration and drain on their own cadence.
+	s.armWake(consumerLoop)
 	return nil
 }
 
@@ -148,6 +160,33 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey string) error {
 		consumerLoop, dedupKey,
 	)
 	return err
+}
+
+// Consumers returns the distinct consumer partitions that currently
+// hold pending work, optionally filtered to names beginning with
+// prefix (empty prefix = all). Used by boot-time recovery sweeps:
+// debounce state is process-local, so a partition whose wake was
+// pending at crash time is found here and drained directly.
+func (s *Store) Consumers(ctx context.Context, prefix string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT consumer_loop FROM loop_queue
+		WHERE status = ? AND consumer_loop LIKE ?
+		ORDER BY consumer_loop ASC
+	`, StatusPending, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var consumers []string
+	for rows.Next() {
+		var consumer string
+		if err := rows.Scan(&consumer); err != nil {
+			return nil, err
+		}
+		consumers = append(consumers, consumer)
+	}
+	return consumers, rows.Err()
 }
 
 // PendingCount returns the number of pending items in consumerLoop's
