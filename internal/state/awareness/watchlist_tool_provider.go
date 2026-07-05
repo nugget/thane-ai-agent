@@ -99,13 +99,13 @@ func retiredTagsError(param string) error {
 func (w *WatchlistTools) Tools() []*tools.Tool {
 	ownerParam := map[string]any{
 		"type":        "string",
-		"description": "Who owns the subscription. Omit for an always-visible subscription (appears on every turn — your own field of view). Pass a loop definition name to subscribe that loop instead: the entry lands on its spec's subscriptions and follows the loop's lifecycle. From inside a loop's own turn, prefer watch_entity (no name needed). The reserved owner \"system\" is read-only (runtime-seeded rows such as the person-presence ingestion floor, configured via person.track).",
+		"description": "Who owns the subscription. Omit (or pass \"core\") for an always-visible subscription: it lands on core — the root container whose context every turn shares — and appears everywhere. Pass a loop definition name to subscribe that loop instead: the entry lands on its spec's subscriptions and follows the loop's lifecycle. From inside a loop's own turn, prefer watch_entity (no name needed). The reserved owner \"system\" is read-only (runtime-seeded rows such as the person-presence ingestion floor, configured via person.track).",
 	}
 	return []*tools.Tool{
 		{
 			Name: "add_entity_subscription",
 			Description: "Subscribe to a Home Assistant entity so its live state is injected into the model's context. " +
-				"Without owner this adds an always-visible subscription: the entity appears on every turn — this is how you, or a conversation, watch an entity in your own field of view. " +
+				"Without owner this adds an always-visible subscription owned by core (the root container whose context every turn shares): the entity appears on every turn — this is how you, or a conversation, watch an entity in your own field of view. " +
 				"With owner set to a loop definition name, the subscription lands on that loop's spec instead; from inside a loop's own turn use watch_entity. " +
 				"Use ttl_seconds for subscriptions that should expire after a bounded task. Use history to include historical state snapshots at specific intervals. Use forecast for weather entities when future weather context is needed. " +
 				"When Home Assistant is connected, a glob or area/label/floor target reports how many entities it currently matches (with a sample) — and flags a zero-member expansion, which almost always means a typo'd id or an empty group.",
@@ -176,7 +176,7 @@ func (w *WatchlistTools) Tools() []*tools.Tool {
 				"properties": map[string]any{
 					"owner": map[string]any{
 						"type":        "string",
-						"description": "Optional owner filter: \"\" is not a valid filter value (omit the parameter to list everything); pass a loop definition name, or \"system\" for runtime-seeded rows.",
+						"description": "Optional owner filter: omit the parameter to list everything; pass \"core\" for the always-visible tier, a loop definition name, or \"system\" for runtime-seeded rows.",
 					},
 					"entity_id": map[string]any{
 						"type":        "string",
@@ -221,6 +221,12 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	if owner == OwnerSystem {
 		return "", fmt.Errorf("owner %q is reserved for runtime-seeded rows (the person-presence ingestion floor, configured via person.track) and cannot be written by tools; omit owner for an always-visible subscription or name a loop", OwnerSystem)
 	}
+	// The anonymous always-visible tier collapsed into core (#1208):
+	// omitted owner means core, and core routes store-direct — it has
+	// no persisted definition for the spec-mutation path to edit.
+	if owner == "" {
+		owner = OwnerCore
+	}
 
 	history, err := parseWatchlistHistoryArg(args["history"])
 	if err != nil {
@@ -251,8 +257,8 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		return "", err
 	}
 	selfOnly, _ := args["self_only"].(bool)
-	if selfOnly && owner == "" {
-		return "", fmt.Errorf("self_only shapes container inheritance and applies to loop-owned subscriptions only; pass owner with a container loop's name, or drop self_only for an always-visible subscription")
+	if selfOnly && owner == OwnerCore {
+		return "", fmt.Errorf("self_only has no effect on core's subscriptions — they render in every context by definition; pass owner with another container's name, or drop self_only")
 	}
 	requiresTag := strings.TrimSpace(stringArg(args, "requires_tag"))
 	transitions, err := watchlistIntArg(args["transitions"], "transitions")
@@ -295,10 +301,11 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 
 	if sub.Wake {
-		// The wake feed awakens the OWNING loop; the always-visible
-		// tier has nobody to wake.
-		if owner == "" {
-			return "", fmt.Errorf("wake awakens the owning loop, and an always-visible subscription has no owner — pass owner with the loop to wake, or use watch_entity from inside it")
+		// The wake feed awakens the OWNING loop; core is the root
+		// container and never iterates, so a core-owned wake would
+		// fire into the void.
+		if owner == OwnerCore {
+			return "", fmt.Errorf("wake awakens the owning loop, and core is a container that never iterates — pass owner with the executing loop to wake, or use watch_entity from inside it")
 		}
 		if requiresTag != "" {
 			return "", fmt.Errorf("wake cannot combine with requires_tag — waking must not follow tag state; drop one of the two")
@@ -340,7 +347,7 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 		return "", err
 	}
 
-	if owner != "" {
+	if owner != OwnerCore {
 		if w.loopMutator == nil {
 			return "", fmt.Errorf("loop-owned subscriptions are not available in this runtime; omit owner for an always-visible subscription")
 		}
@@ -353,7 +360,9 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 			return "", err
 		}
 	} else {
-		if err := w.store.Upsert("", sub); err != nil {
+		// Core rows are the source of truth themselves — core has no
+		// persisted spec by design, so the store write IS the mutation.
+		if err := w.store.Upsert(OwnerCore, sub); err != nil {
 			return "", fmt.Errorf("add to watchlist: %w", err)
 		}
 		// Explicit ingest modes and transition-log derivation both
@@ -364,7 +373,7 @@ func (w *WatchlistTools) handleAddEntitySubscription(ctx context.Context, args m
 	}
 
 	msg := fmt.Sprintf("Now watching %s", entityID)
-	if owner != "" {
+	if owner != OwnerCore {
 		msg = fmt.Sprintf("Loop %q is now watching %s", owner, entityID)
 	}
 	switch mode {
@@ -489,7 +498,7 @@ func (w *WatchlistTools) handleListEntitySubscriptions(ctx context.Context, args
 			"entity_id":      row.EntityID,
 			"owner":          row.Owner,
 			"mode":           mode,
-			"always_visible": row.Owner == "",
+			"always_visible": row.Owner == OwnerCore,
 		}
 		if len(row.History) > 0 {
 			item["history"] = append([]int(nil), row.History...)
@@ -571,10 +580,13 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 	}
 
 	owner := strings.TrimSpace(stringArg(args, "owner"))
+	if owner == "" {
+		owner = OwnerCore
+	}
 	switch {
 	case owner == OwnerSystem:
 		return "", fmt.Errorf("system-owned rows are seeded from configuration (person.track) and re-appear at the next startup; change the configuration instead of removing them here")
-	case owner != "":
+	case owner != OwnerCore:
 		// The mutator persists the spec, and the app's persist hook
 		// re-mirrors the registry and rebuilds the ingestion filter —
 		// no onIngestChange here or the filter would rebuild twice.
@@ -587,7 +599,7 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 			return "", err
 		}
 	default:
-		if err := w.store.Remove("", entityID); err != nil {
+		if err := w.store.Remove(OwnerCore, entityID); err != nil {
 			return "", fmt.Errorf("remove from watchlist: %w", err)
 		}
 		// Unconditional for global removes: the handler doesn't know
@@ -598,7 +610,7 @@ func (w *WatchlistTools) handleRemoveEntitySubscription(ctx context.Context, arg
 		}
 	}
 	w.logger.Info("entity subscription removed", "entity_id", entityID, "owner", owner)
-	if owner != "" {
+	if owner != OwnerCore {
 		return fmt.Sprintf("Loop %q stopped watching %s.", owner, entityID), nil
 	}
 	return fmt.Sprintf("Stopped watching %s.", entityID), nil

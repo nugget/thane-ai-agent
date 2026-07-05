@@ -1608,3 +1608,30 @@ func TestApplyDefaults_ArchivistZeroFloatsArePreserved(t *testing.T) {
 		t.Errorf("SupervisorProbability = %v, want explicit 0.0 to survive applyDefaults", cfg.Archivist.SupervisorProbability)
 	}
 }
+
+// TestLoad_RetiredHomeAssistantSubscribeRejected guards the #1192
+// ingestion-registry cutover: yaml.v3 silently ignores the retired
+// homeassistant.subscribe block, so a config still carrying
+// entity_globs would boot with a quietly different capture set. Load
+// must fail fast teaching the registry-derived replacement.
+func TestLoad_RetiredHomeAssistantSubscribeRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+homeassistant:
+  url: http://ha.local:8123
+  subscribe:
+    entity_globs:
+      - person.*
+      - binary_sensor.*door*
+    rate_limit_per_minute: 30
+`), 0600)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to reject homeassistant.subscribe block")
+	}
+	if !strings.Contains(err.Error(), "homeassistant.subscribe") || !strings.Contains(err.Error(), "ingest_rate_limit_per_minute") {
+		t.Errorf("error %q should name the retired block and the replacement", err)
+	}
+}

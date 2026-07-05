@@ -2137,6 +2137,27 @@ func rejectRetiredKeys(data []byte) error {
 			if err := rejectRetiredMCPKeys(valueNode); err != nil {
 				return err
 			}
+		case "homeassistant":
+			if err := rejectRetiredHomeAssistantKeys(valueNode); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// rejectRetiredHomeAssistantKeys rejects the legacy
+// homeassistant.subscribe block, retired when the state-watch
+// ingestion filter became registry-derived (#1192): silently ignoring
+// it would let a deploy quietly change what gets captured, since the
+// old entity_globs no longer feed the filter.
+func rejectRetiredHomeAssistantKeys(node *yaml.Node) error {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == "subscribe" {
+			return fmt.Errorf("homeassistant.subscribe was retired: state-change capture now derives from the subscription registry (ingest/transitions/wake subscriptions plus person.track — the old entity_globs no longer feed the filter). Move rate_limit_per_minute to homeassistant.ingest_rate_limit_per_minute, re-declare any globs you still want as ingest-mode subscriptions after boot, and delete the subscribe: block")
 		}
 	}
 	return nil

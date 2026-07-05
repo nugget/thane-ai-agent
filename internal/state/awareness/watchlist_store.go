@@ -20,9 +20,20 @@ import (
 // mutation; the configuration is their source of truth.
 const OwnerSystem = "system"
 
+// OwnerCore is the owner of the always-visible tier: core is the root
+// container and every context is de facto core's context, so the
+// formerly anonymous global tier — rows persisted with an empty owner
+// before #1208's closing decision — collapsed into rows core owns
+// directly. Core has no persisted definition by design (the bootstrap
+// owns its lifecycle), so unlike other loop owners these rows are the
+// source of truth themselves, mutated store-direct by the tools
+// rather than compiled from a spec; the spec mirror and orphan sweep
+// skip this owner accordingly.
+const OwnerCore = looppkg.CoreLoopName
+
 // SubscriptionRow is one persisted registry entry: an owner plus the
-// unified subscription declaration. Owner ” means always-visible (the
-// global tier every turn renders), [OwnerSystem] marks runtime-seeded
+// unified subscription declaration. [OwnerCore] is the always-visible
+// tier every context renders, [OwnerSystem] marks runtime-seeded
 // rows, and any other value is the owning loop's definition name —
 // loop rows are compiled from Spec.Subscriptions and replaced whenever
 // the spec persists.
@@ -47,7 +58,12 @@ func NewWatchlistStore(db *sql.DB, logger *slog.Logger) (*WatchlistStore, error)
 // Upsert inserts or replaces the subscription for (owner, entity_id).
 // A zero AddedAt is stamped with the current time so TTL countdown is
 // always anchored; re-upserting an entity restarts its TTL window.
+// Owner is required: the anonymous tier collapsed into [OwnerCore],
+// so an ownerless row has no meaning left.
 func (s *WatchlistStore) Upsert(owner string, sub looppkg.EntitySubscription) error {
+	if strings.TrimSpace(owner) == "" {
+		return fmt.Errorf("owner is required (the always-visible tier is %q)", OwnerCore)
+	}
 	if strings.TrimSpace(sub.EntityID) == "" {
 		return fmt.Errorf("entity_id is required")
 	}
@@ -83,8 +99,8 @@ func (s *WatchlistStore) Remove(owner, entityID string) error {
 
 // RemoveAllForOwner deletes every subscription row belonging to the
 // given owner. Used when the owning loop definition is deleted and by
-// [WatchlistStore.ReplaceOwner]. The global tier (owner ”) is never
-// bulk-deleted; owner is required.
+// [WatchlistStore.ReplaceOwner]. Owner is required — there is no
+// anonymous tier left to address.
 func (s *WatchlistStore) RemoveAllForOwner(owner string) error {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
@@ -150,9 +166,11 @@ func (s *WatchlistStore) ReplaceOwner(owner string, subs []looppkg.EntitySubscri
 	return nil
 }
 
-// Owners returns the distinct owners present in the registry,
-// excluding the global tier (”). Consumed by the startup orphan sweep
-// to find rows whose owning definition no longer exists.
+// Owners returns the distinct owners present in the registry
+// (defensively excluding any legacy empty-owner rows, which the
+// schema migration re-homes onto [OwnerCore]). Consumed by the
+// startup orphan sweep to find rows whose owning definition no
+// longer exists; reserved owners are the sweep's concern to skip.
 func (s *WatchlistStore) Owners() ([]string, error) {
 	rows, err := s.db.Query(
 		`SELECT DISTINCT owner FROM watched_entity_subscriptions WHERE owner != '' ORDER BY owner ASC`)
@@ -181,8 +199,8 @@ func (s *WatchlistStore) ListAll() ([]SubscriptionRow, error) {
 }
 
 // ListOwner returns the active subscription rows for one owner in
-// insertion order; ” selects the always-visible global tier. Expired
-// rows are reaped as a side effect.
+// insertion order; [OwnerCore] selects the always-visible tier.
+// Expired rows are reaped as a side effect.
 func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	return s.scanActiveSubscriptions(
 		`SELECT entity_id, owner, added_at, options FROM watched_entity_subscriptions
@@ -191,8 +209,8 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	)
 }
 
-// GlobalEntityGates returns, for each candidate whose always-visible
-// row (owner=”) can render at all — state-rendering mode, not expired
+// CoreEntityGates returns, for each candidate whose always-visible
+// row (owner [OwnerCore]) can render at all — state-rendering mode, not expired
 // — that row's RequiresTag gate ("" for an ungated row). Rows that
 // never render (ingest-only, elapsed TTL) are omitted entirely, so
 // they cannot suppress a loop-scoped render of the same entity;
@@ -206,7 +224,7 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 // the always-visible [WatchlistProvider]'s own pass so we don't
 // double-write deletes. Returns an empty (non-nil) map when
 // candidates is empty.
-func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]string, error) {
+func (s *WatchlistStore) CoreEntityGates(candidates []string) (map[string]string, error) {
 	out := make(map[string]string, len(candidates))
 	if len(candidates) == 0 {
 		return out, nil
@@ -232,8 +250,8 @@ func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]stri
 	placeholders := strings.Repeat("?,", len(args))
 	placeholders = placeholders[:len(placeholders)-1]
 	query := `SELECT entity_id, added_at, options FROM watched_entity_subscriptions
-		 WHERE owner = '' AND entity_id IN (` + placeholders + `)`
-	rows, err := s.db.Query(query, args...)
+		 WHERE owner = ? AND entity_id IN (` + placeholders + `)`
+	rows, err := s.db.Query(query, append([]any{OwnerCore}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -335,10 +353,7 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 // subscriptionOptionsWire is the options-blob JSON shape. It carries
 // the declaration fields of [looppkg.EntitySubscription] that don't
 // have their own column; entity_id, owner, and added_at live on the
-// row. ExpiresAt is decode-only: pre-#1209 rows persisted an absolute
-// expiry instead of ttl_seconds, and the shim in
-// parseSubscriptionOptions converts it back against the row's
-// added_at so old TTLs keep counting down unchanged.
+// row.
 type subscriptionOptionsWire struct {
 	History                  []int                                 `json:"history,omitempty"`
 	Forecast                 string                                `json:"forecast,omitempty"`
@@ -351,7 +366,6 @@ type subscriptionOptionsWire struct {
 	TransitionsWindowSeconds int                                   `json:"transitions_window_seconds,omitempty"`
 	Wake                     bool                                  `json:"wake,omitempty"`
 	WakeDebounceSeconds      int                                   `json:"wake_debounce_seconds,omitempty"`
-	ExpiresAt                string                                `json:"expires_at,omitempty"`
 }
 
 func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
@@ -427,19 +441,6 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	}
 	if wire.TTLSeconds > 0 {
 		sub.TTLSeconds = wire.TTLSeconds
-	} else if wire.ExpiresAt != "" {
-		// Legacy absolute-expiry row: recover the TTL against the
-		// row's added_at anchor. An expiry at or before added_at
-		// (clock skew, an already-elapsed row) maps to a 1-second
-		// TTL so the expiry sweep reaps it on this pass instead of
-		// resurrecting it as immortal.
-		if ts, err := time.Parse(time.RFC3339, wire.ExpiresAt); err == nil {
-			ttl := int(ts.UTC().Sub(addedAt).Seconds())
-			if ttl <= 0 {
-				ttl = 1
-			}
-			sub.TTLSeconds = ttl
-		}
 	}
 	return sub
 }

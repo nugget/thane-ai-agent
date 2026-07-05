@@ -105,7 +105,7 @@ func setupRegistryProvider(t *testing.T, ha *fakeHARegistry) (*WatchlistProvider
 func TestRegistryTarget_AreaExpandsWithInheritance(t *testing.T) {
 	ha := officeRegistry()
 	p, store := setupRegistryProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "area:office"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "area:office"}); err != nil {
 		t.Fatalf("add area target: %v", err)
 	}
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
@@ -128,7 +128,7 @@ func TestRegistryTarget_LabelAndFloor(t *testing.T) {
 
 	// Label: both office entities carry "critical" (one direct, one via device).
 	p, store := setupRegistryProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "label:critical"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "label:critical"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	got, _ := p.TagContext(context.Background(), agentctx.ContextRequest{})
@@ -138,7 +138,7 @@ func TestRegistryTarget_LabelAndFloor(t *testing.T) {
 
 	// Floor: main covers office + garage, so all three entities.
 	p2, store2 := setupRegistryProvider(t, ha)
-	if err := store2.Upsert("", looppkg.EntitySubscription{EntityID: "floor:main"}); err != nil {
+	if err := store2.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "floor:main"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	got2, _ := p2.TagContext(context.Background(), agentctx.ContextRequest{})
@@ -152,7 +152,7 @@ func TestRegistryTarget_LabelAndFloor(t *testing.T) {
 func TestRegistryTarget_UnknownAreaIsSilent(t *testing.T) {
 	ha := officeRegistry()
 	p, store := setupRegistryProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "area:atrium"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "area:atrium"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
@@ -169,7 +169,7 @@ func TestRegistryTarget_NoRegistryClientMarksUnavailable(t *testing.T) {
 	ha := officeRegistry()
 	// setupTestProvider does NOT wire the registry client.
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "area:office"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "area:office"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{})

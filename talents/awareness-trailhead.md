@@ -14,10 +14,12 @@ turn.
 Choose the next move deliberately:
 
 - Use `list_entity_subscriptions` to see the whole subscription
-  registry — every row carries its `owner`: `""` is the always-visible
-  tier (your own field of view), a loop name is that loop's own watch
-  set, and `system` marks runtime-seeded rows like the person-presence
-  ingestion floor (configured via `person.track`, read-only here).
+  registry — every row carries its `owner`: `core` is the
+  always-visible tier (core is the root container, and every context
+  is core's context — this is your own field of view), a loop name is
+  that loop's own watch set, and `system` marks runtime-seeded rows
+  like the person-presence ingestion floor (configured via
+  `person.track`, read-only here).
 - Use `add_entity_subscription` when a room, device, person, or live state
   should auto-load while the work continues. The `entity_id` accepts more
   than a single entity: a glob (`binary_sensor.*door*`, `*_temperature`)

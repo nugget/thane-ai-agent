@@ -65,8 +65,9 @@ func TestCompileLoopSubscriptions_MirrorsAndSweepsOrphans(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed system row: %v", err)
 	}
-	// Global rows are untouched by definition compilation.
-	if err := a.watchlistStore.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
+	// Core-owned rows (the always-visible tier) are untouched by
+	// definition compilation and survive the sweep as a reserved owner.
+	if err := a.watchlistStore.Upsert(awareness.OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
 		t.Fatalf("seed global row: %v", err)
 	}
 
@@ -85,7 +86,7 @@ func TestCompileLoopSubscriptions_MirrorsAndSweepsOrphans(t *testing.T) {
 	want := map[string]string{
 		"sensor.kitchen_temp": "kitchen-watcher",
 		"person.alice":        awareness.OwnerSystem,
-		"sensor.always_on":    "",
+		"sensor.always_on":    awareness.OwnerCore,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("registry rows = %v, want %v", got, want)

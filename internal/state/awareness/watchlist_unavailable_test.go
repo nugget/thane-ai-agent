@@ -311,7 +311,7 @@ func TestProvider_UnavailableEnrichmentEndToEnd(t *testing.T) {
 	p, store := setupTestProvider(t, ha)
 	p.SetRegistryClient(regs)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
