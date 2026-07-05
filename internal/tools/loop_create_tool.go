@@ -29,11 +29,11 @@ func (r *Registry) registerThaneLoopCreate() {
 		Description: "Create and launch a durable, reusable loop. This is the always-on front door for standing up recurring work; for the full lifecycle afterwards (inspect, edit, relaunch, reparent) activate the `loops` capability. " +
 			"operation is explicit and picks the kind: " +
 			"\"service\" = a recurring loop that self-paces within a sleep envelope (requires sleep_min and sleep_max); " +
-			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; wire that trigger separately after creating the loop, or it never runs; " +
+			"\"event_driven\" = a quiescent handler with no timer that runs only when an external trigger wakes it — give it an entity subscription with wake: true (wakes on that entity's changes), point a feed/forge subscription or an MQTT wake at it, or have another loop notify it; without at least one trigger it never runs; " +
 			"\"container\" = a non-executing node that groups loops and shares its tags with descendants; like every operation it requires intent, takes the optional parent_name and tags, and rejects execution/output fields (sleep knobs, output, entities, instructions, etc.). " +
 			"output (service/event_driven only) declares a managed markdown document the loop maintains — \"journal\" appends a dated entry each cycle, \"maintain\" rewrites it idempotently — and is scaffolded with ownership frontmatter before launch; omit it for a loop that acts without maintaining a document. " +
 			"parent_name nests the loop under a container by name, inheriting its tags and subscriptions. " +
-			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; they do NOT wake the loop (an event_driven loop's wake is wired separately). " +
+			"entities are Home Assistant subscriptions surfaced into the loop's context each iteration; an entry with wake: true ALSO wakes the loop when that entity changes (debounced/coalesced) — for a service loop an early wake, for an event_driven loop a primary trigger. " +
 			"Returns the loop definition name, loop_id, and the canonical loop row; plus output_tool/document_path when a document was declared. If the loop lands at the root but an existing container declares tags it shares, the result also carries a non-blocking placement_advisory suggesting where it might nest (see loop_containers).",
 		ContentResolveExempt: []string{
 			"name", "intent", "operation", "parent_name", "output", "entities", "tags",
@@ -507,7 +507,7 @@ func thaneLoopCreateSchema() map[string]any {
 			},
 			"entities": map[string]any{
 				"type":        "array",
-				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. They provide context only and do NOT wake the loop — an event_driven loop's wake is wired separately (feed/forge/MQTT/inter-loop notification). Container ancestors' subscriptions also cascade in.",
+				"description": "Optional Home Assistant entity subscriptions surfaced into the loop's context each iteration. By default they provide context only; an entry with wake: true also wakes this loop when the entity changes (debounced/coalesced — the simple-change-trigger door; compound conditions stay HA-side via MQTT wakes). Container ancestors' subscriptions also cascade in.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{

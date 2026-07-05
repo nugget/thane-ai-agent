@@ -40,9 +40,19 @@ Choose stream wiring by attention cost:
   physical-world context beside the live state, including HA's
   floor/building hierarchy and hidden/enabled salience. Use
   `visibility.context_role` as the quick default-vs-forensic hint.
-- Use event-source `wake_loop` targets when each event deserves an
-  immediate iteration. Producer tools such as `forge_repo_follow` and
-  `media_follow` own those subscriptions.
+- When the loop should *act* the moment an entity changes — not wait
+  for its next timer — the subscription itself is the trigger: add
+  `wake: true` to the entity entry (at creation or later). The loop
+  wakes with the change as a `{entity, from, to, ago}` event,
+  debounced and coalesced so a chattering sensor can't wakestorm it.
+  This is the first door for simple entity-change triggers; reach for
+  the HA-automation→MQTT pipeline (`mqtt_wake_add`) only when the
+  trigger logic is HA-side — compound conditions, zone dwell,
+  templates. Both deliver through the same queue.
+- Use event-source `wake_loop` targets when each event from a
+  *producer stream* deserves an immediate iteration. Producer tools
+  such as `forge_repo_follow` and `media_follow` own those
+  subscriptions.
 
 Treat running loops as bi-directional. A service loop can pull you in
 via `request_core_attention` when something deserves a decision; you
