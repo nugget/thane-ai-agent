@@ -24,16 +24,16 @@ const OwnerSystem = "system"
 // container and every context is de facto core's context, so the
 // formerly anonymous global tier — rows persisted with an empty owner
 // before #1208's closing decision — collapsed into rows core owns
-// directly. Core has no persisted
-// definition by design — the bootstrap owns its lifecycle — so unlike
-// other loop owners these rows are the source of truth themselves,
-// mutated store-direct by the tools rather than compiled from a spec;
-// the spec mirror and orphan sweep skip this owner accordingly.
+// directly. Core has no persisted definition by design (the bootstrap
+// owns its lifecycle), so unlike other loop owners these rows are the
+// source of truth themselves, mutated store-direct by the tools
+// rather than compiled from a spec; the spec mirror and orphan sweep
+// skip this owner accordingly.
 const OwnerCore = looppkg.CoreLoopName
 
 // SubscriptionRow is one persisted registry entry: an owner plus the
-// unified subscription declaration. Owner ” means always-visible (the
-// global tier every turn renders), [OwnerSystem] marks runtime-seeded
+// unified subscription declaration. [OwnerCore] is the always-visible
+// tier every context renders, [OwnerSystem] marks runtime-seeded
 // rows, and any other value is the owning loop's definition name —
 // loop rows are compiled from Spec.Subscriptions and replaced whenever
 // the spec persists.
@@ -99,8 +99,8 @@ func (s *WatchlistStore) Remove(owner, entityID string) error {
 
 // RemoveAllForOwner deletes every subscription row belonging to the
 // given owner. Used when the owning loop definition is deleted and by
-// [WatchlistStore.ReplaceOwner]. The global tier (owner ”) is never
-// bulk-deleted; owner is required.
+// [WatchlistStore.ReplaceOwner]. Owner is required — there is no
+// anonymous tier left to address.
 func (s *WatchlistStore) RemoveAllForOwner(owner string) error {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
@@ -166,9 +166,11 @@ func (s *WatchlistStore) ReplaceOwner(owner string, subs []looppkg.EntitySubscri
 	return nil
 }
 
-// Owners returns the distinct owners present in the registry,
-// excluding the global tier (”). Consumed by the startup orphan sweep
-// to find rows whose owning definition no longer exists.
+// Owners returns the distinct owners present in the registry
+// (defensively excluding any legacy empty-owner rows, which the
+// schema migration re-homes onto [OwnerCore]). Consumed by the
+// startup orphan sweep to find rows whose owning definition no
+// longer exists; reserved owners are the sweep's concern to skip.
 func (s *WatchlistStore) Owners() ([]string, error) {
 	rows, err := s.db.Query(
 		`SELECT DISTINCT owner FROM watched_entity_subscriptions WHERE owner != '' ORDER BY owner ASC`)
@@ -197,8 +199,8 @@ func (s *WatchlistStore) ListAll() ([]SubscriptionRow, error) {
 }
 
 // ListOwner returns the active subscription rows for one owner in
-// insertion order; ” selects the always-visible global tier. Expired
-// rows are reaped as a side effect.
+// insertion order; [OwnerCore] selects the always-visible tier.
+// Expired rows are reaped as a side effect.
 func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	return s.scanActiveSubscriptions(
 		`SELECT entity_id, owner, added_at, options FROM watched_entity_subscriptions
