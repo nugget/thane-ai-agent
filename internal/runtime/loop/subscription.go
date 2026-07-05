@@ -290,6 +290,18 @@ func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]E
 		if sub.WantsTransitions() && sub.Mode == SubscriptionModeIngest {
 			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", i, sub.EntityID)
 		}
+		// Registry targets (area:/label:/floor:) never reach the
+		// ingestion filter, so capture-dependent options on them would
+		// silently do nothing. Enforced here so loop_definition_set
+		// and persisted records obey the same rule as the tool doors.
+		if homeassistant.IsRegistryTarget(sub.EntityID) {
+			if sub.WantsTransitions() {
+				return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — use a concrete entity or glob", i, sub.EntityID)
+			}
+			if sub.FeedsIngest() {
+				return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; use mode render", i, sub.EntityID, sub.Mode)
+			}
+		}
 		if sub.TTLSeconds > 0 && sub.AddedAt.IsZero() {
 			sub.AddedAt = now
 		}

@@ -1181,3 +1181,45 @@ func TestThaneCurate_EntityRequiresTag(t *testing.T) {
 		t.Fatalf("ingest+requires_tag error = %v, want render-only teaching", err)
 	}
 }
+
+// TestThaneCurate_RegistryTargetCaptureCombos closes the authoring
+// gap Copilot flagged on #1215: capture-dependent options on
+// area/label/floor targets are rejected at the create door the same
+// way every other boundary rejects them — those targets never reach
+// the ingestion filter, so the options would silently do nothing.
+func TestThaneCurate_RegistryTargetCaptureCombos(t *testing.T) {
+	t.Parallel()
+	rig := newCurateTestRig(t)
+
+	base := map[string]any{
+		"name":      "office_lens",
+		"intent":    "Watch the office.",
+		"operation": "service",
+		"sleep_min": "1h",
+		"sleep_max": "6h",
+	}
+
+	call := func(entity map[string]any) error {
+		args := make(map[string]any, len(base)+1)
+		for k, v := range base {
+			args[k] = v
+		}
+		args["entities"] = []any{entity}
+		_, err := rig.tool.Handler(context.Background(), args)
+		return err
+	}
+
+	if err := call(map[string]any{"entity_id": "area:office", "transitions": 5}); err == nil || !strings.Contains(err.Error(), "ingestion filter") {
+		t.Errorf("transitions on registry target = %v, want filter teaching", err)
+	}
+	if err := call(map[string]any{"entity_id": "area:office", "mode": "ingest"}); err == nil || !strings.Contains(err.Error(), "ingestion filter") {
+		t.Errorf("mode ingest on registry target = %v, want filter teaching", err)
+	}
+	if err := call(map[string]any{"entity_id": "area:office", "mode": "both"}); err == nil || !strings.Contains(err.Error(), "ingestion filter") {
+		t.Errorf("mode both on registry target = %v, want filter teaching", err)
+	}
+	// Plain render on a registry target stays legal.
+	if err := call(map[string]any{"entity_id": "area:office"}); err != nil {
+		t.Errorf("render registry target rejected: %v", err)
+	}
+}

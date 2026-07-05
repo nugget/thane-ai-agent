@@ -242,6 +242,18 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		if (ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0) && ent.Mode == looppkg.SubscriptionModeIngest {
 			return nil, fmt.Errorf("%s[%d]: a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", fieldName, i)
 		}
+		// Registry targets (area:/label:/floor:) cannot feed the
+		// ingestion filter, so capture-dependent options on them would
+		// silently do nothing (Copilot #1215) — same rejection every
+		// other authoring door applies.
+		if homeassistant.IsRegistryTarget(ent.EntityID) {
+			if ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0 {
+				return nil, fmt.Errorf("%s[%d]: a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — subscribe a concrete entity or glob for transitions", fieldName, i)
+			}
+			if ent.Mode == looppkg.SubscriptionModeIngest || ent.Mode == looppkg.SubscriptionModeBoth {
+				return nil, fmt.Errorf("%s[%d]: mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; use mode render, or list the group's member entities", fieldName, i, ent.Mode)
+			}
+		}
 		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
 		if err != nil {
 			return nil, err

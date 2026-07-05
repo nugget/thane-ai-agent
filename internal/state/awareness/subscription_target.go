@@ -31,7 +31,10 @@ const (
 // registry-backed target to its kind. Concrete entity IDs are
 // domain.object_id (dot-separated) and globs carry wildcard runes, so a
 // "kind:value" colon form is unambiguous against both — HA has no
-// colon-bearing entity ids.
+// colon-bearing entity ids. The prefix vocabulary itself is owned by
+// [homeassistant.CutRegistryTarget] so authoring boundaries outside
+// this package enforce the same set; this map only assigns the typed
+// kinds.
 var registryTargetPrefixes = map[string]SubscriptionTargetKind{
 	"area":  TargetArea,
 	"label": TargetLabel,
@@ -52,16 +55,13 @@ type SubscriptionTarget struct {
 // wildcard-bearing value is a glob, anything else is a concrete entity.
 func ParseSubscriptionTarget(raw string) SubscriptionTarget {
 	raw = strings.TrimSpace(raw)
-	if prefix, value, ok := strings.Cut(raw, ":"); ok {
-		if kind, known := registryTargetPrefixes[prefix]; known {
-			// An empty id after the prefix ("area:") is a malformed
-			// target, not a wildcard. Falling through renders it as a
-			// bogus concrete entity (a clean not-found signal) rather
-			// than silently matching every entity with no area/floor.
-			if v := strings.TrimSpace(value); v != "" {
-				return SubscriptionTarget{Kind: kind, Value: v}
-			}
-		}
+	// An empty id after the prefix ("area:") is a malformed target,
+	// not a wildcard — CutRegistryTarget reports it as not-a-target,
+	// so it falls through and renders as a bogus concrete entity (a
+	// clean not-found signal) rather than silently matching every
+	// entity with no area/floor.
+	if prefix, id, ok := homeassistant.CutRegistryTarget(raw); ok {
+		return SubscriptionTarget{Kind: registryTargetPrefixes[prefix], Value: id}
 	}
 	if homeassistant.IsEntityGlob(raw) {
 		return SubscriptionTarget{Kind: TargetGlob, Value: raw}

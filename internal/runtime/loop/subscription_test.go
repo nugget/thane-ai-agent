@@ -455,3 +455,29 @@ func TestNormalizeSubscriptionsOnLoadTransitionCombos(t *testing.T) {
 		t.Errorf("gated transition log rejected: %v", err)
 	}
 }
+
+// TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture makes
+// the registry-target capture rule uniform at JSON hydration: a
+// loop_definition_set spec cannot smuggle in combinations the tool
+// doors reject (Copilot #1215).
+func TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office", Transitions: 5},
+	}, now); err == nil {
+		t.Error("transition log on registry target survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "label:critical", Mode: SubscriptionModeBoth},
+	}, now); err == nil {
+		t.Error("ingest-feeding mode on registry target survived hydration")
+	}
+	// Plain render on a registry target stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office"},
+	}, now); err != nil {
+		t.Errorf("render registry target rejected at hydration: %v", err)
+	}
+}
