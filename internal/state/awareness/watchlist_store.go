@@ -22,8 +22,9 @@ const OwnerSystem = "system"
 
 // OwnerCore is the owner of the always-visible tier: core is the root
 // container and every context is de facto core's context, so the
-// formerly anonymous global tier (owner ”) collapsed into rows core
-// owns directly (#1208's closing decision). Core has no persisted
+// formerly anonymous global tier — rows persisted with an empty owner
+// before #1208's closing decision — collapsed into rows core owns
+// directly. Core has no persisted
 // definition by design — the bootstrap owns its lifecycle — so unlike
 // other loop owners these rows are the source of truth themselves,
 // mutated store-direct by the tools rather than compiled from a spec;
@@ -247,8 +248,8 @@ func (s *WatchlistStore) CoreEntityGates(candidates []string) (map[string]string
 	placeholders := strings.Repeat("?,", len(args))
 	placeholders = placeholders[:len(placeholders)-1]
 	query := `SELECT entity_id, added_at, options FROM watched_entity_subscriptions
-		 WHERE owner = '` + OwnerCore + `' AND entity_id IN (` + placeholders + `)`
-	rows, err := s.db.Query(query, args...)
+		 WHERE owner = ? AND entity_id IN (` + placeholders + `)`
+	rows, err := s.db.Query(query, append([]any{OwnerCore}, args...)...)
 	if err != nil {
 		return nil, err
 	}
