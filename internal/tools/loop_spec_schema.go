@@ -129,6 +129,8 @@ func loopSpecSchema(description string) map[string]any {
 						"requires_tag":               map[string]any{"type": "string", "description": "Optional capability tag gating visibility: renders only while the tag is active. Render-only — incompatible with mode ingest/both; the combination is rejected."},
 						"transitions":                map[string]any{"type": "integer", "description": "Render the entity's last n observed state changes ({from, to, ago}, class-aware); declaring a log feeds the entity into state-change capture automatically. Capped; incompatible with mode ingest."},
 						"transitions_window_seconds": map[string]any{"type": "integer", "description": "Bound the transition log to a trailing window in seconds; usable with or without transitions (still capped)."},
+						"wake":                       map[string]any{"type": "boolean", "description": "Wake the owning loop when the entity changes — debounced/coalesced via the shared queue; capture derives automatically. Incompatible with requires_tag and registry targets."},
+						"wake_debounce_seconds":      map[string]any{"type": "integer", "description": "Coalescing window before the wake fires; the loop's cadence follows its twitchiest wake subscription."},
 					},
 				},
 			},

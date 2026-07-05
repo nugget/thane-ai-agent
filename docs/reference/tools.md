@@ -113,6 +113,18 @@ retention behind the shared window — so `mode: ingest` is never needed
 for it. Entity ids and globs only; complementary to `history` (numeric
 trend summaries) rather than a replacement.
 
+A loop-owned subscription may declare `wake: true`: the owning loop is
+awakened when the entity changes, with the event delivered as
+`{entity, from, to, ago}` in the class-aware vocabulary through the
+shared loopqueue chassis — debounced (`wake_debounce_seconds`, default
+a few seconds), coalesced per entity (latest change wins while a wake
+is pending), and crash-durable. Capture derives automatically, wake
+subscriptions count against the ingest entry cap, and the upstream
+rate limiter still applies — a chattering sensor cannot wakestorm a
+loop. Simple native change triggers only: HA-side derivation
+(compound conditions, zone dwell, templates) remains the
+automation→MQTT→wake pipeline, draining the same queue.
+
 A subscription may carry `requires_tag`, a capability tag gating its
 visibility: it renders only while that tag is active in the consuming
 context. This is the macro-set lens — one tag activation surfaces a

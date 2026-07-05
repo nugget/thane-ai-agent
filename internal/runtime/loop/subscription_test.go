@@ -481,3 +481,35 @@ func TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture(t *testing.T) 
 		t.Errorf("render registry target rejected at hydration: %v", err)
 	}
 }
+
+// TestNormalizeSubscriptionsOnLoadWakeCombos makes the #1211 wake
+// invariants uniform at JSON hydration: negatives are corrupt, the
+// tag gate cannot ride the wake feed, and registry targets cannot
+// wake (their members never reach the ingestion filter).
+func TestNormalizeSubscriptionsOnLoadWakeCombos(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Wake: true, WakeDebounceSeconds: -1},
+	}, now); err == nil {
+		t.Error("negative wake debounce survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Wake: true, RequiresTag: "ranch_water"},
+	}, now); err == nil {
+		t.Error("wake+requires_tag survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office", Wake: true},
+	}, now); err == nil {
+		t.Error("wake on registry target survived hydration")
+	}
+	// The plain declaration stays legal, ingest-mode wake included
+	// (capture + wake with no render is coherent).
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "binary_sensor.gate", Wake: true, WakeDebounceSeconds: 30, Mode: SubscriptionModeIngest},
+	}, now); err != nil {
+		t.Errorf("wake declaration rejected: %v", err)
+	}
+}

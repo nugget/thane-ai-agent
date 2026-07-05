@@ -50,9 +50,20 @@ Choose the next move deliberately:
   happened to THIS entity" (survives the shared window's churn),
   `history` summaries answer "what has it been doing" (numeric trends
   over windows), and the shared recent-state-changes window answers
-  "what's been happening around the house." For "act the moment it
-  changes," that's a wake concern — use the event-driven wiring, not a
-  render option.
+  "what's been happening around the house."
+- Pass `wake: true` when a loop should *act* on change, not just see
+  it next iteration: the owning loop is awakened with a
+  `{entity, from, to, ago}` event — debounced and coalesced, so a
+  chattering sensor becomes one wake carrying the latest change,
+  never a wakestorm. `wake_debounce_seconds` sets how long changes
+  coalesce (a loop's cadence follows its twitchiest wake
+  subscription); capture follows automatically. Wake needs an owning
+  loop (`owner`, or `watch_entity` from inside one). Boundary: this
+  covers simple native triggers — "wake me when this entity changes."
+  Compound conditions, zone dwell, and template triggers belong to
+  the HA-automation→MQTT pipeline (`mqtt_wake_add` + an HA
+  automation); both deliver through the same queue, so pick by where
+  the condition logic lives, not by delivery mechanics.
 - Add `include` metadata flags when area, owning device, HA labels, or
   descriptions would make the subscribed state easier to interpret; use
   `visibility` when hidden/enabled salience matters, and read

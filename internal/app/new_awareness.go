@@ -337,6 +337,18 @@ func (a *App) initAwareness(s *newState) error {
 		"episodic_history_tokens", cfg.Episodic.HistoryTokens,
 	)
 
+	// --- Subscription wake feed (#1211) ---
+	// Wake-declaring subscriptions awaken their owning loop on entity
+	// change: the feeder taps the filtered state stream below,
+	// enqueues entity-deduped records per owner, and the shared
+	// queued-wake dispatcher's debounce delivers coalesced batches.
+	if a.loopQueue != nil && a.messageBus != nil && watchlistStore != nil {
+		a.subWakeFeeder = newSubscriptionWakeFeeder(
+			a.loopQueue, a.messageBus, watchlistStore, a.loopRegistry,
+			contextfmt.SemanticState, logger,
+		)
+	}
+
 	// --- State watcher ---
 	// Consumes state_changed events from the HA WebSocket and forwards
 	// them to the state window and person tracker. The ingestion filter
@@ -375,16 +387,24 @@ func (a *App) initAwareness(s *newState) error {
 		}
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.IngestRateLimitPerMinute)
 
-		// Compose handler: state window and person tracker both see
-		// every state change that passes the filter and rate limiter.
-		var handler homeassistant.StateWatchHandler
+		// Compose handler: the state window, person tracker, and
+		// subscription wake feeder all see every state change that
+		// passes the filter and rate limiter.
+		taps := []homeassistant.StateWatchHandler{stateWindowProvider.HandleStateChange}
 		if s.personTracker != nil {
+			taps = append(taps, s.personTracker.HandleStateChange)
+		}
+		if a.subWakeFeeder != nil {
+			taps = append(taps, a.subWakeFeeder.HandleStateChange)
+		}
+		handler := taps[0]
+		if len(taps) > 1 {
+			all := taps
 			handler = func(entityID, oldState, newState, deviceClass string) {
-				stateWindowProvider.HandleStateChange(entityID, oldState, newState, deviceClass)
-				s.personTracker.HandleStateChange(entityID, oldState, newState, deviceClass)
+				for _, tap := range all {
+					tap(entityID, oldState, newState, deviceClass)
+				}
 			}
-		} else {
-			handler = stateWindowProvider.HandleStateChange
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
@@ -396,9 +416,14 @@ func (a *App) initAwareness(s *newState) error {
 				// genuinely, by not swapping — rather than narrowing
 				// ingestion on bad luck.
 				logger.Warn("ingest registry read failed; keeping the previous ingestion filter", "error", err)
-				return
+			} else {
+				watcher.SetFilter(rebuilt)
 			}
-			watcher.SetFilter(rebuilt)
+			// The wake index derives from the same registry state, so
+			// it rides the same rebuild signal (#1211).
+			if a.subWakeFeeder != nil {
+				a.subWakeFeeder.Rebuild()
+			}
 		}
 		logger.Info("state watcher configured",
 			"ingest_rate_limit_per_minute", cfg.HomeAssistant.IngestRateLimitPerMinute,

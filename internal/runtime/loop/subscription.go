@@ -101,6 +101,24 @@ type EntitySubscription struct {
 	// set alone it renders every retained change inside the window,
 	// still clamped to the render cap.
 	TransitionsWindowSeconds int `yaml:"transitions_window_seconds,omitempty" json:"transitions_window_seconds,omitempty"`
+
+	// Wake declares the wake feed (#1211): the OWNING loop is
+	// awakened when the watched entity changes — debounced,
+	// coalesced per entity, and delivered through the shared
+	// loopqueue chassis, never a private wake driver. Requires a
+	// loop owner (always-visible and system rows have nobody to
+	// wake) and, like every capture-dependent option, derives the
+	// entity into the ingestion filter and refuses registry targets
+	// and requires_tag (wake must not follow tag state).
+	Wake bool `yaml:"wake,omitempty" json:"wake,omitempty"`
+
+	// WakeDebounceSeconds is this subscription's ask for how long
+	// changes coalesce before its loop wakes. Zero uses the shared
+	// default. A loop's effective wake cadence follows its twitchiest
+	// wake subscription — one wake drains everything pending — so a
+	// slower ask here bounds only how fast THIS subscription's
+	// changes demand a wake.
+	WakeDebounceSeconds int `yaml:"wake_debounce_seconds,omitempty" json:"wake_debounce_seconds,omitempty"`
 }
 
 // IsExpired reports whether this subscription's TTL has elapsed
@@ -282,6 +300,19 @@ func normalizeSubscriptionsOnLoad(subs []EntitySubscription, now time.Time) ([]E
 		}
 		if sub.TransitionsWindowSeconds < 0 {
 			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): transitions_window_seconds must be >= 0, got %d", i, sub.EntityID, sub.TransitionsWindowSeconds)
+		}
+		if sub.WakeDebounceSeconds < 0 {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): wake_debounce_seconds must be >= 0, got %d", i, sub.EntityID, sub.WakeDebounceSeconds)
+		}
+		// The wake feed must not follow tag state (#1213's boundary
+		// extended to #1211: capture-adjacent behavior stays
+		// unconditional) and cannot ride registry targets (their
+		// members never reach the ingestion filter).
+		if sub.Wake && sub.RequiresTag != "" {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): wake cannot combine with requires_tag — waking must not follow tag state; drop one of the two", i, sub.EntityID)
+		}
+		if sub.Wake && homeassistant.IsRegistryTarget(sub.EntityID) {
+			return nil, fmt.Errorf("subscriptions[%d] (entity_id=%q): wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — use a concrete entity or glob", i, sub.EntityID)
 		}
 		// The transition log is a render feature; an ingest-only mode
 		// renders nothing, so the combination declares a log nobody

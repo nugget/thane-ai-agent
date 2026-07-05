@@ -93,6 +93,8 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 			RequiresTag:              e.RequiresTag,
 			Transitions:              e.Transitions,
 			TransitionsWindowSeconds: e.TransitionsWindowSeconds,
+			Wake:                     e.Wake,
+			WakeDebounceSeconds:      e.WakeDebounceSeconds,
 		})
 	}
 	return out
@@ -111,6 +113,8 @@ type curateEntity struct {
 	RequiresTag              string
 	Transitions              int
 	TransitionsWindowSeconds int
+	Wake                     bool
+	WakeDebounceSeconds      int
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
@@ -242,11 +246,34 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 		if (ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0) && ent.Mode == looppkg.SubscriptionModeIngest {
 			return nil, fmt.Errorf("%s[%d]: a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", fieldName, i)
 		}
+		if rawWake, present := obj["wake"]; present && rawWake != nil {
+			wake, ok := rawWake.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].wake: must be a boolean, got %T", fieldName, i, rawWake)
+			}
+			ent.Wake = wake
+		}
+		if rawWakeDebounce, present := obj["wake_debounce_seconds"]; present {
+			n, err := coerceInt(rawWakeDebounce)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].wake_debounce_seconds: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].wake_debounce_seconds: must be >= 0", fieldName, i)
+			}
+			ent.WakeDebounceSeconds = n
+		}
+		if ent.Wake && ent.RequiresTag != "" {
+			return nil, fmt.Errorf("%s[%d]: wake cannot combine with requires_tag — waking must not follow tag state", fieldName, i)
+		}
 		// Registry targets (area:/label:/floor:) cannot feed the
 		// ingestion filter, so capture-dependent options on them would
 		// silently do nothing (Copilot #1215) — same rejection every
 		// other authoring door applies.
 		if homeassistant.IsRegistryTarget(ent.EntityID) {
+			if ent.Wake {
+				return nil, fmt.Errorf("%s[%d]: wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — use a concrete entity or glob", fieldName, i)
+			}
 			if ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0 {
 				return nil, fmt.Errorf("%s[%d]: a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — subscribe a concrete entity or glob for transitions", fieldName, i)
 			}

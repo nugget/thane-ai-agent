@@ -146,7 +146,7 @@ func TestMQTTWakeHandlerDispatchesViaWakeTarget(t *testing.T) {
 	}
 
 	// The queue partition drains fully — nothing left pending.
-	pending, err := dispatcher.queue.PendingCount(context.Background(), mqttWakePartition(target))
+	pending, err := dispatcher.dispatch.queue.PendingCount(context.Background(), mqttWakePartition(target))
 	if err != nil {
 		t.Fatalf("PendingCount: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestMQTTWakeBootSweep(t *testing.T) {
 	dispatcher := newTestDispatcher(t, bus, nil)
 
 	target := messages.LoopWakeTarget{Name: "recovered_handler"}
-	record, err := json.Marshal(mqttQueuedWake{
+	record, err := json.Marshal(queuedWakeRecord{
 		Target: target,
 		Event: messages.LoopEventPayload{
 			Source: "mqtt_wake", Type: "message",
@@ -292,7 +292,7 @@ func TestMQTTWakeBootSweep(t *testing.T) {
 	}
 	// Enqueue directly — simulating a pre-crash write whose debounce
 	// state died with the process (no registration on this store yet).
-	if err := dispatcher.queue.Enqueue(context.Background(), mqttWakePartition(target), "mqtt:crashed:a/topic", 1, record); err != nil {
+	if err := dispatcher.dispatch.queue.Enqueue(context.Background(), mqttWakePartition(target), "mqtt:crashed:a/topic", 1, record); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -305,7 +305,7 @@ func TestMQTTWakeBootSweep(t *testing.T) {
 	if got[0].To.Target != "recovered_handler" {
 		t.Errorf("swept target = %q, want recovered_handler", got[0].To.Target)
 	}
-	pending, err := dispatcher.queue.PendingCount(context.Background(), mqttWakePartition(target))
+	pending, err := dispatcher.dispatch.queue.PendingCount(context.Background(), mqttWakePartition(target))
 	if err != nil {
 		t.Fatalf("PendingCount: %v", err)
 	}
@@ -389,14 +389,14 @@ func TestMQTTWakeConcurrentDrainsDeliverOnce(t *testing.T) {
 
 	dispatcher := newTestDispatcher(t, bus, nil)
 	target := messages.LoopWakeTarget{Name: "slow_handler"}
-	record, err := json.Marshal(mqttQueuedWake{
+	record, err := json.Marshal(queuedWakeRecord{
 		Target: target,
 		Event:  messages.LoopEventPayload{Source: "mqtt_wake", Type: "message", ID: "mqtt-slow-1", Title: "a/topic"},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if err := dispatcher.queue.Enqueue(context.Background(), mqttWakePartition(target), "mqtt:slow:a/topic", 1, record); err != nil {
+	if err := dispatcher.dispatch.queue.Enqueue(context.Background(), mqttWakePartition(target), "mqtt:slow:a/topic", 1, record); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 

@@ -193,6 +193,12 @@ type App struct {
 	// targets have hydrated. Nil when MQTT is not configured.
 	mqttWakeDispatch *mqttWakeDispatcher
 
+	// Subscription wake feed (#1211): state changes on wake-declaring
+	// subscriptions enqueue debounced loop wakes over the same
+	// chassis. Set in initAwareness; nil when HA/bus/queue wiring is
+	// absent. The loop-definition worker runs its boot sweep.
+	subWakeFeeder *subscriptionWakeFeeder
+
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 

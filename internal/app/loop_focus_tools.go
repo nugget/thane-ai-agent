@@ -94,6 +94,14 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 						"type":        "integer",
 						"description": "Bound the transition log to changes within this trailing window (seconds); combine with transitions or set alone (still capped).",
 					},
+					"wake": map[string]any{
+						"type":        "boolean",
+						"description": "Wake this loop when the entity changes — debounced and coalesced (a chattering sensor becomes one wake with the latest change). Capture follows automatically. Entity ids and globs only; incompatible with requires_tag.",
+					},
+					"wake_debounce_seconds": map[string]any{
+						"type":        "integer",
+						"description": "How long changes coalesce before waking (default a few seconds); the loop's cadence follows its twitchiest wake subscription.",
+					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
 				"required": []string{"entity_id"},
@@ -147,6 +155,14 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if transitions > looppkg.MaxSubscriptionTransitions {
 					return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", looppkg.MaxSubscriptionTransitions)
 				}
+				wake, _ := args["wake"].(bool)
+				wakeDebounce, err := intFromMap(args, "wake_debounce_seconds")
+				if err != nil {
+					return "", fmt.Errorf("wake_debounce_seconds: %w", err)
+				}
+				if wakeDebounce < 0 {
+					return "", fmt.Errorf("wake_debounce_seconds must be >= 0")
+				}
 				sub := looppkg.EntitySubscription{
 					EntityID:                 entityID,
 					History:                  history,
@@ -159,6 +175,16 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					RequiresTag:              strings.TrimSpace(stringMapValue(args, "requires_tag")),
 					Transitions:              transitions,
 					TransitionsWindowSeconds: transitionsWindow,
+					Wake:                     wake,
+					WakeDebounceSeconds:      wakeDebounce,
+				}
+				if sub.Wake {
+					if sub.RequiresTag != "" {
+						return "", fmt.Errorf("wake cannot combine with requires_tag — waking must not follow tag state; drop one of the two")
+					}
+					if awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+						return "", fmt.Errorf("wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — watch a concrete entity or glob to wake on")
+					}
 				}
 				// The gate is render-only: capture must never depend
 				// on tag state (#1213).
