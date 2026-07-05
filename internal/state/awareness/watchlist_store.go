@@ -353,10 +353,7 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 // subscriptionOptionsWire is the options-blob JSON shape. It carries
 // the declaration fields of [looppkg.EntitySubscription] that don't
 // have their own column; entity_id, owner, and added_at live on the
-// row. ExpiresAt is decode-only: pre-#1209 rows persisted an absolute
-// expiry instead of ttl_seconds, and the shim in
-// parseSubscriptionOptions converts it back against the row's
-// added_at so old TTLs keep counting down unchanged.
+// row.
 type subscriptionOptionsWire struct {
 	History                  []int                                 `json:"history,omitempty"`
 	Forecast                 string                                `json:"forecast,omitempty"`
@@ -369,7 +366,6 @@ type subscriptionOptionsWire struct {
 	TransitionsWindowSeconds int                                   `json:"transitions_window_seconds,omitempty"`
 	Wake                     bool                                  `json:"wake,omitempty"`
 	WakeDebounceSeconds      int                                   `json:"wake_debounce_seconds,omitempty"`
-	ExpiresAt                string                                `json:"expires_at,omitempty"`
 }
 
 func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
@@ -445,19 +441,6 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	}
 	if wire.TTLSeconds > 0 {
 		sub.TTLSeconds = wire.TTLSeconds
-	} else if wire.ExpiresAt != "" {
-		// Legacy absolute-expiry row: recover the TTL against the
-		// row's added_at anchor. An expiry at or before added_at
-		// (clock skew, an already-elapsed row) maps to a 1-second
-		// TTL so the expiry sweep reaps it on this pass instead of
-		// resurrecting it as immortal.
-		if ts, err := time.Parse(time.RFC3339, wire.ExpiresAt); err == nil {
-			ttl := int(ts.UTC().Sub(addedAt).Seconds())
-			if ttl <= 0 {
-				ttl = 1
-			}
-			sub.TTLSeconds = ttl
-		}
 	}
 	return sub
 }

@@ -2,7 +2,6 @@ package awareness
 
 import (
 	"database/sql"
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -277,44 +276,6 @@ func TestStore_ExpiredRowsAreReapedOnScan(t *testing.T) {
 	}
 }
 
-// TestStore_LegacyExpiresAtShim covers pre-#1209 rows whose options
-// blob carried an absolute expires_at instead of ttl_seconds: a
-// still-live expiry keeps counting down against the added_at column,
-// and an elapsed one is reaped on the next scan.
-func TestStore_LegacyExpiresAtShim(t *testing.T) {
-	store := setupTestStore(t)
-
-	insertLegacy := func(entityID, expiresAt string) {
-		t.Helper()
-		optsJSON, err := json.Marshal(map[string]any{"expires_at": expiresAt})
-		if err != nil {
-			t.Fatalf("marshal legacy options: %v", err)
-		}
-		if _, err := store.db.Exec(
-			`INSERT INTO watched_entity_subscriptions (entity_id, owner, added_at, options) VALUES (?, 'core', ?, ?)`,
-			entityID, time.Now().UTC().Add(-time.Minute), string(optsJSON),
-		); err != nil {
-			t.Fatalf("insert legacy row: %v", err)
-		}
-	}
-
-	insertLegacy("sensor.legacy_live", time.Now().UTC().Add(time.Hour).Format(time.RFC3339))
-	insertLegacy("sensor.legacy_elapsed", time.Now().UTC().Add(-time.Minute).Format(time.RFC3339))
-
-	rows, err := store.ListOwner(OwnerCore)
-	if err != nil {
-		t.Fatalf("ListOwner: %v", err)
-	}
-	if len(rows) != 1 || rows[0].EntityID != "sensor.legacy_live" {
-		t.Fatalf("rows = %+v, want only sensor.legacy_live to survive", rows)
-	}
-	// Recovered TTL ≈ expires_at − added_at ≈ 61 minutes; assert the
-	// order of magnitude rather than an exact second to stay clock-safe.
-	if rows[0].TTLSeconds < 3600 || rows[0].TTLSeconds > 3780 {
-		t.Errorf("recovered ttl = %ds, want ~3660s", rows[0].TTLSeconds)
-	}
-}
-
 // TestStore_MigratesLegacyScopeColumn proves the scope→owner column
 // rename lands on a database created with the pre-#1209 schema and
 // that its rows stay readable afterwards.
@@ -334,8 +295,11 @@ func TestStore_MigratesLegacyScopeColumn(t *testing.T) {
 	)`); err != nil {
 		t.Fatalf("create legacy table: %v", err)
 	}
+	// Seed under a NAMED owner: anonymous-tier rows are deliberately
+	// cleared (not migrated) by the #1208 closing step, so the rename
+	// mechanics are proven on a row that survives.
 	if _, err := db.Exec(
-		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options) VALUES ('sensor.pre_rename', '', '{}')`,
+		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options) VALUES ('sensor.pre_rename', 'kitchen-watcher', '{}')`,
 	); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
 	}
@@ -345,8 +309,12 @@ func TestStore_MigratesLegacyScopeColumn(t *testing.T) {
 		t.Fatalf("new store over legacy schema: %v", err)
 	}
 
-	if ids := globalEntityIDs(t, store); !slices.Equal(ids, []string{"sensor.pre_rename"}) {
-		t.Errorf("post-migration ids = %v, want [sensor.pre_rename]", ids)
+	rows, err := store.ListOwner("kitchen-watcher")
+	if err != nil {
+		t.Fatalf("ListOwner: %v", err)
+	}
+	if len(rows) != 1 || rows[0].EntityID != "sensor.pre_rename" {
+		t.Errorf("post-migration rows = %+v, want [sensor.pre_rename] under the renamed owner column", rows)
 	}
 
 	// A second migration pass must be a no-op.
@@ -440,19 +408,19 @@ func TestStore_CoreEntityGates(t *testing.T) {
 	}
 }
 
-// TestStore_MigratesGlobalTierOntoCore proves the #1208 closing
-// migration: rows persisted under the anonymous global tier (”) are
-// re-homed onto core at store open, with a collision against an
-// existing core row resolved in the core row's favor.
-func TestStore_MigratesGlobalTierOntoCore(t *testing.T) {
+// TestStore_ClearsRetiredAnonymousTier proves the #1208 closing
+// posture: legacy empty-owner rows are deliberately NOT migrated onto
+// core — the owner re-evaluates the subscription set by hand — so the
+// schema migration clears them, leaves genuine core rows untouched,
+// and is a no-op on every subsequent open.
+func TestStore_ClearsRetiredAnonymousTier(t *testing.T) {
 	db, err := sql.Open("sqlite-thane", ":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
 
-	// Pre-#1208 shape: the table with '' rows, one of which collides
-	// with a core-owned row.
+	// Pre-#1208 shape: anonymous-tier rows alongside a core-owned row.
 	if _, err := db.Exec(`CREATE TABLE watched_entity_subscriptions (
 		entity_id TEXT NOT NULL,
 		owner     TEXT NOT NULL DEFAULT '',
@@ -462,18 +430,18 @@ func TestStore_MigratesGlobalTierOntoCore(t *testing.T) {
 	)`); err != nil {
 		t.Fatalf("create legacy table: %v", err)
 	}
-	seed := func(entity, owner, options string) {
-		t.Helper()
+	for _, row := range [][2]string{
+		{"sensor.legacy_one", ""},
+		{"sensor.legacy_two", ""},
+		{"sensor.kept", "core"},
+	} {
 		if _, err := db.Exec(
-			`INSERT INTO watched_entity_subscriptions (entity_id, owner, options) VALUES (?, ?, ?)`,
-			entity, owner, options,
+			`INSERT INTO watched_entity_subscriptions (entity_id, owner) VALUES (?, ?)`,
+			row[0], row[1],
 		); err != nil {
-			t.Fatalf("seed %s/%s: %v", owner, entity, err)
+			t.Fatalf("seed %s: %v", row[0], err)
 		}
 	}
-	seed("sensor.plain", "", "{}")
-	seed("sensor.collide", "", `{"history":[600]}`)
-	seed("sensor.collide", "core", `{"history":[3600]}`)
 
 	store, err := NewWatchlistStore(db, nil)
 	if err != nil {
@@ -484,29 +452,17 @@ func TestStore_MigratesGlobalTierOntoCore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListOwner(core): %v", err)
 	}
-	byEntity := make(map[string][]int, len(rows))
-	for _, row := range rows {
-		byEntity[row.EntityID] = row.History
+	if len(rows) != 1 || rows[0].EntityID != "sensor.kept" {
+		t.Fatalf("core rows = %+v, want only the pre-existing core row", rows)
 	}
-	if len(byEntity) != 2 {
-		t.Fatalf("core rows = %v, want re-homed plain + surviving collide", byEntity)
-	}
-	if _, ok := byEntity["sensor.plain"]; !ok {
-		t.Error("sensor.plain not re-homed onto core")
-	}
-	if h := byEntity["sensor.collide"]; len(h) != 1 || h[0] != 3600 {
-		t.Errorf("collision history = %v, want the core row (3600) to win", h)
-	}
-
-	// No anonymous rows remain, and a second open is a no-op.
 	var leftover int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM watched_entity_subscriptions WHERE owner = ''`).Scan(&leftover); err != nil {
 		t.Fatalf("count leftovers: %v", err)
 	}
 	if leftover != 0 {
-		t.Errorf("leftover '' rows = %d, want 0", leftover)
+		t.Errorf("leftover anonymous rows = %d, want cleared", leftover)
 	}
 	if _, err := NewWatchlistStore(db, nil); err != nil {
-		t.Fatalf("re-migrate: %v", err)
+		t.Fatalf("re-open: %v", err)
 	}
 }
