@@ -235,17 +235,27 @@ when its scope should shift.
    `remove_entity_subscription` with the same `owner` to retire
    watches you no longer care about.
 
+For wakes on a *single entity's changes* — a door opening, a pump
+starting — the loop's own subscription is the trigger: `wake: true`
+on the entity entry (in `thane_loop_create.entities`, via
+`add_entity_subscription` with `owner`, or `watch_entity` from
+inside). No automation, no topic, debounced by default. Reach past
+this door only when the trigger logic can't be "this entity changed."
+
 For event-driven wakes (a new release on a repo, a new feed entry),
 producer tools like `forge_repo_follow` and `media_follow` take a
 `wake_loop` target so the service loop wakes on the event rather than
 its timer.
 
-For wakes triggered by *arbitrary external events* — most commonly
-an HA automation publishing an MQTT message — register the loop
-with `mqtt_wake_add` and pair it with an HA automation whose action
-publishes to the same topic. The two sides are independent
-artifacts that share only the topic string; the topic string IS
-the contract.
+For wakes triggered by *HA-side derived conditions* — compound
+triggers, zone dwell, templates, anything an HA automation decides —
+register the loop with `mqtt_wake_add` and pair it with an HA
+automation whose action publishes to the same topic. The two sides
+are independent artifacts that share only the topic string; the
+topic string IS the contract. (The worked example below is exactly
+this shape: the trigger is "presence transition AND morning AND
+entering the office," which is HA-automation logic, not a bare
+entity change.)
 
 ### Worked example: morning-briefing loop on Alice's office arrival
 

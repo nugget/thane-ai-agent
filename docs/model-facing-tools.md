@@ -316,6 +316,38 @@ For example, if a tool expects an integer issue number, say `number
 If a delegate would need to ask itself "what do I try next?", the tool
 surface can probably be improved.
 
+## Shipping: the model is the user
+
+A functional change to a model-facing surface is not done when the
+code merges — it is done when the teaching ships. The habit to unlearn
+is treating documentation and UX as human-facing follow-up, as they
+historically were: these features are built *for the model*. The model
+is the user; the operator is the second audience. A teaching pass
+targets, in order:
+
+1. **Tool descriptions and schemas** — the surfaces the model reads at
+   decision time.
+2. **Talents** — the decision frames that route the model to the right
+   door before it reads any schema.
+3. **Cross-references at the borders** — the other talents and tool
+   descriptions that mention this capability's neighbors.
+4. **Operator docs** (`docs/`) — last, not first.
+
+Two failure modes deserve special vigilance:
+
+- **Stale doors are worse than missing docs.** When a new option
+  changes which door is the smooth path, re-read the OLD doors'
+  descriptions. A description that says "entities do NOT wake the
+  loop" after entities learned to wake doesn't just under-teach — it
+  actively routes the model around the feature it sits next to.
+- **Phased work accretes cafeteria bullets.** Shipping an arc PR by PR
+  appends per-feature guidance that is individually correct and
+  collectively frameless (see the anti-pattern catalog in
+  [tool-and-talent-audit.md](tool-and-talent-audit.md)). After an arc
+  completes, make a synthesis pass that restates the *decision frame*
+  — the questions the model should ask — with the per-option details
+  under it.
+
 ## Review Checklist
 
 Before merging a new or changed tool, ask:
@@ -331,6 +363,9 @@ Before merging a new or changed tool, ask:
 8. Would multi-account or multi-target ambiguity be obvious to recover?
 9. Is the output compact structure instead of human-oriented narrative?
 10. Are we preserving exact upstream state where exactness matters?
+11. Did the change make any OLDER tool description or talent stale —
+    especially one that now routes the model around this feature?
+12. Does a talent teach WHEN to reach for this, not just what it does?
 
 If those answers are good, the tool surface is probably on the right
 track.
