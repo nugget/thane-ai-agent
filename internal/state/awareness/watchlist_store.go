@@ -20,6 +20,16 @@ import (
 // mutation; the configuration is their source of truth.
 const OwnerSystem = "system"
 
+// OwnerCore is the owner of the always-visible tier: core is the root
+// container and every context is de facto core's context, so the
+// formerly anonymous global tier (owner ”) collapsed into rows core
+// owns directly (#1208's closing decision). Core has no persisted
+// definition by design — the bootstrap owns its lifecycle — so unlike
+// other loop owners these rows are the source of truth themselves,
+// mutated store-direct by the tools rather than compiled from a spec;
+// the spec mirror and orphan sweep skip this owner accordingly.
+const OwnerCore = looppkg.CoreLoopName
+
 // SubscriptionRow is one persisted registry entry: an owner plus the
 // unified subscription declaration. Owner ” means always-visible (the
 // global tier every turn renders), [OwnerSystem] marks runtime-seeded
@@ -47,7 +57,12 @@ func NewWatchlistStore(db *sql.DB, logger *slog.Logger) (*WatchlistStore, error)
 // Upsert inserts or replaces the subscription for (owner, entity_id).
 // A zero AddedAt is stamped with the current time so TTL countdown is
 // always anchored; re-upserting an entity restarts its TTL window.
+// Owner is required: the anonymous tier collapsed into [OwnerCore],
+// so an ownerless row has no meaning left.
 func (s *WatchlistStore) Upsert(owner string, sub looppkg.EntitySubscription) error {
+	if strings.TrimSpace(owner) == "" {
+		return fmt.Errorf("owner is required (the always-visible tier is %q)", OwnerCore)
+	}
 	if strings.TrimSpace(sub.EntityID) == "" {
 		return fmt.Errorf("entity_id is required")
 	}
@@ -191,8 +206,8 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 	)
 }
 
-// GlobalEntityGates returns, for each candidate whose always-visible
-// row (owner=”) can render at all — state-rendering mode, not expired
+// CoreEntityGates returns, for each candidate whose always-visible
+// row (owner [OwnerCore]) can render at all — state-rendering mode, not expired
 // — that row's RequiresTag gate ("" for an ungated row). Rows that
 // never render (ingest-only, elapsed TTL) are omitted entirely, so
 // they cannot suppress a loop-scoped render of the same entity;
@@ -206,7 +221,7 @@ func (s *WatchlistStore) ListOwner(owner string) ([]SubscriptionRow, error) {
 // the always-visible [WatchlistProvider]'s own pass so we don't
 // double-write deletes. Returns an empty (non-nil) map when
 // candidates is empty.
-func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]string, error) {
+func (s *WatchlistStore) CoreEntityGates(candidates []string) (map[string]string, error) {
 	out := make(map[string]string, len(candidates))
 	if len(candidates) == 0 {
 		return out, nil
@@ -232,7 +247,7 @@ func (s *WatchlistStore) GlobalEntityGates(candidates []string) (map[string]stri
 	placeholders := strings.Repeat("?,", len(args))
 	placeholders = placeholders[:len(placeholders)-1]
 	query := `SELECT entity_id, added_at, options FROM watched_entity_subscriptions
-		 WHERE owner = '' AND entity_id IN (` + placeholders + `)`
+		 WHERE owner = '` + OwnerCore + `' AND entity_id IN (` + placeholders + `)`
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err

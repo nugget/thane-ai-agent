@@ -40,11 +40,11 @@ func TestIngestGlobs(t *testing.T) {
 		owner string
 		sub   looppkg.EntitySubscription
 	}{
-		{"", looppkg.EntitySubscription{EntityID: "binary_sensor.*_door", Mode: looppkg.SubscriptionModeIngest}},
-		{"", looppkg.EntitySubscription{EntityID: "lock.front", Mode: looppkg.SubscriptionModeBoth}},
-		{"", looppkg.EntitySubscription{EntityID: "sensor.render_only"}},
+		{OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.*_door", Mode: looppkg.SubscriptionModeIngest}},
+		{OwnerCore, looppkg.EntitySubscription{EntityID: "lock.front", Mode: looppkg.SubscriptionModeBoth}},
+		{OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.render_only"}},
 		// Expired ingest row drops out of the rebuild.
-		{"", looppkg.EntitySubscription{EntityID: "sensor.expired", Mode: looppkg.SubscriptionModeIngest, TTLSeconds: 1, AddedAt: now}},
+		{OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.expired", Mode: looppkg.SubscriptionModeIngest, TTLSeconds: 1, AddedAt: now}},
 		// Loop-owned ingest rows feed the filter too — #1209 widened the
 		// read from the always-visible tier to every owner.
 		{"alice", looppkg.EntitySubscription{EntityID: "sensor.loop_owned", Mode: looppkg.SubscriptionModeIngest}},
@@ -80,13 +80,13 @@ func TestIngestGlobs(t *testing.T) {
 // field) and an explicit render row are indistinguishable.
 func TestSubscriptionModeRoundTrip(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.a", Mode: looppkg.SubscriptionModeIngest}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.a", Mode: looppkg.SubscriptionModeIngest}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.b"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.b"}); err != nil {
 		t.Fatalf("add plain: %v", err)
 	}
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -211,14 +211,14 @@ func TestIngestCap(t *testing.T) {
 // posture the store has always had.
 func TestUnknownStoredModeDecodesAsRender(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.future"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.future"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	if _, err := store.db.Exec(
 		`UPDATE watched_entity_subscriptions SET options = '{"mode":"telepathy"}' WHERE entity_id = 'sensor.future'`); err != nil {
 		t.Fatalf("plant unknown mode: %v", err)
 	}
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -234,10 +234,10 @@ func TestUnknownStoredModeDecodesAsRender(t *testing.T) {
 // watchlist context provider must skip them.
 func TestWatchlistProviderSkipsIngestOnlyRows(t *testing.T) {
 	store := newIngestStore(t)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.ingest_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.ingest_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestWatchlistProviderSkipsIngestOnlyRows(t *testing.T) {
 func TestIngestGlobsDerivesFromTransitionLogs(t *testing.T) {
 	store := newIngestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID:    "binary_sensor.garage_bay_3",
 		Transitions: 5,
 	}); err != nil {
@@ -287,7 +287,7 @@ func TestIngestGlobsDerivesFromTransitionLogs(t *testing.T) {
 		t.Fatalf("upsert gated mode row: %v", err)
 	}
 	// Plain render row: no capture.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.render_only"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.render_only"}); err != nil {
 		t.Fatalf("upsert render row: %v", err)
 	}
 

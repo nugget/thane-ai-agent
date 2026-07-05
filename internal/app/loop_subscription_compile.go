@@ -33,11 +33,13 @@ func (a *App) compileLoopSubscriptions() error {
 			if name == "" {
 				continue
 			}
-			if name == awareness.OwnerSystem {
-				// The reserved system owner holds runtime-seeded rows;
-				// a definition squatting on the name must not clobber
-				// them (and could not be told apart from them later).
-				a.logger.Warn("loop definition name collides with the reserved system owner — its subscriptions are not mirrored into the registry",
+			if name == awareness.OwnerSystem || name == awareness.OwnerCore {
+				// Reserved owners: system holds runtime-seeded rows,
+				// and core's rows are the always-visible tier whose
+				// source of truth is the registry itself (core has no
+				// persisted definition by design, #1208). A definition
+				// squatting on either name must not clobber them.
+				a.logger.Warn("loop definition name collides with a reserved subscription owner — its subscriptions are not mirrored into the registry",
 					"name", name)
 				continue
 			}
@@ -54,7 +56,9 @@ func (a *App) compileLoopSubscriptions() error {
 		return errors.Join(errs...)
 	}
 	for _, owner := range owners {
-		if owner == awareness.OwnerSystem {
+		if owner == awareness.OwnerSystem || owner == awareness.OwnerCore {
+			// Reserved owners have no definition behind them by
+			// design; their rows are never orphans.
 			continue
 		}
 		if _, ok := known[owner]; ok {
@@ -95,7 +99,7 @@ func (a *App) mirrorLoopSubscriptions(spec looppkg.Spec) {
 		return
 	}
 	name := strings.TrimSpace(spec.Name)
-	if name == "" || name == awareness.OwnerSystem {
+	if name == "" || name == awareness.OwnerSystem || name == awareness.OwnerCore {
 		return
 	}
 	if err := a.watchlistStore.ReplaceOwner(name, spec.Subscriptions); err != nil {

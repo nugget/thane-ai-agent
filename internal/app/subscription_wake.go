@@ -118,9 +118,11 @@ func (f *subscriptionWakeFeeder) Rebuild() {
 			continue
 		}
 		owner := strings.TrimSpace(row.Owner)
-		if owner == "" || owner == awareness.OwnerSystem {
-			// Nobody to wake: the tool boundaries reject these, this
-			// is the backstop for rows arriving by other routes.
+		if owner == "" || owner == awareness.OwnerSystem || owner == awareness.OwnerCore {
+			// Nobody to wake: core is a container that never iterates
+			// and the system floor is runtime plumbing. The tool
+			// boundaries reject these; this is the backstop for rows
+			// arriving by other routes.
 			continue
 		}
 		if awareness.ParseSubscriptionTarget(row.EntityID).IsRegistryTarget() {

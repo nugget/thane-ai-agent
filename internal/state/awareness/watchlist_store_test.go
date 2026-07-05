@@ -29,7 +29,7 @@ func setupTestStore(t *testing.T) *WatchlistStore {
 
 func globalEntityIDs(t *testing.T, store *WatchlistStore) []string {
 	t.Helper()
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner(\"\"): %v", err)
 	}
@@ -55,11 +55,11 @@ func TestStore_ListEmpty(t *testing.T) {
 func TestStore_UpsertAndListPreservesInsertionOrder(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	// Distinct AddedAt so ORDER BY added_at is deterministic.
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID: "binary_sensor.front_door",
 		AddedAt:  time.Now().UTC().Add(time.Second),
 	}); err != nil {
@@ -75,17 +75,17 @@ func TestStore_UpsertAndListPreservesInsertionOrder(t *testing.T) {
 func TestStore_UpsertReplacesInsteadOfDuplicating(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID: "sensor.temperature",
 		History:  []int{600},
 	}); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -147,17 +147,17 @@ func TestStore_UpsertRoundTripsUnifiedOptions(t *testing.T) {
 func TestStore_UpsertRejectsInvalidOptions(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "monthly"}); err == nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "monthly"}); err == nil {
 		t.Fatal("expected invalid forecast error")
 	} else if !strings.Contains(err.Error(), "forecast must be one of") {
 		t.Fatalf("error = %q, want forecast validation", err.Error())
 	}
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.a", Mode: "firehose"}); err == nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.a", Mode: "firehose"}); err == nil {
 		t.Fatal("expected invalid mode error")
 	}
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: ""}); err == nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: ""}); err == nil {
 		t.Fatal("expected entity_id required error")
 	}
 }
@@ -165,7 +165,7 @@ func TestStore_UpsertRejectsInvalidOptions(t *testing.T) {
 func TestStore_RemoveIsOwnerExact(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
 		t.Fatalf("upsert global: %v", err)
 	}
 	if err := store.Upsert("battery-watcher", looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
@@ -225,10 +225,10 @@ func TestStore_ReplaceOwnerIsAtomicAndSkipsExpired(t *testing.T) {
 	}
 }
 
-func TestStore_OwnersExcludesGlobalTier(t *testing.T) {
+func TestStore_OwnersListsReservedAndLoopOwners(t *testing.T) {
 	store := setupTestStore(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.global"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.global"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if err := store.Upsert("loop-b", looppkg.EntitySubscription{EntityID: "sensor.b"}); err != nil {
@@ -242,8 +242,10 @@ func TestStore_OwnersExcludesGlobalTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Owners: %v", err)
 	}
-	if !slices.Equal(owners, []string{"loop-b", OwnerSystem}) {
-		t.Errorf("owners = %v, want [loop-b system]", owners)
+	// Core appears like any other owner post-#1208; the orphan sweep
+	// is what treats it (and system) as reserved.
+	if !slices.Equal(owners, []string{OwnerCore, "loop-b", OwnerSystem}) {
+		t.Errorf("owners = %v, want [core loop-b system]", owners)
 	}
 }
 
@@ -289,7 +291,7 @@ func TestStore_LegacyExpiresAtShim(t *testing.T) {
 			t.Fatalf("marshal legacy options: %v", err)
 		}
 		if _, err := store.db.Exec(
-			`INSERT INTO watched_entity_subscriptions (entity_id, owner, added_at, options) VALUES (?, '', ?, ?)`,
+			`INSERT INTO watched_entity_subscriptions (entity_id, owner, added_at, options) VALUES (?, 'core', ?, ?)`,
 			entityID, time.Now().UTC().Add(-time.Minute), string(optsJSON),
 		); err != nil {
 			t.Fatalf("insert legacy row: %v", err)
@@ -299,7 +301,7 @@ func TestStore_LegacyExpiresAtShim(t *testing.T) {
 	insertLegacy("sensor.legacy_live", time.Now().UTC().Add(time.Hour).Format(time.RFC3339))
 	insertLegacy("sensor.legacy_elapsed", time.Now().UTC().Add(-time.Minute).Format(time.RFC3339))
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -353,21 +355,21 @@ func TestStore_MigratesLegacyScopeColumn(t *testing.T) {
 	}
 }
 
-// TestStore_GlobalEntityGates covers the narrow dedup lookup used by
+// TestStore_CoreEntityGates covers the narrow dedup lookup used by
 // [LoopSubscriptionProvider]: it must return only the candidates
 // present in the always-visible (owner=”) tier — each with its
 // RequiresTag gate so the caller can ignore gated-off rows — ignore
 // owned rows for the same entity_id, and skip the TTL cleanup side
 // effect that [ListOwner] performs.
-func TestStore_GlobalEntityGates(t *testing.T) {
+func TestStore_CoreEntityGates(t *testing.T) {
 	store := setupTestStore(t)
 
 	// Global ungated → present with an empty gate.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	// Global gated → present with its gate exposed.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
 		t.Fatalf("upsert gated: %v", err)
 	}
 	// Loop-owned → NOT in the always-visible set even though the
@@ -377,10 +379,10 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 	}
 	// Rows that never render must not appear at all: ingest-only mode
 	// and elapsed TTL (Copilot #1214).
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.capture_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.capture_only", Mode: looppkg.SubscriptionModeIngest}); err != nil {
 		t.Fatalf("upsert ingest-only: %v", err)
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID:   "sensor.elapsed",
 		TTLSeconds: 60,
 		AddedAt:    time.Now().UTC().Add(-time.Hour),
@@ -388,7 +390,7 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 		t.Fatalf("upsert elapsed: %v", err)
 	}
 
-	gates, err := store.GlobalEntityGates([]string{
+	gates, err := store.CoreEntityGates([]string{
 		"sensor.always_on",
 		"sensor.lensed",
 		"sensor.owned_only",
@@ -397,7 +399,7 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 		"sensor.unknown",
 	})
 	if err != nil {
-		t.Fatalf("GlobalEntityGates: %v", err)
+		t.Fatalf("CoreEntityGates: %v", err)
 	}
 	if gate, ok := gates["sensor.always_on"]; !ok || gate != "" {
 		t.Errorf("sensor.always_on gate = %q,%v, want present and ungated", gate, ok)
@@ -419,9 +421,9 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 	}
 
 	// Empty candidate list returns an empty (non-nil) map.
-	empty, err := store.GlobalEntityGates(nil)
+	empty, err := store.CoreEntityGates(nil)
 	if err != nil {
-		t.Fatalf("GlobalEntityGates(nil): %v", err)
+		t.Fatalf("CoreEntityGates(nil): %v", err)
 	}
 	if empty == nil || len(empty) != 0 {
 		t.Errorf("want empty non-nil map, got %#v", empty)
@@ -429,11 +431,82 @@ func TestStore_GlobalEntityGates(t *testing.T) {
 
 	// Duplicates and empty strings in the candidate list are
 	// tolerated (deduped + filtered before the SQL IN clause).
-	gates2, err := store.GlobalEntityGates([]string{"sensor.always_on", "sensor.always_on", ""})
+	gates2, err := store.CoreEntityGates([]string{"sensor.always_on", "sensor.always_on", ""})
 	if err != nil {
-		t.Fatalf("GlobalEntityGates dedup: %v", err)
+		t.Fatalf("CoreEntityGates dedup: %v", err)
 	}
 	if len(gates2) != 1 {
 		t.Errorf("want exactly 1 entry after dedup, got %v", gates2)
+	}
+}
+
+// TestStore_MigratesGlobalTierOntoCore proves the #1208 closing
+// migration: rows persisted under the anonymous global tier (”) are
+// re-homed onto core at store open, with a collision against an
+// existing core row resolved in the core row's favor.
+func TestStore_MigratesGlobalTierOntoCore(t *testing.T) {
+	db, err := sql.Open("sqlite-thane", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Pre-#1208 shape: the table with '' rows, one of which collides
+	// with a core-owned row.
+	if _, err := db.Exec(`CREATE TABLE watched_entity_subscriptions (
+		entity_id TEXT NOT NULL,
+		owner     TEXT NOT NULL DEFAULT '',
+		added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		options   TEXT NOT NULL DEFAULT '{}',
+		PRIMARY KEY (owner, entity_id)
+	)`); err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	seed := func(entity, owner, options string) {
+		t.Helper()
+		if _, err := db.Exec(
+			`INSERT INTO watched_entity_subscriptions (entity_id, owner, options) VALUES (?, ?, ?)`,
+			entity, owner, options,
+		); err != nil {
+			t.Fatalf("seed %s/%s: %v", owner, entity, err)
+		}
+	}
+	seed("sensor.plain", "", "{}")
+	seed("sensor.collide", "", `{"history":[600]}`)
+	seed("sensor.collide", "core", `{"history":[3600]}`)
+
+	store, err := NewWatchlistStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store over legacy tier: %v", err)
+	}
+
+	rows, err := store.ListOwner(OwnerCore)
+	if err != nil {
+		t.Fatalf("ListOwner(core): %v", err)
+	}
+	byEntity := make(map[string][]int, len(rows))
+	for _, row := range rows {
+		byEntity[row.EntityID] = row.History
+	}
+	if len(byEntity) != 2 {
+		t.Fatalf("core rows = %v, want re-homed plain + surviving collide", byEntity)
+	}
+	if _, ok := byEntity["sensor.plain"]; !ok {
+		t.Error("sensor.plain not re-homed onto core")
+	}
+	if h := byEntity["sensor.collide"]; len(h) != 1 || h[0] != 3600 {
+		t.Errorf("collision history = %v, want the core row (3600) to win", h)
+	}
+
+	// No anonymous rows remain, and a second open is a no-op.
+	var leftover int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM watched_entity_subscriptions WHERE owner = ''`).Scan(&leftover); err != nil {
+		t.Fatalf("count leftovers: %v", err)
+	}
+	if leftover != 0 {
+		t.Errorf("leftover '' rows = %d, want 0", leftover)
+	}
+	if _, err := NewWatchlistStore(db, nil); err != nil {
+		t.Fatalf("re-migrate: %v", err)
 	}
 }

@@ -56,7 +56,7 @@ func TestLoopSubscriptionProviderSkipsAlwaysVisibleEntities(t *testing.T) {
 	p, store, reg, _ := setupLoopSubProvider(t)
 
 	// Always-visible subscription via the store (owner "").
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.shared"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.shared"}); err != nil {
 		t.Fatalf("seed always-visible: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestLoopSubscriptionProviderDedupIgnoresGatedOffGlobalRows(t *testing.T) {
 	p, store, reg, _ := setupLoopSubProvider(t)
 
 	// Always-visible row gated on a tag.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.shared", RequiresTag: "ranch_water"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.shared", RequiresTag: "ranch_water"}); err != nil {
 		t.Fatalf("seed gated global: %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestLoopSubscriptionProviderGatedLeafShadowsUngatedAncestor(t *testing.T) {
 // TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows pins
 // the Copilot finding on #1214: an always-visible row that never
 // renders — ingest-only mode — must not suppress a loop's own render
-// of the same entity. Before GlobalEntityGates filtered on
+// of the same entity. Before CoreEntityGates filtered on
 // RendersState, the entity would silently vanish from loop context
 // whenever the global tier used it for capture only.
 func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T) {
@@ -275,7 +275,7 @@ func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T
 
 	// Global row that feeds capture only; WatchlistProvider never
 	// renders it.
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID: "sensor.shared",
 		Mode:     looppkg.SubscriptionModeIngest,
 	}); err != nil {
@@ -306,7 +306,7 @@ func TestLoopSubscriptionProviderDedupIgnoresNonRenderingGlobalRows(t *testing.T
 	}
 
 	// mode both DOES render globally, so the dedup must apply.
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID: "sensor.shared",
 		Mode:     looppkg.SubscriptionModeBoth,
 	}); err != nil {

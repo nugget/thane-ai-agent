@@ -25,5 +25,20 @@ var watchlistSchema = database.Schema{
 		// rename is a no-op on fresh databases and on every run after
 		// the first.
 		database.ColumnRename{Table: "watched_entity_subscriptions", From: "scope", To: "owner"},
+		// The former global tier (owner '') belongs to core (#1208's
+		// closing decision): core is the root container and every
+		// context is de facto core's context, so the anonymous tier
+		// was a second name for the same thing. UPDATE OR IGNORE
+		// re-homes rows; a collision with an existing core row keeps
+		// the core row and the DELETE clears the leftover. Both steps
+		// are idempotent no-ops once no '' rows remain.
+		database.Raw{
+			Description: "re-home global-tier subscription rows onto core",
+			SQL:         `UPDATE OR IGNORE watched_entity_subscriptions SET owner = 'core' WHERE owner = ''`,
+		},
+		database.Raw{
+			Description: "drop global-tier rows that collided with core rows",
+			SQL:         `DELETE FROM watched_entity_subscriptions WHERE owner = ''`,
+		},
 	},
 }

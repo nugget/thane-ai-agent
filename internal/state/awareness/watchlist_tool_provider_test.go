@@ -125,7 +125,7 @@ func TestAddEntitySubscription_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain 'watching'", result)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestAddEntitySubscription_WithTTLHistoryAndInclude(t *testing.T) {
 		t.Fatalf("result = %q, want include text", result)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestAddEntitySubscription_ForecastNoneClearsExistingOption(t *testing.T) {
 		t.Fatalf("result = %q, want forecast clearing note", result)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestAddEntitySubscription_ForecastNoneClearsExistingOption(t *testing.T) {
 func TestListEntitySubscriptions_WholeTruth(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.always_on"}); err != nil {
 		t.Fatalf("upsert global: %v", err)
 	}
 	if err := store.Upsert("battery-watcher", looppkg.EntitySubscription{
@@ -456,8 +456,8 @@ func TestListEntitySubscriptions_WholeTruth(t *testing.T) {
 			ExpiresDelta  string
 		}{item.Owner, item.Mode, item.AlwaysVisible, item.ExpiresDelta}
 	}
-	if got := byEntity["sensor.always_on"]; got.Owner != "" || !got.AlwaysVisible || got.Mode != "render" {
-		t.Errorf("sensor.always_on = %+v, want global render row", got)
+	if got := byEntity["sensor.always_on"]; got.Owner != OwnerCore || !got.AlwaysVisible || got.Mode != "render" {
+		t.Errorf("sensor.always_on = %+v, want core-owned always-visible render row", got)
 	}
 	if got := byEntity["sensor.battery"]; got.Owner != "battery-watcher" || got.AlwaysVisible || got.ExpiresDelta == "" {
 		t.Errorf("sensor.battery = %+v, want owned row with expiry", got)
@@ -503,7 +503,7 @@ func TestRemoveEntitySubscription_MissingEntityID(t *testing.T) {
 func TestRemoveEntitySubscription_Success(t *testing.T) {
 	p, store, _ := setupWatchlistProvider(t)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -517,7 +517,7 @@ func TestRemoveEntitySubscription_Success(t *testing.T) {
 		t.Errorf("result = %q, want to contain entity_id", result)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestRemoveEntitySubscription_OwnerRoutesToLoopMutator(t *testing.T) {
 	p, store, mutator := setupWatchlistProvider(t)
 
 	// A same-named global row must survive an owner-routed remove.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.battery"}); err != nil {
 		t.Fatalf("upsert global: %v", err)
 	}
 	mutator.subs = map[string][]looppkg.EntitySubscription{
@@ -649,7 +649,7 @@ func TestAddEntitySubscription_RequiresTag(t *testing.T) {
 		t.Fatalf("result = %q, want gate acknowledgement", result)
 	}
 
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("ListOwner: %v", err)
 	}

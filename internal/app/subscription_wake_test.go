@@ -167,7 +167,7 @@ func TestSubscriptionWakeGlobAndIndexGuards(t *testing.T) {
 		t.Fatalf("upsert glob: %v", err)
 	}
 	// Backstop rows that must be ignored: global, system, container-owned.
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.global", Wake: true}); err != nil {
+	if err := store.Upsert(awareness.OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.global", Wake: true}); err != nil {
 		t.Fatalf("upsert global: %v", err)
 	}
 	if err := store.Upsert(awareness.OwnerSystem, looppkg.EntitySubscription{EntityID: "person.alice", Wake: true, Mode: looppkg.SubscriptionModeIngest}); err != nil {

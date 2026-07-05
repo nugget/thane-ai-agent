@@ -119,7 +119,7 @@ func TestProvider_RendersIncludedEntityMetadata(t *testing.T) {
 		Labels:      true,
 		Description: true,
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: state.EntityID, Include: &include}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: state.EntityID, Include: &include}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	p.SetRegistryClient(&fakeRegistries{
@@ -183,7 +183,7 @@ func TestProvider_SingleEntity(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.broken"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.broken"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -266,10 +266,10 @@ func TestProvider_MultipleEntities(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.door"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -305,7 +305,7 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.raw"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.raw"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.office_temperature", History: []int{24 * 60 * 60}}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.office_temperature", History: []int{24 * 60 * 60}}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -419,7 +419,7 @@ func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "hourly"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "hourly"}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -479,7 +479,7 @@ func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "daily"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "daily"}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -566,7 +566,7 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -625,7 +625,7 @@ func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -692,10 +692,10 @@ func TestWatchlistProviderHonorsRequiresTag(t *testing.T) {
 	}}
 	p, store := setupTestProvider(t, ha)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.plain"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.plain"}); err != nil {
 		t.Fatalf("upsert plain: %v", err)
 	}
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
 		t.Fatalf("upsert lensed: %v", err)
 	}
 
@@ -749,7 +749,7 @@ func TestWatchlistProviderRendersTransitionLog(t *testing.T) {
 	}}
 	p, store := setupTestProvider(t, ha)
 
-	if err := store.Upsert("", looppkg.EntitySubscription{
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
 		EntityID:    "binary_sensor.garage_bay_3",
 		Transitions: 2,
 	}); err != nil {

@@ -17,9 +17,9 @@ import (
 // at render time by reading the current loop_id from context and
 // walking the live registry's ancestor chain.
 //
-// Always-visible entities (those subscribed with no loop scope) are
-// still emitted by [WatchlistProvider]; this provider only covers
-// loop- and container-scoped subscriptions.
+// Always-visible entities (core-owned rows) are still emitted by
+// [WatchlistProvider]; this provider only covers loop- and
+// container-scoped subscriptions.
 type LoopSubscriptionProvider struct {
 	loops            *looppkg.Registry
 	store            *WatchlistStore
@@ -101,7 +101,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.
 	// would add an HA fetch and a redundant prompt block; the
 	// always-visible rendering wins because it would appear in
 	// every loop's context anyway. We use
-	// [WatchlistStore.GlobalEntityGates] (bounded IN-clause query,
+	// [WatchlistStore.CoreEntityGates] (bounded IN-clause query,
 	// no TTL cleanup writes) so the dedup check costs one indexed
 	// scan over the loop's own candidate list rather than a full
 	// always-visible scan + cleanup pass — the cleanup is left to
@@ -115,7 +115,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.
 		for _, sub := range subs {
 			candidates = append(candidates, sub.EntityID)
 		}
-		gates, err := p.store.GlobalEntityGates(candidates)
+		gates, err := p.store.CoreEntityGates(candidates)
 		if err != nil {
 			p.logger.Warn("loop subscription provider could not enumerate always-visible store",
 				"error", err,

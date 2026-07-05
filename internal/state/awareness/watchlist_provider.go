@@ -85,11 +85,13 @@ func (p *WatchlistProvider) SetRegistryClient(registries HARegistryClient) {
 // use a markdown line with state and unit. All timestamps use delta
 // format per #458.
 func (p *WatchlistProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
-	// Always-visible entities only. Loop-owned rows are rendered by
-	// [LoopSubscriptionProvider] after walking the ancestor chain, and
-	// system-owned rows (the person-entity ingestion floor) never
-	// render — they are ingest-mode by construction.
-	rows, err := p.store.ListOwner("")
+	// The always-visible tier is core's subscriptions (#1208): core is
+	// the root container and every context is de facto core's context.
+	// Loop-owned rows are rendered by [LoopSubscriptionProvider] after
+	// walking the ancestor chain, and system-owned rows (the
+	// person-entity ingestion floor) never render — they are
+	// ingest-mode by construction.
+	rows, err := p.store.ListOwner(looppkg.CoreLoopName)
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}

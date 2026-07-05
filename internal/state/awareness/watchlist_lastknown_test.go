@@ -167,7 +167,7 @@ func TestProvider_UnavailableEntitySurfacesLastKnownGood(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 

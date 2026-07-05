@@ -81,8 +81,8 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `add_entity_subscription` | Subscribe to an HA entity. Ownership is a parameter: no `owner` = always-visible; `owner: <loop name>` lands on that loop's spec. |
-| `list_entity_subscriptions` | List the whole subscription registry: always-visible, loop-owned, and system-seeded rows, each with its owner. |
+| `add_entity_subscription` | Subscribe to an HA entity. Ownership is a parameter: no `owner` (or `core`) = always-visible, owned by the root container; `owner: <loop name>` lands on that loop's spec. |
+| `list_entity_subscriptions` | List the whole subscription registry: core-owned (always-visible), loop-owned, and system-seeded rows, each with its owner. |
 | `remove_entity_subscription` | Remove a subscription; `owner` addresses a loop's own entry, system rows are config-owned and refuse removal. |
 
 Subscription expiry is reported as `expires_delta`, not a raw timestamp,
@@ -112,6 +112,12 @@ state-change ingestion filter automatically, with per-entity bounded
 retention behind the shared window — so `mode: ingest` is never needed
 for it. Entity ids and globs only; complementary to `history` (numeric
 trend summaries) rather than a replacement.
+
+The always-visible tier belongs to `core`: the root container's
+subscriptions render in every context (conversations are de facto
+core's context), stored as core-owned registry rows — core has no
+persisted spec by design, so the rows themselves are the source of
+truth and the orphan sweep treats `core` (like `system`) as reserved.
 
 A loop-owned subscription may declare `wake: true`: the owning loop is
 awakened when the entity changes, with the event delivered as

@@ -99,7 +99,7 @@ func TestAddEntitySubscription_ZeroMemberTargetFlagged(t *testing.T) {
 	}
 	// Flagged, not rejected — the subscription is still recorded so it can
 	// pick up members later (the point of a registry-tracking target).
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestAddEntitySubscription_NoRegistryClientNoPreview(t *testing.T) {
 	if strings.Contains(result, "Currently matches") {
 		t.Errorf("result = %q, want no expansion clause without a registry client", result)
 	}
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAddEntitySubscription_PreviewFailureIsSurfaced(t *testing.T) {
 	}
 	// The subscription still records — a transient read failure shouldn't
 	// lose the intent.
-	rows, err := store.ListOwner("")
+	rows, err := store.ListOwner(OwnerCore)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
