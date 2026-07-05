@@ -187,6 +187,12 @@ type App struct {
 	// earlier are simply no-ops.
 	ingestFilterRebuild func()
 
+	// MQTT wake delivery dispatcher over the shared loopqueue
+	// (#1033). Set during MQTT wiring in new_servers; the
+	// loop-definition worker runs its boot recovery sweep once loop
+	// targets have hydrated. Nil when MQTT is not configured.
+	mqttWakeDispatch *mqttWakeDispatcher
+
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 

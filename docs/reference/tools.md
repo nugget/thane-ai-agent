@@ -444,6 +444,16 @@ See [MQTT](../operating/mqtt.md) for the broker-side conventions.
 |------|-------------|
 | `mqtt_wake_list` | List runtime and config-defined wake subscriptions. |
 | `mqtt_wake_add` | Add a runtime wake subscription that delivers matching messages to a `wake_loop` target. Required args: `topic` and `wake_loop` (loop name/ID, optional tags + instructions). The legacy inline routing fields (`mission`, `quality_floor`, etc.) were retired in PR-T2b; point `wake_loop` at the built-in `mqtt-default-handler` for generic triage. |
+
+MQTT wake delivery rides the shared loopqueue chassis: matching
+messages enqueue durably per target and a short debounced wake drains
+the coalesced batch, so a burst on one topic becomes one iteration
+(latest payload wins per subscription+topic) and a message received
+just before a crash is replayed at the next startup. A payload may
+self-address by including `target_loop` (a loop definition name) — a
+general-purpose HA automation publishing to one shared wake topic can
+wake any named loop with no per-topic subscription; unresolvable
+targets fall back to the subscription's `wake_loop`.
 | `mqtt_wake_remove` | Remove a runtime wake subscription by ID. |
 
 ## `message_channel` — current message-app conversation

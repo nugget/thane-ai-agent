@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -13,6 +15,7 @@ import (
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
 
 // maxWakePayloadBytes bounds the MQTT payload size included in the
@@ -29,6 +32,18 @@ const maxWakePayloadBytes = 32 * 1024
 // the envelope-handoff hop.
 const mqttWakeDeliveryTimeout = 30 * time.Second
 
+// mqttWakePartitionPrefix namespaces the loopqueue partitions the MQTT
+// wake dispatcher owns. Partition strings are internal routing keys —
+// deliberately NOT bare loop names, so a wake target that also happens
+// to be a model-facing queue consumer (archivist-style queue_pull)
+// never finds MQTT plumbing records in its own partition.
+const mqttWakePartitionPrefix = "mqtt-wake:"
+
+// mqttWakeDrainBatch bounds one Peek pass during a drain. The drain
+// loops until the partition is empty, so this is a memory bound per
+// pass, not a delivery cap.
+const mqttWakeDrainBatch = 50
+
 // mqttWakeDeps wires the wake handler to the message bus and event
 // bus. parentID is unused in the post-retirement dispatch shape but
 // retained so the wiring in new_servers.go stays compatible during
@@ -40,8 +55,53 @@ type mqttWakeDeps struct {
 	parentID   *atomic.Value
 }
 
-// mqttWakeHandler returns a MessageHandler that delivers MQTT messages
-// to existing event-driven loops via the message bus. Every active
+// mqttQueuedWake is the loopqueue payload for one matched MQTT
+// message: the resolved wake target plus the event to deliver. Stored
+// durably at ingress and replayed by the dispatcher's drain, so a
+// crash between broker receipt and loop delivery no longer loses the
+// message, and a burst on one topic coalesces (latest payload wins
+// per subscription+topic) instead of amplifying into a wake per
+// message (#1024/#1033).
+type mqttQueuedWake struct {
+	Target messages.LoopWakeTarget   `json:"target"`
+	Event  messages.LoopEventPayload `json:"event"`
+}
+
+// mqttWakeDispatcher moves MQTT wake delivery onto the shared
+// loopqueue chassis: ingress enqueues into a per-target partition and
+// arms the WakeOnEnqueue debounce; the debounced fire drains the
+// coalesced batch and hands each record to the message bus exactly
+// the way the direct path used to. Trigger rate is decoupled from
+// wake rate; the downstream envelope contract is unchanged.
+type mqttWakeDispatcher struct {
+	queue  *loopqueue.Store
+	deps   mqttWakeDeps
+	logger *slog.Logger
+
+	// debounce/maxWait override the loopqueue wake defaults; zero
+	// values defer to [loopqueue.DefaultWakeDebounce] /
+	// [loopqueue.DefaultWakeMaxWait]. Tests shrink them.
+	debounce time.Duration
+	maxWait  time.Duration
+
+	mu         sync.Mutex
+	registered map[string]bool
+}
+
+func newMQTTWakeDispatcher(queue *loopqueue.Store, deps mqttWakeDeps, logger *slog.Logger) *mqttWakeDispatcher {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &mqttWakeDispatcher{
+		queue:      queue,
+		deps:       deps,
+		logger:     logger,
+		registered: make(map[string]bool),
+	}
+}
+
+// mqttWakeHandler returns a MessageHandler that routes MQTT messages
+// on wake topics onto the loopqueue dispatcher. Every active
 // subscription routes through a wake_loop target after the trigger-
 // unification work; legacy inline-Profile subscriptions are migrated
 // onto [mqtt.DefaultHandlerLoopName] at config load / DB hydrate time.
@@ -53,7 +113,7 @@ func mqttWakeHandler(
 	store *mqtt.SubscriptionStore,
 	fallback mqtt.MessageHandler,
 	logger *slog.Logger,
-	deps mqttWakeDeps,
+	dispatcher *mqttWakeDispatcher,
 ) mqtt.MessageHandler {
 	if logger == nil {
 		logger = slog.Default()
@@ -67,34 +127,34 @@ func mqttWakeHandler(
 			return
 		}
 
-		if deps.messageBus == nil {
-			logger.Error("mqtt wake has no message bus, dropping message",
+		if dispatcher == nil || dispatcher.deps.messageBus == nil {
+			logger.Error("mqtt wake has no dispatcher/message bus, dropping message",
 				"topic", topic,
 				"matches", len(matches),
 			)
 			return
 		}
 
-		// Fan-out: dispatch one envelope per matching subscription so
+		// Fan-out: one queue record per matching subscription so
 		// multiple subscribers (e.g. owner-attention plus security
 		// monitoring) on the same topic each see the same event in
 		// their own loop's iteration context.
 		for _, ws := range matches {
 			ws := ws
-			go dispatchViaWakeTarget(deps, ws, topic, payload, logger)
+			go dispatcher.ingress(ws, topic, payload)
 		}
 	}
 }
 
-// dispatchViaWakeTarget delivers an MQTT message to the subscription's
-// wake target as an event-source notification. Builds a
-// [messages.LoopEventPayload], wraps it in a
-// [messages.NewEventSourceEnvelope], and publishes via the bus with a
-// bounded delivery context. No new loop is spawned — the target loop
-// (a custom event-driven loop or the built-in default handler) sees
-// the event in its pending notifications and runs under its own
-// Spec.Profile / container cascade.
-func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic string, payload []byte, logger *slog.Logger) {
+// ingress converts one matched MQTT message into a durable queue
+// record: resolve the effective wake target (honoring payload
+// self-addressing), build the event, and enqueue it into the target's
+// partition — arming the debounced drain. Coalescing: a second
+// message on the same subscription+topic inside the debounce window
+// replaces the pending payload (latest wins) rather than appending.
+func (d *mqttWakeDispatcher) ingress(ws mqtt.WakeSubscription, topic string, payload []byte) {
+	target := d.resolveTarget(ws, topic, payload)
+
 	event := messages.LoopEventPayload{
 		Source:     "mqtt_wake",
 		Type:       "message",
@@ -107,42 +167,199 @@ func dispatchViaWakeTarget(deps mqttWakeDeps, ws mqtt.WakeSubscription, topic st
 			"subscription_id": ws.ID,
 		},
 	}
+	if target.Name != ws.WakeTarget.Name {
+		event.Metadata["target_loop"] = target.Name
+	}
+
+	record, err := json.Marshal(mqttQueuedWake{Target: target, Event: event})
+	if err != nil {
+		d.logger.Warn("mqtt wake record marshal failed, dropping message",
+			"subscription_id", ws.ID, "topic", topic, "error", err)
+		return
+	}
+
+	partition := mqttWakePartition(target)
+	d.ensureRegistered(partition)
+
+	enqCtx, cancel := context.WithTimeout(context.Background(), mqttWakeDeliveryTimeout)
+	defer cancel()
+	dedupKey := fmt.Sprintf("mqtt:%s:%s", ws.ID, topic)
+	if err := d.queue.Enqueue(enqCtx, partition, dedupKey, int(targetPriorityRank(target)), record); err != nil {
+		d.logger.Warn("mqtt wake enqueue failed, dropping message",
+			"subscription_id", ws.ID, "topic", topic, "partition", partition, "error", err)
+	}
+}
+
+// resolveTarget returns the subscription's wake target, overridden by
+// a payload-declared target_loop when present and resolvable (#1033
+// self-addressing: a general-purpose HA automation publishes
+// {"target_loop": "<definition name>", ...} to a shared wake topic and
+// wakes that loop with no pre-registered per-topic subscription). An
+// unresolvable self-address falls back to the subscription's static
+// target with a warning — the message still lands somewhere a model
+// can triage it rather than vanishing.
+func (d *mqttWakeDispatcher) resolveTarget(ws mqtt.WakeSubscription, topic string, payload []byte) messages.LoopWakeTarget {
+	var probe struct {
+		TargetLoop string `json:"target_loop"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return ws.WakeTarget
+	}
+	name := strings.TrimSpace(probe.TargetLoop)
+	if name == "" {
+		return ws.WakeTarget
+	}
+	if d.deps.registry == nil || !d.deps.registry.LoopExistsByName(name) {
+		d.logger.Warn("mqtt payload target_loop does not resolve; falling back to subscription target",
+			"subscription_id", ws.ID, "topic", topic,
+			"target_loop", name,
+			"fallback", ws.WakeTarget.Name,
+		)
+		return ws.WakeTarget
+	}
+	// The subscription's presentation fields (instructions, tags,
+	// priority, supervisor forcing) ride along; only the destination
+	// is re-addressed.
+	target := ws.WakeTarget
+	target.LoopID = ""
+	target.Name = name
+	return target
+}
+
+// ensureRegistered lazily attaches the WakeOnEnqueue debounce for a
+// partition the first time traffic addresses it. Package defaults for
+// debounce/maxWait: coalesce a burst, never starve under chatter.
+func (d *mqttWakeDispatcher) ensureRegistered(partition string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.registered[partition] {
+		return
+	}
+	d.registered[partition] = true
+	d.queue.SetWakeOnEnqueue(partition, d.debounce, d.maxWait, func() { d.drain(partition) })
+}
+
+// drain delivers a partition's pending records to the message bus in
+// drain order and acks each attempt. Delivery failures are logged and
+// acked anyway — parity with the pre-queue direct path, where a
+// failed bus send dropped the message; the queue adds crash
+// durability and burst coalescing, not retry semantics. A record that
+// no longer unmarshals is acked and skipped for the same reason.
+func (d *mqttWakeDispatcher) drain(partition string) {
+	ctx := context.Background()
+	for {
+		items, err := d.queue.Peek(ctx, partition, mqttWakeDrainBatch)
+		if err != nil {
+			d.logger.Warn("mqtt wake drain peek failed", "partition", partition, "error", err)
+			return
+		}
+		if len(items) == 0 {
+			return
+		}
+		for _, item := range items {
+			d.deliver(partition, item)
+		}
+		if len(items) < mqttWakeDrainBatch {
+			return
+		}
+	}
+}
+
+// deliver replays one queued record through the same envelope path
+// the direct dispatch used, then acks it.
+func (d *mqttWakeDispatcher) deliver(partition string, item loopqueue.Item) {
+	ack := func() {
+		if err := d.queue.Ack(context.Background(), partition, item.DedupKey); err != nil {
+			d.logger.Warn("mqtt wake ack failed", "partition", partition, "dedup_key", item.DedupKey, "error", err)
+		}
+	}
+
+	var record mqttQueuedWake
+	if err := json.Unmarshal(item.Payload, &record); err != nil {
+		d.logger.Warn("mqtt wake record unmarshal failed, dropping",
+			"partition", partition, "dedup_key", item.DedupKey, "error", err)
+		ack()
+		return
+	}
 
 	env, err := messages.NewEventSourceEnvelope(
 		messages.Identity{Kind: messages.IdentitySystem, Name: "mqtt_wake"},
-		ws.WakeTarget,
+		record.Target,
 		"mqtt_wake",
-		[]messages.LoopEventPayload{event},
+		[]messages.LoopEventPayload{record.Event},
 	)
 	if err != nil {
-		logger.Warn("mqtt wake envelope construction failed, dropping message",
-			"subscription_id", ws.ID,
-			"topic", topic,
-			"error", err,
-		)
+		d.logger.Warn("mqtt wake envelope construction failed, dropping message",
+			"partition", partition, "dedup_key", item.DedupKey, "error", err)
+		ack()
 		return
 	}
 
 	deliveryCtx, cancel := context.WithTimeout(context.Background(), mqttWakeDeliveryTimeout)
 	defer cancel()
-	if _, err := deps.messageBus.Send(deliveryCtx, env); err != nil {
-		logger.Warn("mqtt wake envelope delivery failed, dropping message",
-			"subscription_id", ws.ID,
-			"topic", topic,
-			"target_loop_id", ws.WakeTarget.LoopID,
-			"target_loop_name", ws.WakeTarget.Name,
+	if _, err := d.deps.messageBus.Send(deliveryCtx, env); err != nil {
+		d.logger.Warn("mqtt wake envelope delivery failed, dropping message",
+			"partition", partition,
+			"dedup_key", item.DedupKey,
+			"target_loop_id", record.Target.LoopID,
+			"target_loop_name", record.Target.Name,
 			"error", err,
 		)
+		ack()
 		return
 	}
+	ack()
 
-	logger.Info("mqtt wake delivered to target loop",
-		"subscription_id", ws.ID,
-		"topic", topic,
-		"target_loop_id", ws.WakeTarget.LoopID,
-		"target_loop_name", ws.WakeTarget.Name,
-		"payload_size", len(payload),
+	d.logger.Info("mqtt wake delivered to target loop",
+		"partition", partition,
+		"dedup_key", item.DedupKey,
+		"target_loop_id", record.Target.LoopID,
+		"target_loop_name", record.Target.Name,
 	)
+}
+
+// Sweep drains every mqtt-wake partition that still holds pending
+// records — the boot-time recovery for enqueues whose debounce was
+// pending when the process died. Call after the loop registry has
+// hydrated so targets resolve. Partitions touched here are also
+// registered so subsequent traffic debounces normally.
+func (d *mqttWakeDispatcher) Sweep(ctx context.Context) {
+	partitions, err := d.queue.Consumers(ctx, mqttWakePartitionPrefix)
+	if err != nil {
+		d.logger.Warn("mqtt wake boot sweep failed to enumerate partitions", "error", err)
+		return
+	}
+	for _, partition := range partitions {
+		d.ensureRegistered(partition)
+		d.drain(partition)
+	}
+	if len(partitions) > 0 {
+		d.logger.Info("mqtt wake boot sweep drained pending partitions", "partitions", len(partitions))
+	}
+}
+
+// mqttWakePartition derives the queue partition for a wake target.
+// Keyed by destination so per-target coalescing works and two targets
+// never share a burst window.
+func mqttWakePartition(target messages.LoopWakeTarget) string {
+	if target.LoopID != "" {
+		return mqttWakePartitionPrefix + "id:" + target.LoopID
+	}
+	return mqttWakePartitionPrefix + "name:" + target.Name
+}
+
+// targetPriorityRank maps a wake target's delivery priority onto the
+// queue's integer priority so urgent wakes drain ahead of normal ones
+// within a partition.
+func targetPriorityRank(target messages.LoopWakeTarget) int {
+	switch target.Priority {
+	case messages.PriorityUrgent:
+		return 2
+	case messages.PriorityLow:
+		return 0
+	default:
+		return 1
+	}
 }
 
 // sanitizePayload converts raw MQTT bytes to a valid UTF-8 string,

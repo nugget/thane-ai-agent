@@ -27,12 +27,19 @@ const DefaultHandlerLoopName = "mqtt-default-handler"
 
 // WakeSubscription pairs an MQTT topic filter with a target loop
 // that receives matching messages as event-source notifications.
-// Matching messages produce a [messages.LoopEventPayload] delivered
-// to the target loop's pending notifications via
-// [messages.NewEventSourceEnvelope]; the target loop's next iteration
-// sees the MQTT payload as an event-source wake and runs under its
-// own Spec.Profile / SupervisorProfile / container cascade. No new
-// loop is spawned; the registry stays clean.
+// Since #1033 delivery rides the shared loopqueue chassis: a matching
+// message is enqueued durably into the target's partition (deduped
+// per subscription+topic, latest payload wins), a debounced
+// WakeOnEnqueue drain replays it as a [messages.LoopEventPayload] via
+// [messages.NewEventSourceEnvelope], and the target loop's next
+// iteration sees the MQTT payload as an event-source wake under its
+// own Spec.Profile / SupervisorProfile / container cascade — so a
+// burst on one topic coalesces into one wake instead of one per
+// message. A payload carrying a `target_loop` field re-addresses the
+// wake to that named loop when it resolves (automation-authored
+// self-targeting); this registry remains the fixed topic wiring and
+// the source of the broker SUBSCRIBE set. No new loop is spawned; the
+// registry stays clean.
 //
 // Operators that don't declare a custom wake_loop are migrated onto
 // the built-in [DefaultHandlerLoopName] event-driven loop at config

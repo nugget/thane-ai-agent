@@ -311,9 +311,12 @@ A few choices that matter:
 - **`mode: single`** means a second trigger while the automation
   is still running won't double-fire. With `mqtt.publish` this
   matters less, but it's the safe default for any HA-side action.
-- **Payload as JSON** carries useful context to the loop side
-  even though `mqtt_wake_add` doesn't currently parse the body
-  for routing. The future-proofing is cheap, and the timestamp
+- **Payload as JSON** carries useful context to the loop side —
+  and one field IS parsed for routing: `target_loop` (a loop
+  definition name) re-addresses the wake to that loop, so one
+  shared wake topic can serve many automation-authored targets
+  without per-topic registrations. An unresolvable `target_loop`
+  falls back to the subscription's `wake_loop`. The timestamp
   helps the loop notice when it's reacting to a stale message
   (network flap, broker replay).
 - **Topic convention `thane/{device_name}/wake/{purpose}`** is

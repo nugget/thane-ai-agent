@@ -128,6 +128,11 @@ var nonToolTokens = map[string]struct{}{
 	// Appears in talent prose describing routing, not as a tool call.
 	"wake_loop": {},
 
+	// MQTT wake payload field (#1033 self-addressing): an automation
+	// publishes {"target_loop": "<definition name>"} to re-address a
+	// wake. A message field, not a tool.
+	"target_loop": {},
+
 	// Talent frontmatter keys. The authoring README documents these
 	// alongside their tool-like siblings (`tags`, `kind`, `teaser`).
 	// `next_tags` matches the regex but slips past the matcher
