@@ -417,3 +417,67 @@ func TestNormalizeSubscriptionsOnLoadRejectsGatedIngest(t *testing.T) {
 		t.Errorf("gated render subscription rejected at hydration: %v", err)
 	}
 }
+
+// TestNormalizeSubscriptionsOnLoadTransitionCombos covers the #1210
+// hydration invariants: negative counts are corrupt, and a transition
+// log with an ingest-only mode declares a render nobody would see.
+func TestNormalizeSubscriptionsOnLoadTransitionCombos(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: -1},
+	}, now); err == nil {
+		t.Error("negative transitions survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", TransitionsWindowSeconds: -1},
+	}, now); err == nil {
+		t.Error("negative transitions window survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, Mode: SubscriptionModeIngest},
+	}, now); err == nil {
+		t.Error("transition log with mode ingest survived hydration")
+	}
+	// mode both renders, so the log is visible — legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, Mode: SubscriptionModeBoth},
+	}, now); err != nil {
+		t.Errorf("transition log with mode both rejected: %v", err)
+	}
+	// A gated transition log is legal: capture is unconditional,
+	// rendering follows the gate.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, RequiresTag: "ranch_water"},
+	}, now); err != nil {
+		t.Errorf("gated transition log rejected: %v", err)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture makes
+// the registry-target capture rule uniform at JSON hydration: a
+// loop_definition_set spec cannot smuggle in combinations the tool
+// doors reject (Copilot #1215).
+func TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office", Transitions: 5},
+	}, now); err == nil {
+		t.Error("transition log on registry target survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "label:critical", Mode: SubscriptionModeBoth},
+	}, now); err == nil {
+		t.Error("ingest-feeding mode on registry target survived hydration")
+	}
+	// Plain render on a registry target stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office"},
+	}, now); err != nil {
+		t.Errorf("render registry target rejected at hydration: %v", err)
+	}
+}

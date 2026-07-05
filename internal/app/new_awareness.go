@@ -114,8 +114,14 @@ func (a *App) initAwareness(s *newState) error {
 		}
 	}
 
+	// Declared here so the state-window section below can wire itself
+	// in as the transition-log retention source once it exists.
+	var (
+		watchlistProvider *awareness.WatchlistProvider
+		loopSubProvider   *awareness.LoopSubscriptionProvider
+	)
 	if a.ha != nil {
-		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
+		watchlistProvider = awareness.NewWatchlistProvider(watchlistStore, a.ha, logger)
 		watchlistProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(watchlistProvider)
 
@@ -124,7 +130,7 @@ func (a *App) initAwareness(s *newState) error {
 		// for the current loop. Per-tag watchlist providers are gone —
 		// the structural parent/child binding from container loops
 		// replaces the scope_tag indirection.
-		loopSubProvider := awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, a.ha, logger)
+		loopSubProvider = awareness.NewLoopSubscriptionProvider(a.loopRegistry, watchlistStore, a.ha, logger)
 		loopSubProvider.SetRegistryClient(a.ha)
 		a.loop.RegisterAlwaysContextProvider(loopSubProvider)
 
@@ -190,6 +196,17 @@ func (a *App) initAwareness(s *newState) error {
 		logger,
 	)
 	a.loop.RegisterAlwaysContextProvider(stateWindowProvider)
+
+	// The window's per-entity retention rings back the subscription
+	// transition logs (#1210): declared logs render from here, and
+	// their targets reach the rings through derived capture in the
+	// ingestion filter below.
+	if watchlistProvider != nil {
+		watchlistProvider.SetTransitionSource(stateWindowProvider)
+	}
+	if loopSubProvider != nil {
+		loopSubProvider.SetTransitionSource(stateWindowProvider)
+	}
 
 	// --- Person tracker ---
 	// Tracks configured household members' presence state and injects

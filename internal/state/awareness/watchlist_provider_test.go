@@ -718,3 +718,74 @@ func TestWatchlistProviderHonorsRequiresTag(t *testing.T) {
 		t.Errorf("gated row missing with its tag active: %q", out)
 	}
 }
+
+// fakeTransitionSource is a canned per-entity transition fixture.
+type fakeTransitionSource struct {
+	transitions map[string][]homeassistant.Transition
+	matched     map[string]int
+}
+
+func (f *fakeTransitionSource) RecentTransitions(entityID string, limit int, _ time.Duration) ([]homeassistant.Transition, int) {
+	all := f.transitions[entityID]
+	matched := f.matched[entityID]
+	if matched == 0 {
+		matched = len(all)
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, matched
+}
+
+// TestWatchlistProviderRendersTransitionLog covers the #1210 render
+// merge: a declared log lands on the entity's block as class-aware
+// {from,to,ago} entries, truncation is advertised when more matched
+// than rendered, and a missing retention source is marked
+// unavailable rather than reading as an empty log.
+func TestWatchlistProviderRendersTransitionLog(t *testing.T) {
+	now := time.Now()
+	ha := &fakeHA{states: map[string]*homeassistant.State{
+		"binary_sensor.garage_bay_3": {EntityID: "binary_sensor.garage_bay_3", State: "off"},
+	}}
+	p, store := setupTestProvider(t, ha)
+
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID:    "binary_sensor.garage_bay_3",
+		Transitions: 2,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// No source wired: requested log must be marked unavailable.
+	out, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext (no source): %v", err)
+	}
+	if !strings.Contains(out, `"transitions_unavailable":true`) {
+		t.Errorf("missing unavailable marker without a source: %q", out)
+	}
+
+	p.SetTransitionSource(&fakeTransitionSource{
+		transitions: map[string][]homeassistant.Transition{
+			"binary_sensor.garage_bay_3": {
+				{From: "closed", To: "open", At: now.Add(-2 * time.Minute)},
+				{From: "open", To: "closed", At: now.Add(-10 * time.Minute)},
+			},
+		},
+		matched: map[string]int{"binary_sensor.garage_bay_3": 5},
+	})
+
+	out, err = p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(out, `"from":"closed"`) || !strings.Contains(out, `"to":"open"`) {
+		t.Errorf("missing class-aware transition entries: %q", out)
+	}
+	if !strings.Contains(out, `"ago":`) {
+		t.Errorf("missing delta timestamps: %q", out)
+	}
+	if !strings.Contains(out, `"transitions_truncated":true`) {
+		t.Errorf("missing truncation marker (matched 5, rendered 2): %q", out)
+	}
+}

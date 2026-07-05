@@ -35,6 +35,7 @@ func expandRegistryTargetSubscription(
 	statesErr error,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 	maxExpansion int,
 	exclude map[string]struct{},
 ) string {
@@ -80,7 +81,13 @@ func expandRegistryTargetSubscription(
 	truncationMarker := func(matched, shown int) string {
 		return formatTargetTruncation(label, matched, shown)
 	}
-	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, maxExpansion, truncationMarker)
+	// Registry-target members are resolved from the registry, not the
+	// ingestion filter, so their transitions are never captured — a
+	// declared log would render permanently empty. Strip it rather
+	// than emit misleading empty arrays; the tool boundaries reject
+	// the combination where they can see the target kind.
+	sub.Transitions, sub.TransitionsWindowSeconds = 0, 0
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, transitions, maxExpansion, truncationMarker)
 }
 
 // renderExpandedMatches is the shared tail of glob and registry-target
@@ -99,6 +106,7 @@ func renderExpandedMatches(
 	stateByID map[string]*homeassistant.State,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 	maxExpansion int,
 	truncationMarker func(matched, shown int) string,
 ) string {
@@ -113,7 +121,7 @@ func renderExpandedMatches(
 	for _, id := range matchedIDs {
 		matchSub := sub
 		matchSub.EntityID = id
-		sb.WriteString(renderWatchedState(ctx, ha, logger, matchSub, stateByID[id], now, registries))
+		sb.WriteString(renderWatchedState(ctx, ha, logger, matchSub, stateByID[id], now, registries, transitions))
 		sb.WriteByte('\n')
 	}
 	if truncated {

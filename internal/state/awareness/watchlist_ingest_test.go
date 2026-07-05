@@ -3,6 +3,8 @@ package awareness
 import (
 	"context"
 	"database/sql"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -252,5 +254,50 @@ func TestWatchlistProviderSkipsIngestOnlyRows(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("ingest-only watchlist rendered context: %q", got)
+	}
+}
+
+// TestIngestGlobsDerivesFromTransitionLogs covers the #1210 capture
+// insight: a subscription that renders a transition log needs the
+// stream, so its target joins the filter with no user-facing mode —
+// including gated logs (capture unconditional, render gated) — while
+// gated mode-based capture stays excluded (#1213 backstop).
+func TestIngestGlobsDerivesFromTransitionLogs(t *testing.T) {
+	store := newIngestStore(t)
+
+	if err := store.Upsert("", looppkg.EntitySubscription{
+		EntityID:    "binary_sensor.garage_bay_3",
+		Transitions: 5,
+	}); err != nil {
+		t.Fatalf("upsert transitions row: %v", err)
+	}
+	if err := store.Upsert("alice-loop", looppkg.EntitySubscription{
+		EntityID:                 "sensor.stock_tank_level",
+		TransitionsWindowSeconds: 900,
+		RequiresTag:              "ranch_water",
+	}); err != nil {
+		t.Fatalf("upsert gated windowed row: %v", err)
+	}
+	// Gated MODE-based capture is the #1213 backstop exclusion.
+	if err := store.Upsert("bob-loop", looppkg.EntitySubscription{
+		EntityID:    "sensor.gated_mode",
+		Mode:        looppkg.SubscriptionModeBoth,
+		RequiresTag: "ranch_water",
+	}); err != nil {
+		t.Fatalf("upsert gated mode row: %v", err)
+	}
+	// Plain render row: no capture.
+	if err := store.Upsert("", looppkg.EntitySubscription{EntityID: "sensor.render_only"}); err != nil {
+		t.Fatalf("upsert render row: %v", err)
+	}
+
+	globs, err := store.IngestGlobs(time.Now())
+	if err != nil {
+		t.Fatalf("IngestGlobs: %v", err)
+	}
+	sort.Strings(globs)
+	want := []string{"binary_sensor.garage_bay_3", "sensor.stock_tank_level"}
+	if !slices.Equal(globs, want) {
+		t.Fatalf("IngestGlobs = %v, want %v", globs, want)
 	}
 }

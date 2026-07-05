@@ -715,3 +715,83 @@ func TestIngestGlobsSkipsGatedRows(t *testing.T) {
 		t.Fatalf("IngestGlobs = %v, want gated row skipped", globs)
 	}
 }
+
+// TestAddEntitySubscription_TransitionOptions covers the #1210 tool
+// boundary: round-trip + list surfacing, the per-subscription cap,
+// the ingest-mode combo, the registry-target rejection, and the
+// derived-capture rebuild signal.
+func TestAddEntitySubscription_TransitionOptions(t *testing.T) {
+	db, err := sql.Open("sqlite-thane", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store, err := NewWatchlistStore(db, nil)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	rebuilds := 0
+	p := NewWatchlistTools(WatchlistToolsConfig{
+		Store:          store,
+		OnIngestChange: func() { rebuilds++ },
+	})
+
+	result, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":                  "binary_sensor.garage_bay_3",
+		"transitions":                5,
+		"transitions_window_seconds": 900,
+	})
+	if err != nil {
+		t.Fatalf("add with transitions: %v", err)
+	}
+	if !strings.Contains(result, "transition log") || !strings.Contains(result, "capture follows automatically") {
+		t.Fatalf("result = %q, want transition-log acknowledgement", result)
+	}
+	if rebuilds != 1 {
+		t.Fatalf("rebuilds = %d, want 1 — derived capture changes the filter", rebuilds)
+	}
+	globs, err := store.IngestGlobs(time.Now())
+	if err != nil {
+		t.Fatalf("IngestGlobs: %v", err)
+	}
+	if !slices.Equal(globs, []string{"binary_sensor.garage_bay_3"}) {
+		t.Fatalf("IngestGlobs = %v, want derived entry", globs)
+	}
+
+	raw, err := p.handleListEntitySubscriptions(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var payload struct {
+		Items []struct {
+			Transitions              int `json:"transitions"`
+			TransitionsWindowSeconds int `json:"transitions_window_seconds"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].Transitions != 5 || payload.Items[0].TransitionsWindowSeconds != 900 {
+		t.Fatalf("list items = %+v, want transition options surfaced", payload.Items)
+	}
+
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":   "sensor.x",
+		"transitions": maxTransitionsPerSubscription + 1,
+	}); err == nil || !strings.Contains(err.Error(), "capped") {
+		t.Fatalf("over-cap error = %v, want cap teaching", err)
+	}
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":   "sensor.x",
+		"transitions": 3,
+		"mode":        "ingest",
+	}); err == nil || !strings.Contains(err.Error(), "never renders") {
+		t.Fatalf("ingest combo error = %v, want render teaching", err)
+	}
+	if _, err := p.handleAddEntitySubscription(context.Background(), map[string]any{
+		"entity_id":   "area:office",
+		"transitions": 3,
+	}); err == nil || !strings.Contains(err.Error(), "ingestion filter") {
+		t.Fatalf("registry-target error = %v, want filter teaching", err)
+	}
+}

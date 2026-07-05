@@ -340,14 +340,16 @@ func (s *WatchlistStore) subscriptionCount() (int, error) {
 // parseSubscriptionOptions converts it back against the row's
 // added_at so old TTLs keep counting down unchanged.
 type subscriptionOptionsWire struct {
-	History     []int                                 `json:"history,omitempty"`
-	Forecast    string                                `json:"forecast,omitempty"`
-	Mode        string                                `json:"mode,omitempty"`
-	Include     *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
-	TTLSeconds  int                                   `json:"ttl_seconds,omitempty"`
-	SelfOnly    bool                                  `json:"self_only,omitempty"`
-	RequiresTag string                                `json:"requires_tag,omitempty"`
-	ExpiresAt   string                                `json:"expires_at,omitempty"`
+	History                  []int                                 `json:"history,omitempty"`
+	Forecast                 string                                `json:"forecast,omitempty"`
+	Mode                     string                                `json:"mode,omitempty"`
+	Include                  *homeassistant.EntityMetadataIncludes `json:"include,omitempty"`
+	TTLSeconds               int                                   `json:"ttl_seconds,omitempty"`
+	SelfOnly                 bool                                  `json:"self_only,omitempty"`
+	RequiresTag              string                                `json:"requires_tag,omitempty"`
+	Transitions              int                                   `json:"transitions,omitempty"`
+	TransitionsWindowSeconds int                                   `json:"transitions_window_seconds,omitempty"`
+	ExpiresAt                string                                `json:"expires_at,omitempty"`
 }
 
 func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) {
@@ -362,14 +364,19 @@ func marshalSubscriptionOptions(sub looppkg.EntitySubscription) ([]byte, error) 
 	if sub.TTLSeconds < 0 {
 		return nil, fmt.Errorf("ttl_seconds must be >= 0, got %d", sub.TTLSeconds)
 	}
+	if sub.Transitions < 0 || sub.TransitionsWindowSeconds < 0 {
+		return nil, fmt.Errorf("transitions and transitions_window_seconds must be >= 0, got %d/%d", sub.Transitions, sub.TransitionsWindowSeconds)
+	}
 	wire := subscriptionOptionsWire{
-		History:     append([]int(nil), sub.History...),
-		Forecast:    forecast,
-		Mode:        mode,
-		Include:     sub.Include.Clone(),
-		TTLSeconds:  sub.TTLSeconds,
-		SelfOnly:    sub.SelfOnly,
-		RequiresTag: strings.TrimSpace(sub.RequiresTag),
+		History:                  append([]int(nil), sub.History...),
+		Forecast:                 forecast,
+		Mode:                     mode,
+		Include:                  sub.Include.Clone(),
+		TTLSeconds:               sub.TTLSeconds,
+		SelfOnly:                 sub.SelfOnly,
+		RequiresTag:              strings.TrimSpace(sub.RequiresTag),
+		Transitions:              sub.Transitions,
+		TransitionsWindowSeconds: sub.TransitionsWindowSeconds,
 	}
 	if wire.Include != nil && !wire.Include.Any() {
 		wire.Include = nil
@@ -395,6 +402,12 @@ func parseSubscriptionOptions(optsJSON string, addedAt time.Time) looppkg.Entity
 	sub.Include = wire.Include.Clone()
 	sub.SelfOnly = wire.SelfOnly
 	sub.RequiresTag = strings.TrimSpace(wire.RequiresTag)
+	if wire.Transitions > 0 {
+		sub.Transitions = wire.Transitions
+	}
+	if wire.TransitionsWindowSeconds > 0 {
+		sub.TransitionsWindowSeconds = wire.TransitionsWindowSeconds
+	}
 	if forecast, err := looppkg.NormalizeSubscriptionForecast(wire.Forecast); err == nil {
 		sub.Forecast = forecast
 	}

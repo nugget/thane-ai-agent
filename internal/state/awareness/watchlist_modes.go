@@ -38,17 +38,23 @@ func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
 		}
 		sub := parseSubscriptionOptions(optsJSON, addedAt.UTC())
 		sub.EntityID = entityID
-		if sub.IsExpired(now) || !sub.FeedsIngest() {
+		if sub.IsExpired(now) {
+			continue
+		}
+		// Capture is fed two ways: an explicit ingest-feeding mode, or
+		// derivation — a declared transition log needs the stream, so
+		// its target joins the filter automatically (#1210). For the
+		// mode path, tag-gated rows never feed capture (the gate is
+		// render-only, #1213; tool boundaries reject the combination
+		// and this skip is the backstop). Derived capture is the
+		// deliberate exception: a gated transition log captures
+		// unconditionally so the log is warm when the tag activates —
+		// only its rendering follows the gate.
+		modeFeeds := sub.FeedsIngest() && sub.RequiresTag == ""
+		if !modeFeeds && !sub.WantsTransitions() {
 			continue
 		}
 		if ParseSubscriptionTarget(entityID).IsRegistryTarget() {
-			continue
-		}
-		// Tag-gated rows never feed capture: the gate is render-only
-		// by design (#1213), and the tool boundaries reject the
-		// combination — this skip is the defensive backstop for rows
-		// that arrive by other routes (hand-authored specs).
-		if sub.RequiresTag != "" {
 			continue
 		}
 		if _, dup := seen[entityID]; dup {
@@ -61,12 +67,14 @@ func (s *WatchlistStore) IngestGlobs(now time.Time) ([]string, error) {
 }
 
 // CheckIngestCapacity enforces the ingestion-registry cap (#1192) for
-// a subscription about to be written with an ingest-feeding mode. The
-// cap gates only genuinely new filter entries: re-adding an id already
-// in the filter updates it in place and always passes. Call before
-// persisting; the returned error teaches the recovery move.
+// a subscription about to be written that will feed the filter —
+// through an ingest-feeding mode or through transition-log derivation
+// (#1210). The cap gates only genuinely new filter entries: re-adding
+// an id already in the filter updates it in place and always passes.
+// Call before persisting; the returned error teaches the recovery
+// move.
 func CheckIngestCapacity(store *WatchlistStore, sub looppkg.EntitySubscription) error {
-	if store == nil || !sub.FeedsIngest() {
+	if store == nil || (!sub.FeedsIngest() && !sub.WantsTransitions()) {
 		return nil
 	}
 	globs, err := store.IngestGlobs(time.Now())

@@ -25,8 +25,16 @@ type LoopSubscriptionProvider struct {
 	store            *WatchlistStore
 	ha               StateGetter
 	registries       HARegistryClient
+	transitions      TransitionSource // optional; nil marks requested logs unavailable
 	logger           *slog.Logger
 	maxGlobExpansion int
+}
+
+// SetTransitionSource wires the per-entity retention that backs
+// declared transition logs (#1210). Pass nil to render requested logs
+// as unavailable rather than empty.
+func (p *LoopSubscriptionProvider) SetTransitionSource(source TransitionSource) {
+	p.transitions = source
 }
 
 // NewLoopSubscriptionProvider creates a provider bound to the live
@@ -158,10 +166,10 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.
 			// Pass alreadyVisible so a loop glob (e.g. sensor.*) doesn't
 			// re-render entities the always-visible watchlist already
 			// injects — same dedup the concrete path applies below.
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
 		case target.IsRegistryTarget():
 			states, statesErr := snap.get(ctx)
-			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
 		default:
 			if _, dup := alreadyVisible[sub.EntityID]; dup {
 				continue
@@ -192,5 +200,5 @@ func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, s
 		)
 		return formatFetchError(sub.EntityID)
 	}
-	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries)
+	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries, p.transitions)
 }
