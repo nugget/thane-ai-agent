@@ -1,7 +1,12 @@
 package loopqueue
 
 import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 
@@ -166,5 +171,158 @@ func TestStore_PartitionIsolation(t *testing.T) {
 	items, _ := s.Peek(t.Context(), "archivist", 10)
 	if len(items) != 1 || items[0].DedupKey != "session:1" {
 		t.Errorf("archivist peek leaked another partition: %+v", items)
+	}
+}
+
+// TestWakeOnEnqueueDebounce covers the #1033 seam: a burst of
+// enqueues coalesces into one debounced wake, a lone enqueue fires
+// after the trailing window, and consumers without a registration
+// (the archivist posture) never fire.
+func TestWakeOnEnqueueDebounce(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	fired := make(chan struct{}, 8)
+	store.SetWakeOnEnqueue("mqtt-dispatch", 40*time.Millisecond, 500*time.Millisecond, func() {
+		fired <- struct{}{}
+	})
+
+	// A burst inside the debounce window → exactly one wake.
+	for i := 0; i < 5; i++ {
+		if err := store.Enqueue(ctx, "mqtt-dispatch", fmt.Sprintf("mqtt:topic/%d", i), 0, []byte(`{}`)); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("debounced wake never fired after burst")
+	}
+	select {
+	case <-fired:
+		t.Fatal("burst fired more than one wake")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// A fresh enqueue after the burst starts a new window and fires again.
+	if err := store.Enqueue(ctx, "mqtt-dispatch", "mqtt:topic/later", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("second burst never fired")
+	}
+
+	// An unregistered consumer stays silent.
+	if err := store.Enqueue(ctx, "archivist", "session:x", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("enqueue archivist: %v", err)
+	}
+	select {
+	case <-fired:
+		t.Fatal("unregistered consumer fired the wrong consumer's wake")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// TestWakeOnEnqueueMaxWait pins the anti-starvation bound: continuous
+// chatter that keeps resetting the trailing window still fires no
+// later than maxWait after the burst began.
+func TestWakeOnEnqueueMaxWait(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	fired := make(chan time.Time, 4)
+	store.SetWakeOnEnqueue("mqtt-dispatch", 60*time.Millisecond, 200*time.Millisecond, func() {
+		fired <- time.Now()
+	})
+
+	start := time.Now()
+	deadline := start.Add(600 * time.Millisecond)
+	var firedAt time.Time
+chatter:
+	for time.Now().Before(deadline) {
+		if err := store.Enqueue(ctx, "mqtt-dispatch", "mqtt:chatty", 0, []byte(`{}`)); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		select {
+		case firedAt = <-fired:
+			break chatter
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if firedAt.IsZero() {
+		t.Fatal("chatter starved the wake past maxWait")
+	}
+	if elapsed := firedAt.Sub(start); elapsed > 450*time.Millisecond {
+		t.Errorf("wake fired %v after burst start, want ≲ maxWait+debounce slack", elapsed)
+	}
+}
+
+// TestSetWakeOnEnqueueNilRemoves verifies deregistration: a nil fire
+// removes the hook and stops any pending timer.
+func TestSetWakeOnEnqueueNilRemoves(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	fired := make(chan struct{}, 1)
+	store.SetWakeOnEnqueue("mqtt-dispatch", 50*time.Millisecond, time.Second, func() {
+		fired <- struct{}{}
+	})
+	if err := store.Enqueue(ctx, "mqtt-dispatch", "mqtt:x", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	store.SetWakeOnEnqueue("mqtt-dispatch", 0, 0, nil)
+	select {
+	case <-fired:
+		t.Fatal("wake fired after deregistration")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestWakeOnEnqueueArmFireRace hammers the arm path with concurrent
+// enqueues against a tiny debounce so timer expiry constantly races
+// re-arming — the window where Reset-on-AfterFunc could double-fire
+// (Copilot #1216). The generation guard must keep the count sane and
+// the state clean: fires never exceed enqueues, at least one fires,
+// and once traffic stops the count goes quiet (no stale late fires).
+func TestWakeOnEnqueueArmFireRace(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	var fires atomic.Int64
+	store.SetWakeOnEnqueue("racy", time.Millisecond, 5*time.Millisecond, func() {
+		fires.Add(1)
+	})
+
+	const workers, perWorker = 4, 50
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				if err := store.Enqueue(ctx, "racy", fmt.Sprintf("k:%d:%d", w, i), 0, []byte(`{}`)); err != nil {
+					t.Errorf("enqueue: %v", err)
+					return
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// Let the final burst settle, then confirm the count is stable.
+	time.Sleep(50 * time.Millisecond)
+	settled := fires.Load()
+	if settled < 1 {
+		t.Fatal("no wake fired at all")
+	}
+	if settled > workers*perWorker {
+		t.Fatalf("fires = %d exceeds enqueues — duplicate callbacks leaked", settled)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if again := fires.Load(); again != settled {
+		t.Fatalf("stale late fire: count moved %d → %d after quiet", settled, again)
 	}
 }

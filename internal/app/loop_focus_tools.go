@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
+	"github.com/nugget/thane-ai-agent/internal/state/awareness"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -49,7 +50,7 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 	return []looppkg.RuntimeTool{
 		{
 			Name:               "watch_entity",
-			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart. Scope: this is the loop you are currently running; for an always-visible subscription in your own field of view use add_entity_subscription, and for a different named loop use update_entity_subscriptions.",
+			Description:        "Add a Home Assistant entity to this loop's watched set. Its live state is injected into your context every iteration. Use history for compact rolling-window summaries, forecast for weather entities, ttl_seconds for time-bounded watches, mode ingest for transitions-only capture without a per-turn render. The subscription is scoped to this loop only — other loops and conversations are unaffected. Changes persist across restart. Scope: this is the loop you are currently running; for an always-visible subscription in your own field of view — or to subscribe a different named loop — use add_entity_subscription (its owner parameter names the loop).",
 			SkipContentResolve: true,
 			Parameters: map[string]any{
 				"type": "object",
@@ -71,6 +72,35 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 					"ttl_seconds": map[string]any{
 						"type":        "integer",
 						"description": "Optional auto-expiration in seconds. Use for bounded research tasks where the watch should fall off automatically.",
+					},
+					"mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"render", "ingest", "both"},
+						"description": "What the subscription feeds. render (default): live state in context each iteration. ingest: feed the recent-state-changes window only — transitions appear there without per-turn state injection. both: both. ingest/both accept entity ids and globs, not area/label/floor targets.",
+					},
+					"self_only": map[string]any{
+						"type":        "boolean",
+						"description": "Meaningful when this loop is a container: true keeps the subscription out of descendant loops' inherited sets.",
+					},
+					"requires_tag": map[string]any{
+						"type":        "string",
+						"description": "Optional capability tag gating visibility: the entity renders only while this tag is active. Render-only; incompatible with mode ingest/both (a transition log MAY be gated — capture continues, rendering follows the tag).",
+					},
+					"transitions": map[string]any{
+						"type":        "integer",
+						"description": "Include the entity's last n observed state changes in its rendered block ({from, to, ago}, class-aware). Declaring a log automatically feeds this entity into state-change capture. Capped per subscription; entity ids and globs only.",
+					},
+					"transitions_window_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Bound the transition log to changes within this trailing window (seconds); combine with transitions or set alone (still capped).",
+					},
+					"wake": map[string]any{
+						"type":        "boolean",
+						"description": "Wake this loop when the entity changes — debounced and coalesced (a chattering sensor becomes one wake with the latest change). Capture follows automatically. Entity ids and globs only; incompatible with requires_tag.",
+					},
+					"wake_debounce_seconds": map[string]any{
+						"type":        "integer",
+						"description": "How long changes coalesce before waking (default a few seconds); the loop's cadence follows its twitchiest wake subscription.",
 					},
 					"include": tools.EntityMetadataIncludeParameter(),
 				},
@@ -103,16 +133,74 @@ func buildLoopFocusToolsWithMutator(loopName string, mutator subscriptionMutator
 				if err != nil {
 					return "", err
 				}
-				now := time.Now().UTC()
+				mode, err := looppkg.NormalizeSubscriptionMode(stringMapValue(args, "mode"))
+				if err != nil {
+					return "", err
+				}
+				if mode != "" && awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+					return "", fmt.Errorf("mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; watch the target with mode render, or list its member entities", stringMapValue(args, "mode"))
+				}
+				selfOnly, _ := args["self_only"].(bool)
+				transitions, err := intFromMap(args, "transitions")
+				if err != nil {
+					return "", fmt.Errorf("transitions: %w", err)
+				}
+				transitionsWindow, err := intFromMap(args, "transitions_window_seconds")
+				if err != nil {
+					return "", fmt.Errorf("transitions_window_seconds: %w", err)
+				}
+				if transitions < 0 || transitionsWindow < 0 {
+					return "", fmt.Errorf("transitions and transitions_window_seconds must be >= 0")
+				}
+				if transitions > looppkg.MaxSubscriptionTransitions {
+					return "", fmt.Errorf("transitions is capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", looppkg.MaxSubscriptionTransitions)
+				}
+				wake, _ := args["wake"].(bool)
+				wakeDebounce, err := intFromMap(args, "wake_debounce_seconds")
+				if err != nil {
+					return "", fmt.Errorf("wake_debounce_seconds: %w", err)
+				}
+				if wakeDebounce < 0 {
+					return "", fmt.Errorf("wake_debounce_seconds must be >= 0")
+				}
+				sub := looppkg.EntitySubscription{
+					EntityID:                 entityID,
+					History:                  history,
+					Forecast:                 forecast,
+					Include:                  tools.EntityMetadataIncludesPointer(include),
+					TTLSeconds:               ttlSeconds,
+					AddedAt:                  time.Now().UTC(),
+					Mode:                     mode,
+					SelfOnly:                 selfOnly,
+					RequiresTag:              strings.TrimSpace(stringMapValue(args, "requires_tag")),
+					Transitions:              transitions,
+					TransitionsWindowSeconds: transitionsWindow,
+					Wake:                     wake,
+					WakeDebounceSeconds:      wakeDebounce,
+				}
+				if sub.Wake {
+					if sub.RequiresTag != "" {
+						return "", fmt.Errorf("wake cannot combine with requires_tag — waking must not follow tag state; drop one of the two")
+					}
+					if awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+						return "", fmt.Errorf("wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — watch a concrete entity or glob to wake on")
+					}
+				}
+				// The gate is render-only: capture must never depend
+				// on tag state (#1213).
+				if sub.RequiresTag != "" && sub.FeedsIngest() {
+					return "", fmt.Errorf("requires_tag gates rendering only and cannot combine with mode %q — capture does not follow tag state; drop requires_tag, or use mode render for a tag-gated watch", stringMapValue(args, "mode"))
+				}
+				if sub.WantsTransitions() {
+					if sub.Mode == looppkg.SubscriptionModeIngest {
+						return "", fmt.Errorf("a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both")
+					}
+					if awareness.ParseSubscriptionTarget(entityID).IsRegistryTarget() {
+						return "", fmt.Errorf("a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — watch a concrete entity or glob for transitions")
+					}
+				}
 				_, err = mutator(ctx, loopName, func(current []looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error) {
-					return upsertSubscription(current, looppkg.EntitySubscription{
-						EntityID:   entityID,
-						History:    history,
-						Forecast:   forecast,
-						Include:    tools.EntityMetadataIncludesPointer(include),
-						TTLSeconds: ttlSeconds,
-						AddedAt:    now,
-					}), nil
+					return upsertSubscription(current, sub), nil
 				})
 				if err != nil {
 					return "", err

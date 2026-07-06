@@ -130,6 +130,10 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatVacuum(state, now)
 	case "update":
 		return formatUpdate(state, now)
+	case "alarm_control_panel":
+		return formatAlarmControlPanel(state, now)
+	case "event":
+		return formatEvent(state, now)
 	default:
 		return formatDefault(state, now)
 	}
@@ -285,6 +289,25 @@ func attrString(attrs map[string]any, key string) string {
 	return ""
 }
 
+// attrStringSlice extracts a []string attribute (JSON decodes arrays as
+// []any). ok reports whether the attribute exists as an array at all, so
+// callers can distinguish present-but-empty (a real, informative value —
+// e.g. an away person's in_zones: []) from an absent attribute. The
+// returned slice is never nil when ok; non-string elements are skipped.
+func attrStringSlice(attrs map[string]any, key string) (values []string, ok bool) {
+	raw, isArray := attrs[key].([]any)
+	if !isArray {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, true
+}
+
 // attrBool extracts a boolean attribute, returning false if missing or
 // not a bool.
 func attrBool(attrs map[string]any, key string) bool {
@@ -302,6 +325,14 @@ type personContext struct {
 	State  string `json:"state"`
 	Since  string `json:"since"`
 	Source string `json:"source,omitempty"`
+	// InZones is HA 2026.7's multi-zone membership. A person can be in
+	// several zones at once (nested zones); State reports only the
+	// smallest, so "is she home" reads from in_zones, not State — a
+	// person whose State is a nested zone's name is still home when
+	// zone.home is in this list. Pointer so present-but-empty (away: HA
+	// reports in_zones: []) renders an explicit [] rather than being
+	// omitted — absence means the source doesn't speak in_zones at all.
+	InZones *[]string `json:"in_zones,omitempty"`
 }
 
 func formatPerson(state *homeassistant.State, now time.Time) string {
@@ -310,6 +341,9 @@ func formatPerson(state *homeassistant.State, now time.Time) string {
 		State:  state.State,
 		Since:  promptfmt.FormatDeltaOnly(state.LastChanged, now),
 		Source: attrString(state.Attributes, "source"),
+	}
+	if zones, ok := attrStringSlice(state.Attributes, "in_zones"); ok {
+		pc.InZones = &zones
 	}
 	return promptfmt.MarshalCompact(pc)
 }

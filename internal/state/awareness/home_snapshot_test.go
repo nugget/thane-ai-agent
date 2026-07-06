@@ -308,3 +308,44 @@ func TestComputeHomeSnapshot_IncludeMetadata(t *testing.T) {
 		t.Errorf("metadata.description = %#v, want Front deadbolt", meta["description"])
 	}
 }
+
+// HA 2026.7 presence semantics: in_zones is authoritative for the
+// home/away rollup. State reports only the *smallest* zone a person is
+// in, so someone in a nested zone inside the home would miscount as
+// away on a bare state comparison.
+func TestComputeHomeSnapshot_InZonesPresence(t *testing.T) {
+	st := func(id, state string, attrs map[string]any) homeassistant.State {
+		return homeassistant.State{EntityID: id, State: state, Attributes: attrs}
+	}
+	client := &fakeAreaClient{
+		entities: []homeassistant.EntityRegistryEntry{
+			{EntityID: "person.alice"},
+			{EntityID: "person.bob"},
+			{EntityID: "person.carol"},
+			{EntityID: "person.dave"},
+		},
+		states: []homeassistant.State{
+			// Alice is in a nested zone inside home: state = smallest zone
+			// name, but zone.home is in in_zones → home.
+			st("person.alice", "Pool House", map[string]any{"in_zones": []any{"zone.pool_house", "zone.home"}}),
+			// Bob is away with the attribute present-and-empty → away.
+			st("person.bob", "not_home", map[string]any{"in_zones": []any{}}),
+			// Carol is in an unrelated zone → away (zone.home absent).
+			st("person.carol", "Work", map[string]any{"in_zones": []any{"zone.work"}}),
+			// Dave has no in_zones (pre-2026.7 / scanner-derived person):
+			// state fallback keeps him home.
+			st("person.dave", "home", nil),
+		},
+	}
+
+	out, err := ComputeHomeSnapshot(context.Background(), client, HomeSnapshotRequest{}, testNow)
+	if err != nil {
+		t.Fatalf("ComputeHomeSnapshot: %v", err)
+	}
+	payload := decodeHome(t, out)
+	summary, _ := payload["summary"].(map[string]any)
+	if summary["home"] != float64(2) || summary["away"] != float64(2) {
+		t.Errorf("summary home/away = %v/%v, want 2/2 (nested-zone alice + fallback dave home)",
+			summary["home"], summary["away"])
+	}
+}

@@ -65,58 +65,6 @@ func (r *Registry) ConfigureLoopIntentTools(deps LoopIntentToolDeps) {
 	}
 	r.loopIntentDeps = deps
 	r.registerThaneLoopCreate()
-	r.registerUpdateEntitySubscriptions()
-}
-
-// mutateLoopSubscriptions reads the current spec for loopName, calls
-// mutate to compute the next subscriptions, persists the updated
-// spec, and propagates the change to the live loop if one is
-// registered. Used by watch_entity, unwatch_entity, and
-// update_entity_subscriptions so runtime changes to subscriptions
-// survive restart and take effect on the next iteration.
-//
-// Returns the resulting subscription list (after mutation) along
-// with any error. Mutators that need to compute removed/added
-// deltas should diff against the pre-mutation list inside their
-// closure.
-func (r *Registry) mutateLoopSubscriptions(ctx context.Context, loopName string, mutate func([]looppkg.EntitySubscription) ([]looppkg.EntitySubscription, error)) ([]looppkg.EntitySubscription, error) {
-	deps := r.loopIntentDeps
-	if deps.Registry == nil {
-		return nil, fmt.Errorf("loop definition registry not configured")
-	}
-	snap := deps.Registry.Snapshot()
-	existing, ok := looppkg.FindDefinition(snap, loopName)
-	if !ok {
-		return nil, (&looppkg.UnknownDefinitionError{Name: loopName})
-	}
-	if existing.Source == looppkg.DefinitionSourceConfig {
-		return nil, (&looppkg.ImmutableDefinitionError{Name: loopName})
-	}
-
-	next, err := mutate(existing.Spec.Subscriptions)
-	if err != nil {
-		return nil, err
-	}
-	newSpec := existing.Spec
-	newSpec.Subscriptions = next
-
-	updatedAt := time.Now().UTC()
-	if deps.PersistSpec != nil {
-		if err := deps.PersistSpec(newSpec, updatedAt); err != nil {
-			return nil, fmt.Errorf("persist loop definition: %w", err)
-		}
-	}
-	if err := deps.Registry.Upsert(newSpec, updatedAt); err != nil {
-		return nil, err
-	}
-	if deps.LiveRegistry != nil {
-		if live := deps.LiveRegistry.GetByName(loopName); live != nil {
-			live.SetSubscriptions(next)
-		}
-	}
-	// ctx reserved for future async hooks (e.g. notifying a watcher).
-	_ = ctx
-	return next, nil
 }
 
 // curateEntitiesToSubscriptions converts the parsed thane_loop_create
@@ -134,34 +82,47 @@ func curateEntitiesToSubscriptions(entities []curateEntity, addedAt time.Time) [
 	out := make([]looppkg.EntitySubscription, 0, len(entities))
 	for _, e := range entities {
 		out = append(out, looppkg.EntitySubscription{
-			EntityID:   e.EntityID,
-			History:    append([]int(nil), e.History...),
-			Forecast:   e.Forecast,
-			Include:    EntityMetadataIncludesPointer(e.Include),
-			TTLSeconds: e.TTLSeconds,
-			AddedAt:    addedAt,
+			EntityID:                 e.EntityID,
+			History:                  append([]int(nil), e.History...),
+			Forecast:                 e.Forecast,
+			Include:                  EntityMetadataIncludesPointer(e.Include),
+			TTLSeconds:               e.TTLSeconds,
+			AddedAt:                  addedAt,
+			Mode:                     e.Mode,
+			SelfOnly:                 e.SelfOnly,
+			RequiresTag:              e.RequiresTag,
+			Transitions:              e.Transitions,
+			TransitionsWindowSeconds: e.TransitionsWindowSeconds,
+			Wake:                     e.Wake,
+			WakeDebounceSeconds:      e.WakeDebounceSeconds,
 		})
 	}
 	return out
 }
 
 // curateEntity is the parsed shape of one element from the thane_loop_create
-// "entities" parameter. Fields mirror the watchlist subscription options.
+// "entities" parameter. Fields mirror the unified subscription options.
 type curateEntity struct {
-	EntityID   string
-	History    []int
-	Forecast   string
-	Include    homeassistant.EntityMetadataIncludes
-	TTLSeconds int
+	EntityID                 string
+	History                  []int
+	Forecast                 string
+	Include                  homeassistant.EntityMetadataIncludes
+	TTLSeconds               int
+	Mode                     string
+	SelfOnly                 bool
+	RequiresTag              string
+	Transitions              int
+	TransitionsWindowSeconds int
+	Wake                     bool
+	WakeDebounceSeconds      int
 }
 
 // parseEntityList decodes an entity-subscription array into a typed
 // list. fieldName is the caller-facing name of the parameter
-// (e.g. "entities" for thane_loop_create, "add" for
-// update_entity_subscriptions) and is woven into every error message
-// so the model can see which argument failed validation.
-// Empty/missing returns nil. Invalid shapes return an actionable
-// error per the model-facing-tools doctrine.
+// (e.g. "entities" for thane_loop_create) and is woven into every
+// error message so the model can see which argument failed
+// validation. Empty/missing returns nil. Invalid shapes return an
+// actionable error per the model-facing-tools doctrine.
 func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 	if raw == nil {
 		return nil, nil
@@ -226,6 +187,99 @@ func parseEntityList(fieldName string, raw any) ([]curateEntity, error) {
 				return nil, fmt.Errorf("%s[%d].ttl_seconds: must be >= 0", fieldName, i)
 			}
 			ent.TTLSeconds = ttl
+		}
+		if rawMode, present := obj["mode"]; present && rawMode != nil {
+			modeStr, ok := rawMode.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].mode: must be a string, got %T", fieldName, i, rawMode)
+			}
+			mode, err := looppkg.NormalizeSubscriptionMode(modeStr)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].mode: %w", fieldName, i, err)
+			}
+			ent.Mode = mode
+		}
+		if rawSelfOnly, present := obj["self_only"]; present && rawSelfOnly != nil {
+			selfOnly, ok := rawSelfOnly.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].self_only: must be a boolean, got %T", fieldName, i, rawSelfOnly)
+			}
+			ent.SelfOnly = selfOnly
+		}
+		if rawRequiresTag, present := obj["requires_tag"]; present && rawRequiresTag != nil {
+			requiresTag, ok := rawRequiresTag.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].requires_tag: must be a string, got %T", fieldName, i, rawRequiresTag)
+			}
+			ent.RequiresTag = strings.TrimSpace(requiresTag)
+		}
+		// The gate is render-only: capture must never depend on tag
+		// state (#1213).
+		if ent.RequiresTag != "" && (ent.Mode == looppkg.SubscriptionModeIngest || ent.Mode == looppkg.SubscriptionModeBoth) {
+			return nil, fmt.Errorf("%s[%d]: requires_tag gates rendering only and cannot combine with mode %q — drop requires_tag, or use mode render", fieldName, i, ent.Mode)
+		}
+		if rawTransitions, present := obj["transitions"]; present {
+			n, err := coerceInt(rawTransitions)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].transitions: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].transitions: must be >= 0", fieldName, i)
+			}
+			if n > looppkg.MaxSubscriptionTransitions {
+				return nil, fmt.Errorf("%s[%d].transitions: capped at %d per subscription — ask for fewer, or add transitions_window_seconds to bound by recency instead", fieldName, i, looppkg.MaxSubscriptionTransitions)
+			}
+			ent.Transitions = n
+		}
+		if rawWindow, present := obj["transitions_window_seconds"]; present {
+			n, err := coerceInt(rawWindow)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].transitions_window_seconds: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].transitions_window_seconds: must be >= 0", fieldName, i)
+			}
+			ent.TransitionsWindowSeconds = n
+		}
+		// A transition log is a render feature; an ingest-only mode
+		// renders nothing (#1210).
+		if (ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0) && ent.Mode == looppkg.SubscriptionModeIngest {
+			return nil, fmt.Errorf("%s[%d]: a transition log renders into context, but mode ingest never renders — drop the transition options, or use mode render or both", fieldName, i)
+		}
+		if rawWake, present := obj["wake"]; present && rawWake != nil {
+			wake, ok := rawWake.(bool)
+			if !ok {
+				return nil, fmt.Errorf("%s[%d].wake: must be a boolean, got %T", fieldName, i, rawWake)
+			}
+			ent.Wake = wake
+		}
+		if rawWakeDebounce, present := obj["wake_debounce_seconds"]; present {
+			n, err := coerceInt(rawWakeDebounce)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d].wake_debounce_seconds: %w", fieldName, i, err)
+			}
+			if n < 0 {
+				return nil, fmt.Errorf("%s[%d].wake_debounce_seconds: must be >= 0", fieldName, i)
+			}
+			ent.WakeDebounceSeconds = n
+		}
+		if ent.Wake && ent.RequiresTag != "" {
+			return nil, fmt.Errorf("%s[%d]: wake cannot combine with requires_tag — waking must not follow tag state", fieldName, i)
+		}
+		// Registry targets (area:/label:/floor:) cannot feed the
+		// ingestion filter, so capture-dependent options on them would
+		// silently do nothing (Copilot #1215) — same rejection every
+		// other authoring door applies.
+		if homeassistant.IsRegistryTarget(ent.EntityID) {
+			if ent.Wake {
+				return nil, fmt.Errorf("%s[%d]: wake needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — use a concrete entity or glob", fieldName, i)
+			}
+			if ent.Transitions > 0 || ent.TransitionsWindowSeconds > 0 {
+				return nil, fmt.Errorf("%s[%d]: a transition log needs the entity's event stream, and area/label/floor targets cannot feed the ingestion filter — subscribe a concrete entity or glob for transitions", fieldName, i)
+			}
+			if ent.Mode == looppkg.SubscriptionModeIngest || ent.Mode == looppkg.SubscriptionModeBoth {
+				return nil, fmt.Errorf("%s[%d]: mode %q accepts entity ids and globs only — area/label/floor targets cannot feed the ingestion filter; use mode render, or list the group's member entities", fieldName, i, ent.Mode)
+			}
 		}
 		include, err := ParseEntityMetadataIncludesArg(obj["include"], fmt.Sprintf("%s[%d].include", fieldName, i))
 		if err != nil {

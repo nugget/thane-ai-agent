@@ -16,8 +16,12 @@ type SyncState struct {
 	OK bool
 	// Outcome classifies the last completed sync pass.
 	Outcome SyncOutcome
-	Ahead   int
-	Behind  int
+	// Ahead counts local commits the remote does not have, as observed
+	// by the last pass. Zero on a clean mirror.
+	Ahead int
+	// Behind counts remote commits the local checkout has not applied;
+	// what the next fast-forward would take.
+	Behind int
 	// LocalHead and RemoteHead are the resolved local and remote commit SHAs
 	// observed by the sync pass.
 	LocalHead  string

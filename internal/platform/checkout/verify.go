@@ -30,7 +30,11 @@ type VerifySpec struct {
 type Verified struct {
 	Root
 
-	Name     string
+	// Name is the caller-facing checkout identifier used in logs and
+	// verification reporting.
+	Name string
+	// Verifier is the read-side verification engine for this checkout —
+	// signature checks and revision reads without write access.
 	Verifier *provenance.Verifier
 }
 

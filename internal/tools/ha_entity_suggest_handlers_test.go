@@ -57,8 +57,12 @@ func TestHandleCallService_KnownEntityCalls(t *testing.T) {
 	if len(fake.serviceCalls) != 1 {
 		t.Errorf("expected exactly one forwarded service call, got %v", fake.serviceCalls)
 	}
-	if want := "Successfully called"; len(out) < len(want) || out[:len(want)] != want {
-		t.Errorf("expected success message, got %q", out)
+	var res haCallServiceResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("unmarshal call result: %v\n%s", err, out)
+	}
+	if res.Called != "light.turn_on" || res.EntityID != "light.kitchen" {
+		t.Errorf("call result identity = %q/%q, want light.turn_on/light.kitchen", res.Called, res.EntityID)
 	}
 }
 

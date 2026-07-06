@@ -42,7 +42,7 @@ type WriteArgs struct {
 type EditArgs struct {
 	Ref         string              `json:"ref"`
 	Mode        string              `json:"mode"`
-	Content     string              `json:"content,omitempty"`
+	Body        string              `json:"body,omitempty"`
 	Section     string              `json:"section,omitempty"`
 	Heading     string              `json:"heading,omitempty"`
 	Level       int                 `json:"level,omitempty"`
@@ -131,6 +131,16 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 		existingRecord = record
 	}
 
+	// A new document with no body at all is almost never intent — it is
+	// the signature of arguments that missed the schema (a misnamed body
+	// parameter is silently absent here). "Omit to preserve the existing
+	// body" is meaningless on a create, so require the body explicitly;
+	// an empty string remains the documented way to create one blank. A
+	// journal-entry-only write is the one legitimate bodiless create.
+	if !existed && args.Body == nil && strings.TrimSpace(args.JournalEntry) == "" {
+		return nil, fmt.Errorf("creating %s requires body — this write would produce an empty document (pass body, or an explicit empty string to create one blank)", args.Ref)
+	}
+
 	now := time.Now()
 	body := ""
 	if args.Body != nil {
@@ -190,13 +200,13 @@ func (s *Store) Edit(ctx context.Context, args EditArgs) (*MutationResult, error
 	case "metadata":
 		// metadata-only update
 	case "replace_body":
-		editedBody = trimDocumentBody(args.Content)
+		editedBody = trimDocumentBody(args.Body)
 	case "append_body":
-		editedBody = appendDocumentBody(body, args.Content)
+		editedBody = appendDocumentBody(body, args.Body)
 	case "prepend_body":
-		editedBody = prependDocumentBody(body, args.Content)
+		editedBody = prependDocumentBody(body, args.Body)
 	case "upsert_section":
-		editedBody, sectionName, err = upsertDocumentSection(body, args.Section, args.Heading, args.Level, args.Content)
+		editedBody, sectionName, err = upsertDocumentSection(body, args.Section, args.Heading, args.Level, args.Body)
 		if err != nil {
 			return nil, err
 		}

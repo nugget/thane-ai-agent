@@ -384,7 +384,7 @@ func NewLoop(opts LoopOptions) (*Loop, error) {
 		compactor:           opts.Compactor,
 		router:              opts.Router,
 		llm:                 opts.LLM,
-		tools:               tools.NewRegistry(opts.HomeAssistant, opts.Scheduler),
+		tools:               tools.NewRegistry(opts.HomeAssistant, opts.Scheduler, opts.Logger),
 		model:               opts.Model,
 		parsedTalents:       opts.ParsedTalents,
 		persona:             opts.Persona,

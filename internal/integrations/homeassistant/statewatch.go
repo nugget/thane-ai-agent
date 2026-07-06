@@ -10,14 +10,30 @@ import (
 
 // StateWatchHandler is called for each state change that passes the
 // entity filter and rate limiter. The handler receives the entity ID,
-// old state string, and new state string.
-type StateWatchHandler func(entityID, oldState, newState string)
+// old state string, new state string, and the entity's device_class.
+// deviceClass comes from the new state's attributes — HA writes the
+// operator's "Show as" override there, so it is the effective key for
+// class-aware rendering (a garage bay shows garage_door, not the
+// integration's original class). Empty when the entity has none.
+type StateWatchHandler func(entityID, oldState, newState, deviceClass string)
 
 // EntityFilter selects which entity IDs to process using glob patterns.
 // An empty filter matches all entities.
 type EntityFilter struct {
-	patterns []string
-	logger   *slog.Logger
+	patterns  []string
+	matchNone bool
+	logger    *slog.Logger
+}
+
+// NewEntityFilterMatchNone returns a filter that matches no entities.
+// Distinct from an empty pattern list, which matches everything: with a
+// runtime-managed ingestion registry, "nothing registered" must mean
+// ingest nothing, not ingest the whole firehose.
+func NewEntityFilterMatchNone(logger *slog.Logger) *EntityFilter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &EntityFilter{matchNone: true, logger: logger}
 }
 
 // NewEntityFilter creates an entity filter from glob patterns. Patterns
@@ -33,6 +49,9 @@ func NewEntityFilter(globs []string, logger *slog.Logger) *EntityFilter {
 // Match reports whether the entity ID matches at least one pattern.
 // If no patterns are configured, Match always returns true.
 func (f *EntityFilter) Match(entityID string) bool {
+	if f.matchNone {
+		return false
+	}
 	if len(f.patterns) == 0 {
 		return true
 	}
@@ -129,11 +148,25 @@ func (r *EntityRateLimiter) Cleanup() {
 // WebSocket event channel, applies entity filtering and rate limiting,
 // and dispatches matching events to a handler.
 type StateWatcher struct {
-	events  <-chan Event
-	filter  *EntityFilter
-	limiter *EntityRateLimiter
-	handler StateWatchHandler
-	logger  *slog.Logger
+	events   <-chan Event
+	filterMu sync.RWMutex
+	filter   *EntityFilter
+	limiter  *EntityRateLimiter
+	handler  StateWatchHandler
+	logger   *slog.Logger
+}
+
+// SetFilter swaps the ingestion filter at runtime. The WebSocket
+// subscription is a firehose filtered client-side, so changing the
+// filter needs no HA re-subscription — the next event simply sees the
+// new gate. Safe for concurrent use with Run.
+func (w *StateWatcher) SetFilter(filter *EntityFilter) {
+	if filter == nil {
+		filter = NewEntityFilterMatchNone(w.logger)
+	}
+	w.filterMu.Lock()
+	w.filter = filter
+	w.filterMu.Unlock()
 }
 
 // NewStateWatcher creates a state watcher that consumes events from the
@@ -233,7 +266,10 @@ func (w *StateWatcher) handleEvent(ev Event) bool {
 		return false
 	}
 
-	if !w.filter.Match(data.EntityID) {
+	w.filterMu.RLock()
+	filter := w.filter
+	w.filterMu.RUnlock()
+	if !filter.Match(data.EntityID) {
 		return false
 	}
 
@@ -247,6 +283,11 @@ func (w *StateWatcher) handleEvent(ev Event) bool {
 		oldState = data.OldState.State
 	}
 
-	w.handler(data.EntityID, oldState, data.NewState.State)
+	deviceClass := ""
+	if dc, ok := data.NewState.Attributes["device_class"].(string); ok {
+		deviceClass = dc
+	}
+
+	w.handler(data.EntityID, oldState, data.NewState.State, deviceClass)
 	return true
 }

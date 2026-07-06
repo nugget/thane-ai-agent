@@ -25,7 +25,8 @@ below.
   sleep envelope, profile, supervisor settings, conditions, metadata.
 
 If a peer loop already owns the topic, prefer extending it (via
-`update_entity_subscriptions`) over launching a parallel watcher.
+`add_entity_subscription` with `owner` set to its name) over
+launching a parallel watcher.
 
 ## Choose the shape of work
 
@@ -196,9 +197,9 @@ when its scope should shift.
 
 2. **The watcher runs at its own pace** inside the envelope, tuning
    via `set_next_sleep` and adjusting its own watch set via
-   `update_entity_subscriptions` (same loop-scoped tool the operator
-   uses in step 4 to push focus down, just called by the watcher
-   against its own name). You don't interact during this phase.
+   `watch_entity` / `unwatch_entity` (the in-loop door — no name
+   needed, the loop is baked in). You don't interact during this
+   phase.
 
 3. **The watcher pulls you in when something matters** via
    `request_core_attention`. This forces a supervisor turn on your
@@ -218,34 +219,43 @@ when its scope should shift.
    delivery command. You decide whether to notify, defer, or absorb.
 
 4. **You push new focus down when something matters** via
-   `update_entity_subscriptions`. Adds or removes entities on the
+   `add_entity_subscription` / `remove_entity_subscription` with
+   `owner` naming the loop. Each call adjusts one entity on the
    running loop's watch set in place.
 
    ```json
    {
-     "name": "server_closet_guardian",
-     "add": [
-       {"entity_id": "sensor.closet_ac_state", "history": [3600]},
-       {"entity_id": "binary_sensor.utility_brownout"}
-     ]
+     "entity_id": "sensor.closet_ac_state",
+     "owner": "server_closet_guardian",
+     "history": [3600]
    }
    ```
 
-   The watcher sees the new entities on its next wake. Use
-   `remove: ["entity_id", ...]` to retire watches you no longer care
-   about.
+   The watcher sees the new entity on its next wake. Use
+   `remove_entity_subscription` with the same `owner` to retire
+   watches you no longer care about.
+
+For wakes on a *single entity's changes* — a door opening, a pump
+starting — the loop's own subscription is the trigger: `wake: true`
+on the entity entry (in `thane_loop_create.entities`, via
+`add_entity_subscription` with `owner`, or `watch_entity` from
+inside). No automation, no topic, debounced by default. Reach past
+this door only when the trigger logic can't be "this entity changed."
 
 For event-driven wakes (a new release on a repo, a new feed entry),
 producer tools like `forge_repo_follow` and `media_follow` take a
 `wake_loop` target so the service loop wakes on the event rather than
 its timer.
 
-For wakes triggered by *arbitrary external events* — most commonly
-an HA automation publishing an MQTT message — register the loop
-with `mqtt_wake_add` and pair it with an HA automation whose action
-publishes to the same topic. The two sides are independent
-artifacts that share only the topic string; the topic string IS
-the contract.
+For wakes triggered by *HA-side derived conditions* — compound
+triggers, zone dwell, templates, anything an HA automation decides —
+register the loop with `mqtt_wake_add` and pair it with an HA
+automation whose action publishes to the same topic. The two sides
+are independent artifacts that share only the topic string; the
+topic string IS the contract. (The worked example below is exactly
+this shape: the trigger is "presence transition AND morning AND
+entering the office," which is HA-automation logic, not a bare
+entity change.)
 
 ### Worked example: morning-briefing loop on Alice's office arrival
 
@@ -311,9 +321,12 @@ A few choices that matter:
 - **`mode: single`** means a second trigger while the automation
   is still running won't double-fire. With `mqtt.publish` this
   matters less, but it's the safe default for any HA-side action.
-- **Payload as JSON** carries useful context to the loop side
-  even though `mqtt_wake_add` doesn't currently parse the body
-  for routing. The future-proofing is cheap, and the timestamp
+- **Payload as JSON** carries useful context to the loop side —
+  and one field IS parsed for routing: `target_loop` (a loop
+  definition name) re-addresses the wake to that loop, so one
+  shared wake topic can serve many automation-authored targets
+  without per-topic registrations. An unresolvable `target_loop`
+  falls back to the subscription's `wake_loop`. The timestamp
   helps the loop notice when it's reacting to a stale message
   (network flap, broker replay).
 - **Topic convention `thane/{device_name}/wake/{purpose}`** is

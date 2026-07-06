@@ -31,6 +31,36 @@ func (r *Registry) registerLoopContainers() {
 	})
 }
 
+// LoopContainerView is one row of the loop_containers placement
+// directory: a container loop expressed for model consumption. Field
+// declaration order matches the alphabetical order the previous
+// map-based output marshaled in, so the rendered JSON is byte-identical
+// across the typed-schema introduction (#1173).
+type LoopContainerView struct {
+	// ChildCount is how many loops nest directly under this container.
+	ChildCount int `json:"child_count"`
+	// ConfersTags is the sorted capability tag set the container passes
+	// to everything nested under it. Always non-nil so it serializes as
+	// [] rather than null.
+	ConfersTags []string `json:"confers_tags"`
+	// DescendantCount is the transitive nested-loop count.
+	DescendantCount int `json:"descendant_count"`
+	// Intent is the container's declared purpose.
+	Intent string `json:"intent"`
+	// Name is the container's loop name — the value a new loop passes as
+	// parent_name to nest here.
+	Name string `json:"name"`
+	// SampleChildren previews up to loopContainerSampleChildrenCap child
+	// loop names; ChildCount carries the true total.
+	SampleChildren []string `json:"sample_children"`
+}
+
+// loopContainersResult is the loop_containers tool's response envelope.
+type loopContainersResult struct {
+	Containers []LoopContainerView `json:"containers"`
+	Status     string              `json:"status"`
+}
+
 func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (string, error) {
 	if r.liveLoopRegistry == nil {
 		return "", fmt.Errorf("live loop registry is not configured")
@@ -58,7 +88,7 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 		return containerStatuses[i].Name < containerStatuses[j].Name
 	})
 
-	containers := make([]map[string]any, 0, len(containerStatuses))
+	containers := make([]LoopContainerView, 0, len(containerStatuses))
 	for _, s := range containerStatuses {
 		childIDs := append([]string(nil), childrenByParent[s.ID]...)
 		sort.Slice(childIDs, func(i, j int) bool {
@@ -71,18 +101,18 @@ func (r *Registry) handleLoopContainers(_ context.Context, _ map[string]any) (st
 			}
 			sample = append(sample, byID[cid].Name)
 		}
-		containers = append(containers, map[string]any{
-			"name":             s.Name,
-			"intent":           s.Config.Intent,
-			"child_count":      len(childIDs),
-			"descendant_count": countDescendants(s.ID, childrenByParent),
-			"confers_tags":     containerConfersTags(s),
-			"sample_children":  sample,
+		containers = append(containers, LoopContainerView{
+			Name:            s.Name,
+			Intent:          s.Config.Intent,
+			ChildCount:      len(childIDs),
+			DescendantCount: countDescendants(s.ID, childrenByParent),
+			ConfersTags:     containerConfersTags(s),
+			SampleChildren:  sample,
 		})
 	}
-	return ldMarshalToolJSON(map[string]any{
-		"status":     "ok",
-		"containers": containers,
+	return ldMarshalToolJSON(loopContainersResult{
+		Status:     "ok",
+		Containers: containers,
 	})
 }
 

@@ -81,9 +81,9 @@ These tools load on every turn regardless of active tags.
 
 | Tool | Description |
 |------|-------------|
-| `add_entity_subscription` | Watch an HA entity so its state is injected into context each turn. |
-| `list_entity_subscriptions` | List current watchlist subscriptions (scoped and always-visible). |
-| `remove_entity_subscription` | Remove a watched entity or a scoped subscription. |
+| `add_entity_subscription` | Subscribe to an HA entity. Ownership is a parameter: no `owner` (or `core`) = always-visible, owned by the root container; `owner: <loop name>` lands on that loop's spec. |
+| `list_entity_subscriptions` | List the whole subscription registry: core-owned (always-visible), loop-owned, and system-seeded rows, each with its owner. |
+| `remove_entity_subscription` | Remove a subscription; `owner` addresses a loop's own entry, system rows are config-owned and refuse removal. |
 
 Subscription expiry is reported as `expires_delta`, not a raw timestamp,
 so the model does not need to do clock arithmetic.
@@ -99,8 +99,45 @@ An entity subscription's `entity_id` may be a glob (e.g.
 subscription is re-expanded against live entities every turn — newly
 matching entities join automatically — and is capped per turn, emitting a
 truncation marker when it matches more than the cap. This works across
-`add_entity_subscription`, `watch_entity`, `thane_loop_create.entities`, and
-`update_entity_subscriptions`.
+`add_entity_subscription`, `watch_entity`, and
+`thane_loop_create.entities`.
+
+A subscription may declare a transition log: `transitions: n` renders
+the entity's last n observed state changes inside its block
+(`{from, to, ago}`, class-aware, delta timestamps), and
+`transitions_window_seconds` bounds the log to a trailing window
+(usable together or alone; capped per subscription with truncation
+advertised). Declaring a log derives capture — the entity joins the
+state-change ingestion filter automatically, with per-entity bounded
+retention behind the shared window — so `mode: ingest` is never needed
+for it. Entity ids and globs only; complementary to `history` (numeric
+trend summaries) rather than a replacement.
+
+The always-visible tier belongs to `core`: the root container's
+subscriptions render in every context (conversations are de facto
+core's context), stored as core-owned registry rows — core has no
+persisted spec by design, so the rows themselves are the source of
+truth and the orphan sweep treats `core` (like `system`) as reserved.
+
+A loop-owned subscription may declare `wake: true`: the owning loop is
+awakened when the entity changes, with the event delivered as
+`{entity, from, to, ago}` in the class-aware vocabulary through the
+shared loopqueue chassis — debounced (`wake_debounce_seconds`, default
+a few seconds), coalesced per entity (latest change wins while a wake
+is pending), and crash-durable. Capture derives automatically, wake
+subscriptions count against the ingest entry cap, and the upstream
+rate limiter still applies — a chattering sensor cannot wakestorm a
+loop. Simple native change triggers only: HA-side derivation
+(compound conditions, zone dwell, templates) remains the
+automation→MQTT→wake pipeline, draining the same queue.
+
+A subscription may carry `requires_tag`, a capability tag gating its
+visibility: it renders only while that tag is active in the consuming
+context. This is the macro-set lens — one tag activation surfaces a
+subject's tagged documents and its related entities together. The gate
+is render-only (rejected with `mode: ingest`/`both`, and the ingestion
+filter ignores gated rows), optional, and deliberately not the default
+path: ungated subscriptions remain the norm.
 
 Entity subscriptions also accept `include`, a set of HA metadata flags:
 `area`, `device`, `labels`, `description`, and `visibility`, or
@@ -122,7 +159,7 @@ becoming default context clutter.
 | `ha_list_entities` | Browse entities by domain and/or entity_id glob (e.g. `binary_sensor.*door*`), with optional HA metadata. |
 | `ha_search_states` | Predicate search across live entity state (state value, numeric attribute, domain, area). |
 | `get_area_activity` | Whole-area snapshot: floor context + entities grouped by salience + transition timeline + filtered counts, with optional per-entity metadata. |
-| `ha_device` | Whole-device snapshot: device identity (manufacturer/model/firmware/area/integration) + every child entity with semantic state grouped by salience + availability rollup, resolved by id or name, with optional per-entity metadata. |
+| `ha_device` | Whole-device snapshot: the full device-info card (manufacturer/model/firmware/serial/MAC connections/area/labels/integration) + every child entity grouped the way HA's device page groups them (controls/sensors/configuration/diagnostic), with hidden entities shown marked, per-group truncation counts, and an availability rollup; resolved by id or name, with optional per-entity metadata. |
 | `ha_history` | Recorder trend for one entity over a lookback window: numeric min/max/start/end/delta/trend or a discrete change summary, optionally trending a numeric attribute instead of the state. |
 | `ha_home_snapshot` | Curated whole-home overview: anomalies, security/openings, presence, climate (energy optional), salience-first with an at-a-glance summary and a quiet status, plus optional per-entity metadata. |
 | `ha_call_service` | Direct HA service invocation. |
@@ -186,9 +223,10 @@ or signed deltas like `-604800s`.
 | `doc_search` | Full-text and tagged search across roots. |
 | `doc_links` | List inbound/outbound links for a document. |
 | `doc_values` | List frontmatter values (tags, statuses, etc.) across a root. |
-| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it. |
-| `doc_commit` | Commit an approved `doc_intake` result through managed mutations. |
-| `doc_write` | Write or replace a document. |
+| `doc_create` | Create a new document safely: corpus collision check + normalized placement + write in one call; declines with an analysis when a similar document exists. |
+| `doc_intake` | Analyze proposed knowledge against the existing corpus before writing it (the deliberate two-step form of `doc_create`). |
+| `doc_commit` | Commit an approved `doc_intake`/declined `doc_create` result through managed mutations. |
+| `doc_write` | Replace a document's content (creates at a fresh ref only when the destination is already deliberate — prefer `doc_create` for new documents). |
 | `doc_edit` | Targeted edit within a document. |
 | `doc_copy` | Copy a document to another location. |
 | `doc_move` | Move or rename a document. |
@@ -415,7 +453,6 @@ supervisor-randomized metacog) where the canonical family doesn't fit.
 | `loop_definition_launch` | Launch a persistent loop from a definition. |
 | `loop_definition_set_policy` | Update a loop definition's lifecycle policy. |
 | `loop_definition_summary` | Summary view across definitions. |
-| `update_entity_subscriptions` | Add or remove Home Assistant entity subscriptions on a running loop. |
 
 ## `mqtt` — wake subscriptions
 
@@ -425,6 +462,16 @@ See [MQTT](../operating/mqtt.md) for the broker-side conventions.
 |------|-------------|
 | `mqtt_wake_list` | List runtime and config-defined wake subscriptions. |
 | `mqtt_wake_add` | Add a runtime wake subscription that delivers matching messages to a `wake_loop` target. Required args: `topic` and `wake_loop` (loop name/ID, optional tags + instructions). The legacy inline routing fields (`mission`, `quality_floor`, etc.) were retired in PR-T2b; point `wake_loop` at the built-in `mqtt-default-handler` for generic triage. |
+
+MQTT wake delivery rides the shared loopqueue chassis: matching
+messages enqueue durably per target and a short debounced wake drains
+the coalesced batch, so a burst on one topic becomes one iteration
+(latest payload wins per subscription+topic) and a message received
+just before a crash is replayed at the next startup. A payload may
+self-address by including `target_loop` (a loop definition name) — a
+general-purpose HA automation publishing to one shared wake topic can
+wake any named loop with no per-topic subscription; unresolvable
+targets fall back to the subscription's `wake_loop`.
 | `mqtt_wake_remove` | Remove a runtime wake subscription by ID. |
 
 ## `message_channel` — current message-app conversation
@@ -485,10 +532,11 @@ tags from the MCP config's `default_tags` or configuration-side tag
 overrides; they do not have a compiled-in entry in
 `internal/model/toolcatalog/catalog.go`.
 
-The primary MCP server in typical deployments is
-[`ha-mcp`](https://github.com/karimkhaleel/ha-mcp), which exposes
-a broad set of Home Assistant tools beyond Thane's native set. `include_tools`
-filtering in the config narrows the bridged surface.
+Home Assistant needs no MCP bridge: the native `ha_*` tool set above is
+the complete HA surface (the `ha-mcp` bridge was retired in v0.10.2 once
+native parity landed). MCP remains the extension path for capabilities
+Thane doesn't implement natively; `include_tools` filtering in the config
+narrows the bridged surface.
 
 See [Delegation & MCP](../understanding/delegation.md) for
 configuration details.

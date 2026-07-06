@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -96,6 +97,13 @@ type channelEntry struct {
 	LoopID       string `json:"loop_id,omitempty"`
 	ConvID       string `json:"conv_id,omitempty"`
 	YouAreHere   bool   `json:"you_are_here,omitempty"`
+
+	// fullLoopID carries the untruncated loop ID for sort tie-breaking.
+	// LoopID above is an 8-rune display prefix — UUIDv7 prefixes collide
+	// for every loop created in the same ~65s window (e.g. a restart
+	// hydration burst), so it cannot anchor a total order. Unexported,
+	// so encoding/json omits it from the rendered entry.
+	fullLoopID string
 }
 
 // TagContext returns a compact JSON channel overview for injection into
@@ -140,9 +148,10 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 		}
 
 		e := channelEntry{
-			Channel: subsystem,
-			State:   l.State,
-			LoopID:  promptfmt.ShortIDPrefix(l.ID),
+			Channel:    subsystem,
+			State:      l.State,
+			LoopID:     promptfmt.ShortIDPrefix(l.ID),
+			fullLoopID: l.ID,
 		}
 
 		// Skip parent loops (no per-conversation identity).
@@ -197,7 +206,7 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 			}
 		}
 
-		// Exact-second delta per issue #458.
+		// Tiered delta per the model-facing time convention (#458, #1160).
 		if !l.LastWakeAt.IsZero() {
 			e.LastActivity = promptfmt.FormatDeltaOnly(l.LastWakeAt, now)
 		}
@@ -208,6 +217,24 @@ func (p *ChannelOverviewProvider) TagContext(ctx context.Context, _ agentctx.Con
 	if len(entries) == 0 {
 		return "", nil
 	}
+
+	// Deterministic order regardless of how the loop registry happens
+	// to iterate — the interface asks ChannelLoops() for sorted output,
+	// but prompt stability across turns must not rest on an upstream
+	// comment being honored.
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.Channel != b.Channel {
+			return a.Channel < b.Channel
+		}
+		if a.Sender != b.Sender {
+			return a.Sender < b.Sender
+		}
+		if a.ConvID != b.ConvID {
+			return a.ConvID < b.ConvID
+		}
+		return a.fullLoopID < b.fullLoopID
+	})
 
 	data, err := json.Marshal(entries)
 	if err != nil {

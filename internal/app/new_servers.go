@@ -379,6 +379,13 @@ func (a *App) initServers(s *newState) error {
 			parentID:   &mqttParentID,
 		}
 
+		// MQTT wakes ride the shared loopqueue chassis (#1033):
+		// ingress enqueues per-target, the WakeOnEnqueue debounce
+		// coalesces bursts, and the dispatcher replays records onto
+		// the message bus. Stashed on the App so the loop-definition
+		// worker can run the boot recovery sweep once targets resolve.
+		a.mqttWakeDispatch = newMQTTWakeDispatcher(a.loopQueue, wakeDeps, logger)
+
 		// Wrap with the wake handler: wake-configured topics dispatch
 		// agent conversations, everything else falls through to the
 		// base handler above.
@@ -386,7 +393,7 @@ func (a *App) initServers(s *newState) error {
 			subStore,
 			baseMsgHandler,
 			logger,
-			wakeDeps,
+			a.mqttWakeDispatch,
 		))
 
 		// Register MQTT wake subscription tools via the provider.
@@ -589,26 +596,15 @@ func (a *App) initServers(s *newState) error {
 	// as first-class definitions via runtime spec hydration.
 	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
-			if err := a.migrateLegacyScopeTagSubscriptions(); err != nil {
-				// Promoted from Warn to hard error: a failed
-				// migration leaves subscription state partial —
-				// spec.Subscriptions populated, legacy
-				// scope_tag metadata still present, watchlist
-				// rows un-wiped. The next startup re-runs the
-				// migration. If an operator edits subscriptions
-				// between failed-migration restarts (via
-				// watch_entity / update_entity_subscriptions),
-				// mergeLegacySubscriptions re-adds the entities
-				// they removed because step 1 unions
-				// def.Spec.Subscriptions with the legacy rows
-				// that are still in the watchlist. Failing the
-				// startup loud forces operator attention while
-				// the migration is still a one-shot upgrade
-				// path; the migration is idempotent in the
-				// happy case, so a clean restart after fixing
-				// the underlying issue (DB connectivity,
-				// permissions, schema drift) resumes cleanly.
-				return fmt.Errorf("legacy scope_tag migration failed — subscription state may be partial; fix underlying error and restart: %w", err)
+			// Mirror every definition's subscriptions into the
+			// awareness registry and consciously drop orphaned rows
+			// (including anything the retired tag-scoped tier left
+			// behind). Non-fatal: the registry rows are a projection
+			// of the specs, per-spec persists keep re-projecting, and
+			// the next boot re-runs the full pass — a partial compile
+			// degrades visibility, not correctness.
+			if err := a.compileLoopSubscriptions(); err != nil {
+				logger.Warn("loop subscription compile incomplete", "error", err)
 			}
 			// Core is auto-created synchronously during initStores —
 			// before any deferred worker runs — so default-parenting
@@ -630,6 +626,19 @@ func (a *App) initServers(s *newState) error {
 					"skipped_existing", result.SkippedExisting,
 					"skipped_non_service", result.SkippedNonService,
 				)
+			}
+			// Drain any queued-wake partitions left pending by a
+			// crash while their debounce was armed (#1033/#1211).
+			// Runs here — after StartEnabledServices — so wake
+			// targets resolve. The subscription feeder also compiles
+			// its initial wake index now that loop-owned rows are
+			// mirrored.
+			if a.mqttWakeDispatch != nil {
+				a.mqttWakeDispatch.Sweep(ctx)
+			}
+			if a.subWakeFeeder != nil {
+				a.subWakeFeeder.Rebuild()
+				a.subWakeFeeder.Sweep(ctx)
 			}
 			// Now that the durable definition snapshot is registered,
 			// fail loud on any config-defined MQTT wake subscription

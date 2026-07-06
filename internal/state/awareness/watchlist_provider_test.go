@@ -12,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	_ "modernc.org/sqlite"
 )
 
@@ -118,8 +119,8 @@ func TestProvider_RendersIncludedEntityMetadata(t *testing.T) {
 		Labels:      true,
 		Description: true,
 	}
-	if err := store.AddWithOptions(state.EntityID, nil, nil, 0, "", include); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: state.EntityID, Include: &include}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 	p.SetRegistryClient(&fakeRegistries{
 		areas: []homeassistant.Area{{
@@ -182,7 +183,7 @@ func TestProvider_SingleEntity(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.office_temperature"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.office_temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -214,7 +215,7 @@ func TestProvider_EntityFetchFailure(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.broken"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.broken"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -265,10 +266,10 @@ func TestProvider_MultipleEntities(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.temperature"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.temperature"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := store.Add("binary_sensor.door"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -304,7 +305,7 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("sensor.raw"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.raw"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -351,8 +352,8 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("sensor.office_temperature", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.office_temperature", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -372,8 +373,8 @@ func TestProvider_IncludesNumericHistorySummaries(t *testing.T) {
 	if summary["kind"] != "numeric" {
 		t.Fatalf("kind = %#v, want numeric", summary["kind"])
 	}
-	if summary["lookback"] != "-86400s" {
-		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	if summary["lookback"] != "-24h" {
+		t.Fatalf("lookback = %#v, want -24h", summary["lookback"])
 	}
 	if summary["trend"] != "rising" {
 		t.Fatalf("trend = %#v, want rising", summary["trend"])
@@ -418,8 +419,8 @@ func TestProvider_IncludesWeatherForecastWhenSubscribed(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "hourly"); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "hourly"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -478,8 +479,8 @@ func TestProvider_ForecastFetchFailureSurfacesUnavailableMarker(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("weather.home", nil, nil, 0, "daily"); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "weather.home", Forecast: "daily"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -565,8 +566,8 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -586,8 +587,8 @@ func TestProvider_IncludesDiscreteHistorySummaries(t *testing.T) {
 	if summary["kind"] != "discrete" {
 		t.Fatalf("kind = %#v, want discrete", summary["kind"])
 	}
-	if summary["lookback"] != "-86400s" {
-		t.Fatalf("lookback = %#v, want -86400s", summary["lookback"])
+	if summary["lookback"] != "-24h" {
+		t.Fatalf("lookback = %#v, want -24h", summary["lookback"])
 	}
 	if summary["change_count"] != float64(2) {
 		t.Fatalf("change_count = %#v, want 2", summary["change_count"])
@@ -624,8 +625,8 @@ func TestProvider_DiscreteHistoryUsesDeviceClassLabels(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.AddWithOptions("binary_sensor.front_door", nil, []int{24 * 60 * 60}, 0, ""); err != nil {
-		t.Fatalf("AddWithOptions: %v", err)
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door", History: []int{24 * 60 * 60}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
 	}
 
 	got, err := p.TagContext(context.Background(), agentctx.ContextRequest{UserMessage: ""})
@@ -678,4 +679,113 @@ func decodeWatchlistPayload(t *testing.T, got string) map[string]any {
 		t.Fatalf("unmarshal payload %q: %v", payloadLine, err)
 	}
 	return payload
+}
+
+// TestWatchlistProviderHonorsRequiresTag covers the #1213 render gate
+// on the always-visible tier: a gated row renders only while its
+// capability tag is active in the consuming context, and an ungated
+// row is unaffected either way.
+func TestWatchlistProviderHonorsRequiresTag(t *testing.T) {
+	ha := &fakeHA{states: map[string]*homeassistant.State{
+		"sensor.plain":  {EntityID: "sensor.plain", State: "1"},
+		"sensor.lensed": {EntityID: "sensor.lensed", State: "2"},
+	}}
+	p, store := setupTestProvider(t, ha)
+
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.plain"}); err != nil {
+		t.Fatalf("upsert plain: %v", err)
+	}
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "sensor.lensed", RequiresTag: "ranch_water"}); err != nil {
+		t.Fatalf("upsert lensed: %v", err)
+	}
+
+	out, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext (tag off): %v", err)
+	}
+	if !strings.Contains(out, "sensor.plain") {
+		t.Errorf("ungated row missing: %q", out)
+	}
+	if strings.Contains(out, "sensor.lensed") {
+		t.Errorf("gated row rendered with its tag inactive: %q", out)
+	}
+
+	out, err = p.TagContext(context.Background(), agentctx.ContextRequest{ActiveTags: map[string]bool{"ranch_water": true}})
+	if err != nil {
+		t.Fatalf("TagContext (tag on): %v", err)
+	}
+	if !strings.Contains(out, "sensor.lensed") {
+		t.Errorf("gated row missing with its tag active: %q", out)
+	}
+}
+
+// fakeTransitionSource is a canned per-entity transition fixture.
+type fakeTransitionSource struct {
+	transitions map[string][]homeassistant.Transition
+	matched     map[string]int
+}
+
+func (f *fakeTransitionSource) RecentTransitions(entityID string, limit int, _ time.Duration) ([]homeassistant.Transition, int) {
+	all := f.transitions[entityID]
+	matched := f.matched[entityID]
+	if matched == 0 {
+		matched = len(all)
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all, matched
+}
+
+// TestWatchlistProviderRendersTransitionLog covers the #1210 render
+// merge: a declared log lands on the entity's block as class-aware
+// {from,to,ago} entries, truncation is advertised when more matched
+// than rendered, and a missing retention source is marked
+// unavailable rather than reading as an empty log.
+func TestWatchlistProviderRendersTransitionLog(t *testing.T) {
+	now := time.Now()
+	ha := &fakeHA{states: map[string]*homeassistant.State{
+		"binary_sensor.garage_bay_3": {EntityID: "binary_sensor.garage_bay_3", State: "off"},
+	}}
+	p, store := setupTestProvider(t, ha)
+
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{
+		EntityID:    "binary_sensor.garage_bay_3",
+		Transitions: 2,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// No source wired: requested log must be marked unavailable.
+	out, err := p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext (no source): %v", err)
+	}
+	if !strings.Contains(out, `"transitions_unavailable":true`) {
+		t.Errorf("missing unavailable marker without a source: %q", out)
+	}
+
+	p.SetTransitionSource(&fakeTransitionSource{
+		transitions: map[string][]homeassistant.Transition{
+			"binary_sensor.garage_bay_3": {
+				{From: "closed", To: "open", At: now.Add(-2 * time.Minute)},
+				{From: "open", To: "closed", At: now.Add(-10 * time.Minute)},
+			},
+		},
+		matched: map[string]int{"binary_sensor.garage_bay_3": 5},
+	})
+
+	out, err = p.TagContext(context.Background(), agentctx.ContextRequest{})
+	if err != nil {
+		t.Fatalf("TagContext: %v", err)
+	}
+	if !strings.Contains(out, `"from":"closed"`) || !strings.Contains(out, `"to":"open"`) {
+		t.Errorf("missing class-aware transition entries: %q", out)
+	}
+	if !strings.Contains(out, `"ago":`) {
+		t.Errorf("missing delta timestamps: %q", out)
+	}
+	if !strings.Contains(out, `"transitions_truncated":true`) {
+		t.Errorf("missing truncation marker (matched 5, rendered 2): %q", out)
+	}
 }

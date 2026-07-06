@@ -163,8 +163,8 @@ only in Go contexts where the type matters.
 
 A standard protocol for extending LLM capabilities via external tool
 servers. Thane hosts MCP servers as subprocesses and bridges their tools
-into the agent loop. The primary example is ha-mcp, which provides 90+
-Home Assistant tools.
+into the agent loop as `mcp_{server}_{tool}` — the extension path for
+capabilities Thane doesn't implement natively.
 See [Delegation](delegation.md).
 
 ### Metacognitive Loop

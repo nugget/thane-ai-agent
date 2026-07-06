@@ -606,6 +606,12 @@ func (r *Registry) effectiveState(loopID string) effectiveStateResult {
 			if sub.EntityID == "" {
 				continue
 			}
+			// SelfOnly entries render for their declaring loop but do
+			// not cascade — inheritance is honored per-subscription,
+			// not as a blanket property of the ancestor walk (#1209).
+			if i > 0 && sub.SelfOnly {
+				continue
+			}
 			if _, dup := seenSubs[sub.EntityID]; dup {
 				continue
 			}

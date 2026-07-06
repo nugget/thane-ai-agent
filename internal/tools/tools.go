@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ type Registry struct {
 	tagIndex           map[string][]string // tag → tool names
 	ha                 *homeassistant.Client
 	scheduler          *scheduler.Scheduler
+	logger             *slog.Logger
 	factTools          *knowledge.Tools
 	contactTools       *contacts.Tools
 	emailTools         *email.Tools
@@ -112,17 +114,40 @@ func NewEmptyRegistry() *Registry {
 }
 
 // NewRegistry creates a tool registry with HA integration.
-func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry {
+// NewRegistry builds the native tool registry. logger is the
+// subsystem/loop logger tool handlers emit to (degraded-path warnings,
+// etc.); pass nil in tests or contexts without one and it falls back to
+// [slog.Default].
+func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler, logger *slog.Logger) *Registry {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	r := &Registry{
 		tools:     make(map[string]*Tool),
 		ha:        ha,
 		scheduler: sched,
+		logger:    logger,
 	}
 	r.registerBuiltins()
 	r.registerFindEntity()     // Smart entity discovery
 	r.registerHASearchStates() // Predicate search across live state
+	r.registerHAListServices() // Service-catalog discovery (#1177)
 	r.registerHAAutomationTools()
+	r.registerHAAutomationTraces()     // Run-level debugging (#1178)
+	r.registerHAAutomationVocabulary() // Target-scoped 2026.7 vocabulary discovery (#1176)
 	return r
+}
+
+// log returns the registry's logger, defaulting to [slog.Default] when
+// unset. Shallow-copy constructors (FilteredCopy, WithRuntimeTools,
+// FilterByTags, NewEmptyRegistry) may leave logger nil, so handlers use
+// this rather than r.logger directly — a degraded-path warning must
+// never itself panic.
+func (r *Registry) log() *slog.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return slog.Default()
 }
 
 // SetFactTools adds fact management tools to the registry.
@@ -748,6 +773,10 @@ func (r *Registry) registerBuiltins() {
 					"type":        "integer",
 					"description": "Maximum number of entities to return (default 20, max 100)",
 				},
+				"include_hidden": map[string]any{
+					"type":        "boolean",
+					"description": "By default, operator-hidden entities (registry hidden_by) are excluded and their count reported as hidden_excluded. Set true to include them, each marked hidden.",
+				},
 				"include": EntityMetadataIncludeParameter(),
 			},
 			// Encode the handler's "at least one of domain or pattern"
@@ -797,8 +826,10 @@ func (r *Registry) registerBuiltins() {
 
 	// Call service (low-level, use ha_control_device for voice commands)
 	r.Register(&Tool{
-		Name:        "ha_call_service",
-		Description: "Low-level Home Assistant service call. Only use if you already have the exact entity_id. For voice commands, use ha_control_device instead.",
+		Name: "ha_call_service",
+		Description: "Low-level Home Assistant service call. Address one verified entity_id, OR a target block to fan out across an area, floor, label, or device in a single call — \"turn off the office lights\" is one call with target.area_id, not N entity calls. " +
+			"ha_list_services shows which services accept targets (accepts_target). HA skips hidden entities in area/floor/label targets — that is operator curation, not an error. " +
+			"For voice-style commands against one device, prefer ha_control_device.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -812,14 +843,25 @@ func (r *Registry) registerBuiltins() {
 				},
 				"entity_id": map[string]any{
 					"type":        "string",
-					"description": "The EXACT entity ID (must be verified, not guessed)",
+					"description": "The EXACT entity ID (must be verified, not guessed). Provide this or target.",
+				},
+				"target": map[string]any{
+					"type":        "object",
+					"description": "Fan-out addressing: any of entity_id, device_id, area_id, floor_id, label_id (string or array each). Areas, floors, labels, and devices accept human names (\"Office\") as well as registry IDs — names resolve case-insensitively, unknown references fail fast with the known names. Provide this or entity_id.",
+					"properties": map[string]any{
+						"entity_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"device_id": map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"area_id":   map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"floor_id":  map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+						"label_id":  map[string]any{"type": []string{"string", "array"}, "items": map[string]any{"type": "string"}},
+					},
 				},
 				"data": map[string]any{
 					"type":        "object",
 					"description": "Additional service data (e.g., brightness, temperature)",
 				},
 			},
-			"required": []string{"domain", "service", "entity_id"},
+			"required": []string{"domain", "service"},
 		},
 		Handler: r.handleCallService,
 	})
@@ -970,6 +1012,7 @@ func (r *Registry) FilteredCopy(names []string) *Registry {
 		tools:           make(map[string]*Tool, len(names)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for _, name := range names {
 		if t := r.tools[name]; t != nil {
@@ -990,6 +1033,7 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 		tools:           make(map[string]*Tool, len(r.tools)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		if !skip[name] {
@@ -1011,6 +1055,7 @@ func (r *Registry) WithRuntimeTools(runtime []*Tool) *Registry {
 		tools:           make(map[string]*Tool, len(r.tools)+len(runtime)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		filtered.tools[name] = t
@@ -1050,6 +1095,7 @@ func (r *Registry) WithDynamicTools(extra []*Tool, tagAdditions map[string][]str
 	filtered := &Registry{
 		tools:           make(map[string]*Tool, len(r.tools)+len(extra)),
 		contentResolver: r.contentResolver,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		filtered.tools[name] = t
@@ -1144,6 +1190,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 			tools:           make(map[string]*Tool, len(r.tools)),
 			contentResolver: r.contentResolver,
 			tagIndex:        r.tagIndex,
+			logger:          r.logger,
 		}
 		for name, t := range r.tools {
 			filtered.tools[name] = t
@@ -1162,6 +1209,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 		tools:           make(map[string]*Tool, len(allowed)),
 		contentResolver: r.contentResolver,
 		tagIndex:        r.tagIndex,
+		logger:          r.logger,
 	}
 	for name, t := range r.tools {
 		if allowed[name] || t.Core {
@@ -1334,16 +1382,29 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return "", err
 	}
+	includeHidden, _ := args["include_hidden"].(bool)
 
 	states, err := r.ha.GetStates(ctx)
 	if err != nil {
 		return "", err
 	}
 
+	// Visibility needs the registry snapshot before the limit so hidden
+	// entities are dropped (or marked) up front rather than padding the
+	// page. Registry is TTL-cached (#1185). Fail open on a registry
+	// error: keep enumeration usable and show everything (nil map =
+	// "no visibility info, no filtering") rather than erroring the tool.
+	visEntries, regErr := entityRegistryByID(ctx, r.ha)
+	if regErr != nil {
+		r.log().Warn("ha_list_entities: visibility filter degraded; entity registry unavailable", "error", regErr)
+		visEntries = nil
+	}
+
 	var matches []haListEntityItem
 	var matchEntityIDs []string
 	var matchStates []homeassistant.State
 	total := 0
+	hiddenExcluded := 0
 	now := time.Now()
 	prefix := ""
 	if domain != "" {
@@ -1358,17 +1419,24 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 				continue
 			}
 		}
+		if !includeHidden && isEntityHidden(visEntries[s.EntityID]) {
+			hiddenExcluded++
+			continue
+		}
 		total++
 		if len(matches) >= limit {
 			continue
 		}
 		item := haListEntityItem{
 			EntityID: s.EntityID,
-			State:    s.State,
+			State:    haSemanticState(s),
 		}
 		item.Since, item.Updated = haRecencyDelta(s, now)
 		if friendly, ok := s.Attributes["friendly_name"].(string); ok {
 			item.FriendlyName = friendly
+		}
+		if includeHidden {
+			item.Hidden = isEntityHidden(visEntries[s.EntityID])
 		}
 		matches = append(matches, item)
 		matchEntityIDs = append(matchEntityIDs, s.EntityID)
@@ -1385,12 +1453,13 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	}
 
 	result := haListEntitiesResult{
-		Domain:    domain,
-		Pattern:   pattern,
-		Count:     len(matches),
-		Total:     total,
-		Truncated: total > len(matches),
-		Items:     matches,
+		Domain:         domain,
+		Pattern:        pattern,
+		Count:          len(matches),
+		Total:          total,
+		Truncated:      total > len(matches),
+		HiddenExcluded: hiddenExcluded,
+		Items:          matches,
 	}
 	return toIndentedJSONWithTruncationNote(result, haListEntitiesTruncationNote), nil
 }
@@ -1407,37 +1476,77 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	service, _ := args["service"].(string)
 	entityID, _ := args["entity_id"].(string)
 
-	if domain == "" || service == "" || entityID == "" {
-		return "", fmt.Errorf("domain, service, and entity_id are required")
-	}
-
-	// HA accepts a service call for an unknown entity_id and silently
-	// no-ops, so a typo'd or stale id otherwise vanishes without feedback.
-	// Probe the entity first (a 404 here is authoritative) and return a
-	// recoverable "did you mean?" suggestion instead of a phantom success.
-	if _, err := r.ha.GetState(ctx, entityID); err != nil {
-		if IsHAEntityNotFound(err) {
-			return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+	// A present-but-malformed target must say so, not fall through to
+	// the generic "provide entity_id or target" error.
+	var targetRaw map[string]any
+	hasTarget := false
+	if rawTarget, present := args["target"]; present {
+		obj, ok := rawTarget.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("target must be an object like {\"area_id\": \"office\"}, got %T", rawTarget)
 		}
-		return "", fmt.Errorf("verify entity_id %q before calling %s.%s: %w", entityID, domain, service, err)
+		targetRaw, hasTarget = obj, true
 	}
 
-	data := map[string]any{
-		"entity_id": entityID,
+	if domain == "" || service == "" {
+		return "", fmt.Errorf("domain and service are required")
+	}
+	if entityID == "" && !hasTarget {
+		return "", fmt.Errorf("provide entity_id (one verified entity) or target (fan out by area/floor/label/device)")
+	}
+	if entityID != "" && hasTarget {
+		return "", fmt.Errorf("provide entity_id or target, not both; put the entity in target.entity_id to combine it with other selectors")
 	}
 
-	// Merge additional data
+	data := map[string]any{}
+
+	// Merge service data FIRST, and refuse addressing keys inside it:
+	// data.entity_id would silently override the verified/resolved
+	// addressing below, reintroducing the phantom-success no-op and
+	// making the reported result disagree with what went to HA.
 	if extra, ok := args["data"].(map[string]any); ok {
 		for k, v := range extra {
+			if slicesContains(haTargetKeys, k) {
+				return "", fmt.Errorf("data.%s is addressing, not service data — use entity_id or target for addressing", k)
+			}
 			data[k] = v
 		}
 	}
 
-	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
+	var resolvedTarget map[string]any
+
+	if entityID != "" {
+		// HA accepts a service call for an unknown entity_id and silently
+		// no-ops, so a typo'd or stale id otherwise vanishes without feedback.
+		// Probe the entity first (a 404 here is authoritative) and return a
+		// recoverable "did you mean?" suggestion instead of a phantom success.
+		if _, err := r.ha.GetState(ctx, entityID); err != nil {
+			if IsHAEntityNotFound(err) {
+				return SuggestEntityNotFound(ctx, r.ha, entityID), nil
+			}
+			return "", fmt.Errorf("verify entity_id %q before calling %s.%s: %w", entityID, domain, service, err)
+		}
+		data["entity_id"] = entityID
+	} else {
+		resolution, err := r.resolveServiceTarget(ctx, targetRaw)
+		if err != nil {
+			return "", err
+		}
+		if resolution.Suggestion != "" {
+			return resolution.Suggestion, nil
+		}
+		resolvedTarget = resolution.Resolved
+		for k, v := range resolvedTarget {
+			data[k] = v
+		}
+	}
+
+	changed, err := r.ha.CallServiceWithResponse(ctx, domain, service, data)
+	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("Successfully called %s.%s on %s", domain, service, entityID), nil
+	return haCallServiceResponse(domain, service, entityID, resolvedTarget, changed), nil
 }
 
 func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any) (string, error) {

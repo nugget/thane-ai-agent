@@ -199,7 +199,7 @@ func classifyHomeMembers(members []areaMember, statesByID map[string]*homeassist
 		switch domain {
 		case "person":
 			s.presence = append(s.presence, renderEntityForArea(state, now))
-			if presenceIsHome(state.State) {
+			if presenceIsHome(state) {
 				s.home++
 			} else {
 				s.away++
@@ -250,11 +250,24 @@ func homeAnomalyDomain(domain string) bool {
 	}
 }
 
-// presenceIsHome reports whether a person entity's state means they are
-// home. Any other value (not_home, or a named zone like "Work") counts
-// as away.
-func presenceIsHome(state string) bool {
-	return strings.EqualFold(state, "home")
+// presenceIsHome reports whether a person entity is home. HA 2026.7's
+// in_zones attribute is authoritative when present: a person can occupy
+// several nested zones at once and State reports only the *smallest*,
+// so someone in a zone inside the home (State = that zone's name) is
+// still home — a bare State comparison would miscount them as away.
+// When the attribute is absent (a pre-2026.7 HA, or a tracker source
+// that doesn't populate it), fall back to the State string rather than
+// assuming any particular wire shape.
+func presenceIsHome(state *homeassistant.State) bool {
+	if raw, ok := state.Attributes["in_zones"].([]any); ok {
+		for _, z := range raw {
+			if s, ok := z.(string); ok && strings.EqualFold(s, "zone.home") {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.EqualFold(state.State, "home")
 }
 
 // sortHomeSection orders a section's entities by entity_id for stable,

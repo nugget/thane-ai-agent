@@ -136,7 +136,7 @@ func TestStateWatcher_Run(t *testing.T) {
 		entityID, oldState, newState string
 	}
 
-	handler := func(entityID, oldState, newState string) {
+	handler := func(entityID, oldState, newState, _ string) {
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, struct {
@@ -195,7 +195,7 @@ func TestStateWatcher_NilNewStateSkipped(t *testing.T) {
 	events := make(chan Event, 10)
 
 	called := false
-	handler := func(_, _, _ string) { called = true }
+	handler := func(_, _, _, _ string) { called = true }
 
 	watcher := NewStateWatcher(events, nil, nil, handler, nil)
 
@@ -230,7 +230,7 @@ func TestStateWatcher_NonStateChangedIgnored(t *testing.T) {
 	events := make(chan Event, 10)
 
 	called := false
-	handler := func(_, _, _ string) { called = true }
+	handler := func(_, _, _, _ string) { called = true }
 
 	watcher := NewStateWatcher(events, nil, nil, handler, nil)
 
@@ -257,7 +257,7 @@ func TestStateWatcher_NonStateChangedIgnored(t *testing.T) {
 
 func TestHandleEvent_ReturnValue(t *testing.T) {
 	events := make(chan Event, 10)
-	handler := func(_, _, _ string) {}
+	handler := func(_, _, _, _ string) {}
 
 	// Filter accepts only "light.*".
 	filter := NewEntityFilter([]string{"light.*"}, nil)
@@ -295,4 +295,100 @@ func makeStateEvent(t *testing.T, entityID, oldState, newState string) Event {
 		t.Fatalf("marshal state data: %v", err)
 	}
 	return Event{Type: "state_changed", Data: raw}
+}
+
+// The watcher must deliver the new state's device_class to the handler —
+// it carries the operator's "Show as" override, the key class-aware
+// renderers translate by. Missing device_class arrives as "".
+func TestStateWatcher_DeliversDeviceClass(t *testing.T) {
+	events := make(chan Event, 10)
+
+	var mu sync.Mutex
+	classes := map[string]string{}
+	handler := func(entityID, _, _, deviceClass string) {
+		mu.Lock()
+		defer mu.Unlock()
+		classes[entityID] = deviceClass
+	}
+
+	watcher := NewStateWatcher(events, nil, nil, handler, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watcher.Run(ctx)
+		close(done)
+	}()
+
+	withClass := StateChangedData{
+		EntityID: "binary_sensor.zone25_garage_bay_3",
+		OldState: &State{State: "off"},
+		NewState: &State{State: "on", Attributes: map[string]any{"device_class": "garage_door"}},
+	}
+	raw, err := json.Marshal(withClass)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	events <- Event{Type: "state_changed", Data: raw}
+	events <- makeStateEvent(t, "light.kitchen", "off", "on") // no device_class
+
+	// Poll until both events land instead of a fixed sleep, so the test
+	// stays deterministic under slow CI rather than timing-sensitive.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(classes)
+		mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("watcher processed %d/2 events before deadline", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if classes["binary_sensor.zone25_garage_bay_3"] != "garage_door" {
+		t.Errorf("device_class = %q, want garage_door", classes["binary_sensor.zone25_garage_bay_3"])
+	}
+	if classes["light.kitchen"] != "" {
+		t.Errorf("device_class for classless entity = %q, want empty", classes["light.kitchen"])
+	}
+}
+
+// The ingestion filter is a dynamic registry (#1192): SetFilter swaps
+// the gate at runtime with no HA re-subscription — the next event sees
+// the new filter. Match-none is distinct from empty (which matches all).
+func TestStateWatcher_SetFilterLiveSwap(t *testing.T) {
+	watcher := NewStateWatcher(nil, NewEntityFilter([]string{"lock.*"}, nil), nil, func(_, _, _, _ string) {}, nil)
+
+	if !watcher.HandleEvent(makeStateEvent(t, "lock.front", "locked", "unlocked")) {
+		t.Fatal("lock.front should pass the initial filter")
+	}
+	if watcher.HandleEvent(makeStateEvent(t, "light.office", "off", "on")) {
+		t.Fatal("light.office should be filtered initially")
+	}
+
+	watcher.SetFilter(NewEntityFilter([]string{"light.*"}, nil))
+	if watcher.HandleEvent(makeStateEvent(t, "lock.front", "unlocked", "locked")) {
+		t.Fatal("lock.front should be filtered after the swap")
+	}
+	if !watcher.HandleEvent(makeStateEvent(t, "light.office", "on", "off")) {
+		t.Fatal("light.office should pass after the swap")
+	}
+
+	// Nothing registered must mean ingest nothing.
+	watcher.SetFilter(NewEntityFilterMatchNone(nil))
+	if watcher.HandleEvent(makeStateEvent(t, "light.office", "off", "on")) {
+		t.Fatal("match-none filter should drop everything")
+	}
+	// And SetFilter(nil) defaults to match-none, not match-all.
+	watcher.SetFilter(nil)
+	if watcher.HandleEvent(makeStateEvent(t, "lock.front", "locked", "unlocked")) {
+		t.Fatal("nil filter should default to match-none")
+	}
 }

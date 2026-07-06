@@ -62,7 +62,7 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 
 	_, err = hydrated.RuntimeTools[0].Handler(context.Background(), map[string]any{
-		"content": "## Current Sense\n\nEverything is calm.",
+		"body": "## Current Sense\n\nEverything is calm.",
 	})
 	if err != nil {
 		t.Fatalf("replace output handler: %v", err)
@@ -136,7 +136,7 @@ Everything is calm.
 		t.Fatalf("renderLoopOutputContextWithNow: %v", err)
 	}
 
-	if !strings.Contains(ctx, `"updated_delta": "-7200s"`) {
+	if !strings.Contains(ctx, `"updated_delta": "-2h"`) {
 		t.Fatalf("output context missing delta freshness:\n%s", ctx)
 	}
 	for _, unwanted := range []string{

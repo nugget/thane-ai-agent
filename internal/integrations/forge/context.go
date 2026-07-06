@@ -101,5 +101,5 @@ func (p *ContextProvider) buildContext() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal forge context: %w", err)
 	}
-	return string(data), nil
+	return "### Forge Accounts\n\n" + string(data) + "\n", nil
 }

@@ -113,18 +113,24 @@ func loopSpecSchema(description string) map[string]any {
 			},
 			"subscriptions": map[string]any{
 				"type":        "array",
-				"description": "Entities surfaced in context every iteration; the effective set unions every container ancestor's subscriptions.",
+				"description": "Entities surfaced in context every iteration; the effective set unions every container ancestor's subscriptions (entries marked self_only stay out of descendants).",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"entity_id": map[string]any{"type": "string", "description": "Subscribed entity id (e.g. a Home Assistant entity)."},
+						"entity_id": map[string]any{"type": "string", "description": "Subscribed entity id (e.g. a Home Assistant entity), a glob, or an area:/label:/floor: target."},
 						"history":   map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Optional history windows to include."},
 						"forecast":  map[string]any{"type": "string", "enum": []string{"daily", "hourly", "twice_daily", "none"}, "description": "For weather.* entities, the Home Assistant forecast type to include."},
 						"ttl_seconds": map[string]any{
 							"type":        "integer",
 							"description": "Optional time-to-live; the subscription is dropped after this many seconds.",
 						},
-						"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional tags scoping the subscription."},
+						"mode":                       map[string]any{"type": "string", "enum": []string{"render", "ingest", "both"}, "description": "What the subscription feeds: render (default) injects live state each iteration; ingest feeds the recent-state-changes window only; both does both."},
+						"self_only":                  map[string]any{"type": "boolean", "description": "On containers: true keeps this subscription out of descendant loops' inherited sets."},
+						"requires_tag":               map[string]any{"type": "string", "description": "Optional capability tag gating visibility: renders only while the tag is active. Render-only — incompatible with mode ingest/both; the combination is rejected."},
+						"transitions":                map[string]any{"type": "integer", "description": "Render the entity's last n observed state changes ({from, to, ago}, class-aware); declaring a log feeds the entity into state-change capture automatically. Capped; incompatible with mode ingest."},
+						"transitions_window_seconds": map[string]any{"type": "integer", "description": "Bound the transition log to a trailing window in seconds; usable with or without transitions (still capped)."},
+						"wake":                       map[string]any{"type": "boolean", "description": "Wake the owning loop when the entity changes — debounced/coalesced via the shared queue; capture derives automatically. Incompatible with requires_tag and registry targets."},
+						"wake_debounce_seconds":      map[string]any{"type": "integer", "description": "Coalescing window before the wake fires; the loop's cadence follows its twitchiest wake subscription."},
 					},
 				},
 			},

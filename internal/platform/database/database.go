@@ -64,3 +64,18 @@ func AddColumn(db *sql.DB, table, column, typedef string) error {
 	}
 	return nil
 }
+
+// RenameColumn idempotently renames a column on an existing table. The
+// call is a no-op when the source column is absent — either the table
+// was created fresh with the new name, or a prior run already renamed
+// it — so it is safe as a forward-only migration step.
+func RenameColumn(db *sql.DB, table, from, to string) error {
+	if !HasColumn(db, table, from) {
+		return nil
+	}
+	_, err := db.Exec(fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", table, from, to))
+	if err != nil {
+		return fmt.Errorf("rename column %s.%s to %s: %w", table, from, to, err)
+	}
+	return nil
+}

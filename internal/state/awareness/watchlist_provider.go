@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // StateGetter abstracts the Home Assistant client methods the watchlist
@@ -30,8 +31,16 @@ type WatchlistProvider struct {
 	store            *WatchlistStore
 	ha               StateGetter
 	registries       HARegistryClient // optional; nil disables unavailable enrichment
+	transitions      TransitionSource // optional; nil marks requested logs unavailable
 	logger           *slog.Logger
 	maxGlobExpansion int
+}
+
+// SetTransitionSource wires the per-entity retention that backs
+// declared transition logs (#1210). Pass nil to render requested logs
+// as unavailable rather than empty.
+func (p *WatchlistProvider) SetTransitionSource(source TransitionSource) {
+	p.transitions = source
 }
 
 // NewWatchlistProvider creates a watchlist context provider.
@@ -75,13 +84,28 @@ func (p *WatchlistProvider) SetRegistryClient(registries HARegistryClient) {
 // formatted as compact JSON with relevant attributes. Default domains
 // use a markdown line with state and unit. All timestamps use delta
 // format per #458.
-func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
-	// Always-visible entities only. Loop-scoped subscriptions live on
-	// Spec.Subscriptions and are rendered by [LoopSubscriptionProvider]
-	// after walking the ancestor chain.
-	subs, err := p.store.ListUntaggedSubscriptions()
+func (p *WatchlistProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
+	// The always-visible tier is core's subscriptions (#1208): core is
+	// the root container and every context is de facto core's context.
+	// Loop-owned rows are rendered by [LoopSubscriptionProvider] after
+	// walking the ancestor chain, and system-owned rows (the
+	// person-entity ingestion floor) never render — they are
+	// ingest-mode by construction.
+	rows, err := p.store.ListOwner(looppkg.CoreLoopName)
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
+	}
+	// Ingest-only entries feed the state-change window's push pipeline;
+	// they don't render per-turn state here (#1192). Tag-gated entries
+	// render only while their capability tag is active (#1213) — the
+	// macro-set lens: one tag activation surfaces the subject's
+	// documents and its entities together.
+	subs := make([]looppkg.EntitySubscription, 0, len(rows))
+	for _, row := range rows {
+		if !row.RendersState() || !row.GateOpen(req.ActiveTags) {
+			continue
+		}
+		subs = append(subs, row.EntitySubscription)
 	}
 	if len(subs) == 0 {
 		return "", nil
@@ -101,27 +125,32 @@ func (p *WatchlistProvider) TagContext(ctx context.Context, _ agentctx.ContextRe
 	// this turn) yields no bare header.
 	var body strings.Builder
 	for _, sub := range subs {
-		if homeassistant.IsEntityGlob(sub.EntityID) {
+		target := ParseSubscriptionTarget(sub.EntityID)
+		switch {
+		case target.Kind == TargetGlob:
 			states, statesErr := snap.get(ctx)
 			// No exclusion set — this provider IS the always-visible
 			// surface, so there is nothing upstream to dedup against.
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.maxGlobExpansion, nil))
-			continue
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, nil))
+		case target.IsRegistryTarget():
+			states, statesErr := snap.get(ctx)
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, nil))
+		default:
+			body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
+			body.WriteByte('\n')
 		}
-		body.WriteString(p.renderSubscriptionContext(ctx, sub, now, registries))
-		body.WriteByte('\n')
 	}
 	if body.Len() == 0 {
 		return "", nil
 	}
 	return "### Watched Entities\n\n" +
-		"_This is a keyhole onto a few subscribed entities, not the house. " +
-		"For anything wider — another room, a device, live state, history, " +
-		"control, or automations — activate the `ha` capability tag._\n\n" +
+		"Live state for explicitly subscribed entities only. Wider Home " +
+		"Assistant access (other rooms, devices, history, control, " +
+		"automations) is behind the `ha` capability tag.\n\n" +
 		body.String(), nil
 }
 
-func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub WatchedSubscription, now time.Time, registries *renderRegistries) string {
+func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub looppkg.EntitySubscription, now time.Time, registries *renderRegistries) string {
 	state, err := p.ha.GetState(ctx, sub.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch watched entity state",
@@ -130,14 +159,14 @@ func (p *WatchlistProvider) renderSubscriptionContext(ctx context.Context, sub W
 		)
 		return formatFetchError(sub.EntityID)
 	}
-	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries)
+	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries, p.transitions)
 }
 
 func watchlistStateWithForecast(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	state *homeassistant.State,
 	warnMsg string,
 	extraLogFields ...any,

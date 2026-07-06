@@ -30,25 +30,35 @@ Choose stream wiring by attention cost:
 
 - Use entity subscriptions for ambient state the loop should see on its
   normal turns. `thane_loop_create.entities` creates the initial watch
-  set; `update_entity_subscriptions` adjusts it later — that's the
-  loop-scoped store. Don't reach for `add_entity_subscription` /
-  `remove_entity_subscription` here; those mutate the
-  conversation-wide always-visible subscription set, a different
-  store, and using them on a loop's scope mutates the wrong thing.
+  set; `add_entity_subscription` / `remove_entity_subscription` with
+  `owner` set to the loop's name adjust it later. Ownership is the
+  parameter: omit `owner` and the same tools mutate your own
+  always-visible subscription set instead — name the loop when the
+  loop should carry the watch.
   Add `include` metadata flags (`area`, `device`, `labels`,
   `description`, `visibility`, or `all`) when the loop needs
   physical-world context beside the live state, including HA's
   floor/building hierarchy and hidden/enabled salience. Use
   `visibility.context_role` as the quick default-vs-forensic hint.
-- Use event-source `wake_loop` targets when each event deserves an
-  immediate iteration. Producer tools such as `forge_repo_follow` and
-  `media_follow` own those subscriptions.
+- When the loop should *act* the moment an entity changes — not wait
+  for its next timer — the subscription itself is the trigger: add
+  `wake: true` to the entity entry (at creation or later). The loop
+  wakes with the change as a `{entity, from, to, ago}` event,
+  debounced and coalesced so a chattering sensor can't wakestorm it.
+  This is the first door for simple entity-change triggers; reach for
+  the HA-automation→MQTT pipeline (`mqtt_wake_add`) only when the
+  trigger logic is HA-side — compound conditions, zone dwell,
+  templates. Both deliver through the same queue.
+- Use event-source `wake_loop` targets when each event from a
+  *producer stream* deserves an immediate iteration. Producer tools
+  such as `forge_repo_follow` and `media_follow` own those
+  subscriptions.
 
 Treat running loops as bi-directional. A service loop can pull you in
 via `request_core_attention` when something deserves a decision; you
 can push new focus down by adding entities to a running loop's watch
-set with `update_entity_subscriptions`, or by pointing a producer's
-`wake_loop` target at the loop. Inspect what is already running with
+set with `add_entity_subscription` (`owner: <loop name>`), or by
+pointing a producer's `wake_loop` target at the loop. Inspect what is already running with
 `loop_status` and `loop_definition_get` before launching a parallel
 loop — a thriving loop is its own data-dense documentation and is
 usually the right thing to extend.

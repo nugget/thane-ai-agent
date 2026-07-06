@@ -219,3 +219,297 @@ func TestLoopSetSubscriptionsRoundtrip(t *testing.T) {
 		t.Errorf("Subscriptions accessor returned %d entries, want 2", len(got))
 	}
 }
+
+// TestNormalizeSubscriptionMode covers the canonical stored-mode
+// contract: render collapses to the empty string so pre-mode and
+// default declarations serialize identically.
+func TestNormalizeSubscriptionMode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"empty is render", "", "", false},
+		{"render collapses to empty", "render", "", false},
+		{"ingest passes through", "ingest", SubscriptionModeIngest, false},
+		{"both passes through", "both", SubscriptionModeBoth, false},
+		{"whitespace trimmed", "  ingest  ", SubscriptionModeIngest, false},
+		{"unknown rejected", "push", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeSubscriptionMode(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("NormalizeSubscriptionMode(%q) = %q, want error", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalizeSubscriptionMode(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Errorf("NormalizeSubscriptionMode(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadCanonicalizesMode verifies hydration
+// applies the mode boundary invariant alongside the existing forecast
+// and AddedAt sweeps.
+func TestNormalizeSubscriptionsOnLoadCanonicalizesMode(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+
+	got, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Mode: "render"},
+		{EntityID: "sensor.b", Mode: "ingest"},
+	}, now)
+	if err != nil {
+		t.Fatalf("normalizeSubscriptionsOnLoad: %v", err)
+	}
+	if got[0].Mode != "" {
+		t.Errorf("render mode = %q, want canonical empty", got[0].Mode)
+	}
+	if got[1].Mode != SubscriptionModeIngest {
+		t.Errorf("ingest mode = %q, want %q", got[1].Mode, SubscriptionModeIngest)
+	}
+
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.c", Mode: "firehose"},
+	}, now); err == nil {
+		t.Fatal("unknown mode survived hydration, want error")
+	}
+}
+
+// TestRegistryAncestorSubscriptionsHonorsSelfOnly asserts the
+// per-subscription inheritance flag: a container's SelfOnly entry is
+// visible to the container itself but never unions into descendants.
+func TestRegistryAncestorSubscriptionsHonorsSelfOnly(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+
+	root, err := New(Config{
+		Name:      "root_container",
+		Operation: OperationContainer,
+		Subscriptions: []EntitySubscription{
+			{EntityID: "sensor.inherited"},
+			{EntityID: "sensor.container_private", SelfOnly: true},
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("new root: %v", err)
+	}
+	if err := r.Register(root); err != nil {
+		t.Fatalf("register root: %v", err)
+	}
+
+	leaf, err := New(Config{
+		Name:     "leaf",
+		Task:     "do",
+		ParentID: root.ID(),
+		Subscriptions: []EntitySubscription{
+			{EntityID: "sensor.own_private", SelfOnly: true},
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("new leaf: %v", err)
+	}
+	if err := r.Register(leaf); err != nil {
+		t.Fatalf("register leaf: %v", err)
+	}
+
+	leafSubs := r.AncestorSubscriptions(leaf.ID())
+	byID := make(map[string]EntitySubscription, len(leafSubs))
+	for _, sub := range leafSubs {
+		byID[sub.EntityID] = sub
+	}
+	if _, ok := byID["sensor.inherited"]; !ok {
+		t.Error("leaf missing inheritable container subscription")
+	}
+	if _, ok := byID["sensor.container_private"]; ok {
+		t.Error("container's SelfOnly subscription leaked into descendant")
+	}
+	// A loop's OWN SelfOnly entries always render for itself.
+	if _, ok := byID["sensor.own_private"]; !ok {
+		t.Error("leaf's own SelfOnly subscription missing from its effective set")
+	}
+
+	rootSubs := r.AncestorSubscriptions(root.ID())
+	rootByID := make(map[string]EntitySubscription, len(rootSubs))
+	for _, sub := range rootSubs {
+		rootByID[sub.EntityID] = sub
+	}
+	if _, ok := rootByID["sensor.container_private"]; !ok {
+		t.Error("container's own SelfOnly subscription missing from its own effective set")
+	}
+}
+
+// TestEntitySubscriptionGateOpen covers the #1213 render gate: an
+// ungated subscription always renders; a gated one only while its
+// capability tag is active, with a nil tag set closing every gate.
+func TestEntitySubscriptionGateOpen(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		sub    EntitySubscription
+		active map[string]bool
+		want   bool
+	}{
+		{"ungated with nil tags", EntitySubscription{EntityID: "a"}, nil, true},
+		{"ungated with tags active", EntitySubscription{EntityID: "a"}, map[string]bool{"x": true}, true},
+		{"gated with nil tags", EntitySubscription{EntityID: "a", RequiresTag: "x"}, nil, false},
+		{"gated with tag inactive", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"y": true}, false},
+		{"gated with tag active", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"x": true}, true},
+		{"gated with tag explicitly false", EntitySubscription{EntityID: "a", RequiresTag: "x"}, map[string]bool{"x": false}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.sub.GateOpen(tc.active); got != tc.want {
+				t.Errorf("GateOpen = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadTrimsRequiresTag verifies hydration
+// canonicalizes the gate alongside forecast and mode.
+func TestNormalizeSubscriptionsOnLoadTrimsRequiresTag(t *testing.T) {
+	t.Parallel()
+
+	got, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", RequiresTag: "  ranch_water  "},
+	}, time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("normalizeSubscriptionsOnLoad: %v", err)
+	}
+	if got[0].RequiresTag != "ranch_water" {
+		t.Errorf("requires_tag = %q, want trimmed", got[0].RequiresTag)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadRejectsGatedIngest makes the
+// render-only invariant uniform at hydration: a JSON-hydrated spec
+// (loop_definition_set, persisted records) cannot carry a gated
+// ingest-feeding subscription any more than the tool doors can.
+func TestNormalizeSubscriptionsOnLoadRejectsGatedIngest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	for _, mode := range []string{SubscriptionModeIngest, SubscriptionModeBoth} {
+		if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+			{EntityID: "binary_sensor.pump_running", Mode: mode, RequiresTag: "ranch_water"},
+		}, now); err == nil {
+			t.Errorf("mode %q with requires_tag survived hydration, want rejection", mode)
+		}
+	}
+	// The render-mode combination stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.tank", RequiresTag: "ranch_water"},
+	}, now); err != nil {
+		t.Errorf("gated render subscription rejected at hydration: %v", err)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadTransitionCombos covers the #1210
+// hydration invariants: negative counts are corrupt, and a transition
+// log with an ingest-only mode declares a render nobody would see.
+func TestNormalizeSubscriptionsOnLoadTransitionCombos(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: -1},
+	}, now); err == nil {
+		t.Error("negative transitions survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", TransitionsWindowSeconds: -1},
+	}, now); err == nil {
+		t.Error("negative transitions window survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, Mode: SubscriptionModeIngest},
+	}, now); err == nil {
+		t.Error("transition log with mode ingest survived hydration")
+	}
+	// mode both renders, so the log is visible — legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, Mode: SubscriptionModeBoth},
+	}, now); err != nil {
+		t.Errorf("transition log with mode both rejected: %v", err)
+	}
+	// A gated transition log is legal: capture is unconditional,
+	// rendering follows the gate.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Transitions: 5, RequiresTag: "ranch_water"},
+	}, now); err != nil {
+		t.Errorf("gated transition log rejected: %v", err)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture makes
+// the registry-target capture rule uniform at JSON hydration: a
+// loop_definition_set spec cannot smuggle in combinations the tool
+// doors reject (Copilot #1215).
+func TestNormalizeSubscriptionsOnLoadRejectsRegistryTargetCapture(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office", Transitions: 5},
+	}, now); err == nil {
+		t.Error("transition log on registry target survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "label:critical", Mode: SubscriptionModeBoth},
+	}, now); err == nil {
+		t.Error("ingest-feeding mode on registry target survived hydration")
+	}
+	// Plain render on a registry target stays legal.
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office"},
+	}, now); err != nil {
+		t.Errorf("render registry target rejected at hydration: %v", err)
+	}
+}
+
+// TestNormalizeSubscriptionsOnLoadWakeCombos makes the #1211 wake
+// invariants uniform at JSON hydration: negatives are corrupt, the
+// tag gate cannot ride the wake feed, and registry targets cannot
+// wake (their members never reach the ingestion filter).
+func TestNormalizeSubscriptionsOnLoadWakeCombos(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Wake: true, WakeDebounceSeconds: -1},
+	}, now); err == nil {
+		t.Error("negative wake debounce survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "sensor.a", Wake: true, RequiresTag: "ranch_water"},
+	}, now); err == nil {
+		t.Error("wake+requires_tag survived hydration")
+	}
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "area:office", Wake: true},
+	}, now); err == nil {
+		t.Error("wake on registry target survived hydration")
+	}
+	// The plain declaration stays legal, ingest-mode wake included
+	// (capture + wake with no render is coherent).
+	if _, err := normalizeSubscriptionsOnLoad([]EntitySubscription{
+		{EntityID: "binary_sensor.gate", Wake: true, WakeDebounceSeconds: 30, Mode: SubscriptionModeIngest},
+	}, now); err != nil {
+		t.Errorf("wake declaration rejected: %v", err)
+	}
+}

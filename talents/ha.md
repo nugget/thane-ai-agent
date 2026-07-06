@@ -74,14 +74,23 @@ expose", or "is this device healthy":
 }
 ```
 
-Returns the device identity (manufacturer/model/firmware/serial/area/
-integration/via_device) plus every child entity it owns, with semantic
-state grouped by salience (anomalies first, then active, ambient, then
-the rest) and an availability rollup (how many of its entities are
-reporting). Resolves by `device_id` or by name — user-assigned or
-registry name, with a substring fallback, returning candidates when a
-name is ambiguous. Reach for this instead of discovering a device's
-child entities one `ha_get_state` at a time.
+Returns the full device-info card — manufacturer, model, firmware,
+serial, network connections (MAC and friends), area, labels, integration,
+and via_device — plus every child entity it owns, grouped exactly
+the way Home Assistant's own device page groups them — `controls` (the
+actionable primaries: lights, switches, climate), `sensors` (the
+read-only primaries), `configuration` (tuning knobs), and `diagnostic`
+(health counters) — with an availability rollup (how many entities are
+reporting). This is explicit inspection, so unlike the enumeration tools
+it shows **hidden** entities too, each marked `"hidden": true`: naming a
+device means you want its whole instrument panel, including the config
+and diagnostic entities HA keeps off its generated dashboards. The
+`configuration` and `diagnostic` groups are capped for a device with a
+long tail of knobs, with an honest `*_truncated_count`. Resolves by
+`device_id` or by name — user-assigned or registry name, with a
+substring fallback, returning candidates when a name is ambiguous. Reach
+for this instead of discovering a device's child entities one
+`ha_get_state` at a time.
 
 ## Find one entity by description
 
@@ -114,9 +123,11 @@ entity_id is already in hand:
 }
 ```
 
-The fastest path when the entity_id is already known. Returns the
-state value plus all attributes (brightness, color, last_changed,
-etc.).
+The fastest path when the entity_id is already known. Returns a
+curated, class-aware projection — semantic state plus the attributes
+that matter for that class (a climate entity shows mode, current,
+target, and hvac_action; a lock shows battery and jammed-vs-unlocked;
+an event shows what fired and when) — not a raw attribute dump.
 
 Add `include` when physical-world metadata would improve reasoning:
 
@@ -164,6 +175,17 @@ or use a numeric `attribute`/`comparison`/`value` predicate for
 threshold questions. This is the right reach instead of fanning out
 many `ha_get_state` calls or listing a whole domain and eyeballing it.
 Add `include` for area/device/label/visibility metadata on each match.
+
+**Hidden entities.** `ha_search_states` and `ha_list_entities` default
+to the entities the operator lets Home Assistant show — hidden ones
+(the diagnostics and config an operator curated off their dashboards)
+are excluded, and their count comes back as `hidden_excluded` so you
+know they exist. Respect that default: hidden is operator intent, not
+an obstacle. When you specifically need them — a device's power draw,
+a diagnostic sensor — pass `include_hidden: true` (each returned hidden
+entity is marked `hidden`), or read the one entity directly with
+`ha_get_state`, or inspect the whole device with `ha_device`, which
+shows everything a device exposes the way HA's device page does.
 
 ## Enumerate a domain or name pattern
 
@@ -266,6 +288,22 @@ rises:
   next move is "tell someone about this," activate notifications;
   HA's tools are about state and control, not interruption.
 
+## Presence and zones
+
+Person entities carry `in_zones` — the full list of zones someone is in
+right now (zones nest, so it can be several at once). The `state` field
+reports only the *smallest* zone: a person in a zone inside the home
+shows that zone's name as state, and `zone.home` in their `in_zones` is
+what says they're still home. Read membership from `in_zones`, not from
+`state == "home"`.
+
+For the reverse question — "who's in zone X" — read the zone entity
+itself: its state is the live occupant count and its `persons` attribute
+lists them (`ha_get_state` on `zone.home`, or `ha_list_entities` with
+`domain: zone` to survey every zone at once). No person-by-person sweep
+needed. Person entities whose location comes from presence scanners
+carry no coordinates — never assume `latitude`/`longitude` exist.
+
 ## Cross-references
 
 - For sustained entity attention across loop iterations, bounce to
@@ -330,7 +368,36 @@ a guessed entity_id.
 
 ## Low-level: ha_call_service
 
-`ha_call_service` requires the exact entity_id:
+Unsure of a service name or its fields? `ha_list_services` is the
+catalog: bare call for a directory of every domain's service names;
+`domain` for full field detail on all of that domain's services;
+`"domain.service"` (e.g. `"light.turn_on"`) for just that one service —
+descriptions, required flags, examples, and whether it accepts a
+target block. Check it before guessing; a wrong service name costs a
+failed call.
+
+`ha_call_service` addresses one verified entity_id, or fans out with a
+`target` block. Multi-device intent is ONE call, not N: "turn off the
+office lights" is a single call targeting the area —
+
+```json
+{
+  "domain": "light",
+  "service": "turn_off",
+  "target": { "area_id": "Office" }
+}
+```
+
+Targets take `entity_id`, `device_id`, `area_id`, `floor_id`, and
+`label_id` (string or array each), and areas/floors/labels/devices
+accept human names as well as registry IDs — names resolve against the
+registry, and unknown references fail fast with the known names instead
+of HA's silent no-op. HA skips hidden entities in area/floor/label
+targets; that's the operator's curation, not a bug. The response
+reports which entities actually changed state — zero changes with a
+note usually means everything was already in the requested state.
+
+Single-entity form, with the exact entity_id:
 
 ```json
 {
@@ -411,57 +478,97 @@ labels, aliases, icon). Read this before updating — config updates
 are merged shallowly, so you want to know what's there before
 modifying.
 
+## Debug a run: ha_automation_traces
+
+When an automation misfires — or right after you create or update one —
+`ha_automation_traces` shows what actually happened. Bare (with `id` or
+`entity_id`): recent runs newest-first, each with what triggered it,
+how it ended (`finished`, `failed_conditions`, `error`), duration, and
+any error. Pass a `run_id` from that listing for the full step-by-step
+trace in execution order — which trigger fired, each condition's
+result, what every action did. HA keeps traces only for a handful of
+recent runs, so an empty list usually means "hasn't fired lately," not
+"broken." Activity counts from `ha_automation_list` tell you *whether*
+it fires; traces tell you *why it did what it did*.
+
 ## Author a new automation
 
-`ha_automation_create` takes a full HA automation object:
+Home Assistant (2026.7+) authors automations around *intent*, not
+device internals. A purpose-specific trigger describes what you want
+to happen — "motion in the office," "a battery got low" — and targets
+an area, floor, label, or set of entities. The automation then follows
+the home as it changes: move a sensor into the office and the "motion
+in the office" trigger picks it up, no re-authoring. Prefer this form.
+
+`ha_automation_vocabulary` lists what a target supports — its purpose
+triggers, conditions, and services, in the `domain.name` form the
+config takes. Call it first; the vocabulary is per-install because
+integrations register their own.
 
 ```json
 {
   "config": {
-    "alias": "Driveway camera notification",
-    "description": "Notify when the driveway camera sees motion at night",
-    "trigger": [
-      {
-        "platform": "state",
-        "entity_id": "binary_sensor.driveway_motion",
-        "to": "on"
-      }
+    "alias": "Office lights on with motion after dark",
+    "description": "When anyone moves in the office after sunset, bring the office lights up — so the room is never dark when occupied.",
+    "triggers": [
+      { "trigger": "motion.detected", "target": { "area_id": "office" } }
     ],
-    "condition": [
-      {
-        "condition": "sun",
-        "after": "sunset",
-        "before": "sunrise"
-      }
+    "conditions": [
+      { "condition": "sun.is_below_horizon" }
     ],
-    "action": [
-      {
-        "service": "notify.mobile_app_pixel",
-        "data": {
-          "message": "Driveway motion detected"
-        }
-      }
+    "actions": [
+      { "action": "light.turn_on", "target": { "area_id": "office" } }
     ],
     "mode": "single"
   },
   "metadata": {
-    "area_id": "driveway",
-    "label_ids": ["security"]
+    "area_id": "office",
+    "label_ids": ["lighting"]
+  }
+}
+```
+
+The purpose trigger targets the *area*, not a specific
+`binary_sensor.*`. That is the durable choice — entity-ID triggers
+break the moment a device is renamed or replaced.
+
+**2026.7 renames** — use the current names: `battery.became_low`,
+`vacuum.returned_to_dock`, `update.became_available`,
+`climate.is_target_temperature`.
+
+Classic platform triggers still work and are the right tool when no
+purpose trigger fits (a raw MQTT topic, a template, a specific
+webhook). Like purpose triggers, each is an entry in `config.triggers`
+— never a top-level `trigger` field on the config:
+
+```json
+{
+  "config": {
+    "triggers": [
+      { "trigger": "state", "entity_id": "binary_sensor.driveway_motion", "to": "on" }
+    ]
   }
 }
 ```
 
 The `config` key holds the raw HA automation object — preserve
-HA-native field names (alias, description, trigger, condition,
-action, mode). The `metadata` key holds entity registry overrides;
-prefer the `_id` suffixed variants (`area_id`, `label_ids`,
-`category_id`) over their friendly-name siblings.
+HA-native field names. The `metadata` key holds entity registry
+overrides; prefer the `_id` variants (`area_id`, `label_ids`,
+`category_id`).
 
-**Before authoring**: use `ha_registry_search` to find real area
-IDs, label IDs, and entity IDs. Don't guess — typos in entity_ids
-inside a trigger silently break the automation the same way they
-silently break `ha_call_service`. The automation will register, return
-success, and never fire.
+**Author it well.** Every automation you create should read like a
+careful operator wrote it: a real `alias` and a `description` that
+states the intent (not "Automation 7"), an `area_id`, and `label_ids`
+where they apply. The metadata is courtesy to whoever opens the HA UI
+and context you yourself read back later.
+
+**Before authoring**: resolve real IDs. `ha_automation_vocabulary`
+gives you valid trigger/condition/service identifiers for a target;
+`ha_registry_search` finds area, label, and entity IDs. Purpose
+triggers targeting an area sidestep the classic failure mode — a typo
+in an `entity_id` inside a trigger silently breaks the automation:
+it registers, returns success, and never fires. After creating, use
+`ha_automation_traces` to confirm it does what you intended.
 
 ## Update an existing automation
 

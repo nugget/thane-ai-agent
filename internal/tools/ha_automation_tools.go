@@ -254,8 +254,9 @@ func (r *Registry) registerHAAutomationTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "ha_automation_create",
-		Description: "Create a Home Assistant automation directly from a raw HA automation object. Supports the full depth of triggers, conditions, actions, variables, mode, max, and use_blueprint. Optional metadata can set area, labels, icon, aliases, category_id, hidden state, and entity_id rename after creation.",
+		Name: "ha_automation_create",
+		Description: "Create a Home Assistant automation directly from a raw HA automation object. Each trigger is an entry in the config.triggers array, each condition in config.conditions, each action in config.actions. Author triggers and conditions in the purpose-specific form when one fits — a config.triggers entry of {\"trigger\": \"light.turned_off\", \"target\": {\"area_id\": \"office\"}} — so the automation describes intent and survives device changes; ha_automation_vocabulary lists the identifiers a target supports. Classic triggers (a config.triggers entry of {\"trigger\": \"state\", ...}) remain fully supported for cases the purpose vocabulary doesn't cover. " +
+			"Supports the full depth of triggers, conditions, actions, variables, mode, max, and use_blueprint. Optional metadata can set area, labels, icon, aliases, category_id, hidden state, and entity_id rename after creation.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -265,7 +266,7 @@ func (r *Registry) registerHAAutomationTools() {
 				},
 				"config": map[string]any{
 					"type":        "object",
-					"description": "Raw Home Assistant automation config object. Preserve HA-native field names such as alias, description, triggers, conditions, actions, variables, mode, max, or use_blueprint.",
+					"description": "Raw Home Assistant automation config object. Preserve HA-native field names such as alias, description, triggers, conditions, actions, variables, mode, max, or use_blueprint. Purpose-specific entries use domain.name identifiers with a target block; note the 2026.7 renames (battery.became_low, vacuum.returned_to_dock, update.became_available, climate.is_target_temperature). Always fill alias and description with genuine intent prose.",
 				},
 				"metadata": map[string]any{
 					"type":        "object",

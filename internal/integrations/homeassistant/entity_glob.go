@@ -53,3 +53,37 @@ func ValidateEntityTarget(s string) error {
 	}
 	return nil
 }
+
+// CutRegistryTarget splits a registry-backed subscription target
+// ("area:office", "label:critical", "floor:upstairs") into its prefix
+// and id. ok is false for concrete entity ids, globs, unknown
+// prefixes, and a bare prefix with an empty id ("area:") — the last
+// is a malformed target, not a wildcard. This is the one place the
+// registry-target vocabulary is defined; the awareness parser and
+// every authoring boundary that must reject capture-incompatible
+// combinations on registry targets route through it so the prefix
+// set can't drift between surfaces.
+func CutRegistryTarget(raw string) (prefix, id string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	p, v, found := strings.Cut(raw, ":")
+	if !found {
+		return "", "", false
+	}
+	switch p {
+	case "area", "label", "floor":
+	default:
+		return "", "", false
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", "", false
+	}
+	return p, v, true
+}
+
+// IsRegistryTarget reports whether raw addresses a registry-backed
+// group (area/label/floor) rather than a concrete entity id or glob.
+func IsRegistryTarget(raw string) bool {
+	_, _, ok := CutRegistryTarget(raw)
+	return ok
+}

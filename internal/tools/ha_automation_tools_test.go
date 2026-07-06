@@ -19,20 +19,28 @@ type fakeHAServer struct {
 	server   *httptest.Server
 	upgrader websocket.Upgrader
 
-	mu           sync.Mutex
-	states       []homeassistant.State
-	configs      map[string]map[string]any
-	areas        []map[string]any
-	floors       []map[string]any
-	labels       []map[string]any
-	categories   map[string][]map[string]any
-	devices      []map[string]any
-	entityRows   []map[string]any
-	entityByID   map[string]map[string]any
-	logbook      []map[string]any
-	serviceCalls []string
-	validations  map[string]homeassistant.ConfigValidationResult
-	wsCalls      map[string]int
+	mu              sync.Mutex
+	states          []homeassistant.State
+	services        []homeassistant.ServiceDomain
+	traces          map[string][]map[string]any
+	traceDetails    map[string]map[string]any
+	servicePayloads []map[string]any
+	serviceChanged  []homeassistant.State
+	targetTriggers  []string
+	targetConds     []string
+	targetServices  []string
+	configs         map[string]map[string]any
+	areas           []map[string]any
+	floors          []map[string]any
+	labels          []map[string]any
+	categories      map[string][]map[string]any
+	devices         []map[string]any
+	entityRows      []map[string]any
+	entityByID      map[string]map[string]any
+	logbook         []map[string]any
+	serviceCalls    []string
+	validations     map[string]homeassistant.ConfigValidationResult
+	wsCalls         map[string]int
 }
 
 func newFakeHAServer(t *testing.T) *fakeHAServer {
@@ -58,6 +66,7 @@ func newFakeHAServer(t *testing.T) *fakeHAServer {
 	mux.HandleFunc("/api/states/", f.handleState)
 	mux.HandleFunc("/api/config/automation/config/", f.handleAutomationConfig)
 	mux.HandleFunc("/api/services/", f.handleServiceCall)
+	mux.HandleFunc("/api/services", f.handleServicesCatalog)
 
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
@@ -78,7 +87,17 @@ func (f *fakeHAServer) registry(t *testing.T) *Registry {
 	}
 	t.Cleanup(func() { _ = ws.Close() })
 
-	return NewRegistry(client, nil)
+	return NewRegistry(client, nil, nil)
+}
+
+func (f *fakeHAServer) handleServicesCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	writeJSON(f.t, w, f.services)
 }
 
 func (f *fakeHAServer) handleStates(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +168,7 @@ func (f *fakeHAServer) handleServiceCall(w http.ResponseWriter, r *http.Request)
 	defer f.mu.Unlock()
 
 	f.serviceCalls = append(f.serviceCalls, strings.TrimPrefix(r.URL.Path, "/api/services/"))
+	f.servicePayloads = append(f.servicePayloads, payload)
 	entityID, _ := payload["entity_id"].(string)
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/turn_off"):
@@ -157,8 +177,17 @@ func (f *fakeHAServer) handleServiceCall(w http.ResponseWriter, r *http.Request)
 		f.setAutomationStateLocked(entityID, "on")
 	}
 
+	// Real HA answers a service call with the array of states the call
+	// changed; tests seed serviceChanged to simulate fan-out.
+	changed := f.serviceChanged
+	if changed == nil {
+		changed = []homeassistant.State{}
+		if entityID != "" {
+			changed = append(changed, homeassistant.State{EntityID: entityID, State: "on"})
+		}
+	}
 	w.WriteHeader(http.StatusOK)
-	writeJSON(f.t, w, map[string]any{"result": "ok"})
+	writeJSON(f.t, w, changed)
 }
 
 func (f *fakeHAServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +250,35 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 	defer f.mu.Unlock()
 
 	switch msgType {
+	case "get_triggers_for_target":
+		if f.targetTriggers == nil {
+			return []string{}, true
+		}
+		return f.targetTriggers, true
+	case "get_conditions_for_target":
+		if f.targetConds == nil {
+			return []string{}, true
+		}
+		return f.targetConds, true
+	case "get_services_for_target":
+		if f.targetServices == nil {
+			return []string{}, true
+		}
+		return f.targetServices, true
+	case "trace/list":
+		itemID, _ := msg["item_id"].(string)
+		list := f.traces[itemID]
+		if list == nil {
+			list = []map[string]any{}
+		}
+		return list, true
+	case "trace/get":
+		runID, _ := msg["run_id"].(string)
+		detail, ok := f.traceDetails[runID]
+		if !ok {
+			return nil, false
+		}
+		return detail, true
 	case "validate_config":
 		return f.validations, true
 	case "config/area_registry/list":

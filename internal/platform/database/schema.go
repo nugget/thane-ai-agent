@@ -81,6 +81,25 @@ func (s ColumnAdd) Describe() string {
 	return "column " + s.Table + "." + s.Column
 }
 
+// ColumnRename renames a column on an existing table. A no-op when
+// the source column is absent (fresh table created with the new name,
+// or a prior run already applied the rename).
+type ColumnRename struct {
+	Table string
+	From  string
+	To    string
+}
+
+// Apply renames the column when present and is a no-op otherwise.
+func (s ColumnRename) Apply(db *sql.DB) error {
+	return RenameColumn(db, s.Table, s.From, s.To)
+}
+
+// Describe returns "rename <table>.<from> to <to>".
+func (s ColumnRename) Describe() string {
+	return "rename " + s.Table + "." + s.From + " to " + s.To
+}
+
 // IndexCreate creates an index. SQL must be the full CREATE INDEX
 // statement (including IF NOT EXISTS for idempotency). Use this for
 // indexes that aren't already inlined in a TableCreate.

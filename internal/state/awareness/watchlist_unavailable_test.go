@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // fakeRegistries provides the four registry calls needed for
@@ -310,7 +311,7 @@ func TestProvider_UnavailableEnrichmentEndToEnd(t *testing.T) {
 	p, store := setupTestProvider(t, ha)
 	p.SetRegistryClient(regs)
 
-	if err := store.Add("binary_sensor.front_door"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 

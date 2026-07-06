@@ -180,6 +180,25 @@ type App struct {
 	mediaFeedPoller    *media.FeedPoller
 	telemetryPublisher *telemetry.Publisher
 
+	// Set in initAwareness once the state watcher exists; invoked
+	// after any subscription-registry mutation (tool writes, spec
+	// mirroring) to rebuild the ingestion filter from the registry
+	// (#1192). Nil until the watcher is wired — mutations that land
+	// earlier are simply no-ops.
+	ingestFilterRebuild func()
+
+	// MQTT wake delivery dispatcher over the shared loopqueue
+	// (#1033). Set during MQTT wiring in new_servers; the
+	// loop-definition worker runs its boot recovery sweep once loop
+	// targets have hydrated. Nil when MQTT is not configured.
+	mqttWakeDispatch *mqttWakeDispatcher
+
+	// Subscription wake feed (#1211): state changes on wake-declaring
+	// subscriptions enqueue debounced loop wakes over the same
+	// chassis. Set in initAwareness; nil when HA/bus/queue wiring is
+	// absent. The loop-definition worker runs its boot sweep.
+	subWakeFeeder *subscriptionWakeFeeder
+
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 

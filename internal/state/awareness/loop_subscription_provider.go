@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
@@ -18,16 +17,24 @@ import (
 // at render time by reading the current loop_id from context and
 // walking the live registry's ancestor chain.
 //
-// Always-visible entities (those subscribed with no loop scope) are
-// still emitted by [WatchlistProvider]; this provider only covers
-// loop- and container-scoped subscriptions.
+// Always-visible entities (core-owned rows) are still emitted by
+// [WatchlistProvider]; this provider only covers loop- and
+// container-scoped subscriptions.
 type LoopSubscriptionProvider struct {
 	loops            *looppkg.Registry
 	store            *WatchlistStore
 	ha               StateGetter
 	registries       HARegistryClient
+	transitions      TransitionSource // optional; nil marks requested logs unavailable
 	logger           *slog.Logger
 	maxGlobExpansion int
+}
+
+// SetTransitionSource wires the per-entity retention that backs
+// declared transition logs (#1210). Pass nil to render requested logs
+// as unavailable rather than empty.
+func (p *LoopSubscriptionProvider) SetTransitionSource(source TransitionSource) {
+	p.transitions = source
 }
 
 // NewLoopSubscriptionProvider creates a provider bound to the live
@@ -72,7 +79,7 @@ func (p *LoopSubscriptionProvider) SetRegistryClient(registries HARegistryClient
 // or the effective list is empty — each is a normal quiescent state,
 // not an error. Registered as an always-on provider via
 // [agent.Loop.RegisterAlwaysContextProvider].
-func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.ContextRequest) (string, error) {
+func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, req agentctx.ContextRequest) (string, error) {
 	if p.loops == nil {
 		return "", nil
 	}
@@ -94,7 +101,7 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	// would add an HA fetch and a redundant prompt block; the
 	// always-visible rendering wins because it would appear in
 	// every loop's context anyway. We use
-	// [WatchlistStore.UntaggedEntityIDSet] (bounded IN-clause query,
+	// [WatchlistStore.CoreEntityGates] (bounded IN-clause query,
 	// no TTL cleanup writes) so the dedup check costs one indexed
 	// scan over the loop's own candidate list rather than a full
 	// always-visible scan + cleanup pass — the cleanup is left to
@@ -108,13 +115,21 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		for _, sub := range subs {
 			candidates = append(candidates, sub.EntityID)
 		}
-		set, err := p.store.UntaggedEntityIDSet(candidates)
+		gates, err := p.store.CoreEntityGates(candidates)
 		if err != nil {
 			p.logger.Warn("loop subscription provider could not enumerate always-visible store",
 				"error", err,
 			)
 		} else {
-			alreadyVisible = set
+			// Only rows the global tier will actually render this turn
+			// suppress a loop-scoped render: a gated global row whose
+			// tag is inactive renders nothing, so the loop's own
+			// subscription for the same entity must still show (#1213).
+			for id, gate := range gates {
+				if gate == "" || req.ActiveTags[gate] {
+					alreadyVisible[id] = struct{}{}
+				}
+			}
 		}
 	}
 
@@ -133,19 +148,35 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 		if sub.IsExpired(now) {
 			continue
 		}
-		if homeassistant.IsEntityGlob(sub.EntityID) {
+		// Ingest-only entries feed the state-change window's push
+		// pipeline; they don't render per-turn state here (#1192).
+		// Tag-gated entries render only while their capability tag is
+		// active (#1213). First-wins dedup in the ancestor walk
+		// composes with the gate: a leaf's gated declaration shadows a
+		// container's ungated one for the same entity, so the entity
+		// is absent while the leaf's tag is off — the closest
+		// declaration wins, conditions included.
+		if !sub.RendersState() || !sub.GateOpen(req.ActiveTags) {
+			continue
+		}
+		target := ParseSubscriptionTarget(sub.EntityID)
+		switch {
+		case target.Kind == TargetGlob:
 			states, statesErr := snap.get(ctx)
 			// Pass alreadyVisible so a loop glob (e.g. sensor.*) doesn't
 			// re-render entities the always-visible watchlist already
 			// injects — same dedup the concrete path applies below.
-			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, watchedFromLoopSubscription(sub), states, statesErr, now, registries, p.maxGlobExpansion, alreadyVisible))
-			continue
+			body.WriteString(expandGlobSubscription(ctx, p.ha, p.logger, sub, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
+		case target.IsRegistryTarget():
+			states, statesErr := snap.get(ctx)
+			body.WriteString(expandRegistryTargetSubscription(ctx, p.ha, p.logger, sub, target, states, statesErr, now, registries, p.transitions, p.maxGlobExpansion, alreadyVisible))
+		default:
+			if _, dup := alreadyVisible[sub.EntityID]; dup {
+				continue
+			}
+			body.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
+			body.WriteByte('\n')
 		}
-		if _, dup := alreadyVisible[sub.EntityID]; dup {
-			continue
-		}
-		body.WriteString(p.renderLoopSubscription(ctx, sub, now, registries))
-		body.WriteByte('\n')
 	}
 	if body.Len() == 0 {
 		return "", nil
@@ -156,35 +187,18 @@ func (p *LoopSubscriptionProvider) TagContext(ctx context.Context, _ agentctx.Co
 	return sb.String(), nil
 }
 
-// renderLoopSubscription adapts a loop.EntitySubscription into the same
-// rendering pipeline the always-visible watchlist providers use, mapping it
-// onto WatchedSubscription. The two are deliberately distinct representations,
-// not a migration in flight: WatchedSubscription is the SQLite row type for
-// the always-visible watchlist (it carries Scope and ExpiresAt), while
-// loop.EntitySubscription is the loop-scoped attribute on Spec. The shared
-// renderer consumes the WatchedSubscription shape so both sources render
-// identically.
+// renderLoopSubscription feeds a spec-declared subscription through
+// the same per-entity renderer the always-visible watchlist uses. Both
+// sources speak [looppkg.EntitySubscription] — the render-time adapter
+// that used to translate between two vocabularies is gone (#1209).
 func (p *LoopSubscriptionProvider) renderLoopSubscription(ctx context.Context, sub looppkg.EntitySubscription, now time.Time, registries *renderRegistries) string {
-	w := watchedFromLoopSubscription(sub)
-	state, err := p.ha.GetState(ctx, w.EntityID)
+	state, err := p.ha.GetState(ctx, sub.EntityID)
 	if err != nil {
 		p.logger.Warn("failed to fetch loop-scoped entity state",
-			"entity_id", w.EntityID,
+			"entity_id", sub.EntityID,
 			"error", err,
 		)
-		return formatFetchError(w.EntityID)
+		return formatFetchError(sub.EntityID)
 	}
-	return renderWatchedState(ctx, p.ha, p.logger, w, state, now, registries)
-}
-
-// watchedFromLoopSubscription maps a loop.EntitySubscription onto the
-// WatchedSubscription shape the shared render/expansion path consumes. The two
-// types stay distinct by design (see renderLoopSubscription).
-func watchedFromLoopSubscription(sub looppkg.EntitySubscription) WatchedSubscription {
-	return WatchedSubscription{
-		EntityID: sub.EntityID,
-		History:  append([]int(nil), sub.History...),
-		Forecast: sub.Forecast,
-		Include:  sub.Include.Clone(),
-	}
+	return renderWatchedState(ctx, p.ha, p.logger, sub, state, now, registries, p.transitions)
 }

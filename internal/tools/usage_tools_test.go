@@ -115,7 +115,7 @@ func TestParsePeriod_YesterdayBounds(t *testing.T) {
 
 func TestCostSummaryTool_Registration(t *testing.T) {
 	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -129,7 +129,7 @@ func TestCostSummaryTool_Registration(t *testing.T) {
 
 func TestCostSummaryTool_EmptyStore(t *testing.T) {
 	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -167,7 +167,7 @@ func TestCostSummaryTool_WithData(t *testing.T) {
 		}
 	}
 
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -205,7 +205,7 @@ func TestCostSummaryTool_GroupBy(t *testing.T) {
 		}
 	}
 
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -256,7 +256,7 @@ func TestCostSummaryTool_GroupBy_NormalizesInput(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -274,7 +274,7 @@ func TestCostSummaryTool_GroupBy_NormalizesInput(t *testing.T) {
 
 func TestCostSummaryTool_GroupBy_InvalidValue(t *testing.T) {
 	store := testUsageStore(t)
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -307,7 +307,7 @@ func TestCostSummaryTool_GroupBy_WhitespaceMeansUngrouped(t *testing.T) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -338,7 +338,7 @@ func TestCostSummaryTool_GroupByOrdering(t *testing.T) {
 		}
 	}
 
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(store)
 
 	tool := reg.Get("cost_summary")
@@ -362,7 +362,7 @@ func TestCostSummaryTool_GroupByOrdering(t *testing.T) {
 }
 
 func TestSetUsageStore_NilStore(t *testing.T) {
-	reg := NewRegistry(nil, nil)
+	reg := NewRegistry(nil, nil, nil)
 	reg.SetUsageStore(nil)
 
 	tool := reg.Get("cost_summary")

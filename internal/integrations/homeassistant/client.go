@@ -317,6 +317,19 @@ func (c *Client) CallService(ctx context.Context, domain, service string, data m
 	return c.post(ctx, path, data, nil)
 }
 
+// CallServiceWithResponse invokes a service and returns the states HA
+// reports as changed by the call. For target-addressed calls (area,
+// floor, label, device) this is the caller's only direct evidence of
+// fan-out — which entities the call actually touched.
+func (c *Client) CallServiceWithResponse(ctx context.Context, domain, service string, data map[string]any) ([]State, error) {
+	var changed []State
+	path := fmt.Sprintf("/api/services/%s/%s", domain, service)
+	if err := c.post(ctx, path, data, &changed); err != nil {
+		return nil, err
+	}
+	return changed, nil
+}
+
 // Area represents a Home Assistant area.
 type Area struct {
 	AreaID              string   `json:"area_id"`

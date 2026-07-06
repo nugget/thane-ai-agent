@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/nugget/thane-ai-agent/internal/server/legacyroute"
 )
 
 // testTokenIndex returns a token index mapping "test-secret" to "nugget".
@@ -706,5 +707,98 @@ func TestRegistryCallTrimsRoutingSelectors(t *testing.T) {
 	}
 	if request.req.Method != "list_events" {
 		t.Fatalf("method: got %q, want %q", request.req.Method, "list_events")
+	}
+}
+
+// legacyAliasMux wires the handler the way server.go does: the canonical
+// realtime path plus every legacyroute alias, so a dial can exercise the
+// deprecation branch by path.
+func legacyAliasMux(handler http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/realtime/ws", handler)
+	for _, a := range legacyroute.Aliases {
+		mux.Handle(a.Route(), handler)
+	}
+	return mux
+}
+
+func TestLegacyAliasEmitsDeprecationSignals(t *testing.T) {
+	if len(legacyroute.Aliases) == 0 {
+		t.Skip("no legacy aliases registered")
+	}
+	alias := legacyroute.Aliases[0]
+
+	handler := NewHandler(testTokenIndex(), NewRegistry(nil), nil)
+	srv := httptest.NewServer(legacyAliasMux(handler))
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + alias.Path
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial %s: %v", alias.Path, err)
+	}
+	defer conn.Close()
+
+	// The 101 response carries the RFC 8594 / RFC 9745 headers.
+	if got := resp.Header.Get("Sunset"); got == "" {
+		t.Error("legacy alias upgrade missing Sunset header")
+	}
+	if got := resp.Header.Get("Deprecation"); got == "" {
+		t.Error("legacy alias upgrade missing Deprecation header")
+	}
+	if got := resp.Header.Get("Link"); !strings.Contains(got, alias.Canonical) || !strings.Contains(got, "successor-version") {
+		t.Errorf("Link = %q, want successor-version to %q", got, alias.Canonical)
+	}
+
+	// The in-band auth_ok notice is populated for WS clients that ignore
+	// handshake headers.
+	var authReq authRequired
+	readJSON(t, conn, &authReq)
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(authMessage{Type: typeAuth, Token: "test-secret", ClientName: "Legacy Mac", ClientID: "legacy-uuid"}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+	var ok authOK
+	readJSON(t, conn, &ok)
+	if ok.Deprecation == nil {
+		t.Fatal("auth_ok missing deprecation notice on legacy alias")
+	}
+	if ok.Deprecation.CanonicalPath != alias.Canonical {
+		t.Errorf("deprecation canonical = %q, want %q", ok.Deprecation.CanonicalPath, alias.Canonical)
+	}
+	if ok.Deprecation.SunsetOn != alias.RemoveAfter {
+		t.Errorf("deprecation sunset_on = %q, want %q", ok.Deprecation.SunsetOn, alias.RemoveAfter)
+	}
+}
+
+func TestCanonicalPathNoDeprecation(t *testing.T) {
+	handler := NewHandler(testTokenIndex(), NewRegistry(nil), nil)
+	srv := httptest.NewServer(legacyAliasMux(handler))
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):] + "/v1/realtime/ws"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial realtime: %v", err)
+	}
+	defer conn.Close()
+
+	if got := resp.Header.Get("Sunset"); got != "" {
+		t.Errorf("canonical path carried a Sunset header: %q", got)
+	}
+	if got := resp.Header.Get("Deprecation"); got != "" {
+		t.Errorf("canonical path carried a Deprecation header: %q", got)
+	}
+
+	var authReq authRequired
+	readJSON(t, conn, &authReq)
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(authMessage{Type: typeAuth, Token: "test-secret", ClientName: "Modern Mac", ClientID: "modern-uuid"}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+	var ok authOK
+	readJSON(t, conn, &ok)
+	if ok.Deprecation != nil {
+		t.Errorf("canonical path auth_ok carried a deprecation notice: %+v", ok.Deprecation)
 	}
 }

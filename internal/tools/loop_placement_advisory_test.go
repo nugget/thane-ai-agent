@@ -17,11 +17,10 @@ func TestBuildPlacementAdvisory(t *testing.T) {
 		{name: "trips", tags: []string{"travel"}},
 	}
 
-	candNames := func(adv map[string]any) []string {
-		cands := adv["candidates"].([]map[string]any)
-		out := make([]string, len(cands))
-		for i, c := range cands {
-			out[i] = c["container"].(string)
+	candNames := func(adv *LoopPlacementAdvisory) []string {
+		out := make([]string, len(adv.Candidates))
+		for i, c := range adv.Candidates {
+			out[i] = c.Container
 		}
 		return out
 	}
@@ -34,8 +33,8 @@ func TestBuildPlacementAdvisory(t *testing.T) {
 		if got := candNames(adv); len(got) != 2 || got[0] != "travel" || got[1] != "trips" {
 			t.Fatalf("candidates = %v, want [travel trips]", got)
 		}
-		if adv["current_parent"] != looppkg.CoreLoopName {
-			t.Errorf("current_parent = %v, want core", adv["current_parent"])
+		if adv.CurrentParent != looppkg.CoreLoopName {
+			t.Errorf("current_parent = %v, want core", adv.CurrentParent)
 		}
 	})
 
@@ -165,5 +164,49 @@ func TestPlacementAdvisoryOnLint(t *testing.T) {
 	if len(got.PlacementAdvisory.Candidates) != 1 ||
 		got.PlacementAdvisory.Candidates[0].Container != "travel" {
 		t.Fatalf("candidates = %+v, want [travel]", got.PlacementAdvisory.Candidates)
+	}
+}
+
+// The typed schemas exist so field names and presence are a compile-time
+// contract (#1173). This golden pins the exact wire shape — byte-identical
+// to the map-based output they replaced — so schema drift is a test
+// failure, not a silent model-facing change.
+func TestPlacementAdvisoryWireShapeGolden(t *testing.T) {
+	t.Parallel()
+
+	adv := buildPlacementAdvisory("flight_watch", "", []string{"travel"}, []containerTagSet{
+		{name: "travel", tags: []string{"travel", "calendar"}},
+	})
+	if adv == nil {
+		t.Fatal("expected an advisory")
+	}
+	got, err := json.Marshal(adv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"candidates":[{"container":"travel","rationale":"declares \"travel\", which this loop also has","shared_tags":["travel"]}],"current_parent":"core","message":"This loop is parented to \"core\" (the root), but 1 existing container(s) declare tags it shares — consider setting parent_name to one of them so the loop nests under it and inherits its context."}`
+	if string(got) != want {
+		t.Fatalf("wire shape drifted:\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestLoopContainerViewWireShapeGolden(t *testing.T) {
+	t.Parallel()
+
+	view := LoopContainerView{
+		Name:            "home",
+		Intent:          "House awareness loops",
+		ChildCount:      2,
+		DescendantCount: 3,
+		ConfersTags:     []string{"ha"},
+		SampleChildren:  []string{"climate-watch", "garage-bays"},
+	}
+	got, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"child_count":2,"confers_tags":["ha"],"descendant_count":3,"intent":"House awareness loops","name":"home","sample_children":["climate-watch","garage-bays"]}`
+	if string(got) != want {
+		t.Fatalf("wire shape drifted:\n got: %s\nwant: %s", got, want)
 	}
 }

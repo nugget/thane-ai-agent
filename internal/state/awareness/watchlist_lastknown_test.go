@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 func TestEnrichWithLastKnownGood_NoOpForAvailableEntity(t *testing.T) {
@@ -166,7 +167,7 @@ func TestProvider_UnavailableEntitySurfacesLastKnownGood(t *testing.T) {
 	}
 
 	p, store := setupTestProvider(t, ha)
-	if err := store.Add("binary_sensor.front_door"); err != nil {
+	if err := store.Upsert(OwnerCore, looppkg.EntitySubscription{EntityID: "binary_sensor.front_door"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 

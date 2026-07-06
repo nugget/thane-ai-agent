@@ -64,23 +64,29 @@ the workhorse for most HA interactions.
 
 ### WebSocket API
 
-Persistent connection for real-time `state_changed` events. Thane subscribes
-to entity patterns (e.g., `person.*`, `binary_sensor.*door*`) and receives
-instant notifications when state changes. This is the same mechanism used by
-the HA frontend and mobile apps — the official, first-class event bus.
+Persistent connection for real-time `state_changed` events. The event feed
+is gated client-side by the subscription registry: ingest-mode entity
+subscriptions (ids or globs like `binary_sensor.*door*`, added via
+`add_entity_subscription` from any owner) plus the system-seeded person
+floor from `person.track` decide what is captured. This is the same
+mechanism used by the HA frontend and mobile apps — the official,
+first-class event bus.
 
 WebSocket events can trigger agent wakes, enabling proactive behavior without
 polling.
 
-### MCP (ha-mcp)
+### No MCP bridge required
 
-[ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides a broad set of HA tools via
-the Model Context Protocol — search, state queries, service calls, camera
-images, automation traces, area registry, and more. Thane hosts ha-mcp as a
-stdio subprocess and bridges selected tools into the agent loop.
+The native tool set is the complete HA surface — search, state, control
+with target fan-out, history, automation CRUD with traces, service
+discovery, and registry access all speak HA's REST and WebSocket APIs
+directly. Earlier deployments bridged the third-party `ha-mcp` MCP
+server to fill gaps; native parity landed in v0.10.2 and the bridge was
+retired (dropping the `uvx` startup dependency and its supply-chain
+exposure with it).
 
-See [Delegation & MCP](../understanding/delegation.md) for tool gating and
-MCP configuration.
+See [Delegation & MCP](../understanding/delegation.md) for MCP as a
+general extension path.
 
 ### MQTT
 

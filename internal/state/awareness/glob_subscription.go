@@ -4,11 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // defaultMaxGlobExpansion caps how many entities a single glob
@@ -71,16 +71,20 @@ func renderWatchedState(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	state *homeassistant.State,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 ) string {
 	state = watchlistStateWithForecast(ctx, ha, logger, sub, state, "failed to fetch watched weather forecast")
 
 	content := formatEntityContextWithMetadata(state, now, registries.entityMetadata(sub.EntityID, state, sub.Include))
 	content = enrichWithLastKnownGood(ctx, ha, content, state, now)
 	content = enrichUnavailable(content, state, registries)
+	if sub.WantsTransitions() {
+		content = mergeTransitionsIntoEntityContext(content, sub, transitions, now)
+	}
 	if len(sub.History) == 0 {
 		return content
 	}
@@ -123,11 +127,12 @@ func expandGlobSubscription(
 	ctx context.Context,
 	ha StateGetter,
 	logger *slog.Logger,
-	sub WatchedSubscription,
+	sub looppkg.EntitySubscription,
 	states []homeassistant.State,
 	statesErr error,
 	now time.Time,
 	registries *renderRegistries,
+	transitions TransitionSource,
 	maxExpansion int,
 	exclude map[string]struct{},
 ) string {
@@ -151,26 +156,23 @@ func expandGlobSubscription(
 		return ""
 	}
 	sort.Strings(matchedIDs)
+	globMarker := func(matched, shown int) string {
+		return formatGlobTruncation(pattern, matched, shown)
+	}
+	return renderExpandedMatches(ctx, ha, logger, sub, matchedIDs, stateByID, now, registries, transitions, maxExpansion, globMarker)
+}
 
-	total := len(matchedIDs)
-	truncated := false
-	if cap := normalizeMaxGlobExpansion(maxExpansion); total > cap {
-		matchedIDs = matchedIDs[:cap]
-		truncated = true
-	}
-
-	var sb strings.Builder
-	for _, id := range matchedIDs {
-		matchSub := sub
-		matchSub.EntityID = id
-		sb.WriteString(renderWatchedState(ctx, ha, logger, matchSub, stateByID[id], now, registries))
-		sb.WriteByte('\n')
-	}
-	if truncated {
-		sb.WriteString(formatGlobTruncation(pattern, total, len(matchedIDs)))
-		sb.WriteByte('\n')
-	}
-	return sb.String()
+// formatGlobTruncation renders the marker appended when a glob matched
+// more entities than the per-turn cap, telling the model to narrow the
+// pattern. Registry targets get their own marker (formatTargetTruncation).
+func formatGlobTruncation(pattern string, matched, shown int) string {
+	return promptfmt.MarshalCompact(map[string]any{
+		"glob":      pattern,
+		"matched":   matched,
+		"shown":     shown,
+		"truncated": true,
+		"note":      "glob matched more entities than the per-turn cap; narrow the pattern to see the rest",
+	})
 }
 
 // formatGlobFetchError renders the marker emitted when the live state
@@ -184,18 +186,5 @@ func formatGlobFetchError(pattern string) string {
 		"available": false,
 		"reason":    "fetch_error",
 		"note":      "could not enumerate entities to expand this glob this turn",
-	})
-}
-
-// formatGlobTruncation renders the marker line appended when a glob
-// matched more entities than the per-turn cap, so the model can tell the
-// view is partial and narrow the pattern if it needs the rest.
-func formatGlobTruncation(pattern string, matched, shown int) string {
-	return promptfmt.MarshalCompact(map[string]any{
-		"glob":      pattern,
-		"matched":   matched,
-		"shown":     shown,
-		"truncated": true,
-		"note":      "glob matched more entities than the per-turn cap; narrow the pattern to see the rest",
 	})
 }
