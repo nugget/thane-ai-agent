@@ -107,5 +107,34 @@ muddle them and the loop drifts.
   script through unstructured input, that's the signal — a loop
   with interpretive instructions handles it more durably.
 
+## Changing a loop that's already running
+
+A running loop carries the config it launched with. Editing its
+stored definition doesn't reach the live instance — the edit waits
+in the overlay until the loop relaunches. Which verb you reach for
+depends on what changed:
+
+- **Scalars** (sleep envelope, quality floor) —
+  `loop_definition_update` promotes the value into the running loop
+  at its next turn boundary. No relaunch, no lost iteration.
+- **Structure** (tags, entity subscriptions, parent, model) — these
+  bind at launch, so they take effect only on a full relaunch:
+  `stop_loop` then `loop_definition_launch`, or `loop_reparent` for a
+  parent change (it does the stop-and-relaunch for you). A process
+  restart relaunches everything from its stored definition.
+
+Two consequences worth holding:
+
+- **Inheritance resolves at launch, not continuously.** Re-tag a
+  container that's already running and neither it nor its live
+  children carry the new tag until they relaunch — the container to
+  pick up its own new tag, then the children to inherit it. Plan a
+  container's shared tags up front when you can.
+- **A container with live children can't be stopped in place.** Its
+  descendants resolve their home from its current launch, so stopping
+  it would strand them. Move or stop the children first
+  (`loop_reparent` each, or `stop_loop` them), then relaunch the
+  container. That's why re-tagging a busy container is churn.
+
 When you need concrete JSON launch patterns, activate `loops_examples`
 and adapt the closest recipe minimally.
