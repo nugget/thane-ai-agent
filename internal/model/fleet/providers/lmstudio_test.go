@@ -173,17 +173,33 @@ func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	got := string(b)
 
-	// Every message — including the empty-content ones — must carry a content field.
-	if n := strings.Count(got, `"content":`); n != len(msgs) {
-		t.Fatalf("content field count = %d, want %d (one per message)\njson: %s", n, len(msgs), got)
+	// Inspect the actual top-level message objects rather than substring-matching
+	// the whole payload — a "content" key nested inside tool-call arguments must
+	// not be mistaken for a message-level content field.
+	var decoded []map[string]json.RawMessage
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
 	}
-	if !strings.Contains(got, `"role":"assistant","content":""`) {
-		t.Errorf("assistant tool-call message must carry empty-string content, got: %s", got)
+	if len(decoded) != len(msgs) {
+		t.Fatalf("decoded %d messages, want %d", len(decoded), len(msgs))
 	}
-	if !strings.Contains(got, `"role":"tool","content":""`) {
-		t.Errorf("tool result must carry empty-string content, got: %s", got)
+	for i, m := range decoded {
+		raw, ok := m["content"]
+		if !ok {
+			t.Errorf("message %d (role %q) has no content field — LM Studio 400s on this", i, msgs[i].Role)
+			continue
+		}
+		// The empty-content assistant tool-call and tool result must serialize an
+		// empty string, not a dropped field or a JSON null.
+		if msgs[i].Content == "" {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				t.Errorf("message %d (role %q) content is not a string: %s", i, msgs[i].Role, raw)
+			} else if s != "" {
+				t.Errorf("message %d (role %q) content = %q, want empty string", i, msgs[i].Role, s)
+			}
+		}
 	}
 }
 
