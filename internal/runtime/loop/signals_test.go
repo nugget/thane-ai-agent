@@ -9,7 +9,23 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/platform/database"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
+
+func newTestMailbox(t *testing.T) *Mailbox {
+	t.Helper()
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("new loop queue: %v", err)
+	}
+	return NewMailbox(store)
+}
 
 func TestLoopNotifyWakesSleepingLoopAndPrependsSignalContext(t *testing.T) {
 	t.Parallel()
@@ -157,6 +173,97 @@ func TestLoopNotifyWakesEventDrivenLoop(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("event-driven loop did not wake after signal")
+	}
+}
+
+func TestLoopMailboxWakesEventDrivenLoopAndDrainsAll(t *testing.T) {
+	t.Parallel()
+
+	inputs := make(chan TurnInput, 1)
+	mailbox := newTestMailbox(t)
+	l, err := New(Config{
+		Name:      "mailbox-driven",
+		Operation: OperationEventDriven,
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			inputs <- input
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "mailbox wake"}},
+				},
+			}, nil
+		},
+		MaxIter: 1,
+	}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("enqueue mailbox one: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"two"}`)); err != nil {
+		t.Fatalf("enqueue mailbox two: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer l.Stop()
+
+	select {
+	case input := <-inputs:
+		if len(input.MailboxItems) != 2 {
+			t.Fatalf("MailboxItems len = %d, want 2", len(input.MailboxItems))
+		}
+		if got := string(input.MailboxItems[0].Payload); got != `{"message":"one"}` {
+			t.Fatalf("first payload = %q", got)
+		}
+		if got := string(input.MailboxItems[1].Payload); got != `{"message":"two"}` {
+			t.Fatalf("second payload = %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event-driven loop did not wake after mailbox enqueue")
+	}
+
+	depth, err := l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("mailbox depth: %v", err)
+	}
+	if depth != 0 {
+		t.Fatalf("mailbox depth = %d, want 0 after turn drain", depth)
+	}
+}
+
+func TestLoopMailboxIncrementalDrain(t *testing.T) {
+	t.Parallel()
+
+	mailbox := newTestMailbox(t)
+	l, err := New(Config{
+		Name:      "mailbox-incremental",
+		Operation: OperationEventDriven,
+		Task:      "handle mailbox",
+	}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("enqueue one: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"two"}`)); err != nil {
+		t.Fatalf("enqueue two: %v", err)
+	}
+
+	items, err := l.DrainMailbox(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("DrainMailbox: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	depth, err := l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("MailboxDepth: %v", err)
+	}
+	if depth != 1 {
+		t.Fatalf("depth = %d, want 1 after limited drain", depth)
 	}
 }
 

@@ -24,6 +24,11 @@ type TurnInput struct {
 	// builders may inspect or ignore them.
 	NotifyEnvelopes []messages.Envelope
 
+	// MailboxItems are durable data-plane inputs drained for this wake.
+	// Unlike NotifyEnvelopes, these are opaque conversation payloads
+	// owned by the loop's TurnBuilder or Handler.
+	MailboxItems []MailboxItem
+
 	// WakeTags are iteration-scoped capability tags carried on the
 	// envelopes that woke this iteration (see [messages.LoopWakeTarget.Tags]).
 	// They fade after this iteration unless the model explicitly

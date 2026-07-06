@@ -162,6 +162,9 @@ type Deps struct {
 	// Runner executes LLM iterations. Required unless [Config].Handler
 	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
+	// Mailbox stores durable data-plane inputs for event-driven
+	// conversational loops. Nil disables mailbox delivery.
+	Mailbox *Mailbox
 	// CompletionSink receives detached completion deliveries such as
 	// background-task results injected into conversations.
 	CompletionSink CompletionSink
@@ -1231,6 +1234,8 @@ func (l *Loop) run(ctx context.Context) {
 		},
 	})
 
+	l.wakeIfMailboxNonEmpty(ctx)
+
 	logger.Info("loop started",
 		"sleep_min", l.config.SleepMin,
 		"sleep_max", l.config.SleepMax,
@@ -1430,6 +1435,7 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		signals, forceSupervisor, wakeTags := l.consumePendingNotifies()
+		mailboxItems, mailboxErr := l.DrainMailbox(ctx, 0)
 
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
@@ -1475,11 +1481,14 @@ func (l *Loop) run(ctx context.Context) {
 				"supervisor_trigger": string(supervisorTrigger),
 				"attempt":            attemptCount + 1,
 				"signal_envelopes":   len(signals),
+				"mailbox_items":      len(mailboxItems),
 			},
 		})
 		iterLog.Debug("loop iteration starting")
 
-		if l.config.Handler != nil {
+		if mailboxErr != nil {
+			err = fmt.Errorf("mailbox drain: %w", mailboxErr)
+		} else if l.config.Handler != nil {
 			iterStart := time.Now()
 			summary := make(map[string]any)
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
@@ -1487,6 +1496,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
+			handlerCtx = withMailboxItems(handlerCtx, mailboxItems)
 			handlerCtx = withWakeTags(handlerCtx, wakeTags)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
@@ -1571,11 +1581,13 @@ func (l *Loop) run(ctx context.Context) {
 			turnCtx := withLoopID(iterCtx, l.id)
 			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
 			turnCtx = withNotifyEnvelopes(turnCtx, signals)
+			turnCtx = withMailboxItems(turnCtx, mailboxItems)
 			turnCtx = withWakeTags(turnCtx, wakeTags)
 			turn, buildErr := l.buildAgentTurn(turnCtx, TurnInput{
 				Event:           event,
 				Supervisor:      isSupervisor,
 				NotifyEnvelopes: signals,
+				MailboxItems:    mailboxItems,
 				WakeTags:        wakeTags,
 			})
 			if buildErr != nil {

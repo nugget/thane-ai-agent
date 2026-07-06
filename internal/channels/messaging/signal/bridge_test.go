@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
+	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
@@ -36,6 +37,20 @@ func newTestAttachmentStore(t *testing.T, dbPath, storeDir string) *attachments.
 		t.Fatal(err)
 	}
 	return store
+}
+
+func newSignalTestMailbox(t *testing.T) *loop.Mailbox {
+	t.Helper()
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("open memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := loopqueue.NewStore(db, nil)
+	if err != nil {
+		t.Fatalf("new loop queue: %v", err)
+	}
+	return loop.NewMailbox(store)
 }
 
 // testRunner records the most recent Run call and returns a canned
@@ -93,6 +108,9 @@ func bridgeHelper(t *testing.T, opts ...bridgeOption) (*Bridge, io.Writer, io.Re
 	}
 	for _, o := range opts {
 		o(&cfg)
+	}
+	if cfg.Registry != nil && cfg.Mailbox == nil {
+		cfg.Mailbox = newSignalTestMailbox(t)
 	}
 
 	bridge := NewBridge(cfg)
@@ -221,6 +239,59 @@ func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
 	}
 	if req.RoutingFactors["loop_name"] != "signal/15551234567" {
 		t.Fatalf("loop_name = %q, want signal/15551234567", req.RoutingFactors["loop_name"])
+	}
+}
+
+func TestBridge_PrepareSignalMailboxTurnRendersEachEnvelopeAsMessage(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	mkItem := func(message string, ts int64) loop.MailboxItem {
+		t.Helper()
+		env := &Envelope{
+			Source:      "+15551234567",
+			SourceName:  "Alice",
+			Timestamp:   ts,
+			DataMessage: &DataMessage{Timestamp: ts, Message: message},
+		}
+		payload, err := json.Marshal(env)
+		if err != nil {
+			t.Fatalf("marshal envelope: %v", err)
+		}
+		return loop.MailboxItem{ID: fmt.Sprintf("signal:%d", ts), Payload: payload}
+	}
+
+	turn, err := bridge.prepareSignalMailboxTurn(context.Background(), "+15551234567", []loop.MailboxItem{
+		mkItem("first", 1700000000000),
+		mkItem("second", 1700000001000),
+	})
+	if err != nil {
+		t.Fatalf("prepareSignalMailboxTurn: %v", err)
+	}
+	if turn == nil {
+		t.Fatal("turn is nil")
+	}
+	if len(turn.Request.Messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(turn.Request.Messages))
+	}
+	if !strings.Contains(turn.Request.Messages[0].Content, "first") || !strings.Contains(turn.Request.Messages[0].Content, "[ts:1700000000000]") {
+		t.Fatalf("first message content = %q", turn.Request.Messages[0].Content)
+	}
+	if !strings.Contains(turn.Request.Messages[1].Content, "second") || !strings.Contains(turn.Request.Messages[1].Content, "[ts:1700000001000]") {
+		t.Fatalf("second message content = %q", turn.Request.Messages[1].Content)
+	}
+	if turn.Summary["signal_batch_turn"] != true {
+		t.Fatalf("signal_batch_turn summary = %#v, want true", turn.Summary["signal_batch_turn"])
+	}
+	if turn.Summary["message_count"] != 2 {
+		t.Fatalf("message_count summary = %#v, want 2", turn.Summary["message_count"])
+	}
+
+	ts, ok := bridge.LastInboundTimestamp("+15551234567")
+	if !ok {
+		t.Fatal("last inbound timestamp missing")
+	}
+	if ts != 1700000001000 {
+		t.Fatalf("last inbound timestamp = %d, want latest drained message", ts)
 	}
 }
 

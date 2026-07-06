@@ -57,6 +57,39 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 	}
 }
 
+func TestStore_AppendKeepsDuplicateItems(t *testing.T) {
+	s := newTestStore(t)
+
+	first, err := s.Append(t.Context(), "signal/contact", "signal", 0, []byte(`{"message":"first"}`))
+	if err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+	second, err := s.Append(t.Context(), "signal/contact", "signal", 0, []byte(`{"message":"second"}`))
+	if err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if first == second {
+		t.Fatalf("append generated duplicate key %q", first)
+	}
+
+	if n, _ := s.PendingCount(t.Context(), "signal/contact"); n != 2 {
+		t.Fatalf("pending = %d, want 2", n)
+	}
+	items, err := s.PeekAll(t.Context(), "signal/contact")
+	if err != nil {
+		t.Fatalf("peek all: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	if got := string(items[0].Payload); got != `{"message":"first"}` {
+		t.Fatalf("first payload = %q", got)
+	}
+	if got := string(items[1].Payload); got != `{"message":"second"}` {
+		t.Fatalf("second payload = %q", got)
+	}
+}
+
 func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	s := newTestStore(t)
 
