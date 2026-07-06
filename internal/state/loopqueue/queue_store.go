@@ -1,4 +1,4 @@
-// Package loopqueue is a durable, deduped, per-consumer-loop work queue.
+// Package loopqueue is a durable per-consumer-loop work queue.
 //
 // It is the persistent, pull-based counterpart to in-memory loop
 // notifications: instead of pushing an event into a live loop and waking
@@ -8,6 +8,8 @@
 // own partition on whatever cadence it chooses. The queue layer is
 // payload-agnostic — it stores opaque JSON bytes (by convention a
 // marshaled messages.LoopNotifyPayload) and never interprets them.
+// Enqueue coalesces by key for frontier-style work; Append adds a
+// distinct item for ordered data-plane inputs such as chat messages.
 package loopqueue
 
 import (
@@ -19,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
@@ -100,26 +103,71 @@ func (s *Store) Enqueue(ctx context.Context, consumerLoop, dedupKey string, prio
 	return nil
 }
 
+// Append adds one distinct pending item for consumerLoop and returns
+// its generated queue key. Unlike [Store.Enqueue], Append never
+// coalesces with existing work. keyPrefix is sanitized only enough to
+// keep keys readable; callers should treat the returned key as opaque.
+func (s *Store) Append(ctx context.Context, consumerLoop, keyPrefix string, priority int, payload []byte) (string, error) {
+	consumerLoop = strings.TrimSpace(consumerLoop)
+	if consumerLoop == "" {
+		return "", fmt.Errorf("loopqueue: consumer_loop is required")
+	}
+	keyPrefix = strings.Trim(strings.TrimSpace(keyPrefix), ":")
+	if keyPrefix == "" {
+		keyPrefix = "item"
+	}
+	if len(payload) == 0 {
+		payload = []byte("{}")
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("loopqueue: generate append key: %w", err)
+	}
+	dedupKey := keyPrefix + ":" + id.String()
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at)
+		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, consumerLoop, dedupKey, priority, string(payload))
+	if err != nil {
+		return "", fmt.Errorf("loopqueue: append %s/%s: %w", consumerLoop, dedupKey, err)
+	}
+	return dedupKey, nil
+}
+
 // Peek returns up to limit pending items for consumerLoop in drain order
 // (priority desc, then FIFO by enqueued_at). It does NOT change item
 // state: the single-consumer model acks on completion, so a crash mid-
 // iteration simply leaves the item pending for the next drain
 // (at-least-once). limit <= 0 is treated as 1.
 func (s *Store) Peek(ctx context.Context, consumerLoop string, limit int) ([]Item, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	return s.peek(ctx, consumerLoop, limit)
+}
+
+// PeekAll returns all pending items for consumerLoop in drain order
+// without changing item state.
+func (s *Store) PeekAll(ctx context.Context, consumerLoop string) ([]Item, error) {
+	return s.peek(ctx, consumerLoop, 0)
+}
+
+func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Item, error) {
 	consumerLoop = strings.TrimSpace(consumerLoop)
 	if consumerLoop == "" {
 		return nil, fmt.Errorf("loopqueue: consumer_loop is required")
 	}
-	if limit <= 0 {
-		limit = 1
-	}
-	rows, err := s.db.QueryContext(ctx, `
+	query := `
 		SELECT dedup_key, priority, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
-		ORDER BY priority DESC, enqueued_at ASC
-		LIMIT ?
-	`, consumerLoop, StatusPending, limit)
+		ORDER BY priority DESC, enqueued_at ASC, dedup_key ASC`
+	args := []any{consumerLoop, StatusPending}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,21 +178,104 @@ func (s *Store) Peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 		var (
 			it          Item
 			payload     string
-			enqueuedRaw string
+			enqueuedRaw any
 		)
 		if err := rows.Scan(&it.DedupKey, &it.Priority, &payload, &enqueuedRaw); err != nil {
 			return nil, err
 		}
 		it.Payload = []byte(payload)
-		if ts, perr := database.ParseTimestamp(enqueuedRaw); perr == nil {
-			it.EnqueuedAt = ts
-		}
+		it.EnqueuedAt = parseQueueTimestamp(enqueuedRaw)
 		items = append(items, it)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+func parseQueueTimestamp(raw any) time.Time {
+	switch v := raw.(type) {
+	case time.Time:
+		return v
+	case string:
+		if ts, err := database.ParseTimestamp(v); err == nil {
+			return ts
+		}
+	case []byte:
+		if ts, err := database.ParseTimestamp(string(v)); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
+// escapeLikePrefix escapes the SQL LIKE wildcards ('%', '_') and the
+// escape character itself so a caller-supplied string is matched as a
+// literal prefix. Pair it with `ESCAPE '\'` in the query.
+func escapeLikePrefix(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// PendingConsumers returns distinct consumer-loop partitions that have
+// pending work. When prefix is non-empty, only partitions with that
+// prefix are returned.
+func (s *Store) PendingConsumers(ctx context.Context, prefix string) ([]string, error) {
+	query := `
+		SELECT DISTINCT consumer_loop
+		FROM loop_queue
+		WHERE status = ?`
+	args := []any{StatusPending}
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" {
+		// Escape LIKE wildcards so the prefix matches literally: a
+		// caller passing a name fragment containing '%' or '_' must not
+		// silently widen the match to unrelated partitions.
+		query += ` AND consumer_loop LIKE ? ESCAPE '\'`
+		args = append(args, escapeLikePrefix(prefix)+"%")
+	}
+	query += ` ORDER BY consumer_loop ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var consumers []string
+	for rows.Next() {
+		var consumer string
+		if err := rows.Scan(&consumer); err != nil {
+			return nil, err
+		}
+		consumers = append(consumers, consumer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return consumers, nil
+}
+
+// MoveConsumer reassigns all pending work from one consumer-loop
+// partition to another. It is used when callers tighten a durable
+// partition key and need old rows to follow the same consumer.
+func (s *Store) MoveConsumer(ctx context.Context, from, to string) error {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return fmt.Errorf("loopqueue: source and destination consumer_loop are required")
+	}
+	if from == to {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE loop_queue
+		SET consumer_loop = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE consumer_loop = ? AND status = ?
+	`, to, from, StatusPending)
+	if err != nil {
+		return fmt.Errorf("loopqueue: move consumer %s to %s: %w", from, to, err)
+	}
+	return nil
 }
 
 // Ack removes a completed item from consumerLoop's partition. A missing

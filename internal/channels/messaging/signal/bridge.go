@@ -2,6 +2,9 @@ package signal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -53,10 +56,7 @@ const cleanupInterval = 10 * time.Minute
 // times out after ~15 seconds, so 10 seconds keeps it alive.
 const typingRefreshInterval = 10 * time.Second
 
-// senderChanSize is the buffer size for per-sender message channels.
-// A small buffer prevents back-pressure on the parent loop while the
-// child processes a message.
-const senderChanSize = 4
+const signalMailboxRehydratePeekLimit = 16
 
 // lastMessage tracks a sender's most recent inbound message timestamp
 // along with when we received it, for bounded cleanup.
@@ -103,6 +103,7 @@ type BridgeConfig struct {
 	AttachmentStore  *attachments.Store                                                // content-addressed store; nil = legacy copy
 	VisionAnalyzer   VisionAnalyzer                                                    // nil disables vision analysis
 	Registry         *loop.Registry                                                    // loop registry for dashboard visibility
+	Mailbox          *loop.Mailbox                                                     // durable data-plane inbox for per-sender loops
 	EventBus         *events.Bus                                                       // event bus for in-flight events
 }
 
@@ -121,14 +122,15 @@ type Bridge struct {
 	attachmentStore  *attachments.Store
 	visionAnalyzer   VisionAnalyzer
 	registry         *loop.Registry
+	mailbox          *loop.Mailbox
 	eventBus         *events.Bus
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
 	lastCleanup   time.Time
 	lastInboundTS map[string]lastMessage // most recent message per sender
-	senderChans   map[string]chan *Envelope
-	parentID      string // loop ID of the parent signal node
+	senderLoops   map[string]string      // sender -> child loop ID
+	parentID      string                 // loop ID of the parent signal node
 }
 
 // NewBridge creates a Signal message bridge.
@@ -163,10 +165,11 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		attachmentStore:  cfg.AttachmentStore,
 		visionAnalyzer:   cfg.VisionAnalyzer,
 		registry:         cfg.Registry,
+		mailbox:          cfg.Mailbox,
 		eventBus:         cfg.EventBus,
 		senderTimes:      make(map[string][]time.Time),
 		lastInboundTS:    make(map[string]lastMessage),
-		senderChans:      make(map[string]chan *Envelope),
+		senderLoops:      make(map[string]string),
 	}
 }
 
@@ -219,6 +222,11 @@ func (b *Bridge) Register(ctx context.Context) error {
 	b.mu.Lock()
 	b.parentID = parentID
 	b.mu.Unlock()
+	if err := b.rehydrateSenderLoops(ctx); err != nil {
+		b.logger.Warn("signal mailbox rehydration failed",
+			"error", err,
+		)
+	}
 
 	b.logger.Info("signal bridge registered with loop infrastructure",
 		"parent_id", parentID,
@@ -253,7 +261,7 @@ func (b *Bridge) Start(ctx context.Context) {
 
 // dispatch is the parent loop handler. It filters envelopes
 // (empty source, reactions, no content, rate limits) and fans out
-// valid messages to per-sender child loops.
+// valid messages to per-sender child loop mailboxes.
 func (b *Bridge) dispatch(ctx context.Context, event any) error {
 	env, ok := event.(*Envelope)
 	if !ok {
@@ -379,101 +387,119 @@ func (b *Bridge) enqueueSenderEnvelope(ctx context.Context, env *Envelope) bool 
 	if env == nil {
 		return false
 	}
-	b.ensureSenderLoop(ctx, env.Source)
-
-	b.mu.Lock()
-	ch, ok := b.senderChans[env.Source]
-	b.mu.Unlock()
-	if !ok {
-		return false
-	}
-
-	select {
-	case ch <- env:
+	if b.registry == nil || b.mailbox == nil {
+		// Legacy path with no durable mailbox: run the turn inline and
+		// only report success when it actually handled the message, so
+		// the caller does not send a read receipt for a turn we could
+		// not process (there is no queue here to retry from).
+		if err := b.handleEnvelope(ctx, env, nil); err != nil {
+			b.logger.Warn("signal legacy turn failed, not acking message",
+				"sender", env.Source,
+				"error", err,
+			)
+			return false
+		}
 		return true
-	case <-ctx.Done():
-		b.logger.Warn("signal context cancelled before enqueue, dropping message",
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		b.logger.Warn("signal envelope marshal failed, dropping message",
 			"sender", env.Source,
-			"error", ctx.Err(),
+			"error", err,
 		)
 		return false
 	}
+	loopName := signalLoopName(env.Source)
+	if _, err := b.mailbox.Enqueue(ctx, loopName, "signal", payload); err != nil {
+		b.logger.Warn("signal mailbox enqueue failed, dropping message",
+			"sender", env.Source,
+			"loop_name", loopName,
+			"error", err,
+		)
+		return false
+	}
+	loopID, _, ok := b.ensureSenderLoop(ctx, env.Source)
+	if !ok {
+		b.logger.Warn("signal mailbox item queued without live sender loop",
+			"sender", env.Source,
+			"loop_name", loopName,
+		)
+		return true
+	}
+	if err := b.registry.WakeLoop(ctx, loopID); err != nil {
+		b.logger.Warn("signal sender loop wake failed",
+			"sender", env.Source,
+			"loop_id", loopID,
+			"error", err,
+		)
+		b.forgetSenderLoop(env.Source, loopID)
+		if retryID, _, retryOK := b.ensureSenderLoop(ctx, env.Source); retryOK {
+			if retryErr := b.registry.WakeLoop(ctx, retryID); retryErr != nil {
+				b.logger.Warn("signal sender loop retry wake failed",
+					"sender", env.Source,
+					"loop_id", retryID,
+					"error", retryErr,
+				)
+			}
+		}
+	}
+	return true
 }
 
 // ensureSenderLoop creates a per-sender child loop if one does not
-// already exist. The child loop blocks on a per-sender channel and
-// processes envelopes sequentially via TurnBuilder.
-func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
+// already exist. The child loop wakes from its durable mailbox and
+// processes all drained envelopes in one TurnBuilder pass.
+func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) (string, string, bool) {
+	loopName := signalLoopName(sender)
 	b.mu.Lock()
-	if _, exists := b.senderChans[sender]; exists {
+	if id, exists := b.senderLoops[sender]; exists {
 		b.mu.Unlock()
-		return
+		if b.senderLoopLive(loopName, id) {
+			return id, loopName, true
+		}
+		b.forgetSenderLoop(sender, id)
+	} else {
+		b.mu.Unlock()
 	}
-	ch := make(chan *Envelope, senderChanSize)
-	b.senderChans[sender] = ch
+
+	if b.registry == nil || b.mailbox == nil {
+		return "", loopName, false
+	}
+
+	if existing := b.registry.GetByName(loopName); existing != nil {
+		status := existing.Status()
+		if status.State != loop.StateStopped {
+			b.mu.Lock()
+			b.senderLoops[sender] = status.ID
+			b.mu.Unlock()
+			return status.ID, loopName, true
+		}
+		b.registry.Deregister(status.ID)
+	}
+
+	b.mu.Lock()
 	parentID := b.parentID
 	b.mu.Unlock()
 
-	// Resolve a stable identifier and trust zone for the loop node.
-	// Prefer the contact UUID prefix over the contact name or raw phone:
-	// the UUID is opaque to operator-visible surfaces (dashboard,
-	// /api/loops, structured logs) and cross-references the
-	// "Session Origin Context" block in the system prompt
-	// (origin.contact_id), so a model reading log lines can chain back
-	// to the trust zone and name without each loop name being a
-	// re-emission of personal data.
-	loopName := "signal/" + sanitizePhone(sender)
 	trustZone := "unknown"
 	binding := b.resolveBinding(sender)
 	if binding != nil {
-		if short := shortContactID(binding.ContactID); short != "" {
-			loopName = "signal/" + short
-		}
 		if binding.TrustZone != "" {
 			trustZone = binding.TrustZone
 		}
 	}
 
-	if b.registry == nil {
-		// No registry — just run the handler inline in a goroutine.
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case env, ok := <-ch:
-					if !ok {
-						return
-					}
-					b.handleEnvelope(ctx, env, nil)
-				}
-			}
-		}()
-		return
-	}
-
-	_, err := b.registry.SpawnLoop(ctx, loop.Config{
-		Name: loopName,
-		WaitFunc: func(wCtx context.Context) (any, error) {
-			select {
-			case <-wCtx.Done():
-				return nil, wCtx.Err()
-			case env, ok := <-ch:
-				if !ok {
-					return nil, fmt.Errorf("sender channel closed")
-				}
-				return env, nil
-			}
-		},
+	loopID, err := b.registry.SpawnLoop(ctx, loop.Config{
+		Name:      loopName,
+		Operation: loop.OperationEventDriven,
 		TurnBuilder: func(tCtx context.Context, input loop.TurnInput) (*loop.AgentTurn, error) {
-			env, ok := input.Event.(*Envelope)
-			if !ok {
-				if len(input.NotifyEnvelopes) > 0 {
-					return b.prepareLoopNotificationTurn(tCtx, sender, input.NotifyEnvelopes)
-				}
-				return nil, nil
+			if len(input.MailboxItems) > 0 {
+				return b.prepareSignalMailboxTurn(tCtx, sender, input.MailboxItems, input.NotifyEnvelopes)
 			}
-			return b.prepareSignalTurn(tCtx, env)
+			if len(input.NotifyEnvelopes) > 0 {
+				return b.prepareLoopNotificationTurn(tCtx, sender, input.NotifyEnvelopes)
+			}
+			return nil, nil
 		},
 		ParentID:        parentID,
 		FallbackContent: prompts.InteractiveEmptyResponseFallback,
@@ -493,6 +519,7 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 		},
 	}, loop.Deps{
 		Runner:   signalResponseRunner{bridge: b, runner: b.runner},
+		Mailbox:  b.mailbox,
 		Logger:   b.logger,
 		EventBus: b.eventBus,
 	})
@@ -501,28 +528,117 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 			"sender", sender,
 			"error", err,
 		)
-		// Fall back to inline goroutine.
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case env, ok := <-ch:
-					if !ok {
-						return
-					}
-					b.handleEnvelope(ctx, env, nil)
-				}
-			}
-		}()
+		return "", loopName, false
 	}
+	b.mu.Lock()
+	b.senderLoops[sender] = loopID
+	b.mu.Unlock()
+	return loopID, loopName, true
+}
+
+func (b *Bridge) senderLoopLive(loopName, loopID string) bool {
+	if b.registry == nil || loopID == "" {
+		return false
+	}
+	l := b.registry.Get(loopID)
+	if l == nil {
+		return false
+	}
+	status := l.Status()
+	if status.Name != loopName {
+		return false
+	}
+	if status.State == loop.StateStopped {
+		b.registry.Deregister(loopID)
+		return false
+	}
+	return true
+}
+
+func (b *Bridge) forgetSenderLoop(sender, loopID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.senderLoops[sender] == loopID {
+		delete(b.senderLoops, sender)
+	}
+}
+
+func signalLoopName(sender string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(sender)))
+	return "signal/sender-" + hex.EncodeToString(sum[:])[:16]
+}
+
+func (b *Bridge) rehydrateSenderLoops(ctx context.Context) error {
+	if b.registry == nil || b.mailbox == nil {
+		return nil
+	}
+	consumers, err := b.mailbox.PendingConsumers(ctx, "signal/")
+	if err != nil {
+		return err
+	}
+	restored := 0
+	for _, consumer := range consumers {
+		items, err := b.mailbox.Peek(ctx, consumer, signalMailboxRehydratePeekLimit)
+		if err != nil {
+			return fmt.Errorf("peek signal mailbox %q: %w", consumer, err)
+		}
+		sender := firstSignalMailboxSender(items)
+		if sender == "" {
+			b.logger.Warn("signal mailbox partition has no decodable sender",
+				"loop_name", consumer,
+				"items", len(items),
+			)
+			continue
+		}
+		loopName := signalLoopName(sender)
+		if consumer != loopName {
+			if err := b.mailbox.MoveConsumer(ctx, consumer, loopName); err != nil {
+				return err
+			}
+		}
+		loopID, _, ok := b.ensureSenderLoop(ctx, sender)
+		if !ok {
+			b.logger.Warn("signal mailbox partition could not be rehydrated",
+				"sender", sender,
+				"loop_name", loopName,
+			)
+			continue
+		}
+		if err := b.registry.WakeLoop(ctx, loopID); err != nil {
+			b.logger.Warn("signal rehydrated sender loop wake failed",
+				"sender", sender,
+				"loop_id", loopID,
+				"error", err,
+			)
+		}
+		restored++
+	}
+	if restored > 0 {
+		b.logger.Info("signal mailbox rehydrated sender loops",
+			"loops", restored,
+		)
+	}
+	return nil
+}
+
+func firstSignalMailboxSender(items []loop.MailboxItem) string {
+	for _, item := range items {
+		var env Envelope
+		if err := json.Unmarshal(item.Payload, &env); err != nil {
+			continue
+		}
+		if strings.TrimSpace(env.Source) != "" {
+			return env.Source
+		}
+	}
+	return ""
 }
 
 // handleMessage processes a single inbound Signal message through the
 // loop-facing request path. The progressFn, if non-nil, is used by the
 // legacy no-registry path to forward in-flight events to loop telemetry.
 func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	b.handleEnvelope(ctx, env, progressFn)
+	_ = b.handleEnvelope(ctx, env, progressFn)
 }
 
 // handleReaction processes an inbound emoji reaction. Reaction
@@ -542,23 +658,31 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		return
 	}
 
-	b.handleEnvelope(ctx, env, nil)
+	_ = b.handleEnvelope(ctx, env, nil)
 }
 
-func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
+// handleEnvelope prepares and runs one Signal turn on the legacy
+// no-mailbox path. It returns an error when the turn could not be
+// prepared or the runner failed, so callers gate the read receipt on
+// actual handling instead of acking a message they could not process.
+// A nil turn (nothing to answer) is a successful no-op.
+func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) error {
 	turn, err := b.prepareSignalTurn(ctx, env)
 	if err != nil {
 		b.logger.Error("signal turn preparation failed", "error", err)
-		return
+		return err
 	}
 	if turn == nil {
-		return
+		return nil
 	}
 	req := turn.Request
 	if progressFn != nil {
 		req.OnProgress = progressFn
 	}
-	_, _ = signalResponseRunner{bridge: b, runner: b.runner}.Run(ctx, req, nil)
+	if _, err := (signalResponseRunner{bridge: b, runner: b.runner}).Run(ctx, req, nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
@@ -572,10 +696,84 @@ func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.Ag
 		}
 		return b.prepareReactionTurn(ctx, env)
 	}
-	if env.DataMessage.Message == "" && len(env.DataMessage.Attachments) == 0 {
+	scaffold := b.prepareSignalTurnScaffold(env.Source)
+	msg, summary, ok, err := b.renderEnvelope(ctx, scaffold, env)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary), nil
+}
+
+func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, items []loop.MailboxItem, notifies []messages.Envelope) (*loop.AgentTurn, error) {
+	if len(items) == 0 && len(notifies) == 0 {
 		return nil, nil
 	}
-	return b.prepareMessageTurn(ctx, env)
+	scaffold := b.prepareSignalTurnScaffold(sender)
+	msgs := make([]loop.Message, 0, len(items)+1)
+	summary := map[string]any{
+		"sender":            sender,
+		"mailbox_items":     len(items),
+		"signal_batch_turn": len(items) > 1,
+	}
+	if notifySummary := loop.FormatNotifyEnvelopes(notifies); notifySummary != "" {
+		msgs = append(msgs, loop.Message{Role: "user", Content: notifySummary})
+		summary["notification_count"] = len(notifies)
+	}
+	skipped := 0
+	for _, item := range items {
+		var env Envelope
+		if err := json.Unmarshal(item.Payload, &env); err != nil {
+			skipped++
+			b.logger.Warn("signal mailbox item decode failed, skipping",
+				"sender", sender,
+				"item_id", item.ID,
+				"error", err,
+			)
+			continue
+		}
+		msg, envSummary, ok, err := b.renderEnvelope(ctx, scaffold, &env)
+		if err != nil {
+			skipped++
+			b.logger.Warn("signal mailbox item render failed, skipping",
+				"sender", sender,
+				"item_id", item.ID,
+				"error", err,
+			)
+			continue
+		}
+		if !ok {
+			skipped++
+			continue
+		}
+		msgs = append(msgs, msg)
+		mergeSignalSummary(summary, envSummary)
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	messageCount := len(msgs)
+	if _, ok := summary["notification_count"]; ok {
+		messageCount--
+	}
+	summary["message_count"] = messageCount
+	if skipped > 0 {
+		summary["skipped_mailbox_items"] = skipped
+	}
+	if messageCount == 1 && summary["event_type"] == "reaction" {
+		hints := map[string]string{
+			"source":     "signal",
+			"sender":     sender,
+			"event_type": "reaction",
+		}
+		if emoji, ok := summary["reaction_emoji"].(string); ok {
+			hints["reaction_emoji"] = emoji
+		}
+		if target, ok := summary["target_sent_timestamp"]; ok {
+			hints["target_sent_timestamp"] = fmt.Sprint(target)
+		}
+		scaffold.opts = b.requestOptions(sender, hints)
+	}
+	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary), nil
 }
 
 func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string, envs []messages.Envelope) (*loop.AgentTurn, error) {
@@ -618,15 +816,57 @@ func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string,
 	return turn, nil
 }
 
-func (b *Bridge) prepareMessageTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	sender := env.Source
+type signalTurnScaffold struct {
+	sender         string
+	convID         string
+	log            *slog.Logger
+	channelBinding *memory.ChannelBinding
+	opts           router.RequestOptions
+}
+
+func (b *Bridge) prepareSignalTurnScaffold(sender string) signalTurnScaffold {
 	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
+	channelBinding := b.resolveBinding(sender)
 	log := b.logger.With(
 		"subsystem", logging.SubsystemSignal,
 		"conversation_id", convID,
 		"sender", sender,
 	)
+	if b.bindConversation != nil && channelBinding != nil {
+		if err := b.bindConversation(convID, channelBinding); err != nil {
+			log.Warn("failed to persist signal conversation binding", "error", err)
+		}
+	}
+	return signalTurnScaffold{
+		sender:         sender,
+		convID:         convID,
+		log:            log,
+		channelBinding: channelBinding,
+		opts: b.requestOptions(sender, map[string]string{
+			"source": "signal",
+			"sender": sender,
+		}),
+	}
+}
 
+func (b *Bridge) renderEnvelope(ctx context.Context, scaffold signalTurnScaffold, env *Envelope) (loop.Message, map[string]any, bool, error) {
+	if env == nil || env.DataMessage == nil {
+		return loop.Message{}, nil, false, nil
+	}
+	if env.DataMessage.Reaction != nil {
+		if env.DataMessage.Reaction.IsRemove {
+			b.handleReaction(ctx, env)
+			return loop.Message{}, nil, false, nil
+		}
+		return b.renderReactionEnvelope(scaffold, env)
+	}
+	if env.DataMessage.Message == "" && len(env.DataMessage.Attachments) == 0 {
+		return loop.Message{}, nil, false, nil
+	}
+	return b.renderMessageEnvelope(ctx, scaffold, env)
+}
+
+func (b *Bridge) renderMessageEnvelope(ctx context.Context, scaffold signalTurnScaffold, env *Envelope) (loop.Message, map[string]any, bool, error) {
 	var attachmentDescs []string
 	if len(env.DataMessage.Attachments) > 0 {
 		if env.DataMessage.ViewOnce {
@@ -637,18 +877,11 @@ func (b *Bridge) prepareMessageTurn(ctx context.Context, env *Envelope) (*loop.A
 				msgTS = env.DataMessage.Timestamp
 			}
 			receivedAt := time.UnixMilli(msgTS)
-			attachmentDescs = b.processAttachments(ctx, env.DataMessage.Attachments, sender, convID, receivedAt)
+			attachmentDescs = b.processAttachments(ctx, env.DataMessage.Attachments, scaffold.sender, scaffold.convID, receivedAt)
 		}
 	}
 	content := formatMessage(env, attachmentDescs)
-	channelBinding := b.resolveBinding(sender)
-	if b.bindConversation != nil && channelBinding != nil {
-		if err := b.bindConversation(convID, channelBinding); err != nil {
-			log.Warn("failed to persist signal conversation binding", "error", err)
-		}
-	}
-
-	log.Info("signal message received",
+	scaffold.log.Info("signal message received",
 		"message_len", len(env.DataMessage.Message),
 		"attachments", len(env.DataMessage.Attachments),
 	)
@@ -658,65 +891,89 @@ func (b *Bridge) prepareMessageTurn(ctx context.Context, env *Envelope) (*loop.A
 		ts = env.DataMessage.Timestamp
 	}
 	b.mu.Lock()
-	b.lastInboundTS[sender] = lastMessage{
+	b.lastInboundTS[scaffold.sender] = lastMessage{
 		signalTS:   ts,
 		receivedAt: time.Now(),
 	}
 	b.mu.Unlock()
 
-	opts := b.requestOptions(sender, map[string]string{
-		"source": "signal",
-		"sender": sender,
-	})
-
-	return b.agentTurn(convID, channelBinding, content, opts, map[string]any{
+	return loop.Message{Role: "user", Content: content}, map[string]any{
 		"message_len": len(content),
-		"sender":      sender,
+		"sender":      scaffold.sender,
 		"attachments": len(env.DataMessage.Attachments),
-	}), nil
+	}, true, nil
 }
 
-func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.AgentTurn, error) {
-	sender := env.Source
+func (b *Bridge) renderReactionEnvelope(scaffold signalTurnScaffold, env *Envelope) (loop.Message, map[string]any, bool, error) {
 	reaction := signalReactionEvent(env)
-	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
-
-	b.logger.Info("signal reaction received",
-		"sender", sender,
+	scaffold.log.Info("signal reaction received",
 		"emoji", reaction.Emoji,
 		"target_author", reaction.TargetAuthor,
 		"target_timestamp", reaction.TargetTimestamp,
-		"conversation_id", convID,
 	)
-
 	content := reaction.Prompt()
-	channelBinding := b.resolveBinding(sender)
-	if b.bindConversation != nil && channelBinding != nil {
-		if err := b.bindConversation(convID, channelBinding); err != nil {
-			b.logger.Warn("failed to persist signal conversation binding", "error", err)
-		}
-	}
-
-	hints := reaction.Hints()
-	hints["source"] = "signal"
-	hints["sender"] = sender
-	opts := b.requestOptions(sender, hints)
-
-	return b.agentTurn(convID, channelBinding, content, opts, map[string]any{
+	return loop.Message{Role: "user", Content: content}, map[string]any{
 		"event_type":            "reaction",
-		"sender":                sender,
+		"sender":                scaffold.sender,
 		"reaction_emoji":        reaction.Emoji,
 		"target_sent_timestamp": reaction.TargetTimestamp,
-	}), nil
+	}, true, nil
+}
+
+func mergeSignalSummary(dst map[string]any, src map[string]any) {
+	if len(src) == 0 {
+		return
+	}
+	if sender, ok := src["sender"]; ok {
+		dst["sender"] = sender
+	}
+	if src["event_type"] == "reaction" {
+		dst["reaction_count"] = intSummary(dst, "reaction_count") + 1
+		dst["event_type"] = "reaction"
+		if emoji, ok := src["reaction_emoji"]; ok {
+			dst["reaction_emoji"] = emoji
+		}
+		if target, ok := src["target_sent_timestamp"]; ok {
+			dst["target_sent_timestamp"] = target
+		}
+	}
+	if attachments, ok := src["attachments"].(int); ok {
+		dst["attachments"] = intSummary(dst, "attachments") + attachments
+	}
+}
+
+func intSummary(summary map[string]any, key string) int {
+	if n, ok := summary[key].(int); ok {
+		return n
+	}
+	return 0
+}
+
+func (b *Bridge) prepareReactionTurn(_ context.Context, env *Envelope) (*loop.AgentTurn, error) {
+	scaffold := b.prepareSignalTurnScaffold(env.Source)
+	reaction := signalReactionEvent(env)
+	hints := reaction.Hints()
+	hints["source"] = "signal"
+	hints["sender"] = env.Source
+	scaffold.opts = b.requestOptions(env.Source, hints)
+	msg, summary, ok, err := b.renderReactionEnvelope(scaffold, env)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, []loop.Message{msg}, scaffold.opts, summary), nil
 }
 
 func (b *Bridge) agentTurn(convID string, binding *memory.ChannelBinding, content string, opts router.RequestOptions, summary map[string]any) *loop.AgentTurn {
+	return b.agentTurnMessages(convID, binding, []loop.Message{{Role: "user", Content: content}}, opts, summary)
+}
+
+func (b *Bridge) agentTurnMessages(convID string, binding *memory.ChannelBinding, msgs []loop.Message, opts router.RequestOptions, summary map[string]any) *loop.AgentTurn {
 	fallbackContent := prompts.InteractiveEmptyResponseFallback
 	return &loop.AgentTurn{
 		Request: loop.Request{
 			ConversationID:   convID,
 			ChannelBinding:   binding,
-			Messages:         []loop.Message{{Role: "user", Content: content}},
+			Messages:         append([]loop.Message(nil), msgs...),
 			Model:            opts.Model,
 			RoutingFactors:   opts.RoutingFactors,
 			DelegationGating: opts.DelegationGating,
@@ -952,50 +1209,6 @@ func sanitizePhone(phone string) string {
 		}
 	}
 	return sb.String()
-}
-
-// shortContactID returns the first segment of a contact UUID for use
-// as a stable, low-PII loop-name component. Loop names are
-// hierarchy-path-shaped (the dashboard / structured logs treat "/"
-// as a parent/child separator), so this validates the input is a
-// safe hex-and-dash identifier and returns "" on any other shape —
-// the caller falls back to sanitizePhone in that case.
-//
-// UUIDs are 8-4-4-4-12 hyphenated; we take the leading 8 hex chars.
-// That's a 16-bit-times-2 namespace which collides only at very
-// small probability across a household-scale contact list and is
-// easy to grep against the full ID in contact_lookup /
-// session-origin output. Non-UUID inputs (tests sometimes pass
-// "contact-1" or paths) get rejected entirely so a stray "/" or
-// other special character can't restructure the loop hierarchy.
-func shortContactID(id string) string {
-	if id == "" {
-		return ""
-	}
-	if !isSafeContactID(id) {
-		return ""
-	}
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
-}
-
-// isSafeContactID reports whether s is a hex-and-dash-only string
-// safe to embed in a loop name. Lower-case [0-9a-f-] only; any other
-// character (including the upper-case A-F, "/" path separator, or
-// dot) disqualifies the value.
-func isSafeContactID(s string) bool {
-	for _, r := range s {
-		switch {
-		case r >= '0' && r <= '9':
-		case r >= 'a' && r <= 'f':
-		case r == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // formatMessage builds the user-facing message content for the agent

@@ -162,6 +162,9 @@ type Deps struct {
 	// Runner executes LLM iterations. Required unless [Config].Handler
 	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
+	// Mailbox stores durable data-plane inputs for event-driven
+	// conversational loops. Nil disables mailbox delivery.
+	Mailbox *Mailbox
 	// CompletionSink receives detached completion deliveries such as
 	// background-task results injected into conversations.
 	CompletionSink CompletionSink
@@ -1232,6 +1235,8 @@ func (l *Loop) run(ctx context.Context) {
 		},
 	})
 
+	l.wakeIfMailboxNonEmpty(ctx)
+
 	logger.Info("loop started",
 		"sleep_min", l.config.SleepMin,
 		"sleep_max", l.config.SleepMax,
@@ -1431,6 +1436,7 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		signals, forceSupervisor, wakeTags := l.consumePendingNotifies()
+		mailboxItems, mailboxErr := l.DrainMailbox(ctx, maxMailboxItemsPerWake)
 
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
@@ -1452,6 +1458,12 @@ func (l *Loop) run(ctx context.Context) {
 			"attempt", attemptCount+1,
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
+		if mailboxErr != nil {
+			iterLog.Warn("loop mailbox drain failed; continuing with notification input",
+				"error", mailboxErr,
+			)
+			l.wakeIfMailboxNonEmpty(ctx)
+		}
 
 		iterStartTime := time.Now()
 
@@ -1476,6 +1488,7 @@ func (l *Loop) run(ctx context.Context) {
 				"supervisor_trigger": string(supervisorTrigger),
 				"attempt":            attemptCount + 1,
 				"signal_envelopes":   len(signals),
+				"mailbox_items":      len(mailboxItems),
 			},
 		})
 		iterLog.Debug("loop iteration starting")
@@ -1488,6 +1501,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			handlerCtx = withNotifyEnvelopes(handlerCtx, signals)
+			handlerCtx = withMailboxItems(handlerCtx, mailboxItems)
 			handlerCtx = withWakeTags(handlerCtx, wakeTags)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
@@ -1572,11 +1586,13 @@ func (l *Loop) run(ctx context.Context) {
 			turnCtx := withLoopID(iterCtx, l.id)
 			turnCtx = withFallbackContent(turnCtx, l.config.FallbackContent)
 			turnCtx = withNotifyEnvelopes(turnCtx, signals)
+			turnCtx = withMailboxItems(turnCtx, mailboxItems)
 			turnCtx = withWakeTags(turnCtx, wakeTags)
 			turn, buildErr := l.buildAgentTurn(turnCtx, TurnInput{
 				Event:           event,
 				Supervisor:      isSupervisor,
 				NotifyEnvelopes: signals,
+				MailboxItems:    mailboxItems,
 				WakeTags:        wakeTags,
 			})
 			if buildErr != nil {
@@ -1623,6 +1639,16 @@ func (l *Loop) run(ctx context.Context) {
 				}
 				l.mu.Unlock()
 			}
+		}
+
+		if mailboxErr == nil && len(mailboxItems) > 0 && err == nil && (result != nil || noOp) {
+			if ackErr := l.AckMailbox(ctx, mailboxItems); ackErr != nil {
+				iterLog.Warn("loop mailbox ack failed",
+					"error", ackErr,
+					"items", len(mailboxItems),
+				)
+			}
+			l.wakeIfMailboxNonEmpty(ctx)
 		}
 
 		// Clear in-flight state after iteration completes.
@@ -1833,7 +1859,9 @@ func (l *Loop) run(ctx context.Context) {
 		// --- SLEEP PHASE (bottom of loop, timer-driven loops only) ---
 		// Event-driven loops (WaitFunc-based and OperationEventDriven)
 		// skip the sleep phase and flow back to the top to wait for
-		// the next event/notification.
+		// the next event/notification — except when a failed turn
+		// retained mailbox rows, which takes the backoff branch below
+		// so the rows retry without waiting for an external wake.
 		if l.config.WaitFunc == nil && l.config.Operation != OperationEventDriven {
 			l.setState(StateSleeping)
 			l.publishEvent(events.Event{
@@ -1855,10 +1883,46 @@ func (l *Loop) run(ctx context.Context) {
 				)
 				break
 			}
+		} else if l.config.WaitFunc == nil && err != nil && mailboxErr == nil && len(mailboxItems) > 0 && l.hasAttemptsRemaining() {
+			// OperationEventDriven with a failed turn and un-acked
+			// mailbox rows: waitForWake would block until the next
+			// external enqueue, leaving the retained rows undelivered.
+			// Back off first — floored like the wait-error path so a
+			// chronically failing turn cannot tight-loop — then re-arm
+			// the wake so the rows are retried. A fresh enqueue during
+			// the backoff cuts the sleep short via wakeCh. Loops out of
+			// MaxIter budget skip the backoff and exit at the top-of-loop
+			// check instead.
+			backoff := l.computeSleep()
+			if backoff <= 0 {
+				backoff = eventDrivenErrorBackoff
+			}
+			iterLog.Warn("loop mailbox retry backoff",
+				"backoff", backoff.Round(time.Second),
+				"retained_items", len(mailboxItems),
+			)
+			if !l.sleep(ctx, backoff) {
+				logger.Debug("loop stopped during mailbox retry backoff",
+					"phase", "mailbox_backoff",
+				)
+				break
+			}
+			l.wakeIfMailboxNonEmpty(ctx)
 		}
 	}
 
 	l.emitStopped()
+}
+
+// hasAttemptsRemaining reports whether the loop's MaxIter budget
+// allows another iteration.
+func (l *Loop) hasAttemptsRemaining() bool {
+	if l.config.MaxIter <= 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attempts < l.config.MaxIter
 }
 
 // emitStopped transitions the loop to StateStopped and publishes a

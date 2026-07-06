@@ -164,6 +164,13 @@ func (r *Registry) Register(l *Loop) error {
 			}
 		}
 	}
+	if l.deps.Mailbox != nil {
+		for _, existing := range r.loops {
+			if existing.config.Name == l.config.Name && existing.deps.Mailbox != nil {
+				return fmt.Errorf("loop: mailbox-enabled loop name %q is already registered", l.config.Name)
+			}
+		}
+	}
 
 	// Three parent-shape outcomes at Register:
 	//

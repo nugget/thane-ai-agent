@@ -92,7 +92,10 @@ var channelDefaults = map[string]string{
 		"(Signal makes threads easy). Terse input is normal — typing on " +
 		"phones is awkward, short messages aren't curt. Your responses " +
 		"can be fuller but stay conversational. You are chatting, not " +
-		"presenting.",
+		"presenting. If several incoming Signal messages arrive in one " +
+		"run, they appear as separate user messages in chronological order; " +
+		"answer once to the combined batch and use the per-message [ts] tags " +
+		"when quoting or reacting.",
 }
 
 // ChannelProvider is a ContextProvider that injects channel-specific

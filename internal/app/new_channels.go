@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
 	"github.com/nugget/thane-ai-agent/internal/state/knowledge"
@@ -779,6 +780,7 @@ func (a *App) initChannels(s *newState) error {
 				AttachmentStore: a.attachmentStore,
 				VisionAnalyzer:  a.visionAnalyzer,
 				Registry:        a.loopRegistry,
+				Mailbox:         looppkg.NewMailbox(a.loopQueue),
 				EventBus:        a.eventBus,
 			})
 			if err := bridge.Register(ctx); err != nil {

@@ -62,6 +62,87 @@ func TestStore_EnqueuePeekAck(t *testing.T) {
 	}
 }
 
+func TestStore_AppendKeepsDuplicateItems(t *testing.T) {
+	s := newTestStore(t)
+
+	first, err := s.Append(t.Context(), "signal/contact", "signal", 0, []byte(`{"message":"first"}`))
+	if err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+	second, err := s.Append(t.Context(), "signal/contact", "signal", 0, []byte(`{"message":"second"}`))
+	if err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if first == second {
+		t.Fatalf("append generated duplicate key %q", first)
+	}
+
+	if n, _ := s.PendingCount(t.Context(), "signal/contact"); n != 2 {
+		t.Fatalf("pending = %d, want 2", n)
+	}
+	items, err := s.PeekAll(t.Context(), "signal/contact")
+	if err != nil {
+		t.Fatalf("peek all: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	if got := string(items[0].Payload); got != `{"message":"first"}` {
+		t.Fatalf("first payload = %q", got)
+	}
+	if got := string(items[1].Payload); got != `{"message":"second"}` {
+		t.Fatalf("second payload = %q", got)
+	}
+}
+
+func TestStore_PendingConsumersAndMoveConsumer(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.Append(t.Context(), "signal/old", "signal", 0, []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("append old: %v", err)
+	}
+	if _, err := s.Append(t.Context(), "archivist", "item", 0, []byte(`{"message":"two"}`)); err != nil {
+		t.Fatalf("append archivist: %v", err)
+	}
+	consumers, err := s.PendingConsumers(t.Context(), "signal/")
+	if err != nil {
+		t.Fatalf("PendingConsumers: %v", err)
+	}
+	if len(consumers) != 1 || consumers[0] != "signal/old" {
+		t.Fatalf("consumers = %#v, want signal/old", consumers)
+	}
+	if err := s.MoveConsumer(t.Context(), "signal/old", "signal/new"); err != nil {
+		t.Fatalf("MoveConsumer: %v", err)
+	}
+	if n, _ := s.PendingCount(t.Context(), "signal/old"); n != 0 {
+		t.Fatalf("old pending = %d, want 0", n)
+	}
+	if n, _ := s.PendingCount(t.Context(), "signal/new"); n != 1 {
+		t.Fatalf("new pending = %d, want 1", n)
+	}
+}
+
+func TestStore_PendingConsumersEscapesLikeWildcards(t *testing.T) {
+	s := newTestStore(t)
+
+	// "signal/a_b" contains a LIKE wildcard ('_' = any single char).
+	// Unescaped, the prefix query would also match "signal/axb"; the
+	// prefix must be treated literally.
+	if _, err := s.Append(t.Context(), "signal/a_b", "signal", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("append literal: %v", err)
+	}
+	if _, err := s.Append(t.Context(), "signal/axb", "signal", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("append wildcard-collision: %v", err)
+	}
+	consumers, err := s.PendingConsumers(t.Context(), "signal/a_b")
+	if err != nil {
+		t.Fatalf("PendingConsumers: %v", err)
+	}
+	if len(consumers) != 1 || consumers[0] != "signal/a_b" {
+		t.Fatalf("consumers = %#v, want [signal/a_b] (literal prefix, not wildcard match)", consumers)
+	}
+}
+
 func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	s := newTestStore(t)
 

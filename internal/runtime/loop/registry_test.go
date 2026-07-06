@@ -48,6 +48,22 @@ func TestRegistryRegisterDeregister(t *testing.T) {
 	r.Deregister("nonexistent")
 }
 
+func TestRegistryRejectsDuplicateMailboxLoopNames(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	mailbox := newTestMailbox(t)
+	first := mustNew(t, Config{Name: "mailbox-loop", Task: "test"}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	second := mustNew(t, Config{Name: "mailbox-loop", Task: "test"}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+
+	if err := r.Register(first); err != nil {
+		t.Fatalf("Register first: %v", err)
+	}
+	if err := r.Register(second); err == nil {
+		t.Fatal("duplicate mailbox loop name should fail")
+	}
+}
+
 func TestRegistryChangeHook(t *testing.T) {
 	t.Parallel()
 
