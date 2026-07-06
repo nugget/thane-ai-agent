@@ -777,9 +777,11 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary)
 	// Mid-turn input merge (#1221): let the loop pull messages that arrive
 	// while this turn is composing, rendered in channel voice. The loop owns
-	// delta-gating, the drain budget, and the ack; this only renders.
+	// delta-gating, the drain budget, and the ack; this only renders. Close
+	// over the scaffold already built for this turn so repeated pulls don't
+	// rebuild it (and re-persist the conversation binding) each time.
 	turn.PullRender = func(rctx context.Context, items []loop.MailboxItem) []llm.Message {
-		return b.renderPulledMailbox(rctx, sender, items)
+		return b.renderPulledMailbox(rctx, scaffold, items)
 	}
 	return turn, nil
 }
@@ -865,11 +867,11 @@ func (b *Bridge) prepareSignalTurnScaffold(sender string) signalTurnScaffold {
 // content that landed while the model was mid-work, so it is presented as
 // channel input, never in a system voice. The loop supplies only fresh,
 // delta-gated items; this method does not touch the mailbox or ack.
-func (b *Bridge) renderPulledMailbox(ctx context.Context, sender string, items []loop.MailboxItem) []llm.Message {
+func (b *Bridge) renderPulledMailbox(ctx context.Context, scaffold signalTurnScaffold, items []loop.MailboxItem) []llm.Message {
 	if len(items) == 0 {
 		return nil
 	}
-	scaffold := b.prepareSignalTurnScaffold(sender)
+	sender := scaffold.sender
 	out := make([]llm.Message, 0, len(items))
 	for _, item := range items {
 		var env Envelope

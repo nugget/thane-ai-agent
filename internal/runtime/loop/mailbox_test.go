@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -85,6 +86,53 @@ func TestBuildMailboxPullInputDeltaGatesAndBudgets(t *testing.T) {
 	// (mid-1, mid-2, mid-3) — the budget-blocked mid-4 is not.
 	if len(pulled) != 3 {
 		t.Fatalf("ack accumulator = %d, want 3 (mid-1, mid-2, mid-3)", len(pulled))
+	}
+}
+
+// TestBuildMailboxPullInputCapsItemsPerPull confirms a single pull injects at
+// most maxMidTurnItemsPerPull items even with a larger backlog, so prompt size
+// and render/store work stay bounded; the remainder rides the next pull.
+func TestBuildMailboxPullInputCapsItemsPerPull(t *testing.T) {
+	t.Parallel()
+
+	mailbox := newTestMailbox(t)
+	l := mustNew(t, Config{Name: "pull-cap", Task: "t", MidTurnInputBudget: 8},
+		Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	ctx := context.Background()
+
+	render := func(_ context.Context, items []MailboxItem) []llm.Message {
+		out := make([]llm.Message, len(items))
+		for i, it := range items {
+			out[i] = llm.Message{Role: "user", Content: string(it.Payload)}
+		}
+		return out
+	}
+	var pulled []MailboxItem
+	pull := l.buildMailboxPullInput(nil, &pulled, render)
+
+	overflow := 3
+	total := maxMidTurnItemsPerPull + overflow
+	for i := 0; i < total; i++ {
+		if _, err := mailbox.Enqueue(ctx, l.Name(), "test", []byte(fmt.Sprintf("m%02d", i))); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	first := pull(ctx)
+	if len(first) != maxMidTurnItemsPerPull {
+		t.Fatalf("first pull delivered %d, want per-pull cap %d", len(first), maxMidTurnItemsPerPull)
+	}
+	// FIFO: the oldest items came first.
+	if first[0].Content != "m00" {
+		t.Errorf("first item = %q, want oldest (m00)", first[0].Content)
+	}
+
+	second := pull(ctx)
+	if len(second) != overflow {
+		t.Fatalf("second pull delivered %d, want the %d remainder", len(second), overflow)
+	}
+	if len(pulled) != total {
+		t.Fatalf("ack accumulator = %d, want %d (all delivered across pulls)", len(pulled), total)
 	}
 }
 

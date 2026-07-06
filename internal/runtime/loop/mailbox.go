@@ -44,11 +44,17 @@ type MailboxReceipt struct {
 const maxMailboxItemsPerWake = 16
 
 // defaultMidTurnInputBudget caps how many times a single turn may pull
-// newly-arrived mailbox input mid-flight (#1221). Bounding pulls — not items
-// — keeps turn boundaries reachable under continuous inbound flow (#1152):
-// once spent, the remainder rides the buffered-wakeCh immediate re-wake.
-// Override per loop via Config.MidTurnInputBudget.
+// newly-arrived mailbox input mid-flight (#1221). Bounding pulls keeps turn
+// boundaries reachable under continuous inbound flow (#1152): once spent, the
+// remainder rides the buffered-wakeCh immediate re-wake. Override per loop via
+// Config.MidTurnInputBudget.
 const defaultMidTurnInputBudget = 8
+
+// maxMidTurnItemsPerPull bounds how many fresh items a single pull injects, so
+// a large pending backlog can't blow up prompt size or per-iteration
+// render/store work in one shot. The overflow stays pending for the next pull
+// (within budget) or the post-turn re-wake. Matches the wake drain cap.
+const maxMidTurnItemsPerPull = maxMailboxItemsPerWake
 
 func (l *Loop) midTurnInputBudget() int {
 	if l.config.MidTurnInputBudget > 0 {
@@ -60,11 +66,14 @@ func (l *Loop) midTurnInputBudget() int {
 // buildMailboxPullInput returns a PullInput closure over this loop's mailbox
 // for the #1221 mid-turn input merge. Each call peeks pending items, skips any
 // already delivered this turn — the wake batch plus prior pulls (delta-gating,
-// so content is never re-presented) — caps the number of pulls per turn
-// (drain budget), renders the fresh items via render (channel voice), appends
-// them to *pulled so the turn-end ack covers them, and returns the rendered
-// messages. Returns nil once the budget is spent or nothing new is pending,
-// which the engine reads as "no mid-turn input."
+// so content is never re-presented) — takes at most maxMidTurnItemsPerPull
+// fresh items (bounding prompt growth and render/store work per pull), caps the
+// number of pulls per turn (drain budget), renders those items via render
+// (channel voice), appends them to *pulled so the turn-end ack covers them, and
+// returns the rendered messages. Returns nil once the budget is spent or
+// nothing new is pending, which the engine reads as "no mid-turn input." Items
+// left over from a capped pull stay pending for the next pull or post-turn
+// re-wake.
 func (l *Loop) buildMailboxPullInput(
 	wakeBatch []MailboxItem,
 	pulled *[]MailboxItem,
@@ -89,8 +98,12 @@ func (l *Loop) buildMailboxPullInput(
 		}
 		var fresh []MailboxItem
 		for _, it := range items {
-			if !delivered[it.ID] {
-				fresh = append(fresh, it)
+			if delivered[it.ID] {
+				continue
+			}
+			fresh = append(fresh, it)
+			if len(fresh) >= maxMidTurnItemsPerPull {
+				break // bound prompt growth and render/store work per pull
 			}
 		}
 		if len(fresh) == 0 {
