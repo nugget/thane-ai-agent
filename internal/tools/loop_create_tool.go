@@ -566,7 +566,7 @@ func thaneLoopCreateSchema() map[string]any {
 			"tags": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Optional capability tags. For containers, every descendant inherits them; for executing loops, they scope the loop's tool surface. Omit to use only core tags.",
+				"description": "Optional capability tags. Each tag binds two things into the loop: its tool surface, AND every KB doc whose frontmatter carries that tag (injected into the loop's context each wake). For containers, every descendant inherits them; for executing loops, they scope the tool surface and pull in tagged knowledge. A knowledge-only tag (no tools, just docs) works too and needs no catalog entry. Omit to use only core tags.",
 			},
 			"instructions": map[string]any{
 				"type":        "string",
