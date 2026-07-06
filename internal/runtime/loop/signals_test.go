@@ -290,6 +290,68 @@ func TestLoopMailboxKeepsItemsWhenTurnFails(t *testing.T) {
 	}
 }
 
+func TestLoopMailboxRetriesAfterFailedTurn(t *testing.T) {
+	t.Parallel()
+
+	inputs := make(chan TurnInput, 2)
+	mailbox := newTestMailbox(t)
+	runs := 0
+	runner := &turnCallbackRunner{fn: func(context.Context, RunRequest, StreamCallback) (*RunResponse, error) {
+		runs++
+		if runs == 1 {
+			return nil, errors.New("transient runner failure")
+		}
+		return &RunResponse{Content: "ok"}, nil
+	}}
+	l, err := New(Config{
+		Name:         "mailbox-retry",
+		Operation:    OperationEventDriven,
+		SleepDefault: 10 * time.Millisecond,
+		SleepMax:     50 * time.Millisecond,
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			inputs <- input
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "mailbox wake"}},
+				},
+			}, nil
+		},
+		MaxIter: 2,
+	}, Deps{Runner: runner, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("enqueue mailbox: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		select {
+		case input := <-inputs:
+			if len(input.MailboxItems) != 1 {
+				t.Fatalf("attempt %d MailboxItems len = %d, want 1", attempt, len(input.MailboxItems))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("attempt %d never started; failed turn was not retried", attempt)
+		}
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	depth, err := l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("mailbox depth: %v", err)
+	}
+	if depth != 0 {
+		t.Fatalf("mailbox depth = %d, want 0 after successful retry", depth)
+	}
+}
+
 func TestLoopMailboxCapsItemsPerWake(t *testing.T) {
 	t.Parallel()
 

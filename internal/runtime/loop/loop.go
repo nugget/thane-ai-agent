@@ -1859,7 +1859,9 @@ func (l *Loop) run(ctx context.Context) {
 		// --- SLEEP PHASE (bottom of loop, timer-driven loops only) ---
 		// Event-driven loops (WaitFunc-based and OperationEventDriven)
 		// skip the sleep phase and flow back to the top to wait for
-		// the next event/notification.
+		// the next event/notification — except when a failed turn
+		// retained mailbox rows, which takes the backoff branch below
+		// so the rows retry without waiting for an external wake.
 		if l.config.WaitFunc == nil && l.config.Operation != OperationEventDriven {
 			l.setState(StateSleeping)
 			l.publishEvent(events.Event{
@@ -1881,10 +1883,46 @@ func (l *Loop) run(ctx context.Context) {
 				)
 				break
 			}
+		} else if l.config.WaitFunc == nil && err != nil && mailboxErr == nil && len(mailboxItems) > 0 && l.hasAttemptsRemaining() {
+			// OperationEventDriven with a failed turn and un-acked
+			// mailbox rows: waitForWake would block until the next
+			// external enqueue, leaving the retained rows undelivered.
+			// Back off first — floored like the wait-error path so a
+			// chronically failing turn cannot tight-loop — then re-arm
+			// the wake so the rows are retried. A fresh enqueue during
+			// the backoff cuts the sleep short via wakeCh. Loops out of
+			// MaxIter budget skip the backoff and exit at the top-of-loop
+			// check instead.
+			backoff := l.computeSleep()
+			if backoff <= 0 {
+				backoff = eventDrivenErrorBackoff
+			}
+			iterLog.Warn("loop mailbox retry backoff",
+				"backoff", backoff.Round(time.Second),
+				"retained_items", len(mailboxItems),
+			)
+			if !l.sleep(ctx, backoff) {
+				logger.Debug("loop stopped during mailbox retry backoff",
+					"phase", "mailbox_backoff",
+				)
+				break
+			}
+			l.wakeIfMailboxNonEmpty(ctx)
 		}
 	}
 
 	l.emitStopped()
+}
+
+// hasAttemptsRemaining reports whether the loop's MaxIter budget
+// allows another iteration.
+func (l *Loop) hasAttemptsRemaining() bool {
+	if l.config.MaxIter <= 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attempts < l.config.MaxIter
 }
 
 // emitStopped transitions the loop to StateStopped and publishes a
