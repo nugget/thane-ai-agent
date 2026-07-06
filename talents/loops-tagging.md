@@ -20,18 +20,21 @@ that activates it:
 - **A tool surface** — the catalog tools under that tag, which the
   rest of this talent is about.
 - **A knowledge bundle** — every KB article whose frontmatter `tags:`
-  includes that tag, injected into the loop's context in full, every
-  wake. This is how a loop *learns* something durable — a plant
-  primer, a doctrine, a house map — instead of re-deriving it each
-  cycle or being handed it inline.
+  includes that tag, injected into the loop's context each wake
+  (subject to a per-bucket size cap — an oversized article is
+  truncated with a marker rather than dropped silently). This is how a
+  loop *learns* something durable — a plant primer, a doctrine, a
+  house map — instead of re-deriving it each cycle or being handed it
+  inline.
 
 A tag can carry tools and no docs (`web`), docs and no tools, or both.
 A purpose-built tag like `hor-house-hvac` can be pure knowledge: no
 tools of its own, but tagging a doc with it and activating it on a
 loop injects that one doc into that one loop. A knowledge-only tag
 needs no catalog entry — the match is purely frontmatter `tags:`
-against the loop's active tags. (A tool-surface tag must be a real
-registered tag; see the tag-as-label anti-pattern below.)
+against the loop's active tags. (Only the tool-surface half needs
+registration; a tag that just routes knowledge does not — see the
+tag-as-label anti-pattern below.)
 
 To route a specific document into specific loops:
 

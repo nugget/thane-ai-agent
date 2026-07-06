@@ -109,19 +109,24 @@ muddle them and the loop drifts.
 
 ## Changing a loop that's already running
 
-A running loop carries the config it launched with. Editing its
-stored definition doesn't reach the live instance — the edit waits
-in the overlay until the loop relaunches. Which verb you reach for
-depends on what changed:
+A running loop carries the config it launched with. Whether an edit
+reaches the live instance or waits for a relaunch depends on the tool
+you use, not just the field:
 
-- **Scalars** (sleep envelope, quality floor) —
-  `loop_definition_update` promotes the value into the running loop
-  at its next turn boundary. No relaunch, no lost iteration.
-- **Structure** (tags, entity subscriptions, parent, model) — these
-  bind at launch, so they take effect only on a full relaunch:
-  `stop_loop` then `loop_definition_launch`, or `loop_reparent` for a
-  parent change (it does the stop-and-relaunch for you). A process
-  restart relaunches everything from its stored definition.
+- **Retune it live** — task, model, instructions, sleep envelope,
+  quality floor, supervisor, max_iter all promote into the running
+  loop via `loop_definition_update` at its next turn boundary. No
+  relaunch, no lost iteration.
+- **Change its watch set live** — entity subscriptions have their own
+  door: `add_entity_subscription` / `remove_entity_subscription` with
+  `owner` set to the loop's name edit one watch entry in place, also
+  without a relaunch.
+- **Relaunch-tier changes** — tags and parent bind at launch, so they
+  take effect only on a full relaunch: `stop_loop` then
+  `loop_definition_launch`, or `loop_reparent` for a parent change (it
+  does the stop-and-relaunch for you). A wholesale spec rewrite via
+  `loop_definition_set`, or a process restart, relaunches from the
+  stored definition too.
 
 Two consequences worth holding:
 
