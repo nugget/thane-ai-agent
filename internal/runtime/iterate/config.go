@@ -107,6 +107,18 @@ type Config struct {
 	// Nil means all tools are available.
 	CheckToolAvail func(name string) bool
 
+	// PullInput is polled at the top of each iteration — after any prior
+	// iteration's tool results are appended, before this iteration's LLM
+	// call — so it can never split a tool_use/tool_result pair. A non-empty
+	// return is appended verbatim as user-role messages and the iteration
+	// proceeds with them in context. This is the seam that merges
+	// newly-arrived conversation input into a live turn (#1221): a long
+	// tool-heavy turn becomes aware of messages that arrive while it works.
+	// Nil disables mid-turn input. The callback owns delta-gating (return
+	// only what is new) and any per-turn drain budget (return empty once
+	// spent); the engine appends whatever it returns without inspection.
+	PullInput func(ctx context.Context) []llm.Message
+
 	// NormalizeToolCall can rewrite or repair a model-emitted tool call
 	// before availability checks and execution. Use it for runtime
 	// compatibility shims such as aliasing common hallucinated names to

@@ -227,6 +227,114 @@ func TestEngine_MultipleToolCalls(t *testing.T) {
 	}
 }
 
+func TestEngine_PullInputMergesMidTurn(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			toolCallResponse(makeToolCall("search", map[string]any{"q": "test"})),
+			textResponse("Answered with the new context."),
+		},
+	}
+	exec := &mockExecutor{results: map[string]string{"search": "result data"}}
+	cfg := baseCfg(mock, exec)
+
+	injected := llm.Message{Role: "user", Content: "New message from Alice, arrived while you were working: change of plans"}
+	var polls int
+	cfg.PullInput = func(context.Context) []llm.Message {
+		polls++
+		// Poll 1 is the top of iteration 0 (nothing new yet); poll 2 is the
+		// top of iteration 1, after the search tool result was appended.
+		if polls == 2 {
+			return []llm.Message{injected}
+		}
+		return nil
+	}
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Content != "Answered with the new context." {
+		t.Errorf("content = %q", result.Content)
+	}
+	if len(mock.calls) != 2 {
+		t.Fatalf("LLM calls = %d, want 2", len(mock.calls))
+	}
+
+	// The injected message must reach the model on the second LLM call,
+	// positioned immediately after the tool result — the tool_use/tool_result
+	// pair is never split.
+	sent := mock.calls[1].Messages
+	last := sent[len(sent)-1]
+	if last.Role != "user" || last.Content != injected.Content {
+		t.Errorf("last message on 2nd LLM call = %+v, want the injected user message", last)
+	}
+	if prev := sent[len(sent)-2]; prev.Role != "tool" {
+		t.Errorf("message before injection = %q, want tool result", prev.Role)
+	}
+
+	// The interleave order survives into the final history.
+	var found bool
+	for _, m := range result.Messages {
+		if m.Role == "user" && m.Content == injected.Content {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("injected message missing from final history: %+v", result.Messages)
+	}
+}
+
+func TestEngine_PullInputNeverSplitsMultiToolBatch(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			toolCallResponse(
+				makeToolCall("search", map[string]any{"q": "a"}),
+				makeToolCall("read", map[string]any{"path": "/x"}),
+			),
+			textResponse("done"),
+		},
+	}
+	exec := &mockExecutor{results: map[string]string{"search": "found", "read": "contents"}}
+	cfg := baseCfg(mock, exec)
+
+	injected := llm.Message{Role: "user", Content: "New message from Bob, arrived while you were working"}
+	var polls int
+	cfg.PullInput = func(context.Context) []llm.Message {
+		polls++
+		if polls == 2 {
+			return []llm.Message{injected}
+		}
+		return nil
+	}
+
+	engine := &Engine{}
+	if _, err := engine.Run(context.Background(), cfg, baseMessages()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// On the second LLM call, the assistant tool_use message must be
+	// immediately followed by BOTH of its tool results, with the injected
+	// user message only after them — nothing interleaved into the batch.
+	sent := mock.calls[1].Messages
+	asstIdx := -1
+	for i, m := range sent {
+		if m.Role == "assistant" && len(m.ToolCalls) == 2 {
+			asstIdx = i
+			break
+		}
+	}
+	if asstIdx == -1 || asstIdx+2 >= len(sent) {
+		t.Fatalf("expected assistant tool batch followed by its results, got %+v", sent)
+	}
+	if sent[asstIdx+1].Role != "tool" || sent[asstIdx+2].Role != "tool" {
+		t.Errorf("tool_use not immediately followed by its two tool results: %+v", sent[asstIdx:])
+	}
+	if last := sent[len(sent)-1]; last.Role != "user" || last.Content != injected.Content {
+		t.Errorf("injected message not positioned after both tool results: %+v", last)
+	}
+}
+
 func TestEngine_NormalizeToolCallPersistsNormalizedMessage(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
