@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -373,15 +374,27 @@ func TestRegistryLaunchDetachedSurvivesCallerCancel(t *testing.T) {
 		t.Fatal("Detached = false, want true")
 	}
 
-	// Cancel the launching context while the loop is still in its long
-	// initial sleep, then give the goroutine time to react.
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-	time.Sleep(100 * time.Millisecond)
-
 	l := r.Get(result.LoopID)
 	if l == nil {
-		t.Fatal("detached loop was deregistered after caller context cancel; want still running")
+		t.Fatalf("Get(%q) = nil, want running loop", result.LoopID)
+	}
+
+	// Wait until the loop is parked in its (long) initial sleep — a
+	// deterministic proof it got past Start, rather than guessing with a
+	// fixed delay. SleepDefault is 5s, so it stays parked well past the
+	// window below.
+	waitForLoopState(t, l, StateSleeping)
+
+	// Cancel the launching context. Before the fix this cancelled the loop's
+	// run context and stopped it mid initial-sleep; after the fix the
+	// detached loop's lifetime is severed from the caller, so Done() must not
+	// fire.
+	cancel()
+	select {
+	case <-l.Done():
+		t.Fatal("detached loop stopped after caller context cancel; want still running")
+	case <-time.After(200 * time.Millisecond):
+		// Still parked in initial sleep — survived the caller's cancellation.
 	}
 	if st := l.Status(); st.State == StateStopped {
 		t.Fatalf("state = %v, want a live (sleeping) state after caller cancel", st.State)
@@ -403,6 +416,7 @@ func TestRegistryLaunchRequestReplyStillHonorsCallerCancel(t *testing.T) {
 
 	r := NewRegistry()
 	ctx, cancel := context.WithCancel(context.Background())
+	runner := &signalingCtxRunner{started: make(chan struct{})}
 
 	type launchOutcome struct {
 		result LaunchResult
@@ -417,12 +431,17 @@ func TestRegistryLaunchRequestReplyStillHonorsCallerCancel(t *testing.T) {
 				Operation:  OperationRequestReply,
 				Completion: CompletionReturn,
 			},
-		}, Deps{Runner: &ctxBlockingRunner{}})
+		}, Deps{Runner: runner})
 		done <- launchOutcome{result: res, err: err}
 	}()
 
-	// Cancel while the runner is blocked on ctx.Done(); Launch must return.
-	time.Sleep(20 * time.Millisecond)
+	// Cancel only once the runner is actually executing, so the test proves
+	// caller cancellation propagates rather than racing Launch's setup.
+	select {
+	case <-runner.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner never started")
+	}
 	cancel()
 
 	select {
@@ -884,6 +903,20 @@ func (r *blockingRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) 
 type ctxBlockingRunner struct{}
 
 func (r *ctxBlockingRunner) Run(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// signalingCtxRunner closes started on its first Run call, then blocks until
+// the context is cancelled. It lets a test cancel exactly when the runner is
+// executing, instead of racing a fixed sleep against Launch's setup.
+type signalingCtxRunner struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (r *signalingCtxRunner) Run(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+	r.once.Do(func() { close(r.started) })
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
