@@ -214,6 +214,12 @@ type Config struct {
 	// explicitly disable jitter.
 	Jitter *float64
 
+	// MidTurnInputBudget caps how many times a single turn may pull
+	// newly-arrived mailbox input mid-flight (#1221). Zero uses
+	// [defaultMidTurnInputBudget]. Only meaningful for loops with a live
+	// inbound channel that sets AgentTurn.PullRender.
+	MidTurnInputBudget int
+
 	// MaxDuration is the maximum wall-clock time the loop may run.
 	// Zero means unlimited.
 	MaxDuration time.Duration

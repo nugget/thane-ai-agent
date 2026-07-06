@@ -432,6 +432,51 @@ func TestBridge_PrepareSignalMailboxTurnRendersEachEnvelopeAsMessage(t *testing.
 	}
 }
 
+func TestBridge_MailboxTurnWiresChannelVoicePullRender(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	mkItem := func(message string, ts int64) loop.MailboxItem {
+		t.Helper()
+		env := &Envelope{
+			Source:      "+15551234567",
+			SourceName:  "Alice",
+			Timestamp:   ts,
+			DataMessage: &DataMessage{Timestamp: ts, Message: message},
+		}
+		payload, err := json.Marshal(env)
+		if err != nil {
+			t.Fatalf("marshal envelope: %v", err)
+		}
+		return loop.MailboxItem{ID: fmt.Sprintf("signal:%d", ts), Payload: payload}
+	}
+
+	turn, err := bridge.prepareSignalMailboxTurn(context.Background(), "+15551234567",
+		[]loop.MailboxItem{mkItem("original question", 1700000000000)}, nil)
+	if err != nil {
+		t.Fatalf("prepareSignalMailboxTurn: %v", err)
+	}
+	if turn.PullRender == nil {
+		t.Fatal("mailbox turn did not wire PullRender for mid-turn input (#1221)")
+	}
+
+	// A message that arrives mid-turn renders as a channel-voice user message
+	// carrying explicit provenance — never a system voice.
+	msgs := turn.PullRender(context.Background(),
+		[]loop.MailboxItem{mkItem("actually, never mind", 1700000002000)})
+	if len(msgs) != 1 {
+		t.Fatalf("PullRender returned %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("role = %q, want user", msgs[0].Role)
+	}
+	if !strings.Contains(msgs[0].Content, "arrived while you were working") {
+		t.Errorf("content missing provenance framing: %q", msgs[0].Content)
+	}
+	if !strings.Contains(msgs[0].Content, "actually, never mind") {
+		t.Errorf("content missing the message body: %q", msgs[0].Content)
+	}
+}
+
 func TestBridge_PrepareSignalMailboxTurnSkipsInvalidItems(t *testing.T) {
 	bridge, _, _, _ := bridgeHelper(t)
 
