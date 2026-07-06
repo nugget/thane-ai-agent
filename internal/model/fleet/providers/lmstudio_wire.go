@@ -225,7 +225,14 @@ func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
 				})
 			}
 			wire.Content = parts
-		case m.Content != "":
+		default:
+			// Always emit content as a string, even when empty. Leaving it
+			// unset makes `content,omitempty` drop the field, and strict
+			// OpenAI-compatible servers such as LM Studio then reject the
+			// message with "content field must be a string or an array of
+			// objects" — which bites assistant messages that carry only
+			// tool_calls and tool results with empty output. The ollama
+			// adapter already always sets content; this keeps parity.
 			wire.Content = m.Content
 		}
 		if len(m.ToolCalls) > 0 {

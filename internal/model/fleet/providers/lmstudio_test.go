@@ -146,6 +146,47 @@ func TestLMStudioListModelInfos_FallsBackToOpenAIEndpoint(t *testing.T) {
 	}
 }
 
+func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
+	t.Parallel()
+
+	// An assistant message carrying only tool_calls and a tool result with
+	// empty output must still serialize a `content` field. Omitting it (the
+	// prior behavior: unset `any` + `omitempty`) made LM Studio reject the
+	// request with 400 "content field must be a string or an array of
+	// objects".
+	var tc llm.ToolCall
+	tc.ID = "tc1"
+	tc.Function.Name = "replace_output_climate_bench_qwen"
+	tc.Function.Arguments = map[string]any{"body": "..."}
+
+	msgs := []llm.Message{
+		{Role: "user", Content: "update the doc"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{tc}}, // tool call, no text
+		{Role: "tool", Content: "", ToolCallID: "tc1"},                  // empty tool result
+	}
+
+	wire, err := toLMStudioMessages(msgs)
+	if err != nil {
+		t.Fatalf("toLMStudioMessages: %v", err)
+	}
+	b, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+
+	// Every message — including the empty-content ones — must carry a content field.
+	if n := strings.Count(got, `"content":`); n != len(msgs) {
+		t.Fatalf("content field count = %d, want %d (one per message)\njson: %s", n, len(msgs), got)
+	}
+	if !strings.Contains(got, `"role":"assistant","content":""`) {
+		t.Errorf("assistant tool-call message must carry empty-string content, got: %s", got)
+	}
+	if !strings.Contains(got, `"role":"tool","content":""`) {
+		t.Errorf("tool result must carry empty-string content, got: %s", got)
+	}
+}
+
 func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	t.Parallel()
 
