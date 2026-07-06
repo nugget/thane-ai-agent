@@ -209,6 +209,13 @@ func parseQueueTimestamp(raw any) time.Time {
 	return time.Time{}
 }
 
+// escapeLikePrefix escapes the SQL LIKE wildcards ('%', '_') and the
+// escape character itself so a caller-supplied string is matched as a
+// literal prefix. Pair it with `ESCAPE '\'` in the query.
+func escapeLikePrefix(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // PendingConsumers returns distinct consumer-loop partitions that have
 // pending work. When prefix is non-empty, only partitions with that
 // prefix are returned.
@@ -220,8 +227,11 @@ func (s *Store) PendingConsumers(ctx context.Context, prefix string) ([]string, 
 	args := []any{StatusPending}
 	prefix = strings.TrimSpace(prefix)
 	if prefix != "" {
-		query += ` AND consumer_loop LIKE ?`
-		args = append(args, prefix+"%")
+		// Escape LIKE wildcards so the prefix matches literally: a
+		// caller passing a name fragment containing '%' or '_' must not
+		// silently widen the match to unrelated partitions.
+		query += ` AND consumer_loop LIKE ? ESCAPE '\'`
+		args = append(args, escapeLikePrefix(prefix)+"%")
 	}
 	query += ` ORDER BY consumer_loop ASC`
 

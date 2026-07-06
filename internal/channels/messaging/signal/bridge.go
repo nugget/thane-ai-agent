@@ -388,7 +388,17 @@ func (b *Bridge) enqueueSenderEnvelope(ctx context.Context, env *Envelope) bool 
 		return false
 	}
 	if b.registry == nil || b.mailbox == nil {
-		b.handleEnvelope(ctx, env, nil)
+		// Legacy path with no durable mailbox: run the turn inline and
+		// only report success when it actually handled the message, so
+		// the caller does not send a read receipt for a turn we could
+		// not process (there is no queue here to retry from).
+		if err := b.handleEnvelope(ctx, env, nil); err != nil {
+			b.logger.Warn("signal legacy turn failed, not acking message",
+				"sender", env.Source,
+				"error", err,
+			)
+			return false
+		}
 		return true
 	}
 	payload, err := json.Marshal(env)
@@ -628,7 +638,7 @@ func firstSignalMailboxSender(items []loop.MailboxItem) string {
 // loop-facing request path. The progressFn, if non-nil, is used by the
 // legacy no-registry path to forward in-flight events to loop telemetry.
 func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	b.handleEnvelope(ctx, env, progressFn)
+	_ = b.handleEnvelope(ctx, env, progressFn)
 }
 
 // handleReaction processes an inbound emoji reaction. Reaction
@@ -648,23 +658,31 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		return
 	}
 
-	b.handleEnvelope(ctx, env, nil)
+	_ = b.handleEnvelope(ctx, env, nil)
 }
 
-func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
+// handleEnvelope prepares and runs one Signal turn on the legacy
+// no-mailbox path. It returns an error when the turn could not be
+// prepared or the runner failed, so callers gate the read receipt on
+// actual handling instead of acking a message they could not process.
+// A nil turn (nothing to answer) is a successful no-op.
+func (b *Bridge) handleEnvelope(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) error {
 	turn, err := b.prepareSignalTurn(ctx, env)
 	if err != nil {
 		b.logger.Error("signal turn preparation failed", "error", err)
-		return
+		return err
 	}
 	if turn == nil {
-		return
+		return nil
 	}
 	req := turn.Request
 	if progressFn != nil {
 		req.OnProgress = progressFn
 	}
-	_, _ = signalResponseRunner{bridge: b, runner: b.runner}.Run(ctx, req, nil)
+	if _, err := (signalResponseRunner{bridge: b, runner: b.runner}).Run(ctx, req, nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *Bridge) prepareSignalTurn(ctx context.Context, env *Envelope) (*loop.AgentTurn, error) {

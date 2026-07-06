@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -251,6 +252,43 @@ func TestBridge_DispatchWithoutMailboxRunsBeforeReceipt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("dispatch did not finish after runner release")
 	}
+}
+
+func TestBridge_EnqueueWithoutMailboxGatesReceiptOnTurnOutcome(t *testing.T) {
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Timestamp: 1700000000000, Message: "hi"},
+	}
+
+	// The legacy no-mailbox path has no durable queue to retry from, so
+	// the read receipt (sent by dispatch on a true return) must reflect
+	// whether the turn actually handled the message.
+	t.Run("failed turn is not acked", func(t *testing.T) {
+		client, stdout, stdin := pipeClient(t)
+		go drainRPCRequests(t, stdin, stdout)
+		bridge := NewBridge(BridgeConfig{
+			Client: client,
+			Runner: &testRunner{err: errors.New("runner down")},
+			Logger: slog.Default(),
+		})
+		if bridge.enqueueSenderEnvelope(context.Background(), env) {
+			t.Fatal("returned true for a failed legacy turn; the message would be falsely acked")
+		}
+	})
+
+	t.Run("successful turn is acked", func(t *testing.T) {
+		client, stdout, stdin := pipeClient(t)
+		go drainRPCRequests(t, stdin, stdout)
+		bridge := NewBridge(BridgeConfig{
+			Client: client,
+			Runner: &testRunner{resp: &loop.Response{Content: "ok"}},
+			Logger: slog.Default(),
+		})
+		if !bridge.enqueueSenderEnvelope(context.Background(), env) {
+			t.Fatal("returned false for a successful legacy turn")
+		}
+	})
 }
 
 func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {

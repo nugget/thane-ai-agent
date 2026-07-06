@@ -122,6 +122,27 @@ func TestStore_PendingConsumersAndMoveConsumer(t *testing.T) {
 	}
 }
 
+func TestStore_PendingConsumersEscapesLikeWildcards(t *testing.T) {
+	s := newTestStore(t)
+
+	// "signal/a_b" contains a LIKE wildcard ('_' = any single char).
+	// Unescaped, the prefix query would also match "signal/axb"; the
+	// prefix must be treated literally.
+	if _, err := s.Append(t.Context(), "signal/a_b", "signal", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("append literal: %v", err)
+	}
+	if _, err := s.Append(t.Context(), "signal/axb", "signal", 0, []byte(`{}`)); err != nil {
+		t.Fatalf("append wildcard-collision: %v", err)
+	}
+	consumers, err := s.PendingConsumers(t.Context(), "signal/a_b")
+	if err != nil {
+		t.Fatalf("PendingConsumers: %v", err)
+	}
+	if len(consumers) != 1 || consumers[0] != "signal/a_b" {
+		t.Fatalf("consumers = %#v, want [signal/a_b] (literal prefix, not wildcard match)", consumers)
+	}
+}
+
 func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	s := newTestStore(t)
 
