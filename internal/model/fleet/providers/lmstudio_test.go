@@ -146,6 +146,63 @@ func TestLMStudioListModelInfos_FallsBackToOpenAIEndpoint(t *testing.T) {
 	}
 }
 
+func TestToLMStudioMessages_EmptyContentIsEmittedNotOmitted(t *testing.T) {
+	t.Parallel()
+
+	// An assistant message carrying only tool_calls and a tool result with
+	// empty output must still serialize a `content` field. Omitting it (the
+	// prior behavior: unset `any` + `omitempty`) made LM Studio reject the
+	// request with 400 "content field must be a string or an array of
+	// objects".
+	var tc llm.ToolCall
+	tc.ID = "tc1"
+	tc.Function.Name = "replace_output_climate_bench_qwen"
+	tc.Function.Arguments = map[string]any{"body": "..."}
+
+	msgs := []llm.Message{
+		{Role: "user", Content: "update the doc"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{tc}}, // tool call, no text
+		{Role: "tool", Content: "", ToolCallID: "tc1"},                  // empty tool result
+	}
+
+	wire, err := toLMStudioMessages(msgs)
+	if err != nil {
+		t.Fatalf("toLMStudioMessages: %v", err)
+	}
+	b, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Inspect the actual top-level message objects rather than substring-matching
+	// the whole payload — a "content" key nested inside tool-call arguments must
+	// not be mistaken for a message-level content field.
+	var decoded []map[string]json.RawMessage
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
+	}
+	if len(decoded) != len(msgs) {
+		t.Fatalf("decoded %d messages, want %d", len(decoded), len(msgs))
+	}
+	for i, m := range decoded {
+		raw, ok := m["content"]
+		if !ok {
+			t.Errorf("message %d (role %q) has no content field — LM Studio 400s on this", i, msgs[i].Role)
+			continue
+		}
+		// The empty-content assistant tool-call and tool result must serialize an
+		// empty string, not a dropped field or a JSON null.
+		if msgs[i].Content == "" {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				t.Errorf("message %d (role %q) content is not a string: %s", i, msgs[i].Role, raw)
+			} else if s != "" {
+				t.Errorf("message %d (role %q) content = %q, want empty string", i, msgs[i].Role, s)
+			}
+		}
+	}
+}
+
 func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	t.Parallel()
 
