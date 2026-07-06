@@ -61,6 +61,14 @@ type Request struct {
 	// progress reporting.
 	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
 
+	// PullInput, when set, is polled by the runner's engine at every
+	// iteration boundary and at turn closure to merge newly-arrived
+	// conversation input into this live turn (#1221). The loop builds it
+	// over its mailbox with delta-gating and a drain budget; the engine
+	// appends whatever it returns as user-role messages. Nil disables
+	// mid-turn input. Runtime-only.
+	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
+
 	MaxIterations   int                 `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 	MaxOutputTokens int                 `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	ToolTimeout     time.Duration       `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
@@ -1473,6 +1481,10 @@ func (l *Loop) run(ctx context.Context) {
 		var err error
 		var handlerSummary map[string]any
 		var noOp bool
+		// midTurnPulled collects mailbox items delivered into the live turn
+		// after the wake snapshot (#1221) so the turn-end ack covers them
+		// alongside the wake batch.
+		var midTurnPulled []MailboxItem
 		// Transition to processing and emit iteration_start before
 		// dispatching work so the dashboard sees activity immediately.
 		l.setState(StateProcessing)
@@ -1617,6 +1629,15 @@ func (l *Loop) run(ctx context.Context) {
 						l.currentConvID = convID
 						l.mu.Unlock()
 					}
+					// Mid-turn input merge (#1221): when the builder supplied a
+					// channel renderer and this loop has a mailbox, wire a
+					// delta-gated, budget-capped PullInput over the mailbox onto
+					// the prepared request (set here, after preparation, so no
+					// request-base merge can wipe it). Items it delivers are
+					// acked with the wake batch at turn end.
+					if turn.PullRender != nil && l.deps.Mailbox != nil {
+						req.PullInput = l.buildMailboxPullInput(mailboxItems, &midTurnPulled, turn.PullRender)
+					}
 					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
 					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor, supervisorTrigger)
 					runCancel()
@@ -1641,11 +1662,18 @@ func (l *Loop) run(ctx context.Context) {
 			}
 		}
 
-		if mailboxErr == nil && len(mailboxItems) > 0 && err == nil && (result != nil || noOp) {
-			if ackErr := l.AckMailbox(ctx, mailboxItems); ackErr != nil {
+		// Ack the wake batch plus anything merged mid-turn (#1221) at the
+		// same lifecycle point — turn end, only on a clean turn — so a crash
+		// mid-turn leaves every delivered item pending for redelivery.
+		ackItems := mailboxItems
+		if len(midTurnPulled) > 0 {
+			ackItems = append(append([]MailboxItem(nil), mailboxItems...), midTurnPulled...)
+		}
+		if mailboxErr == nil && len(ackItems) > 0 && err == nil && (result != nil || noOp) {
+			if ackErr := l.AckMailbox(ctx, ackItems); ackErr != nil {
 				iterLog.Warn("loop mailbox ack failed",
 					"error", ackErr,
-					"items", len(mailboxItems),
+					"items", len(ackItems),
 				)
 			}
 			l.wakeIfMailboxNonEmpty(ctx)

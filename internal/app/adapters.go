@@ -1075,6 +1075,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		InitialTags:           append([]string(nil), req.InitialTags...),
 		RuntimeTags:           append([]string(nil), req.RuntimeTags...),
 		RuntimeTools:          compileLoopRuntimeTools(req.RuntimeTools),
+		PullInput:             req.PullInput,
 		MaxIterations:         req.MaxIterations,
 		MaxOutputTokens:       req.MaxOutputTokens,
 		ToolTimeout:           req.ToolTimeout,

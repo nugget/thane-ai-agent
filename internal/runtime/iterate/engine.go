@@ -52,6 +52,22 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterLog := log.With("iter", i)
 		iterCtx := logging.WithLogger(ctx, iterLog)
 
+		// --- Mid-turn input merge (#1221) ---
+		// Poll for newly-arrived conversation content at the iteration
+		// boundary. This runs after any prior iteration appended its
+		// tool_use/tool_result pair (that append completes before the
+		// `continue` that returns here), and before this iteration's LLM
+		// call, so the pair is never split. The callback delta-gates and
+		// budget-caps its own output; the engine appends it verbatim as
+		// user-role messages so the model sees the new input this call.
+		if cfg.PullInput != nil {
+			if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
+				messages = append(messages, pulled...)
+				iterLog.Info("merged mid-turn input into live turn",
+					"pulled_messages", len(pulled))
+			}
+		}
+
 		// Get tool definitions for this iteration.
 		var toolDefs []map[string]any
 		if cfg.ToolDefs != nil {
@@ -422,6 +438,29 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			// When NudgeOnEmpty is false, empty content is preserved —
 			// the caller is responsible for handling it (e.g., delegate
 			// treats it as ExhaustNoOutput).
+		}
+
+		// --- Closure-time input merge (#1221) ---
+		// The model produced a complete reply and is about to end the turn.
+		// If new conversation input arrived while it was composing, fold that
+		// reply into history, append the new input, and keep the turn alive
+		// for one more iteration instead of shipping an answer the next
+		// message may already supersede. This is the second PullInput poll
+		// site: it reaches the zero-tool-call conversational case the
+		// top-of-iteration poll cannot, since a text-only reply has no later
+		// boundary. OnTextResponse is deliberately NOT fired here — this is
+		// not the turn's final reply, so memory/fact-extraction waits for the
+		// real close. The callback's shared per-turn drain budget bounds how
+		// many times a turn can be held open; the remainder rides the
+		// immediate post-turn re-wake.
+		if cfg.PullInput != nil && llmResp.Message.Content != "" {
+			if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
+				messages = append(messages, llmResp.Message)
+				messages = append(messages, pulled...)
+				iterLog.Info("held turn open for input arriving at closure",
+					"pulled_messages", len(pulled))
+				continue
+			}
 		}
 
 		// Append the final assistant message before firing OnTextResponse
