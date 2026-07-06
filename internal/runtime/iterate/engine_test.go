@@ -335,6 +335,76 @@ func TestEngine_PullInputNeverSplitsMultiToolBatch(t *testing.T) {
 	}
 }
 
+func TestEngine_PullInputHoldsTurnOpenAtClosure(t *testing.T) {
+	// A zero-tool-call conversational turn: the model produces a complete
+	// reply, but new input arrived while it composed. The closure poll keeps
+	// the turn alive for one more iteration rather than shipping a reply the
+	// new message supersedes.
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			textResponse("Sure, I'll look into that."),
+			textResponse("Done — and I also handled Y."),
+		},
+	}
+	exec := &mockExecutor{}
+	cfg := baseCfg(mock, exec)
+
+	injected := llm.Message{Role: "user", Content: "Actually, also do Y"}
+	var polls int
+	cfg.PullInput = func(context.Context) []llm.Message {
+		polls++
+		// Poll 1: top of iter 0 (nothing yet). Poll 2: closure of iter 0's
+		// text reply (new input arrived). Poll 3: top of iter 1 (delta-gated
+		// empty). Poll 4: closure of iter 1 (nothing → turn ends).
+		if polls == 2 {
+			return []llm.Message{injected}
+		}
+		return nil
+	}
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.calls) != 2 {
+		t.Fatalf("LLM calls = %d, want 2 (turn held open at closure)", len(mock.calls))
+	}
+	if result.Content != "Done — and I also handled Y." {
+		t.Errorf("final content = %q, want the continuation reply", result.Content)
+	}
+
+	// The second call saw the interim reply folded into history, then the
+	// injected input as the latest user message.
+	sent := mock.calls[1].Messages
+	if last := sent[len(sent)-1]; last.Role != "user" || last.Content != injected.Content {
+		t.Errorf("injected message not last on 2nd call: %+v", last)
+	}
+	if prev := sent[len(sent)-2]; prev.Role != "assistant" || prev.Content != "Sure, I'll look into that." {
+		t.Errorf("interim assistant reply missing before injection: %+v", prev)
+	}
+}
+
+func TestEngine_PullInputAtClosureNoInputEndsTurn(t *testing.T) {
+	// With nothing queued, the closure poll must not hold the turn open —
+	// a normal text reply ends the turn in a single iteration.
+	mock := &mockLLM{responses: []*llm.ChatResponse{textResponse("All done.")}}
+	cfg := baseCfg(mock, &mockExecutor{})
+	cfg.PullInput = func(context.Context) []llm.Message { return nil }
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("LLM calls = %d, want 1 (turn ends when nothing queued)", len(mock.calls))
+	}
+	if result.Content != "All done." {
+		t.Errorf("content = %q", result.Content)
+	}
+}
+
 func TestEngine_NormalizeToolCallPersistsNormalizedMessage(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
