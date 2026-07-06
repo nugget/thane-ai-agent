@@ -344,6 +344,97 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 	t.Fatalf("loop %q still registered after completion", result.LoopID)
 }
 
+// TestRegistryLaunchDetachedSurvivesCallerCancel is the #1224 regression: a
+// detached loop (service here) launched from a cancellable context must not die
+// when that context is cancelled. Before the fix, the run goroutine inherited
+// the caller's context, so an interactive turn ending cancelled the loop mid
+// initial-sleep — iterations=0, gone before it ever ran.
+func TestRegistryLaunchDetachedSurvivesCallerCancel(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	result, err := r.Launch(ctx, Launch{
+		Spec: Spec{
+			Name:         "detached-survives-cancel",
+			Task:         "test",
+			Operation:    OperationService,
+			SleepMin:     1 * time.Second,
+			SleepMax:     5 * time.Second,
+			SleepDefault: 5 * time.Second,
+			Jitter:       Float64Ptr(0),
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !result.Detached {
+		t.Fatal("Detached = false, want true")
+	}
+
+	// Cancel the launching context while the loop is still in its long
+	// initial sleep, then give the goroutine time to react.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	l := r.Get(result.LoopID)
+	if l == nil {
+		t.Fatal("detached loop was deregistered after caller context cancel; want still running")
+	}
+	if st := l.Status(); st.State == StateStopped {
+		t.Fatalf("state = %v, want a live (sleeping) state after caller cancel", st.State)
+	}
+
+	// Explicit stop still works via the loop's own cancel, independent of
+	// the (already-cancelled) caller context.
+	if err := r.StopLoop(result.LoopID); err != nil {
+		t.Fatalf("StopLoop: %v", err)
+	}
+}
+
+// TestRegistryLaunchRequestReplyStillHonorsCallerCancel guards the other half
+// of the #1224 fix: request_reply launches are synchronous — the caller blocks
+// on the result — so cancelling the caller's context must still abort them.
+// Only detached operations sever the caller's cancellation.
+func TestRegistryLaunchRequestReplyStillHonorsCallerCancel(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	type launchOutcome struct {
+		result LaunchResult
+		err    error
+	}
+	done := make(chan launchOutcome, 1)
+	go func() {
+		res, err := r.Launch(ctx, Launch{
+			Spec: Spec{
+				Name:       "request-reply-honors-cancel",
+				Task:       "test",
+				Operation:  OperationRequestReply,
+				Completion: CompletionReturn,
+			},
+		}, Deps{Runner: &ctxBlockingRunner{}})
+		done <- launchOutcome{result: res, err: err}
+	}()
+
+	// Cancel while the runner is blocked on ctx.Done(); Launch must return.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case out := <-done:
+		if !errors.Is(out.err, context.Canceled) {
+			t.Fatalf("Launch error = %v, want context canceled", out.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("request_reply Launch did not return after caller context cancel")
+	}
+}
+
 func TestRegistryLaunchBackgroundTaskDeliversConversationCompletion(t *testing.T) {
 	t.Parallel()
 

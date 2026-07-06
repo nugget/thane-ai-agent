@@ -900,7 +900,20 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 
 	cfg := l.config
 	detached := spec.Operation != OperationRequestReply
-	if err := r.startLoop(ctx, spec.Name, l, cfg.Setup, detached); err != nil {
+	// A detached loop outlives the call that launched it, so its run
+	// goroutine must not inherit the caller's cancellation. When the launch
+	// comes from an interactive turn, ctx is cancelled the moment that turn
+	// ends — which killed the loop mid initial-sleep, before its first
+	// iteration ever ran (#1224). Sever the caller's cancellation and
+	// deadline while preserving request-scoped values; the detached loop's
+	// lifetime is then bounded only by Stop/ShutdownAll via its own cancel.
+	// request_reply launches stay attached: the caller blocks on the result
+	// below and its cancellation must still propagate.
+	startCtx := ctx
+	if detached {
+		startCtx = context.WithoutCancel(ctx)
+	}
+	if err := r.startLoop(startCtx, spec.Name, l, cfg.Setup, detached); err != nil {
 		return LaunchResult{}, err
 	}
 
