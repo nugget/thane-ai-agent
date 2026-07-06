@@ -222,6 +222,11 @@ func TestLoopMailboxWakesEventDrivenLoopAndDrainsAll(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("event-driven loop did not wake after mailbox enqueue")
 	}
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not finish")
+	}
 
 	depth, err := l.MailboxDepth(context.Background())
 	if err != nil {
@@ -229,6 +234,111 @@ func TestLoopMailboxWakesEventDrivenLoopAndDrainsAll(t *testing.T) {
 	}
 	if depth != 0 {
 		t.Fatalf("mailbox depth = %d, want 0 after turn drain", depth)
+	}
+}
+
+func TestLoopMailboxKeepsItemsWhenTurnFails(t *testing.T) {
+	t.Parallel()
+
+	inputs := make(chan TurnInput, 1)
+	mailbox := newTestMailbox(t)
+	runner := &turnCallbackRunner{fn: func(context.Context, RunRequest, StreamCallback) (*RunResponse, error) {
+		return nil, errors.New("runner unavailable")
+	}}
+	l, err := New(Config{
+		Name:      "mailbox-failure",
+		Operation: OperationEventDriven,
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			inputs <- input
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "mailbox wake"}},
+				},
+			}, nil
+		},
+		MaxIter: 1,
+	}, Deps{Runner: runner, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("enqueue mailbox: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case input := <-inputs:
+		if len(input.MailboxItems) != 1 {
+			t.Fatalf("MailboxItems len = %d, want 1", len(input.MailboxItems))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event-driven loop did not wake after mailbox enqueue")
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	depth, err := l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("mailbox depth: %v", err)
+	}
+	if depth != 1 {
+		t.Fatalf("mailbox depth = %d, want 1 after failed turn", depth)
+	}
+}
+
+func TestLoopMailboxCapsItemsPerWake(t *testing.T) {
+	t.Parallel()
+
+	inputs := make(chan TurnInput, 1)
+	mailbox := newTestMailbox(t)
+	l, err := New(Config{
+		Name:      "mailbox-capped",
+		Operation: OperationEventDriven,
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			inputs <- input
+			return &AgentTurn{
+				Request: Request{
+					Messages: []Message{{Role: "user", Content: "mailbox wake"}},
+				},
+			}, nil
+		},
+		MaxIter: 1,
+	}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := 0; i < maxMailboxItemsPerWake+1; i++ {
+		if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte(`{"message":"one"}`)); err != nil {
+			t.Fatalf("enqueue mailbox %d: %v", i, err)
+		}
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case input := <-inputs:
+		if len(input.MailboxItems) != maxMailboxItemsPerWake {
+			t.Fatalf("MailboxItems len = %d, want %d", len(input.MailboxItems), maxMailboxItemsPerWake)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("event-driven loop did not wake after mailbox enqueue")
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	depth, err := l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("mailbox depth: %v", err)
+	}
+	if depth != 1 {
+		t.Fatalf("mailbox depth = %d, want 1 after capped turn", depth)
 	}
 }
 
@@ -262,8 +372,18 @@ func TestLoopMailboxIncrementalDrain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MailboxDepth: %v", err)
 	}
+	if depth != 2 {
+		t.Fatalf("depth = %d, want 2 after limited peek", depth)
+	}
+	if err := l.AckMailbox(context.Background(), items); err != nil {
+		t.Fatalf("AckMailbox: %v", err)
+	}
+	depth, err = l.MailboxDepth(context.Background())
+	if err != nil {
+		t.Fatalf("MailboxDepth after ack: %v", err)
+	}
 	if depth != 1 {
-		t.Fatalf("depth = %d, want 1 after limited drain", depth)
+		t.Fatalf("depth = %d, want 1 after limited ack", depth)
 	}
 }
 

@@ -1436,7 +1436,7 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		signals, forceSupervisor, wakeTags := l.consumePendingNotifies()
-		mailboxItems, mailboxErr := l.DrainMailbox(ctx, 0)
+		mailboxItems, mailboxErr := l.DrainMailbox(ctx, maxMailboxItemsPerWake)
 
 		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
@@ -1458,6 +1458,12 @@ func (l *Loop) run(ctx context.Context) {
 			"attempt", attemptCount+1,
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
+		if mailboxErr != nil {
+			iterLog.Warn("loop mailbox drain failed; continuing with notification input",
+				"error", mailboxErr,
+			)
+			l.wakeIfMailboxNonEmpty(ctx)
+		}
 
 		iterStartTime := time.Now()
 
@@ -1487,9 +1493,7 @@ func (l *Loop) run(ctx context.Context) {
 		})
 		iterLog.Debug("loop iteration starting")
 
-		if mailboxErr != nil {
-			err = fmt.Errorf("mailbox drain: %w", mailboxErr)
-		} else if l.config.Handler != nil {
+		if l.config.Handler != nil {
 			iterStart := time.Now()
 			summary := make(map[string]any)
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
@@ -1635,6 +1639,16 @@ func (l *Loop) run(ctx context.Context) {
 				}
 				l.mu.Unlock()
 			}
+		}
+
+		if mailboxErr == nil && len(mailboxItems) > 0 && err == nil && (result != nil || noOp) {
+			if ackErr := l.AckMailbox(ctx, mailboxItems); ackErr != nil {
+				iterLog.Warn("loop mailbox ack failed",
+					"error", ackErr,
+					"items", len(mailboxItems),
+				)
+			}
+			l.wakeIfMailboxNonEmpty(ctx)
 		}
 
 		// Clear in-flight state after iteration completes.

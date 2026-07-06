@@ -40,6 +40,8 @@ type MailboxReceipt struct {
 	QueuedForNextWake bool   `json:"queued_for_next_wake,omitempty"`
 }
 
+const maxMailboxItemsPerWake = 16
+
 type mailboxItemsContextKey struct{}
 
 // MailboxItemsFromContext returns mailbox items delivered to the
@@ -64,6 +66,13 @@ func withMailboxItems(ctx context.Context, items []MailboxItem) context.Context 
 }
 
 func (m *Mailbox) enqueue(ctx context.Context, loopName, keyPrefix string, payload []byte) (MailboxItem, error) {
+	return m.Enqueue(ctx, loopName, keyPrefix, payload)
+}
+
+// Enqueue durably appends one payload to a loop-name mailbox partition.
+// The loop name is the durable consumer identity; mailbox-enabled loops
+// must keep names unique while they share a store.
+func (m *Mailbox) Enqueue(ctx context.Context, loopName, keyPrefix string, payload []byte) (MailboxItem, error) {
 	if m == nil || m.store == nil {
 		return MailboxItem{}, fmt.Errorf("loop mailbox is not configured")
 	}
@@ -75,6 +84,12 @@ func (m *Mailbox) enqueue(ctx context.Context, loopName, keyPrefix string, paylo
 }
 
 func (m *Mailbox) drain(ctx context.Context, loopName string, limit int) ([]MailboxItem, error) {
+	return m.Peek(ctx, loopName, limit)
+}
+
+// Peek returns pending mailbox items for loopName without acknowledging
+// them. Callers must ack only after the items have been handled.
+func (m *Mailbox) Peek(ctx context.Context, loopName string, limit int) ([]MailboxItem, error) {
 	if m == nil || m.store == nil {
 		return nil, nil
 	}
@@ -95,9 +110,6 @@ func (m *Mailbox) drain(ctx context.Context, loopName string, limit int) ([]Mail
 	}
 	items := make([]MailboxItem, 0, len(stored))
 	for _, it := range stored {
-		if err := m.store.Ack(ctx, loopName, it.DedupKey); err != nil {
-			return nil, err
-		}
 		items = append(items, MailboxItem{
 			ID:         it.DedupKey,
 			Payload:    append([]byte(nil), it.Payload...),
@@ -107,11 +119,41 @@ func (m *Mailbox) drain(ctx context.Context, loopName string, limit int) ([]Mail
 	return items, nil
 }
 
+func (m *Mailbox) ack(ctx context.Context, loopName string, items []MailboxItem) error {
+	if m == nil || m.store == nil || len(items) == 0 {
+		return nil
+	}
+	for _, item := range items {
+		if err := m.store.Ack(ctx, loopName, item.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *Mailbox) depth(ctx context.Context, loopName string) (int, error) {
 	if m == nil || m.store == nil {
 		return 0, nil
 	}
 	return m.store.PendingCount(ctx, loopName)
+}
+
+// PendingConsumers returns loop-name partitions with pending mailbox
+// work, optionally restricted to names that share prefix.
+func (m *Mailbox) PendingConsumers(ctx context.Context, prefix string) ([]string, error) {
+	if m == nil || m.store == nil {
+		return nil, nil
+	}
+	return m.store.PendingConsumers(ctx, prefix)
+}
+
+// MoveConsumer reassigns pending mailbox rows from one durable loop-name
+// partition to another.
+func (m *Mailbox) MoveConsumer(ctx context.Context, from, to string) error {
+	if m == nil || m.store == nil {
+		return nil
+	}
+	return m.store.MoveConsumer(ctx, from, to)
 }
 
 // EnqueueMailbox durably enqueues payload for this loop and wakes the
@@ -170,15 +212,26 @@ func (l *Loop) enqueueMailbox(ctx context.Context, keyPrefix string, payload []b
 	return receipt, nil
 }
 
-// DrainMailbox drains mailbox items for this loop. limit <= 0 drains
-// all currently pending items; positive limits provide the incremental
-// drain API used by future mid-turn input paths.
+// DrainMailbox peeks mailbox items for this loop. The rows remain
+// pending until [Loop.AckMailbox] is called after successful handling.
+// limit <= 0 drains all currently pending items; positive limits provide
+// incremental delivery for capped wake batches.
 func (l *Loop) DrainMailbox(ctx context.Context, limit int) ([]MailboxItem, error) {
 	l.mu.Lock()
 	mailbox := l.deps.Mailbox
 	loopName := l.config.Name
 	l.mu.Unlock()
 	return mailbox.drain(ctx, loopName, limit)
+}
+
+// AckMailbox removes mailbox items that were successfully handled by
+// this loop.
+func (l *Loop) AckMailbox(ctx context.Context, items []MailboxItem) error {
+	l.mu.Lock()
+	mailbox := l.deps.Mailbox
+	loopName := l.config.Name
+	l.mu.Unlock()
+	return mailbox.ack(ctx, loopName, items)
 }
 
 // MailboxDepth returns the number of pending mailbox items for this loop.
@@ -203,6 +256,10 @@ func (l *Loop) wakeIfMailboxNonEmpty(ctx context.Context) {
 	if depth == 0 {
 		return
 	}
+	l.pokeWake()
+}
+
+func (l *Loop) pokeWake() {
 	select {
 	case l.wakeCh <- struct{}{}:
 	default:

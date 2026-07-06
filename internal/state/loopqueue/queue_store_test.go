@@ -95,6 +95,33 @@ func TestStore_AppendKeepsDuplicateItems(t *testing.T) {
 	}
 }
 
+func TestStore_PendingConsumersAndMoveConsumer(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.Append(t.Context(), "signal/old", "signal", 0, []byte(`{"message":"one"}`)); err != nil {
+		t.Fatalf("append old: %v", err)
+	}
+	if _, err := s.Append(t.Context(), "archivist", "item", 0, []byte(`{"message":"two"}`)); err != nil {
+		t.Fatalf("append archivist: %v", err)
+	}
+	consumers, err := s.PendingConsumers(t.Context(), "signal/")
+	if err != nil {
+		t.Fatalf("PendingConsumers: %v", err)
+	}
+	if len(consumers) != 1 || consumers[0] != "signal/old" {
+		t.Fatalf("consumers = %#v, want signal/old", consumers)
+	}
+	if err := s.MoveConsumer(t.Context(), "signal/old", "signal/new"); err != nil {
+		t.Fatalf("MoveConsumer: %v", err)
+	}
+	if n, _ := s.PendingCount(t.Context(), "signal/old"); n != 0 {
+		t.Fatalf("old pending = %d, want 0", n)
+	}
+	if n, _ := s.PendingCount(t.Context(), "signal/new"); n != 1 {
+		t.Fatalf("new pending = %d, want 1", n)
+	}
+}
+
 func TestStore_CoalesceOnDedupKey(t *testing.T) {
 	s := newTestStore(t)
 

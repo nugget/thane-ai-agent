@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/channels/messages"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
@@ -73,6 +74,17 @@ func (r *testRunner) getLastReq() *loop.Request {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.lastReq
+}
+
+type blockingTestRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingTestRunner) Run(_ context.Context, _ loop.Request, _ loop.StreamCallback) (*loop.Response, error) {
+	close(r.started)
+	<-r.release
+	return &loop.Response{Content: "ok"}, nil
 }
 
 func containsString(values []string, want string) bool {
@@ -197,6 +209,50 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 }
 
+func TestBridge_DispatchWithoutMailboxRunsBeforeReceipt(t *testing.T) {
+	client, stdout, stdin := pipeClient(t)
+	runner := &blockingTestRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	bridge := NewBridge(BridgeConfig{
+		Client: client,
+		Runner: runner,
+		Logger: slog.Default(),
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Message: "hello"},
+	}
+	done := make(chan struct{})
+	go func() {
+		if err := bridge.dispatch(context.Background(), env); err != nil {
+			t.Errorf("dispatch: %v", err)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not start")
+	}
+	select {
+	case <-done:
+		t.Fatal("dispatch returned before legacy runner completed")
+	default:
+	}
+	close(runner.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatch did not finish after runner release")
+	}
+}
+
 func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
 	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
 		cfg.Registry = loop.NewRegistry()
@@ -237,8 +293,51 @@ func TestBridge_MessageRoutesThroughSenderTurnBuilder(t *testing.T) {
 	if req.RoutingFactors["loop_id"] == "" {
 		t.Fatal("loop_id hint is empty; request did not traverse sender loop turn preparation")
 	}
-	if req.RoutingFactors["loop_name"] != "signal/15551234567" {
-		t.Fatalf("loop_name = %q, want signal/15551234567", req.RoutingFactors["loop_name"])
+	if req.RoutingFactors["loop_name"] != signalLoopName("+15551234567") {
+		t.Fatalf("loop_name = %q, want %s", req.RoutingFactors["loop_name"], signalLoopName("+15551234567"))
+	}
+}
+
+func TestBridge_RehydrateSenderLoopsMigratesPendingSignalPartition(t *testing.T) {
+	registry := loop.NewRegistry()
+	mailbox := newSignalTestMailbox(t)
+	bridge, stdout, stdin, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Registry = registry
+		cfg.Mailbox = mailbox
+	})
+	go drainRPCRequests(t, stdin, stdout)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		registry.ShutdownAll(ctx)
+	})
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		SourceName:  "Alice",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Timestamp: 1700000000000, Message: "queued"},
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	if _, err := mailbox.Enqueue(context.Background(), "signal/15551234567", "signal", payload); err != nil {
+		t.Fatalf("enqueue old partition: %v", err)
+	}
+
+	if err := bridge.rehydrateSenderLoops(context.Background()); err != nil {
+		t.Fatalf("rehydrateSenderLoops: %v", err)
+	}
+	if registry.GetByName(signalLoopName("+15551234567")) == nil {
+		t.Fatalf("rehydrated loop %q not found", signalLoopName("+15551234567"))
+	}
+	oldItems, err := mailbox.Peek(context.Background(), "signal/15551234567", 1)
+	if err != nil {
+		t.Fatalf("peek old partition: %v", err)
+	}
+	if len(oldItems) != 0 {
+		t.Fatalf("old partition still has %d item(s)", len(oldItems))
 	}
 }
 
@@ -263,7 +362,7 @@ func TestBridge_PrepareSignalMailboxTurnRendersEachEnvelopeAsMessage(t *testing.
 	turn, err := bridge.prepareSignalMailboxTurn(context.Background(), "+15551234567", []loop.MailboxItem{
 		mkItem("first", 1700000000000),
 		mkItem("second", 1700000001000),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("prepareSignalMailboxTurn: %v", err)
 	}
@@ -292,6 +391,96 @@ func TestBridge_PrepareSignalMailboxTurnRendersEachEnvelopeAsMessage(t *testing.
 	}
 	if ts != 1700000001000 {
 		t.Fatalf("last inbound timestamp = %d, want latest drained message", ts)
+	}
+}
+
+func TestBridge_PrepareSignalMailboxTurnSkipsInvalidItems(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		SourceName:  "Alice",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Timestamp: 1700000000000, Message: "good"},
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	turn, err := bridge.prepareSignalMailboxTurn(context.Background(), "+15551234567", []loop.MailboxItem{
+		{ID: "signal:bad", Payload: []byte(`{`)},
+		{ID: "signal:good", Payload: payload},
+	}, nil)
+	if err != nil {
+		t.Fatalf("prepareSignalMailboxTurn: %v", err)
+	}
+	if turn == nil {
+		t.Fatal("turn is nil")
+	}
+	if len(turn.Request.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(turn.Request.Messages))
+	}
+	if !strings.Contains(turn.Request.Messages[0].Content, "good") {
+		t.Fatalf("message content = %q, want good payload", turn.Request.Messages[0].Content)
+	}
+	if turn.Summary["skipped_mailbox_items"] != 1 {
+		t.Fatalf("skipped_mailbox_items = %#v, want 1", turn.Summary["skipped_mailbox_items"])
+	}
+}
+
+func TestBridge_PrepareSignalMailboxTurnIncludesNotifications(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		SourceName:  "Alice",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Timestamp: 1700000000000, Message: "hello"},
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	notify, err := (messages.Envelope{
+		From: messages.Identity{Kind: messages.IdentityCore, Name: "core"},
+		To: messages.Destination{
+			Kind:     messages.DestinationLoop,
+			Target:   "signal",
+			Selector: messages.SelectorName,
+		},
+		Type: messages.TypeSignal,
+		Payload: messages.LoopNotifyPayload{
+			Message: "core needs attention",
+		},
+	}).Normalize(time.Now())
+	if err != nil {
+		t.Fatalf("normalize notification: %v", err)
+	}
+
+	turn, err := bridge.prepareSignalMailboxTurn(context.Background(), "+15551234567", []loop.MailboxItem{
+		{ID: "signal:good", Payload: payload},
+	}, []messages.Envelope{notify})
+	if err != nil {
+		t.Fatalf("prepareSignalMailboxTurn: %v", err)
+	}
+	if turn == nil {
+		t.Fatal("turn is nil")
+	}
+	if len(turn.Request.Messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(turn.Request.Messages))
+	}
+	if !strings.Contains(turn.Request.Messages[0].Content, "core needs attention") {
+		t.Fatalf("notification content = %q", turn.Request.Messages[0].Content)
+	}
+	if !strings.Contains(turn.Request.Messages[1].Content, "hello") {
+		t.Fatalf("signal content = %q", turn.Request.Messages[1].Content)
+	}
+	if turn.Summary["notification_count"] != 1 {
+		t.Fatalf("notification_count = %#v, want 1", turn.Summary["notification_count"])
+	}
+	if turn.Summary["message_count"] != 1 {
+		t.Fatalf("message_count = %#v, want 1", turn.Summary["message_count"])
 	}
 }
 

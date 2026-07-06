@@ -124,11 +124,10 @@ func (s *Store) Append(ctx context.Context, consumerLoop, keyPrefix string, prio
 		return "", fmt.Errorf("loopqueue: generate append key: %w", err)
 	}
 	dedupKey := keyPrefix + ":" + id.String()
-	now := time.Now().UTC()
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO loop_queue (consumer_loop, dedup_key, priority, status, attempts, payload, enqueued_at, updated_at)
-		VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)
-	`, consumerLoop, dedupKey, priority, string(payload), now, now)
+		VALUES (?, ?, ?, 'pending', 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, consumerLoop, dedupKey, priority, string(payload))
 	if err != nil {
 		return "", fmt.Errorf("loopqueue: append %s/%s: %w", consumerLoop, dedupKey, err)
 	}
@@ -208,6 +207,65 @@ func parseQueueTimestamp(raw any) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// PendingConsumers returns distinct consumer-loop partitions that have
+// pending work. When prefix is non-empty, only partitions with that
+// prefix are returned.
+func (s *Store) PendingConsumers(ctx context.Context, prefix string) ([]string, error) {
+	query := `
+		SELECT DISTINCT consumer_loop
+		FROM loop_queue
+		WHERE status = ?`
+	args := []any{StatusPending}
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" {
+		query += ` AND consumer_loop LIKE ?`
+		args = append(args, prefix+"%")
+	}
+	query += ` ORDER BY consumer_loop ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var consumers []string
+	for rows.Next() {
+		var consumer string
+		if err := rows.Scan(&consumer); err != nil {
+			return nil, err
+		}
+		consumers = append(consumers, consumer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return consumers, nil
+}
+
+// MoveConsumer reassigns all pending work from one consumer-loop
+// partition to another. It is used when callers tighten a durable
+// partition key and need old rows to follow the same consumer.
+func (s *Store) MoveConsumer(ctx context.Context, from, to string) error {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || to == "" {
+		return fmt.Errorf("loopqueue: source and destination consumer_loop are required")
+	}
+	if from == to {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE loop_queue
+		SET consumer_loop = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE consumer_loop = ? AND status = ?
+	`, to, from, StatusPending)
+	if err != nil {
+		return fmt.Errorf("loopqueue: move consumer %s to %s: %w", from, to, err)
+	}
+	return nil
 }
 
 // Ack removes a completed item from consumerLoop's partition. A missing

@@ -33,6 +33,19 @@ func (r *Registry) EnqueueMailbox(ctx context.Context, id, keyPrefix string, pay
 	return l.enqueueMailbox(ctx, keyPrefix, payload)
 }
 
+// WakeLoop nudges a live loop to process already-durable work.
+func (r *Registry) WakeLoop(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l := r.Get(id)
+	if l == nil {
+		return fmt.Errorf("loop %q not found", id)
+	}
+	l.pokeWake()
+	return nil
+}
+
 // NotifyLoopByName delivers one inter-loop process notification to a live loop
 // by exact name. This is loop-runtime control messaging, not Signal-channel
 // transport.
