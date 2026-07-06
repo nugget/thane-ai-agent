@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/model/router"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -773,7 +774,14 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 		}
 		scaffold.opts = b.requestOptions(sender, hints)
 	}
-	return b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary), nil
+	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary)
+	// Mid-turn input merge (#1221): let the loop pull messages that arrive
+	// while this turn is composing, rendered in channel voice. The loop owns
+	// delta-gating, the drain budget, and the ack; this only renders.
+	turn.PullRender = func(rctx context.Context, items []loop.MailboxItem) []llm.Message {
+		return b.renderPulledMailbox(rctx, sender, items)
+	}
+	return turn, nil
 }
 
 func (b *Bridge) prepareLoopNotificationTurn(ctx context.Context, sender string, envs []messages.Envelope) (*loop.AgentTurn, error) {
@@ -847,6 +855,44 @@ func (b *Bridge) prepareSignalTurnScaffold(sender string) signalTurnScaffold {
 			"sender": sender,
 		}),
 	}
+}
+
+// renderPulledMailbox renders mailbox items that arrived mid-turn into
+// channel-voice user messages for the #1221 mid-turn input merge. It reuses
+// renderEnvelope (so attachment processing, reaction handling, and
+// last-inbound bookkeeping still run exactly once per item), then wraps the
+// rendered text in explicit provenance framing: this is sender-controlled
+// content that landed while the model was mid-work, so it is presented as
+// channel input, never in a system voice. The loop supplies only fresh,
+// delta-gated items; this method does not touch the mailbox or ack.
+func (b *Bridge) renderPulledMailbox(ctx context.Context, sender string, items []loop.MailboxItem) []llm.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	scaffold := b.prepareSignalTurnScaffold(sender)
+	out := make([]llm.Message, 0, len(items))
+	for _, item := range items {
+		var env Envelope
+		if err := json.Unmarshal(item.Payload, &env); err != nil {
+			b.logger.Warn("signal mid-turn mailbox item decode failed, skipping",
+				"sender", sender, "item_id", item.ID, "error", err)
+			continue
+		}
+		msg, _, ok, err := b.renderEnvelope(ctx, scaffold, &env)
+		if err != nil {
+			b.logger.Warn("signal mid-turn mailbox item render failed, skipping",
+				"sender", sender, "item_id", item.ID, "error", err)
+			continue
+		}
+		if !ok || strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		out = append(out, llm.Message{
+			Role:    "user",
+			Content: "A new message arrived while you were working — read it before you finish, in case it changes your reply:\n\n" + msg.Content,
+		})
+	}
+	return out
 }
 
 func (b *Bridge) renderEnvelope(ctx context.Context, scaffold signalTurnScaffold, env *Envelope) (loop.Message, map[string]any, bool, error) {

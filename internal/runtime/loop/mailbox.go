@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
 
@@ -41,6 +42,72 @@ type MailboxReceipt struct {
 }
 
 const maxMailboxItemsPerWake = 16
+
+// defaultMidTurnInputBudget caps how many times a single turn may pull
+// newly-arrived mailbox input mid-flight (#1221). Bounding pulls — not items
+// — keeps turn boundaries reachable under continuous inbound flow (#1152):
+// once spent, the remainder rides the buffered-wakeCh immediate re-wake.
+// Override per loop via Config.MidTurnInputBudget.
+const defaultMidTurnInputBudget = 8
+
+func (l *Loop) midTurnInputBudget() int {
+	if l.config.MidTurnInputBudget > 0 {
+		return l.config.MidTurnInputBudget
+	}
+	return defaultMidTurnInputBudget
+}
+
+// buildMailboxPullInput returns a PullInput closure over this loop's mailbox
+// for the #1221 mid-turn input merge. Each call peeks pending items, skips any
+// already delivered this turn — the wake batch plus prior pulls (delta-gating,
+// so content is never re-presented) — caps the number of pulls per turn
+// (drain budget), renders the fresh items via render (channel voice), appends
+// them to *pulled so the turn-end ack covers them, and returns the rendered
+// messages. Returns nil once the budget is spent or nothing new is pending,
+// which the engine reads as "no mid-turn input."
+func (l *Loop) buildMailboxPullInput(
+	wakeBatch []MailboxItem,
+	pulled *[]MailboxItem,
+	render func(context.Context, []MailboxItem) []llm.Message,
+) func(context.Context) []llm.Message {
+	delivered := make(map[string]bool, len(wakeBatch))
+	for _, it := range wakeBatch {
+		delivered[it.ID] = true
+	}
+	budget := l.midTurnInputBudget()
+	pulls := 0
+
+	return func(ctx context.Context) []llm.Message {
+		if pulls >= budget {
+			return nil
+		}
+		items, err := l.DrainMailbox(ctx, 0) // peek all pending; delta-gate below
+		if err != nil {
+			l.deps.Logger.Warn("mid-turn mailbox peek failed",
+				"loop_id", l.id, "loop_name", l.config.Name, "error", err)
+			return nil
+		}
+		var fresh []MailboxItem
+		for _, it := range items {
+			if !delivered[it.ID] {
+				fresh = append(fresh, it)
+			}
+		}
+		if len(fresh) == 0 {
+			return nil
+		}
+		rendered := render(ctx, fresh)
+		if len(rendered) == 0 {
+			return nil
+		}
+		pulls++
+		for _, it := range fresh {
+			delivered[it.ID] = true
+		}
+		*pulled = append(*pulled, fresh...)
+		return rendered
+	}
+}
 
 type mailboxItemsContextKey struct{}
 

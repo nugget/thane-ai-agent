@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/messages"
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
 // TurnInput is the loop wake context passed to a [TurnBuilder]. It is
@@ -74,6 +75,14 @@ type AgentTurn struct {
 	// snapshot and completion event. Values should stay small because
 	// they travel through dashboard/event payloads.
 	Summary map[string]any
+
+	// PullRender renders mailbox items that arrive mid-turn into channel-
+	// voice user messages for the #1221 mid-turn input merge. A builder
+	// backed by a live inbound channel (e.g. Signal) sets it; the loop wraps
+	// it in a delta-gated, budget-capped PullInput over its mailbox and wires
+	// that into the turn. Nil (the default) means the turn takes no mid-turn
+	// input — its reply is composed from the wake snapshot alone.
+	PullRender func(ctx context.Context, items []MailboxItem) []llm.Message
 }
 
 // TurnResultSink receives the model response and error for a single
