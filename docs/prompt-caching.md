@@ -47,8 +47,11 @@ and regression tests.
 | `RELATED CONTEXT`       | volatile  | Request/wake-related retrieval providers. Query-sensitive. |
 | `LIVE STATE`            | volatile  | Current operational/world state providers. |
 | `CURRENT CONDITIONS`    | volatile  | Time, host, version, branch, and uptime. Changes every turn. |
-| `CONVERSATION HISTORY`  | volatile  | Append-only, but the latest turn must remain visible. |
 | `CONTEXT USAGE`         | volatile  | Per-turn token counts and request metadata. |
+
+Conversation history is not a system-prompt section: it rides in the
+`messages[]` array (PR #852), where providers with prefix caching cover
+it through the message-level cache breakpoints described below.
 
 Stable and semi-stable sections should appear before volatile sections.
 Volatile sections should not receive provider cache markers unless the
