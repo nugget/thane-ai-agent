@@ -128,6 +128,18 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 
 // AddMessage adds a message to a conversation.
 func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
+	return s.addMessage(conversationID, role, content, false)
+}
+
+// AddMidTurnMessage adds a message that arrived mid-turn and was merged into
+// an in-flight turn (#1230), tagging the row so consumers can identify the
+// injection from the structured record rather than substring-matching the
+// channel-rendered arrival marker in the content.
+func (s *SQLiteStore) AddMidTurnMessage(conversationID, role, content string) error {
+	return s.addMessage(conversationID, role, content, true)
+}
+
+func (s *SQLiteStore) addMessage(conversationID, role, content string, midTurn bool) error {
 	now := time.Now()
 	msgID, err := uuid.NewV7()
 	if err != nil {
@@ -140,11 +152,16 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 		return err
 	}
 
+	midTurnVal := 0
+	if midTurn {
+		midTurnVal = 1
+	}
+
 	// Insert message
 	_, err = s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, msgID.String(), conversationID, role, content, now, llm.EstimateTokens(content))
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, mid_turn)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, msgID.String(), conversationID, role, content, now, llm.EstimateTokens(content), midTurnVal)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -181,15 +198,15 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
 		WITH recent AS (
-			SELECT id, role, content, timestamp
+			SELECT id, role, content, timestamp, COALESCE(mid_turn, 0) AS mid_turn
 			FROM messages
 			WHERE conversation_id = ? AND status = 'active'
 			ORDER BY timestamp DESC, id DESC
 			LIMIT ?
 		)
-		SELECT id, role, content, timestamp FROM recent
+		SELECT id, role, content, timestamp, mid_turn FROM recent
 		UNION
-		SELECT id, role, content, timestamp
+		SELECT id, role, content, timestamp, COALESCE(mid_turn, 0)
 		FROM messages
 		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
 		  AND content LIKE ? || '%'
@@ -203,9 +220,11 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	var messages []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
+		var midTurn int
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &midTurn); err != nil {
 			continue
 		}
+		m.MidTurn = midTurn != 0
 		messages = append(messages, m)
 	}
 
@@ -437,7 +456,7 @@ func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *Ch
 // Includes tool call data for full-fidelity archiving — never lose primary sources.
 func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
-		SELECT id, role, content, timestamp, tool_calls, tool_call_id
+		SELECT id, role, content, timestamp, tool_calls, tool_call_id, COALESCE(mid_turn, 0)
 		FROM messages
 		WHERE conversation_id = ?
 		ORDER BY timestamp ASC
@@ -451,7 +470,8 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 	for rows.Next() {
 		var m Message
 		var toolCalls, toolCallID sql.NullString
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID); err != nil {
+		var midTurn int
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID, &midTurn); err != nil {
 			continue
 		}
 		if toolCalls.Valid {
@@ -460,6 +480,7 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 		if toolCallID.Valid {
 			m.ToolCallID = toolCallID.String
 		}
+		m.MidTurn = midTurn != 0
 		messages = append(messages, m)
 	}
 

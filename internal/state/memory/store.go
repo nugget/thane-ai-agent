@@ -48,6 +48,11 @@ type Message struct {
 	ToolCallID     string    `json:"tool_call_id,omitempty"`   // Tool call ID (tool response messages)
 	ArchivedAt     time.Time `json:"archived_at,omitzero"`     // When the message was archived
 	ArchiveReason  string    `json:"archive_reason,omitempty"` // Why: compaction, reset, shutdown, import
+	// MidTurn marks a user message that arrived mid-turn and was merged into
+	// an in-flight turn at an iteration boundary (#1221/#1230), rather than
+	// opening its own turn. The structured contract that replaces
+	// substring-matching the channel-rendered arrival marker.
+	MidTurn bool `json:"mid_turn,omitempty"`
 }
 
 // Conversation holds the state of a single conversation.
@@ -114,6 +119,17 @@ func (s *Store) GetOrCreateConversation(id string) *Conversation {
 
 // AddMessage adds a message to a conversation.
 func (s *Store) AddMessage(conversationID string, role, content string) error {
+	return s.addMessage(conversationID, role, content, false)
+}
+
+// AddMidTurnMessage adds a message that arrived mid-turn and was merged into
+// an in-flight turn (#1230), tagging it so consumers can identify the
+// injection without substring-matching the rendered arrival marker.
+func (s *Store) AddMidTurnMessage(conversationID string, role, content string) error {
+	return s.addMessage(conversationID, role, content, true)
+}
+
+func (s *Store) addMessage(conversationID string, role, content string, midTurn bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -136,6 +152,7 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),
+		MidTurn:   midTurn,
 	})
 	conv.UpdatedAt = time.Now()
 
