@@ -1825,6 +1825,11 @@ func (l *Loop) run(ctx context.Context) {
 					"tooling":         snap.Tooling,
 					"supervisor":      result.Supervisor,
 					"conversation_id": convID,
+					// Messages folded into this turn mid-flight (#1230): the
+					// per-turn total of every mid-turn mailbox pull, the datum
+					// for a "folded N messages" turn badge. 0 for an ordinary
+					// turn.
+					"midturn_merged": len(midTurnPulled),
 				}
 				if len(handlerSummary) > 0 {
 					eventData["summary"] = handlerSummary
