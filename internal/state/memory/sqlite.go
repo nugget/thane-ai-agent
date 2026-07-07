@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,13 @@ type SQLiteStore struct {
 	db          *sql.DB
 	maxMessages int
 	logger      *slog.Logger
+
+	// clipWarnAt rate-limits the "read window clipped" warning per
+	// conversation. GetMessages returns at most maxMessages recent rows;
+	// a conversation whose active set exceeds that is read every turn, so
+	// an unthrottled warning would spam. Guarded by clipWarnMu.
+	clipWarnMu sync.Mutex
+	clipWarnAt map[string]time.Time
 }
 
 // NewSQLiteStore creates a new SQLite-backed store.
@@ -45,6 +53,7 @@ func NewSQLiteStoreWithLogger(dbPath string, maxMessages int, logger *slog.Logge
 		db:          db,
 		maxMessages: maxMessages,
 		logger:      logger,
+		clipWarnAt:  make(map[string]time.Time),
 	}
 
 	if err := store.migrate(); err != nil {
@@ -151,15 +160,41 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 	return nil
 }
 
-// GetMessages retrieves messages for a conversation.
+// GetMessages retrieves the working-memory window for a conversation:
+// the newest maxMessages active rows plus every active compaction
+// summary, returned in chronological (ASC) order.
+//
+// The window is deliberately anchored to the NEWEST rows. A naive
+// `ORDER BY timestamp ASC LIMIT maxMessages` returns the OLDEST rows,
+// so once the active set exceeds maxMessages every newer message falls
+// outside the window and the model's context silently freezes at that
+// point (the amnesia bug). Compaction is token-gated and does not bound
+// the active message count, so a long run of short messages can push
+// the count past maxMessages while staying under the token threshold —
+// hence the newest-N window is load-bearing, not just tidy.
+//
+// Compaction summaries carry the compacted region's earliest timestamp
+// (ApplyCompaction), so they sort at the head of history and would fall
+// outside a naive newest-N window; the UNION arm force-includes them so
+// the model never loses its compacted past. UNION (set semantics) also
+// dedupes a summary that happens to land inside the newest-N window.
 func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
+		WITH recent AS (
+			SELECT id, role, content, timestamp
+			FROM messages
+			WHERE conversation_id = ? AND status = 'active'
+			ORDER BY timestamp DESC, id DESC
+			LIMIT ?
+		)
+		SELECT id, role, content, timestamp FROM recent
+		UNION
 		SELECT id, role, content, timestamp
 		FROM messages
-		WHERE conversation_id = ? AND status = 'active'
-		ORDER BY timestamp ASC
-		LIMIT ?
-	`, conversationID, s.maxMessages)
+		WHERE conversation_id = ? AND status = 'active' AND role = 'system'
+		  AND content LIKE ? || '%'
+		ORDER BY timestamp ASC, id ASC
+	`, conversationID, s.maxMessages, conversationID, CompactionSummaryPrefix)
 	if err != nil {
 		return []Message{}
 	}
@@ -174,7 +209,60 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 		messages = append(messages, m)
 	}
 
+	// Observability: if the active set is larger than the window we just
+	// returned, we clipped older messages. A silent clip is exactly what
+	// hid the amnesia bug for so long — surface it (rate-limited). The
+	// COUNT is best-effort and never blocks history retrieval.
+	var activeTotal int
+	_ = s.db.QueryRow(`
+		SELECT COUNT(*) FROM messages
+		WHERE conversation_id = ? AND status = 'active'
+	`, conversationID).Scan(&activeTotal)
+	if activeTotal > len(messages) {
+		s.maybeWarnClip(conversationID, activeTotal, len(messages))
+	}
+
 	return messages
+}
+
+// maybeWarnClip emits a rate-limited warning when GetMessages returned
+// fewer rows than the conversation's active set — i.e. the read window
+// clipped older active messages. Throttled per-conversation so a hot
+// overflowing conversation (read every turn) does not spam the log.
+func (s *SQLiteStore) maybeWarnClip(conversationID string, activeTotal, returned int) {
+	if s.logger == nil {
+		return
+	}
+
+	s.clipWarnMu.Lock()
+	if last, ok := s.clipWarnAt[conversationID]; ok && time.Since(last) < 5*time.Minute {
+		s.clipWarnMu.Unlock()
+		return
+	}
+	s.clipWarnAt[conversationID] = time.Now()
+	s.clipWarnMu.Unlock()
+
+	s.logger.Warn("working-memory read window clipped older active messages",
+		"conversation_id", conversationID,
+		"active_total", activeTotal,
+		"returned", returned,
+		"max_messages", s.maxMessages,
+	)
+}
+
+// ActiveMessageCount returns the number of active non-system messages in
+// a conversation — the reducible set compaction can actually shrink
+// (GetMessagesForCompaction filters role != 'system' too). Feeds the
+// count-aware compaction trigger so a summary-only overflow can't spin
+// an unsatisfiable compaction loop.
+func (s *SQLiteStore) ActiveMessageCount(conversationID string) int {
+	var count int
+	_ = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM messages
+		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
+	`, conversationID).Scan(&count)
+	return count
 }
 
 // GetConversation retrieves a conversation by ID.
@@ -222,7 +310,19 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Evict the clip-warning rate-limit entry: delegate conversations use a
+	// fresh unique ID per invocation and Clear on finish, so without this
+	// the map would grow one stale entry per overflowing delegate for the
+	// life of the process.
+	s.clipWarnMu.Lock()
+	delete(s.clipWarnAt, conversationID)
+	s.clipWarnMu.Unlock()
+
+	return nil
 }
 
 // Stats returns memory statistics.
