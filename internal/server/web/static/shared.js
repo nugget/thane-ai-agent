@@ -1214,7 +1214,7 @@ function buildLiveCard(loop) {
       const li = document.createElement('li');
       li.className = 'live-tool live-tool--midturn';
       if (m.phase === 'merged') {
-        const n = m.count || 1;
+        const n = Number.isFinite(m.count) ? m.count : 0;
         li.textContent = '⤵ merged ' + n + (n === 1 ? ' message' : ' messages') + ' into the turn';
       } else {
         li.textContent = '↳ message arrived while working';
@@ -1719,7 +1719,7 @@ function applyLoopEventToLoop(evt, ctx) {
     case 'loop_midturn_input':
       // Newly-arrived input was merged into the live turn (#1230).
       if (!loop._midturnLive) loop._midturnLive = [];
-      loop._midturnLive.push({ phase: 'merged', count: d.count || 0 });
+      loop._midturnLive.push({ phase: 'merged', count: Number.isFinite(d.count) ? d.count : 0 });
       return null;
 
     case 'loop_sleep_start': {
