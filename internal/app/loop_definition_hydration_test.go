@@ -322,30 +322,29 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 		}
 	}
 
-	// Cognition members nest under the cognition container.
-	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName} {
-		if got := byName[name].ParentName; got != cognitionContainerName {
-			t.Errorf("%s ParentName = %q, want %q", name, got, cognitionContainerName)
+	// assertNested checks each member exists and nests under container. The
+	// presence check keeps a missing member reported as such rather than as a
+	// misleading empty-ParentName mismatch.
+	assertNested := func(container string, names ...string) {
+		t.Helper()
+		for _, name := range names {
+			s, ok := byName[name]
+			if !ok {
+				t.Errorf("member %q missing from base specs", name)
+				continue
+			}
+			if s.ParentName != container {
+				t.Errorf("%s ParentName = %q, want %q", name, s.ParentName, container)
+			}
 		}
 	}
 
-	// Home Assistant members nest under the home-assistant container.
-	for _, name := range []string{haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName} {
-		if got := byName[name].ParentName; got != homeAssistantContainerName {
-			t.Errorf("%s ParentName = %q, want %q", name, got, homeAssistantContainerName)
-		}
-	}
-
-	// Pollers members nest under the pollers container — the four pollers and
-	// the two triage handlers that used to hang off core directly.
-	for _, name := range []string{
+	assertNested(cognitionContainerName, ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName)
+	assertNested(homeAssistantContainerName, haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName)
+	// The four pollers and the two triage handlers that used to hang off core.
+	assertNested(pollersContainerName,
 		unifiPollerDefinitionName, emailPollerDefinitionName, emailcfg.DefaultHandlerLoopName,
-		forgeSubPollerDefinitionName, mediaFeedPollerDefinitionName, media.DefaultHandlerLoopName,
-	} {
-		if got := byName[name].ParentName; got != pollersContainerName {
-			t.Errorf("%s ParentName = %q, want %q", name, got, pollersContainerName)
-		}
-	}
+		forgeSubPollerDefinitionName, mediaFeedPollerDefinitionName, media.DefaultHandlerLoopName)
 }
 
 // TestBuiltInContainerDefinitionSpecs_Gating guards the container gating:
