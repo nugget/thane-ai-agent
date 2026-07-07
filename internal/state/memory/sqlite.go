@@ -209,17 +209,22 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 		messages = append(messages, m)
 	}
 
-	// Observability: if the active set is larger than the window we just
-	// returned, we clipped older messages. A silent clip is exactly what
-	// hid the amnesia bug for so long — surface it (rate-limited). The
-	// COUNT is best-effort and never blocks history retrieval.
-	var activeTotal int
-	_ = s.db.QueryRow(`
-		SELECT COUNT(*) FROM messages
-		WHERE conversation_id = ? AND status = 'active'
-	`, conversationID).Scan(&activeTotal)
-	if activeTotal > len(messages) {
-		s.maybeWarnClip(conversationID, activeTotal, len(messages))
+	// Observability: a read may have clipped older active rows. Clipping is
+	// only possible when the window came back saturated — a result smaller
+	// than maxMessages means the whole active set fit (active > maxMessages
+	// would have filled the newest-N window), so skip the COUNT entirely in
+	// that common case. When it could have clipped, confirm with a
+	// best-effort COUNT and warn (rate-limited); the COUNT never blocks
+	// history retrieval. A silent clip is exactly what hid the amnesia bug.
+	if len(messages) >= s.maxMessages {
+		var activeTotal int
+		_ = s.db.QueryRow(`
+			SELECT COUNT(*) FROM messages
+			WHERE conversation_id = ? AND status = 'active'
+		`, conversationID).Scan(&activeTotal)
+		if activeTotal > len(messages) {
+			s.maybeWarnClip(conversationID, activeTotal, len(messages))
+		}
 	}
 
 	return messages

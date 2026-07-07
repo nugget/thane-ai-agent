@@ -285,13 +285,22 @@ func formatCompactionSummary(messages []Message, summary string) string {
 func (c *Compactor) CompactionStats(conversationID string) map[string]any {
 	tokenCount := c.store.GetTokenCount(conversationID)
 	threshold := int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
+	activeCount := c.store.ActiveMessageCount(conversationID)
+
+	// needs_compaction must reflect BOTH gates (token budget OR active
+	// count), matching NeedsCompaction — otherwise the stat lies whenever
+	// the count gate is the reason compaction fires.
+	needsToken := tokenCount > threshold
+	needsCount := c.config.MaxActiveMessages > 0 && activeCount >= c.config.MaxActiveMessages
 
 	return map[string]any{
-		"token_count":      tokenCount,
-		"max_tokens":       c.config.MaxTokens,
-		"trigger_at":       threshold,
-		"needs_compaction": tokenCount > threshold,
-		"ratio":            float64(tokenCount) / float64(c.config.MaxTokens),
+		"token_count":          tokenCount,
+		"max_tokens":           c.config.MaxTokens,
+		"trigger_at":           threshold,
+		"active_message_count": activeCount,
+		"max_active_messages":  c.config.MaxActiveMessages,
+		"needs_compaction":     needsToken || needsCount,
+		"ratio":                float64(tokenCount) / float64(c.config.MaxTokens),
 	}
 }
 

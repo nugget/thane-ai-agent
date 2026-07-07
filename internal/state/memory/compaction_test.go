@@ -264,4 +264,27 @@ func TestCompactionStats(t *testing.T) {
 	if stats["max_tokens"] != config.MaxTokens {
 		t.Errorf("Expected max_tokens %d, got %v", config.MaxTokens, stats["max_tokens"])
 	}
+	for _, k := range []string{"active_message_count", "max_active_messages", "needs_compaction"} {
+		if _, ok := stats[k]; !ok {
+			t.Errorf("stats missing key %q", k)
+		}
+	}
+
+	// needs_compaction must reflect the count gate even when tokens are
+	// well under the token threshold — otherwise the stat contradicts
+	// NeedsCompaction whenever the count trigger is what fires.
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for i := 0; i < 8; i++ {
+		insertMessageAt(t, store, "conv-count", "user", "short", base.Add(time.Duration(i)*time.Minute))
+	}
+	countCompactor := NewCompactor(store, CompactionConfig{
+		MaxTokens: 1_000_000, TriggerRatio: 0.7, MaxActiveMessages: 5,
+	}, &SimpleSummarizer{}, slog.Default())
+	cs := countCompactor.CompactionStats("conv-count")
+	if cs["active_message_count"] != 8 {
+		t.Errorf("active_message_count = %v, want 8", cs["active_message_count"])
+	}
+	if cs["needs_compaction"] != true {
+		t.Errorf("needs_compaction = %v, want true (count gate fires under token threshold)", cs["needs_compaction"])
+	}
 }
