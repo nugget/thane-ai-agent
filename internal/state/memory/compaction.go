@@ -17,6 +17,13 @@ type CompactionConfig struct {
 	TriggerRatio         float64 // Trigger compaction at this ratio (e.g., 0.7 = 70%)
 	KeepRecent           int     // Number of recent messages to always keep
 	MinMessagesToCompact int     // Minimum messages before considering compaction
+	// MaxActiveMessages triggers compaction when the active non-summary
+	// message count reaches this value, independent of tokens. The token
+	// gate alone misses a long run of SHORT messages, which can push the
+	// active count past the store's read window (maxMessages) while total
+	// tokens stay under MaxTokens*TriggerRatio — starving the model of
+	// recent context. 0 disables the count trigger (pure token-gated).
+	MaxActiveMessages int
 }
 
 // DefaultCompactionConfig returns sensible defaults.
@@ -26,6 +33,7 @@ func DefaultCompactionConfig() CompactionConfig {
 		TriggerRatio:         0.7,   // Trigger at 70% full
 		KeepRecent:           10,    // Keep last 10 messages
 		MinMessagesToCompact: 20,    // Don't compact tiny conversations
+		MaxActiveMessages:    0,     // Count trigger off by default; prod wires it
 	}
 }
 
@@ -38,6 +46,9 @@ const CompactionSummaryPrefix = "[Conversation Summary]"
 // CompactableStore is the interface for stores that support compaction.
 type CompactableStore interface {
 	GetTokenCount(conversationID string) int
+	// ActiveMessageCount is the active non-summary message count — the
+	// reducible set — backing the count-aware compaction trigger.
+	ActiveMessageCount(conversationID string) int
 	GetMessagesForCompaction(conversationID string, keep int) []Message
 	GetActiveCompactionSummaries(conversationID string) ([]Message, error)
 	// ApplyCompaction atomically marks compactedIDs compacted and
@@ -98,10 +109,21 @@ func (c *Compactor) CompactionThreshold() int {
 	return int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
 }
 
-// NeedsCompaction checks if a conversation needs compaction.
+// NeedsCompaction checks if a conversation needs compaction. It fires on
+// either the token budget (the long-standing gate) or, when configured,
+// the active non-summary message count reaching MaxActiveMessages. The
+// count gate catches short-message overflow the token gate misses — the
+// exact precondition of the working-memory freeze — so the predicate is
+// a strict superset of the prior token-only behavior.
 func (c *Compactor) NeedsCompaction(conversationID string) bool {
-	tokenCount := c.store.GetTokenCount(conversationID)
-	return tokenCount > c.CompactionThreshold()
+	if c.store.GetTokenCount(conversationID) > c.CompactionThreshold() {
+		return true
+	}
+	if c.config.MaxActiveMessages > 0 &&
+		c.store.ActiveMessageCount(conversationID) >= c.config.MaxActiveMessages {
+		return true
+	}
+	return false
 }
 
 // tryAcquire marks the conversation as compacting, returning false when
@@ -263,13 +285,22 @@ func formatCompactionSummary(messages []Message, summary string) string {
 func (c *Compactor) CompactionStats(conversationID string) map[string]any {
 	tokenCount := c.store.GetTokenCount(conversationID)
 	threshold := int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
+	activeCount := c.store.ActiveMessageCount(conversationID)
+
+	// needs_compaction must reflect BOTH gates (token budget OR active
+	// count), matching NeedsCompaction — otherwise the stat lies whenever
+	// the count gate is the reason compaction fires.
+	needsToken := tokenCount > threshold
+	needsCount := c.config.MaxActiveMessages > 0 && activeCount >= c.config.MaxActiveMessages
 
 	return map[string]any{
-		"token_count":      tokenCount,
-		"max_tokens":       c.config.MaxTokens,
-		"trigger_at":       threshold,
-		"needs_compaction": tokenCount > threshold,
-		"ratio":            float64(tokenCount) / float64(c.config.MaxTokens),
+		"token_count":          tokenCount,
+		"max_tokens":           c.config.MaxTokens,
+		"trigger_at":           threshold,
+		"active_message_count": activeCount,
+		"max_active_messages":  c.config.MaxActiveMessages,
+		"needs_compaction":     needsToken || needsCount,
+		"ratio":                float64(tokenCount) / float64(c.config.MaxTokens),
 	}
 }
 

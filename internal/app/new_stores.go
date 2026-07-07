@@ -357,6 +357,11 @@ func (a *App) initStores(s *newState) error {
 		TriggerRatio:         0.7, // Compact at 70% of MaxTokens
 		KeepRecent:           10,  // Preserve the last 10 messages verbatim
 		MinMessagesToCompact: 15,  // Don't bother compacting tiny conversations
+		// Count-aware trigger: keep the active set bounded below the store's
+		// read window (maxMessages=100, above) so short-message runs that
+		// stay under the token budget still compact — 20 rows of headroom
+		// absorb #1220 mid-turn mailbox bursts before the window would clip.
+		MaxActiveMessages: 80,
 	}
 
 	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
