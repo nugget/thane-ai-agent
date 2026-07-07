@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -170,6 +169,9 @@ func TestBuildMailboxPullInputPublishesMidTurnEvent(t *testing.T) {
 		t.Fatalf("pull delivered %d, want 1", len(got))
 	}
 
+	// Bus.Publish is synchronous (it sends to subscriber channels in the
+	// caller's goroutine), so a delivering pull has already buffered the event
+	// by the time it returns — a non-blocking receive suffices, no waiting.
 	select {
 	case evt := <-ch:
 		if evt.Kind != events.KindLoopMidTurnInput {
@@ -187,7 +189,7 @@ func TestBuildMailboxPullInputPublishesMidTurnEvent(t *testing.T) {
 		if evt.Data["loop_name"] != "pull-evt" {
 			t.Errorf("loop_name = %v, want pull-evt", evt.Data["loop_name"])
 		}
-	case <-time.After(2 * time.Second):
+	default:
 		t.Fatal("no loop_midturn_input event published for a delivering pull")
 	}
 
@@ -198,7 +200,7 @@ func TestBuildMailboxPullInputPublishesMidTurnEvent(t *testing.T) {
 	select {
 	case evt := <-ch:
 		t.Fatalf("unexpected event on an empty pull: %+v", evt)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 }
 
