@@ -55,10 +55,18 @@ runs entirely on local models.
 homeassistant:
   url: http://homeassistant.local:8123
   token: your_long_lived_access_token
+  ingest_rate_limit_per_minute: 12  # optional: cap on state-change events ingested per entity per minute
+  # registry_cache_ttl and floor_alias are also optional — see homeassistant.md
 ```
 
-Both fields are required. The token needs access to the entities and
-services you want Thane to interact with. See
+`url` and `token` are required; the token needs access to the entities and
+services you want Thane to interact with.
+
+As of v0.10.2 the former `homeassistant.subscribe` block is retired — a stale
+`subscribe:` key will fail the boot. Its `rate_limit_per_minute` moved to the
+top-level `ingest_rate_limit_per_minute`, and entity globs are no longer a
+config concept: they are runtime ingest-mode subscriptions, declared with
+`add_entity_subscription` (or the model's `watch_entity`) after boot. See
 [Home Assistant](homeassistant.md) for setup details.
 
 ## MQTT
