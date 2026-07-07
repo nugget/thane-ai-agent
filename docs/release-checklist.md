@@ -255,7 +255,7 @@ not a plan.
   - [ ] `11434` exposes only the intended virtual model suite
   - [ ] MCP servers needed in production start successfully and their
         tools land in the intended tags/toolboxes
-  - [ ] If the build reached the host via `just deploy-macos user@host`,
+  - [ ] If the build reached the host via `just deploy-macos <user@host>`,
         that completed and the API reports the intended version after
         restart
 - [ ] **Canary smoke tests** — exercise the routes operators actually
