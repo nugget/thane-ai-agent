@@ -163,12 +163,15 @@ becoming default context clutter.
 | `ha_history` | Recorder trend for one entity over a lookback window: numeric min/max/start/end/delta/trend or a discrete change summary, optionally trending a numeric attribute instead of the state. |
 | `ha_home_snapshot` | Curated whole-home overview: anomalies, security/openings, presence, climate (energy optional), salience-first with an at-a-glance summary and a quiet status, plus optional per-entity metadata. |
 | `ha_call_service` | Direct HA service invocation. |
+| `ha_list_services` | List available HA services with per-field detail; feeds `ha_automation_create` action authoring. |
 | `ha_registry_search` | Search the entity/device/area registry. |
 | `ha_automation_list` | List automations with recent activation counts. |
 | `ha_automation_get` | Retrieve one automation's configuration. |
 | `ha_automation_create` | Create a new automation. |
 | `ha_automation_update` | Modify an existing automation. |
 | `ha_automation_delete` | Delete an automation. |
+| `ha_automation_traces` | Fetch execution traces for an automation — step-by-step debugging of why it did or didn't fire. |
+| `ha_automation_vocabulary` | Enumerate the 2026.7 trigger/condition identifiers usable in `ha_automation_create` config blocks. |
 
 ## `notifications` — delivery, escalation, and actionable responses
 

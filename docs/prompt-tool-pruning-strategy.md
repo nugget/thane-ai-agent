@@ -309,9 +309,8 @@ For model-facing copy inside the document itself:
 
 Some capability families are real on one deployment but weak, absent, or
 shaped differently elsewhere. `pocket` is the obvious current example:
-its Home Assistant MCP bridge, MQTT wake plumbing, host-local ops
-surface, and older local tag aliases are not universal truths for every
-Thane runtime.
+its MQTT wake plumbing, host-local ops surface, and older local tag
+aliases are not universal truths for every Thane runtime.
 
 The working convention should be:
 
