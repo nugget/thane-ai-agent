@@ -32,7 +32,28 @@ const (
 const (
 	cognitionContainerName     = "cognition"
 	homeAssistantContainerName = "home-assistant"
+	pollersContainerName       = "pollers"
 )
+
+// Each predicate is the exact enablement gate for the pollers-container
+// member(s) it names. The container appears iff at least one is true, and the
+// members below use the same predicates — so the gate and its members cannot
+// drift into an empty container or a member orphaned under a missing parent.
+func unifiPollerEnabled(cfg *config.Config) bool {
+	return cfg.Unifi.Configured() && len(cfg.Person.Track) > 0
+}
+
+func emailServicesEnabled(cfg *config.Config) bool {
+	return cfg.Email.Configured() && cfg.Email.PollIntervalSec > 0
+}
+
+func forgePollerEnabled(cfg *config.Config) bool {
+	return cfg.Forge.Configured() && cfg.Forge.SubscriptionCheckInterval > 0
+}
+
+func mediaServicesEnabled(cfg *config.Config) bool {
+	return cfg.Media.FeedCheckInterval > 0
+}
 
 // builtInContainerDefinitionSpecs returns the built-in grouping containers,
 // each gated so an empty container never appears: cognition when any core
@@ -50,6 +71,10 @@ func builtInContainerDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 	if cfg.HomeAssistant.Configured() || cfg.MQTT.Configured() {
 		specs = append(specs, containerSpec(homeAssistantContainerName,
 			"Home Assistant integration: state watching, MQTT transport, and telemetry."))
+	}
+	if unifiPollerEnabled(cfg) || emailServicesEnabled(cfg) || forgePollerEnabled(cfg) || mediaServicesEnabled(cfg) {
+		specs = append(specs, containerSpec(pollersContainerName,
+			"Outward integration services: presence, email, code-forge, and media-feed pollers and their triage handlers."))
 	}
 
 	return specs
@@ -72,11 +97,12 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 
 	var specs []looppkg.Spec
 
-	if cfg.Unifi.Configured() && len(cfg.Person.Track) > 0 {
+	if unifiPollerEnabled(cfg) {
 		pollInterval := time.Duration(cfg.Unifi.PollIntervalSec) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         unifiPollerDefinitionName,
 			Enabled:      true,
+			ParentName:   pollersContainerName,
 			Task:         "Poll UniFi device locations and update room presence state.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
@@ -106,7 +132,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		})
 	}
 
-	if cfg.Email.Configured() && cfg.Email.PollIntervalSec > 0 {
+	if emailServicesEnabled(cfg) {
 		// Default landing zone for new-mail wakes when an operator
 		// hasn't pointed the poller at a custom handler. Event-driven
 		// so the loop sits idle on wakeCh until the poller delivers
@@ -120,6 +146,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:       email.DefaultHandlerLoopName,
 			Enabled:    true,
+			ParentName: pollersContainerName,
 			Task:       "Triage incoming email wakes. Each event carries a sender trust-zone tag — owner/trusted/household/known/stranger — use it to adapt: owners get direct responses, trusted senders get reviewed action, strangers get a low-cost classify-and-defer pass. Read with email_read when a message warrants a deeper look, reply via email_reply or send a fresh message via email_send, file or trash with email_move when handled, and notify the owner about anything that genuinely needs attention.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
@@ -147,6 +174,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:         emailPollerDefinitionName,
 			Enabled:      true,
+			ParentName:   pollersContainerName,
 			Task:         "Poll configured email accounts for new inbound mail and dispatch event-source wakes to the configured handler loop.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
@@ -161,11 +189,12 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		})
 	}
 
-	if cfg.Forge.Configured() && cfg.Forge.SubscriptionCheckInterval > 0 {
+	if forgePollerEnabled(cfg) {
 		pollInterval := time.Duration(cfg.Forge.SubscriptionCheckInterval) * time.Second
 		specs = append(specs, looppkg.Spec{
 			Name:         forgeSubPollerDefinitionName,
 			Enabled:      true,
+			ParentName:   pollersContainerName,
 			Task:         "Poll followed code forge repositories for release and commit events.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,
@@ -181,7 +210,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		})
 	}
 
-	if cfg.Media.FeedCheckInterval > 0 {
+	if mediaServicesEnabled(cfg) {
 		// Default landing zone for media feed wakes when an operator
 		// hasn't pointed media_follow's wake_loop at a custom handler.
 		// Event-driven so the loop sits idle on wakeCh until the
@@ -189,6 +218,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:       media.DefaultHandlerLoopName,
 			Enabled:    true,
+			ParentName: pollersContainerName,
 			Task:       "Triage media feed wake events: inspect each entry's trust_zone metadata, fetch and analyze worthwhile content with media_transcript and media_save_analysis, then notify the owner about anything noteworthy.",
 			Operation:  looppkg.OperationEventDriven,
 			Completion: looppkg.CompletionNone,
@@ -214,6 +244,7 @@ func builtInServiceDefinitionSpecs(cfg *config.Config) []looppkg.Spec {
 		specs = append(specs, looppkg.Spec{
 			Name:         mediaFeedPollerDefinitionName,
 			Enabled:      true,
+			ParentName:   pollersContainerName,
 			Task:         "Poll followed media feeds for new entries and dispatch analysis when needed.",
 			Operation:    looppkg.OperationService,
 			Completion:   looppkg.CompletionNone,

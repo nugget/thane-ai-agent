@@ -284,6 +284,21 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 		PublishIntervalSec: 60,
 		Telemetry:          config.TelemetryConfig{Enabled: true, Interval: 60},
 	}
+	// Enable the pollers members so the pollers container and its members appear.
+	cfg.Unifi = config.UnifiConfig{URL: "https://unifi.local", APIKey: "key", PollIntervalSec: 30}
+	cfg.Person = config.PersonConfig{Track: []string{"person.dan"}}
+	cfg.Email = emailcfg.Config{
+		PollIntervalSec: 300,
+		Accounts: []emailcfg.AccountConfig{{
+			Name: "personal",
+			IMAP: emailcfg.IMAPConfig{Host: "imap.example.com", Username: "dan@example.com"},
+		}},
+	}
+	cfg.Media = config.MediaConfig{FeedCheckInterval: 600}
+	cfg.Forge = forge.Config{
+		SubscriptionCheckInterval: 900,
+		Accounts:                  []forge.AccountConfig{{Name: "github", Provider: "github", Token: "token"}},
+	}
 
 	a := &App{cfg: cfg}
 	specs, err := a.buildLoopDefinitionBaseSpecs()
@@ -296,7 +311,7 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 	}
 
 	// Containers exist and are inert grouping containers.
-	for _, name := range []string{cognitionContainerName, homeAssistantContainerName} {
+	for _, name := range []string{cognitionContainerName, homeAssistantContainerName, pollersContainerName} {
 		s, ok := byName[name]
 		if !ok {
 			t.Errorf("grouping container %q missing from base specs", name)
@@ -307,19 +322,29 @@ func TestBuildLoopDefinitionBaseSpecs_GroupingContainers(t *testing.T) {
 		}
 	}
 
-	// Cognition members nest under the cognition container.
-	for _, name := range []string{ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName} {
-		if got := byName[name].ParentName; got != cognitionContainerName {
-			t.Errorf("%s ParentName = %q, want %q", name, got, cognitionContainerName)
+	// assertNested checks each member exists and nests under container. The
+	// presence check keeps a missing member reported as such rather than as a
+	// misleading empty-ParentName mismatch.
+	assertNested := func(container string, names ...string) {
+		t.Helper()
+		for _, name := range names {
+			s, ok := byName[name]
+			if !ok {
+				t.Errorf("member %q missing from base specs", name)
+				continue
+			}
+			if s.ParentName != container {
+				t.Errorf("%s ParentName = %q, want %q", name, s.ParentName, container)
+			}
 		}
 	}
 
-	// Home Assistant members nest under the home-assistant container.
-	for _, name := range []string{haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName} {
-		if got := byName[name].ParentName; got != homeAssistantContainerName {
-			t.Errorf("%s ParentName = %q, want %q", name, got, homeAssistantContainerName)
-		}
-	}
+	assertNested(cognitionContainerName, ego.DefinitionName, metacognitive.DefinitionName, archivist.DefinitionName)
+	assertNested(homeAssistantContainerName, haStateWatcherDefinitionName, mqttPublisherDefinitionName, telemetryDefinitionName, mqtt.DefaultHandlerLoopName)
+	// The four pollers and the two triage handlers that used to hang off core.
+	assertNested(pollersContainerName,
+		unifiPollerDefinitionName, emailPollerDefinitionName, emailcfg.DefaultHandlerLoopName,
+		forgeSubPollerDefinitionName, mediaFeedPollerDefinitionName, media.DefaultHandlerLoopName)
 }
 
 // TestBuiltInContainerDefinitionSpecs_Gating guards the container gating:
@@ -351,6 +376,15 @@ func TestBuiltInContainerDefinitionSpecs_Gating(t *testing.T) {
 	}))
 	if !ha[homeAssistantContainerName] {
 		t.Error("home-assistant container missing when MQTT configured")
+	}
+
+	// The pollers container appears when any of its members is enabled (media
+	// is the simplest gate — a positive feed-check interval, no Configured()).
+	pol := names(builtInContainerDefinitionSpecs(&config.Config{
+		Media: config.MediaConfig{FeedCheckInterval: 600},
+	}))
+	if !pol[pollersContainerName] {
+		t.Error("pollers container missing when a poller integration is configured")
 	}
 }
 
