@@ -1204,6 +1204,26 @@ function buildLiveCard(loop) {
     card.appendChild(ul);
   }
 
+  // Mid-turn arrivals/merges (#1230): messages that landed while this turn was
+  // composing and were folded in at an iteration boundary.
+  const midturn = loop._midturnLive || [];
+  if (midturn.length > 0) {
+    const mtUl = document.createElement('ul');
+    mtUl.className = 'live-tools';
+    for (const m of midturn) {
+      const li = document.createElement('li');
+      li.className = 'live-tool live-tool--midturn';
+      if (m.phase === 'merged') {
+        const n = m.count || 1;
+        li.textContent = '⤵ merged ' + n + (n === 1 ? ' message' : ' messages') + ' into the turn';
+      } else {
+        li.textContent = '↳ message arrived while working';
+      }
+      mtUl.appendChild(li);
+    }
+    card.appendChild(mtUl);
+  }
+
   return card;
 }
 
@@ -1402,6 +1422,14 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     body.appendChild(supEl);
   }
 
+  // Mid-turn merge badge (#1230): how many messages this turn folded in.
+  if (snap.midturn_merged > 0) {
+    const mtEl = document.createElement('span');
+    mtEl.className = 'iter-card__midturn-badge';
+    mtEl.textContent = '\u2935 folded ' + snap.midturn_merged + (snap.midturn_merged === 1 ? ' message' : ' messages');
+    body.appendChild(mtEl);
+  }
+
   // Timestamp.
   if (snap.completed_at) {
     const ts = document.createElement('div');
@@ -1495,6 +1523,7 @@ function clearLiveTelemetry(loop) {
   loop._liveModel = '';
   loop._llmContext = null;
   loop._currentRequestID = '';
+  loop._midturnLive = [];
 }
 
 // ---------------------------------------------------------------------------
@@ -1533,6 +1562,11 @@ function applyLoopEventToLoop(evt, ctx) {
       loop._liveTools = [];
       loop._liveModel = '';
       loop._llmContext = null;
+      // NB: do NOT reset _midturnLive here. It is cleared at turn end
+      // (clearLiveTelemetry on iteration_complete / leaving 'processing'), and
+      // the backend can emit loop_mailbox_arrival during turn prep — after
+      // currentConvID is set but before iteration_start — so resetting here
+      // would erase a legitimate arrival for the turn now starting (#1230).
       loop._iterStartTs = Date.now();
       return null;
 
@@ -1591,6 +1625,7 @@ function applyLoopEventToLoop(evt, ctx) {
         completed_at: evt.ts,
         summary: d.summary || null,
         delegate_calls: delegateCalls.length > 0 ? delegateCalls : null,
+        midturn_merged: d.midturn_merged || 0,
       };
       clearLiveTelemetry(loop);
       return { snapshot: snap };
@@ -1672,6 +1707,19 @@ function applyLoopEventToLoop(evt, ctx) {
       loop._liveModel = d.model || '';
       loop._currentRequestID = d.request_id || loop._currentRequestID || '';
       if (!loop._iterStartTs) loop._iterStartTs = Date.now();
+      return null;
+
+    case 'loop_mailbox_arrival':
+      // A message landed while this turn was composing (#1230); it will be
+      // merged at the next iteration boundary. Show it on the live timeline.
+      if (!loop._midturnLive) loop._midturnLive = [];
+      loop._midturnLive.push({ phase: 'arrived' });
+      return null;
+
+    case 'loop_midturn_input':
+      // Newly-arrived input was merged into the live turn (#1230).
+      if (!loop._midturnLive) loop._midturnLive = [];
+      loop._midturnLive.push({ phase: 'merged', count: d.count || 0 });
       return null;
 
     case 'loop_sleep_start': {

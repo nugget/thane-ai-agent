@@ -1779,6 +1779,9 @@ func (l *Loop) run(ctx context.Context) {
 				snap.ContextWindow = result.ContextWindow
 				snap.ElapsedMs = result.Elapsed.Milliseconds()
 				snap.CompletedAt = time.Now()
+				// Same per-turn total the iteration_complete event carries, so
+				// the persisted snapshot renders the "folded N" badge on reload.
+				snap.MidTurnMerged = len(midTurnPulled)
 
 				// Deep copy ToolsUsed so the snapshot is independent
 				// of any caller-held references.

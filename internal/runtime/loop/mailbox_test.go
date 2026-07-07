@@ -377,6 +377,16 @@ drained:
 	if got := complete.Data["midturn_merged"]; got != 1 {
 		t.Fatalf("midturn_merged = %v (%T), want 1", got, got)
 	}
+
+	// The persisted snapshot must carry the same tally so the history/reload
+	// path renders the "folded N" badge, not just live-watching clients (#1230).
+	iters := l.Status().RecentIterations
+	if len(iters) == 0 {
+		t.Fatal("no recent iterations recorded")
+	}
+	if iters[0].MidTurnMerged != 1 {
+		t.Errorf("snapshot MidTurnMerged = %d, want 1", iters[0].MidTurnMerged)
+	}
 }
 
 // TestBuildMailboxPullInputDefaultBudget confirms the zero-value budget falls
