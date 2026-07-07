@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
@@ -201,6 +202,180 @@ func TestBuildMailboxPullInputPublishesMidTurnEvent(t *testing.T) {
 	case evt := <-ch:
 		t.Fatalf("unexpected event on an empty pull: %+v", evt)
 	default:
+	}
+}
+
+// TestEnqueueMailboxArrivalEventOnlyMidTurn verifies the arrival side of the
+// mid-turn observability story (#1230): a message that lands while the loop is
+// already processing publishes a loop_mailbox_arrival event, while one that
+// wakes an idle loop (the ordinary path, already visible via
+// loop_iteration_start's mailbox_items) publishes nothing.
+func TestEnqueueMailboxArrivalEventOnlyMidTurn(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	ch := bus.Subscribe(8)
+	defer bus.Unsubscribe(ch)
+
+	mailbox := newTestMailbox(t)
+	l := mustNew(t, Config{Name: "arrival-evt", Task: "t"},
+		Deps{Runner: &noopRunner{}, Mailbox: mailbox, EventBus: bus})
+	ctx := context.Background()
+
+	setState := func(s State, conv string) {
+		l.mu.Lock()
+		l.started = true
+		l.stopped = false
+		l.state = s
+		l.currentConvID = conv
+		l.mu.Unlock()
+	}
+	drain := func() {
+		for {
+			select {
+			case <-ch:
+			default:
+				return
+			}
+		}
+	}
+
+	// A live turn is in flight (currentConvID set): the arrival is a genuine
+	// mid-turn merge and publishes an event naming the conversation and item.
+	setState(StateProcessing, "conv-mid")
+	if _, err := l.enqueueMailbox(ctx, "test", []byte("mid")); err != nil {
+		t.Fatalf("enqueue mid-turn: %v", err)
+	}
+	select {
+	case evt := <-ch:
+		if evt.Kind != events.KindLoopMailboxArrival {
+			t.Fatalf("kind = %q, want %q", evt.Kind, events.KindLoopMailboxArrival)
+		}
+		if evt.Source != events.SourceLoop {
+			t.Errorf("source = %q, want loop (so /v1/loops/events forwards it)", evt.Source)
+		}
+		if evt.Data["conversation_id"] != "conv-mid" {
+			t.Errorf("conversation_id = %v, want conv-mid", evt.Data["conversation_id"])
+		}
+		if s, _ := evt.Data["item_id"].(string); s == "" {
+			t.Errorf("item_id empty, want the enqueued item's id")
+		}
+		if evt.Data["loop_name"] != "arrival-evt" {
+			t.Errorf("loop_name = %v, want arrival-evt", evt.Data["loop_name"])
+		}
+	default:
+		t.Fatal("no loop_mailbox_arrival event for a mid-iteration enqueue")
+	}
+
+	// No in-flight turn (currentConvID empty): every such case is a wake-path
+	// arrival, not a mid-turn merge, and must publish nothing — including the
+	// startup (StatePending) and post-turn teardown (StateProcessing with the
+	// convID already cleared) windows, which the state enum alone cannot
+	// distinguish from a live turn.
+	noEvent := []struct {
+		name  string
+		state State
+	}{
+		{"idle waiting", StateWaiting},
+		{"idle sleeping", StateSleeping},
+		{"post-turn teardown", StateProcessing},
+		{"startup pending", StatePending},
+	}
+	for _, tc := range noEvent {
+		drain()
+		setState(tc.state, "")
+		if _, err := l.enqueueMailbox(ctx, "test", []byte("x")); err != nil {
+			t.Fatalf("%s: enqueue: %v", tc.name, err)
+		}
+		select {
+		case evt := <-ch:
+			t.Fatalf("%s: unexpected arrival event (state=%s, no in-flight turn): %+v", tc.name, tc.state, evt)
+		default:
+		}
+	}
+}
+
+// TestIterationCompleteCarriesMidTurnMergedTally drives a real mid-turn merge
+// through a live iteration and asserts the completed turn reports how many
+// messages it folded in (#1230 item 3) — the datum for a per-turn badge.
+func TestIterationCompleteCarriesMidTurnMergedTally(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	ch := bus.Subscribe(32)
+	defer bus.Unsubscribe(ch)
+
+	mailbox := newTestMailbox(t)
+	const loopName = "midturn-tally"
+
+	render := func(_ context.Context, items []MailboxItem) []llm.Message {
+		out := make([]llm.Message, len(items))
+		for i, it := range items {
+			out[i] = llm.Message{Role: "user", Content: string(it.Payload)}
+		}
+		return out
+	}
+
+	// The runner stands in for the engine's poll: it enqueues a fresh item
+	// (not in the wake batch) and pulls it, folding one message into the turn,
+	// then returns a normal result.
+	runner := &turnCallbackRunner{fn: func(ctx context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
+		if _, err := mailbox.enqueue(ctx, loopName, "test", []byte("mid-turn arrival")); err != nil {
+			return nil, err
+		}
+		if req.PullInput != nil {
+			req.PullInput(ctx)
+		}
+		return &RunResponse{Content: "ok", Model: "m", FinishReason: "stop", InputTokens: 10, OutputTokens: 5, Iterations: 1}, nil
+	}}
+
+	l, err := New(Config{
+		Name:      loopName,
+		Operation: OperationEventDriven,
+		TurnBuilder: func(_ context.Context, _ TurnInput) (*AgentTurn, error) {
+			return &AgentTurn{
+				Request:    Request{Messages: []Message{{Role: "user", Content: "wake"}}},
+				PullRender: render,
+			}, nil
+		},
+		MaxIter: 1,
+	}, Deps{Runner: runner, Mailbox: mailbox, EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// The wake batch (one item), so the mid-turn arrival is genuinely fresh.
+	if _, err := mailbox.enqueue(context.Background(), loopName, "test", []byte("wake item")); err != nil {
+		t.Fatalf("enqueue wake: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer l.Stop()
+	select {
+	case <-l.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	var complete *events.Event
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Kind == events.KindLoopIterationComplete && evt.Source == events.SourceLoop {
+				c := evt
+				complete = &c
+			}
+		default:
+			goto drained
+		}
+	}
+drained:
+	if complete == nil {
+		t.Fatal("missing loop_iteration_complete event")
+	}
+	if got := complete.Data["midturn_merged"]; got != 1 {
+		t.Fatalf("midturn_merged = %v (%T), want 1", got, got)
 	}
 }
 

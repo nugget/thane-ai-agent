@@ -143,6 +143,14 @@ const (
 	// delivery arc #1220–#1222). Data: loop_id, loop_name, conversation_id,
 	// count (messages merged this pull).
 	KindLoopMidTurnInput = "loop_midturn_input"
+	// KindLoopMailboxArrival signals that a message landed in a loop's
+	// mailbox while the loop was already mid-iteration — a mid-turn arrival
+	// that will be merged into the in-flight turn at the next poll boundary
+	// (the arrival side of KindLoopMidTurnInput, #1230). Arrivals that wake an
+	// idle loop are the ordinary wake path (counted by loop_iteration_start's
+	// mailbox_items) and do not emit this. Data: loop_id, loop_name,
+	// conversation_id (the in-flight turn's), item_id, pending_items.
+	KindLoopMailboxArrival = "loop_mailbox_arrival"
 )
 
 // Event represents a single operational event published by a component.

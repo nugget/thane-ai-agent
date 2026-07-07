@@ -298,7 +298,6 @@ func (l *Loop) enqueueMailbox(ctx context.Context, keyPrefix string, payload []b
 	}
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	receipt := MailboxReceipt{
 		LoopID:       loopID,
 		LoopName:     loopName,
@@ -314,6 +313,36 @@ func (l *Loop) enqueueMailbox(ctx context.Context, keyPrefix string, payload []b
 		receipt.WokeImmediately = true
 	} else {
 		receipt.QueuedForNextWake = true
+	}
+	// A turn is genuinely in flight exactly when currentConvID is set (set
+	// before StateProcessing, cleared at turn end). Gate the arrival event on
+	// that, not on the state enum: the startup (StatePending) and post-turn
+	// teardown (StateProcessing with currentConvID already cleared) windows are
+	// "not sleeping/waiting" yet have no turn to merge into, so a state-based
+	// gate would fire a spurious arrival carrying an empty conversation_id.
+	inFlightConvID := l.currentConvID
+	midTurnArrival := inFlightConvID != ""
+	l.mu.Unlock()
+
+	// Emit the arrival so "a message landed while the loop was working ->
+	// queued for merge" is observable on the loop event stream, not just the
+	// merge itself (KindLoopMidTurnInput). Published after releasing l.mu so
+	// the bus is never touched under the loop lock. Ordinary wake-path
+	// arrivals (idle loop) are already visible via loop_iteration_start's
+	// mailbox_items and are deliberately not doubled here (#1230).
+	if midTurnArrival {
+		l.publishEvent(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      events.KindLoopMailboxArrival,
+			Data: map[string]any{
+				"loop_id":         loopID,
+				"loop_name":       loopName,
+				"conversation_id": inFlightConvID,
+				"item_id":         item.ID,
+				"pending_items":   pending,
+			},
+		})
 	}
 	return receipt, nil
 }
