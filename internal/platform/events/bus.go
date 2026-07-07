@@ -138,6 +138,11 @@ const (
 	// loop iteration. Data: loop_id, loop_name, model, input_tokens,
 	// output_tokens.
 	KindLoopLLMResponse = "loop_llm_response"
+	// KindLoopMidTurnInput signals that newly-arrived conversation input was
+	// merged into a live turn at an iteration boundary (#1230, the mid-turn
+	// delivery arc #1220–#1222). Data: loop_id, loop_name, conversation_id,
+	// count (messages merged this pull).
+	KindLoopMidTurnInput = "loop_midturn_input"
 )
 
 // Event represents a single operational event published by a component.

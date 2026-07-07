@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
 )
 
 // TestBuildMailboxPullInputDeltaGatesAndBudgets exercises the #1221 loop-side
@@ -45,7 +47,7 @@ func TestBuildMailboxPullInputDeltaGatesAndBudgets(t *testing.T) {
 	}
 
 	var pulled []MailboxItem
-	pull := l.buildMailboxPullInput(wakeBatch, &pulled, render)
+	pull := l.buildMailboxPullInput("conv-test", wakeBatch, &pulled, render)
 
 	// Nothing new beyond the wake batch → nil (never re-present delivered).
 	if got := pull(ctx); got != nil {
@@ -108,7 +110,7 @@ func TestBuildMailboxPullInputCapsItemsPerPull(t *testing.T) {
 		return out
 	}
 	var pulled []MailboxItem
-	pull := l.buildMailboxPullInput(nil, &pulled, render)
+	pull := l.buildMailboxPullInput("conv-test", nil, &pulled, render)
 
 	overflow := 3
 	total := maxMidTurnItemsPerPull + overflow
@@ -133,6 +135,70 @@ func TestBuildMailboxPullInputCapsItemsPerPull(t *testing.T) {
 	}
 	if len(pulled) != total {
 		t.Fatalf("ack accumulator = %d, want %d (all delivered across pulls)", len(pulled), total)
+	}
+}
+
+// TestBuildMailboxPullInputPublishesMidTurnEvent verifies that a delivering
+// pull emits a loop_midturn_input event (#1230) with Source=loop so it reaches
+// /v1/loops/events and the archive, and that an empty pull publishes nothing.
+func TestBuildMailboxPullInputPublishesMidTurnEvent(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	ch := bus.Subscribe(8)
+	defer bus.Unsubscribe(ch)
+
+	mailbox := newTestMailbox(t)
+	l := mustNew(t, Config{Name: "pull-evt", Task: "t", MidTurnInputBudget: 4},
+		Deps{Runner: &noopRunner{}, Mailbox: mailbox, EventBus: bus})
+	ctx := context.Background()
+
+	render := func(_ context.Context, items []MailboxItem) []llm.Message {
+		out := make([]llm.Message, len(items))
+		for i, it := range items {
+			out[i] = llm.Message{Role: "user", Content: string(it.Payload)}
+		}
+		return out
+	}
+	var pulled []MailboxItem
+	pull := l.buildMailboxPullInput("conv-42", nil, &pulled, render)
+
+	if _, err := mailbox.Enqueue(ctx, l.Name(), "test", []byte("hello")); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if got := pull(ctx); len(got) != 1 {
+		t.Fatalf("pull delivered %d, want 1", len(got))
+	}
+
+	select {
+	case evt := <-ch:
+		if evt.Kind != events.KindLoopMidTurnInput {
+			t.Fatalf("event kind = %q, want %q", evt.Kind, events.KindLoopMidTurnInput)
+		}
+		if evt.Source != events.SourceLoop {
+			t.Errorf("event source = %q, want loop (so /v1/loops/events forwards it)", evt.Source)
+		}
+		if evt.Data["conversation_id"] != "conv-42" {
+			t.Errorf("conversation_id = %v, want conv-42", evt.Data["conversation_id"])
+		}
+		if evt.Data["count"] != 1 {
+			t.Errorf("count = %v, want 1", evt.Data["count"])
+		}
+		if evt.Data["loop_name"] != "pull-evt" {
+			t.Errorf("loop_name = %v, want pull-evt", evt.Data["loop_name"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no loop_midturn_input event published for a delivering pull")
+	}
+
+	// A pull that delivers nothing must not publish an event.
+	if got := pull(ctx); got != nil {
+		t.Fatalf("second pull delivered %v, want nil (nothing new)", got)
+	}
+	select {
+	case evt := <-ch:
+		t.Fatalf("unexpected event on an empty pull: %+v", evt)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

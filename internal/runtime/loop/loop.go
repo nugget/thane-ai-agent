@@ -1636,7 +1636,7 @@ func (l *Loop) run(ctx context.Context) {
 					// request-base merge can wipe it). Items it delivers are
 					// acked with the wake batch at turn end.
 					if turn.PullRender != nil && l.deps.Mailbox != nil {
-						req.PullInput = l.buildMailboxPullInput(mailboxItems, &midTurnPulled, turn.PullRender)
+						req.PullInput = l.buildMailboxPullInput(convID, mailboxItems, &midTurnPulled, turn.PullRender)
 					}
 					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
 					result, turnResp, turnErr = l.runAgentTurn(runCtx, req, turn.Stream, iterStart, isSupervisor, supervisorTrigger)

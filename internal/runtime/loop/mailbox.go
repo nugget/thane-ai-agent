@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/state/loopqueue"
 )
 
@@ -73,8 +74,11 @@ func (l *Loop) midTurnInputBudget() int {
 // returns the rendered messages. Returns nil once the budget is spent or
 // nothing new is pending, which the engine reads as "no mid-turn input." Items
 // left over from a capped pull stay pending for the next pull or post-turn
-// re-wake.
+// re-wake. Each delivering pull publishes a KindLoopMidTurnInput event (#1230)
+// so the merge is visible on the loop event stream, not just in the retained
+// prompt. convID names the conversation the merge belongs to.
 func (l *Loop) buildMailboxPullInput(
+	convID string,
 	wakeBatch []MailboxItem,
 	pulled *[]MailboxItem,
 	render func(context.Context, []MailboxItem) []llm.Message,
@@ -118,8 +122,30 @@ func (l *Loop) buildMailboxPullInput(
 			delivered[it.ID] = true
 		}
 		*pulled = append(*pulled, fresh...)
+		l.publishMidTurnInput(convID, len(fresh))
 		return rendered
 	}
+}
+
+// publishMidTurnInput emits a KindLoopMidTurnInput event for one delivering
+// pull of the mid-turn merge (#1230), so the loop event stream and archive
+// record that input was folded into a live turn — and how much — instead of it
+// being visible only by finding the rendered marker in a retained prompt.
+func (l *Loop) publishMidTurnInput(convID string, count int) {
+	if l.deps.EventBus == nil || count <= 0 {
+		return
+	}
+	l.deps.EventBus.Publish(events.Event{
+		Timestamp: time.Now(),
+		Source:    events.SourceLoop,
+		Kind:      events.KindLoopMidTurnInput,
+		Data: map[string]any{
+			"loop_id":         l.id,
+			"loop_name":       l.config.Name,
+			"conversation_id": convID,
+			"count":           count,
+		},
+	})
 }
 
 type mailboxItemsContextKey struct{}
