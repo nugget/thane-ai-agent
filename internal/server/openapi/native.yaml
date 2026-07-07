@@ -2469,6 +2469,16 @@ components:
           readOnly: true
           description: Identifier of the tool call this message responds to, for tool-result messages.
           example: call_019e7469
+        mid_turn:
+          type: boolean
+          readOnly: true
+          description: >-
+            True when this user message arrived mid-turn and was merged into an
+            in-flight turn at an iteration boundary, rather than opening its own
+            turn. Omitted when false. The structured signal for a mid-turn
+            injection — consumers should key on this rather than substring-match
+            the channel-rendered arrival marker in the content.
+          example: true
         archived_at:
           type: string
           format: date-time

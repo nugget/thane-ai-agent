@@ -60,6 +60,10 @@ func (m *mockMem) AddMessage(id, role, content string) error {
 	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content})
 	return nil
 }
+func (m *mockMem) AddMidTurnMessage(id, role, content string) error {
+	m.msgs[id] = append(m.msgs[id], memory.Message{Role: role, Content: content, MidTurn: true})
+	return nil
+}
 func (m *mockMem) GetTokenCount(string) int { return 0 }
 func (m *mockMem) Clear(id string) error    { m.msgs[id] = nil; return nil }
 func (m *mockMem) Stats() map[string]any    { return nil }

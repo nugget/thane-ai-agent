@@ -165,6 +165,11 @@ type Response struct {
 type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
 	AddMessage(conversationID, role, content string) error
+	// AddMidTurnMessage records a user message that arrived mid-turn and was
+	// merged into the in-flight turn (#1230), tagging the record so consumers
+	// identify the injection structurally rather than by substring-matching
+	// the rendered arrival marker.
+	AddMidTurnMessage(conversationID, role, content string) error
 	GetTokenCount(conversationID string) int
 	Clear(conversationID string) error
 	Stats() map[string]any
@@ -2148,7 +2153,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if m.Role != "user" || m.Content == "" {
 					continue
 				}
-				if err := l.memory.AddMessage(convID, "user", m.Content); err != nil {
+				if err := l.memory.AddMidTurnMessage(convID, "user", m.Content); err != nil {
 					logging.Logger(pctx).Warn("failed to record mid-turn input in conversation store",
 						"conversation_id", convID, "error", err)
 				}
