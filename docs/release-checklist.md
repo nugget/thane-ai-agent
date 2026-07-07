@@ -6,8 +6,11 @@ easy to roll back.
 
 The phases are time-ordered: audits land first, while a fix is still
 cheap; assets get cut once the tree is clean; validation and
-communication happen against the live build. Skipping forward is fine,
-working backward is the smell.
+communication happen against the live build. The later phases hand off
+to the human operator — the live production host and the Apple Developer
+credentials never leave the operator's macOS release workstation, so an
+AI-assisted release stops there and the operator finishes. Skipping
+forward is fine, working backward is the smell.
 
 ## 1. Pre-release audits
 
@@ -158,7 +161,7 @@ same fix after a release ships is migration work.
   - [ ] [docs/reference/](reference/) — tools, CLI, API docs accurate
   - [ ] [CONTRIBUTING.md](../CONTRIBUTING.md) — accurate for current development workflow
 - [ ] **Config review**
-  - [ ] [`examples/config.example.yaml`](../examples/config.example.yaml) regenerated and committed (`go generate ./internal/platform/config/...`)
+  - [ ] [`examples/config.example.yaml`](../examples/config.example.yaml) is current and committed — the `config-generate-check` gate in `just ci` regenerates it and fails on drift, so a green `just ci` is the real check; run `go generate ./internal/platform/config/...` and commit only if the gate flags it stale
   - [ ] Stale config-owned tool lists removed where compiled defaults or MCP `default_tags` can own membership
   - [ ] Production config checked for removed or renamed tools,
         deprecated aliases, and stale capability-tag memberships
@@ -192,62 +195,92 @@ Tree is clean — verify it builds.
 
 ## 3. Cut artifacts
 
-Decide the operator path first; the rest follows from that choice.
+The tree is clean; now the release itself gets cut. Almost everything
+here is encapsulated by one recipe, and everything that recipe touches —
+Apple Developer signing, notarization, the live upload — lives on the
+human operator's macOS release workstation, not in an AI-assisted run.
+So this section is deliberately hand-wavey: decide the path, make sure
+the commit tells the truth, and hand off.
 
-- [ ] Operator path chosen:
-  - [ ] `just release-github <version> [auto|prerelease|release]` for a real
-        published release — it runs the guards, then `prepare-release`
-        (build + sign + notarize + checksum + container smoke), then
-        `publish-release` (tag + upload assets + trigger the GHCR image)
-  - [ ] `just deploy-macos user@host` for live-host pkg testing without cutting a release
-- [ ] `just release-github <version>` completes on the macOS release workstation
-- [ ] Prepared release metadata matches the commit being published
-- [ ] Release tag created from a clean, up-to-date `main`
-- [ ] Candidate commit is the intended release commit — no unmerged
-      canary branch, dirty tree, or local-only config/talent change is
-      part of the artifact story by accident
-- [ ] Local release upload publishes the two macOS `.pkg` files, the two Linux tarballs, and a version-scoped `thane_<version>_checksums.txt` to the GitHub release
-- [ ] GitHub release workflow publishes the GHCR multi-arch container image
-- [ ] GitHub build provenance attestations are available for the container image
-- [ ] GitHub release token is set explicitly (`THANE_GH_TOKEN`) for tag creation and release upload
-- [ ] macOS release signing credentials are set (`THANE_CODESIGN_IDENTITY`) if shipping a Developer ID-signed build
-- [ ] macOS installer signing credentials are set (`THANE_INSTALLER_IDENTITY`) if shipping signed `.pkg` artifacts
-- [ ] macOS notarization profile is set (`THANE_NOTARY_PROFILE`) if shipping a notarized/stapled macOS installer package
-- [ ] macOS installer packages inspect cleanly (`pkgutil --check-signature`, distribution metadata, current-user-home install domain, and architecture gating all match the intended release)
-- [ ] If a manual breakpoint was needed, `just prepare-release <version>` and `just publish-release <version> [auto|prerelease|release]` were used intentionally instead of by habit
+- [ ] **Operator path chosen** — one of:
+  - [ ] `just release-github <version> [auto|prerelease|release]` for a
+        real published release. This is the whole path in one recipe:
+        the **human operator runs it on the macOS release workstation**
+        and it walks guards → build → sign → notarize → checksum → tag →
+        upload assets → GHCR image. The credential env vars
+        (signing identity, installer identity, notary profile, release
+        token) and the per-asset upload are the recipe's problem, not a
+        checklist to re-enumerate — if a credential is missing the guards
+        fail loudly.
+  - [ ] `just deploy-macos <user@host>` for live-host pkg testing without
+        cutting a release.
+- [ ] **The commit tells the truth about itself** — the tag comes off a
+      clean, up-to-date `main`, and the candidate commit is the intended
+      release commit. No unmerged canary branch, dirty tree, or
+      local-only config/talent change is part of the artifact story by
+      accident. This is the one part the recipe's guards can't fully see
+      for you: local-only talent or config drift on the workstation won't
+      trip a build guard but will silently change what ships. Verify it
+      by hand.
+- [ ] **Operator validates the live build** — once `just release-github`
+      finishes, the operator confirms the published, signed, notarized
+      artifact is real: the installer inspects cleanly and the build it
+      produces reports the intended version. This needs the notarized
+      output and the operator's credentials, so it can't be done from an
+      AI-assisted run — it's a handoff, not a step you execute here.
+- [ ] **Manual breakpoint only when you mean it** — if the release needs
+      to pause between build and publish, use `just prepare-release
+      <version>` then `just publish-release <version>
+      [auto|prerelease|release]` deliberately, not by habit.
+      `release-github` is the default; the split path is for when you
+      genuinely need to inspect the prepared artifacts before they go
+      public.
 
 ## 4. Post-deploy validation
 
-After the build lands on its target host. Verifies the release in situ
-and confirms rollback is real.
+After the build lands on its target host. This phase is the human
+operator's: the live production host and the Apple Developer credentials
+never leave their hands, so an AI-assisted release stops at the release
+workstation. What follows is the operator's memory aid — the checks that
+confirm the shipped build is healthy in situ and that rollback is real,
+not a plan.
 
-- [ ] **Pre-deploy operator hygiene**
-  - [ ] Existing production config backed up before swap
-  - [ ] Previous binary kept locally on the host so rollback is one move
-- [ ] **Live-build sanity**
+- [ ] **Pre-deploy operator hygiene** — before the swap, make rollback a
+      single move, not a scramble.
+  - [ ] Existing production config backed up
+  - [ ] Previous binary kept on the host so rollback is one command
+- [ ] **Live-build sanity** — confirm the thing that came up is the thing
+      you shipped.
   - [ ] `/v1/version` reports the intended commit after restart
   - [ ] `11434` exposes only the intended virtual model suite
-  - [ ] MCP servers needed in production start successfully and their tools land in the intended tags/toolboxes
-- [ ] **Canary smoke tests**
+  - [ ] MCP servers needed in production start successfully and their
+        tools land in the intended tags/toolboxes
+  - [ ] If the build reached the host via `just deploy-macos <user@host>`,
+        that completed and the API reports the intended version after
+        restart
+- [ ] **Canary smoke tests** — exercise the routes operators actually
+      use, not just the ones that are easy to hit.
   - [ ] One plain `8080` chat request succeeds
   - [ ] One `11434` `thane:premium` request succeeds
-  - [ ] One tool-using request succeeds on the route operators actually use
+  - [ ] One tool-using request succeeds on a real production route
   - [ ] One delegate-family request succeeds (`thane_now` for inline
         work; `thane_assign` too if async delegation changed)
   - [ ] Any capability family changed in this release gets one tagged
-        delegate smoke test using the production path operators will
-        actually use
+        delegate smoke test on the path operators will actually use
   - [ ] One Home Assistant request succeeds if HA is production-critical
   - [ ] One scheduler/background loop completes after restart
-  - [ ] Dashboard, request viewer, and registry windows load cleanly enough for incident response
-  - [ ] If a live host was used for pkg validation, `just deploy-macos user@host` completed and the target Thane API reported the intended build version after restart
-- [ ] **Log review**
+  - [ ] Dashboard, request viewer, and registry windows load cleanly
+        enough for incident response
+- [ ] **Log review** — read the logs like an incident is coming.
   - [ ] Check recent `WARN`/`ERROR` output after restart
   - [ ] Distinguish startup burst noise from steady-state regressions
-  - [ ] Remove or explain stale config warnings instead of normalizing them away
-  - [ ] Confirm request, loop, tool, and model fields are present on new operational log lines
-- [ ] **Rollback readiness**
-  - [ ] Restart path uses the real supervisor in production, not vestigial install-time service scripts
+  - [ ] Remove or explain stale config warnings instead of normalizing
+        them away
+  - [ ] Confirm request, loop, tool, and model fields are present on new
+        operational log lines
+- [ ] **Rollback readiness** — prove the escape hatch before you need it.
+  - [ ] Restart path uses the real production supervisor, not vestigial
+        install-time service scripts
   - [ ] Rollback steps are short enough to execute under pressure
 
 ## 5. Communication
@@ -259,7 +292,7 @@ and confirms rollback is real.
       config migrations, and production-only guidance changes plainly
 - [ ] **GitHub release notes drafted on the release object itself**, not in a repo document.
 
-  Thane release notes are narrative. Pattern them after recent releases — [v0.9.1 — The Operational Hardening Release](https://github.com/nugget/thane-ai-agent/releases/tag/v0.9.1) is the current canonical example. The notes make a story out of the release and are explicit about the *whys* behind the features. They draw heavily from constituent PR descriptions and issue comments, because that's where the why actually got written down. They are *not* an autogenerated changelog with a marketing intro.
+  Thane release notes are narrative. Pattern them after recent releases — [v0.9.1 — The Operational Hardening Release](https://github.com/nugget/thane-ai-agent/releases/tag/v0.9.1) is a canonical example. The notes make a story out of the release and are explicit about the *whys* behind the features. They draw heavily from constituent PR descriptions and issue comments, because that's where the why actually got written down. They are *not* an autogenerated changelog with a marketing intro.
 
   - [ ] **Title and theme.** Pick a center of gravity and name it: `vX.Y.Z — The {Theme} Release` (e.g. *Operational Hardening*, *Convergence*). State the theme in the title and reinforce it in the opening paragraph. If the release lacks a thematic backbone, that itself is signal — call it a maintenance bump and keep it short rather than inflating it.
   - [ ] **Opening framing paragraph.** One to three sentences placing this release in the larger arc of the project. "v0.9.1 is the first release after the convergence work of v0.9.0; the architecture is no longer trying to become one thing — now it starts getting sharper, safer, and easier to operate as that one thing." sets context that a flat changelog cannot. Lift framing language from the PR descriptions and issue comments where the writers captured *why* in the moment.
