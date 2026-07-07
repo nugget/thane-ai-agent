@@ -291,7 +291,7 @@ export function createLoopStore({ client, events } = {}) {
       const statuses = await client.get('/loops');
       const serverIds = new Set();
       const transient = [
-        '_iterStartTs', '_liveTools', '_liveModel', '_llmContext',
+        '_iterStartTs', '_liveTools', '_liveModel', '_llmContext', '_midturnLive',
         '_supervisor', '_currentConvID', '_currentRequestID', '_lastModel', '_lastSupervisor',
         '_delegate', '_delegateId', '_delegateTask', '_delegateProfile',
         '_delegateGuidance', '_delegateTags', '_delegateIterations',

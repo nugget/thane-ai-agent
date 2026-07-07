@@ -811,6 +811,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .live-tool--running { border-left-color: var(--accent); }
 .live-tool--done { border-left-color: var(--green); }
 .live-tool--error { border-left-color: var(--red); }
+.live-tool--midturn { border-left-color: var(--blue); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
 .live-tool__head { display: flex; align-items: baseline; gap: 8px; }
 .live-tool__name { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
 .live-tool__status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
@@ -1872,6 +1873,12 @@ body.resize-col .schema-card__fade {
   display: inline-block;
   font-size: 0.6rem;
   color: var(--purple);
+}
+.iter-card__midturn-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.6rem;
+  color: var(--blue);
 }
 .iter-card__timestamp {
   color: var(--text-muted);

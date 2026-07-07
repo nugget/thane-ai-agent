@@ -541,6 +541,11 @@ type IterationSnapshot struct {
 	// "random" (Bernoulli win) from "forced" (notification-driven)
 	// without re-deriving the cause from event logs.
 	SupervisorTrigger SupervisorTrigger `json:"supervisor_trigger,omitempty"`
+	// MidTurnMerged is the number of mailbox messages folded into this turn
+	// mid-flight (#1230); zero for an ordinary turn. Carried on the snapshot
+	// (not just the live event) so the history/reload path renders the
+	// "folded N messages" badge identically to a live-watching client.
+	MidTurnMerged int `json:"midturn_merged,omitempty"`
 	// Error holds the error message if the iteration failed.
 	Error string `json:"error,omitempty"`
 	// StartedAt is when the iteration began.
