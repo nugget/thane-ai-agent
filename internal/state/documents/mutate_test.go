@@ -94,6 +94,130 @@ func TestStoreEditUpsertSectionPreservesCreated(t *testing.T) {
 	}
 }
 
+func TestStripLeadingDuplicateHeading(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		names   []string
+		want    string
+	}{
+		{
+			name:    "exact duplicate stripped",
+			content: "## Observations\n\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "case insensitive duplicate stripped",
+			content: "## OBSERVATIONS\n\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "wrong level duplicate stripped",
+			content: "# Observations\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "slug match against selector stripped",
+			content: "## Current Status\n\nAll clear.",
+			names:   []string{"", "current-status"},
+			want:    "All clear.",
+		},
+		{
+			name:    "different heading preserved",
+			content: "### Background\n\nDetail.",
+			names:   []string{"Observations"},
+			want:    "### Background\n\nDetail.",
+		},
+		{
+			name:    "plain first line preserved",
+			content: "Observations of note.\n\nMore.",
+			names:   []string{"Observations"},
+			want:    "Observations of note.\n\nMore.",
+		},
+		{
+			name:    "hash without space is not a heading",
+			content: "#Observations\n\nMore.",
+			names:   []string{"Observations"},
+			want:    "#Observations\n\nMore.",
+		},
+		{
+			name:    "heading only becomes empty",
+			content: "## Observations",
+			names:   []string{"Observations"},
+			want:    "",
+		},
+		{
+			name:    "crlf duplicate stripped",
+			content: "## Observations\r\n\r\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "crlf blank line before duplicate stripped",
+			content: "\r\n## Observations\r\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "empty content unchanged",
+			content: "",
+			names:   []string{"Observations"},
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stripLeadingDuplicateHeading(tt.content, tt.names...); got != tt.want {
+				t.Fatalf("stripLeadingDuplicateHeading(%q, %v) = %q, want %q", tt.content, tt.names, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStoreEditUpsertSectionStripsDuplicateHeading(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newMutationStore(t)
+	ctx := context.Background()
+
+	_, err := store.Write(ctx, WriteArgs{
+		Ref:   "kb:status.md",
+		Title: "Status",
+		Body:  stringPtr("# Status\n\nBase body."),
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	_, err = store.Edit(ctx, EditArgs{
+		Ref:     "kb:status.md",
+		Mode:    "upsert_section",
+		Section: "Observations",
+		Body:    "## Observations\n\nFresh note.",
+	})
+	if err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+
+	after, err := store.Read(ctx, "kb:status.md")
+	if err != nil {
+		t.Fatalf("Read after edit: %v", err)
+	}
+	if got := strings.Count(after.Body, "## Observations"); got != 1 {
+		t.Fatalf("edited body = %q, want exactly one Observations heading, got %d", after.Body, got)
+	}
+	if !strings.Contains(after.Body, "Fresh note.") {
+		t.Fatalf("edited body = %q, want section content preserved", after.Body)
+	}
+}
+
 func TestStoreJournalUpdatePrunesOldWindows(t *testing.T) {
 	t.Parallel()
 

@@ -177,6 +177,7 @@ func upsertDocumentSection(body, selector, heading string, level int, content st
 	if level <= 0 || level > 6 {
 		level = 2
 	}
+	content = stripLeadingDuplicateHeading(content, heading, selector)
 	lines := strings.Split(trimDocumentBody(body), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil
@@ -270,6 +271,36 @@ func findSection(sections []Section, selector, heading string) (Section, bool) {
 		}
 	}
 	return Section{}, false
+}
+
+// stripLeadingDuplicateHeading removes a redundant heading line from
+// section content. Models frequently repeat the target section's heading
+// as the first line of an upsert_section body even though
+// renderSectionBlock adds the heading itself, doubling it on disk. The
+// line is dropped only when it is an ATX heading whose text matches the
+// resolved heading or selector (case-insensitive or slug-equal); the
+// heading level is ignored because the duplicate often arrives at the
+// wrong depth.
+func stripLeadingDuplicateHeading(content string, names ...string) string {
+	line, rest, _ := strings.Cut(strings.TrimLeft(content, "\r\n"), "\n")
+	candidate := strings.TrimSpace(line)
+	hashes := 0
+	for hashes < len(candidate) && candidate[hashes] == '#' {
+		hashes++
+	}
+	if hashes == 0 || hashes > 6 || hashes == len(candidate) || candidate[hashes] != ' ' {
+		return content
+	}
+	text := strings.TrimSpace(candidate[hashes:])
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(text, name) || slugify(text) == slugify(name) {
+			return strings.TrimLeft(rest, "\r\n")
+		}
+	}
+	return content
 }
 
 func renderSectionBlock(level int, heading, content string) string {
