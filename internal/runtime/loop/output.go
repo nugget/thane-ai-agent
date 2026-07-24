@@ -19,6 +19,11 @@ const (
 	// OutputTypeJournalDocument describes an append-only journal
 	// document maintained by the loop.
 	OutputTypeJournalDocument OutputType = "journal_document"
+	// OutputTypeWorkingNotes describes a loop-private process journal:
+	// append-only like a journal document, internal-audience by default.
+	// It holds the loop's own timeline — drift, refinement, and curation
+	// rationale — and is never projected into consumer surfaces.
+	OutputTypeWorkingNotes OutputType = "working_notes"
 )
 
 // OutputMode describes the allowed write mode for a loop output.
@@ -29,6 +34,37 @@ const (
 	OutputModeReplace OutputMode = "replace"
 	// OutputModeAppend requires append-only journal entries.
 	OutputModeAppend OutputMode = "append"
+)
+
+// OutputTier names one declared fidelity level in a tiered output's
+// published projection ladder. Full fidelity is not a tier: it is the
+// document body itself.
+type OutputTier string
+
+const (
+	// OutputTierStatusLine is the ambient projection: current state in
+	// one standalone line, no markdown structure.
+	OutputTierStatusLine OutputTier = "status_line"
+	// OutputTierTeaser is the interest hook: one short paragraph on why
+	// a reader would open the full document right now.
+	OutputTierTeaser OutputTier = "teaser"
+	// OutputTierDigest is the standalone summary: enough detail to act
+	// on without opening the full document.
+	OutputTierDigest OutputTier = "digest"
+)
+
+// OutputAudience describes which surfaces may project an output's
+// content.
+type OutputAudience string
+
+const (
+	// OutputAudiencePublished allows projection into any consumer
+	// surface: search results, context injection, ambient rails.
+	OutputAudiencePublished OutputAudience = "published"
+	// OutputAudienceInternal restricts the content to the owning loop's
+	// own context and explicit by-ref reads. This is context hygiene,
+	// not secrecy: operators and the archive still see the document.
+	OutputAudienceInternal OutputAudience = "internal"
 )
 
 // OutputSpec declares one durable document surface a loop is allowed to
@@ -51,6 +87,14 @@ type OutputSpec struct {
 	// MaxWindows caps retained journal windows. Zero uses the document
 	// layer default for the selected window.
 	MaxWindows int `yaml:"max_windows,omitempty" json:"max_windows,omitempty"`
+	// Tiers declares the published projection ladder for a maintained
+	// document: which of status_line, teaser, and digest the loop
+	// publishes alongside the full body. Empty means untiered.
+	Tiers []OutputTier `yaml:"tiers,omitempty" json:"tiers,omitempty"`
+	// Audience overrides which surfaces may project this output. Empty
+	// defaults from Type: working_notes is internal, every other type
+	// is published.
+	Audience OutputAudience `yaml:"audience,omitempty" json:"audience,omitempty"`
 }
 
 // RuntimeTool is a request-scoped tool hydrated from runtime state. It
@@ -78,11 +122,23 @@ func (o OutputSpec) EffectiveMode() OutputMode {
 	switch o.Type {
 	case OutputTypeMaintainedDocument:
 		return OutputModeReplace
-	case OutputTypeJournalDocument:
+	case OutputTypeJournalDocument, OutputTypeWorkingNotes:
 		return OutputModeAppend
 	default:
 		return ""
 	}
+}
+
+// EffectiveAudience returns the explicit audience or the default
+// audience implied by the output type.
+func (o OutputSpec) EffectiveAudience() OutputAudience {
+	if o.Audience != "" {
+		return o.Audience
+	}
+	if o.Type == OutputTypeWorkingNotes {
+		return OutputAudienceInternal
+	}
+	return OutputAudiencePublished
 }
 
 // ToolName returns the scoped mutation tool name generated for this
@@ -120,7 +176,7 @@ func (o OutputSpec) Validate() error {
 		return err
 	}
 	switch o.Type {
-	case OutputTypeMaintainedDocument, OutputTypeJournalDocument:
+	case OutputTypeMaintainedDocument, OutputTypeJournalDocument, OutputTypeWorkingNotes:
 	default:
 		return fmt.Errorf("unsupported type %q", o.Type)
 	}
@@ -131,14 +187,61 @@ func (o OutputSpec) Validate() error {
 			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeMaintainedDocument)
 		}
 	case OutputModeAppend:
-		if o.Type != OutputTypeJournalDocument {
-			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeJournalDocument)
+		if o.Type != OutputTypeJournalDocument && o.Type != OutputTypeWorkingNotes {
+			return fmt.Errorf("mode %q is only valid for types %q and %q", mode, OutputTypeJournalDocument, OutputTypeWorkingNotes)
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
 	}
+	switch o.Audience {
+	case "", OutputAudiencePublished, OutputAudienceInternal:
+	default:
+		return fmt.Errorf("unsupported audience %q; use %q or %q", o.Audience, OutputAudiencePublished, OutputAudienceInternal)
+	}
+	if o.Type == OutputTypeWorkingNotes && o.Audience == OutputAudiencePublished {
+		return fmt.Errorf("audience %q contradicts type %q; working notes are internal by definition — declare a journal_document instead for a published journal", OutputAudiencePublished, OutputTypeWorkingNotes)
+	}
+	if err := validateOutputTiers(o); err != nil {
+		return err
+	}
 	if o.MaxWindows < 0 {
 		return fmt.Errorf("max_windows must be >= 0")
+	}
+	return nil
+}
+
+// validateOutputTiers checks a declared projection ladder. Tiers are a
+// published-projection contract, so they attach only to published
+// maintained documents, and status_line anchors the ladder whenever any
+// tier is declared.
+func validateOutputTiers(o OutputSpec) error {
+	if len(o.Tiers) == 0 {
+		return nil
+	}
+	if o.Type != OutputTypeMaintainedDocument {
+		return fmt.Errorf("tiers are only valid for type %q; %q outputs are not tiered", OutputTypeMaintainedDocument, o.Type)
+	}
+	if o.EffectiveAudience() == OutputAudienceInternal {
+		return fmt.Errorf("tiers declare published projections, but audience is %q; an internal output has no consumers to tier for", OutputAudienceInternal)
+	}
+	seen := make(map[OutputTier]struct{}, len(o.Tiers))
+	hasStatusLine := false
+	for i, tier := range o.Tiers {
+		switch tier {
+		case OutputTierStatusLine, OutputTierTeaser, OutputTierDigest:
+		default:
+			return fmt.Errorf("tiers[%d]: unsupported tier %q; use %q, %q, or %q (full fidelity is the document body, not a declared tier)", i, tier, OutputTierStatusLine, OutputTierTeaser, OutputTierDigest)
+		}
+		if _, dup := seen[tier]; dup {
+			return fmt.Errorf("tiers[%d]: duplicate tier %q", i, tier)
+		}
+		seen[tier] = struct{}{}
+		if tier == OutputTierStatusLine {
+			hasStatusLine = true
+		}
+	}
+	if !hasStatusLine {
+		return fmt.Errorf("tiers must include %q; the ambient one-line projection anchors the ladder (teaser and digest are optional)", OutputTierStatusLine)
 	}
 	return nil
 }
@@ -170,6 +273,9 @@ func cloneOutputs(src []OutputSpec) []OutputSpec {
 	}
 	dst := make([]OutputSpec, len(src))
 	copy(dst, src)
+	for i := range dst {
+		dst[i].Tiers = append([]OutputTier(nil), src[i].Tiers...)
+	}
 	return dst
 }
 

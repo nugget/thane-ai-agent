@@ -171,7 +171,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 			Policy:    "Write only through the generated output tool. The managed document root handles path safety, indexing, provenance, and signature policy.",
 			Interface: outputInterfaceDescription(output),
 		}
-		if output.Type == looppkg.OutputTypeJournalDocument {
+		if output.Type == looppkg.OutputTypeJournalDocument || output.Type == looppkg.OutputTypeWorkingNotes {
 			entry.Journal = &loopOutputJournal{
 				Window:     output.JournalWindow,
 				MaxWindows: output.MaxWindows,
@@ -194,7 +194,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		switch output.Type {
 		case looppkg.OutputTypeMaintainedDocument:
 			entry.Content, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputContentBytes, false)
-		case looppkg.OutputTypeJournalDocument:
+		case looppkg.OutputTypeJournalDocument, looppkg.OutputTypeWorkingNotes:
 			entry.RecentContent, entry.Truncated, entry.BytesShown, entry.BytesTotal = truncateLoopOutputText(doc.Body, loopOutputRecentBytes, true)
 		}
 		payload.Outputs = append(payload.Outputs, entry)
