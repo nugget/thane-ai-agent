@@ -101,7 +101,7 @@ func registerDocumentMutationTools(r *Registry, dt *documents.Tools) {
 				},
 				"body": map[string]any{
 					"type":        "string",
-					"description": "Markdown text for the edit — the same parameter name doc_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document.",
+					"description": "Markdown text for the edit — the same parameter name doc_write uses. For the body modes this is the document's new body (whole or appended/prepended text); for upsert_section it is only that one section's text — never the whole document, and never the section's heading line (the heading is rendered automatically from `section`/`heading`; a leading duplicate heading line is stripped).",
 				},
 				"section": map[string]any{
 					"type":        "string",
