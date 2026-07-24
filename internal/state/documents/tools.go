@@ -57,6 +57,7 @@ type SearchArgs struct {
 	ModifiedAfter   string              `json:"modified_after,omitempty"`
 	ModifiedBefore  string              `json:"modified_before,omitempty"`
 	Limit           int                 `json:"limit,omitempty"`
+	IncludeInternal bool                `json:"include_internal,omitempty"`
 }
 
 // RefArgs identifies one managed document by canonical semantic ref.
@@ -143,6 +144,7 @@ func (t *Tools) Search(ctx context.Context, args SearchArgs) (string, error) {
 		Frontmatter:     args.Frontmatter,
 		FrontmatterKeys: args.FrontmatterKeys,
 		Limit:           clampLimit(args.Limit, 20, 100),
+		IncludeInternal: args.IncludeInternal,
 	}
 	now := nowUTC()
 	if args.ModifiedAfter != "" {
