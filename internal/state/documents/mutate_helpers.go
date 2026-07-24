@@ -282,7 +282,7 @@ func findSection(sections []Section, selector, heading string) (Section, bool) {
 // heading level is ignored because the duplicate often arrives at the
 // wrong depth.
 func stripLeadingDuplicateHeading(content string, names ...string) string {
-	line, rest, _ := strings.Cut(strings.TrimLeft(content, "\n"), "\n")
+	line, rest, _ := strings.Cut(strings.TrimLeft(content, "\r\n"), "\n")
 	candidate := strings.TrimSpace(line)
 	hashes := 0
 	for hashes < len(candidate) && candidate[hashes] == '#' {
@@ -297,7 +297,7 @@ func stripLeadingDuplicateHeading(content string, names ...string) string {
 			continue
 		}
 		if strings.EqualFold(text, name) || slugify(text) == slugify(name) {
-			return strings.TrimLeft(rest, "\n")
+			return strings.TrimLeft(rest, "\r\n")
 		}
 	}
 	return content

@@ -152,6 +152,18 @@ func TestStripLeadingDuplicateHeading(t *testing.T) {
 			want:    "",
 		},
 		{
+			name:    "crlf duplicate stripped",
+			content: "## Observations\r\n\r\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
+			name:    "crlf blank line before duplicate stripped",
+			content: "\r\n## Observations\r\nFresh note.",
+			names:   []string{"Observations"},
+			want:    "Fresh note.",
+		},
+		{
 			name:    "empty content unchanged",
 			content: "",
 			names:   []string{"Observations"},
