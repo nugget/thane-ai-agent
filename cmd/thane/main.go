@@ -86,11 +86,18 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "-config" && i+1 < len(args):
+		case args[i] == "-insecure-config" && i+1 < len(args):
 			configPath = args[i+1]
 			i++ // skip the value
-		case strings.HasPrefix(args[i], "-config="):
-			configPath = strings.TrimPrefix(args[i], "-config=")
+		case strings.HasPrefix(args[i], "-insecure-config="):
+			configPath = strings.TrimPrefix(args[i], "-insecure-config=")
+		case args[i] == "-config" || strings.HasPrefix(args[i], "-config="):
+			// Renamed rather than aliased. A config outside core cannot
+			// be covered by the instance's signed history — that is what
+			// verification means — so loading one is insecure by
+			// construction, and the flag that does it should say so
+			// before it is typed, not after it is diagnosed.
+			return fmt.Errorf("-config was renamed to -insecure-config\n\nThane loads its config from <workspace>/core/config.yaml, where it is signed and version-controlled. Pass -workspace to point at a different instance. Use -insecure-config only to load a config from outside the trust boundary, for recovery")
 		case args[i] == "-workspace" && i+1 < len(args):
 			workspacePath = args[i+1]
 			i++ // skip the value
@@ -225,8 +232,9 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  -workspace <dir>  Instance workspace (default: ~/Thane)")
-	fmt.Fprintln(w, "  -config <path>    Load config from an exact path instead of the")
-	fmt.Fprintln(w, "                    workspace; for recovery only")
+	fmt.Fprintln(w, "  -insecure-config <path>")
+	fmt.Fprintln(w, "                    Load config from outside the trust boundary,")
+	fmt.Fprintln(w, "                    for recovery. Not signature-verified.")
 	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)
