@@ -155,14 +155,43 @@ answer to that step's question.
 
 When you don't know which managed root holds the answer, `doc_roots`
 returns each indexed root with document counts, top tags, top
-directories, and recent examples:
+directories, recent examples, and — the part worth reading before you
+search — how that root reaches you:
 
 ```json
 {}
 ```
 
-Skip when you already know the right root (most queries about people
-go to `dossiers`, most network/infra notes go to `kb`, etc.).
+Each root reports a `context` block:
+
+- `search: "default"` — included in an unscoped `doc_search`.
+- `search: "on_request"` — **only searched when you name the root.** A
+  large foreign corpus is usually set this way so it doesn't drown open
+  queries. If you search without naming it and find nothing, you have
+  not learned that the content is absent; you have learned that the one
+  place likely to hold it was never looked at.
+- `search: "never"` — not searchable at all.
+- `inject: "tagged"` — tagged documents here can enter your context on
+  their own. `inject: "none"` means nothing here ever appears unbidden,
+  so anything you need from it you must go and read.
+- `requires_tag` — the whole root stays invisible until that capability
+  tag is active.
+
+So the funnel has a precondition: when a search comes back empty and the
+answer plausibly lives in a corpus you did not name, check `doc_roots`
+and search that root explicitly before concluding the thing does not
+exist. Reporting "there is no record of X" on the strength of a search
+that never looked is the failure mode this block exists to prevent.
+
+Separately, documents whose frontmatter marks them `audience: internal`
+— loop working notes, process logs — stay out of results by default.
+Pass `include_internal: true` when you specifically want them; they hold
+reasoning about how an understanding evolved rather than the current
+state.
+
+Skip this step when you already know the right root (most queries about
+people go to `dossiers`, most network/infra notes go to `kb`, etc.) —
+but not when a previous search surprised you by finding nothing.
 
 ## Step 2 — browse like a phone tree
 
