@@ -623,7 +623,16 @@ func loadConfig(explicit, workspace string) (*config.Config, string, error) {
 	// and be judged against an instance the operator never mentioned.
 	fallbackWorkspace := ""
 	if strings.TrimSpace(workspace) != "" {
-		fallbackWorkspace, _ = config.ExpandWorkspace(workspace)
+		// An unresolvable -workspace is reported here rather than
+		// swallowed. Falling back to empty would leave the instance
+		// running with no workspace at all — file tools disabled — and
+		// surface later as something that looks unrelated to the flag
+		// that caused it.
+		resolved, wErr := config.ExpandWorkspace(workspace)
+		if wErr != nil {
+			return nil, "", terminal(wErr)
+		}
+		fallbackWorkspace = resolved
 	}
 	cfg, err := config.LoadWithWorkspace(cfgPath, fallbackWorkspace)
 	if err != nil {

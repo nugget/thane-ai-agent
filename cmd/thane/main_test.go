@@ -168,3 +168,23 @@ func TestLoadConfig_WorkspaceFallbackRequiresAnExplicitWorkspace(t *testing.T) {
 		t.Fatalf("Workspace.Path = %q, want the named workspace %q", cfg.Workspace.Path, dir)
 	}
 }
+
+func TestLoadConfig_UnresolvableWorkspaceIsReported(t *testing.T) {
+	// Swallowing this would leave the instance running with no workspace
+	// — file tools disabled — and surface later as something that looks
+	// unrelated to the flag that caused it.
+	t.Setenv("HOME", "")
+	dir := t.TempDir()
+	loose := filepath.Join(dir, "rescue.yaml")
+	if err := os.WriteFile(loose, []byte(minimalValidConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, _, err := loadConfig(loose, "~/nowhere")
+	if err == nil {
+		t.Skip("home directory still resolvable in this environment")
+	}
+	if exitCodeFor(err) != ExitTerminal {
+		t.Fatalf("an unresolvable -workspace should exit %d, got %d", ExitTerminal, exitCodeFor(err))
+	}
+}

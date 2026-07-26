@@ -93,7 +93,18 @@ func integrityError(report *coreintegrity.Report) error {
 // a question the operator did not ask, and would do it while they are
 // looking at a different file entirely.
 func checkCoreIntegrity(cfg *config.Config, configPath, workspacePath string) *coreintegrity.Report {
-	workspace := workspacePath
+	// The flag is expanded before use. Taking it raw would check a
+	// literal "~" directory whenever the shell did not expand it for us,
+	// while the config had already loaded from the correct path — a
+	// report about somewhere the instance does not live.
+	workspace := ""
+	if strings.TrimSpace(workspacePath) != "" {
+		resolved, err := config.ExpandWorkspace(workspacePath)
+		if err != nil {
+			return nil
+		}
+		workspace = resolved
+	}
 	if workspace == "" && cfg != nil {
 		workspace = cfg.Workspace.Path
 	}
