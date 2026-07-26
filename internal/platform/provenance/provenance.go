@@ -157,6 +157,7 @@ type Store struct {
 	signer             Signer
 	logger             *slog.Logger
 	allowedSignersPath string
+	seedSigners        []TrustedSigner
 }
 
 // Options configures optional provenance store behavior.
@@ -165,6 +166,12 @@ type Options struct {
 	// existing OpenSSH allowed signers file. Empty writes a
 	// repository-local .allowed_signers file containing the signing key.
 	AllowedSignersPath string
+
+	// SeedSigners are the keys entitled to establish this repository.
+	// They are written into .allowed_signers alongside the agent key
+	// when the file is first created, and never applied again — a root
+	// that already has a trust surface owns it.
+	SeedSigners []TrustedSigner
 }
 
 // New creates a [Store] backed by a git repository at path. If the
@@ -201,6 +208,7 @@ func NewWithOptions(path string, signer Signer, logger *slog.Logger, opts Option
 		signer:             signer,
 		logger:             logger,
 		allowedSignersPath: allowedSignersPath,
+		seedSigners:        opts.SeedSigners,
 	}
 
 	if err := s.ensureRepo(); err != nil {

@@ -10,7 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
 
-// DefaultBootstrapTimeout bounds checkout birth-commit and trust reconciliation
+// DefaultBootstrapTimeout bounds checkout birth-commit and trust seeding
 // work. It matches the provenance package's own git startup timeout.
 const DefaultBootstrapTimeout = 30 * time.Second
 
@@ -25,11 +25,14 @@ type SignedSpec struct {
 	RepoPath string
 	// SigningKeyPath is the SSH private key used for signed commits.
 	SigningKeyPath string
-	// TrustedSigners are operator signing keys added to the repo-local trust set.
-	TrustedSigners []provenance.TrustedSigner
-	// SkipBirthCommit leaves the first commit to the caller. Use this when the
-	// domain needs its own birth commit contents; TrustedSigners must be empty
-	// because trust reconciliation requires an existing signed HEAD.
+	// SeedSigners establish this root's trust set at birth. They are not
+	// re-applied afterwards: the root's own .allowed_signers is its record
+	// of whom it trusts from then on.
+	SeedSigners []provenance.TrustedSigner
+	// SkipBirthCommit leaves the first commit to the caller. Use this when
+	// the domain needs its own birth commit contents; SeedSigners must be
+	// empty, since those contents include the trust file and would
+	// overwrite the seed.
 	SkipBirthCommit bool
 	// Logger receives setup logs. Nil uses slog.Default.
 	Logger *slog.Logger
@@ -48,7 +51,8 @@ type Signed struct {
 }
 
 // OpenSigned opens or initializes a signed checkout, creates a birth commit
-// when needed, and reconciles its repo-local allowed_signers file.
+// when needed, and seeds its repo-local allowed_signers file on first
+// establishment.
 func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	ctx, cancel := withDefaultTimeout(ctx)
 	defer cancel()
@@ -60,8 +64,12 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if strings.TrimSpace(spec.WorktreePath) == "" {
 		return nil, fmt.Errorf("%s: worktree path is required", name)
 	}
-	if spec.SkipBirthCommit && len(spec.TrustedSigners) > 0 {
-		return nil, fmt.Errorf("%s: trusted signers require a birth commit before reconciliation", name)
+	if spec.SkipBirthCommit && len(spec.SeedSigners) > 0 {
+		// A caller that owns the birth contents writes its own
+		// .allowed_signers, which would overwrite the seeded one without
+		// saying so. Refuse the combination rather than discard a trust
+		// set the caller believed they had declared.
+		return nil, fmt.Errorf("%s: seed signers cannot be combined with SkipBirthCommit, because the caller's own birth contents overwrite the seeded trust set", name)
 	}
 	signingKey := strings.TrimSpace(spec.SigningKeyPath)
 	if signingKey == "" {
@@ -84,7 +92,9 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store, err := provenance.New(root.RepoPath, signer, logger)
+	store, err := provenance.NewWithOptions(root.RepoPath, signer, logger, provenance.Options{
+		SeedSigners: spec.SeedSigners,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: initialize provenance store: %w", name, err)
 	}
@@ -92,9 +102,6 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if !spec.SkipBirthCommit {
 		if err := store.BootstrapBirthCommit(ctx); err != nil {
 			return nil, fmt.Errorf("%s: bootstrap birth commit: %w", name, err)
-		}
-		if _, err := store.ReconcileAllowedSigners(ctx, spec.TrustedSigners); err != nil {
-			return nil, fmt.Errorf("%s: reconcile allowed_signers: %w", name, err)
 		}
 	}
 

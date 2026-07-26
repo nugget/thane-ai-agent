@@ -110,7 +110,12 @@ func ExampleConfig() *Config {
 		Roots: map[string]RootEntry{
 			"generated": {Path: "./generated"},
 			"kb": {
-				Path:     "./knowledge",
+				Path: "./knowledge",
+				SeedSigners: []AllowedSigner{{
+					Principal: "alice@example.com",
+					Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyUStZXWURqF4b7IWfSTz2W6zYz5JnXrKbcuPfGAmUo",
+					Label:     "Alice laptop",
+				}},
 				Indexing: &docRootIndexing,
 				// The knowledge base is the one corpus whose tagged
 				// articles are meant to reach the prompt. Every other
@@ -285,14 +290,6 @@ func ExampleConfig() *Config {
 		Provenance: ProvenanceConfig{
 			Path:       "~/Thane/core",
 			SigningKey: "~/.ssh/id_ed25519",
-		},
-
-		Signing: SigningConfig{
-			AllowedSigners: []AllowedSigner{{
-				Principal: "alice@example.com",
-				Key:       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyUStZXWURqF4b7IWfSTz2W6zYz5JnXrKbcuPfGAmUo",
-				Label:     "Alice laptop",
-			}},
 		},
 
 		Loops: LoopsConfig{

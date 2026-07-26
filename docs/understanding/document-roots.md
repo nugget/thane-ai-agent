@@ -144,11 +144,35 @@ The current policy fields are:
   or `required`.
 
 Signature verification always uses the repository-local
-`.allowed_signers` file. For signer-backed roots, Thane creates that
-file from the configured signing key when it is missing; after that, the
-file itself is the trust configuration surface. Adding additional
-signers should be done by editing and committing `.allowed_signers`
-through trusted history.
+`.allowed_signers` file. Thane creates it once, when a signed root is
+first established, from the agent key plus that root's declared
+`seed_signers`:
+
+```yaml
+roots:
+  knowledge:
+    path: ./knowledge
+    seed_signers:
+      - principal: alice@example.com
+        key: "ssh-ed25519 AAAA..."
+        label: "Alice laptop"
+    git:
+      enabled: true
+      sign_commits: true
+      signing_key: ~/.ssh/id_ed25519
+```
+
+After that the file is the root's own trust surface and config never
+rewrites it. Adding signers is done by editing and committing
+`.allowed_signers` through trusted history — a change signed by a key
+the root already trusts.
+
+`seed_signers` is declared per root rather than once for the instance,
+because roots have different trust domains. The keys entitled to sign a
+corpus synced from a remote should not automatically be entitled to sign
+the config that decides what the whole system trusts. A root that signs
+its commits must declare seed signers, since signed history nobody
+decided to admit is a signature without a claim behind it.
 
 Signature-required roots are the place for high-integrity authored
 knowledge, such as owner-tagged knowledge articles. When verification
