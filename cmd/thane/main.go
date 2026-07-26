@@ -49,6 +49,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
 
+// ExitTerminal is the exit status for a failure that retrying cannot
+// fix: a missing or invalid config, a core that fails verification, a
+// malformed command line. It is sysexits.h EX_CONFIG.
+//
+// The distinction a supervisor needs is not which subsystem failed but
+// whether waiting will help. A broker that is briefly unreachable
+// deserves a restart; a core with an unsigned config will fail
+// identically forever, and a supervisor that keeps restarting it turns
+// one clear error into an endless stream of them. systemd expresses this
+// as RestartPreventExitStatus=78.
+const ExitTerminal = 78
+
 // main is intentionally minimal. It constructs the OS-level environment
 // (context, stdio, argv) and delegates immediately to [run]. This keeps
 // os.Exit, os.Stdout, and os.Args out of the application logic so that
@@ -58,8 +70,31 @@ func main() {
 
 	if err := run(ctx, os.Stdout, os.Stderr, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
+		os.Exit(exitCodeFor(err))
 	}
+}
+
+// terminalError marks a failure a restart cannot resolve.
+type terminalError struct{ err error }
+
+func (e terminalError) Error() string { return e.err.Error() }
+func (e terminalError) Unwrap() error { return e.err }
+
+// terminal wraps an error as needing human intervention.
+func terminal(err error) error {
+	if err == nil {
+		return nil
+	}
+	return terminalError{err: err}
+}
+
+// exitCodeFor maps an error to a process exit status.
+func exitCodeFor(err error) int {
+	var t terminalError
+	if errors.As(err, &t) {
+		return ExitTerminal
+	}
+	return 1
 }
 
 // run is the real entry point for the thane command. All OS-level
@@ -113,11 +148,11 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			// subcommand or another flag. Consuming a subcommand as the
 			// path would report "config file not found: validate", which
 			// sends the operator hunting for a typo they did not make.
-			return errInsecureConfigNeedsPath
+			return terminal(errInsecureConfigNeedsPath)
 		case strings.HasPrefix(args[i], "-insecure-config="):
 			configPath = strings.TrimPrefix(args[i], "-insecure-config=")
 			if strings.TrimSpace(configPath) == "" {
-				return errInsecureConfigNeedsPath
+				return terminal(errInsecureConfigNeedsPath)
 			}
 		case args[i] == "-config" || strings.HasPrefix(args[i], "-config="):
 			// Renamed rather than aliased. A config outside core cannot
@@ -125,7 +160,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			// verification means — so loading one is insecure by
 			// construction, and the flag that does it should say so
 			// before it is typed, not after it is diagnosed.
-			return fmt.Errorf("-config was renamed to -insecure-config\n\nThane loads its config from <workspace>/core/config.yaml, where it is signed and version-controlled. Pass -workspace to point at a different instance. Use -insecure-config only to load a config from outside the trust boundary, for recovery")
+			return terminal(fmt.Errorf("-config was renamed to -insecure-config\n\nThane loads its config from <workspace>/core/config.yaml, where it is signed and version-controlled. Pass -workspace to point at a different instance. Use -insecure-config only to load a config from outside the trust boundary, for recovery"))
 		case args[i] == "-workspace" && i+1 < len(args):
 			workspacePath = args[i+1]
 			i++ // skip the value
@@ -428,6 +463,19 @@ func gateOnCoreIntegrity(ctx context.Context, logger *slog.Logger, cfg *config.C
 		return nil
 	}
 
+	failed := make([]string, 0, len(report.Checks))
+	for _, check := range report.Failures() {
+		failed = append(failed, check.Name)
+	}
+	// Logged as well as returned: a supervisor scraping structured logs
+	// gets the failing check names as fields, without parsing the human
+	// message written for the operator.
+	logger.Error("refusing to start: core integrity check failed",
+		"core", report.CorePath,
+		"failed_checks", strings.Join(failed, ","),
+		"exit_code", ExitTerminal,
+	)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "refusing to start: core integrity check failed for %s\n", report.CorePath)
 	for _, check := range report.Failures() {
@@ -437,7 +485,7 @@ func gateOnCoreIntegrity(ctx context.Context, logger *slog.Logger, cfg *config.C
 		}
 	}
 	fmt.Fprintf(&b, "\nRun 'thane validate' for the full report. To start anyway with a config from outside the trust boundary, use -insecure-config")
-	return errors.New(b.String())
+	return terminal(errors.New(b.String()))
 }
 
 func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath, workspacePath string) error {
@@ -446,7 +494,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	cfg, cfgPath, err := loadConfig(configPath, workspacePath)
 	if err != nil {
-		return err
+		return terminal(err)
 	}
 	if err := gateOnCoreIntegrity(ctx, logger, cfg, configPath); err != nil {
 		return err

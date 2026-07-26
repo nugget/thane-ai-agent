@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -105,5 +107,36 @@ func TestGateOnCoreIntegrity_InsecureConfigBypassesButAnnounces(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "outside the trust boundary") {
 		t.Fatalf("bypass must be announced:\n%s", logged.String())
+	}
+}
+
+func TestExitCodeFor_DistinguishesTerminalFromTransient(t *testing.T) {
+	// The distinction a supervisor needs is not which subsystem failed
+	// but whether waiting will help.
+	if got := exitCodeFor(errors.New("broker unreachable")); got != 1 {
+		t.Fatalf("a possibly-transient failure should exit 1, got %d", got)
+	}
+	if got := exitCodeFor(terminal(errors.New("unsigned config"))); got != ExitTerminal {
+		t.Fatalf("a terminal failure should exit %d, got %d", ExitTerminal, got)
+	}
+	// Wrapping must survive, or the supervisor loses the signal the
+	// moment anything adds context to the error.
+	wrapped := fmt.Errorf("start: %w", terminal(errors.New("unsigned config")))
+	if got := exitCodeFor(wrapped); got != ExitTerminal {
+		t.Fatalf("a wrapped terminal failure should still exit %d, got %d", ExitTerminal, got)
+	}
+}
+
+func TestGateRefusalIsTerminal(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "core"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.Workspace.Path = workspace
+
+	err := gateOnCoreIntegrity(context.Background(), slog.New(slog.DiscardHandler), cfg, "")
+	if exitCodeFor(err) != ExitTerminal {
+		t.Fatalf("a refusal to start should exit %d so supervisors stop retrying, got %d", ExitTerminal, exitCodeFor(err))
 	}
 }
