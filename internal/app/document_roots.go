@@ -124,12 +124,22 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Resolve injection eligibility once, here, so the assembler and the
+	// document store report the same answer. Without this the store
+	// would derive its own from an empty policy and tell the model
+	// "inject: none" about the very root that injects under the legacy
+	// fallback — a description that contradicts runtime behavior.
+	legacyInject := legacyInjectRoot(a.cfg)
+
 	for root, rootCfg := range a.cfg.DocRoots {
 		root = strings.TrimSuffix(strings.TrimSpace(root), ":")
 		if root == "" {
 			continue
 		}
 		policy := documentRootPolicyFromConfig(rootCfg)
+		if root == legacyInject {
+			policy.Context.Inject = documents.RootInjectTagged
+		}
 
 		rootPath, ok := documentRoots[root]
 		if !ok {
@@ -257,6 +267,25 @@ func bootstrapMissingRootDirectory(root string, resolver *paths.Resolver, logger
 	}
 	logger.Info("bootstrapping new document root", "root", root, "path", absPath)
 	return absPath, nil
+}
+
+// legacyInjectRoot returns the root that injects by historical default
+// when no root declares a context policy, or empty once any policy is
+// declared. Before roots could declare eligibility, tagged articles in
+// the kb root were scanned into every prompt; that behavior is preserved
+// until an operator states an intent, and naming it here keeps the
+// preserved behavior visible to the model rather than implicit in the
+// assembler's wiring.
+func legacyInjectRoot(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, policy := range cfg.DocRoots {
+		if policy.Context.Declared() {
+			return ""
+		}
+	}
+	return "kb"
 }
 
 func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.RootPolicy {

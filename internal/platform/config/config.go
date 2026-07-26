@@ -945,6 +945,10 @@ type RootContextPolicy struct {
 	// tag. It is a coarse companion to per-document tags: cheap to
 	// enforce, and the right shape when an entire corpus is only
 	// relevant while a capability is active.
+	//
+	// It applies to injection only, so it requires inject: tagged.
+	// Gating search the same way would need the document store to see
+	// active capability tags, which it deliberately does not.
 	RequiresTag string `yaml:"requires_tag,omitempty"`
 }
 
@@ -988,8 +992,12 @@ func (p RootContextPolicy) Validate(rootName string) error {
 	default:
 		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
 	}
-	if p.RequiresTag != "" && p.EffectiveInject() == RootInjectNone && p.EffectiveSearch() == RootSearchNever {
-		return fmt.Errorf("roots.%s.context.requires_tag has no effect when the root neither injects nor is searchable", rootName)
+	// requires_tag gates prompt injection only. Search runs below the
+	// capability layer — the document store has no view of which tags
+	// are active — so accepting the field on a root that does not inject
+	// would silently do nothing, which is worse than refusing it.
+	if p.RequiresTag != "" && p.EffectiveInject() != RootInjectTagged {
+		return fmt.Errorf("roots.%s.context.requires_tag gates prompt injection and requires inject: %q (got %q); it does not gate search, because search does not see active capability tags", rootName, RootInjectTagged, p.EffectiveInject())
 	}
 	return nil
 }

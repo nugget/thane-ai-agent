@@ -264,6 +264,10 @@ roots:
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
       requires_tag: ""
   kb:
     # Path is the directory the root resolves to. Supports ~
@@ -380,6 +384,10 @@ roots:
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
       requires_tag: ""
   scratchpad:
     # Path is the directory the root resolves to. Supports ~
@@ -442,6 +450,10 @@ roots:
       # tag. It is a coarse companion to per-document tags: cheap to
       # enforce, and the right shape when an entire corpus is only
       # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
       requires_tag: ""
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.

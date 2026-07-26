@@ -1,6 +1,9 @@
 package documents
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 func hasFrontmatterKeys(frontmatter map[string][]string, keys []string) bool {
 	if len(keys) == 0 {
@@ -89,23 +92,35 @@ func audienceExplicitlyFiltered(q SearchQuery) bool {
 	return false
 }
 
-// rootSearchable reports whether a root's documents may appear in this
-// search. A root set to on_request stays out of an unscoped query but is
-// fully reachable once the query names it — the shape a large foreign
+// searchExcludedRoots returns the roots whose documents must not appear
+// in a search, given the root the query named (empty for an unscoped
+// search). A root set to on_request stays out of an unscoped query but
+// is fully reachable once the query names it — the shape a large foreign
 // corpus wants, where the documents are worth having but would drown an
 // open-ended search.
-func (s *Store) rootSearchable(root string, rootNamed bool) bool {
+//
+// The result feeds a SQL NOT IN clause so an excluded corpus is never
+// fetched, decoded, or scored: a root that was not asked for should cost
+// nothing, which is not true of a filter applied after the scan. Order
+// is deterministic to keep the generated query stable across calls.
+func (s *Store) searchExcludedRoots(namedRoot string) []string {
 	if s == nil {
-		return true
+		return nil
 	}
-	switch s.rootPolicy(normalizeRootName(root)).Context.EffectiveSearch() {
-	case RootSearchNever:
-		return false
-	case RootSearchOnRequest:
-		return rootNamed
-	default:
-		return true
+	named := normalizeRootName(namedRoot)
+	var excluded []string
+	for _, root := range s.allRoots() {
+		switch s.rootPolicy(root).Context.EffectiveSearch() {
+		case RootSearchNever:
+			excluded = append(excluded, root)
+		case RootSearchOnRequest:
+			if named != root {
+				excluded = append(excluded, root)
+			}
+		}
 	}
+	sort.Strings(excluded)
+	return excluded
 }
 
 func normalizeSearchFrontmatter(in map[string][]string) map[string][]string {

@@ -116,3 +116,23 @@ func TestRootPolicySummaryReportsContext(t *testing.T) {
 		t.Fatalf("summary inject = %q, want none", summary.Context.Inject)
 	}
 }
+
+func TestSearchExcludedRootsDrivesSQLNotPostFilter(t *testing.T) {
+	t.Parallel()
+
+	store := newContextPolicyStore(t, RootSearchOnRequest)
+	// An unscoped search excludes the on_request root before the query
+	// runs, so its rows are never fetched, decoded, or scored.
+	if got := store.searchExcludedRoots(""); len(got) != 1 || got[0] != "vault" {
+		t.Fatalf("searchExcludedRoots(\"\") = %v, want [vault]", got)
+	}
+	// Naming it lifts the exclusion entirely.
+	if got := store.searchExcludedRoots("vault"); len(got) != 0 {
+		t.Fatalf("searchExcludedRoots(\"vault\") = %v, want empty", got)
+	}
+	// A never-searchable root stays excluded even when named.
+	never := newContextPolicyStore(t, RootSearchNever)
+	if got := never.searchExcludedRoots("vault"); len(got) != 1 || got[0] != "vault" {
+		t.Fatalf("never-searchable root should stay excluded when named, got %v", got)
+	}
+}
