@@ -321,6 +321,83 @@ func TestBuildDocumentStoreOptionsVerifierUsesRepoLocalAllowedSigners(t *testing
 	}
 }
 
+// TestBuildDocumentStoreOptionsAdmitsVerifyOnlyRoots covers the root shape
+// that has no writer at all: git-backed and verified, but never committed to
+// by this instance. Its history is entirely foreign, which is the case
+// admission exists for — so a birth its declared seeds cannot attribute has to
+// be refused even though nothing here will ever write to it.
+func TestBuildDocumentStoreOptionsAdmitsVerifyOnlyRoots(t *testing.T) {
+	targetPath := t.TempDir()
+	signingKey, agentPublicKey := writeTestSigningKey(t)
+	_, strangerPublicKey := writeTestSigningKey(t)
+
+	agentSeed := []config.AllowedSigner{{
+		Principal: provenance.AgentPrincipal,
+		Key:       agentPublicKey,
+	}}
+
+	resolver := paths.New(map[string]string{"kb": targetPath})
+	app := &App{
+		logger: slog.Default(),
+		cfg: &config.Config{
+			DocRoots: map[string]config.DocumentRootConfig{
+				"kb": {
+					SeedSigners: agentSeed,
+					Git: config.DocumentRootGitConfig{
+						Enabled:          true,
+						SignCommits:      true,
+						VerifySignatures: "required",
+						SigningKey:       signingKey,
+					},
+				},
+			},
+		},
+	}
+	if _, err := app.buildDocumentStoreOptions(buildDocumentRoots(resolver), resolver); err != nil {
+		t.Fatalf("founding the root: %v", err)
+	}
+
+	// The same repository, now read-only to this instance and seeded with a
+	// key that had nothing to do with founding it.
+	app.cfg.DocRoots["kb"] = config.DocumentRootConfig{
+		SeedSigners: []config.AllowedSigner{{
+			Principal: "stranger@example.com",
+			Key:       strangerPublicKey,
+		}},
+		Git: config.DocumentRootGitConfig{
+			Enabled:          true,
+			SignCommits:      false,
+			VerifySignatures: "required",
+		},
+	}
+	_, err := app.buildDocumentStoreOptions(buildDocumentRoots(resolver), resolver)
+	if err == nil {
+		t.Fatal("verify-only root with an unattributable birth was admitted")
+	}
+	if !strings.Contains(err.Error(), "admission") {
+		t.Fatalf("error = %v, want it to name the admission check", err)
+	}
+
+	// Naming the founder admits the same unchanged history, so the refusal
+	// above is the seed set disagreeing with the repository rather than
+	// verify-only roots failing unconditionally.
+	app.cfg.DocRoots["kb"] = config.DocumentRootConfig{
+		SeedSigners: agentSeed,
+		Git: config.DocumentRootGitConfig{
+			Enabled:          true,
+			SignCommits:      false,
+			VerifySignatures: "required",
+		},
+	}
+	opts, err := app.buildDocumentStoreOptions(buildDocumentRoots(resolver), resolver)
+	if err != nil {
+		t.Fatalf("verify-only root founded by a declared seed: %v", err)
+	}
+	if opts.RootVerifiers["kb"] == nil {
+		t.Fatal("admitted verify-only root should still get a verifier")
+	}
+}
+
 // TestBuildDocumentStoreOptionsNonBootstrapMissingDirStillErrors
 // preserves the original behavior for non-bootstrap configs: a
 // missing directory without git+sign_commits stays an error, since

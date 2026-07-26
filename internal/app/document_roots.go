@@ -176,6 +176,20 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 			writer = w
 		}
 
+		// Admission asks whether this root's history was ever entitled to
+		// exist. That is prior to anything either the writer or the verifier
+		// does with it, and it does not depend on whether this instance
+		// writes to the root — a corpus Thane only reads, pulled from a
+		// remote, carries entirely foreign history and is precisely where an
+		// unattributable birth matters most. So it runs here, once per root,
+		// rather than inside whichever constructor happens to be built.
+		//
+		// It follows the writer because a root Thane creates has no history
+		// to judge until BootstrapBirthCommit has made one.
+		if err := a.verifyRootAdmission(root, rootPath, rootCfg, policy.Git.VerifySignatures, resolver, logger); err != nil {
+			return documents.StoreOptions{}, err
+		}
+
 		var verifier *documentRootProvenanceVerifier
 		if policy.Git.Enabled && policy.Git.VerifySignatures != documents.VerificationNone {
 			v, err := a.newDocumentRootProvenanceVerifier(root, rootPath, rootCfg.Git, resolver)
@@ -325,22 +339,9 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	}
 	signingKey = resolvePath(signingKey, resolver)
 
-	repoPath := strings.TrimSpace(gitCfg.RepoPath)
-	if repoPath == "" {
-		repoPath = rootPath
-	} else {
-		repoPath = resolvePath(repoPath, resolver)
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
+	absRepoPath, absRootPath, err := resolveRootPaths(root, rootPath, gitCfg, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("resolve doc_roots.%s.git.repo_path: %w", root, err)
-	}
-	absRootPath, err := filepath.Abs(rootPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve document root %s path: %w", root, err)
-	}
-	if _, err := checkout.ResolveRoot(absRepoPath, absRootPath); err != nil {
-		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
+		return nil, err
 	}
 	logger := a.logger
 	if logger == nil {
@@ -366,14 +367,6 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	mode := documents.VerificationMode(strings.TrimSpace(gitCfg.VerifySignatures))
 	switch mode {
 	case documents.VerificationRequired, documents.VerificationWarn:
-		// Admission runs first because it is the prior question. VerifyHead
-		// asks whether the tip is signed by a key this root trusts; admission
-		// asks whether this root was entitled to arrive at that trust set at
-		// all. Reporting a passing HEAD for a root whose birth is
-		// unattributed would answer the smaller question and hide the larger.
-		if err := applyBootVerification(mode, root, "admission", signed.VerifyAdmission(context.Background()), logger); err != nil {
-			return nil, err
-		}
 		if err := applyBootVerification(mode, root, "allowed_signers", signed.VerifyHead(context.Background()), logger); err != nil {
 			return nil, err
 		}
@@ -388,22 +381,9 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 }
 
 func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceVerifier, error) {
-	repoPath := strings.TrimSpace(gitCfg.RepoPath)
-	if repoPath == "" {
-		repoPath = rootPath
-	} else {
-		repoPath = resolvePath(repoPath, resolver)
-	}
-	absRepoPath, err := filepath.Abs(repoPath)
+	absRepoPath, absRootPath, err := resolveRootPaths(root, rootPath, gitCfg, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("resolve doc_roots.%s.git.repo_path: %w", root, err)
-	}
-	absRootPath, err := filepath.Abs(rootPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve document root %s path: %w", root, err)
-	}
-	if _, err := checkout.ResolveRoot(absRepoPath, absRootPath); err != nil {
-		return nil, fmt.Errorf("doc_roots.%s.git.repo_path: %w", root, err)
+		return nil, err
 	}
 	logger := a.logger
 	if logger == nil {
