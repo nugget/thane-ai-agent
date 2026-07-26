@@ -42,10 +42,13 @@ import (
 // assembler. The assembler is safe for concurrent use after
 // construction.
 type TagContextAssembler struct {
-	capTags  map[string]config.CapabilityTagConfig
-	kbDir    string
-	resolver *paths.Resolver
-	verifier interface {
+	capTags map[string]config.CapabilityTagConfig
+	kbDir   string
+	// injectRoots is the declared injection-eligible root set. Nil means
+	// no policy was declared and the legacy single-kbDir scan applies.
+	injectRoots map[string]InjectRoot
+	resolver    *paths.Resolver
+	verifier    interface {
 		VerifyRef(ctx context.Context, ref string, consumer string) error
 		VerifyPath(ctx context.Context, path string, consumer string) error
 	}
@@ -93,9 +96,15 @@ type KBMenuHint struct {
 // TagContextAssemblerConfig holds the construction parameters for a
 // TagContextAssembler.
 type TagContextAssemblerConfig struct {
-	CapTags  map[string]config.CapabilityTagConfig
-	KBDir    string          // resolved kb: directory; empty skips scanning
-	Resolver *paths.Resolver // managed document root resolver; nil falls back to KBDir for kb: refs
+	CapTags map[string]config.CapabilityTagConfig
+	KBDir   string // resolved kb: directory; empty skips scanning
+	// InjectRoots are the roots whose tagged documents may inject, as
+	// resolved directories keyed by root name. When non-nil it replaces
+	// KBDir entirely: injection eligibility is declared per root in
+	// config rather than fixed to the kb root, so a corpus reaches the
+	// prompt only because policy says it may.
+	InjectRoots map[string]InjectRoot
+	Resolver    *paths.Resolver // managed document root resolver; nil falls back to KBDir for kb: refs
 	// Verifier is an optional managed-root verifier for context refs and
 	// tagged articles.
 	Verifier interface {
@@ -118,31 +127,78 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 		cfg.Logger = slog.Default()
 	}
 	return &TagContextAssembler{
-		capTags:  cfg.CapTags,
-		kbDir:    cfg.KBDir,
-		resolver: cfg.Resolver,
-		verifier: cfg.Verifier,
-		haInject: cfg.HAInject,
-		logger:   cfg.Logger,
+		capTags:     cfg.CapTags,
+		kbDir:       cfg.KBDir,
+		injectRoots: cfg.InjectRoots,
+		resolver:    cfg.Resolver,
+		verifier:    cfg.Verifier,
+		haInject:    cfg.HAInject,
+		logger:      cfg.Logger,
 	}
 }
 
-// loadKBArticles returns the current list of tag-aware KB articles by
-// scanning kbDir fresh. Scan errors are logged and the call returns an
-// empty slice, matching the prior constructor behavior. Callers that
-// need a stable snapshot within a single operation (e.g., Build) call
-// this once and iterate the result locally.
+// InjectRoot is one injection-eligible document root: the directory to
+// scan, and the optional capability tag that must be active before any
+// of its documents are considered at all.
+type InjectRoot struct {
+	Dir         string
+	RequiresTag string
+}
+
+// loadKBArticles returns the current list of tag-aware articles from
+// every injection-eligible root, scanned fresh. Scan errors are logged
+// per root and skipped rather than failing the whole assembly, so one
+// unreadable corpus cannot silence the others. Callers that need a
+// stable snapshot within a single operation (e.g., Build) call this once
+// and iterate the result locally.
+//
+// When no injection policy is declared, this falls back to the single
+// legacy kbDir scan so an existing config keeps assembling context
+// exactly as it did before roots could declare eligibility.
 func (a *TagContextAssembler) loadKBArticles() []kbArticle {
-	if a.kbDir == "" {
-		return nil
+	if a.injectRoots == nil {
+		if a.kbDir == "" {
+			return nil
+		}
+		articles, err := scanKBArticles(a.kbDir)
+		if err != nil {
+			a.logger.Warn("failed to scan KB directory for tagged articles",
+				"dir", a.kbDir, "error", err)
+			return nil
+		}
+		return articles
 	}
-	articles, err := scanKBArticles(a.kbDir)
-	if err != nil {
-		a.logger.Warn("failed to scan KB directory for tagged articles",
-			"dir", a.kbDir, "error", err)
-		return nil
+
+	names := make([]string, 0, len(a.injectRoots))
+	for name := range a.injectRoots {
+		names = append(names, name)
 	}
-	return articles
+	sort.Strings(names) // deterministic order across turns
+
+	var all []kbArticle
+	for _, name := range names {
+		root := a.injectRoots[name]
+		if root.Dir == "" {
+			continue
+		}
+		articles, err := scanKBArticles(root.Dir)
+		if err != nil {
+			a.logger.Warn("failed to scan injection-eligible root for tagged articles",
+				"root", name, "dir", root.Dir, "error", err)
+			continue
+		}
+		if root.RequiresTag != "" {
+			// A root-level gate is coarser than per-document tags: the
+			// whole corpus stays invisible until the capability is
+			// active, which is expressed by stamping the requirement
+			// onto each article's all-of set.
+			for i := range articles {
+				articles[i].TagsAll = append(articles[i].TagsAll, root.RequiresTag)
+			}
+		}
+		all = append(all, articles...)
+	}
+	return all
 }
 
 // RegisterTaggedProvider associates a provider with one capability

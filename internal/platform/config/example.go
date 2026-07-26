@@ -110,8 +110,16 @@ func ExampleConfig() *Config {
 		Roots: map[string]RootEntry{
 			"generated": {Path: "./generated"},
 			"kb": {
-				Path:      "./knowledge",
-				Indexing:  &docRootIndexing,
+				Path:     "./knowledge",
+				Indexing: &docRootIndexing,
+				// The knowledge base is the one corpus whose tagged
+				// articles are meant to reach the prompt. Every other
+				// root stays out unless it says otherwise, so a corpus
+				// can only inject because policy allows it.
+				Context: RootContextPolicy{
+					Inject: RootInjectTagged,
+					Search: RootSearchDefault,
+				},
 				Authoring: "managed",
 				Git: DocumentRootGitConfig{
 					Enabled:          true,

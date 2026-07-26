@@ -250,6 +250,25 @@ roots:
       # never confers trust, which comes only from signature verification
       # against the out-of-tree trust_anchor. Ignored unless Enabled.
       remote: null
+    # Context governs how this root's documents may reach a model:
+    # whether they can be injected into a prompt and how they surface
+    # in search. Omit to keep the legacy behavior for this root.
+    context:
+      # Inject controls prompt-assembly eligibility: "none" (default for
+      # a root that declares a context policy) or "tagged".
+      inject: ""
+      # Search controls search visibility: "default", "on_request", or
+      # "never".
+      search: ""
+      # RequiresTag optionally gates the whole root behind one capability
+      # tag. It is a coarse companion to per-document tags: cheap to
+      # enforce, and the right shape when an entire corpus is only
+      # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
+      requires_tag: ""
   kb:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -351,6 +370,25 @@ roots:
           # Token is an https personal access token. Documented, but SSH is the
           # recommended transport.
           token: ""
+    # Context governs how this root's documents may reach a model:
+    # whether they can be injected into a prompt and how they surface
+    # in search. Omit to keep the legacy behavior for this root.
+    context:
+      # Inject controls prompt-assembly eligibility: "none" (default for
+      # a root that declares a context policy) or "tagged".
+      inject: tagged
+      # Search controls search visibility: "default", "on_request", or
+      # "never".
+      search: default
+      # RequiresTag optionally gates the whole root behind one capability
+      # tag. It is a coarse companion to per-document tags: cheap to
+      # enforce, and the right shape when an entire corpus is only
+      # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
+      requires_tag: ""
   scratchpad:
     # Path is the directory the root resolves to. Supports ~
     # expansion at resolver construction time. For the reserved
@@ -398,6 +436,25 @@ roots:
       # never confers trust, which comes only from signature verification
       # against the out-of-tree trust_anchor. Ignored unless Enabled.
       remote: null
+    # Context governs how this root's documents may reach a model:
+    # whether they can be injected into a prompt and how they surface
+    # in search. Omit to keep the legacy behavior for this root.
+    context:
+      # Inject controls prompt-assembly eligibility: "none" (default for
+      # a root that declares a context policy) or "tagged".
+      inject: ""
+      # Search controls search visibility: "default", "on_request", or
+      # "never".
+      search: ""
+      # RequiresTag optionally gates the whole root behind one capability
+      # tag. It is a coarse companion to per-document tags: cheap to
+      # enforce, and the right shape when an entire corpus is only
+      # relevant while a capability is active.
+      # 
+      # It applies to injection only, so it requires inject: tagged.
+      # Gating search the same way would need the document store to see
+      # active capability tags, which it deliberately does not.
+      requires_tag: ""
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
 # paths: {}

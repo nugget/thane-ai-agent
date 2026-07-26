@@ -40,9 +40,46 @@ const (
 // RootPolicy describes indexing, authoring, and integrity policy for a
 // managed document root.
 type RootPolicy struct {
-	Indexing  bool          `json:"indexing"`
-	Authoring AuthoringMode `json:"authoring"`
-	Git       RootGitPolicy `json:"git,omitempty"`
+	Indexing  bool              `json:"indexing"`
+	Authoring AuthoringMode     `json:"authoring"`
+	Git       RootGitPolicy     `json:"git,omitempty"`
+	Context   RootContextPolicy `json:"context,omitempty"`
+}
+
+// Root context policy values, mirroring the config surface. Injection
+// eligibility is per root because a corpus is the only place the answer
+// can be given for documents Thane does not own and cannot annotate.
+const (
+	RootInjectNone      = "none"
+	RootInjectTagged    = "tagged"
+	RootSearchDefault   = "default"
+	RootSearchOnRequest = "on_request"
+	RootSearchNever     = "never"
+)
+
+// RootContextPolicy describes how a root's documents may reach a model:
+// whether they can be injected into a prompt, and how they surface in
+// search.
+type RootContextPolicy struct {
+	Inject      string `json:"inject,omitempty"`
+	Search      string `json:"search,omitempty"`
+	RequiresTag string `json:"requires_tag,omitempty"`
+}
+
+// EffectiveInject resolves injection eligibility, defaulting to none.
+func (p RootContextPolicy) EffectiveInject() string {
+	if p.Inject == "" {
+		return RootInjectNone
+	}
+	return p.Inject
+}
+
+// EffectiveSearch resolves search visibility, defaulting to full.
+func (p RootContextPolicy) EffectiveSearch() string {
+	if p.Search == "" {
+		return RootSearchDefault
+	}
+	return p.Search
 }
 
 // RootGitPolicy describes git-backed provenance policy for a managed
@@ -60,6 +97,18 @@ type RootPolicySummary struct {
 	Indexing  bool                 `json:"indexing"`
 	Authoring AuthoringMode        `json:"authoring"`
 	Git       RootGitPolicySummary `json:"git"`
+	// Context tells the model how this corpus reaches it: whether
+	// documents here can appear in a prompt unbidden, and whether an
+	// unscoped search will look here. Always emitted so the model can
+	// tell "no results" from "not searched by default".
+	Context RootContextSummary `json:"context"`
+}
+
+// RootContextSummary is the model-facing form of [RootContextPolicy].
+type RootContextSummary struct {
+	Inject      string `json:"inject"`
+	Search      string `json:"search"`
+	RequiresTag string `json:"requires_tag,omitempty"`
 }
 
 // RootGitPolicySummary is the model-facing form of [RootGitPolicy].
@@ -242,6 +291,11 @@ func (s *Store) rootPolicySummary(root string) RootPolicySummary {
 			SignCommits:      policy.Git.SignCommits,
 			VerifySignatures: policy.Git.VerifySignatures,
 			Revisions:        s.rootReviser(root) != nil,
+		},
+		Context: RootContextSummary{
+			Inject:      policy.Context.EffectiveInject(),
+			Search:      policy.Context.EffectiveSearch(),
+			RequiresTag: policy.Context.RequiresTag,
 		},
 	}
 }
