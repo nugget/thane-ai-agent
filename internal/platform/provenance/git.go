@@ -42,6 +42,22 @@ func (s *Store) BootstrapBirthCommit(ctx context.Context) error {
 		return nil
 	}
 
+	// The commit about to be created is this root's birth, and it will carry
+	// the agent's signature. If the declared seed set does not include the
+	// agent key, the root is inadmissible from its very first commit — a
+	// state no later commit can repair, because the birth is the thing being
+	// judged. Refuse while the repository is still empty and the remedy is a
+	// config line rather than a history rewrite.
+	if len(s.seedSigners) > 0 {
+		admits, err := seedsInclude(s.seedSigners, s.signer.PublicKey())
+		if err != nil {
+			return fmt.Errorf("birth commit: %w", err)
+		}
+		if !admits {
+			return fmt.Errorf("birth commit: this root's seed signers do not include the agent key, so the commit it is about to sign could never be admitted; declare %s with the agent's public key in this root's seed_signers, or establish the root by hand with a commit signed by a declared seed", AgentPrincipal)
+		}
+	}
+
 	gitignorePath := filepath.Join(s.path, ".gitignore")
 	if _, err := os.Stat(gitignorePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

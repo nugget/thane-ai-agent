@@ -42,61 +42,29 @@ type TrustedSigner struct {
 // file that trusts the agent key plus the operator keys, deterministically.
 //
 // The agent key is the unremovable trust anchor: it is always emitted first,
-// under [AgentPrincipal], and an operator entry whose public key equals the
-// agent key is rejected — that is a principal-spoof that would let another
-// identity ride the agent's own key. Operator keys are canonicalized (comment
-// and whitespace stripped for identity), deduplicated by key blob, and sorted
-// by (principal, blob) so the rendered file never churns across boots when the
-// configured set is unchanged. The returned content ends with a trailing
-// newline and is safe to compare byte-for-byte for drift detection.
+// under [AgentPrincipal]. An operator entry may name that same key under
+// [AgentPrincipal] — that is how a root declares the agent entitled to
+// establish it — and collapses into the implicit line rather than repeating
+// it. The same key under any *other* principal is refused: that is a
+// principal-spoof that would let another identity ride the agent's own key.
+//
+// Operator keys are canonicalized (comment and whitespace stripped for
+// identity), deduplicated by key blob, and sorted by (principal, blob) so the
+// rendered file never churns across boots when the configured set is
+// unchanged. The returned content ends with a trailing newline and is safe to
+// compare byte-for-byte for drift detection.
 func RenderAllowedSigners(agentPublicKey string, operators []TrustedSigner) (string, error) {
 	agentBlob, err := canonicalKeyBlob(agentPublicKey)
 	if err != nil {
 		return "", fmt.Errorf("agent signing key: %w", err)
 	}
 
-	type entry struct {
-		principal string
-		blob      string
-		line      string
+	// The agent line is emitted first and unconditionally, so its blob is
+	// already claimed before any operator entry is considered.
+	lines, err := renderSignerSet(operators, map[string]string{agentBlob: AgentPrincipal})
+	if err != nil {
+		return "", err
 	}
-	// seen maps a canonical key blob to the principal that first claimed
-	// it, so a key reused under a second principal is caught.
-	seen := map[string]string{agentBlob: AgentPrincipal}
-	others := make([]entry, 0, len(operators))
-	for i, s := range operators {
-		blob, err := canonicalKeyBlob(s.PublicKey)
-		if err != nil {
-			return "", fmt.Errorf("operator signer %d (%s): %w", i, strings.TrimSpace(s.Principal), err)
-		}
-		principal := strings.TrimSpace(s.Principal)
-		if blob == agentBlob {
-			return "", fmt.Errorf("operator signer %q uses the agent's own signing key; the agent key is trusted implicitly and must not be listed", principal)
-		}
-		if prev, ok := seen[blob]; ok {
-			// The same key under the same principal collapses silently:
-			// this is the benign case where a key is listed in both the
-			// shared block and a root's own list (the sets union). The
-			// same key under a *different* principal is a spoof and is
-			// refused.
-			if prev == principal {
-				continue
-			}
-			return "", fmt.Errorf("operator signer %q duplicates the key already trusted for %q", principal, prev)
-		}
-		seen[blob] = principal
-		line, err := renderSignerLine(principal, blob, s.Comment, s.ValidAfter, s.ValidBefore)
-		if err != nil {
-			return "", fmt.Errorf("operator signer %q: %w", principal, err)
-		}
-		others = append(others, entry{principal: principal, blob: blob, line: line})
-	}
-	sort.Slice(others, func(i, j int) bool {
-		if others[i].principal != others[j].principal {
-			return others[i].principal < others[j].principal
-		}
-		return others[i].blob < others[j].blob
-	})
 
 	agentLine, err := renderSignerLine(AgentPrincipal, agentBlob, "", "", "")
 	if err != nil {
@@ -105,11 +73,91 @@ func RenderAllowedSigners(agentPublicKey string, operators []TrustedSigner) (str
 	var b strings.Builder
 	b.WriteString(agentLine)
 	b.WriteByte('\n')
-	for _, e := range others {
-		b.WriteString(e.line)
+	for _, line := range lines {
+		b.WriteString(line)
 		b.WriteByte('\n')
 	}
 	return b.String(), nil
+}
+
+// RenderSeedSigners produces an allowed_signers file containing exactly the
+// declared seed signers and nothing else — in particular, no implicit agent
+// line.
+//
+// That omission is the whole point. Admission asks whether a repository's
+// birth is attributable to a key someone deliberately entitled, and the agent
+// key is trusted implicitly everywhere else. Rendering it here too would make
+// every agent-founded root self-admitting and quietly delete the property that
+// an instance can be configured so its own agent cannot establish or amend the
+// root holding its config.
+func RenderSeedSigners(seeds []TrustedSigner) (string, error) {
+	lines, err := renderSignerSet(seeds, nil)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
+}
+
+// renderSignerSet canonicalizes, deduplicates, and sorts signer entries into
+// allowed_signers lines.
+//
+// reserved maps a key blob the caller has already emitted to the principal
+// holding it, so an entry claiming that key under a different principal is
+// caught. An entry that restates a reserved key under its own principal is
+// dropped rather than repeated.
+func renderSignerSet(signers []TrustedSigner, reserved map[string]string) ([]string, error) {
+	type entry struct {
+		principal string
+		blob      string
+		line      string
+	}
+	// seen maps a canonical key blob to the principal that first claimed
+	// it, so a key reused under a second principal is caught.
+	seen := make(map[string]string, len(signers)+len(reserved))
+	for blob, principal := range reserved {
+		seen[blob] = principal
+	}
+	out := make([]entry, 0, len(signers))
+	for i, s := range signers {
+		blob, err := canonicalKeyBlob(s.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("operator signer %d (%s): %w", i, strings.TrimSpace(s.Principal), err)
+		}
+		principal := strings.TrimSpace(s.Principal)
+		if prev, ok := seen[blob]; ok {
+			// The same key under the same principal collapses silently:
+			// this is the benign case where a key is listed in more than
+			// one place that feeds the same set, or names the agent key
+			// under the agent's own principal. The same key under a
+			// *different* principal is a spoof and is refused.
+			if prev == principal {
+				continue
+			}
+			return nil, fmt.Errorf("operator signer %q duplicates the key already trusted for %q", principal, prev)
+		}
+		seen[blob] = principal
+		line, err := renderSignerLine(principal, blob, s.Comment, s.ValidAfter, s.ValidBefore)
+		if err != nil {
+			return nil, fmt.Errorf("operator signer %q: %w", principal, err)
+		}
+		out = append(out, entry{principal: principal, blob: blob, line: line})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].principal != out[j].principal {
+			return out[i].principal < out[j].principal
+		}
+		return out[i].blob < out[j].blob
+	})
+	lines := make([]string, 0, len(out))
+	for _, e := range out {
+		lines = append(lines, e.line)
+	}
+	return lines, nil
 }
 
 // SeedAllowedSigners establishes this repository's trust set once — the agent
