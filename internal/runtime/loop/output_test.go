@@ -135,14 +135,14 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "tiered maintained document valid",
+			name: "tiered maintained document publishes projections",
 			output: OutputSpec{
 				Name:  "ranch status",
 				Type:  OutputTypeMaintainedDocument,
 				Ref:   "core:ranch.md",
 				Tiers: []OutputTier{OutputTierStatusLine, OutputTierTeaser, OutputTierDigest},
 			},
-			wantTool: "replace_output_ranch_status",
+			wantTool: "publish_output_ranch_status",
 		},
 		{
 			name: "status line alone anchors the ladder",
@@ -152,7 +152,7 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				Ref:   "core:ranch.md",
 				Tiers: []OutputTier{OutputTierStatusLine},
 			},
-			wantTool: "replace_output_ranch_status",
+			wantTool: "publish_output_ranch_status",
 		},
 		{
 			name: "tiers without status line rejected",
@@ -371,8 +371,8 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if len(got.Outputs) != 2 {
 		t.Fatalf("Outputs len = %d, want 2", len(got.Outputs))
 	}
-	if got.Outputs[0].ToolName() != "replace_output_status" {
-		t.Fatalf("output tool = %q, want replace_output_status", got.Outputs[0].ToolName())
+	if got.Outputs[0].ToolName() != "publish_output_status" {
+		t.Fatalf("output tool = %q, want publish_output_status for a tiered output", got.Outputs[0].ToolName())
 	}
 	if len(got.Outputs[0].Tiers) != 2 || got.Outputs[0].Tiers[0] != OutputTierStatusLine {
 		t.Fatalf("round-tripped tiers = %v, want [status_line teaser]", got.Outputs[0].Tiers)

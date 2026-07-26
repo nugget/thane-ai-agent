@@ -22,9 +22,51 @@ For recurring document work, prefer `thane_loop_create` with
 the running loop self-paces inside, its `output` declares the state owner
 (now optional — a service loop can run without maintaining a document),
 and when a document is declared the running loop writes through generated
-output tools such as `replace_output_*` or `append_output_*`. If a
-maintained output is marked `truncated` in Declared Durable Outputs, read
-the full document before replacing it.
+output tools such as `replace_output_*`, `append_output_*`, or
+`publish_output_*`. If a maintained output is marked `truncated` in
+Declared Durable Outputs, read the full document before replacing it.
+
+## Who reads this output?
+
+A loop that curates an understanding others consult — the state of a
+domain, a watchlist, a standing summary — should declare `tiers` on its
+maintained document. The loop then curates condensed views of its own
+work alongside the full body, and each consuming surface takes the one
+it can afford: an ambient overview row takes `status_line`, a search
+snippet takes `teaser`, a digest row takes `digest`, and a reader who
+wants everything opens the document. Without tiers, every consumer pays
+for the whole document or gets a blind truncation of it, so a curator
+whose value is being *consulted often* is the case for declaring them.
+
+Declaring tiers changes the write interface: instead of
+`replace_output_*` taking a document body, the loop gets
+`publish_output_*` taking one argument per projection. Pass them all in
+one call — they are written together so no reader ever sees a status
+line describing a state the details have moved past. Do not write the
+section headings; they are rendered for you. Each projection has a size
+budget, and an over-budget value is rejected rather than trimmed,
+because a clipped teaser reads as a fragment with no sign that anything
+is missing. Write to the budget rather than near it.
+
+Declare `status_line` for any tiered output; add `teaser` when the
+output is something others search or link to, and `digest` when a
+reader should be able to act without opening the document.
+
+## Where the reasoning goes
+
+Published projections carry current state, not the story of how it got
+there. A curating loop should also declare a `working_notes` output: its
+private process log, append-only, invisible to every consumer surface —
+out of search results, out of other loops' context. Use it for how the
+understanding is evolving: what changed and why, what drifted, what was
+refined, what a future turn should know. Revision history already
+records *what* changed; working notes are for *why*.
+
+The smooth path is the `note` argument on `publish_output_*`: publish
+the projections and record the reasoning in the same call, so the
+timeline accumulates as a side effect of the work instead of a chore.
+`append_output_*` on the notes output writes an entry on its own when
+there is something to record without a publish.
 
 Choose stream wiring by attention cost:
 

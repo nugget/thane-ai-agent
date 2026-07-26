@@ -54,7 +54,7 @@ func loopSpecSchema(description string) map[string]any {
 			"supervisor_profile": loopProfileSchema("Overlay applied on supervisor turns (e.g. a higher quality_floor and review-specific instructions). Any field set here wins over profile; unset fields fall back to profile."),
 			"outputs": map[string]any{
 				"type":        "array",
-				"description": "Durable documents this loop maintains through scoped runtime tools (replace_output_*/append_output_*).",
+				"description": "Durable documents this loop owns, each exposed as a scoped runtime tool: whole-document rewrites (replace_output_*), journal appends (append_output_*), and tiered publishes (publish_output_*).",
 				"items":       loopOutputSpecSchema(),
 			},
 			"tags": map[string]any{
@@ -173,13 +173,23 @@ func loopOutputSpecSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":           map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
-			"type":           map[string]any{"type": "string", "enum": []string{"maintained_document", "journal_document"}, "description": "maintained_document = idempotent rewrite each cycle; journal_document = append-only dated entries."},
+			"name": map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
+			"type": map[string]any{"type": "string", "enum": []string{"maintained_document", "journal_document", "working_notes"}, "description": "maintained_document = idempotent rewrite each cycle; journal_document = append-only dated entries; working_notes = this loop's private process log, append-only and never projected into any consumer surface (use it for how the understanding is evolving — drift, refinement, the reasoning behind a change)."},
+			"tiers": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "enum": []string{"status_line", "teaser", "digest"}},
+				"description": "Published projection ladder for a maintained_document: which condensed views this output curates alongside its full body. Declaring tiers swaps the generated tool from replace_output_* to publish_output_*, which takes one typed argument per projection. status_line is required when tiers are declared; teaser and digest are optional. Consumers pick the projection that fits their surface — an ambient row takes status_line, a search snippet takes teaser, a digest row takes digest — so a tiered output is read at a fraction of the cost of the full document. Order here carries no meaning.",
+			},
+			"audience": map[string]any{
+				"type":        "string",
+				"enum":        []string{"published", "internal"},
+				"description": "Who may see this output's content. published (default) allows projection into search results, context injection, and ambient surfaces; internal keeps it to this loop's own context and explicit reads by ref. working_notes outputs are internal automatically. Internal is context hygiene, not secrecy: operators and the archive still see the document.",
+			},
 			"ref":            map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
-			"mode":           map[string]any{"type": "string", "enum": []string{"replace", "append"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal→append)."},
+			"mode":           map[string]any{"type": "string", "enum": []string{"replace", "append"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal and working_notes→append). A tiered maintained_document publishes projections instead, so leave this unset there."},
 			"purpose":        map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
-			"journal_window": map[string]any{"type": "string", "enum": []string{"day", "week", "month"}, "description": "Rolling window for journal outputs; empty uses the document-layer default."},
-			"max_windows":    map[string]any{"type": "integer", "description": "Cap on retained journal windows; 0 uses the document-layer default."},
+			"journal_window": map[string]any{"type": "string", "enum": []string{"day", "week", "month"}, "description": "Rolling window for append-mode outputs (journal_document and working_notes); empty uses the document-layer default."},
+			"max_windows":    map[string]any{"type": "integer", "description": "Cap on retained windows for append-mode outputs; 0 uses the document-layer default. Windows beyond the cap are pruned from the document — the archive and the root's revision history keep them."},
 		},
 	}
 }

@@ -44,6 +44,8 @@ type loopOutputContextEntry struct {
 	BytesTotal       int                `json:"bytes_total,omitempty"`
 	UnavailableError string             `json:"unavailable_error,omitempty"`
 	Journal          *loopOutputJournal `json:"journal,omitempty"`
+	Tiers            []string           `json:"tiers,omitempty"`
+	Audience         string             `json:"audience,omitempty"`
 }
 
 type loopOutputJournal struct {
@@ -76,8 +78,15 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 		return nil
 	}
 	out := make([]looppkg.RuntimeTool, 0, len(outputs))
+	notes := findWorkingNotesOutput(outputs)
 	for _, output := range outputs {
 		output := output
+		if output.IsTiered() {
+			// A tiered output's interface is a set of typed projections,
+			// so it gets the publish tool instead of a body-blob replace.
+			out = append(out, buildTieredPublishTool(store, output, notes))
+			continue
+		}
 		switch output.EffectiveMode() {
 		case looppkg.OutputModeReplace:
 			out = append(out, looppkg.RuntimeTool{
@@ -118,7 +127,7 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 		case looppkg.OutputModeAppend:
 			out = append(out, looppkg.RuntimeTool{
 				Name:               output.ToolName(),
-				Description:        fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref),
+				Description:        appendOutputDescription(output),
 				SkipContentResolve: true,
 				Parameters: map[string]any{
 					"type": "object",
@@ -136,10 +145,11 @@ func buildLoopOutputTools(store *documents.Store, outputs []looppkg.OutputSpec) 
 						return "", fmt.Errorf("entry is required")
 					}
 					result, err := store.JournalUpdate(ctx, documents.JournalUpdateArgs{
-						Ref:        output.Ref,
-						Entry:      entry,
-						Window:     output.JournalWindow,
-						MaxWindows: output.MaxWindows,
+						Ref:         output.Ref,
+						Entry:       entry,
+						Window:      output.JournalWindow,
+						MaxWindows:  output.MaxWindows,
+						Frontmatter: loopOutputAudienceFrontmatter(output),
 					})
 					if err != nil {
 						return "", err
@@ -164,12 +174,16 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		entry := loopOutputContextEntry{
 			Name:      output.Name,
 			Type:      string(output.Type),
-			Mode:      string(output.EffectiveMode()),
+			Mode:      loopOutputContextMode(output),
 			Ref:       output.Ref,
 			Purpose:   output.Purpose,
 			ToolName:  output.ToolName(),
 			Policy:    "Write only through the generated output tool. The managed document root handles path safety, indexing, provenance, and signature policy.",
 			Interface: outputInterfaceDescription(output),
+			Audience:  string(output.EffectiveAudience()),
+		}
+		for _, field := range output.TierFields() {
+			entry.Tiers = append(entry.Tiers, field.Key)
 		}
 		if output.Type == looppkg.OutputTypeJournalDocument || output.Type == looppkg.OutputTypeWorkingNotes {
 			entry.Journal = &loopOutputJournal{
@@ -232,6 +246,13 @@ func loopOutputDelta(value string, now time.Time) string {
 }
 
 func outputInterfaceDescription(output looppkg.OutputSpec) string {
+	if output.IsTiered() {
+		keys := make([]string, 0, 4)
+		for _, field := range output.TierFields() {
+			keys = append(keys, field.Key)
+		}
+		return "Call " + output.ToolName() + " with every projection in one call (" + strings.Join(keys, ", ") + "). Headings are rendered for you; each projection has its own size budget."
+	}
 	switch output.EffectiveMode() {
 	case looppkg.OutputModeReplace:
 		return "Call " + output.ToolName() + " with complete replacement markdown content for this maintained document."
@@ -240,6 +261,32 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 	default:
 		return "Use the generated output tool for this declaration."
 	}
+}
+
+// loopOutputContextMode reports the write interface the model actually
+// has for this output. A tiered output's spec-level mode is still
+// replace — tiers are the only declaration, so there is no authorable
+// publish mode to contradict — but its generated tool takes projections
+// rather than a document body. Reporting the spec mode here would pair
+// "publish_output_*" with "mode: replace" in the same context block and
+// leave the model to guess which one describes the call it should make.
+func loopOutputContextMode(output looppkg.OutputSpec) string {
+	if output.IsTiered() {
+		return "publish"
+	}
+	return string(output.EffectiveMode())
+}
+
+// appendOutputDescription frames an append-mode output for the model.
+// Working notes get their own framing: the value of a private process
+// log is that it holds the reasoning a published document should not
+// carry, and a model that thinks it is writing another public surface
+// will not write that.
+func appendOutputDescription(output looppkg.OutputSpec) string {
+	if output.Type == looppkg.OutputTypeWorkingNotes {
+		return fmt.Sprintf("Append to this loop's working notes %q at %s — the loop's private process log. Record how the understanding is evolving: what changed and why, what drifted, what was refined, what is worth remembering later. No consumer surface reads it: it stays out of search results and out of other loops' context, so write the reasoning that would clutter a published document. Pass only the new entry; Thane stamps, windows, prunes, and indexes.", output.Name, output.Ref)
+	}
+	return fmt.Sprintf("Append to the loop-declared journal output %q at %s. Pass only the new journal entry; Thane stamps, windows, prunes, indexes, and applies root policy.", output.Name, output.Ref)
 }
 
 func truncateLoopOutputText(s string, maxBytes int, tail bool) (string, bool, int, int) {

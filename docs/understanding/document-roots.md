@@ -266,8 +266,13 @@ runtime tools:
 
 - `replace_output_<name>` for a maintained document that should be
   rewritten as a complete current state.
-- `append_output_<name>` for a journal document that should receive new
-  entries over time.
+- `append_output_<name>` for a journal document, or for a working-notes
+  document, that should receive new entries over time.
+- `publish_output_<name>` for a maintained document that declares
+  `tiers`: one typed argument per published projection
+  (`status_line`, `teaser`, `digest`) plus the full body, written
+  together in a single call. Thane renders the document sections from
+  the payload, so the loop supplies content and never structure.
 
 The loop sees a matching context block with the current document content
 or recent journal tail, so the document itself remains the durable source
