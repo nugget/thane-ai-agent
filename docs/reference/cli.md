@@ -124,13 +124,26 @@ injected at build time via ldflags.
 
 If no `-config` flag is provided, Thane searches these paths in order:
 
-1. `./config.yaml`
-2. `~/Thane/config.yaml`
-3. `~/.config/thane/config.yaml`
-4. `/config/config.yaml`
-5. `/usr/local/etc/thane/config.yaml`
-6. `/etc/thane/config.yaml`
+1. `./core/config.yaml`
+2. `~/Thane/core/config.yaml`
+3. `./config.yaml`
+4. `~/Thane/config.yaml`
+5. `~/.config/thane/config.yaml`
+6. `/config/config.yaml`
+7. `/usr/local/etc/thane/config.yaml`
+8. `/etc/thane/config.yaml`
 
-The first file found is used. See
-[Configuration](../operating/configuration.md) for what goes in the config
-file.
+The first file found is used.
+
+The core-relative locations come first because `{workspace}/core` is the
+instance trust boundary: it is git-tracked and signed, so a config that
+lives there has a change history and an author for every edit. A config
+outside core has neither, and Thane logs a warning at startup saying so.
+
+If a config exists in core but is *not* the one in use, the warning is
+louder: two files both look authoritative, only one is read, and editing
+the wrong one changes nothing silently. Resolve it by confirming the two
+files match, deleting the one outside core, and restarting.
+
+See [Configuration](../operating/configuration.md) for what goes in the
+config file.

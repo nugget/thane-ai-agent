@@ -50,9 +50,22 @@ import (
 // DefaultSearchPaths returns the ordered list of paths that [FindConfig]
 // checks when no explicit path is provided. The first existing file wins.
 //
+// Core-relative locations come first. {workspace}/core is the instance
+// trust boundary — git-tracked, signed, and verified — so a config that
+// lives there carries a change history and an author for every edit,
+// which a config floating beside it does not. Preferring it is what lets
+// an instance migrate by moving one file rather than by flag day.
+//
+// The search cannot consult workspace.path, because that value lives in
+// the file being searched for. It instead checks the two locations the
+// legacy entries already imply a workspace at, and [Config.Validate]
+// reconciles the loaded path against workspace.path afterwards.
+//
 // The search order is:
-//   - ./config.yaml (project directory / working directory)
-//   - ~/Thane/config.yaml (macOS role account convention)
+//   - ./core/config.yaml (workspace core, working directory)
+//   - ~/Thane/core/config.yaml (workspace core, role account convention)
+//   - ./config.yaml (legacy: project directory / working directory)
+//   - ~/Thane/config.yaml (legacy: macOS role account convention)
 //   - ~/.config/thane/config.yaml (XDG user config)
 //   - /config/config.yaml (container convention)
 //   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
@@ -63,9 +76,16 @@ import (
 var searchPathsFunc = DefaultSearchPaths
 
 func DefaultSearchPaths() []string {
-	paths := []string{"config.yaml"}
+	paths := []string{filepath.Join("core", "config.yaml")}
 
-	if home, err := os.UserHomeDir(); err == nil {
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		paths = append(paths, filepath.Join(home, "Thane", "core", "config.yaml"))
+	}
+
+	paths = append(paths, "config.yaml")
+
+	if homeErr == nil {
 		paths = append(paths, filepath.Join(home, "Thane", "config.yaml"))
 		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
 	}
@@ -107,6 +127,12 @@ func FindConfig(explicit string) (string, error) {
 // need empty-string checks or fallback logic. See [Config.applyDefaults]
 // for the defaulting rules and [Config.Validate] for consistency checks.
 type Config struct {
+	// loadedFrom is the path this config was read from. It is not a
+	// configurable value — it records provenance so the runtime can
+	// reason about whether the config it is running on lives inside the
+	// instance trust boundary.
+	loadedFrom string
+
 	// Listen configures the primary HTTP API server (OpenAI-compatible).
 	Listen ListenConfig `yaml:"listen"`
 
@@ -2080,6 +2106,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, err
 	}
+	cfg.loadedFrom = path
 
 	if err := cfg.normalizeRoots(); err != nil {
 		return nil, err
@@ -2091,7 +2118,68 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}
 
+	cfg.warnConfigOutsideCore()
+
 	return cfg, nil
+}
+
+// LoadedFrom reports the path this config was read from, or empty when
+// it was not produced by [Load].
+func (c *Config) LoadedFrom() string {
+	if c == nil {
+		return ""
+	}
+	return c.loadedFrom
+}
+
+// CoreConfigPath returns the canonical config location for this
+// instance: {workspace.path}/core/config.yaml. Empty when no workspace
+// is configured.
+func (c *Config) CoreConfigPath() string {
+	if c == nil || strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.CoreRoot(), "config.yaml")
+}
+
+// warnConfigOutsideCore reports a config loaded from outside the
+// instance trust boundary.
+//
+// The dangerous shape is not merely running from a legacy path — it is
+// running from a legacy path while a core config also exists. Then two
+// files both look authoritative, only one is read, and an edit to the
+// wrong one changes nothing with no signal. That state is silent by
+// nature, so it gets the loudest warning available short of refusing to
+// boot, which is where this check is headed.
+func (c *Config) warnConfigOutsideCore() {
+	corePath := c.CoreConfigPath()
+	if corePath == "" || c.loadedFrom == "" {
+		return
+	}
+	loaded, err := filepath.Abs(c.loadedFrom)
+	if err != nil {
+		loaded = c.loadedFrom
+	}
+	canonical, err := filepath.Abs(corePath)
+	if err != nil {
+		canonical = corePath
+	}
+	if loaded == canonical {
+		return
+	}
+	if _, err := os.Stat(canonical); err == nil {
+		slog.Default().Warn("config: a config exists in core but is NOT the one in use; edits to it have no effect and the two files will drift",
+			"loaded", loaded,
+			"core_config", canonical,
+			"resolution", "make core the only config: verify the files match, delete the one outside core, and restart",
+		)
+		return
+	}
+	slog.Default().Warn("config: loaded from outside the instance trust boundary, so it carries no signed change history",
+		"loaded", loaded,
+		"expected", canonical,
+		"resolution", "move this file to core and commit it, so every config change has an author and a history",
+	)
 }
 
 // rejectRetiredKeys returns an actionable error when the YAML
