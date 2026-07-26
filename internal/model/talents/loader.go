@@ -323,8 +323,8 @@ func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 // "---" lines and is followed by the body content up to the next
 // node boundary (or EOF). A node boundary is a "---" line followed by
 // a recognized frontmatter key (name, tags, tags_all, kind, teaser,
-// next_tags); a "---" followed by anything else stays as body content
-// (a markdown horizontal rule).
+// next_tags, audience); a "---" followed by anything else stays as body
+// content (a markdown horizontal rule).
 //
 // Single-node files (the historical shape) return a length-1 slice.
 // Multi-node files return one [Block] per node. Returns a length-1
@@ -431,7 +431,7 @@ func splitAtNextNodeBoundary(body string) (content, remainder string) {
 // markdown horizontal rule (followed by prose or a different key).
 func isFrontmatterKey(key string) bool {
 	switch key {
-	case "name", "tags", "tags_all", "kind", "teaser", "next_tags":
+	case "name", "tags", "tags_all", "kind", "teaser", "next_tags", "audience":
 		return true
 	default:
 		return false
