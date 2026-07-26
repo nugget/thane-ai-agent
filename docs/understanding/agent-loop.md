@@ -111,12 +111,22 @@ definition. A declared output is an explicit contract: this loop is
 responsible for maintaining or appending to this document, and Thane
 generates the narrow tool surface for that job at runtime.
 
-Two output shapes exist today:
+Output shapes available today:
 
 - **Maintained document** outputs replace the whole current document
   through a generated `replace_output_<name>` tool.
 - **Journal document** outputs append a timestamped entry through a
   generated `append_output_<name>` tool.
+- **Tiered maintained document** outputs — a maintained document that
+  declares `tiers` — publish condensed projections alongside the full
+  body through a generated `publish_output_<name>` tool, one argument
+  per projection. Thane renders the document's sections, enforces a
+  per-projection size budget, and can parse the document back into the
+  projections it was published from.
+- **Working notes** outputs are a loop's private append-only process
+  log. They are internal-audience: excluded from document search and
+  from tagged-guidance injection, though the operator and the archive
+  still see them.
 
 The same declaration also feeds context assembly. Each turn receives a
 `Declared Durable Outputs` block with the output name, document root

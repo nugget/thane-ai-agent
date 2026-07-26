@@ -146,8 +146,13 @@ func (o OutputSpec) EffectiveAudience() OutputAudience {
 }
 
 // ToolName returns the scoped mutation tool name generated for this
-// output declaration.
+// output declaration. A tiered output gets a publish verb rather than a
+// replace verb because its interface is a set of typed projections, not
+// a document body.
 func (o OutputSpec) ToolName() string {
+	if o.IsTiered() {
+		return "publish_output_" + safeOutputToolSuffix(o.Name)
+	}
 	switch o.EffectiveMode() {
 	case OutputModeReplace:
 		return "replace_output_" + safeOutputToolSuffix(o.Name)

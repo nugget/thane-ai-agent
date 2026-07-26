@@ -1,0 +1,277 @@
+package loop
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
+
+// Rune budgets for the published projection tiers. They are display
+// budgets, not storage limits: each one is the size at which that
+// projection still fits the surfaces that consume it — a fleet overview
+// row, a search snippet, a subscription digest. Overflow is rejected
+// rather than clipped, because a clipped projection is an unreadable
+// fragment with nothing to signal that anything was dropped.
+const (
+	statusLineMaxRunes = 120
+	teaserMaxRunes     = 500
+	digestMaxRunes     = 2048
+)
+
+// TierPayload is one complete published projection set for a tiered
+// maintained document. Every publish carries the whole payload: a
+// rendered document shows exactly the last publish, so a partially
+// updated payload would leave one projection describing a state the
+// others have moved past.
+type TierPayload struct {
+	StatusLine string
+	Teaser     string
+	Digest     string
+	Full       string
+}
+
+// TierField describes one publishable field of a tiered output, as the
+// generated publish tool advertises it to the model.
+type TierField struct {
+	// Key is the tool argument name.
+	Key string
+	// MaxRunes is the display budget in runes; zero is unbounded.
+	MaxRunes int
+	// SingleLine marks a field that must not contain line breaks.
+	SingleLine bool
+	// Guidance is the model-facing description of what this field is
+	// for and where it surfaces.
+	Guidance string
+}
+
+// tierSection binds one projection to its canonical document section and
+// its budget.
+type tierSection struct {
+	// Tier is the declared tier this section publishes, or empty for
+	// the always-present full projection.
+	Tier    OutputTier
+	Field   TierField
+	Heading string
+	value   func(*TierPayload) *string
+}
+
+// tierSections is the single source of truth for the publish tool's
+// schema, the payload validator, the document renderer, and the parser
+// that reads a rendered document back — so those four cannot drift
+// apart. Order is the canonical ladder order; declaration order in a
+// spec's tiers list carries no meaning.
+var tierSections = []tierSection{
+	{
+		Tier:    OutputTierStatusLine,
+		Heading: "Status Line",
+		Field: TierField{
+			Key:        "status_line",
+			MaxRunes:   statusLineMaxRunes,
+			SingleLine: true,
+			Guidance:   "One standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
+		},
+		value: func(p *TierPayload) *string { return &p.StatusLine },
+	},
+	{
+		Tier:    OutputTierTeaser,
+		Heading: "Teaser",
+		Field: TierField{
+			Key:      "teaser",
+			MaxRunes: teaserMaxRunes,
+			Guidance: "One short paragraph on why a reader would open this document right now. Surfaces as the snippet in search results and cross-references, so write the hook — the reason to look — rather than a compressed summary.",
+		},
+		value: func(p *TierPayload) *string { return &p.Teaser },
+	},
+	{
+		Tier:    OutputTierDigest,
+		Heading: "Digest",
+		Field: TierField{
+			Key:      "digest",
+			MaxRunes: digestMaxRunes,
+			Guidance: "A standalone summary carrying enough substance to act on without opening the full document. Surfaces in subscription rows and periodic digests.",
+		},
+		value: func(p *TierPayload) *string { return &p.Digest },
+	},
+	{
+		Heading: "Details",
+		Field: TierField{
+			Key:      "full",
+			Guidance: "The complete current state in markdown. This is what a reader opens when the digest is not enough. Always required: it is the document's substance, and the other projections are views of it.",
+		},
+		value: func(p *TierPayload) *string { return &p.Full },
+	},
+}
+
+// TierFields returns the fields a tiered output publishes, in canonical
+// ladder order: each declared tier, then the always-present full
+// projection. Every returned field is required at publish time —
+// optionality lives in the declaration (a spec may declare only
+// status_line), not in the write.
+func (o OutputSpec) TierFields() []TierField {
+	if len(o.Tiers) == 0 {
+		return nil
+	}
+	declared := make(map[OutputTier]struct{}, len(o.Tiers))
+	for _, tier := range o.Tiers {
+		declared[tier] = struct{}{}
+	}
+	fields := make([]TierField, 0, len(o.Tiers)+1)
+	for _, section := range tierSections {
+		if section.Tier == "" {
+			fields = append(fields, section.Field)
+			continue
+		}
+		if _, ok := declared[section.Tier]; ok {
+			fields = append(fields, section.Field)
+		}
+	}
+	return fields
+}
+
+// IsTiered reports whether this output publishes through the tiered
+// projection contract rather than a whole-body replacement.
+func (o OutputSpec) IsTiered() bool {
+	return o.Type == OutputTypeMaintainedDocument && len(o.Tiers) > 0
+}
+
+// ValidateTierPayload checks one payload against the output's declared
+// ladder. Errors name the field, the limit, and the observed size so the
+// model can correct the offending projection in one more attempt without
+// re-deriving the whole payload.
+func (o OutputSpec) ValidateTierPayload(payload TierPayload) error {
+	if !o.IsTiered() {
+		return fmt.Errorf("output %q does not declare tiers", o.Name)
+	}
+	for _, field := range o.TierFields() {
+		section, ok := tierSectionByKey(field.Key)
+		if !ok {
+			continue
+		}
+		value := strings.TrimSpace(*section.value(&payload))
+		if value == "" {
+			return fmt.Errorf("%s is required; every declared projection is published together so they cannot describe different moments", field.Key)
+		}
+		if field.SingleLine && strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s must be a single line with no line breaks; it renders as one row on surfaces that show nothing else", field.Key)
+		}
+		if field.MaxRunes > 0 {
+			if runes := utf8.RuneCountInString(value); runes > field.MaxRunes {
+				return fmt.Errorf("%s is %d characters and the limit is %d; tighten it rather than letting it be cut, because a clipped projection reads as a fragment with no sign that anything is missing", field.Key, runes, field.MaxRunes)
+			}
+		}
+		if heading, found := firstReservedTierHeading(value); found {
+			return fmt.Errorf("%s contains the reserved section heading %q; the tier headings are rendered automatically from the contract, so publish only the content beneath them", field.Key, heading)
+		}
+	}
+	return nil
+}
+
+// RenderTierDocument renders a payload as the canonical document body:
+// one H2 section per published projection, in ladder order. Go owns this
+// structure so the model never authors the section convention and the
+// document stays parseable back into a payload.
+func (o OutputSpec) RenderTierDocument(payload TierPayload) string {
+	fields := o.TierFields()
+	published := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		published[field.Key] = struct{}{}
+	}
+	blocks := make([]string, 0, len(fields))
+	for _, section := range tierSections {
+		if _, ok := published[section.Field.Key]; !ok {
+			continue
+		}
+		value := strings.TrimSpace(*section.value(&payload))
+		if value == "" {
+			continue
+		}
+		blocks = append(blocks, "## "+section.Heading+"\n\n"+value)
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+// ParseTierDocument reads a rendered document body back into a payload.
+// It is the inverse of [OutputSpec.RenderTierDocument] and the reason
+// the document is the canonical store: any derived binding — an
+// ambient rail, a published entity, a remote display — can be re-seeded
+// from the document alone after a restart.
+//
+// A body with no recognized tier sections parses entirely into Full,
+// which is what lets an existing untiered maintained document be adopted
+// into the tiered contract without losing its content. Content ahead of
+// the first recognized heading is folded into Full for the same reason.
+func ParseTierDocument(body string) TierPayload {
+	var payload TierPayload
+	var preamble []string
+	current := ""
+	collected := make(map[string][]string, len(tierSections))
+
+	for _, line := range strings.Split(body, "\n") {
+		if heading, ok := reservedTierHeadingOf(line); ok {
+			current = heading
+			continue
+		}
+		if current == "" {
+			preamble = append(preamble, line)
+			continue
+		}
+		collected[current] = append(collected[current], line)
+	}
+
+	for _, section := range tierSections {
+		lines, ok := collected[section.Heading]
+		if !ok {
+			continue
+		}
+		*section.value(&payload) = strings.TrimSpace(strings.Join(lines, "\n"))
+	}
+
+	if leading := strings.TrimSpace(strings.Join(preamble, "\n")); leading != "" {
+		if payload.Full == "" {
+			payload.Full = leading
+		} else {
+			payload.Full = leading + "\n\n" + payload.Full
+		}
+	}
+	return payload
+}
+
+// tierSectionByKey looks up the section table entry for a field key.
+func tierSectionByKey(key string) (tierSection, bool) {
+	for _, section := range tierSections {
+		if section.Field.Key == key {
+			return section, true
+		}
+	}
+	return tierSection{}, false
+}
+
+// reservedTierHeadingOf reports the canonical heading a line declares,
+// if the line is exactly one of the contract's H2 section headings.
+// Deeper headings inside a projection are ordinary content.
+func reservedTierHeadingOf(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "## ") {
+		return "", false
+	}
+	text := strings.TrimSpace(strings.TrimPrefix(trimmed, "## "))
+	for _, section := range tierSections {
+		if strings.EqualFold(text, section.Heading) {
+			return section.Heading, true
+		}
+	}
+	return "", false
+}
+
+// firstReservedTierHeading finds a reserved section heading inside
+// projection content. Such a line would be read back as a section
+// boundary, silently moving content between projections, so publishing
+// is refused instead.
+func firstReservedTierHeading(value string) (string, bool) {
+	for _, line := range strings.Split(value, "\n") {
+		if heading, ok := reservedTierHeadingOf(line); ok {
+			return "## " + heading, true
+		}
+	}
+	return "", false
+}
