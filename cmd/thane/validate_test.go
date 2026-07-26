@@ -200,3 +200,43 @@ channel_tags:
 		t.Errorf("json error field should name the offending tag, got: %q", got.Error)
 	}
 }
+
+func TestRunValidate_IntegrityReportSkippedForUnrelatedExplicitConfig(t *testing.T) {
+	// An explicit -config outside any core names a file, not an
+	// instance. Reporting on the default workspace would answer a
+	// question the operator did not ask.
+	path := writeConfig(t, "listen:\n  port: 8080\n")
+	var buf bytes.Buffer
+
+	if err := runValidate(&buf, path, "", "text"); err != nil {
+		t.Fatalf("runValidate: %v", err)
+	}
+	if strings.Contains(buf.String(), "Core integrity") {
+		t.Fatalf("integrity report should not appear for an unrelated explicit config:\n%s", buf.String())
+	}
+}
+
+func TestRunValidate_IntegrityReportForWorkspaceInstance(t *testing.T) {
+	workspace := t.TempDir()
+	coreDir := filepath.Join(workspace, "core")
+	if err := os.MkdirAll(coreDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(coreDir, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var buf bytes.Buffer
+
+	if err := runValidate(&buf, "", workspace, "text"); err != nil {
+		t.Fatalf("runValidate: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Core integrity") {
+		t.Fatalf("a workspace instance should get an integrity report:\n%s", out)
+	}
+	// core is not a git repository here, so the report must say so and
+	// give the command that fixes it.
+	if !strings.Contains(out, "core_repository") || !strings.Contains(out, "git -C") {
+		t.Fatalf("report should name the failing check and its fix:\n%s", out)
+	}
+}

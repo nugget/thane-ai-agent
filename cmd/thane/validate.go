@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
 )
 
 // runValidate parses and validates the config that would be loaded by
@@ -24,6 +26,7 @@ import (
 // piping into jq.
 func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error {
 	cfg, cfgPath, loadErr := loadConfig(configPath, workspacePath)
+	integrity := checkCoreIntegrity(cfg, configPath, workspacePath)
 	// When discovery fails before a path is resolved, fall back to
 	// the operator's explicit -config value so the JSON report still
 	// names the file that was at fault. Stays empty when neither
@@ -35,17 +38,83 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		// Always emit JSON to stdout, even on failure — scripts may
 		// want the structured error. The error is still returned so
 		// the exit code reflects validity.
-		if err := writeValidateJSON(w, cfgPath, cfg, loadErr); err != nil {
+		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity); err != nil {
 			return err
 		}
 		return loadErr
 	}
 	if loadErr != nil {
+		// Config could not load, but the integrity report is often the
+		// reason and always the next place to look, so print it rather
+		// than leaving the operator with a bare parse error.
+		if integrity != nil {
+			writeIntegrityText(w, *integrity)
+		}
 		return loadErr
 	}
 	fmt.Fprintf(w, "✓ Config valid: %s\n\n", cfgPath)
 	writeValidateText(w, cfg)
+	if integrity != nil {
+		fmt.Fprintln(w)
+		writeIntegrityText(w, *integrity)
+	}
 	return nil
+}
+
+// checkCoreIntegrity runs the core checks for whichever instance this
+// invocation targets, or returns nil when there is no instance to check.
+//
+// An explicit -config pointing outside any core names a file, not an
+// instance. Reporting on the default workspace in that case would answer
+// a question the operator did not ask, and would do it while they are
+// looking at a different file entirely.
+func checkCoreIntegrity(cfg *config.Config, configPath, workspacePath string) *coreintegrity.Report {
+	workspace := workspacePath
+	if workspace == "" && cfg != nil {
+		workspace = cfg.Workspace.Path
+	}
+	if workspace == "" {
+		if configPath != "" {
+			return nil
+		}
+		resolved, err := config.ExpandWorkspace("")
+		if err != nil {
+			return nil
+		}
+		workspace = resolved
+	}
+	report, err := coreintegrity.Run(context.Background(), workspace, coreintegrity.Options{
+		ConfigFileName: config.ConfigFileName,
+	})
+	if err != nil {
+		return nil
+	}
+	return &report
+}
+
+// writeIntegrityText prints the core integrity report. Failures carry
+// the command that resolves them, because the common case for reading
+// this report is an instance that will not start and an operator who
+// needs the next action rather than a diagnosis to interpret.
+func writeIntegrityText(w io.Writer, report coreintegrity.Report) {
+	if report.OK() {
+		fmt.Fprintf(w, "✓ Core integrity: %s\n", report.CorePath)
+		return
+	}
+	fmt.Fprintf(w, "✗ Core integrity: %s\n\n", report.CorePath)
+	for _, check := range report.Checks {
+		switch check.Status {
+		case coreintegrity.StatusPass:
+			fmt.Fprintf(w, "  ✓ %s\n", check.Name)
+		case coreintegrity.StatusSkipped:
+			fmt.Fprintf(w, "  - %s (not checked: %s)\n", check.Name, check.Detail)
+		default:
+			fmt.Fprintf(w, "  ✗ %s\n      %s\n", check.Name, check.Detail)
+			if check.Fix != "" {
+				fmt.Fprintf(w, "      fix: %s\n", check.Fix)
+			}
+		}
+	}
 }
 
 // writeValidateText prints the per-section structural summary used by
@@ -70,18 +139,20 @@ func writeValidateText(w io.Writer, cfg *config.Config) {
 
 // writeValidateJSON emits the structured validation report. cfg may be
 // nil when load failed; loadErr is non-nil when validation failed.
-func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error) error {
+func writeValidateJSON(w io.Writer, cfgPath string, cfg *config.Config, loadErr error, integrity *coreintegrity.Report) error {
 	// Path always emits (no omitempty) so the JSON schema is stable
 	// for scripts piping into jq — even discovery-failure cases get
 	// a path field, possibly empty.
 	result := struct {
-		Path    string         `json:"path"`
-		Valid   bool           `json:"valid"`
-		Error   string         `json:"error,omitempty"`
-		Summary map[string]any `json:"summary,omitempty"`
+		Path      string                `json:"path"`
+		Valid     bool                  `json:"valid"`
+		Error     string                `json:"error,omitempty"`
+		Summary   map[string]any        `json:"summary,omitempty"`
+		Integrity *coreintegrity.Report `json:"integrity,omitempty"`
 	}{
-		Path:  cfgPath,
-		Valid: loadErr == nil,
+		Path:      cfgPath,
+		Valid:     loadErr == nil,
+		Integrity: integrity,
 	}
 	if loadErr != nil {
 		result.Error = loadErr.Error()
