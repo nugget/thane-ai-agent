@@ -48,6 +48,11 @@ type Signed struct {
 	// Store is the provenance engine for this checkout — the write,
 	// sync, and history surface callers use once the checkout is open.
 	Store *provenance.Store
+
+	// seedSigners is the declared set retained for admission. It is kept
+	// rather than re-derived because admission must ask config, not the
+	// repository, whose signatures may establish this root.
+	seedSigners []provenance.TrustedSigner
 }
 
 // OpenSigned opens or initializes a signed checkout, creates a birth commit
@@ -111,7 +116,7 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 		"worktree", root.WorktreePath,
 		"prefix", root.Prefix,
 	)
-	return &Signed{Name: name, Root: root, Store: store}, nil
+	return &Signed{Name: name, Root: root, Store: store, seedSigners: spec.SeedSigners}, nil
 }
 
 func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -122,6 +127,28 @@ func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFun
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, DefaultBootstrapTimeout)
+}
+
+// VerifyAdmission confirms the checkout's history is admitted by its declared
+// seed signers: founded by one, and with its trust file only ever changed by
+// one. It answers a different question from [Signed.VerifyHead], which asks
+// whether the current tip is signed by someone the root already trusts —
+// a check the root's own history gets to define the terms of.
+//
+// A checkout with no declared seed signers is not admitted and not refused:
+// admission has nothing to check against, so the caller's signature policy is
+// left to decide what an unseeded signed root means.
+func (c *Signed) VerifyAdmission(ctx context.Context) error {
+	if c == nil || c.Store == nil {
+		return fmt.Errorf("signed checkout is not configured")
+	}
+	if len(c.seedSigners) == 0 {
+		return nil
+	}
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+	_, err := provenance.VerifyAdmission(ctx, c.Store.Path(), c.seedSigners)
+	return err
 }
 
 // VerifyHead confirms that the checkout HEAD verifies against its trust set.

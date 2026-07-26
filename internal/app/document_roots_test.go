@@ -365,13 +365,16 @@ func TestApplyBootVerification(t *testing.T) {
 		{"required + success is a no-op", documents.VerificationRequired, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := applyBootVerification(tc.mode, "kb", tc.verErr, logger)
+			err := applyBootVerification(tc.mode, "kb", "admission", tc.verErr, logger)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("applyBootVerification = nil, want error")
 				}
 				if !strings.Contains(err.Error(), "kb") {
 					t.Fatalf("error %q should name the root", err)
+				}
+				if !strings.Contains(err.Error(), "admission") {
+					t.Fatalf("error %q should name the failing check", err)
 				}
 				return
 			}

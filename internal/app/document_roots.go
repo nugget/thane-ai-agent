@@ -366,7 +366,15 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg con
 	mode := documents.VerificationMode(strings.TrimSpace(gitCfg.VerifySignatures))
 	switch mode {
 	case documents.VerificationRequired, documents.VerificationWarn:
-		if err := applyBootVerification(mode, root, signed.VerifyHead(context.Background()), logger); err != nil {
+		// Admission runs first because it is the prior question. VerifyHead
+		// asks whether the tip is signed by a key this root trusts; admission
+		// asks whether this root was entitled to arrive at that trust set at
+		// all. Reporting a passing HEAD for a root whose birth is
+		// unattributed would answer the smaller question and hide the larger.
+		if err := applyBootVerification(mode, root, "admission", signed.VerifyAdmission(context.Background()), logger); err != nil {
+			return nil, err
+		}
+		if err := applyBootVerification(mode, root, "allowed_signers", signed.VerifyHead(context.Background()), logger); err != nil {
 			return nil, err
 		}
 	}
@@ -413,20 +421,24 @@ func (a *App) newDocumentRootProvenanceVerifier(root, rootPath string, gitCfg co
 	return &documentRootProvenanceVerifier{verifier: verified.Verifier, prefix: verified.Prefix}, nil
 }
 
-// applyBootVerification maps a boot-time VerifyHead result onto the root's
+// applyBootVerification maps one boot-time check's result onto the root's
 // verification policy: a required root fails to construct, a warn root logs and
 // continues, and any other mode is a no-op. A nil verifyErr is always a no-op,
-// so callers can pass the VerifyHead result directly.
-func applyBootVerification(mode documents.VerificationMode, root string, verifyErr error, logger *slog.Logger) error {
+// so callers can pass a check's result directly.
+//
+// check names the requirement that failed ("admission", "allowed_signers"), so
+// an operator reading the refusal knows which question came back wrong — the
+// two ask different things and are repaired differently.
+func applyBootVerification(mode documents.VerificationMode, root, check string, verifyErr error, logger *slog.Logger) error {
 	if verifyErr == nil {
 		return nil
 	}
 	switch mode {
 	case documents.VerificationRequired:
-		return fmt.Errorf("doc_roots.%s allowed_signers boot verification: %w", root, verifyErr)
+		return fmt.Errorf("doc_roots.%s %s boot verification: %w", root, check, verifyErr)
 	case documents.VerificationWarn:
-		logger.Warn("document root allowed_signers boot verification failed",
-			"root", root, "error", verifyErr)
+		logger.Warn("document root boot verification failed",
+			"root", root, "check", check, "error", verifyErr)
 		return nil
 	default:
 		return nil
