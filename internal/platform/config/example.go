@@ -164,9 +164,7 @@ func ExampleConfig() *Config {
 			DefaultTimeoutSec: 30,
 		},
 
-		Workspace: WorkspaceConfig{
-			Path: "",
-		},
+		Workspace: WorkspaceConfig{},
 
 		Embeddings: EmbeddingsConfig{
 			Enabled: false,

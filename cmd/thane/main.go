@@ -618,7 +618,14 @@ func loadConfig(explicit, workspace string) (*config.Config, string, error) {
 		return nil, "", err
 	}
 
-	cfg, err := config.Load(cfgPath)
+	// The fallback applies only when a workspace was actually named. If
+	// it defaulted, an out-of-core config would silently adopt ~/Thane
+	// and be judged against an instance the operator never mentioned.
+	fallbackWorkspace := ""
+	if strings.TrimSpace(workspace) != "" {
+		fallbackWorkspace, _ = config.ExpandWorkspace(workspace)
+	}
+	cfg, err := config.LoadWithWorkspace(cfgPath, fallbackWorkspace)
 	if err != nil {
 		return nil, cfgPath, fmt.Errorf("load config %s: %w", cfgPath, err)
 	}

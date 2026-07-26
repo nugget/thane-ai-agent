@@ -166,11 +166,6 @@ embeddings:
 # always-on files at stable locations such as axioms.md, persona.md,
 # ego.md, mission.md, and metacognitive.md.
 workspace:
-  # Path is the root directory for file operations. If empty, file
-  # tools are disabled entirely. In multi-root setups, this should be
-  # the common writable parent that contains Thane-owned roots such as
-  # core/, talents/, knowledge/, generated/, and scratchpad/.
-  path: ""
   # ReadOnlyDirs are additional directories the agent can read from
   # but not write to. Useful for compatibility or reference roots that
   # must remain outside Thane's writable authority, such as a legacy
