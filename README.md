@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/nugget/thane-ai-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nugget/thane-ai-agent/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/nugget/thane-ai-agent.svg)](https://pkg.go.dev/github.com/nugget/thane-ai-agent)
-[![Go Report Card](https://goreportcard.com/badge/github.com/nugget/thane-ai-agent)](https://goreportcard.com/report/github.com/nugget/thane-ai-agent)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/nugget/thane-ai-agent)](go.mod)
 [![License](https://img.shields.io/github/license/nugget/thane-ai-agent)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/nugget/thane-ai-agent)](https://github.com/nugget/thane-ai-agent/releases/latest)
