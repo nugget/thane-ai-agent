@@ -1,6 +1,12 @@
 // Package coreintegrity checks whether an instance's core directory is
-// in the state the runtime requires: present, version-controlled,
-// committed, free of key material, and covered by trusted signatures.
+// in the state the runtime requires: present, version-controlled, with
+// its config committed, free of tracked private key material, and with
+// no uncommitted changes to tracked files.
+//
+// Signature verification against the resolved allowed signers is not
+// here yet; it lands with the boot gate, alongside the out-of-tree trust
+// anchor it depends on. Until then this package answers "is core
+// structurally sound", not "is core trusted".
 //
 // The checks live here rather than inside the boot path so one
 // definition serves both `thane validate`, which reports, and the boot
@@ -88,7 +94,25 @@ func (r Report) Failures() []Check {
 // once committed and leaves the machine the moment that root gains a
 // remote, so the check is on the filename rather than on content: by the
 // time anyone inspects content, the commit already happened.
+//
+// Public keys are excluded, and not merely to avoid noise — core is
+// supposed to carry them. The identity public key and .allowed_signers
+// are committed at init precisely so the trust set travels with the
+// repository, so a pattern that swept up .pub files would flag a
+// correctly initialized instance and suggest ignoring the very files
+// that make its history verifiable.
 var keyMaterialPatterns = []string{"*.key", "*_ed25519", "*_rsa", "*.pem", "id_*"}
+
+// publicKeySuffix marks files that look like key material by name but
+// are meant to be shared.
+const publicKeySuffix = ".pub"
+
+// gitignoreKeyMaterialLines are the patterns suggested for a core
+// .gitignore: the private shapes, then an explicit re-inclusion of
+// public keys, which must come after to override the broader globs.
+func gitignoreKeyMaterialLines() []string {
+	return append(append([]string{}, keyMaterialPatterns...), "!*"+publicKeySuffix)
+}
 
 // Options configures a check run.
 type Options struct {
@@ -228,19 +252,19 @@ func (c checker) keyMaterial(r *Report, repoOK bool) {
 			Fix:    "check that git can read " + c.core})
 		return
 	}
-	if tracked != "" {
-		files := strings.Split(tracked, "\n")
+	files := privateKeyFiles(tracked)
+	if len(files) > 0 {
 		r.Checks = append(r.Checks, Check{Name: "key_material_excluded", Status: StatusFail,
 			Detail: "private key material is tracked in core: " + strings.Join(files, ", ") +
 				" — committing it puts the key in history permanently, and it leaves the machine if core ever gains a remote",
 			Fix: "git -C " + c.core + " rm --cached " + strings.Join(files, " ") +
-				" && printf '%s\\n' " + strings.Join(quoteAll(keyMaterialPatterns), " ") + " >> " + filepath.Join(c.core, ".gitignore")})
+				" && printf '%s\\n' " + strings.Join(quoteAll(gitignoreKeyMaterialLines()), " ") + " >> " + filepath.Join(c.core, ".gitignore")})
 		return
 	}
 	if _, err := os.Stat(filepath.Join(c.core, ".gitignore")); errors.Is(err, os.ErrNotExist) {
 		r.Checks = append(r.Checks, Check{Name: "key_material_excluded", Status: StatusFail,
 			Detail: "core has no .gitignore, so nothing stops key material from being committed by a later 'git add'",
-			Fix: "printf '%s\\n' " + strings.Join(quoteAll(keyMaterialPatterns), " ") + " >> " +
+			Fix: "printf '%s\\n' " + strings.Join(quoteAll(gitignoreKeyMaterialLines()), " ") + " >> " +
 				filepath.Join(c.core, ".gitignore")})
 		return
 	}
@@ -285,6 +309,25 @@ func (c checker) coreClean(r *Report, headOK bool) {
 	}
 	r.Checks = append(r.Checks, Check{Name: "core_clean", Status: StatusPass,
 		Detail: "no uncommitted changes to tracked files"})
+}
+
+// privateKeyFiles filters a git ls-files result down to the entries that
+// are actually private key material, dropping public keys that matched
+// the same name shapes.
+func privateKeyFiles(lsFiles string) []string {
+	lsFiles = strings.TrimSpace(lsFiles)
+	if lsFiles == "" {
+		return nil
+	}
+	var out []string
+	for _, name := range strings.Split(lsFiles, "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" || strings.HasSuffix(name, publicKeySuffix) {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func quoteAll(values []string) []string {

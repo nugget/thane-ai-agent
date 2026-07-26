@@ -222,3 +222,47 @@ func TestReportOKTreatsSkippedAsNotPassing(t *testing.T) {
 		t.Fatalf("Failures() = %+v, want the skipped check", report.Failures())
 	}
 }
+
+// TestTrackedPublicKeyIsNotKeyMaterial guards the shape a correctly
+// initialized instance has: thane init commits the identity public key
+// and .allowed_signers on purpose, so the trust set travels with the
+// repository. Flagging those would fail a healthy core and suggest
+// ignoring the files that make its history verifiable.
+func TestTrackedPublicKeyIsNotKeyMaterial(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	identity := filepath.Join(core, "identity")
+	if err := os.MkdirAll(identity, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	for _, name := range []string{
+		filepath.Join(identity, "signing_ed25519.pub"),
+		filepath.Join(core, "id_ed25519.pub"),
+		filepath.Join(core, ".allowed_signers"),
+	} {
+		if err := os.WriteFile(name, []byte("ssh-ed25519 AAAA test\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(core, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitCommitAll(t, core, "core baseline")
+
+	got := checkByName(t, run(t, workspace), "key_material_excluded")
+	if got.Status != StatusPass {
+		t.Fatalf("public keys are not private key material: %+v", got)
+	}
+}
+
+func TestKeyMaterialFixReadmitsPublicKeys(t *testing.T) {
+	// The suggested .gitignore must not exclude public keys, or applying
+	// the fix would untrack the trust set on the next commit.
+	lines := gitignoreKeyMaterialLines()
+	if last := lines[len(lines)-1]; last != "!*.pub" {
+		t.Fatalf("last gitignore line = %q, want the public-key re-inclusion (order matters)", last)
+	}
+}
