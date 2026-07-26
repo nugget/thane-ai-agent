@@ -25,8 +25,8 @@ import (
 func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error {
 	cfg, cfgPath, loadErr := loadConfig(configPath, workspacePath)
 	// When discovery fails before a path is resolved, fall back to
-	// the operator's explicit -config value so the JSON report still
-	// names the file that was at fault. Stays empty when neither
+	// the operator's explicit -insecure-config value so the JSON report
+	// still names the file that was at fault. Stays empty when neither
 	// resolution nor an explicit flag was provided.
 	if cfgPath == "" {
 		cfgPath = configPath

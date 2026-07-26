@@ -32,6 +32,26 @@ func TestRun_RenamedConfigFlagTeachesTheNewName(t *testing.T) {
 	}
 }
 
+func TestRun_InsecureConfigWithoutValueSaysSo(t *testing.T) {
+	// The missing-value case is likeliest during the migration, when
+	// muscle memory types the old flag's shape. "unknown flag" would
+	// send the operator looking for a typo that is not there.
+	for _, args := range [][]string{
+		{"-insecure-config", "validate"},
+		{"-insecure-config="},
+		{"-insecure-config"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := run(context.Background(), &stdout, &stderr, args)
+		if err == nil {
+			t.Fatalf("run(%v) = nil, want a missing-value error", args)
+		}
+		if !strings.Contains(err.Error(), "needs a path") {
+			t.Fatalf("run(%v) error = %v, want it to say a path is required", args, err)
+		}
+	}
+}
+
 func TestRun_InsecureConfigFlagLoadsExactPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "candidate.yaml")

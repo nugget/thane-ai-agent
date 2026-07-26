@@ -125,7 +125,7 @@ func ConfigPathForWorkspace(workspace string) (string, error) {
 }
 
 // FindConfig returns the config path for a workspace, or the explicit
-// path when one is given (the unverified-config escape hatch, whose
+// path when one is given (the -insecure-config escape hatch, whose
 // caller is responsible for degrading the runtime accordingly).
 //
 // When the canonical config is absent, the error names any config left

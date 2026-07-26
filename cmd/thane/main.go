@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -73,6 +74,23 @@ func main() {
 //
 // run returns nil on clean shutdown and a non-nil error for any failure.
 // The caller (main) is responsible for printing the error and exiting.
+// errInsecureConfigNeedsPath is returned when -insecure-config is given
+// without a usable path.
+var errInsecureConfigNeedsPath = errors.New("-insecure-config needs a path (for example: -insecure-config /etc/thane/config.yaml); omit it entirely to load <workspace>/core/config.yaml")
+
+// thaneCommands are the subcommand names. A flag expecting a value must
+// not swallow one of these: the operator who typed it meant the command.
+var thaneCommands = map[string]bool{
+	"serve": true, "init": true, "validate": true, "ask": true,
+	"ingest": true, "caps": true, "health": true, "version": true,
+}
+
+// looksLikeCommandOrFlag reports whether a token is a subcommand or
+// another flag, and so cannot be the value the preceding flag wanted.
+func looksLikeCommandOrFlag(token string) bool {
+	return thaneCommands[token] || strings.HasPrefix(token, "-")
+}
+
 func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	// Parse arguments by hand. The flag package relies on package-level
 	// globals (flag.CommandLine), which makes it impossible to call run()
@@ -86,11 +104,20 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "-insecure-config" && i+1 < len(args):
+		case args[i] == "-insecure-config" && i+1 < len(args) && !looksLikeCommandOrFlag(args[i+1]):
 			configPath = args[i+1]
 			i++ // skip the value
+		case args[i] == "-insecure-config":
+			// Reached when the flag is last, or when the next token is a
+			// subcommand or another flag. Consuming a subcommand as the
+			// path would report "config file not found: validate", which
+			// sends the operator hunting for a typo they did not make.
+			return errInsecureConfigNeedsPath
 		case strings.HasPrefix(args[i], "-insecure-config="):
 			configPath = strings.TrimPrefix(args[i], "-insecure-config=")
+			if strings.TrimSpace(configPath) == "" {
+				return errInsecureConfigNeedsPath
+			}
 		case args[i] == "-config" || strings.HasPrefix(args[i], "-config="):
 			// Renamed rather than aliased. A config outside core cannot
 			// be covered by the instance's signed history — that is what
@@ -239,9 +266,10 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Config location:")
-	fmt.Fprintln(w, "  <workspace>/core/config.yaml — the only location Thane loads.")
-	fmt.Fprintln(w, "  Config lives inside core so it can be signed and version-controlled;")
-	fmt.Fprintln(w, "  it decides what the rest of the system trusts.")
+	fmt.Fprintln(w, "  <workspace>/core/config.yaml — the canonical location, and the only")
+	fmt.Fprintln(w, "  one Thane discovers. Config lives inside core so it can be signed")
+	fmt.Fprintln(w, "  and version-controlled; it decides what the rest of the system")
+	fmt.Fprintln(w, "  trusts. -insecure-config loads a path outside that boundary.")
 	return nil
 }
 
