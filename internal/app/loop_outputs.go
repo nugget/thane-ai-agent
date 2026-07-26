@@ -174,7 +174,7 @@ func renderLoopOutputContextWithNow(ctx context.Context, store *documents.Store,
 		entry := loopOutputContextEntry{
 			Name:      output.Name,
 			Type:      string(output.Type),
-			Mode:      string(output.EffectiveMode()),
+			Mode:      loopOutputContextMode(output),
 			Ref:       output.Ref,
 			Purpose:   output.Purpose,
 			ToolName:  output.ToolName(),
@@ -261,6 +261,20 @@ func outputInterfaceDescription(output looppkg.OutputSpec) string {
 	default:
 		return "Use the generated output tool for this declaration."
 	}
+}
+
+// loopOutputContextMode reports the write interface the model actually
+// has for this output. A tiered output's spec-level mode is still
+// replace — tiers are the only declaration, so there is no authorable
+// publish mode to contradict — but its generated tool takes projections
+// rather than a document body. Reporting the spec mode here would pair
+// "publish_output_*" with "mode: replace" in the same context block and
+// leave the model to guess which one describes the call it should make.
+func loopOutputContextMode(output looppkg.OutputSpec) string {
+	if output.IsTiered() {
+		return "publish"
+	}
+	return string(output.EffectiveMode())
 }
 
 // appendOutputDescription frames an append-mode output for the model.

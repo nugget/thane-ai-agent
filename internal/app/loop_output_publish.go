@@ -172,9 +172,9 @@ func loopOutputAudienceFrontmatter(output looppkg.OutputSpec) map[string][]strin
 	}
 }
 
-// findWorkingNotesOutput returns the loop's internal-audience journal
-// output, if it declared one. A loop may declare at most one working
-// notes surface; the first is used when several are present.
+// findWorkingNotesOutput returns the loop's working-notes output, if it
+// declared one. Spec validation permits at most one, so the first match
+// is the only match.
 func findWorkingNotesOutput(outputs []looppkg.OutputSpec) *looppkg.OutputSpec {
 	for i := range outputs {
 		if outputs[i].Type == looppkg.OutputTypeWorkingNotes {

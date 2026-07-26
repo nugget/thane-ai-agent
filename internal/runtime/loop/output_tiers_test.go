@@ -268,3 +268,35 @@ func TestTieredOutputToolNameUsesPublishVerb(t *testing.T) {
 		t.Fatalf("publish tool name exceeds the tool-name budget: %q", tiered.ToolName())
 	}
 }
+
+func TestValidateOutputsRejectsSecondWorkingNotes(t *testing.T) {
+	spec := Spec{
+		Name:       "curator",
+		Enabled:    true,
+		Task:       "Curate.",
+		Operation:  OperationService,
+		Completion: CompletionNone,
+		Outputs: []OutputSpec{
+			{Name: "office notes", Type: OutputTypeWorkingNotes, Ref: "core:office-notes.md"},
+			{Name: "shop notes", Type: OutputTypeWorkingNotes, Ref: "core:shop-notes.md"},
+		},
+	}
+	err := spec.ValidatePersistable()
+	if err == nil {
+		t.Fatal("ValidatePersistable() error = nil for two working_notes outputs, want error")
+	}
+	if !strings.Contains(err.Error(), "one private log") {
+		t.Fatalf("error = %v, want it to explain the single-log rule", err)
+	}
+
+	// The escape hatch the error names must actually validate.
+	spec.Outputs[1] = OutputSpec{
+		Name:     "shop journal",
+		Type:     OutputTypeJournalDocument,
+		Ref:      "core:shop-journal.md",
+		Audience: OutputAudienceInternal,
+	}
+	if err := spec.ValidatePersistable(); err != nil {
+		t.Fatalf("ValidatePersistable() with an internal journal alongside working notes: %v", err)
+	}
+}

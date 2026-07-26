@@ -348,3 +348,30 @@ func TestPublishToolRejectsNonStringProjection(t *testing.T) {
 		t.Fatalf("error = %v, want a typed argument error naming status_line", err)
 	}
 }
+
+func TestTieredOutputContextReportsPublishMode(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newLoopOutputDocumentStore(t)
+	app := &App{documentStore: store}
+	hydrated, err := app.hydrateLoopOutputs(tieredSpec())
+	if err != nil {
+		t.Fatalf("hydrateLoopOutputs: %v", err)
+	}
+	block, err := hydrated.OutputContextBuilder(context.Background(), hydrated.Outputs)
+	if err != nil {
+		t.Fatalf("OutputContextBuilder: %v", err)
+	}
+	// A tiered output advertises publish_output_*, so pairing it with
+	// the spec-level replace mode would describe a call that does not
+	// exist for this output.
+	if !strings.Contains(block, `"mode": "publish"`) {
+		t.Fatalf("tiered output context should report publish mode:\n%s", block)
+	}
+	if strings.Contains(block, `"mode": "replace"`) {
+		t.Fatalf("tiered output context still reports replace mode:\n%s", block)
+	}
+	if !strings.Contains(block, `"mode": "append"`) {
+		t.Fatalf("working-notes output should still report append mode:\n%s", block)
+	}
+}

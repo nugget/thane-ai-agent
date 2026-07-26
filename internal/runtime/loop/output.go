@@ -258,9 +258,22 @@ func validateOutputTiers(o OutputSpec) error {
 func validateOutputs(outputs []OutputSpec) error {
 	seenNames := make(map[string]struct{}, len(outputs))
 	seenTools := make(map[string]struct{}, len(outputs))
+	workingNotes := ""
 	for i, output := range outputs {
 		if err := output.Validate(); err != nil {
 			return fmt.Errorf("outputs[%d]: %w", i, err)
+		}
+		if output.Type == OutputTypeWorkingNotes {
+			// One private log per loop: the note argument on a tiered
+			// publish writes to "the" working notes, and a second
+			// declaration would make that target an arbitrary pick
+			// between two documents. A loop that wants another private
+			// journal can declare journal_document with
+			// audience: internal, which carries no such implicit target.
+			if workingNotes != "" {
+				return fmt.Errorf("outputs[%d]: loop already declares the working_notes output %q; a loop has one private log, so declare additional private journals as journal_document with audience: %q", i, workingNotes, OutputAudienceInternal)
+			}
+			workingNotes = output.Name
 		}
 		nameKey := strings.ToLower(strings.TrimSpace(output.Name))
 		if _, exists := seenNames[nameKey]; exists {
