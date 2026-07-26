@@ -59,8 +59,18 @@ const ConfigFileName = "config.yaml"
 // moved inside the trust boundary. They are no longer loaded; they are
 // probed only so a failure to find the real config can say where the old
 // one is and how to move it.
-func legacyConfigLocations() []string {
-	paths := []string{ConfigFileName}
+//
+// The instance's own workspace comes first. That is where an existing
+// instance's config actually sits, and it is the one location the fixed
+// list cannot express: a workspace given with -workspace matches neither
+// the working directory nor ~/Thane, so without it the migration
+// instructions would go missing in precisely the case that needs them.
+func legacyConfigLocations(workspace string) []string {
+	var paths []string
+	if abs, err := ExpandWorkspace(workspace); err == nil {
+		paths = append(paths, filepath.Join(abs, ConfigFileName))
+	}
+	paths = append(paths, ConfigFileName)
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths,
 			filepath.Join(home, "Thane", ConfigFileName),
@@ -137,7 +147,7 @@ func FindConfig(explicit, workspace string) (string, error) {
 		return canonical, nil
 	}
 
-	if legacy := firstExistingLegacyConfig(); legacy != "" {
+	if legacy := firstExistingLegacyConfig(workspace); legacy != "" {
 		coreDir := filepath.Dir(canonical)
 		return "", fmt.Errorf(
 			"no config at %s\n\nA config still exists at the pre-core location %s. Thane now loads config only from inside the instance trust boundary, so it can be signed and version-controlled. Move it and commit it:\n\n  mkdir -p %s\n  git -C %s init    # if core is not a repo yet\n  mv %s %s\n  git -C %s add %s && git -C %s commit -S -m 'adopt runtime config into core'",
@@ -155,8 +165,8 @@ func FindConfig(explicit, workspace string) (string, error) {
 
 // firstExistingLegacyConfig reports the first pre-core config location
 // that still holds a file, or empty when none do.
-func firstExistingLegacyConfig() string {
-	for _, p := range legacyConfigLocations() {
+func firstExistingLegacyConfig(workspace string) string {
+	for _, p := range legacyConfigLocations(workspace) {
 		if _, err := os.Stat(p); err == nil {
 			abs, absErr := filepath.Abs(p)
 			if absErr != nil {

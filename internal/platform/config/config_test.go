@@ -51,18 +51,68 @@ func TestFindConfig_LoadsFromWorkspaceCore(t *testing.T) {
 }
 
 func TestFindConfig_IgnoresConfigOutsideCore(t *testing.T) {
-	// A config beside core is not a fallback. Loading it would put the
-	// file that defines the trust policy outside the trust boundary.
+	// A config beside core is not a fallback — loading it would put the
+	// file that defines the trust policy outside the trust boundary —
+	// but it is the likeliest thing an upgrading instance has, so the
+	// failure has to hand back a usable migration instead of just
+	// refusing. Asserting only that this errors would pass even when the
+	// guidance goes missing.
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, "core"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+	legacy := filepath.Join(workspace, "config.yaml")
+	if err := os.WriteFile(legacy, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if _, err := FindConfig("", workspace); err == nil {
+	_, err := FindConfig("", workspace)
+	if err == nil {
 		t.Fatal("FindConfig should not fall back to a config outside core")
+	}
+	got := err.Error()
+	canonical := filepath.Join(workspace, "core", "config.yaml")
+	for _, want := range []string{
+		canonical, // where the config must end up
+		legacy,    // where it is now
+		"mv " + legacy + " " + canonical,
+		"commit -S",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("migration guidance missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFindConfig_LegacyProbeFindsWorkspaceConfigFromAnyCWD(t *testing.T) {
+	// The workspace-adjacent config is the one location the fixed legacy
+	// list cannot express: with -workspace pointing somewhere that is
+	// neither the working directory nor ~/Thane, probing only those would
+	// lose the migration instructions exactly when they are needed.
+	workspace := t.TempDir()
+	legacy := filepath.Join(workspace, "config.yaml")
+	if err := os.WriteFile(legacy, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Run from an unrelated directory so a CWD-relative probe cannot be
+	// what finds it.
+	elsewhere := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(elsewhere); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	_, err = FindConfig("", workspace)
+	if err == nil {
+		t.Fatal("FindConfig should error when only a pre-core config exists")
+	}
+	if !strings.Contains(err.Error(), legacy) {
+		t.Fatalf("error should name the workspace-adjacent legacy config:\n%s", err)
 	}
 }
 
