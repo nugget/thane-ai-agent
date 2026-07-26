@@ -106,6 +106,20 @@ func TestHydrateLoopOutputsBuildsScopedToolsAndContext(t *testing.T) {
 	}
 }
 
+func TestCloneLoopOutputsDeepCopiesTiers(t *testing.T) {
+	src := []looppkg.OutputSpec{{
+		Name:  "ranch status",
+		Type:  looppkg.OutputTypeMaintainedDocument,
+		Ref:   "kb:ranch.md",
+		Tiers: []looppkg.OutputTier{looppkg.OutputTierStatusLine, looppkg.OutputTierTeaser},
+	}}
+	dst := cloneLoopOutputs(src)
+	dst[0].Tiers[1] = looppkg.OutputTierDigest
+	if src[0].Tiers[1] != looppkg.OutputTierTeaser {
+		t.Fatalf("cloneLoopOutputs shares Tiers backing array: src mutated to %q", src[0].Tiers[1])
+	}
+}
+
 func TestRenderLoopOutputContextUsesDeltaFreshness(t *testing.T) {
 	t.Parallel()
 

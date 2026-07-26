@@ -85,6 +85,136 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "working notes defaults append",
+			output: OutputSpec{
+				Name: "ranch notes",
+				Type: OutputTypeWorkingNotes,
+				Ref:  "core:ranch-notes.md",
+			},
+			wantTool: "append_output_ranch_notes",
+		},
+		{
+			name: "working notes rejects replace mode",
+			output: OutputSpec{
+				Name: "ranch notes",
+				Type: OutputTypeWorkingNotes,
+				Ref:  "core:ranch-notes.md",
+				Mode: OutputModeReplace,
+			},
+			wantErr: true,
+		},
+		{
+			name: "working notes rejects published audience",
+			output: OutputSpec{
+				Name:     "ranch notes",
+				Type:     OutputTypeWorkingNotes,
+				Ref:      "core:ranch-notes.md",
+				Audience: OutputAudiencePublished,
+			},
+			wantErr: true,
+		},
+		{
+			name: "journal accepts explicit internal audience",
+			output: OutputSpec{
+				Name:     "private journal",
+				Type:     OutputTypeJournalDocument,
+				Ref:      "core:private-journal.md",
+				Audience: OutputAudienceInternal,
+			},
+			wantTool: "append_output_private_journal",
+		},
+		{
+			name: "unknown audience rejected",
+			output: OutputSpec{
+				Name:     "state",
+				Type:     OutputTypeMaintainedDocument,
+				Ref:      "core:state.md",
+				Audience: OutputAudience("secret"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "tiered maintained document valid",
+			output: OutputSpec{
+				Name:  "ranch status",
+				Type:  OutputTypeMaintainedDocument,
+				Ref:   "core:ranch.md",
+				Tiers: []OutputTier{OutputTierStatusLine, OutputTierTeaser, OutputTierDigest},
+			},
+			wantTool: "replace_output_ranch_status",
+		},
+		{
+			name: "status line alone anchors the ladder",
+			output: OutputSpec{
+				Name:  "ranch status",
+				Type:  OutputTypeMaintainedDocument,
+				Ref:   "core:ranch.md",
+				Tiers: []OutputTier{OutputTierStatusLine},
+			},
+			wantTool: "replace_output_ranch_status",
+		},
+		{
+			name: "tiers without status line rejected",
+			output: OutputSpec{
+				Name:  "ranch status",
+				Type:  OutputTypeMaintainedDocument,
+				Ref:   "core:ranch.md",
+				Tiers: []OutputTier{OutputTierTeaser, OutputTierDigest},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unknown tier rejected",
+			output: OutputSpec{
+				Name:  "ranch status",
+				Type:  OutputTypeMaintainedDocument,
+				Ref:   "core:ranch.md",
+				Tiers: []OutputTier{OutputTierStatusLine, OutputTier("hud")},
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicate tier rejected",
+			output: OutputSpec{
+				Name:  "ranch status",
+				Type:  OutputTypeMaintainedDocument,
+				Ref:   "core:ranch.md",
+				Tiers: []OutputTier{OutputTierStatusLine, OutputTierStatusLine},
+			},
+			wantErr: true,
+		},
+		{
+			name: "tiers on journal rejected",
+			output: OutputSpec{
+				Name:  "service journal",
+				Type:  OutputTypeJournalDocument,
+				Ref:   "core:service-journal.md",
+				Tiers: []OutputTier{OutputTierStatusLine},
+			},
+			wantErr: true,
+		},
+		{
+			name: "tiers on working notes rejected",
+			output: OutputSpec{
+				Name:  "ranch notes",
+				Type:  OutputTypeWorkingNotes,
+				Ref:   "core:ranch-notes.md",
+				Tiers: []OutputTier{OutputTierStatusLine},
+			},
+			wantErr: true,
+		},
+		{
+			name: "tiers on internal maintained document rejected",
+			output: OutputSpec{
+				Name:     "hypotheses",
+				Type:     OutputTypeMaintainedDocument,
+				Ref:      "core:hypotheses.md",
+				Audience: OutputAudienceInternal,
+				Tiers:    []OutputTier{OutputTierStatusLine},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -103,6 +233,57 @@ func TestOutputSpecValidateAndToolName(t *testing.T) {
 				t.Fatalf("ToolName() = %q, want %q", got, tt.wantTool)
 			}
 		})
+	}
+}
+
+func TestOutputSpecEffectiveAudience(t *testing.T) {
+	tests := []struct {
+		name   string
+		output OutputSpec
+		want   OutputAudience
+	}{
+		{
+			name:   "maintained document defaults published",
+			output: OutputSpec{Type: OutputTypeMaintainedDocument},
+			want:   OutputAudiencePublished,
+		},
+		{
+			name:   "journal defaults published",
+			output: OutputSpec{Type: OutputTypeJournalDocument},
+			want:   OutputAudiencePublished,
+		},
+		{
+			name:   "working notes default internal",
+			output: OutputSpec{Type: OutputTypeWorkingNotes},
+			want:   OutputAudienceInternal,
+		},
+		{
+			name:   "explicit audience wins",
+			output: OutputSpec{Type: OutputTypeJournalDocument, Audience: OutputAudienceInternal},
+			want:   OutputAudienceInternal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.output.EffectiveAudience(); got != tt.want {
+				t.Fatalf("EffectiveAudience() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCloneOutputsDeepCopiesTiers(t *testing.T) {
+	src := []OutputSpec{{
+		Name:  "ranch status",
+		Type:  OutputTypeMaintainedDocument,
+		Ref:   "core:ranch.md",
+		Tiers: []OutputTier{OutputTierStatusLine, OutputTierTeaser},
+	}}
+	dst := cloneOutputs(src)
+	dst[0].Tiers[1] = OutputTierDigest
+	if src[0].Tiers[1] != OutputTierTeaser {
+		t.Fatalf("cloneOutputs shares Tiers backing array: src mutated to %q", src[0].Tiers[1])
 	}
 }
 
@@ -162,6 +343,12 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 				Type:    OutputTypeMaintainedDocument,
 				Ref:     "generated:status.md",
 				Purpose: "Current status.",
+				Tiers:   []OutputTier{OutputTierStatusLine, OutputTierTeaser},
+			},
+			{
+				Name: "notes",
+				Type: OutputTypeWorkingNotes,
+				Ref:  "generated:notes.md",
 			},
 		},
 	}
@@ -173,16 +360,25 @@ func TestSpecJSONRoundTripIncludesOutputs(t *testing.T) {
 	if !strings.Contains(string(data), `"outputs"`) {
 		t.Fatalf("marshaled spec missing outputs: %s", string(data))
 	}
+	if !strings.Contains(string(data), `"tiers"`) {
+		t.Fatalf("marshaled spec missing tiers: %s", string(data))
+	}
 
 	var got Spec
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if len(got.Outputs) != 1 {
-		t.Fatalf("Outputs len = %d, want 1", len(got.Outputs))
+	if len(got.Outputs) != 2 {
+		t.Fatalf("Outputs len = %d, want 2", len(got.Outputs))
 	}
 	if got.Outputs[0].ToolName() != "replace_output_status" {
 		t.Fatalf("output tool = %q, want replace_output_status", got.Outputs[0].ToolName())
+	}
+	if len(got.Outputs[0].Tiers) != 2 || got.Outputs[0].Tiers[0] != OutputTierStatusLine {
+		t.Fatalf("round-tripped tiers = %v, want [status_line teaser]", got.Outputs[0].Tiers)
+	}
+	if got.Outputs[1].EffectiveAudience() != OutputAudienceInternal {
+		t.Fatalf("working notes audience = %q, want internal", got.Outputs[1].EffectiveAudience())
 	}
 	if err := got.ValidatePersistable(); err != nil {
 		t.Fatalf("ValidatePersistable: %v", err)
