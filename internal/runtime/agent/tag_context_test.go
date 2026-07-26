@@ -1101,3 +1101,57 @@ func TestKBArticleTags_CountsTagsAll(t *testing.T) {
 		t.Errorf("unexpected extra tags in counts: %v", counts)
 	}
 }
+
+func TestBuildSystemPrompt_InjectRootsGovernEligibility(t *testing.T) {
+	kbDir := t.TempDir()
+	vaultDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "guide.md"),
+		[]byte("---\ntags: [forge]\n---\n# Guide\nEligible guidance."), 0644)
+	os.WriteFile(filepath.Join(vaultDir, "notes.md"),
+		[]byte("---\ntags: [forge]\n---\n# Notes\nIneligible vault content."), 0644)
+
+	l := newTagTestLoop()
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {Description: "Code generation", Tools: []string{"forge_run"}, Core: true},
+	}
+	// Only kb declares tagged injection; the vault root is present on
+	// disk with identically tagged content but is not eligible.
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:     capTags,
+		KBDir:       kbDir,
+		InjectRoots: map[string]InjectRoot{"kb": {Dir: kbDir}},
+		Logger:      l.logger,
+	}))
+	l.SetCapabilityTags(capTags, nil)
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
+	if !strings.Contains(prompt, "Eligible guidance.") {
+		t.Error("an injection-eligible root's tagged article should inject")
+	}
+	if strings.Contains(prompt, "Ineligible vault content.") {
+		t.Error("a root that does not declare injection must not reach the prompt")
+	}
+}
+
+func TestBuildSystemPrompt_InjectRootRequiresTagGatesWholeRoot(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "guide.md"),
+		[]byte("---\ntags: [forge]\n---\n# Guide\nGated corpus content."), 0644)
+
+	l := newTagTestLoop()
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {Description: "Code generation", Tools: []string{"forge_run"}, Core: true},
+	}
+	// The article's own tag is active, but the root demands a second
+	// capability that is not.
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:     capTags,
+		InjectRoots: map[string]InjectRoot{"kb": {Dir: kbDir, RequiresTag: "devops"}},
+		Logger:      l.logger,
+	}))
+	l.SetCapabilityTags(capTags, nil)
+
+	if prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello"); strings.Contains(prompt, "Gated corpus content.") {
+		t.Error("requires_tag should keep the whole root out until its capability is active")
+	}
+}

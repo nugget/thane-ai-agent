@@ -89,6 +89,25 @@ func audienceExplicitlyFiltered(q SearchQuery) bool {
 	return false
 }
 
+// rootSearchable reports whether a root's documents may appear in this
+// search. A root set to on_request stays out of an unscoped query but is
+// fully reachable once the query names it — the shape a large foreign
+// corpus wants, where the documents are worth having but would drown an
+// open-ended search.
+func (s *Store) rootSearchable(root string, rootNamed bool) bool {
+	if s == nil {
+		return true
+	}
+	switch s.rootPolicy(normalizeRootName(root)).Context.EffectiveSearch() {
+	case RootSearchNever:
+		return false
+	case RootSearchOnRequest:
+		return rootNamed
+	default:
+		return true
+	}
+}
+
 func normalizeSearchFrontmatter(in map[string][]string) map[string][]string {
 	if len(in) == 0 {
 		return nil

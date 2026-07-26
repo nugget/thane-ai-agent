@@ -895,6 +895,103 @@ type RootEntry struct {
 	// Git configures optional git-backed write provenance for this
 	// root. Same fields as the legacy doc_roots[name].git block.
 	Git DocumentRootGitConfig `yaml:"git,omitempty"`
+
+	// Context governs how this root's documents may reach a model:
+	// whether they can be injected into a prompt and how they surface
+	// in search. Omit to keep the legacy behavior for this root.
+	Context RootContextPolicy `yaml:"context,omitempty"`
+}
+
+// Root context policy values. Injection is the narrower and more
+// consequential of the two: a root that may inject can place text into a
+// system prompt without anyone asking for it, so eligibility is declared
+// per root rather than inferred from a document's own frontmatter.
+const (
+	// RootInjectNone keeps every document in this root out of prompt
+	// assembly. It is the safe default for any root Thane does not
+	// author, and for any root synced from somewhere Thane does not
+	// control.
+	RootInjectNone = "none"
+	// RootInjectTagged lets a document whose frontmatter tags match an
+	// active capability tag inject as tagged guidance.
+	RootInjectTagged = "tagged"
+
+	// RootSearchDefault includes the root in unscoped document search.
+	RootSearchDefault = "default"
+	// RootSearchOnRequest keeps the root out of unscoped search but
+	// reachable when a query names it. Large foreign corpora want this:
+	// searchable on purpose, never drowning an open-ended query.
+	RootSearchOnRequest = "on_request"
+	// RootSearchNever excludes the root from document search entirely.
+	RootSearchNever = "never"
+)
+
+// RootContextPolicy declares how one document root may reach a model.
+// It sits beside the storage policy (authoring, git, signing) because it
+// answers the same class of question — how is this corpus governed — at
+// the same granularity, and because a corpus is the only place the
+// answer can be given for documents Thane does not own and cannot
+// annotate.
+type RootContextPolicy struct {
+	// Inject controls prompt-assembly eligibility: "none" (default for
+	// a root that declares a context policy) or "tagged".
+	Inject string `yaml:"inject,omitempty"`
+
+	// Search controls search visibility: "default", "on_request", or
+	// "never".
+	Search string `yaml:"search,omitempty"`
+
+	// RequiresTag optionally gates the whole root behind one capability
+	// tag. It is a coarse companion to per-document tags: cheap to
+	// enforce, and the right shape when an entire corpus is only
+	// relevant while a capability is active.
+	RequiresTag string `yaml:"requires_tag,omitempty"`
+}
+
+// Declared reports whether this root states a context policy at all.
+// An undeclared policy keeps the root's historical behavior so an
+// existing config does not silently change how context is assembled.
+func (p RootContextPolicy) Declared() bool {
+	return p.Inject != "" || p.Search != "" || p.RequiresTag != ""
+}
+
+// EffectiveInject resolves the injection policy. A root that declares a
+// context policy without naming inject gets "none": declaring policy is
+// an act of governance, and the safe reading of an unstated answer is
+// that the corpus stays out of the prompt.
+func (p RootContextPolicy) EffectiveInject() string {
+	if p.Inject == "" {
+		return RootInjectNone
+	}
+	return p.Inject
+}
+
+// EffectiveSearch resolves the search policy, defaulting to full
+// visibility. Search is a pull: the model asked, so the conservative
+// default is the useful one.
+func (p RootContextPolicy) EffectiveSearch() string {
+	if p.Search == "" {
+		return RootSearchDefault
+	}
+	return p.Search
+}
+
+// Validate checks the declared policy values.
+func (p RootContextPolicy) Validate(rootName string) error {
+	switch p.Inject {
+	case "", RootInjectNone, RootInjectTagged:
+	default:
+		return fmt.Errorf("roots.%s.context.inject must be %q or %q, got %q", rootName, RootInjectNone, RootInjectTagged, p.Inject)
+	}
+	switch p.Search {
+	case "", RootSearchDefault, RootSearchOnRequest, RootSearchNever:
+	default:
+		return fmt.Errorf("roots.%s.context.search must be %q, %q, or %q, got %q", rootName, RootSearchDefault, RootSearchOnRequest, RootSearchNever, p.Search)
+	}
+	if p.RequiresTag != "" && p.EffectiveInject() == RootInjectNone && p.EffectiveSearch() == RootSearchNever {
+		return fmt.Errorf("roots.%s.context.requires_tag has no effect when the root neither injects nor is searchable", rootName)
+	}
+	return nil
 }
 
 // UnmarshalYAML accepts either the bare-string shorthand or the full
@@ -946,6 +1043,9 @@ type DocumentRootConfig struct {
 
 	// Git configures optional git-backed write provenance for this root.
 	Git DocumentRootGitConfig `yaml:"git,omitempty"`
+
+	// Context governs how this root's documents may reach a model.
+	Context RootContextPolicy `yaml:"context,omitempty"`
 }
 
 // DocumentRootGitConfig configures git-backed provenance for one
@@ -2269,6 +2369,7 @@ func (c *Config) normalizeRoots() error {
 					Indexing:  entry.Indexing,
 					Authoring: entry.Authoring,
 					Git:       entry.Git,
+					Context:   entry.Context,
 				}
 			}
 		}
@@ -2293,6 +2394,9 @@ func entryHasPolicy(entry RootEntry) bool {
 		return true
 	}
 	if strings.TrimSpace(entry.Authoring) != "" {
+		return true
+	}
+	if entry.Context.Declared() {
 		return true
 	}
 	g := entry.Git
@@ -2851,6 +2955,9 @@ func (c *Config) validateDocRoots() error {
 		case "", "managed", "read_only", "restricted":
 		default:
 			return fmt.Errorf("doc_roots.%s.authoring %q must be one of [managed, read_only, restricted]", root, policy.Authoring)
+		}
+		if err := policy.Context.Validate(root); err != nil {
+			return err
 		}
 		git := policy.Git
 		switch strings.TrimSpace(git.VerifySignatures) {

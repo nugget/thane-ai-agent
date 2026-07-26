@@ -203,11 +203,17 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		score int
 	}
 	includeInternal := q.IncludeInternal || audienceExplicitlyFiltered(q)
+	// A root named in the query is being searched deliberately, so
+	// on_request visibility is satisfied by the naming itself.
+	rootNamed := q.Root != ""
 	var matches []scored
 	for rows.Next() {
 		var doc DocumentSummary
 		if err := scanDocument(rows, &doc); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
+		}
+		if !s.rootSearchable(doc.Root, rootNamed) {
+			continue
 		}
 		if !includeInternal && isInternalAudienceDocument(doc.Frontmatter) {
 			continue
