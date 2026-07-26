@@ -359,3 +359,34 @@ func TestConfigSignedSkippedWhenConfigNotCommitted(t *testing.T) {
 		t.Fatalf("config_signed = %+v, want skipped when there is no committed config to verify", got)
 	}
 }
+
+// TestUncommittedConfigGetsStagingFix pins the distinction between the
+// two signature failures: an edit that was never committed cannot be
+// fixed by amending, because the commit does not contain it yet.
+func TestUncommittedConfigGetsStagingFix(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	signCore(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	configPath := filepath.Join(core, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitCommitAll(t, core, "core baseline")
+	if err := os.WriteFile(configPath, []byte("listen:\n  port: 9090\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got := checkByName(t, run(t, workspace), "config_signed")
+	if got.Status != StatusFail {
+		t.Fatalf("an uncommitted config edit must fail config_signed: %+v", got)
+	}
+	if !strings.Contains(got.Fix, "add ") {
+		t.Fatalf("an uncommitted change needs staging before it can be signed: %q", got.Fix)
+	}
+	if strings.Contains(got.Fix, "--amend") {
+		t.Fatalf("amending a commit that does not contain the change would waste the operator's one careful attempt: %q", got.Fix)
+	}
+}

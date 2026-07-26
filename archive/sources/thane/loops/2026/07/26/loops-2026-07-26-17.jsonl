@@ -1,2 +1,0 @@
-{"event_id":"019f9f93-ad2f-74a7-bf7f-36bb032f0fb2","ts":"2026-07-26T17:58:03.311267Z","dataset":"loops","kind":"loop_topology","schema_version":1,"loop_id":"019f9f93-ad2f-73dc-b054-e5cad6597862","source":"loop","severity":"INFO","payload":{"loop_id":"019f9f93-ad2f-73dc-b054-e5cad6597862"}}
-{"event_id":"019f9f93-ad30-70b7-a56e-cddfb1b447d5","ts":"2026-07-26T17:58:03.312027Z","dataset":"loops","kind":"loop_topology","schema_version":1,"loop_id":"019f9f93-ad30-7061-8346-8050e149a618","source":"loop","severity":"INFO","payload":{"loop_id":"019f9f93-ad30-7061-8346-8050e149a618"}}

@@ -472,7 +472,7 @@ func gateOnCoreIntegrity(ctx context.Context, logger *slog.Logger, cfg *config.C
 	// message written for the operator.
 	logger.Error("refusing to start: core integrity check failed",
 		"core", report.CorePath,
-		"failed_checks", strings.Join(failed, ","),
+		"failed_checks", failed,
 		"exit_code", ExitTerminal,
 	)
 

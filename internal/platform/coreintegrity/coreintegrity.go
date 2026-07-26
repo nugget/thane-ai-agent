@@ -297,43 +297,6 @@ func (c checker) configTracked(r *Report, headOK bool) bool {
 	return true
 }
 
-// configSigned verifies that the running config is covered by a commit
-// signed by a key the instance trusts. This is the check the other ones
-// exist to make meaningful: history without signatures records what
-// changed but not who was entitled to change it.
-func (c checker) configSigned(r *Report, configOK bool) {
-	if !configOK {
-		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusSkipped,
-			Detail: "config is not committed in core"})
-		return
-	}
-	verifier, err := provenance.NewVerifier(c.core, slog.New(slog.DiscardHandler), provenance.Options{})
-	if err != nil {
-		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
-			Detail: "cannot resolve the trusted signer set: " + err.Error(),
-			Fix:    "ensure " + filepath.Join(c.core, ".allowed_signers") + " exists and lists the keys entitled to sign this instance"})
-		return
-	}
-	result, err := verifier.VerifyFile(c.ctx, c.configName)
-	switch {
-	case err != nil:
-		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
-			Detail: "signature verification failed: " + err.Error(),
-			Fix:    "commit the config with a trusted key: git -C " + c.core + " commit -S"})
-	case !result.Trusted():
-		detail := c.configName + " is not covered by a commit signed by a trusted key"
-		if result.Message != "" {
-			detail += ": " + result.Message
-		}
-		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
-			Detail: detail,
-			Fix:    "re-commit with a key listed in " + filepath.Join(c.core, ".allowed_signers") + ": git -C " + c.core + " commit -S --amend --no-edit"})
-	default:
-		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusPass,
-			Detail: c.configName + " is covered by a trusted signature"})
-	}
-}
-
 func (c checker) coreClean(r *Report, headOK bool) {
 	if !headOK {
 		r.Checks = append(r.Checks, Check{Name: "core_clean", Status: StatusSkipped,
@@ -355,6 +318,59 @@ func (c checker) coreClean(r *Report, headOK bool) {
 	}
 	r.Checks = append(r.Checks, Check{Name: "core_clean", Status: StatusPass,
 		Detail: "no uncommitted changes to tracked files"})
+}
+
+// configSigned verifies that the running config is covered by a commit
+// signed by a key the instance trusts. This is the check the others
+// exist to make meaningful: history without signatures records what
+// changed but not who was entitled to change it.
+//
+// The failure mode is determined here rather than inferred from the
+// verifier's message, because the two common failures need different
+// commands — an uncommitted edit needs staging before it can be signed,
+// while a committed-but-unsigned config needs the existing commit
+// amended. Telling an operator to amend a commit that does not yet
+// contain their change would waste the one attempt they read carefully.
+func (c checker) configSigned(r *Report, configOK bool) {
+	if !configOK {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusSkipped,
+			Detail: "config is not committed in core"})
+		return
+	}
+
+	if status, err := c.git("status", "--porcelain", "--", c.configName); err == nil && strings.TrimSpace(status) != "" {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+			Detail: c.configName + " has uncommitted changes, so the running config is not the one any signature covers",
+			Fix:    "git -C " + c.core + " add " + c.configName + " && git -C " + c.core + " commit -S -m 'update runtime config'"})
+		return
+	}
+
+	verifier, err := provenance.NewVerifier(c.core, slog.New(slog.DiscardHandler), provenance.Options{})
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+			Detail: "cannot resolve the trusted signer set: " + err.Error(),
+			Fix:    "ensure " + filepath.Join(c.core, ".allowed_signers") + " exists and lists the keys entitled to sign this instance"})
+		return
+	}
+
+	// VerifyFile reports a failure through both the result and a non-nil
+	// error carrying the same message, so the result is the authority
+	// and the error is not a separate case.
+	result, _ := verifier.VerifyFile(c.ctx, c.configName)
+	if result.Trusted() {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusPass,
+			Detail: c.configName + " is covered by a trusted signature"})
+		return
+	}
+
+	detail := c.configName + " is not covered by a commit signed by a trusted key"
+	if result.Message != "" {
+		detail += ": " + result.Message
+	}
+	r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+		Detail: detail,
+		Fix: "re-sign the commit that carries it with a key listed in " + filepath.Join(c.core, ".allowed_signers") +
+			": git -C " + c.core + " commit -S --amend --no-edit"})
 }
 
 // privateKeyFiles filters a git ls-files result down to the entries that

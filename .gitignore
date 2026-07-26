@@ -75,3 +75,16 @@ talents/my-*
 
 # Built dev-tool binary (cmd/prewarm-replay)
 /prewarm-replay
+
+# Runtime state written by a local `thane serve` or `thane init` run in
+# the repo root. These are workspace artifacts, not source: the archive
+# segments embed absolute paths from whoever ran the binary, and the
+# SQLite sidecars change on every run.
+archive/
+db/
+core/
+scratchpad/
+knowledge/
+projects/
+generated/
+talents_backup/
