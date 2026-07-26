@@ -117,8 +117,15 @@ func (s *Store) ensureRepo() error {
 			if err != nil {
 				return fmt.Errorf("render seed allowed_signers: %w", err)
 			}
-			if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
+			// Rename-based, and re-validated after: a plain write leaves a
+			// window between the not-exist check above and the write in
+			// which a symlink can be dropped in, redirecting the file that
+			// decides which signatures count to somewhere outside the repo.
+			if err := atomicWriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
 				return fmt.Errorf("write .allowed_signers: %w", err)
+			}
+			if err := validateAllowedSignersFile(allowedPath); err != nil {
+				return fmt.Errorf("seed .allowed_signers: %w", err)
 			}
 		}
 	} else if err := validateAllowedSignersFile(allowedPath); err != nil {

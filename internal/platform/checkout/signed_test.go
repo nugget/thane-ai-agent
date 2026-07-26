@@ -120,7 +120,7 @@ func TestOpenSignedCanLeaveBirthCommitToCaller(t *testing.T) {
 	}
 }
 
-func TestOpenSignedRejectsDeferredBirthWithTrustedSigners(t *testing.T) {
+func TestOpenSignedRejectsDeferredBirthWithSeedSigners(t *testing.T) {
 	worktree := t.TempDir()
 	signingKey, _ := writeSigningKey(t, "checkout-test")
 	_, operatorPublic := writeSigningKey(t, "operator-test")
@@ -136,10 +136,10 @@ func TestOpenSignedRejectsDeferredBirthWithTrustedSigners(t *testing.T) {
 		}},
 	})
 	if err == nil {
-		t.Fatal("OpenSigned() error = nil, want trusted signer guard")
+		t.Fatal("OpenSigned() error = nil, want the seed-signer guard")
 	}
-	if !strings.Contains(err.Error(), "trusted signers require a birth commit") {
-		t.Fatalf("error = %v, want trusted signer guard", err)
+	if !strings.Contains(err.Error(), "overwrite the seeded trust set") {
+		t.Fatalf("error = %v, want the seed-signer guard", err)
 	}
 }
 

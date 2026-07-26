@@ -968,7 +968,7 @@ compaction:
 #   Supports ~ expansion. Example: ~/.ssh/id_ed25519
 #   signing_key: ~/.ssh/id_ed25519
 #
-# (optional) Signing declares the operator-managed set of SSH public keys trusted
+# (optional) Signing is a placeholder for future instance-wide signing settings.
 # signing: {}
 #
 # (optional) StateWindow configures the rolling window of recent Home Assistant

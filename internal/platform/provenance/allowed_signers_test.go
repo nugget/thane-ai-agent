@@ -229,7 +229,7 @@ func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 		t.Fatalf("operator line missing or malformed:\n%s", got)
 	}
 
-	// HEAD (the reconcile commit) must still verify against the rendered
+	// HEAD (the seed commit) must still verify against the rendered
 	// trust file — the agent key that signed it is in the file.
 	if err := s.git(t.Context(), nil, nil, "verify-commit", "HEAD"); err != nil {
 		t.Fatalf("verify-commit HEAD after seed: %v", err)
@@ -249,8 +249,8 @@ func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 	}
 }
 
-// TestSeedAllowedSignersRejectsExternalTrustFile confirms the in-tree
-// reconcile refuses to run when the Store verifies against an external
+// TestSeedAllowedSignersRejectsExternalTrustFile confirms in-tree seeding
+// refuses to run when the Store verifies against an external
 // allowed_signers file it could not commit anyway.
 func TestSeedAllowedSignersRejectsExternalTrustFile(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

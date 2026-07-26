@@ -394,13 +394,11 @@ type Config struct {
 	// {workspace.path}/core rather than from this store.
 	Provenance ProvenanceConfig `yaml:"provenance"`
 
-	// Signing declares the operator-managed set of SSH public keys trusted
-	// to sign commits in git-backed document roots, in addition to the
-	// agent's own generated signing key (which is always trusted and can
-	// never be removed). These shared keys apply to every signing root; a
-	// root may extend the set with its own git.allowed_signers. Keys live
-	// only here in config and are never reachable by a model loop. This is
-	// the trust gate that lets an operator co-author a signed root.
+	// Signing is a placeholder for future instance-wide signing settings.
+	// It no longer holds a trust set: signing keys are declared per root
+	// as roots.<name>.seed_signers, so the keys entitled to sign a corpus
+	// shared over a remote are not automatically entitled to sign the
+	// config that decides what the whole system trusts.
 	Signing SigningConfig `yaml:"signing"`
 
 	// StateWindow configures the rolling window of recent Home Assistant
