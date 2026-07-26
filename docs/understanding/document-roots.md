@@ -269,6 +269,11 @@ runtime tools:
 - `append_output_<name>` for a journal document that should receive new
   entries over time.
 
+A loop can also declare outputs that are not documents at all — slotted
+payloads rendered by an external display, which publish as Home Assistant
+entities and never touch a root. See
+[Defined Outputs](defined-outputs.md).
+
 The loop sees a matching context block with the current document content
 or recent journal tail, so the document itself remains the durable source
 of truth. The generated tools still write through document roots. That

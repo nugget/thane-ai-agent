@@ -26,6 +26,31 @@ output tools such as `replace_output_*` or `append_output_*`. If a
 maintained output is marked `truncated` in Declared Durable Outputs, read
 the full document before replacing it.
 
+Choose the output tier by who reads the result:
+
+- **`maintained_document`** — a reader who wants the whole picture. Prose
+  and structure, rewritten idempotently each cycle.
+- **`journal_document`** — a reader who wants the history. Append-only
+  dated entries; never rewrite what is already there.
+- **`structured_payload`** — a *display* that has no room for prose. The
+  declaration names a `target` (an entry in the target registry, such as
+  `apple_watch.rectangular`), and the generated `set_output_*` tool
+  advertises that target's exact slots, types, and character budgets.
+  The payload lands on a Home Assistant entity the display binds to.
+
+A structured payload is a full replacement every call: slots you omit are
+cleared, not preserved, so send the complete current state each time. The
+budgets are enforced rather than truncated — an over-budget value comes
+back as an error naming the limit, because a silently shortened string
+becomes an unreadable fragment on a watch face. Write for the geometry:
+the slot descriptions in Declared Durable Outputs say what each position
+renders as and how much of it survives.
+
+Do not reach for a structured payload to store something. It is a display
+surface with no history — the last payload is all there is. When the same
+work needs both a durable record and a glanceable readout, declare two
+outputs and write both.
+
 Choose stream wiring by attention cost:
 
 - Use entity subscriptions for ambient state the loop should see on its

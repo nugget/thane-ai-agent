@@ -30,6 +30,8 @@ complete onboarding guide for Home Assistant users.
   prompt is assembled from persona, talents, knowledge, and session state
 - **[Document Roots](understanding/document-roots.md)** — How `paths:`
   becomes named local document collections that Thane can keep track of
+- **[Defined Outputs](understanding/defined-outputs.md)** — How a loop
+  declares what it owns, and the tiers between a document and a display
 - **[Trust Architecture](understanding/trust-architecture.md)** — Safety
   through structural enforcement, not prompt compliance
 - **[Glossary](understanding/glossary.md)** — Canonical definitions for

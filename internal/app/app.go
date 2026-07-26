@@ -144,6 +144,12 @@ type App struct {
 	mqttInstanceID string
 	mqttSubStore   *mqtt.SubscriptionStore
 
+	// Structured loop outputs (slotted payloads published as HA
+	// entities). Built on first use because loop hydration can run
+	// before the MQTT wiring exists; see App.structuredOutputSink.
+	structuredOutputs     *mqttStructuredOutputSink
+	structuredOutputsOnce sync.Once
+
 	// Notifications
 	notifSender             *notifications.Sender
 	notifRecords            *notifications.RecordStore

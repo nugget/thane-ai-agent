@@ -238,13 +238,20 @@ or signed deltas like `-604800s`.
 | `doc_move_section` | Move one named section into another document. |
 | `doc_journal_update` | Append or update a journal-style entry. |
 
-Loop-declared document output tools are request-scoped and do not appear
-in the global catalog above. When a loop declares a maintained document
-or journal document output, Thane generates tools such as
+Loop-declared output tools are request-scoped and do not appear in the
+global catalog above. When a loop declares a maintained document or
+journal document output, Thane generates tools such as
 `replace_output_metacognitive_state` or `append_output_daily_notes` only
 for that loop run. These tools route through managed document roots, so
 root policy, indexing, and provenance remain centralized instead of
 being reimplemented in each loop prompt.
+
+A loop can also declare a `structured_payload` output naming a rendering
+target, which generates a `set_output_<name>` tool whose schema is that
+target's slot contract — named slots with types and character budgets
+instead of a free-text body. Those payloads publish as Home Assistant
+entities rather than documents. See
+[Defined Outputs](../understanding/defined-outputs.md).
 
 ## `email` — inbox traffic
 

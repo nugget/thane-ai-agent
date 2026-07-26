@@ -5,9 +5,25 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/nugget/thane-ai-agent/internal/model/outputtargets"
 )
 
-const maxOutputToolNameLength = 64
+const (
+	maxOutputToolNameLength = 64
+
+	// structuredPayloadSinkMQTT is the only ref sink a structured
+	// payload output can address today. It is a named constant so the
+	// error text and the check cannot drift apart, and so adding a
+	// second sink is a visible change here rather than a new string
+	// literal somewhere else.
+	structuredPayloadSinkMQTT = "mqtt"
+
+	// maxStructuredPayloadSuffixLength bounds the entity suffix. Home
+	// Assistant tolerates far longer entity IDs, but a complication
+	// binding is typed by hand into the companion app.
+	maxStructuredPayloadSuffixLength = 48
+)
 
 // OutputType names a durable output contract declared by a loop.
 type OutputType string
@@ -19,6 +35,11 @@ const (
 	// OutputTypeJournalDocument describes an append-only journal
 	// document maintained by the loop.
 	OutputTypeJournalDocument OutputType = "journal_document"
+	// OutputTypeStructuredPayload describes a slotted payload rendered
+	// by an external surface rather than written as a document. The
+	// surface is named by [OutputSpec.Target] and its slot contract
+	// lives in the outputtargets registry.
+	OutputTypeStructuredPayload OutputType = "structured_payload"
 )
 
 // OutputMode describes the allowed write mode for a loop output.
@@ -29,6 +50,10 @@ const (
 	OutputModeReplace OutputMode = "replace"
 	// OutputModeAppend requires append-only journal entries.
 	OutputModeAppend OutputMode = "append"
+	// OutputModeSet requires a complete slot set on every write. It has
+	// no partial-update form: a rendered surface shows exactly the last
+	// payload, so an omitted slot is a cleared slot.
+	OutputModeSet OutputMode = "set"
 )
 
 // OutputSpec declares one durable document surface a loop is allowed to
@@ -39,8 +64,16 @@ type OutputSpec struct {
 	Name string `yaml:"name" json:"name"`
 	// Type identifies the output behavior, such as maintained_document.
 	Type OutputType `yaml:"type" json:"type"`
-	// Ref is the managed document ref, such as core:metacognitive.md.
+	// Ref addresses the destination in the form sink:path. Document
+	// outputs use a managed document ref such as core:metacognitive.md;
+	// structured payload outputs use mqtt:<entity_suffix>, which
+	// becomes a Home Assistant sensor entity.
 	Ref string `yaml:"ref" json:"ref"`
+	// Target names the rendering target for a structured payload
+	// output, such as apple_watch.rectangular. It selects the slot
+	// contract the generated tool advertises and validates against, and
+	// must be empty for document outputs.
+	Target string `yaml:"target,omitempty" json:"target,omitempty"`
 	// Mode is the write mode. It defaults from Type when omitted.
 	Mode OutputMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 	// Purpose is optional model-facing guidance for this output.
@@ -80,6 +113,8 @@ func (o OutputSpec) EffectiveMode() OutputMode {
 		return OutputModeReplace
 	case OutputTypeJournalDocument:
 		return OutputModeAppend
+	case OutputTypeStructuredPayload:
+		return OutputModeSet
 	default:
 		return ""
 	}
@@ -93,6 +128,8 @@ func (o OutputSpec) ToolName() string {
 		return "replace_output_" + safeOutputToolSuffix(o.Name)
 	case OutputModeAppend:
 		return "append_output_" + safeOutputToolSuffix(o.Name)
+	case OutputModeSet:
+		return "set_output_" + safeOutputToolSuffix(o.Name)
 	default:
 		return "write_output_" + safeOutputToolSuffix(o.Name)
 	}
@@ -120,9 +157,12 @@ func (o OutputSpec) Validate() error {
 		return err
 	}
 	switch o.Type {
-	case OutputTypeMaintainedDocument, OutputTypeJournalDocument:
+	case OutputTypeMaintainedDocument, OutputTypeJournalDocument, OutputTypeStructuredPayload:
 	default:
 		return fmt.Errorf("unsupported type %q", o.Type)
+	}
+	if err := o.validateTarget(); err != nil {
+		return err
 	}
 	mode := o.EffectiveMode()
 	switch mode {
@@ -134,11 +174,64 @@ func (o OutputSpec) Validate() error {
 		if o.Type != OutputTypeJournalDocument {
 			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeJournalDocument)
 		}
+	case OutputModeSet:
+		if o.Type != OutputTypeStructuredPayload {
+			return fmt.Errorf("mode %q is only valid for type %q", mode, OutputTypeStructuredPayload)
+		}
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
 	}
 	if o.MaxWindows < 0 {
 		return fmt.Errorf("max_windows must be >= 0")
+	}
+	return nil
+}
+
+// validateTarget enforces the target/type pairing and, for a structured
+// payload, that the declared target actually exists and the ref names the
+// sink that can render it. A target ID typo is otherwise invisible until
+// wake time, when the loop discovers it has no output tool at all.
+func (o OutputSpec) validateTarget() error {
+	target := strings.TrimSpace(o.Target)
+	if o.Type != OutputTypeStructuredPayload {
+		if target != "" {
+			return fmt.Errorf("target %q is only valid for type %q; document outputs render through the document layer", o.Target, OutputTypeStructuredPayload)
+		}
+		return nil
+	}
+	if target == "" {
+		return fmt.Errorf("target is required for type %q; choose one of %s", OutputTypeStructuredPayload, strings.Join(outputtargets.IDs(), ", "))
+	}
+	if _, ok := outputtargets.Lookup(target); !ok {
+		return fmt.Errorf("unknown target %q; registered targets are %s", o.Target, strings.Join(outputtargets.IDs(), ", "))
+	}
+	return validateStructuredPayloadRef(o.Ref)
+}
+
+// validateStructuredPayloadRef checks that a structured payload ref names
+// a supported sink and a usable entity suffix. The suffix travels into an
+// MQTT topic path and a Home Assistant entity ID, so the grammar is the
+// intersection of what both accept rather than what either tolerates.
+func validateStructuredPayloadRef(ref string) error {
+	sink, suffix, _ := strings.Cut(strings.TrimSpace(ref), ":")
+	sink = strings.TrimSpace(sink)
+	suffix = strings.TrimSpace(suffix)
+	if sink != structuredPayloadSinkMQTT {
+		return fmt.Errorf("ref %q must address the %q sink for type %q (for example %s:watch_status)", ref, structuredPayloadSinkMQTT, OutputTypeStructuredPayload, structuredPayloadSinkMQTT)
+	}
+	if len(suffix) > maxStructuredPayloadSuffixLength {
+		return fmt.Errorf("ref entity suffix %q is %d characters; keep it to %d or fewer", suffix, len(suffix), maxStructuredPayloadSuffixLength)
+	}
+	for i, r := range suffix {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9', r == '_':
+			if i == 0 {
+				return fmt.Errorf("ref entity suffix %q must start with a lowercase letter", suffix)
+			}
+		default:
+			return fmt.Errorf("ref entity suffix %q contains unsupported character %q; use lowercase letters, digits, and underscores so it is valid in both an MQTT topic and a Home Assistant entity ID", suffix, r)
+		}
 	}
 	return nil
 }

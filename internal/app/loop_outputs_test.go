@@ -124,7 +124,7 @@ Everything is calm.
 		t.Fatalf("write metacognitive.md: %v", err)
 	}
 
-	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, []looppkg.OutputSpec{
+	ctx, err := renderLoopOutputContextWithNow(context.Background(), store, nil, []looppkg.OutputSpec{
 		{
 			Name:    "metacognitive_state",
 			Type:    looppkg.OutputTypeMaintainedDocument,

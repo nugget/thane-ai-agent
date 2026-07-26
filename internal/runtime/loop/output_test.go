@@ -210,3 +210,151 @@ func TestSpecValidateRejectsDuplicateOutputToolNames(t *testing.T) {
 		t.Fatalf("error = %v, want duplicate generated tool", err)
 	}
 }
+
+func TestOutputSpecStructuredPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   OutputSpec
+		wantTool string
+		wantErr  string
+	}{
+		{
+			name: "valid declaration defaults to set mode",
+			output: OutputSpec{
+				Name:   "Watch Status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "mqtt:watch_status",
+				Target: "apple_watch.rectangular",
+			},
+			wantTool: "set_output_watch_status",
+		},
+		{
+			name: "explicit set mode",
+			output: OutputSpec{
+				Name:   "watch_status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "mqtt:watch_status",
+				Target: "apple_watch.circular",
+				Mode:   OutputModeSet,
+			},
+			wantTool: "set_output_watch_status",
+		},
+		{
+			name: "missing target enumerates the registered ones",
+			output: OutputSpec{
+				Name: "watch_status",
+				Type: OutputTypeStructuredPayload,
+				Ref:  "mqtt:watch_status",
+			},
+			wantErr: "apple_watch.rectangular",
+		},
+		{
+			name: "unknown target",
+			output: OutputSpec{
+				Name:   "watch_status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "mqtt:watch_status",
+				Target: "apple_watch.trapezoid",
+			},
+			wantErr: "unknown target",
+		},
+		{
+			name: "target on a document output",
+			output: OutputSpec{
+				Name:   "state",
+				Type:   OutputTypeMaintainedDocument,
+				Ref:    "core:state.md",
+				Target: "apple_watch.circular",
+			},
+			wantErr: "is only valid for type",
+		},
+		{
+			name: "document ref for a structured payload",
+			output: OutputSpec{
+				Name:   "watch_status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "core:watch.md",
+				Target: "apple_watch.circular",
+			},
+			wantErr: `must address the "mqtt" sink`,
+		},
+		{
+			name: "entity suffix with unsupported characters",
+			output: OutputSpec{
+				Name:   "watch_status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "mqtt:Watch-Status",
+				Target: "apple_watch.circular",
+			},
+			wantErr: "unsupported character",
+		},
+		{
+			name: "entity suffix starting with a digit",
+			output: OutputSpec{
+				Name:   "watch_status",
+				Type:   OutputTypeStructuredPayload,
+				Ref:    "mqtt:1watch",
+				Target: "apple_watch.circular",
+			},
+			wantErr: "must start with a lowercase letter",
+		},
+		{
+			name: "set mode on a document output",
+			output: OutputSpec{
+				Name: "state",
+				Type: OutputTypeMaintainedDocument,
+				Ref:  "core:state.md",
+				Mode: OutputModeSet,
+			},
+			wantErr: "is only valid for type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.output.Validate()
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("Validate() error = nil, want %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if got := tt.output.ToolName(); got != tt.wantTool {
+				t.Fatalf("ToolName() = %q, want %q", got, tt.wantTool)
+			}
+			if got := tt.output.EffectiveMode(); got != OutputModeSet {
+				t.Fatalf("EffectiveMode() = %q, want %q", got, OutputModeSet)
+			}
+		})
+	}
+}
+
+func TestOutputSpecStructuredPayloadRoundTrips(t *testing.T) {
+	original := OutputSpec{
+		Name:   "watch_status",
+		Type:   OutputTypeStructuredPayload,
+		Ref:    "mqtt:watch_status",
+		Target: "apple_watch.rectangular",
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"target":"apple_watch.rectangular"`) {
+		t.Fatalf("target missing from JSON: %s", encoded)
+	}
+
+	var decoded OutputSpec
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Fatalf("round trip = %#v, want %#v", decoded, original)
+	}
+}

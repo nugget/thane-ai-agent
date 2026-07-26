@@ -1,5 +1,7 @@
 package tools
 
+import "github.com/nugget/thane-ai-agent/internal/model/outputtargets"
+
 // loopSpecSchema returns the JSON-Schema description of the agent-facing
 // loop-definition spec object, shared by loop_definition_set,
 // loop_definition_lint, and spawn_loop. Until this existed those tools
@@ -54,7 +56,7 @@ func loopSpecSchema(description string) map[string]any {
 			"supervisor_profile": loopProfileSchema("Overlay applied on supervisor turns (e.g. a higher quality_floor and review-specific instructions). Any field set here wins over profile; unset fields fall back to profile."),
 			"outputs": map[string]any{
 				"type":        "array",
-				"description": "Durable documents this loop maintains through scoped runtime tools (replace_output_*/append_output_*).",
+				"description": "Durable outputs this loop owns, each exposed as a scoped runtime tool: documents it maintains (replace_output_*/append_output_*) and rendered surfaces it drives (set_output_*).",
 				"items":       loopOutputSpecSchema(),
 			},
 			"tags": map[string]any{
@@ -174,9 +176,10 @@ func loopOutputSpecSchema() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"name":           map[string]any{"type": "string", "description": "Stable semantic name for this output within the loop."},
-			"type":           map[string]any{"type": "string", "enum": []string{"maintained_document", "journal_document"}, "description": "maintained_document = idempotent rewrite each cycle; journal_document = append-only dated entries."},
-			"ref":            map[string]any{"type": "string", "description": "Managed document ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Stored verbatim — not resolved to content."},
-			"mode":           map[string]any{"type": "string", "enum": []string{"replace", "append"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal→append)."},
+			"type":           map[string]any{"type": "string", "enum": []string{"maintained_document", "journal_document", "structured_payload"}, "description": "maintained_document = idempotent rewrite each cycle; journal_document = append-only dated entries; structured_payload = named slots rendered by an external surface (requires target)."},
+			"ref":            map[string]any{"type": "string", "description": "Destination as sink:path. Documents use a managed ref, e.g. \"core:metacognitive.md\" or \"kb:dashboards/x.md\". Structured payloads use \"mqtt:<entity_suffix>\" (lowercase letters, digits, underscores), which becomes a Home Assistant sensor. Stored verbatim — not resolved to content."},
+			"target":         map[string]any{"type": "string", "enum": outputtargets.IDs(), "description": "Rendering target for structured_payload outputs; selects the slot contract the generated set_output_* tool advertises and enforces. Omit for document outputs."},
+			"mode":           map[string]any{"type": "string", "enum": []string{"replace", "append", "set"}, "description": "Write mode; defaults from type when omitted (maintained→replace, journal→append, structured_payload→set)."},
 			"purpose":        map[string]any{"type": "string", "description": "Optional model-facing guidance describing what this output is for."},
 			"journal_window": map[string]any{"type": "string", "enum": []string{"day", "week", "month"}, "description": "Rolling window for journal outputs; empty uses the document-layer default."},
 			"max_windows":    map[string]any{"type": "integer", "description": "Cap on retained journal windows; 0 uses the document-layer default."},

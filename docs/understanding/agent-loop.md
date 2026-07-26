@@ -111,19 +111,29 @@ definition. A declared output is an explicit contract: this loop is
 responsible for maintaining or appending to this document, and Thane
 generates the narrow tool surface for that job at runtime.
 
-Two output shapes exist today:
+Three output shapes exist today:
 
 - **Maintained document** outputs replace the whole current document
   through a generated `replace_output_<name>` tool.
 - **Journal document** outputs append a timestamped entry through a
   generated `append_output_<name>` tool.
+- **Structured payload** outputs fill the named slots of a rendering
+  target — an Apple Watch complication, say — through a generated
+  `set_output_<name>` tool whose schema is that target's slot contract.
+  The payload publishes as a Home Assistant entity rather than a
+  document.
 
 The same declaration also feeds context assembly. Each turn receives a
-`Declared Durable Outputs` block with the output name, document root
-reference, generated tool name, current content or recent journal tail,
-and any truncation markers. The model should use those generated tools
-instead of generic file tools; the document root owns path safety,
-indexing, provenance, and signature policy.
+`Declared Durable Outputs` block with the output name, destination
+reference, generated tool name, and the current state of the output:
+document content or a recent journal tail with truncation markers, or a
+structured target's slot contract and last published payload. The model
+should use those generated tools instead of generic file tools; the
+output's backend owns the write policy — path safety, indexing,
+provenance, and signature policy for documents; slot budgets and entity
+publishing for structured payloads.
+
+See [Defined Outputs](defined-outputs.md) for the full contract.
 
 ## Capability Tags
 
