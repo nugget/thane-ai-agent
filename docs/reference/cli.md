@@ -20,8 +20,9 @@ Commands:
 
 Flags:
   -workspace <dir>  Instance workspace (default: ~/Thane)
-  -config <path>    Load config from an exact path instead of the
-                    workspace; for recovery only
+  -insecure-config <path>
+                    Load config from outside the trust boundary,
+                    for recovery. Not signature-verified.
   -o, --output fmt  Output format: text (default) or json
 ```
 
@@ -65,7 +66,7 @@ thane serve`) or in CI.
 
 ```bash
 thane validate                            # auto-discovered config
-thane -config /etc/thane/config.yaml validate
+thane -insecure-config /etc/thane/config.yaml validate
 thane -o json validate | jq .             # structured report for scripting
 ```
 
@@ -153,8 +154,16 @@ to move and commit it.
 
 ### Recovery
 
-`-config <path>` loads a config from an exact path, bypassing the
-workspace. It exists for recovery and debugging when the canonical
-config cannot be loaded — a rotated key, a broken core repository — and
-the config it loads is not covered by the trust boundary.
+`-insecure-config <path>` loads a config from an exact path, bypassing
+the workspace. It exists for recovery and debugging when the canonical
+config cannot be loaded — a rotated key, a broken core repository.
+
+The name is literal rather than cautionary. Verification means a file is
+covered by the instance's signed core history, which a file outside core
+cannot be; so a config loaded this way is insecure by construction, not
+merely unchecked. The flag says so before it is typed rather than after
+it is diagnosed.
+
+`-config` was the previous name and is now rejected with a message
+pointing at `-workspace` for the ordinary case.
 

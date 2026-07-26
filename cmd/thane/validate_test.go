@@ -135,7 +135,7 @@ func TestRunValidate_JSONHappyPath(t *testing.T) {
 // TestRunValidate_JSONDiscoveryFailure guards the stable-schema
 // promise: even when config discovery fails before a path is
 // resolved, the JSON report still includes the path field (populated
-// from the operator's explicit -config value) so scripts piping into
+// from the operator's explicit -insecure-config value) so scripts piping into
 // jq don't have to handle two schema shapes.
 func TestRunValidate_JSONDiscoveryFailure(t *testing.T) {
 	const explicit = "/nonexistent/never-going-to-exist.yaml"
@@ -155,7 +155,7 @@ func TestRunValidate_JSONDiscoveryFailure(t *testing.T) {
 		t.Errorf("path field must be present in JSON output even on discovery failure; got keys: %v", keysOf(got))
 	}
 	if got, _ := pathField.(string); got != explicit {
-		t.Errorf("path = %q, want %q (operator's -config value)", got, explicit)
+		t.Errorf("path = %q, want %q (operator's -insecure-config value)", got, explicit)
 	}
 	if v, _ := got["valid"].(bool); v {
 		t.Error("valid should be false on discovery failure")
