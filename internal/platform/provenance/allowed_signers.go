@@ -110,6 +110,11 @@ func RenderSeedSigners(seeds []TrustedSigner) (string, error) {
 // holding it, so an entry claiming that key under a different principal is
 // caught. An entry that restates a reserved key under its own principal is
 // dropped rather than repeated.
+//
+// Errors name a plain "signer" because this renders both the operator set and
+// the seed set. Saying "operator" here would report a malformed seed signer as
+// an operator problem and send the reader to the wrong config block; the
+// calling function supplies which set it was rendering.
 func renderSignerSet(signers []TrustedSigner, reserved map[string]string) ([]string, error) {
 	type entry struct {
 		principal string
@@ -126,7 +131,7 @@ func renderSignerSet(signers []TrustedSigner, reserved map[string]string) ([]str
 	for i, s := range signers {
 		blob, err := canonicalKeyBlob(s.PublicKey)
 		if err != nil {
-			return nil, fmt.Errorf("operator signer %d (%s): %w", i, strings.TrimSpace(s.Principal), err)
+			return nil, fmt.Errorf("signer %d (%s): %w", i, strings.TrimSpace(s.Principal), err)
 		}
 		principal := strings.TrimSpace(s.Principal)
 		if prev, ok := seen[blob]; ok {
@@ -138,12 +143,12 @@ func renderSignerSet(signers []TrustedSigner, reserved map[string]string) ([]str
 			if prev == principal {
 				continue
 			}
-			return nil, fmt.Errorf("operator signer %q duplicates the key already trusted for %q", principal, prev)
+			return nil, fmt.Errorf("signer %q duplicates the key already trusted for %q", principal, prev)
 		}
 		seen[blob] = principal
 		line, err := renderSignerLine(principal, blob, s.Comment, s.ValidAfter, s.ValidBefore)
 		if err != nil {
-			return nil, fmt.Errorf("operator signer %q: %w", principal, err)
+			return nil, fmt.Errorf("signer %q: %w", principal, err)
 		}
 		out = append(out, entry{principal: principal, blob: blob, line: line})
 	}
