@@ -2312,6 +2312,16 @@ func (c *Config) LoadedFrom() string {
 	return c.loadedFrom
 }
 
+// CoreConfigPath returns the canonical config location for this
+// instance: {workspace.path}/core/config.yaml. Empty when no workspace
+// is configured.
+func (c *Config) CoreConfigPath() string {
+	if c == nil || strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.CoreRoot(), "config.yaml")
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

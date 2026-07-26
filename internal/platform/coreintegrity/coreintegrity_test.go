@@ -9,6 +9,38 @@ import (
 	"testing"
 )
 
+// signCore gives a core repository an SSH signing identity and the
+// matching .allowed_signers, so commits made afterwards verify the way
+// a real instance's do. Returns nothing: every later commit in the test
+// is signed by construction.
+func signCore(t *testing.T, dir string) {
+	t.Helper()
+	keyPath := filepath.Join(t.TempDir(), "signing_ed25519")
+	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "test@example.com", "-f", keyPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ssh-keygen unavailable: %v\n%s", err, out)
+	}
+	pub, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatalf("read public key: %v", err)
+	}
+	allowed := "test@example.com namespaces=\"git\" " + strings.TrimSpace(string(pub)) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".allowed_signers"), []byte(allowed), 0o644); err != nil {
+		t.Fatalf("write allowed signers: %v", err)
+	}
+	for _, args := range [][]string{
+		{"config", "gpg.format", "ssh"},
+		{"config", "user.signingkey", keyPath},
+		{"config", "commit.gpgsign", "true"},
+		{"config", "gpg.ssh.allowedSignersFile", filepath.Join(dir, ".allowed_signers")},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
@@ -67,6 +99,7 @@ func checkByName(t *testing.T, report Report, name string) Check {
 func TestHealthyCorePassesEveryCheck(t *testing.T) {
 	workspace, core := newCore(t)
 	gitInit(t, core)
+	signCore(t, core)
 	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -264,5 +297,96 @@ func TestKeyMaterialFixReadmitsPublicKeys(t *testing.T) {
 	lines := gitignoreKeyMaterialLines()
 	if last := lines[len(lines)-1]; last != "!*.pub" {
 		t.Fatalf("last gitignore line = %q, want the public-key re-inclusion (order matters)", last)
+	}
+}
+
+func TestUnsignedCommitFailsConfigSigned(t *testing.T) {
+	// History without signatures records what changed but not who was
+	// entitled to change it, which is the distinction the other checks
+	// exist to make meaningful.
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	signCore(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(core, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Commit without a signature despite the identity being configured.
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "--no-gpg-sign", "-m", "unsigned baseline"}} {
+		cmd := exec.Command("git", append([]string{"-C", core}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	got := checkByName(t, run(t, workspace), "config_signed")
+	if got.Status != StatusFail {
+		t.Fatalf("an unsigned commit must fail config_signed: %+v", got)
+	}
+	if !strings.Contains(got.Fix, "commit -S") {
+		t.Fatalf("fix should show how to re-commit with a trusted key: %q", got.Fix)
+	}
+}
+
+func TestMissingAllowedSignersFailsWithItsOwnFix(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(core, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitCommitAll(t, core, "core baseline")
+
+	got := checkByName(t, run(t, workspace), "config_signed")
+	if got.Status != StatusFail || !strings.Contains(got.Fix, ".allowed_signers") {
+		t.Fatalf("config_signed = %+v, want a failure naming the signer set", got)
+	}
+}
+
+func TestConfigSignedSkippedWhenConfigNotCommitted(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitCommitAll(t, core, "core baseline")
+
+	if got := checkByName(t, run(t, workspace), "config_signed"); got.Status != StatusSkipped {
+		t.Fatalf("config_signed = %+v, want skipped when there is no committed config to verify", got)
+	}
+}
+
+// TestUncommittedConfigGetsStagingFix pins the distinction between the
+// two signature failures: an edit that was never committed cannot be
+// fixed by amending, because the commit does not contain it yet.
+func TestUncommittedConfigGetsStagingFix(t *testing.T) {
+	workspace, core := newCore(t)
+	gitInit(t, core)
+	signCore(t, core)
+	if err := os.WriteFile(filepath.Join(core, ".gitignore"), []byte("*.key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	configPath := filepath.Join(core, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitCommitAll(t, core, "core baseline")
+	if err := os.WriteFile(configPath, []byte("listen:\n  port: 9090\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got := checkByName(t, run(t, workspace), "config_signed")
+	if got.Status != StatusFail {
+		t.Fatalf("an uncommitted config edit must fail config_signed: %+v", got)
+	}
+	if !strings.Contains(got.Fix, "add ") {
+		t.Fatalf("an uncommitted change needs staging before it can be signed: %q", got.Fix)
+	}
+	if strings.Contains(got.Fix, "--amend") {
+		t.Fatalf("amending a commit that does not contain the change would waste the operator's one careful attempt: %q", got.Fix)
 	}
 }

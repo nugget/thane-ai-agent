@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
@@ -41,7 +42,10 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		if err := writeValidateJSON(w, cfgPath, cfg, loadErr, integrity); err != nil {
 			return err
 		}
-		return loadErr
+		if loadErr != nil {
+			return terminal(loadErr)
+		}
+		return integrityError(integrity)
 	}
 	if loadErr != nil {
 		// Config could not load, but the integrity report is often the
@@ -50,7 +54,7 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		if integrity != nil {
 			writeIntegrityText(w, *integrity)
 		}
-		return loadErr
+		return terminal(loadErr)
 	}
 	fmt.Fprintf(w, "✓ Config valid: %s\n\n", cfgPath)
 	writeValidateText(w, cfg)
@@ -58,7 +62,27 @@ func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error
 		fmt.Fprintln(w)
 		writeIntegrityText(w, *integrity)
 	}
-	return nil
+	return integrityError(integrity)
+}
+
+// integrityError converts a failing report into the error that makes
+// `thane validate && thane serve` a real guard.
+//
+// Validate is documented as the pre-flight check for serve, so it has to
+// fail on everything serve would refuse over. Returning success here
+// while serve refuses would make the guard worse than useless: it would
+// certify an instance that is about to be rejected, and it would do so
+// in exactly the deploy scripts that trust it most.
+func integrityError(report *coreintegrity.Report) error {
+	if report == nil || report.OK() {
+		return nil
+	}
+	names := make([]string, 0, len(report.Checks))
+	for _, check := range report.Failures() {
+		names = append(names, check.Name)
+	}
+	return terminal(fmt.Errorf("core integrity check failed for %s: %s (see the report above; thane serve will refuse to start)",
+		report.CorePath, strings.Join(names, ", ")))
 }
 
 // checkCoreIntegrity runs the core checks for whichever instance this

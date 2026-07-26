@@ -152,6 +152,71 @@ If no config exists at the canonical path but one is found at a
 pre-core location, Thane refuses to start and prints the exact commands
 to move and commit it.
 
+### Startup verification
+
+`thane serve` refuses to start when the instance's core does not meet the
+integrity requirements: core must be a git repository with commit
+history, the config must be committed and covered by a signature from a
+key listed in `.allowed_signers`, no private key material may be tracked,
+and no tracked file may have uncommitted changes.
+
+The refusal names each failing check and the command that fixes it, and
+`thane validate` prints the same report without starting anything. The
+gate applies to `serve` rather than every subcommand because `serve` is
+what runs unattended.
+
+Signers resolve from core's own `.allowed_signers`. That is sufficient
+while core has no remote — an attacker who can rewrite the signer list
+already has local write access. It stops being sufficient once core syncs
+from elsewhere, so an out-of-tree trust anchor is a prerequisite for
+giving core a remote.
+
+### Exit codes and supervisors
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | success |
+| 78 | terminal — retrying will not help (`EX_CONFIG`) |
+| 1 | everything else, possibly transient |
+
+The distinction a supervisor needs is not which subsystem failed but
+whether waiting will help. An unreachable broker deserves a restart; a
+core with an unsigned config will fail identically forever, and a
+supervisor that keeps restarting it turns one clear error into an endless
+stream of them.
+
+Exit 78 covers a missing or invalid config, a core that fails
+verification, and a malformed command line. The refusal is also written
+as a structured log record with `failed_checks` and `exit_code` fields,
+so a log-scraping supervisor gets the failing check names without parsing
+the human-readable message.
+
+**systemd** — stop the restart loop on a failure a restart cannot fix:
+
+```ini
+[Service]
+ExecStartPre=/usr/local/bin/thane -workspace /var/lib/thane validate
+ExecStart=/usr/local/bin/thane -workspace /var/lib/thane serve
+Restart=on-failure
+RestartPreventExitStatus=78
+```
+
+**Docker** — `thane validate` is the health probe, since it runs the same
+checks `serve` gates on without starting anything:
+
+```dockerfile
+HEALTHCHECK --start-period=30s CMD thane -workspace /data validate || exit 1
+```
+
+**Any supervisor** — `thane validate -o json` reports the whole picture
+in one object: `valid` for the config, and `integrity.checks[]` with a
+`status` and a `fix` per check. Surfacing `fix` verbatim is usually
+better than paraphrasing it, since it is already the command an operator
+would run.
+
+`thane validate` fails whenever `thane serve` would refuse, so
+`thane validate && thane serve` is a real guard rather than a courtesy.
+
 ### Recovery
 
 `-insecure-config <path>` loads a config from an exact path, bypassing

@@ -227,8 +227,15 @@ func TestRunValidate_IntegrityReportForWorkspaceInstance(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	if err := runValidate(&buf, "", workspace, "text"); err != nil {
-		t.Fatalf("runValidate: %v", err)
+	// core is not a git repository here, so validate must fail the same
+	// way serve would refuse — otherwise `validate && serve` certifies
+	// an instance that is about to be rejected.
+	err := runValidate(&buf, "", workspace, "text")
+	if err == nil {
+		t.Fatal("validate should fail when core integrity fails")
+	}
+	if exitCodeFor(err) != ExitTerminal {
+		t.Fatalf("integrity failure should exit %d, got %d", ExitTerminal, exitCodeFor(err))
 	}
 	out := buf.String()
 	if !strings.Contains(out, "Core integrity") {

@@ -3,10 +3,14 @@
 // its config committed, free of tracked private key material, and with
 // no uncommitted changes to tracked files.
 //
-// Signature verification against the resolved allowed signers is not
-// here yet; it lands with the boot gate, alongside the out-of-tree trust
-// anchor it depends on. Until then this package answers "is core
-// structurally sound", not "is core trusted".
+// Signature verification resolves signers from core's own
+// .allowed_signers. That is sufficient while core has no remote: an
+// attacker who can rewrite the signer list already has local write
+// access and does not need to forge anything. It stops being sufficient
+// the moment core syncs from somewhere, because then someone who can
+// push could rewrite the config and the list of who may sign it in one
+// commit — so an out-of-tree anchor is a prerequisite for giving core a
+// remote, not for this check.
 //
 // The checks live here rather than inside the boot path so one
 // definition serves both `thane validate`, which reports, and the boot
@@ -19,10 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/provenance"
 )
 
 // Status is the outcome of one check.
@@ -151,8 +158,9 @@ func Run(ctx context.Context, workspace string, opts Options) (Report, error) {
 	repoOK := c.coreRepository(&report, coreOK)
 	headOK := c.coreHistory(&report, repoOK)
 	c.keyMaterial(&report, repoOK)
-	c.configTracked(&report, headOK)
+	configOK := c.configTracked(&report, headOK)
 	c.coreClean(&report, headOK)
+	c.configSigned(&report, configOK)
 
 	return report, nil
 }
@@ -272,20 +280,21 @@ func (c checker) keyMaterial(r *Report, repoOK bool) {
 		Detail: "no private key material is tracked"})
 }
 
-func (c checker) configTracked(r *Report, headOK bool) {
+func (c checker) configTracked(r *Report, headOK bool) bool {
 	if !headOK {
 		r.Checks = append(r.Checks, Check{Name: "config_committed", Status: StatusSkipped,
 			Detail: "core has no commit history"})
-		return
+		return false
 	}
 	if _, err := c.git("cat-file", "-e", "HEAD:"+c.configName); err != nil {
 		r.Checks = append(r.Checks, Check{Name: "config_committed", Status: StatusFail,
 			Detail: c.configName + " is not committed in core, so the running config has no change history",
 			Fix:    "git -C " + c.core + " add " + c.configName + " && git -C " + c.core + " commit -S -m 'adopt runtime config into core'"})
-		return
+		return false
 	}
 	r.Checks = append(r.Checks, Check{Name: "config_committed", Status: StatusPass,
 		Detail: c.configName + " is committed in core"})
+	return true
 }
 
 func (c checker) coreClean(r *Report, headOK bool) {
@@ -309,6 +318,59 @@ func (c checker) coreClean(r *Report, headOK bool) {
 	}
 	r.Checks = append(r.Checks, Check{Name: "core_clean", Status: StatusPass,
 		Detail: "no uncommitted changes to tracked files"})
+}
+
+// configSigned verifies that the running config is covered by a commit
+// signed by a key the instance trusts. This is the check the others
+// exist to make meaningful: history without signatures records what
+// changed but not who was entitled to change it.
+//
+// The failure mode is determined here rather than inferred from the
+// verifier's message, because the two common failures need different
+// commands — an uncommitted edit needs staging before it can be signed,
+// while a committed-but-unsigned config needs the existing commit
+// amended. Telling an operator to amend a commit that does not yet
+// contain their change would waste the one attempt they read carefully.
+func (c checker) configSigned(r *Report, configOK bool) {
+	if !configOK {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusSkipped,
+			Detail: "config is not committed in core"})
+		return
+	}
+
+	if status, err := c.git("status", "--porcelain", "--", c.configName); err == nil && strings.TrimSpace(status) != "" {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+			Detail: c.configName + " has uncommitted changes, so the running config is not the one any signature covers",
+			Fix:    "git -C " + c.core + " add " + c.configName + " && git -C " + c.core + " commit -S -m 'update runtime config'"})
+		return
+	}
+
+	verifier, err := provenance.NewVerifier(c.core, slog.New(slog.DiscardHandler), provenance.Options{})
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+			Detail: "cannot resolve the trusted signer set: " + err.Error(),
+			Fix:    "ensure " + filepath.Join(c.core, ".allowed_signers") + " exists and lists the keys entitled to sign this instance"})
+		return
+	}
+
+	// VerifyFile reports a failure through both the result and a non-nil
+	// error carrying the same message, so the result is the authority
+	// and the error is not a separate case.
+	result, _ := verifier.VerifyFile(c.ctx, c.configName)
+	if result.Trusted() {
+		r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusPass,
+			Detail: c.configName + " is covered by a trusted signature"})
+		return
+	}
+
+	detail := c.configName + " is not covered by a commit signed by a trusted key"
+	if result.Message != "" {
+		detail += ": " + result.Message
+	}
+	r.Checks = append(r.Checks, Check{Name: "config_signed", Status: StatusFail,
+		Detail: detail,
+		Fix: "re-sign the commit that carries it with a key listed in " + filepath.Join(c.core, ".allowed_signers") +
+			": git -C " + c.core + " commit -S --amend --no-edit"})
 }
 
 // privateKeyFiles filters a git ls-files result down to the entries that
