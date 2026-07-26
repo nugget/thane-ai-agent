@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 )
 
 func TestRun_RenamedConfigFlagTeachesTheNewName(t *testing.T) {
@@ -65,5 +68,42 @@ func TestRun_InsecureConfigFlagLoadsExactPath(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), path) {
 		t.Fatalf("output should name the loaded config:\n%s", stdout.String())
+	}
+}
+
+func TestGateOnCoreIntegrity_RefusesUnverifiedCore(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "core"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.Workspace.Path = workspace
+
+	err := gateOnCoreIntegrity(context.Background(), slog.New(slog.DiscardHandler), cfg, "")
+	if err == nil {
+		t.Fatal("gate should refuse a core that is not a repository")
+	}
+	msg := err.Error()
+	for _, want := range []string{"refusing to start", "core_repository", "fix:", "thane validate"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("refusal should carry %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestGateOnCoreIntegrity_InsecureConfigBypassesButAnnounces(t *testing.T) {
+	// A config outside the boundary cannot be verified against it, so
+	// the gate steps aside — but the instance should be visibly
+	// unverified without anyone going looking.
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	cfg := &config.Config{}
+	cfg.Workspace.Path = t.TempDir()
+
+	if err := gateOnCoreIntegrity(context.Background(), logger, cfg, "/etc/thane/config.yaml"); err != nil {
+		t.Fatalf("gate should not refuse an explicitly loaded config: %v", err)
+	}
+	if !strings.Contains(logged.String(), "outside the trust boundary") {
+		t.Fatalf("bypass must be announced:\n%s", logged.String())
 	}
 }

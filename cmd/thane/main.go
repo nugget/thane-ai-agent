@@ -40,6 +40,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/coreintegrity"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
@@ -393,12 +394,61 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 //  2. A shutdown checkpoint is persisted (conversations, facts, tasks)
 //  3. HTTP servers drain in-flight requests
 //  4. Database connections and the scheduler are closed via defers
+//
+// gateOnCoreIntegrity refuses to serve when the instance's core is not
+// in the state the runtime requires.
+//
+// This is the point of the whole arc: a config that decides what the
+// system trusts is worth nothing unless something checks that it is the
+// config an entitled party actually committed. The gate applies to serve
+// rather than to every subcommand because serve is what runs
+// autonomously and unattended; the one-shot commands are an operator
+// already sitting at the keyboard.
+//
+// A config loaded through -insecure-config skips the gate by definition
+// — it lives outside the boundary the gate checks — but says so loudly,
+// because an instance running unverified should be obvious in the logs
+// without anyone going looking.
+func gateOnCoreIntegrity(ctx context.Context, logger *slog.Logger, cfg *config.Config, explicitConfig string) error {
+	if explicitConfig != "" {
+		logger.Warn("running on a config from outside the trust boundary; it carries no verified history and no signature was checked",
+			"config", explicitConfig,
+			"canonical", cfg.CoreConfigPath(),
+		)
+		return nil
+	}
+	report, err := coreintegrity.Run(ctx, cfg.Workspace.Path, coreintegrity.Options{
+		ConfigFileName: config.ConfigFileName,
+	})
+	if err != nil {
+		return fmt.Errorf("check core integrity: %w", err)
+	}
+	if report.OK() {
+		logger.Info("core integrity verified", "core", report.CorePath, "checks", len(report.Checks))
+		return nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "refusing to start: core integrity check failed for %s\n", report.CorePath)
+	for _, check := range report.Failures() {
+		fmt.Fprintf(&b, "\n  %s: %s\n", check.Name, check.Detail)
+		if check.Fix != "" {
+			fmt.Fprintf(&b, "    fix: %s\n", check.Fix)
+		}
+	}
+	fmt.Fprintf(&b, "\nRun 'thane validate' for the full report. To start anyway with a config from outside the trust boundary, use -insecure-config")
+	return errors.New(b.String())
+}
+
 func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath, workspacePath string) error {
 	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	cfg, cfgPath, err := loadConfig(configPath, workspacePath)
 	if err != nil {
+		return err
+	}
+	if err := gateOnCoreIntegrity(ctx, logger, cfg, configPath); err != nil {
 		return err
 	}
 

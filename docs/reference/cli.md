@@ -152,6 +152,25 @@ If no config exists at the canonical path but one is found at a
 pre-core location, Thane refuses to start and prints the exact commands
 to move and commit it.
 
+### Startup verification
+
+`thane serve` refuses to start when the instance's core does not meet the
+integrity requirements: core must be a git repository with commit
+history, the config must be committed and covered by a signature from a
+key listed in `.allowed_signers`, no private key material may be tracked,
+and no tracked file may have uncommitted changes.
+
+The refusal names each failing check and the command that fixes it, and
+`thane validate` prints the same report without starting anything. The
+gate applies to `serve` rather than every subcommand because `serve` is
+what runs unattended.
+
+Signers resolve from core's own `.allowed_signers`. That is sufficient
+while core has no remote — an attacker who can rewrite the signer list
+already has local write access. It stops being sufficient once core syncs
+from elsewhere, so an out-of-tree trust anchor is a prerequisite for
+giving core a remote.
+
 ### Recovery
 
 `-insecure-config <path>` loads a config from an exact path, bypassing
