@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/model/talents"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 )
 
@@ -118,12 +121,13 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	}
 
 	tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
-		CapTags:  resolvedCapTags,
-		KBDir:    kbDir,
-		Resolver: s.resolver,
-		Verifier: contextVerifier,
-		HAInject: a.loop.HAInject(),
-		Logger:   logger.With("component", "tag_context"),
+		CapTags:     resolvedCapTags,
+		KBDir:       kbDir,
+		InjectRoots: injectionEligibleRoots(cfg, s.resolver, logger),
+		Resolver:    s.resolver,
+		Verifier:    contextVerifier,
+		HAInject:    a.loop.HAInject(),
+		Logger:      logger.With("component", "tag_context"),
 	})
 
 	// Wire the assembler before tag context providers register so the
@@ -198,4 +202,47 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	)
 
 	return nil
+}
+
+// injectionEligibleRoots resolves the roots whose tagged documents may
+// be injected into a prompt. It returns nil when no root declares a
+// context policy, which keeps the legacy single-kb scan in force so an
+// existing config assembles context exactly as before.
+//
+// Injection is declared, never inferred: a corpus can place text into a
+// system prompt without anyone asking for it, so a root reaches the
+// prompt only because policy says it may. That matters most for a root
+// synced from a remote Thane does not control, where the frontmatter a
+// document carries is not evidence of anything.
+func injectionEligibleRoots(cfg *config.Config, resolver *paths.Resolver, logger *slog.Logger) map[string]agent.InjectRoot {
+	if cfg == nil || resolver == nil {
+		return nil
+	}
+	declared := false
+	for _, policy := range cfg.DocRoots {
+		if policy.Context.Declared() {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return nil
+	}
+
+	eligible := make(map[string]agent.InjectRoot)
+	for name, policy := range cfg.DocRoots {
+		if policy.Context.EffectiveInject() != config.RootInjectTagged {
+			continue
+		}
+		dir, err := resolver.Resolve(name + ":")
+		if err != nil {
+			logger.Warn("root declares tagged injection but does not resolve to a directory",
+				"root", name, "error", err)
+			continue
+		}
+		eligible[name] = agent.InjectRoot{Dir: dir, RequiresTag: policy.Context.RequiresTag}
+	}
+	logger.Info("context injection policy resolved",
+		"injection_eligible_roots", len(eligible))
+	return eligible
 }

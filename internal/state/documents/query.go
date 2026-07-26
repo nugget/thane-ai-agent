@@ -174,6 +174,19 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) ([]DocumentSummary, e
 		where = append(where, `(rel_path = ? OR rel_path LIKE ?)`)
 		args = append(args, q.PathPrefix, q.PathPrefix+"/%")
 	}
+	// Exclude roots the context policy keeps out of this search in SQL
+	// rather than after scanning. The point of on_request visibility is
+	// that a large foreign corpus costs nothing when it was not asked
+	// for, which is not true if its rows are still fetched, decoded, and
+	// scored before being discarded.
+	if excluded := s.searchExcludedRoots(q.Root); len(excluded) > 0 {
+		placeholders := make([]string, len(excluded))
+		for i, root := range excluded {
+			placeholders[i] = "?"
+			args = append(args, root)
+		}
+		where = append(where, `root NOT IN (`+strings.Join(placeholders, ", ")+`)`)
+	}
 	if q.Query != "" {
 		like := "%" + q.Query + "%"
 		where = append(where, `(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(rel_path) LIKE ? OR LOWER(tags_json) LIKE ?)`)
