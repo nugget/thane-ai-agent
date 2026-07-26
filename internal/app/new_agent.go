@@ -31,25 +31,8 @@ func (a *App) initAgentLoop(s *newState) error {
 	// before constructing the agent loop so they can be passed via
 	// LoopOptions instead of post-construction setters.
 	if cfg.Workspace.Path != "" {
-		if cfg.Paths == nil {
-			cfg.Paths = make(map[string]string)
-		}
-		derivedCore := coreRootPath(cfg.Workspace.Path)
-		for k, v := range cfg.Paths {
-			if strings.TrimSuffix(k, ":") != "core" {
-				continue
-			}
-			if strings.TrimSpace(v) != derivedCore {
-				logger.Info("ignoring configured core path; core root is derived from workspace.path",
-					"configured_key", k,
-					"configured_path", v,
-					"derived_path", derivedCore,
-				)
-			}
-			delete(cfg.Paths, k)
-		}
-		cfg.Paths["core"] = derivedCore
-		if err := os.MkdirAll(derivedCore, 0o755); err != nil {
+		cfg.Paths = documentRootPaths(cfg, logger)
+		if err := os.MkdirAll(cfg.Paths["core"], 0o755); err != nil {
 			return fmt.Errorf("create core document root: %w", err)
 		}
 	}

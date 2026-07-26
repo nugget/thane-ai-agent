@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/app"
+	"github.com/nugget/thane-ai-agent/internal/state/documents"
 )
 
 // minimalValidConfig returns the smallest config.yaml body that parses
@@ -245,5 +249,67 @@ func TestRunValidate_IntegrityReportForWorkspaceInstance(t *testing.T) {
 	// give the command that fixes it.
 	if !strings.Contains(out, "core_repository") || !strings.Contains(out, "git -C") {
 		t.Fatalf("report should name the failing check and its fix:\n%s", out)
+	}
+}
+
+// TestAdmissionReporting covers the mapping from admission outcomes to what
+// an operator sees and what the exit code says. The decision itself is tested
+// against the real boot path in internal/app; what matters here is that a
+// required failure stops `validate && serve` while a warn failure does not,
+// since that is exactly how serve treats them.
+func TestAdmissionReporting(t *testing.T) {
+	refused := errors.New("root commit is not signed by a declared seed signer")
+
+	tests := []struct {
+		name      string
+		results   []app.RootAdmission
+		wantErr   bool
+		wantLines []string
+	}{
+		{
+			name: "all admitted",
+			results: []app.RootAdmission{
+				{Root: "projects", Mode: documents.VerificationRequired, Applicable: true},
+				{Root: "kb", Mode: documents.VerificationRequired, Applicable: true},
+			},
+			wantLines: []string{"✓ Root admission: kb, projects"},
+		},
+		{
+			name: "required failure is fatal",
+			results: []app.RootAdmission{
+				{Root: "kb", Mode: documents.VerificationRequired, Applicable: true, Err: refused},
+				{Root: "projects", Mode: documents.VerificationRequired, Applicable: true},
+			},
+			wantErr:   true,
+			wantLines: []string{"✗ Root admission", "✗ kb (required)", "✓ projects", refused.Error()},
+		},
+		{
+			name: "warn failure reports without refusing",
+			results: []app.RootAdmission{
+				{Root: "kb", Mode: documents.VerificationWarn, Applicable: true, Err: refused},
+			},
+			wantLines: []string{"! kb (warn)", refused.Error()},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := admissionError(tc.results)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("admissionError = %v, want error: %v", err, tc.wantErr)
+			}
+			if err != nil && exitCodeFor(err) != ExitTerminal {
+				t.Fatalf("admission failure should exit %d, got %d", ExitTerminal, exitCodeFor(err))
+			}
+
+			var buf bytes.Buffer
+			writeAdmissionText(&buf, tc.results)
+			out := buf.String()
+			for _, want := range tc.wantLines {
+				if !strings.Contains(out, want) {
+					t.Fatalf("report missing %q:\n%s", want, out)
+				}
+			}
+		})
 	}
 }

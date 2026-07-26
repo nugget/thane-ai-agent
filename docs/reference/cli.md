@@ -72,8 +72,18 @@ thane -o json validate | jq .             # structured report for scripting
 
 Text mode prints a one-line confirmation plus a short structural summary
 (default model, resource/model/root counts, MCP server count, which
-optional integrations are configured). JSON mode emits `{path, valid,
-error, summary}` and exits non-zero on failure.
+optional integrations are configured), then the core integrity report and
+per-root admission. JSON mode emits `{path, valid, error, summary,
+integrity, root_admission}` and exits non-zero on failure.
+
+Admission is reported for every git-backed root that declares seed
+signers and verifies signatures, so a root whose history no declared key
+can account for is visible before a deploy rather than after. A failing
+root under `verify_signatures: required` exits non-zero, matching what
+`serve` refuses over; a failing root under `warn` is reported without
+affecting the exit code, matching what `serve` merely logs. See
+[Document Roots](../understanding/document-roots.md) for what admission
+checks and how to repair a refusal.
 
 ### `thane ask`
 
@@ -164,6 +174,12 @@ The refusal names each failing check and the command that fixes it, and
 `thane validate` prints the same report without starting anything. The
 gate applies to `serve` rather than every subcommand because `serve` is
 what runs unattended.
+
+`serve` also refuses when a document root's history is not admitted by
+the seed signers declared for it — a separate question from core
+integrity, covered under [Document
+Roots](../understanding/document-roots.md). `validate` reports that too,
+from the same code the gate uses, so the two cannot answer differently.
 
 Signers resolve from core's own `.allowed_signers`. That is sufficient
 while core has no remote — an attacker who can rewrite the signer list

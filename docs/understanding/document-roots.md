@@ -272,6 +272,22 @@ is the alternative, and for a corpus behind a bidirectional remote it is
 almost never the right one — declaring who actually founded the root is
 the honest record.
 
+You do not have to discover this by watching a deploy fail. `thane
+validate` reports admission for every root, and exits non-zero when a
+`required` root would be refused, so `thane validate && thane serve`
+remains a real guard:
+
+```
+✓ Root admission: core, kb, projects
+```
+
+Roots under `warn` are listed with a `!` rather than a `✗`, because serve
+logs those and starts anyway; validate does not invent strictness the
+gate does not have. Validate never creates anything, so a signing root
+whose directory does not exist yet is simply absent from the report —
+serve would create and birth-commit it, and there is no history to judge
+until it does.
+
 ### Read-side enforcement
 
 Signature-required roots are the place for high-integrity authored
