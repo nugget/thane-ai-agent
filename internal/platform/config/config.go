@@ -194,6 +194,11 @@ type Config struct {
 	// without trusting the file to say.
 	loadedFrom string
 
+	// unverified marks a config loaded from outside the instance trust
+	// boundary. It is set by the loader rather than declared, because a
+	// config cannot be trusted to describe its own trustworthiness.
+	unverified bool
+
 	// Listen configures the primary HTTP API server (OpenAI-compatible).
 	Listen ListenConfig `yaml:"listen"`
 
@@ -2300,6 +2305,26 @@ func (c *Config) deriveWorkspace() error {
 	}
 	c.Workspace.Path = derived
 	return nil
+}
+
+// MarkUnverified records that this config came from outside the trust
+// boundary, so the runtime can withhold the capabilities that an
+// unverified instance should not have.
+func (c *Config) MarkUnverified() {
+	if c != nil {
+		c.unverified = true
+	}
+}
+
+// Unverified reports whether the running config came from outside the
+// instance trust boundary.
+//
+// The runtime consults this to decide what to withhold. Verification is
+// not a label on the file but a claim about who was entitled to write
+// it, so an instance that cannot make the claim should not be able to
+// act on the world as though it could.
+func (c *Config) Unverified() bool {
+	return c != nil && c.unverified
 }
 
 // LoadedFrom reports the path this config was read from, or empty when

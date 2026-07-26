@@ -79,6 +79,7 @@ type Server struct {
 	memoryStore                        *memory.SQLiteStore
 	archiveStore                       *memory.ArchiveStore
 	healthDeps                         HealthStatusFunc
+	unverified                         bool
 	tokenObserver                      TokenObserver
 	eventBus                           *events.Bus
 	owuTracker                         *OWUTracker
@@ -114,6 +115,12 @@ type Server struct {
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
 func (s *Server) SetOWUTracker(t *OWUTracker) {
 	s.owuTracker = t
+}
+
+// SetUnverified marks the instance as running on a config that could
+// not be verified, so /health reports it.
+func (s *Server) SetUnverified(unverified bool) {
+	s.unverified = unverified
 }
 
 // SetConnManager sets the dependency health provider for the /health endpoint.
@@ -608,6 +615,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	health := map[string]any{"status": "healthy"}
+	if s.unverified {
+		// Reported as degraded, not healthy: the instance is running,
+		// but with capabilities withheld and no way to show who
+		// authorized its config. A supervisor that treats this as
+		// healthy would let an unverified instance run indefinitely
+		// without anyone noticing.
+		health["status"] = "degraded"
+		health["trust"] = "unverified"
+		health["trust_detail"] = "running on a config from outside the instance trust boundary; direct human egress and service loops are withheld"
+	}
 	if s.healthDeps != nil {
 		deps := s.healthDeps()
 		health["dependencies"] = deps

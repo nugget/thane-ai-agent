@@ -65,6 +65,7 @@ type Registry struct {
 	factTools          *knowledge.Tools
 	contactTools       *contacts.Tools
 	emailTools         *email.Tools
+	withholdEgress     bool
 	notifier           *notifications.Sender
 	notifRecords       *notifications.RecordStore
 	notifRouter        *notifications.NotificationRouter
@@ -1228,11 +1229,40 @@ func (r *Registry) TaggedToolNames(tag string) []string {
 	return r.tagIndex[tag]
 }
 
+// WithholdDirectHumanEgress stops this registry from executing tools
+// that reach a human directly. It is set when the running config could
+// not be verified.
+//
+// Enforced at execution rather than by unregistering, so the denial
+// holds no matter how a tool was reached — a loop's runtime tool set, a
+// delegate's inherited registry, or a path added later that nobody
+// thought to filter.
+func (r *Registry) WithholdDirectHumanEgress() {
+	if r == nil {
+		return
+	}
+	r.withholdEgress = true
+}
+
+// checkEgressWithheld refuses a direct-egress tool on an unverified
+// instance. The error explains the state rather than reporting the tool
+// as missing, so the model does not respond by hunting for another way
+// to reach the same person.
+func (r *Registry) checkEgressWithheld(name string) error {
+	if r == nil || !r.withholdEgress || !isDirectHumanEgressTool(name) {
+		return nil
+	}
+	return fmt.Errorf("%s is withheld: this instance is running on a config from outside its trust boundary, so it will not contact anyone directly. Report what you found in your reply instead, and tell the operator the instance needs to be restarted on a verified config", name)
+}
+
 // Execute runs a tool by name with given arguments.
 func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (string, error) {
 	tool := r.tools[name]
 	if tool == nil {
 		return "", &ErrToolUnavailable{ToolName: name}
+	}
+	if err := r.checkEgressWithheld(name); err != nil {
+		return "", err
 	}
 
 	var args map[string]any
