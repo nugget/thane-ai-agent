@@ -520,3 +520,43 @@ func TestDocumentRootProvenanceReviser(t *testing.T) {
 		t.Fatalf("diff counts = +%d/-%d, want +2/-0", diff.Added, diff.Removed)
 	}
 }
+
+// TestBuildDocumentStoreOptionsWiresCoreWriter covers the case that
+// makes core survivable as a signed root.
+//
+// core holds documents the agent rewrites on its own schedule — ego,
+// metacognitive, archivist state. The boot gate requires core to have no
+// uncommitted changes, so unless those writes commit as they happen, the
+// first loop iteration after a start makes the next start impossible.
+// Declaring core under roots: with sign_commits is what closes that, and
+// this asserts the writer is actually wired rather than silently absent.
+func TestBuildDocumentStoreOptionsWiresCoreWriter(t *testing.T) {
+	t.Parallel()
+
+	signingKey, _ := writeTestSigningKey(t)
+	coreDir := t.TempDir()
+	app := &App{cfg: &config.Config{
+		DocRoots: map[string]config.DocumentRootConfig{
+			"core": {
+				Authoring: "managed",
+				Git: config.DocumentRootGitConfig{
+					Enabled:     true,
+					SignCommits: true,
+					SigningKey:  signingKey,
+					RepoPath:    coreDir,
+				},
+			},
+		},
+	}}
+
+	opts, err := app.buildDocumentStoreOptions(map[string]string{"core": coreDir}, nil)
+	if err != nil {
+		t.Fatalf("buildDocumentStoreOptions: %v", err)
+	}
+	if opts.RootWriters["core"] == nil {
+		t.Fatal("core declared with sign_commits must get a writer, or its documents never commit and the boot gate fails on the next start")
+	}
+	if !opts.RootPolicies["core"].Git.Enabled {
+		t.Fatalf("core git policy = %#v, want enabled", opts.RootPolicies["core"].Git)
+	}
+}
