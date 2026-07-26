@@ -108,10 +108,15 @@ func (s *Store) ensureRepo() error {
 			if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			// Bootstrap .allowed_signers with the signer's public
-			// key when this repository does not already define its
-			// own trust surface.
-			allowedSigners := fmt.Sprintf("thane@provenance.local %s\n", s.signer.PublicKey())
+			// Establish this repository's trust surface: the agent key
+			// plus the seed signers entitled to found this root. It is
+			// written once, here, and never rewritten from config —
+			// afterwards the file is the root's own record, extended by
+			// commits signed with keys it already trusts.
+			allowedSigners, err := RenderAllowedSigners(s.signer.PublicKey(), s.seedSigners)
+			if err != nil {
+				return fmt.Errorf("render seed allowed_signers: %w", err)
+			}
 			if err := os.WriteFile(allowedPath, []byte(allowedSigners), 0o644); err != nil {
 				return fmt.Errorf("write .allowed_signers: %w", err)
 			}

@@ -169,7 +169,7 @@ func (a *App) buildDocumentStoreOptions(documentRoots map[string]string, resolve
 		// ready yet.
 		var writer *documentRootProvenanceWriter
 		if policy.Git.Enabled && policy.Git.SignCommits {
-			w, err := a.newDocumentRootProvenanceWriter(root, rootPath, rootCfg.Git, resolver)
+			w, err := a.newDocumentRootProvenanceWriter(root, rootPath, rootCfg, resolver)
 			if err != nil {
 				return documents.StoreOptions{}, err
 			}
@@ -317,7 +317,8 @@ func documentRootPolicyFromConfig(rootCfg config.DocumentRootConfig) documents.R
 	return policy
 }
 
-func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg config.DocumentRootGitConfig, resolver *paths.Resolver) (*documentRootProvenanceWriter, error) {
+func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, rootCfg config.DocumentRootConfig, resolver *paths.Resolver) (*documentRootProvenanceWriter, error) {
+	gitCfg := rootCfg.Git
 	signingKey := strings.TrimSpace(gitCfg.SigningKey)
 	if signingKey == "" {
 		return nil, fmt.Errorf("doc_roots.%s.git.signing_key is required for signed document root commits", root)
@@ -350,7 +351,7 @@ func (a *App) newDocumentRootProvenanceWriter(root, rootPath string, gitCfg conf
 		WorktreePath:   absRootPath,
 		RepoPath:       absRepoPath,
 		SigningKeyPath: signingKey,
-		TrustedSigners: buildTrustedSigners(a.cfg.Signing.AllowedSigners, gitCfg.AllowedSigners),
+		SeedSigners:    buildTrustedSigners(rootCfg.SeedSigners, gitCfg.AllowedSigners),
 		Logger:         logger.With("component", "document_root_provenance", "root", root),
 	})
 	if err != nil {

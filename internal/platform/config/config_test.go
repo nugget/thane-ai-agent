@@ -1111,6 +1111,9 @@ roots:
   secure:
     path: ./secure
     indexing: false
+    seed_signers:
+      - principal: alice@example.com
+        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGyUStZXWURqF4b7IWfSTz2W6zYz5JnXrKbcuPfGAmUo"
     git:
       enabled: true
       sign_commits: true

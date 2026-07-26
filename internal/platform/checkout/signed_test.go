@@ -49,7 +49,7 @@ func TestOpenSignedBootstrapsAndReconciles(t *testing.T) {
 		Name:           "kb",
 		WorktreePath:   worktree,
 		SigningKeyPath: signingKey,
-		TrustedSigners: []provenance.TrustedSigner{{
+		SeedSigners: []provenance.TrustedSigner{{
 			Principal: "operator@example.com",
 			PublicKey: operatorPublic,
 			Comment:   "operator laptop",
@@ -130,7 +130,7 @@ func TestOpenSignedRejectsDeferredBirthWithTrustedSigners(t *testing.T) {
 		WorktreePath:    worktree,
 		SigningKeyPath:  signingKey,
 		SkipBirthCommit: true,
-		TrustedSigners: []provenance.TrustedSigner{{
+		SeedSigners: []provenance.TrustedSigner{{
 			Principal: "operator@example.com",
 			PublicKey: operatorPublic,
 		}},

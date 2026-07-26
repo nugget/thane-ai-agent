@@ -133,15 +133,33 @@ func TestValidateAllowedSigners(t *testing.T) {
 	}
 }
 
-// TestValidate_SigningBlockWired confirms the shared signing.allowed_signers
-// block is reached by Config.Validate and labels errors with its path.
-func TestValidate_SigningBlockWired(t *testing.T) {
+// TestValidate_SeedSignersWired confirms a root's seed_signers are reached
+// by Config.Validate and labelled with the root they belong to — which is
+// the point of declaring them per root rather than once.
+func TestValidate_SeedSignersWired(t *testing.T) {
 	t.Parallel()
 	cfg := Default()
-	cfg.Signing = SigningConfig{AllowedSigners: []AllowedSigner{{Principal: "alice example", Key: testSignerKeyAlice}}}
+	cfg.DocRoots = map[string]DocumentRootConfig{
+		"kb": {SeedSigners: []AllowedSigner{{Principal: "alice example", Key: testSignerKeyAlice}}},
+	}
 	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "signing.allowed_signers[0].principal") {
-		t.Fatalf("Validate() = %v, want signing.allowed_signers[0].principal error", err)
+	if err == nil || !strings.Contains(err.Error(), "roots.kb.seed_signers[0].principal") {
+		t.Fatalf("Validate() = %v, want roots.kb.seed_signers[0].principal error", err)
+	}
+}
+
+// TestValidate_SignedRootRequiresSeedSigners covers the rule that keeps
+// signing meaningful: a root that signs its history without declaring who
+// may establish it has signatures nobody decided to trust.
+func TestValidate_SignedRootRequiresSeedSigners(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	cfg.DocRoots = map[string]DocumentRootConfig{
+		"kb": {Git: DocumentRootGitConfig{Enabled: true, SignCommits: true, SigningKey: "~/.ssh/id_ed25519"}},
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "declares no seed_signers") {
+		t.Fatalf("Validate() = %v, want a missing seed_signers error", err)
 	}
 }
 
@@ -159,14 +177,21 @@ func TestValidate_PerRootAllowedSignersWired(t *testing.T) {
 	}
 }
 
-// TestValidate_ValidAllowedSignersPass confirms a well-formed shared block and
-// per-root block validate cleanly end-to-end.
+// TestValidate_ValidAllowedSignersPass confirms well-formed seed and
+// per-root git blocks validate cleanly end-to-end, and that two roots can
+// hold different trust sets — the property a single shared list could not
+// express.
 func TestValidate_ValidAllowedSignersPass(t *testing.T) {
 	t.Parallel()
 	cfg := Default()
-	cfg.Signing = SigningConfig{AllowedSigners: []AllowedSigner{{Principal: "alice@example.com", Key: testSignerKeyAlice, Label: "Alice laptop"}}}
 	cfg.DocRoots = map[string]DocumentRootConfig{
-		"kb": {Git: DocumentRootGitConfig{AllowedSigners: []AllowedSigner{{Principal: "bob@example.com", Key: testSignerKeyBob}}}},
+		"kb": {
+			SeedSigners: []AllowedSigner{{Principal: "alice@example.com", Key: testSignerKeyAlice, Label: "Alice laptop"}},
+			Git:         DocumentRootGitConfig{AllowedSigners: []AllowedSigner{{Principal: "bob@example.com", Key: testSignerKeyBob}}},
+		},
+		"core": {
+			SeedSigners: []AllowedSigner{{Principal: "alice@example.com", Key: testSignerKeyAlice, Label: "Alice laptop"}},
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)

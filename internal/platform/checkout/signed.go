@@ -25,8 +25,10 @@ type SignedSpec struct {
 	RepoPath string
 	// SigningKeyPath is the SSH private key used for signed commits.
 	SigningKeyPath string
-	// TrustedSigners are operator signing keys added to the repo-local trust set.
-	TrustedSigners []provenance.TrustedSigner
+	// SeedSigners establish this root's trust set at birth. They are not
+	// re-applied afterwards: the root's own .allowed_signers is its record
+	// of whom it trusts from then on.
+	SeedSigners []provenance.TrustedSigner
 	// SkipBirthCommit leaves the first commit to the caller. Use this when the
 	// domain needs its own birth commit contents; TrustedSigners must be empty
 	// because trust reconciliation requires an existing signed HEAD.
@@ -60,7 +62,7 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if strings.TrimSpace(spec.WorktreePath) == "" {
 		return nil, fmt.Errorf("%s: worktree path is required", name)
 	}
-	if spec.SkipBirthCommit && len(spec.TrustedSigners) > 0 {
+	if spec.SkipBirthCommit && len(spec.SeedSigners) > 0 {
 		return nil, fmt.Errorf("%s: trusted signers require a birth commit before reconciliation", name)
 	}
 	signingKey := strings.TrimSpace(spec.SigningKeyPath)
@@ -84,7 +86,9 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store, err := provenance.New(root.RepoPath, signer, logger)
+	store, err := provenance.NewWithOptions(root.RepoPath, signer, logger, provenance.Options{
+		SeedSigners: spec.SeedSigners,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: initialize provenance store: %w", name, err)
 	}
@@ -92,9 +96,6 @@ func OpenSigned(ctx context.Context, spec SignedSpec) (*Signed, error) {
 	if !spec.SkipBirthCommit {
 		if err := store.BootstrapBirthCommit(ctx); err != nil {
 			return nil, fmt.Errorf("%s: bootstrap birth commit: %w", name, err)
-		}
-		if _, err := store.ReconcileAllowedSigners(ctx, spec.TrustedSigners); err != nil {
-			return nil, fmt.Errorf("%s: reconcile allowed_signers: %w", name, err)
 		}
 	}
 

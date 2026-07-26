@@ -188,31 +188,34 @@ func TestRenderAllowedSigners_CollapsesSamePrincipalDuplicate(t *testing.T) {
 	}
 }
 
-// TestReconcileAllowedSignersCommitsUnionAndIsIdempotent covers the full I/O
-// path: rendering the agent+operator union into the repo's .allowed_signers,
-// committing it as signed history, keeping HEAD verifiable, and doing nothing
-// on an unchanged set.
-func TestReconcileAllowedSignersCommitsUnionAndIsIdempotent(t *testing.T) {
+// TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone covers the full
+// I/O path: rendering the agent+seed union into the repo's .allowed_signers,
+// committing it as signed history, keeping HEAD verifiable, and then never
+// touching the file again — including when config later disagrees with it,
+// which is the root exercising its own delegation rather than drift.
+func TestSeedAllowedSignersWritesOnceAndThenLeavesTheRootAlone(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
 	signer := testSigner(t)
-	s, err := New(dir, signer, slog.Default())
+	ops := []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"}}
+	s, err := NewWithOptions(dir, signer, slog.Default(), Options{SeedSigners: ops})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewWithOptions: %v", err)
 	}
 	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
 		t.Fatalf("BootstrapBirthCommit: %v", err)
 	}
 
-	ops := []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"}}
-	changed, err := s.ReconcileAllowedSigners(t.Context(), ops)
+	// The seed landed when the repository was established; asking again
+	// must not rewrite it.
+	changed, err := s.SeedAllowedSigners(t.Context(), ops)
 	if err != nil {
-		t.Fatalf("ReconcileAllowedSigners: %v", err)
+		t.Fatalf("SeedAllowedSigners: %v", err)
 	}
-	if !changed {
-		t.Fatal("first reconcile changed = false, want true")
+	if changed {
+		t.Fatal("seeding an established root changed = true, want false")
 	}
 
 	got, err := os.ReadFile(filepath.Join(dir, ".allowed_signers"))
@@ -229,27 +232,27 @@ func TestReconcileAllowedSignersCommitsUnionAndIsIdempotent(t *testing.T) {
 	// HEAD (the reconcile commit) must still verify against the rendered
 	// trust file — the agent key that signed it is in the file.
 	if err := s.git(t.Context(), nil, nil, "verify-commit", "HEAD"); err != nil {
-		t.Fatalf("verify-commit HEAD after reconcile: %v", err)
+		t.Fatalf("verify-commit HEAD after seed: %v", err)
 	}
 
 	// Idempotent: an unchanged set makes no commit and does not move HEAD.
 	before := headHash(t, s)
-	changed, err = s.ReconcileAllowedSigners(t.Context(), ops)
+	changed, err = s.SeedAllowedSigners(t.Context(), ops)
 	if err != nil {
-		t.Fatalf("second ReconcileAllowedSigners: %v", err)
+		t.Fatalf("second SeedAllowedSigners: %v", err)
 	}
 	if changed {
-		t.Fatal("second reconcile changed = true, want false (idempotent)")
+		t.Fatal("second seed changed = true, want false — an existing trust set is the root's own")
 	}
 	if after := headHash(t, s); after != before {
-		t.Fatalf("HEAD moved on idempotent reconcile: %s -> %s", before, after)
+		t.Fatalf("HEAD moved on re-seed: %s -> %s", before, after)
 	}
 }
 
-// TestReconcileAllowedSignersRejectsExternalTrustFile confirms the in-tree
+// TestSeedAllowedSignersRejectsExternalTrustFile confirms the in-tree
 // reconcile refuses to run when the Store verifies against an external
 // allowed_signers file it could not commit anyway.
-func TestReconcileAllowedSignersRejectsExternalTrustFile(t *testing.T) {
+func TestSeedAllowedSignersRejectsExternalTrustFile(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -263,7 +266,7 @@ func TestReconcileAllowedSignersRejectsExternalTrustFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithOptions: %v", err)
 	}
-	_, err = s.ReconcileAllowedSigners(t.Context(), []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}})
+	_, err = s.SeedAllowedSigners(t.Context(), []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey}})
 	if err == nil || !strings.Contains(err.Error(), "external allowed_signers") {
 		t.Fatalf("ReconcileAllowedSigners error = %v, want external-file rejection", err)
 	}
@@ -310,4 +313,76 @@ func headHash(t *testing.T, s *Store) string {
 		t.Fatalf("rev-parse HEAD: %v", err)
 	}
 	return strings.TrimSpace(buf.String())
+}
+
+// TestSeedSignersLandAtRepositoryCreation is the property the whole model
+// rests on: a root's trust surface is established once, from its own
+// declared seed, and is not the shared list that every other root drew
+// from.
+func TestSeedSignersLandAtRepositoryCreation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	seed := []TrustedSigner{{Principal: "alice@example.com", PublicKey: testAliceKey, Comment: "Alice laptop"}}
+	if _, err := NewWithOptions(dir, testSigner(t), slog.Default(), Options{SeedSigners: seed}); err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, ".allowed_signers"))
+	if err != nil {
+		t.Fatalf("read .allowed_signers: %v", err)
+	}
+	got := string(body)
+	if !strings.Contains(got, "alice@example.com") {
+		t.Fatalf(".allowed_signers should carry the seed signer at creation:\n%s", got)
+	}
+	if !strings.Contains(got, AgentPrincipal) {
+		t.Fatalf(".allowed_signers should still carry the agent key:\n%s", got)
+	}
+}
+
+// TestSeedIsNotReappliedAfterTheRootDiverges covers the case that
+// separates seeding from reconciling: once a root's own file says
+// something config does not, config does not win. Divergence is the root
+// exercising its delegation, not drift.
+func TestSeedIsNotReappliedAfterTheRootDiverges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	signer := testSigner(t)
+	s, err := NewWithOptions(dir, signer, slog.Default(), Options{})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+	if err := s.BootstrapBirthCommit(t.Context()); err != nil {
+		t.Fatalf("BootstrapBirthCommit: %v", err)
+	}
+
+	// A key config never mentioned, added the way a root legitimately
+	// extends its own trust.
+	path := filepath.Join(dir, ".allowed_signers")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	delegated := string(body) + "carol@example.com " + testAliceKey + "\n"
+	if err := os.WriteFile(path, []byte(delegated), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := s.SeedAllowedSigners(t.Context(), []TrustedSigner{
+		{Principal: "alice@example.com", PublicKey: testAliceKey},
+	}); err != nil {
+		t.Fatalf("SeedAllowedSigners: %v", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if !strings.Contains(string(after), "carol@example.com") {
+		t.Fatalf("the root's own delegation was overwritten from config:\n%s", string(after))
+	}
 }

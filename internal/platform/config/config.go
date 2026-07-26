@@ -927,14 +927,12 @@ func (c ProvenanceConfig) Configured() bool {
 // own signing key — which is always trusted and can never be removed — to
 // form the trust set that signature verification checks against. Keys are
 // operator-only: they live in config and are never exposed to a model.
-type SigningConfig struct {
-	// AllowedSigners lists SSH public keys trusted to sign commits across
-	// all signing roots. Each entry is an operator identity; a root may
-	// add more via its git.allowed_signers. The agent's own key is
-	// implicit and unremovable, so this list never needs — and must not
-	// include — it.
-	AllowedSigners []AllowedSigner `yaml:"allowed_signers,omitempty"`
-}
+// SigningConfig is retained for future instance-wide signing settings.
+// The trust set itself is declared per root as seed_signers, because
+// roots have different trust domains: the config that decides what the
+// system trusts and a corpus shared over a remote should not draw their
+// signers from one list.
+type SigningConfig struct{}
 
 // AllowedSigner is one trusted signing identity: an SSH public key bound to
 // a principal, with an optional label and validity window. It renders to
@@ -992,6 +990,16 @@ type RootEntry struct {
 	// whether they can be injected into a prompt and how they surface
 	// in search. Omit to keep the legacy behavior for this root.
 	Context RootContextPolicy `yaml:"context,omitempty"`
+
+	// SeedSigners are the keys entitled to establish this root. They
+	// seed its .allowed_signers at birth and are not re-applied after,
+	// because from then on the root's own file is its record of whom it
+	// trusts.
+	//
+	// Declared per root rather than shared, so the keys that may sign a
+	// corpus synced from a remote are not automatically the keys that
+	// may sign the config deciding what the whole system trusts.
+	SeedSigners []AllowedSigner `yaml:"seed_signers,omitempty"`
 }
 
 // Root context policy values. Injection is the narrower and more
@@ -1146,6 +1154,9 @@ type DocumentRootConfig struct {
 
 	// Context governs how this root's documents may reach a model.
 	Context RootContextPolicy `yaml:"context,omitempty"`
+
+	// SeedSigners are the keys entitled to establish this root.
+	SeedSigners []AllowedSigner `yaml:"seed_signers,omitempty"`
 }
 
 // DocumentRootGitConfig configures git-backed provenance for one
@@ -2412,6 +2423,23 @@ func LoadWithWorkspace(path, fallbackWorkspace string) (*Config, error) {
 // sets it believes they have pointed the instance somewhere, and the
 // instance would run from a different directory without saying so. The
 // error names the two things that actually decide the workspace now.
+// rejectRetiredSigningKeys refuses the instance-wide signer list.
+//
+// Silently dropping it would leave every signed root with no declared
+// trust set while the operator believed they had configured one — the
+// failure this whole change exists to make impossible.
+func rejectRetiredSigningKeys(signing *yaml.Node) error {
+	if signing == nil || signing.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(signing.Content); i += 2 {
+		if signing.Content[i].Value == "allowed_signers" {
+			return fmt.Errorf("config declares signing.allowed_signers, which is now per root. Move each key to roots.<name>.seed_signers for the roots it should be able to establish — declaring it once for every root is what let a key trusted for a shared corpus also sign the config that decides what the system trusts")
+		}
+	}
+	return nil
+}
+
 func rejectRetiredWorkspaceKeys(workspace *yaml.Node) error {
 	if workspace == nil || workspace.Kind != yaml.MappingNode {
 		return nil
@@ -2443,6 +2471,10 @@ func rejectRetiredKeys(data []byte) error {
 		switch keyNode.Value {
 		case "platform":
 			return fmt.Errorf("config has top-level platform: section, which was renamed to companion: in v0.9.x. Rename it (the field shape is unchanged) and re-load")
+		case "signing":
+			if err := rejectRetiredSigningKeys(valueNode); err != nil {
+				return err
+			}
 		case "curator":
 			return fmt.Errorf("config has top-level curator: section, which was renamed to archivist: when the loop became a self-paced queue consumer. Rename it (the field shape is unchanged) and re-load")
 		case "workspace":
@@ -2586,10 +2618,11 @@ func (c *Config) normalizeRoots() error {
 			}
 			if entryHasPolicy(entry) {
 				c.DocRoots[trimmed] = DocumentRootConfig{
-					Indexing:  entry.Indexing,
-					Authoring: entry.Authoring,
-					Git:       entry.Git,
-					Context:   entry.Context,
+					Indexing:    entry.Indexing,
+					Authoring:   entry.Authoring,
+					Git:         entry.Git,
+					Context:     entry.Context,
+					SeedSigners: entry.SeedSigners,
 				}
 			}
 		}
@@ -2617,6 +2650,9 @@ func entryHasPolicy(entry RootEntry) bool {
 		return true
 	}
 	if entry.Context.Declared() {
+		return true
+	}
+	if len(entry.SeedSigners) > 0 {
 		return true
 	}
 	g := entry.Git
@@ -3268,9 +3304,23 @@ func isSSHGitURL(url string) bool {
 	return slash < 0 || colon < slash
 }
 
-// validateSigning checks the shared operator allowed-signers block.
+// validateSigning checks each root's declared seed signers, and that a
+// root which signs its commits declares who may establish it.
 func (c *Config) validateSigning() error {
-	return validateAllowedSigners("signing.allowed_signers", c.Signing.AllowedSigners)
+	for root, policy := range c.DocRoots {
+		root = strings.TrimSuffix(strings.TrimSpace(root), ":")
+		label := "roots." + root + ".seed_signers"
+		if err := validateAllowedSigners(label, policy.SeedSigners); err != nil {
+			return err
+		}
+		// A root that signs its history without saying who may establish
+		// it has signed history with no admission: verification would
+		// confirm a signature without anyone having decided whose.
+		if policy.Git.Enabled && policy.Git.SignCommits && len(policy.SeedSigners) == 0 {
+			return fmt.Errorf("roots.%s signs commits but declares no seed_signers; list the keys entitled to establish this root", root)
+		}
+	}
+	return nil
 }
 
 // validateAllowedSigners validates a list of trusted signing keys, prefixing
