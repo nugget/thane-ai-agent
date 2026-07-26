@@ -143,6 +143,8 @@ The current policy fields are:
 - `git.verify_signatures`: sets the consumer policy: `none`, `warn`,
   or `required`.
 
+### Signed roots
+
 Signature verification always uses the repository-local
 `.allowed_signers` file. Thane creates it once, when a signed root is
 first established, from the agent key plus that root's declared
@@ -164,8 +166,8 @@ roots:
 
 After that the file is the root's own trust surface and config never
 rewrites it. Adding signers is done by editing and committing
-`.allowed_signers` through trusted history — a change signed by a key
-the root already trusts.
+`.allowed_signers` — a change that must be signed by one of the root's
+seed signers.
 
 `seed_signers` is declared per root rather than once for the instance,
 because roots have different trust domains. The keys entitled to sign a
@@ -173,6 +175,104 @@ corpus synced from a remote should not automatically be entitled to sign
 the config that decides what the whole system trusts. A root that signs
 its commits must declare seed signers, since signed history nobody
 decided to admit is a signature without a claim behind it.
+
+### What admission checks
+
+Asking only "is this commit signed by a key in `.allowed_signers`?" lets
+a repository vouch for itself, because whoever wrote that file also chose
+what it says. Admission is the question that comes first, and it is the
+one question a root cannot answer in its own favor — seed signers live in
+config, outside the repository they govern.
+
+At boot, every git-backed root that declares seed signers and sets
+`verify_signatures` to `warn` or `required` must satisfy three rules:
+
+1. **One birth.** The root has exactly one parentless commit. A history
+   grafted from two independent roots is refused; admitting it because
+   one of those births checks out would let the other in through the side
+   door.
+2. **An attributable birth.** That commit is signed by a declared seed
+   signer.
+3. **A trust file only seeds have touched.** Every commit that created or
+   changed `.allowed_signers` is signed by a declared seed signer.
+
+All three are checked against a rendered seed-only signers file, never
+the root's in-tree one. Otherwise a commit that added a key could be
+validated by the very entry it introduced.
+
+Keys the trust file delegates to may sign ordinary content. Only a seed
+signer may widen the trust file itself, so a delegated key cannot
+delegate further. That is deliberately stricter than the general case: it
+forbids one collaborator admitting the next. The reason is soundness
+rather than convenience. "Signed by a key trusted at the time" only means
+something relative to a commit's own ancestry, and roots that sync
+bidirectionally can merge — so a permissive walk that ordered commits by
+date would judge a key added on a side branch as trusted earlier than it
+really was. The strict rule is order-independent, which makes it correct
+on every history shape rather than only the linear ones. Transitive
+delegation can arrive later as ancestry-aware composition, with this rule
+as its degenerate case.
+
+The pleasant side effect is that admission is cheap. With no chain to
+follow, the cost is one signature check for the birth plus one per
+trust-file change — on a corpus of several thousand commits that is
+typically a handful of checks rather than thousands.
+
+### Declaring the agent
+
+A root Thane creates is born signed by the agent's own key, so an
+agent-founded root is admitted only if it declares the agent:
+
+```yaml
+    seed_signers:
+      - principal: thane@provenance.local
+        key: "ssh-ed25519 AAAA..."   # public half of git.signing_key
+        label: "Self"
+```
+
+Omitting it is how a root says its own agent may not establish or amend
+it. That is the intended shape for `core`: an operator founds it, the
+agent writes content into it, and the agent cannot rewrite the trust
+surface of the root holding the config that decides what the instance
+trusts.
+
+Be precise about what that buys. Where the agent has shell access it can
+still *write* config; what it cannot do is produce a valid signature for
+the change, so the boot gate refuses and names the failing check. This is
+detection, not prevention — and detection is the property worth having,
+because the realistic failure is not a deliberate adversary but an agent
+steered by a poisoned document into "helpfully" relaxing a check. That
+drift is silent by nature. A refusal at boot makes it loud.
+
+Because a birth is the one thing no later commit can repair, Thane
+refuses to *create* a root whose seed signers omit the agent — while the
+repository is still empty and the remedy is a config line rather than a
+history rewrite.
+
+### When admission fails
+
+A failed root reports through the same `verify_signatures` policy as
+every other check: `required` refuses to start, `warn` logs and
+continues. The message names the check and, in the common case, who
+actually signed:
+
+```
+doc_roots.kb admission boot verification: the root commit 7c939f595ac9
+of /srv/thane/knowledge is not signed by a declared seed signer, so this
+root's birth is unattributed: it was signed by thane@provenance.local,
+the agent's own key — declare that principal in this root's seed_signers
+if the agent is entitled to establish it, or re-establish the root with a
+commit signed by a declared seed
+```
+
+The usual cause is a root founded before its seed set was declared, or
+one founded by the agent at an instance that never declared the agent.
+Both are config fixes. Rewriting history to install a different founder
+is the alternative, and for a corpus behind a bidirectional remote it is
+almost never the right one — declaring who actually founded the root is
+the honest record.
+
+### Read-side enforcement
 
 Signature-required roots are the place for high-integrity authored
 knowledge, such as owner-tagged knowledge articles. When verification
