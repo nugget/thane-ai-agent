@@ -1,5 +1,20 @@
 package tools
 
+// IsDirectHumanEgressTool reports whether a tool reaches a human
+// directly.
+func IsDirectHumanEgressTool(name string) bool {
+	return isDirectHumanEgressTool(name)
+}
+
+func isDirectHumanEgressTool(name string) bool {
+	for _, candidate := range directHumanEgressToolNames {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
 // DirectHumanEgressToolNames returns tool names that can directly contact a
 // person or mutate an active human conversation. Delegated and subsystem loops
 // should wake the core loop with request_core_attention instead of receiving

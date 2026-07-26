@@ -71,6 +71,9 @@ func (a *App) initServers(s *newState) error {
 	if a.indexDB != nil {
 		server.UseLogQuerier(&logQueryAdapter{db: a.indexDB})
 	}
+	if a.cfg.Unverified() {
+		server.SetUnverified(true)
+	}
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
 		result := make(map[string]api.DependencyStatus, len(status))
@@ -612,6 +615,16 @@ func (a *App) initServers(s *newState) error {
 			// below registers. Idempotent if anyone calls it again.
 			if err := a.ensureCoreLoop(ctx); err != nil {
 				return fmt.Errorf("ensure core loop: %w", err)
+			}
+			if a.cfg.Unverified() {
+				// Service loops act on their own schedule for as long as
+				// the process lives. An instance that cannot show who
+				// authorized its config should not be starting unattended
+				// work; an operator who wants a specific loop can launch
+				// it deliberately.
+				logger.Warn("not starting service loops: config is unverified",
+					"resolution", "restart on a verified config, or launch a loop explicitly")
+				return nil
 			}
 			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
 			if err != nil {

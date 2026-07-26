@@ -622,6 +622,13 @@ func loadConfig(explicit, workspace string) (*config.Config, string, error) {
 	if err != nil {
 		return nil, cfgPath, fmt.Errorf("load config %s: %w", cfgPath, err)
 	}
+	if explicit != "" {
+		// Marked at load rather than at the gate so every command
+		// inherits it, not only the one that verifies. A config named
+		// on the command line sits outside the boundary by definition,
+		// and nothing downstream should have to re-derive that.
+		cfg.MarkUnverified()
+	}
 
 	return cfg, cfgPath, nil
 }

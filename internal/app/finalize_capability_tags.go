@@ -9,6 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // finalizeCapabilityTags resolves capability-tag membership from the
@@ -39,6 +40,14 @@ import (
 func (a *App) finalizeCapabilityTags(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
+
+	if cfg.Unverified() {
+		// Withheld here, once the registry is fully assembled, so the
+		// denial covers every tool any later path can reach.
+		a.loop.Tools().WithholdDirectHumanEgress()
+		logger.Warn("withholding direct human egress tools: config is unverified",
+			"tools", tools.DirectHumanEgressToolNames())
+	}
 
 	resolved := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
 	resolvedCapTags := resolved.Configs

@@ -223,6 +223,24 @@ would run.
 the workspace. It exists for recovery and debugging when the canonical
 config cannot be loaded — a rotated key, a broken core repository.
 
+An instance started this way runs with capabilities withheld, because a
+configuration nobody can be shown to have authorized should not be able
+to act on the world as though someone had:
+
+- **Tools that contact a human directly are refused** — Signal, email,
+  notifications, escalations. The refusal explains the state rather than
+  reporting the tool as missing, so the model reports its findings in its
+  reply instead of looking for another route to the same person.
+- **Service loops do not start automatically.** Unattended work needs a
+  verified instance; an operator can still launch a specific loop
+  deliberately.
+- **`/health` reports `status: degraded` with `trust: unverified`**, so a
+  supervisor cannot mistake a recovery session for a healthy instance
+  left running indefinitely.
+- **The model is told**, in its own context, that its configuration is
+  unattested and which capabilities are withheld — before it plans around
+  having them.
+
 The name is literal rather than cautionary. Verification means a file is
 covered by the instance's signed core history, which a file outside core
 cannot be; so a config loaded this way is insecure by construction, not
