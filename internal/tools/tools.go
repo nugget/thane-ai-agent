@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
@@ -57,15 +58,18 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools              map[string]*Tool
-	tagIndex           map[string][]string // tag → tool names
-	ha                 *homeassistant.Client
-	scheduler          *scheduler.Scheduler
-	logger             *slog.Logger
-	factTools          *knowledge.Tools
-	contactTools       *contacts.Tools
-	emailTools         *email.Tools
-	withholdEgress     bool
+	tools        map[string]*Tool
+	tagIndex     map[string][]string // tag → tool names
+	ha           *homeassistant.Client
+	scheduler    *scheduler.Scheduler
+	logger       *slog.Logger
+	factTools    *knowledge.Tools
+	contactTools *contacts.Tools
+	emailTools   *email.Tools
+
+	// policy is shared by pointer with every registry derived from this
+	// one, so a scoped copy cannot regain what the parent withheld.
+	policy             *registryPolicy
 	notifier           *notifications.Sender
 	notifRecords       *notifications.RecordStore
 	notifRouter        *notifications.NotificationRouter
@@ -1009,12 +1013,7 @@ func (r *Registry) AllToolNames() []string {
 // Tools not found in the source are silently skipped. The returned
 // registry shares tool handlers with the source but has its own map.
 func (r *Registry) FilteredCopy(names []string) *Registry {
-	filtered := &Registry{
-		tools:           make(map[string]*Tool, len(names)),
-		contentResolver: r.contentResolver,
-		tagIndex:        r.tagIndex,
-		logger:          r.logger,
-	}
+	filtered := r.derive(len(names))
 	for _, name := range names {
 		if t := r.tools[name]; t != nil {
 			filtered.tools[name] = t
@@ -1030,12 +1029,7 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 	for _, name := range exclude {
 		skip[name] = true
 	}
-	filtered := &Registry{
-		tools:           make(map[string]*Tool, len(r.tools)),
-		contentResolver: r.contentResolver,
-		tagIndex:        r.tagIndex,
-		logger:          r.logger,
-	}
+	filtered := r.derive(len(r.tools))
 	for name, t := range r.tools {
 		if !skip[name] {
 			filtered.tools[name] = t
@@ -1052,12 +1046,7 @@ func (r *Registry) WithRuntimeTools(runtime []*Tool) *Registry {
 	if len(runtime) == 0 {
 		return r
 	}
-	filtered := &Registry{
-		tools:           make(map[string]*Tool, len(r.tools)+len(runtime)),
-		contentResolver: r.contentResolver,
-		tagIndex:        r.tagIndex,
-		logger:          r.logger,
-	}
+	filtered := r.derive(len(r.tools) + len(runtime))
 	for name, t := range r.tools {
 		filtered.tools[name] = t
 	}
@@ -1093,11 +1082,8 @@ func (r *Registry) WithDynamicTools(extra []*Tool, tagAdditions map[string][]str
 		return r
 	}
 
-	filtered := &Registry{
-		tools:           make(map[string]*Tool, len(r.tools)+len(extra)),
-		contentResolver: r.contentResolver,
-		logger:          r.logger,
-	}
+	filtered := r.derive(len(r.tools) + len(extra))
+	filtered.tagIndex = nil // rebuilt below from additions
 	for name, t := range r.tools {
 		filtered.tools[name] = t
 	}
@@ -1187,12 +1173,7 @@ func (r *Registry) SetTagIndex(tags map[string][]string) {
 func (r *Registry) FilterByTags(tags []string) *Registry {
 	if len(tags) == 0 || r.tagIndex == nil {
 		// No filtering — return a shallow copy with all tools.
-		filtered := &Registry{
-			tools:           make(map[string]*Tool, len(r.tools)),
-			contentResolver: r.contentResolver,
-			tagIndex:        r.tagIndex,
-			logger:          r.logger,
-		}
+		filtered := r.derive(len(r.tools))
 		for name, t := range r.tools {
 			filtered.tools[name] = t
 		}
@@ -1206,12 +1187,7 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 		}
 	}
 
-	filtered := &Registry{
-		tools:           make(map[string]*Tool, len(allowed)),
-		contentResolver: r.contentResolver,
-		tagIndex:        r.tagIndex,
-		logger:          r.logger,
-	}
+	filtered := r.derive(len(allowed))
 	for name, t := range r.tools {
 		if allowed[name] || t.Core {
 			filtered.tools[name] = t
@@ -1241,7 +1217,7 @@ func (r *Registry) WithholdDirectHumanEgress() {
 	if r == nil {
 		return
 	}
-	r.withholdEgress = true
+	r.sharedPolicy().withholdEgress.Store(true)
 }
 
 // checkEgressWithheld refuses a direct-egress tool on an unverified
@@ -1249,10 +1225,47 @@ func (r *Registry) WithholdDirectHumanEgress() {
 // as missing, so the model does not respond by hunting for another way
 // to reach the same person.
 func (r *Registry) checkEgressWithheld(name string) error {
-	if r == nil || !r.withholdEgress || !isDirectHumanEgressTool(name) {
+	if r == nil || r.policy == nil || !r.policy.withholdEgress.Load() || !isDirectHumanEgressTool(name) {
 		return nil
 	}
 	return fmt.Errorf("%s is withheld: this instance is running on a config from outside its trust boundary, so it will not contact anyone directly. Report what you found in your reply instead, and tell the operator the instance needs to be restarted on a verified config", name)
+}
+
+// registryPolicy is the runtime policy a registry and all registries
+// derived from it share. It is a pointer rather than copied fields
+// because the derived registries are where the policy has to hold: a
+// loop's scoped set and a delegate's inherited set are the autonomous
+// paths, and those are exactly the copies.
+type registryPolicy struct {
+	withholdEgress atomic.Bool
+}
+
+// derive returns a registry that shares this one's policy and services
+// with an empty tool set.
+//
+// Every constructor that produces a scoped registry goes through here.
+// The field list used to be maintained by hand in five of them, which is
+// how withheld egress came to survive on the base registry and vanish
+// through FilterByTags — the copies dropped what they did not know to
+// carry. Centralizing it means a sixth constructor inherits policy by
+// default instead of by remembering.
+func (r *Registry) derive(capacity int) *Registry {
+	return &Registry{
+		tools:           make(map[string]*Tool, capacity),
+		contentResolver: r.contentResolver,
+		tagIndex:        r.tagIndex,
+		logger:          r.logger,
+		policy:          r.sharedPolicy(),
+	}
+}
+
+// sharedPolicy returns the policy state, creating it on first use so a
+// registry built by any path still has one to share.
+func (r *Registry) sharedPolicy() *registryPolicy {
+	if r.policy == nil {
+		r.policy = &registryPolicy{}
+	}
+	return r.policy
 }
 
 // Execute runs a tool by name with given arguments.

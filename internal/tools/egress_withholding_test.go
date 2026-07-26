@@ -62,3 +62,52 @@ func TestIsDirectHumanEgressToolCoversTheDeclaredSet(t *testing.T) {
 		t.Fatal("doc_read is not direct human egress")
 	}
 }
+
+// TestWithholdingSurvivesEveryDerivedRegistry is the test that would
+// have caught the original bug: withholding lived on the base registry
+// while every scoped copy silently regained the capability. Loops and
+// delegates run through those copies, so the denial held precisely where
+// it did not matter and lapsed where it did.
+func TestWithholdingSurvivesEveryDerivedRegistry(t *testing.T) {
+	base := newEgressTestRegistry(t)
+	base.Register(&Tool{
+		Name:        "tagged_tool",
+		Description: "tag-scoped",
+		Parameters:  map[string]any{"type": "object"},
+		Handler:     func(context.Context, map[string]any) (string, error) { return "ok", nil },
+	})
+	base.WithholdDirectHumanEgress()
+
+	derived := map[string]*Registry{
+		"FilteredCopy":          base.FilteredCopy([]string{"signal_send_message", "doc_read"}),
+		"FilteredCopyExcluding": base.FilteredCopyExcluding([]string{"tagged_tool"}),
+		"FilterByTags/untagged": base.FilterByTags(nil),
+		"WithRuntimeTools":      base.WithRuntimeTools([]*Tool{{Name: "runtime_tool", Parameters: map[string]any{"type": "object"}, Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }}}),
+		"WithDynamicTools":      base.WithDynamicTools([]*Tool{{Name: "dynamic_tool", Parameters: map[string]any{"type": "object"}, Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil }}}, nil),
+	}
+	// A copy of a copy is the realistic shape: a delegate's registry is
+	// derived from a loop's, which is derived from the base.
+	derived["nested"] = derived["FilterByTags/untagged"].FilteredCopy([]string{"signal_send_message"})
+
+	for name, reg := range derived {
+		if reg.Get("signal_send_message") == nil {
+			continue // this copy legitimately excludes the tool
+		}
+		if _, err := reg.Execute(context.Background(), "signal_send_message", "{}"); err == nil {
+			t.Fatalf("%s regained direct human egress after the base withheld it", name)
+		}
+	}
+}
+
+func TestWithholdingAppliesToCopiesMadeBeforeItWasSet(t *testing.T) {
+	// Policy is shared state, not a snapshot: a registry derived during
+	// wiring must honor a withholding decision made after it was built.
+	base := newEgressTestRegistry(t)
+	derived := base.FilterByTags(nil)
+
+	base.WithholdDirectHumanEgress()
+
+	if _, err := derived.Execute(context.Background(), "signal_send_message", "{}"); err == nil {
+		t.Fatal("a registry derived before the decision must still honor it")
+	}
+}
