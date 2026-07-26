@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,5 +112,38 @@ func TestLoadRecordsSourcePath(t *testing.T) {
 	}
 	if cfg.LoadedFrom() != path {
 		t.Fatalf("LoadedFrom() = %q, want %q", cfg.LoadedFrom(), path)
+	}
+}
+
+func TestWarnConfigOutsideCoreHandlesUnreadableCorePath(t *testing.T) {
+	// A core config that cannot be stat'd must not be reported as
+	// absent: core is typically mode 0600, so an unreadable path is the
+	// shape a wrong-user deployment takes, and reporting the milder
+	// "no core config" case would bury it.
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	dir := t.TempDir()
+	coreDir := filepath.Join(dir, "core")
+	if err := os.MkdirAll(coreDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(coreDir, "config.yaml"), []byte("listen:\n  port: 8080\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(coreDir, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(coreDir, 0o755) })
+
+	cfg := &Config{loadedFrom: filepath.Join(dir, "config.yaml")}
+	cfg.Workspace.Path = dir
+
+	// The classifier must reach the unreadable branch rather than
+	// treating the error as not-exist; it stays advisory either way.
+	cfg.warnConfigOutsideCore()
+
+	if _, err := os.Stat(filepath.Join(coreDir, "config.yaml")); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("test setup did not produce a non-not-exist stat error: %v", err)
 	}
 }

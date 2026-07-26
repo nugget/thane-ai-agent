@@ -24,7 +24,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/url"
@@ -58,8 +60,9 @@ import (
 //
 // The search cannot consult workspace.path, because that value lives in
 // the file being searched for. It instead checks the two locations the
-// legacy entries already imply a workspace at, and [Config.Validate]
-// reconciles the loaded path against workspace.path afterwards.
+// legacy entries already imply a workspace at; [Load] then compares the
+// path it actually read against workspace.path once that value is known,
+// and warns through warnConfigOutsideCore when they disagree.
 //
 // The search order is:
 //   - ./core/config.yaml (workspace core, working directory)
@@ -2275,19 +2278,33 @@ func (c *Config) warnConfigOutsideCore() {
 	if loaded == canonical {
 		return
 	}
-	if _, err := os.Stat(canonical); err == nil {
+	switch _, err := os.Stat(canonical); {
+	case err == nil:
 		slog.Default().Warn("config: a config exists in core but is NOT the one in use; edits to it have no effect and the two files will drift",
 			"loaded", loaded,
 			"core_config", canonical,
 			"resolution", "make core the only config: verify the files match, delete the one outside core, and restart",
 		)
-		return
+	case errors.Is(err, fs.ErrNotExist):
+		slog.Default().Warn("config: loaded from outside the instance trust boundary, so it carries no signed change history",
+			"loaded", loaded,
+			"expected", canonical,
+			"resolution", "move this file to core and commit it, so every config change has an author and a history",
+		)
+	default:
+		// Treating an unreadable path as an absent one would report the
+		// milder problem and bury the real one. A core config that
+		// cannot even be stat'd is its own finding: core is typically
+		// mode 0600, so this is the shape a wrong-user or wrong-
+		// permissions deployment takes, and the boot is likely to fail
+		// later for the same reason.
+		slog.Default().Warn("config: cannot determine whether a core config exists; the trust boundary could not be checked",
+			"loaded", loaded,
+			"core_config", canonical,
+			"error", err,
+			"resolution", "check ownership and permissions on the core directory for the user Thane runs as",
+		)
 	}
-	slog.Default().Warn("config: loaded from outside the instance trust boundary, so it carries no signed change history",
-		"loaded", loaded,
-		"expected", canonical,
-		"resolution", "move this file to core and commit it, so every config change has an author and a history",
-	)
 }
 
 // rejectRetiredKeys returns an actionable error when the YAML
