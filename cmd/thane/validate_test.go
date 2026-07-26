@@ -40,7 +40,7 @@ func TestRunValidate_HappyPath(t *testing.T) {
 	path := writeConfig(t, minimalValidConfig)
 	var buf bytes.Buffer
 
-	if err := runValidate(&buf, path, "text"); err != nil {
+	if err := runValidate(&buf, path, "", "text"); err != nil {
 		t.Fatalf("runValidate: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestRunValidate_HappyPath(t *testing.T) {
 
 func TestRunValidate_MissingFile(t *testing.T) {
 	var buf bytes.Buffer
-	err := runValidate(&buf, "/nonexistent/path/config.yaml", "text")
+	err := runValidate(&buf, "/nonexistent/path/config.yaml", "", "text")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -73,7 +73,7 @@ func TestRunValidate_ParseError(t *testing.T) {
 	path := writeConfig(t, "models:\n  default: [this isn't a string\n")
 	var buf bytes.Buffer
 
-	err := runValidate(&buf, path, "text")
+	err := runValidate(&buf, path, "", "text")
 	if err == nil {
 		t.Fatal("expected parse error, got nil")
 	}
@@ -92,7 +92,7 @@ channel_tags:
 	path := writeConfig(t, body)
 	var buf bytes.Buffer
 
-	err := runValidate(&buf, path, "text")
+	err := runValidate(&buf, path, "", "text")
 	if err == nil {
 		t.Fatal("expected semantic error for undefined tag reference, got nil")
 	}
@@ -105,7 +105,7 @@ func TestRunValidate_JSONHappyPath(t *testing.T) {
 	path := writeConfig(t, minimalValidConfig)
 	var buf bytes.Buffer
 
-	if err := runValidate(&buf, path, "json"); err != nil {
+	if err := runValidate(&buf, path, "", "json"); err != nil {
 		t.Fatalf("runValidate: %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestRunValidate_JSONDiscoveryFailure(t *testing.T) {
 	const explicit = "/nonexistent/never-going-to-exist.yaml"
 	var buf bytes.Buffer
 
-	err := runValidate(&buf, explicit, "json")
+	err := runValidate(&buf, explicit, "", "json")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -179,7 +179,7 @@ channel_tags:
 	path := writeConfig(t, body)
 	var buf bytes.Buffer
 
-	err := runValidate(&buf, path, "json")
+	err := runValidate(&buf, path, "", "json")
 	if err == nil {
 		t.Fatal("expected error from runValidate, got nil")
 	}

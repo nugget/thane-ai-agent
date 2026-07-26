@@ -22,8 +22,8 @@ import (
 // short structural summary. Mode "json" emits a single object with
 // path, valid, error (if any), and summary fields, suitable for
 // piping into jq.
-func runValidate(w io.Writer, configPath, outputFmt string) error {
-	cfg, cfgPath, loadErr := loadConfig(configPath)
+func runValidate(w io.Writer, configPath, workspacePath, outputFmt string) error {
+	cfg, cfgPath, loadErr := loadConfig(configPath, workspacePath)
 	// When discovery fails before a path is resolved, fall back to
 	// the operator's explicit -config value so the JSON report still
 	// names the file that was at fault. Stays empty when neither

@@ -19,7 +19,9 @@ Commands:
   version      Show version information
 
 Flags:
-  -config <path>    Path to config file (default: auto-discover)
+  -workspace <dir>  Instance workspace (default: ~/Thane)
+  -config <path>    Load config from an exact path instead of the
+                    workspace; for recovery only
   -o, --output fmt  Output format: text (default) or json
 ```
 
@@ -120,17 +122,39 @@ thane health http://127.0.0.1:8080/health
 Print version, commit hash, build time, and branch information. Version is
 injected at build time via ldflags.
 
-## Config Auto-Discovery
+## Config Location
 
-If no `-config` flag is provided, Thane searches these paths in order:
+Thane loads its runtime configuration from exactly one place:
 
-1. `./config.yaml`
-2. `~/Thane/config.yaml`
-3. `~/.config/thane/config.yaml`
-4. `/config/config.yaml`
-5. `/usr/local/etc/thane/config.yaml`
-6. `/etc/thane/config.yaml`
+```
+<workspace>/core/config.yaml
+```
 
-The first file found is used. See
-[Configuration](../operating/configuration.md) for what goes in the config
-file.
+The workspace defaults to `~/Thane` and is set with `-workspace`. There is
+no search path.
+
+That is deliberate. The config decides what the rest of the system
+trusts: it sets `verify_signatures`, names the allowed-signers source,
+chooses model endpoints, and points every document root at a path. A
+config found by probing several locations would make the trust anchor
+depend on the working directory, and a file that cannot be named cannot
+be verified. Living inside `core` means the config is git-tracked and
+signed like everything else in the trust boundary.
+
+`workspace.path` is derived from the config's own location rather than
+declared. A config that declares one contradicting where it was loaded
+from is rejected, since that disagreement means the instance's roots,
+state, and identity would point somewhere other than the directory the
+config came from.
+
+If no config exists at the canonical path but one is found at a
+pre-core location, Thane refuses to start and prints the exact commands
+to move and commit it.
+
+### Recovery
+
+`-config <path>` loads a config from an exact path, bypassing the
+workspace. It exists for recovery and debugging when the canonical
+config cannot be loaded — a rotated key, a broken core repository — and
+the config it loads is not covered by the trust boundary.
+

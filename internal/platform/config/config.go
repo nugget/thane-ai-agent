@@ -47,40 +47,81 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultSearchPaths returns the ordered list of paths that [FindConfig]
-// checks when no explicit path is provided. The first existing file wins.
-//
-// The search order is:
-//   - ./config.yaml (project directory / working directory)
-//   - ~/Thane/config.yaml (macOS role account convention)
-//   - ~/.config/thane/config.yaml (XDG user config)
-//   - /config/config.yaml (container convention)
-//   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
-//   - /etc/thane/config.yaml (system-wide)
+// DefaultWorkspace is the workspace directory used when none is given
+// on the command line. It matches the role-account convention the
+// installer and the packaged deployment both use.
+const DefaultWorkspace = "~/Thane"
 
-// searchPathsFunc is the function used to generate search paths.
-// Overridden in tests to avoid finding real config files on the host.
-var searchPathsFunc = DefaultSearchPaths
+// ConfigFileName is the fixed name of the runtime config inside core.
+const ConfigFileName = "config.yaml"
 
-func DefaultSearchPaths() []string {
-	paths := []string{"config.yaml"}
-
+// legacyConfigLocations are the paths Thane searched before the config
+// moved inside the trust boundary. They are no longer loaded; they are
+// probed only so a failure to find the real config can say where the old
+// one is and how to move it.
+func legacyConfigLocations() []string {
+	paths := []string{ConfigFileName}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, "Thane", "config.yaml"))
-		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
+		paths = append(paths,
+			filepath.Join(home, "Thane", ConfigFileName),
+			filepath.Join(home, ".config", "thane", ConfigFileName),
+		)
 	}
-
-	paths = append(paths, "/config/config.yaml")
-	paths = append(paths, "/usr/local/etc/thane/config.yaml")
-	paths = append(paths, "/etc/thane/config.yaml")
-	return paths
+	return append(paths,
+		filepath.Join("/config", ConfigFileName),
+		filepath.Join("/usr/local/etc/thane", ConfigFileName),
+		filepath.Join("/etc/thane", ConfigFileName),
+	)
 }
 
-// FindConfig locates a configuration file. If explicit is non-empty, that
-// exact path must exist or an error is returned. Otherwise, the paths from
-// [DefaultSearchPaths] are tried in order, and the first that exists is
-// returned. Returns an error if no config file can be found.
-func FindConfig(explicit string) (string, error) {
+// ExpandWorkspace resolves a workspace argument to an absolute path,
+// expanding a leading ~ and defaulting when empty.
+func ExpandWorkspace(workspace string) (string, error) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		workspace = DefaultWorkspace
+	}
+	if workspace == "~" || strings.HasPrefix(workspace, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand %q: no home directory: %w", workspace, err)
+		}
+		workspace = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(workspace, "~"), "/"))
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve workspace %q: %w", workspace, err)
+	}
+	return abs, nil
+}
+
+// ConfigPathForWorkspace returns the one location Thane loads runtime
+// config from: {workspace}/core/config.yaml.
+//
+// There is deliberately no search. The config names the allowed-signers
+// source, sets verify_signatures, chooses model endpoints, and points
+// every document root at a path — so it decides what the rest of the
+// system is willing to trust. A trust anchor discovered by probing the
+// filesystem is not an anchor: whichever file is found first becomes
+// authoritative, and the answer changes with the working directory. One
+// derived location means the config always has a name, which is the
+// precondition for verifying it.
+func ConfigPathForWorkspace(workspace string) (string, error) {
+	abs, err := ExpandWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(abs, "core", ConfigFileName), nil
+}
+
+// FindConfig returns the config path for a workspace, or the explicit
+// path when one is given (the unverified-config escape hatch, whose
+// caller is responsible for degrading the runtime accordingly).
+//
+// When the canonical config is absent, the error names any config left
+// at a legacy location and gives the exact commands to adopt it, so the
+// migration is one unambiguous step rather than a hunt.
+func FindConfig(explicit, workspace string) (string, error) {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err != nil {
 			return "", fmt.Errorf("config file not found: %s", explicit)
@@ -88,13 +129,43 @@ func FindConfig(explicit string) (string, error) {
 		return explicit, nil
 	}
 
-	for _, p := range searchPathsFunc() {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
+	canonical, err := ConfigPathForWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(canonical); err == nil {
+		return canonical, nil
 	}
 
-	return "", fmt.Errorf("no config file found (searched: %v)", DefaultSearchPaths())
+	if legacy := firstExistingLegacyConfig(); legacy != "" {
+		coreDir := filepath.Dir(canonical)
+		return "", fmt.Errorf(
+			"no config at %s\n\nA config still exists at the pre-core location %s. Thane now loads config only from inside the instance trust boundary, so it can be signed and version-controlled. Move it and commit it:\n\n  mkdir -p %s\n  git -C %s init    # if core is not a repo yet\n  mv %s %s\n  git -C %s add %s && git -C %s commit -S -m 'adopt runtime config into core'",
+			canonical, legacy,
+			coreDir,
+			coreDir,
+			legacy, canonical,
+			coreDir, ConfigFileName, coreDir,
+		)
+	}
+
+	return "", fmt.Errorf("no config at %s (run 'thane init %s' to create one, or pass -workspace to point at a different instance)",
+		canonical, filepath.Dir(filepath.Dir(canonical)))
+}
+
+// firstExistingLegacyConfig reports the first pre-core config location
+// that still holds a file, or empty when none do.
+func firstExistingLegacyConfig() string {
+	for _, p := range legacyConfigLocations() {
+		if _, err := os.Stat(p); err == nil {
+			abs, absErr := filepath.Abs(p)
+			if absErr != nil {
+				return p
+			}
+			return abs
+		}
+	}
+	return ""
 }
 
 // Config is the top-level configuration structure for the Thane agent,
@@ -107,6 +178,12 @@ func FindConfig(explicit string) (string, error) {
 // need empty-string checks or fallback logic. See [Config.applyDefaults]
 // for the defaulting rules and [Config.Validate] for consistency checks.
 type Config struct {
+	// loadedFrom is the path this config was read from. It is not a
+	// configurable value — it records provenance, and workspace.path is
+	// derived from it, so the runtime knows where its instance lives
+	// without trusting the file to say.
+	loadedFrom string
+
 	// Listen configures the primary HTTP API server (OpenAI-compatible).
 	Listen ListenConfig `yaml:"listen"`
 
@@ -2172,6 +2249,59 @@ type StateWindowConfig struct {
 //     shape).
 //  5. Apply defaults via [Config.applyDefaults].
 //  6. Validate via [Config.Validate].
+//
+// deriveWorkspace sets workspace.path from the config's own location
+// rather than trusting the file to describe where it lives.
+//
+// A config at {workspace}/core/config.yaml already states its workspace
+// by sitting there, so a declared workspace.path can only agree or lie.
+// Deriving it removes a field that could point the instance's roots,
+// state, and identity somewhere other than the directory the config was
+// loaded from — and a declared value that disagrees is rejected rather
+// than silently overridden, because the disagreement itself means one of
+// the two is wrong in a way the operator needs to see.
+func (c *Config) deriveWorkspace() error {
+	if c.loadedFrom == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(c.loadedFrom)
+	if err != nil {
+		return fmt.Errorf("resolve config path %q: %w", c.loadedFrom, err)
+	}
+	coreDir := filepath.Dir(abs)
+	if filepath.Base(coreDir) != "core" {
+		// A config outside core — the recovery escape hatch, or a
+		// minimal config for a one-shot command — keeps whatever it
+		// declared, including nothing. An absent workspace is already a
+		// handled state: the features that need one say so when they
+		// are configured.
+		return nil
+	}
+	derived := filepath.Dir(coreDir)
+
+	if declared := strings.TrimSpace(c.Workspace.Path); declared != "" {
+		declaredAbs, err := ExpandWorkspace(declared)
+		if err != nil {
+			return err
+		}
+		if declaredAbs != derived {
+			return fmt.Errorf("workspace.path %q does not match the directory this config was loaded from (%s); remove workspace.path — it is derived from the config location", declared, derived)
+		}
+	}
+	c.Workspace.Path = derived
+	return nil
+}
+
+// LoadedFrom reports the path this config was read from, or empty when
+// it was not produced by [Load]. The integrity gate needs it to verify
+// the file it is actually running on.
+func (c *Config) LoadedFrom() string {
+	if c == nil {
+		return ""
+	}
+	return c.loadedFrom
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2186,6 +2316,11 @@ func Load(path string) (*Config, error) {
 
 	cfg := &Config{}
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
+		return nil, err
+	}
+	cfg.loadedFrom = path
+
+	if err := cfg.deriveWorkspace(); err != nil {
 		return nil, err
 	}
 
