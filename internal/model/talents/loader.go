@@ -60,6 +60,11 @@ type Frontmatter struct {
 	Kind     string
 	Teaser   string
 	NextTags []string
+	// Audience carries the document-layer audience convention (#1250):
+	// "internal" marks a private working surface that must not inject
+	// into model context even when tagged. Parsed here so the KB
+	// article scanner can honor it; meaningless on talents themselves.
+	Audience string
 }
 
 // Block represents a single parsed frontmatter + content pair from a
@@ -461,6 +466,10 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 			meta.Teaser = value
 		case strings.HasPrefix(line, "next_tags:"):
 			meta.NextTags = parseFrontmatterTagList(strings.TrimPrefix(line, "next_tags:"))
+		case strings.HasPrefix(line, "audience:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "audience:"))
+			value = strings.Trim(value, `"'`)
+			meta.Audience = value
 		default:
 			continue
 		}

@@ -87,6 +87,38 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_InternalAudienceKBArticleExcluded(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "guide.md"),
+		[]byte("---\ntags: [forge]\n---\n# Guide\nPublished guidance."), 0644)
+	os.WriteFile(filepath.Join(kbDir, "notes.md"),
+		[]byte("---\ntags: [forge]\naudience: internal\n---\n# Notes\nPrivate process narration."), 0644)
+
+	l := newTagTestLoop()
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Core:        true,
+		},
+	}
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
+	l.SetCapabilityTags(capTags, nil)
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello")
+
+	if !strings.Contains(prompt, "Published guidance.") {
+		t.Error("system prompt should contain the published tagged article")
+	}
+	if strings.Contains(prompt, "Private process narration.") {
+		t.Error("system prompt must not contain an internal-audience article, even when tagged")
+	}
+}
+
 func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 	kbDir := t.TempDir()
 	os.WriteFile(filepath.Join(kbDir, "arch.md"),
