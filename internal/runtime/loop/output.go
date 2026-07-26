@@ -89,7 +89,11 @@ type OutputSpec struct {
 	MaxWindows int `yaml:"max_windows,omitempty" json:"max_windows,omitempty"`
 	// Tiers declares the published projection ladder for a maintained
 	// document: which of status_line, teaser, and digest the loop
-	// publishes alongside the full body. Empty means untiered.
+	// publishes alongside the full body. Empty means untiered. The
+	// declaration is a set — element order carries no meaning, because
+	// the ladder's order is fixed by the contract itself
+	// (status_line → teaser → digest); renderers and consumers use that
+	// canonical order and must not read anything into declaration order.
 	Tiers []OutputTier `yaml:"tiers,omitempty" json:"tiers,omitempty"`
 	// Audience overrides which surfaces may project this output. Empty
 	// defaults from Type: working_notes is internal, every other type

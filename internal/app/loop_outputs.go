@@ -281,5 +281,8 @@ func cloneLoopOutputs(src []looppkg.OutputSpec) []looppkg.OutputSpec {
 	}
 	dst := make([]looppkg.OutputSpec, len(src))
 	copy(dst, src)
+	for i := range dst {
+		dst[i].Tiers = append([]looppkg.OutputTier(nil), src[i].Tiers...)
+	}
 	return dst
 }
