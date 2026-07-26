@@ -168,7 +168,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 
 	r.Register(&Tool{
 		Name:        "doc_search",
-		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies.",
+		Description: "Search indexed markdown documents by root, path prefix, query text, tags, frontmatter filters, and modified-time bounds. Returns compact document summaries with canonical refs like `kb:article.md` and modified-time delta fields like `-3600s`, not full bodies. Documents whose frontmatter declares `audience: internal` (private working surfaces such as loop working notes) are excluded by default; set include_internal true, or filter on the audience key explicitly, to see them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -225,6 +225,10 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 					"type":        "integer",
 					"description": "Maximum number of results to return (default 20, max 100).",
 				},
+				"include_internal": map[string]any{
+					"type":        "boolean",
+					"description": "Include internal-audience documents (frontmatter `audience: internal`), which are excluded by default. Default false.",
+				},
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
@@ -236,6 +240,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 			frontmatterKeys := documentStringSliceArg(args["frontmatter_keys"])
 			modifiedAfter, _ := args["modified_after"].(string)
 			modifiedBefore, _ := args["modified_before"].(string)
+			includeInternal, _ := args["include_internal"].(bool)
 			limit := numericArg(args["limit"], 20, 100)
 			return dt.Search(ctx, documents.SearchArgs{
 				Root:            root,
@@ -247,6 +252,7 @@ func RegisterDocumentTools(r *Registry, dt *documents.Tools) {
 				ModifiedAfter:   modifiedAfter,
 				ModifiedBefore:  modifiedBefore,
 				Limit:           limit,
+				IncludeInternal: includeInternal,
 			})
 		},
 	})

@@ -698,6 +698,14 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 		if len(meta.Tags) == 0 && len(meta.TagsAll) == 0 {
 			return nil // untagged KB articles are not auto-loaded
 		}
+		if strings.EqualFold(strings.TrimSpace(meta.Audience), "internal") {
+			// The #1250 audience contract: an internal-audience document
+			// is a private working surface (loop working notes, process
+			// logs). Tags on it must not turn it into injected guidance —
+			// doc_search already excludes it, and this scanner is the
+			// other injection path.
+			return nil
+		}
 
 		canonicalKind, _ := talents.CanonicalKind(meta.Kind)
 		talents.WarnIfKindAlias(path, meta.Kind)
