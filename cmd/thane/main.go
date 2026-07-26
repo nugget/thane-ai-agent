@@ -3,7 +3,7 @@
 // It exposes an OpenAI-compatible API, an optional Ollama-compatible API
 // (for Home Assistant integration), and a CLI for one-shot queries and
 // document ingestion. Configuration is loaded from a single YAML file
-// discovered automatically (see [config.DefaultSearchPaths]).
+// loaded from {workspace}/core/config.yaml (see [config.FindConfig]).
 //
 // Usage:
 //
@@ -79,6 +79,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// concurrently from tests. Our argument surface is small enough that
 	// manual parsing is clearer than bringing in a CLI framework.
 	var configPath string
+	var workspacePath string
 	var outputFmt string // "text" (default) or "json"
 	var command string
 	var cmdArgs []string
@@ -90,6 +91,11 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			i++ // skip the value
 		case strings.HasPrefix(args[i], "-config="):
 			configPath = strings.TrimPrefix(args[i], "-config=")
+		case args[i] == "-workspace" && i+1 < len(args):
+			workspacePath = args[i+1]
+			i++ // skip the value
+		case strings.HasPrefix(args[i], "-workspace="):
+			workspacePath = strings.TrimPrefix(args[i], "-workspace=")
 		case (args[i] == "-o" || args[i] == "--output") && i+1 < len(args):
 			outputFmt = args[i+1]
 			i++
@@ -121,7 +127,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 
 	switch command {
 	case "serve":
-		return runServe(ctx, stdout, stderr, configPath)
+		return runServe(ctx, stdout, stderr, configPath, workspacePath)
 	case "init":
 		dir := "."
 		if len(cmdArgs) > 0 {
@@ -129,23 +135,23 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		}
 		return runInit(stdout, dir)
 	case "validate":
-		return runValidate(stdout, configPath, outputFmt)
+		return runValidate(stdout, configPath, workspacePath, outputFmt)
 	case "ask":
 		if len(cmdArgs) == 0 {
 			return fmt.Errorf("usage: thane ask <question>")
 		}
-		return runAsk(ctx, stdout, stderr, configPath, cmdArgs)
+		return runAsk(ctx, stdout, stderr, configPath, workspacePath, cmdArgs)
 	case "ingest":
 		if len(cmdArgs) == 0 {
 			return fmt.Errorf("usage: thane ingest <file.md>")
 		}
-		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
+		return runIngest(ctx, stdout, stderr, configPath, workspacePath, cmdArgs[0])
 	case "version":
 		return runVersion(stdout, outputFmt)
 	case "health":
 		return runHealth(ctx, stdout, cmdArgs)
 	case "caps":
-		return runCaps(ctx, stdout, configPath, outputFmt, cmdArgs)
+		return runCaps(ctx, stdout, configPath, workspacePath, outputFmt, cmdArgs)
 	case "":
 		return printUsage(stdout)
 	default:
@@ -218,12 +224,16 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  version      Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -workspace <dir>  Instance workspace (default: ~/Thane)")
+	fmt.Fprintln(w, "  -config <path>    Load config from an exact path instead of the")
+	fmt.Fprintln(w, "                    workspace; for recovery only")
 	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Config search order:")
-	fmt.Fprintln(w, "  ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,")
-	fmt.Fprintln(w, "  /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Config location:")
+	fmt.Fprintln(w, "  <workspace>/core/config.yaml — the only location Thane loads.")
+	fmt.Fprintln(w, "  Config lives inside core so it can be signed and version-controlled;")
+	fmt.Fprintln(w, "  it decides what the rest of the system trusts.")
 	return nil
 }
 
@@ -231,12 +241,12 @@ func printUsage(w io.Writer) error {
 // minimal agent (in-memory conversation store, no router, no scheduler)
 // and processes a single question, printing the response to stdout.
 // Useful for quick smoke tests and debugging without starting the server.
-func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, args []string) error {
+func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath, workspacePath string, args []string) error {
 	logger := newLogger(stdout, slog.LevelInfo, "text")
 
 	question := strings.Join(args, " ")
 
-	cfg, cfgPath, err := loadConfig(configPath)
+	cfg, cfgPath, err := loadConfig(configPath, workspacePath)
 	if err != nil {
 		return err
 	}
@@ -291,11 +301,11 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 // runIngest handles the "thane ingest <file.md>" subcommand. It parses
 // a markdown document into discrete facts and stores them in the fact
 // database, optionally generating embeddings for semantic search.
-func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, filePath string) error {
+func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath, workspacePath string, filePath string) error {
 	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("ingesting markdown document", "file", filePath)
 
-	cfg, _, err := loadConfig(configPath)
+	cfg, _, err := loadConfig(configPath, workspacePath)
 	if err != nil {
 		return err
 	}
@@ -347,11 +357,11 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 //  2. A shutdown checkpoint is persisted (conversations, facts, tasks)
 //  3. HTTP servers drain in-flight requests
 //  4. Database connections and the scheduler are closed via defers
-func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string) error {
+func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath, workspacePath string) error {
 	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
-	cfg, cfgPath, err := loadConfig(configPath)
+	cfg, cfgPath, err := loadConfig(configPath, workspacePath)
 	if err != nil {
 		return err
 	}
@@ -464,12 +474,12 @@ func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 	)
 }
 
-// loadConfig locates and parses the YAML configuration file. If explicit
-// is non-empty, that exact path is used (and must exist). Otherwise,
-// [config.FindConfig] searches the default locations. Returns the parsed
-// config, the path that was loaded, and any error.
-func loadConfig(explicit string) (*config.Config, string, error) {
-	cfgPath, err := config.FindConfig(explicit)
+// loadConfig parses the runtime configuration. Without an explicit
+// path it loads the one canonical location, {workspace}/core/config.yaml,
+// so the file the rest of the system trusts always has a fixed name.
+// Returns the parsed config, the path that was loaded, and any error.
+func loadConfig(explicit, workspace string) (*config.Config, string, error) {
+	cfgPath, err := config.FindConfig(explicit, workspace)
 	if err != nil {
 		return nil, "", err
 	}

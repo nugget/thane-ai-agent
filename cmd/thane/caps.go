@@ -22,10 +22,10 @@ import (
 // view, the CLI just formats it. This keeps the CLI free of any
 // resolver bootstrap and guarantees it shows the same shape the web
 // UI sees.
-func runCaps(ctx context.Context, stdout io.Writer, configPath, outputFmt string, args []string) error {
+func runCaps(ctx context.Context, stdout io.Writer, configPath, workspacePath, outputFmt string, args []string) error {
 	tag, includeExcluded := parseCapsArgs(args)
 
-	cfg, _, err := loadConfig(configPath)
+	cfg, _, err := loadConfig(configPath, workspacePath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

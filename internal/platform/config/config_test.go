@@ -14,7 +14,7 @@ func TestFindConfig_Explicit(t *testing.T) {
 	path := filepath.Join(dir, "test.yaml")
 	os.WriteFile(path, []byte("listen:\n  port: 9999\n"), 0600)
 
-	got, err := FindConfig(path)
+	got, err := FindConfig(path, "")
 	if err != nil {
 		t.Fatalf("FindConfig(%q) error: %v", path, err)
 	}
@@ -24,45 +24,106 @@ func TestFindConfig_Explicit(t *testing.T) {
 }
 
 func TestFindConfig_ExplicitMissing(t *testing.T) {
-	_, err := FindConfig("/nonexistent/config.yaml")
+	_, err := FindConfig("/nonexistent/config.yaml", "")
 	if err == nil {
 		t.Fatal("FindConfig with missing explicit path should error")
 	}
 }
 
-func TestFindConfig_SearchPath(t *testing.T) {
-	// When no config exists anywhere, should error.
-	// Override searchPathsFunc to avoid finding real config files
-	// on developer/deploy machines (~/Thane/config.yaml,
-	// /usr/local/etc/thane/config.yaml, etc.).
-	dir := t.TempDir()
-	orig := searchPathsFunc
-	searchPathsFunc = func() []string {
-		return []string{filepath.Join(dir, "config.yaml")}
+func TestFindConfig_LoadsFromWorkspaceCore(t *testing.T) {
+	workspace := t.TempDir()
+	coreDir := filepath.Join(workspace, "core")
+	if err := os.MkdirAll(coreDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
-	defer func() { searchPathsFunc = orig }()
+	want := filepath.Join(coreDir, "config.yaml")
+	if err := os.WriteFile(want, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-	_, err := FindConfig("")
-	if err == nil {
-		t.Fatal("FindConfig(\"\") with no config files should error")
+	got, err := FindConfig("", workspace)
+	if err != nil {
+		t.Fatalf("FindConfig: %v", err)
+	}
+	if got != want {
+		t.Fatalf("FindConfig() = %q, want %q", got, want)
 	}
 }
 
-func TestFindConfig_CWD(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte("listen:\n  port: 8080\n"), 0600)
-
-	orig, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(orig)
-
-	got, err := FindConfig("")
-	if err != nil {
-		t.Fatalf("FindConfig(\"\") error: %v", err)
+func TestFindConfig_IgnoresConfigOutsideCore(t *testing.T) {
+	// A config beside core is not a fallback — loading it would put the
+	// file that defines the trust policy outside the trust boundary —
+	// but it is the likeliest thing an upgrading instance has, so the
+	// failure has to hand back a usable migration instead of just
+	// refusing. Asserting only that this errors would pass even when the
+	// guidance goes missing.
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "core"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
-	if got != "config.yaml" {
-		t.Errorf("FindConfig(\"\") = %q, want %q", got, "config.yaml")
+	legacy := filepath.Join(workspace, "config.yaml")
+	if err := os.WriteFile(legacy, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := FindConfig("", workspace)
+	if err == nil {
+		t.Fatal("FindConfig should not fall back to a config outside core")
+	}
+	got := err.Error()
+	canonical := filepath.Join(workspace, "core", "config.yaml")
+	for _, want := range []string{
+		canonical, // where the config must end up
+		legacy,    // where it is now
+		"mv " + legacy + " " + canonical,
+		"commit -S",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("migration guidance missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFindConfig_LegacyProbeFindsWorkspaceConfigFromAnyCWD(t *testing.T) {
+	// The workspace-adjacent config is the one location the fixed legacy
+	// list cannot express: with -workspace pointing somewhere that is
+	// neither the working directory nor ~/Thane, probing only those would
+	// lose the migration instructions exactly when they are needed.
+	workspace := t.TempDir()
+	legacy := filepath.Join(workspace, "config.yaml")
+	if err := os.WriteFile(legacy, []byte("listen:\n  port: 8080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Run from an unrelated directory so a CWD-relative probe cannot be
+	// what finds it.
+	elsewhere := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(elsewhere); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	_, err = FindConfig("", workspace)
+	if err == nil {
+		t.Fatal("FindConfig should error when only a pre-core config exists")
+	}
+	if !strings.Contains(err.Error(), legacy) {
+		t.Fatalf("error should name the workspace-adjacent legacy config:\n%s", err)
+	}
+}
+
+func TestFindConfig_MissingConfigNamesTheWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	_, err := FindConfig("", workspace)
+	if err == nil {
+		t.Fatal("FindConfig with no config should error")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(workspace, "core", "config.yaml")) {
+		t.Fatalf("error should name the canonical path: %v", err)
 	}
 }
 
