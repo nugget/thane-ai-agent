@@ -174,8 +174,11 @@ Each root reports a `context` block:
 - `inject: "tagged"` — tagged documents here can enter your context on
   their own. `inject: "none"` means nothing here ever appears unbidden,
   so anything you need from it you must go and read.
-- `requires_tag` — the whole root stays invisible until that capability
-  tag is active.
+- `requires_tag` — documents here inject only while that capability tag
+  is active. It constrains injection alone: search never consults active
+  tags, so a root gated this way is still searchable right now, and
+  skipping it because its tag is inactive would blind you to content
+  that is sitting there.
 
 So the funnel has a precondition: when a search comes back empty and the
 answer plausibly lives in a corpus you did not name, check `doc_roots`
