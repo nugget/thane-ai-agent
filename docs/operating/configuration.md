@@ -191,9 +191,6 @@ Where SQLite databases live (`thane.db`, `facts.db`). Defaults to
 ## Document Roots
 
 ```yaml
-workspace:
-  path: ~/Thane
-
 roots:
   kb:
     path: ~/Thane/knowledge
@@ -245,9 +242,6 @@ corpora, and use file tools such as `file_read`, `file_search`, and
 `file_grep` with the root prefix:
 
 ```yaml
-workspace:
-  path: ~/Thane
-
 roots:
   thanecode:
     path: ~/Thane/checkouts/thane
@@ -288,13 +282,11 @@ operator guide.
 ## Persona & Talents
 
 ```yaml
-workspace:
-  path: ~/Thane
 talents_dir: ~/Thane/talents
 ```
 
 See [Context Layers](../understanding/context-layers.md) for how these
-fit into the system prompt. `workspace.path` derives the protected
+fit into the system prompt. The workspace derives the protected
 `core` root; `core/axioms.md`, `core/persona.md`, `core/ego.md`, and
 `core/mission.md` are picked up by the runtime without a separate
 inject-file list.

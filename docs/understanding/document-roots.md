@@ -72,9 +72,6 @@ one of Thane's managed local document collections.
 Example:
 
 ```yaml
-workspace:
-  path: ~/Thane
-
 roots:
   kb: ~/Thane/knowledge
   scratchpad: ~/Thane/scratchpad
@@ -120,9 +117,6 @@ document corpora. For a forge-maintained local checkout, use a read-only
 root with indexing disabled:
 
 ```yaml
-workspace:
-  path: ~/Thane
-
 roots:
   thanecode:
     path: ~/Thane/checkouts/thane

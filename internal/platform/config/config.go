@@ -1645,11 +1645,16 @@ func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
 // directory. All paths passed to file tools are resolved relative to
 // Path and cannot escape it.
 type WorkspaceConfig struct {
-	// Path is the root directory for file operations. If empty, file
-	// tools are disabled entirely. In multi-root setups, this should be
-	// the common writable parent that contains Thane-owned roots such as
-	// core/, talents/, knowledge/, generated/, and scratchpad/.
-	Path string `yaml:"path"`
+	// Path is the root directory for file operations: the writable
+	// parent holding Thane-owned roots such as core/, talents/,
+	// knowledge/, generated/, and scratchpad/.
+	//
+	// It is derived, never authored. A config lives at
+	// {workspace}/core/config.yaml, so it states its workspace by
+	// sitting there; a declared value could only agree or drift, and it
+	// made the file describe one machine's layout. A config loaded from
+	// outside a core takes the workspace from the -workspace flag.
+	Path string `yaml:"-"`
 
 	// ReadOnlyDirs are additional directories the agent can read from
 	// but not write to. Useful for compatibility or reference roots that
@@ -2286,24 +2291,13 @@ func (c *Config) deriveWorkspace() error {
 	coreDir := filepath.Dir(abs)
 	if filepath.Base(coreDir) != "core" {
 		// A config outside core — the recovery escape hatch, or a
-		// minimal config for a one-shot command — keeps whatever it
-		// declared, including nothing. An absent workspace is already a
-		// handled state: the features that need one say so when they
-		// are configured.
+		// minimal config for a one-shot command — has no location to
+		// derive from. The caller supplies the workspace from the
+		// -workspace flag, or leaves it unset; an absent workspace is
+		// already a handled state, and the features needing one say so.
 		return nil
 	}
-	derived := filepath.Dir(coreDir)
-
-	if declared := strings.TrimSpace(c.Workspace.Path); declared != "" {
-		declaredAbs, err := ExpandWorkspace(declared)
-		if err != nil {
-			return err
-		}
-		if declaredAbs != derived {
-			return fmt.Errorf("workspace.path %q does not match the directory this config was loaded from (%s); remove workspace.path — it is derived from the config location", declared, derived)
-		}
-	}
-	c.Workspace.Path = derived
+	c.Workspace.Path = filepath.Dir(coreDir)
 	return nil
 }
 
@@ -2347,7 +2341,20 @@ func (c *Config) CoreConfigPath() string {
 	return filepath.Join(c.CoreRoot(), "config.yaml")
 }
 
+// Load reads and parses a config whose workspace is derived from its own
+// location.
 func Load(path string) (*Config, error) {
+	return LoadWithWorkspace(path, "")
+}
+
+// LoadWithWorkspace reads a config, falling back to the given workspace
+// when the config's location cannot supply one — which happens only for
+// a config loaded from outside any core, where the -workspace flag is
+// the sole remaining source. A derived workspace always wins: the
+// config's own location is the more trustworthy of the two, and a
+// fallback that could override it would reintroduce the drift that
+// retiring workspace.path removed.
+func LoadWithWorkspace(path, fallbackWorkspace string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -2367,6 +2374,9 @@ func Load(path string) (*Config, error) {
 
 	if err := cfg.deriveWorkspace(); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(cfg.Workspace.Path) == "" && strings.TrimSpace(fallbackWorkspace) != "" {
+		cfg.Workspace.Path = strings.TrimSpace(fallbackWorkspace)
 	}
 
 	if err := cfg.normalizeRoots(); err != nil {
@@ -2396,6 +2406,24 @@ func Load(path string) (*Config, error) {
 // by include/exclude) and mcp.servers[].default_tags (renamed to
 // tags). Each retired key gets a specific message pointing the
 // operator at the new shape.
+// rejectRetiredWorkspaceKeys refuses a declared workspace.path.
+//
+// Silently ignoring it would be worse than refusing: an operator who
+// sets it believes they have pointed the instance somewhere, and the
+// instance would run from a different directory without saying so. The
+// error names the two things that actually decide the workspace now.
+func rejectRetiredWorkspaceKeys(workspace *yaml.Node) error {
+	if workspace == nil || workspace.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(workspace.Content); i += 2 {
+		if workspace.Content[i].Value == "path" {
+			return fmt.Errorf("config declares workspace.path, which is now derived from the config's own location ({workspace}/core/config.yaml) rather than authored. Remove the path: line — keep the rest of the workspace: block — and select a different instance with the -workspace flag instead")
+		}
+	}
+	return nil
+}
+
 func rejectRetiredKeys(data []byte) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -2417,6 +2445,10 @@ func rejectRetiredKeys(data []byte) error {
 			return fmt.Errorf("config has top-level platform: section, which was renamed to companion: in v0.9.x. Rename it (the field shape is unchanged) and re-load")
 		case "curator":
 			return fmt.Errorf("config has top-level curator: section, which was renamed to archivist: when the loop became a self-paced queue consumer. Rename it (the field shape is unchanged) and re-load")
+		case "workspace":
+			if err := rejectRetiredWorkspaceKeys(valueNode); err != nil {
+				return err
+			}
 		case "capability_tags":
 			if err := rejectRetiredCapabilityTagKeys(valueNode); err != nil {
 				return err

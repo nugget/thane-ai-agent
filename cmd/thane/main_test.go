@@ -140,3 +140,51 @@ func TestGateRefusalIsTerminal(t *testing.T) {
 		t.Fatalf("a refusal to start should exit %d so supervisors stop retrying, got %d", ExitTerminal, exitCodeFor(err))
 	}
 }
+
+func TestLoadConfig_WorkspaceFallbackRequiresAnExplicitWorkspace(t *testing.T) {
+	// A defaulted workspace must not be adopted by a config loaded from
+	// somewhere else: the instance at ~/Thane has nothing to do with a
+	// file the operator named on the command line.
+	dir := t.TempDir()
+	loose := filepath.Join(dir, "rescue.yaml")
+	if err := os.WriteFile(loose, []byte(minimalValidConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, _, err := loadConfig(loose, "")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Workspace.Path != "" {
+		t.Fatalf("Workspace.Path = %q, want empty when no workspace was named", cfg.Workspace.Path)
+	}
+
+	// Naming one is what makes the fallback apply.
+	cfg, _, err = loadConfig(loose, dir)
+	if err != nil {
+		t.Fatalf("loadConfig with explicit workspace: %v", err)
+	}
+	if cfg.Workspace.Path != dir {
+		t.Fatalf("Workspace.Path = %q, want the named workspace %q", cfg.Workspace.Path, dir)
+	}
+}
+
+func TestLoadConfig_UnresolvableWorkspaceIsReported(t *testing.T) {
+	// Swallowing this would leave the instance running with no workspace
+	// — file tools disabled — and surface later as something that looks
+	// unrelated to the flag that caused it.
+	t.Setenv("HOME", "")
+	dir := t.TempDir()
+	loose := filepath.Join(dir, "rescue.yaml")
+	if err := os.WriteFile(loose, []byte(minimalValidConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, _, err := loadConfig(loose, "~/nowhere")
+	if err == nil {
+		t.Skip("home directory still resolvable in this environment")
+	}
+	if exitCodeFor(err) != ExitTerminal {
+		t.Fatalf("an unresolvable -workspace should exit %d, got %d", ExitTerminal, exitCodeFor(err))
+	}
+}

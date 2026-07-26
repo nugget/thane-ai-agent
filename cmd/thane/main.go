@@ -618,7 +618,23 @@ func loadConfig(explicit, workspace string) (*config.Config, string, error) {
 		return nil, "", err
 	}
 
-	cfg, err := config.Load(cfgPath)
+	// The fallback applies only when a workspace was actually named. If
+	// it defaulted, an out-of-core config would silently adopt ~/Thane
+	// and be judged against an instance the operator never mentioned.
+	fallbackWorkspace := ""
+	if strings.TrimSpace(workspace) != "" {
+		// An unresolvable -workspace is reported here rather than
+		// swallowed. Falling back to empty would leave the instance
+		// running with no workspace at all — file tools disabled — and
+		// surface later as something that looks unrelated to the flag
+		// that caused it.
+		resolved, wErr := config.ExpandWorkspace(workspace)
+		if wErr != nil {
+			return nil, "", terminal(wErr)
+		}
+		fallbackWorkspace = resolved
+	}
+	cfg, err := config.LoadWithWorkspace(cfgPath, fallbackWorkspace)
 	if err != nil {
 		return nil, cfgPath, fmt.Errorf("load config %s: %w", cfgPath, err)
 	}
