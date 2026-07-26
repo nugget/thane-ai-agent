@@ -533,15 +533,8 @@ func TestDocumentRootProvenanceReviser(t *testing.T) {
 func TestBuildDocumentStoreOptionsWiresCoreWriter(t *testing.T) {
 	t.Parallel()
 
+	signingKey, _ := writeTestSigningKey(t)
 	coreDir := t.TempDir()
-	keyPath := filepath.Join(coreDir, "identity", "signing_ed25519")
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", keyPath).CombinedOutput(); err != nil {
-		t.Skipf("ssh-keygen unavailable: %v\n%s", err, out)
-	}
-
 	app := &App{cfg: &config.Config{
 		DocRoots: map[string]config.DocumentRootConfig{
 			"core": {
@@ -549,7 +542,7 @@ func TestBuildDocumentStoreOptionsWiresCoreWriter(t *testing.T) {
 				Git: config.DocumentRootGitConfig{
 					Enabled:     true,
 					SignCommits: true,
-					SigningKey:  keyPath,
+					SigningKey:  signingKey,
 					RepoPath:    coreDir,
 				},
 			},
