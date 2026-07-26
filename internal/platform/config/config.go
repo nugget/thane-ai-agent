@@ -997,6 +997,24 @@ type RootEntry struct {
 	// Declared per root rather than shared, so the keys that may sign a
 	// corpus synced from a remote are not automatically the keys that
 	// may sign the config deciding what the whole system trusts.
+	//
+	// They are also what the root is admitted against at startup. A
+	// signed root must have been born in a commit one of these keys
+	// signed, and every later change to its .allowed_signers must carry
+	// a seed signer's signature too. Keys the trust file delegates to
+	// may sign ordinary content but cannot widen the trust file itself,
+	// so trust only ever grows by a decision recorded here.
+	//
+	// Admission deliberately does not consult the root's own trust file.
+	// A repository that vouched for its own trust surface would decide
+	// its own admission, since whoever wrote that file also chose what
+	// it says.
+	//
+	// The agent's own key is not implicitly entitled. A root Thane
+	// creates is born signed by the agent, so such a root must list
+	// thane@provenance.local here — and a root that omits it, such as a
+	// core established by an operator, is one the agent cannot
+	// establish or re-establish on its own.
 	SeedSigners []AllowedSigner `yaml:"seed_signers,omitempty"`
 }
 
@@ -1153,7 +1171,8 @@ type DocumentRootConfig struct {
 	// Context governs how this root's documents may reach a model.
 	Context RootContextPolicy `yaml:"context,omitempty"`
 
-	// SeedSigners are the keys entitled to establish this root.
+	// SeedSigners are the keys entitled to establish this root, and the
+	// set its history is admitted against at startup.
 	SeedSigners []AllowedSigner `yaml:"seed_signers,omitempty"`
 }
 
@@ -1182,12 +1201,14 @@ type DocumentRootGitConfig struct {
 	// Supports ~ expansion at startup.
 	SigningKey string `yaml:"signing_key,omitempty"`
 
-	// AllowedSigners lists operator SSH public keys trusted to sign
-	// commits in this root, in addition to the shared
-	// signing.allowed_signers set and the agent's own (always-trusted,
-	// unremovable) key. This only extends the trust set for one root; it
-	// never replaces or removes from it. Use it to let an operator
-	// co-author a signed root.
+	// AllowedSigners is the older spelling of this root's seed signers
+	// and is merged with roots.<name>.seed_signers, which is where new
+	// configs should declare them.
+	//
+	// Both feed the same set, so keys listed here also govern admission:
+	// they can establish the root and amend its .allowed_signers. That
+	// is more authority than the name suggests, which is why the
+	// seed_signers spelling exists.
 	AllowedSigners []AllowedSigner `yaml:"allowed_signers,omitempty"`
 
 	// Remote optionally makes this root a full git citizen that fetches,

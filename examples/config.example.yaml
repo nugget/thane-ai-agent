@@ -233,12 +233,14 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
-      # AllowedSigners lists operator SSH public keys trusted to sign
-      # commits in this root, in addition to the shared
-      # signing.allowed_signers set and the agent's own (always-trusted,
-      # unremovable) key. This only extends the trust set for one root; it
-      # never replaces or removes from it. Use it to let an operator
-      # co-author a signed root.
+      # AllowedSigners is the older spelling of this root's seed signers
+      # and is merged with roots.<name>.seed_signers, which is where new
+      # configs should declare them.
+      # 
+      # Both feed the same set, so keys listed here also govern admission:
+      # they can establish the root and amend its .allowed_signers. That
+      # is more authority than the name suggests, which is why the
+      # seed_signers spelling exists.
       allowed_signers: []
       # Remote optionally makes this root a full git citizen that fetches,
       # verifies, and (in bidirectional mode) pushes against a shared remote.
@@ -274,6 +276,24 @@ roots:
     # Declared per root rather than shared, so the keys that may sign a
     # corpus synced from a remote are not automatically the keys that
     # may sign the config deciding what the whole system trusts.
+    # 
+    # They are also what the root is admitted against at startup. A
+    # signed root must have been born in a commit one of these keys
+    # signed, and every later change to its .allowed_signers must carry
+    # a seed signer's signature too. Keys the trust file delegates to
+    # may sign ordinary content but cannot widen the trust file itself,
+    # so trust only ever grows by a decision recorded here.
+    # 
+    # Admission deliberately does not consult the root's own trust file.
+    # A repository that vouched for its own trust surface would decide
+    # its own admission, since whoever wrote that file also chose what
+    # it says.
+    # 
+    # The agent's own key is not implicitly entitled. A root Thane
+    # creates is born signed by the agent, so such a root must list
+    # thane@provenance.local here — and a root that omits it, such as a
+    # core established by an operator, is one the agent cannot
+    # establish or re-establish on its own.
     seed_signers: []
   kb:
     # Path is the directory the root resolves to. Supports ~
@@ -308,12 +328,14 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ~/.ssh/id_ed25519
-      # AllowedSigners lists operator SSH public keys trusted to sign
-      # commits in this root, in addition to the shared
-      # signing.allowed_signers set and the agent's own (always-trusted,
-      # unremovable) key. This only extends the trust set for one root; it
-      # never replaces or removes from it. Use it to let an operator
-      # co-author a signed root.
+      # AllowedSigners is the older spelling of this root's seed signers
+      # and is merged with roots.<name>.seed_signers, which is where new
+      # configs should declare them.
+      # 
+      # Both feed the same set, so keys listed here also govern admission:
+      # they can establish the root and amend its .allowed_signers. That
+      # is more authority than the name suggests, which is why the
+      # seed_signers spelling exists.
       allowed_signers:
         - # Principal is the OpenSSH signer identity, conventionally an email
           # such as "alice@example.com". Required. It must not contain
@@ -403,6 +425,24 @@ roots:
     # Declared per root rather than shared, so the keys that may sign a
     # corpus synced from a remote are not automatically the keys that
     # may sign the config deciding what the whole system trusts.
+    # 
+    # They are also what the root is admitted against at startup. A
+    # signed root must have been born in a commit one of these keys
+    # signed, and every later change to its .allowed_signers must carry
+    # a seed signer's signature too. Keys the trust file delegates to
+    # may sign ordinary content but cannot widen the trust file itself,
+    # so trust only ever grows by a decision recorded here.
+    # 
+    # Admission deliberately does not consult the root's own trust file.
+    # A repository that vouched for its own trust surface would decide
+    # its own admission, since whoever wrote that file also chose what
+    # it says.
+    # 
+    # The agent's own key is not implicitly entitled. A root Thane
+    # creates is born signed by the agent, so such a root must list
+    # thane@provenance.local here — and a root that omits it, such as a
+    # core established by an operator, is one the agent cannot
+    # establish or re-establish on its own.
     seed_signers:
       - # Principal is the OpenSSH signer identity, conventionally an email
         # such as "alice@example.com". Required. It must not contain
@@ -456,12 +496,14 @@ roots:
       # SigningKey is the SSH private key used to sign managed commits.
       # Supports ~ expansion at startup.
       signing_key: ""
-      # AllowedSigners lists operator SSH public keys trusted to sign
-      # commits in this root, in addition to the shared
-      # signing.allowed_signers set and the agent's own (always-trusted,
-      # unremovable) key. This only extends the trust set for one root; it
-      # never replaces or removes from it. Use it to let an operator
-      # co-author a signed root.
+      # AllowedSigners is the older spelling of this root's seed signers
+      # and is merged with roots.<name>.seed_signers, which is where new
+      # configs should declare them.
+      # 
+      # Both feed the same set, so keys listed here also govern admission:
+      # they can establish the root and amend its .allowed_signers. That
+      # is more authority than the name suggests, which is why the
+      # seed_signers spelling exists.
       allowed_signers: []
       # Remote optionally makes this root a full git citizen that fetches,
       # verifies, and (in bidirectional mode) pushes against a shared remote.
@@ -497,6 +539,24 @@ roots:
     # Declared per root rather than shared, so the keys that may sign a
     # corpus synced from a remote are not automatically the keys that
     # may sign the config deciding what the whole system trusts.
+    # 
+    # They are also what the root is admitted against at startup. A
+    # signed root must have been born in a commit one of these keys
+    # signed, and every later change to its .allowed_signers must carry
+    # a seed signer's signature too. Keys the trust file delegates to
+    # may sign ordinary content but cannot widen the trust file itself,
+    # so trust only ever grows by a decision recorded here.
+    # 
+    # Admission deliberately does not consult the root's own trust file.
+    # A repository that vouched for its own trust surface would decide
+    # its own admission, since whoever wrote that file also chose what
+    # it says.
+    # 
+    # The agent's own key is not implicitly entitled. A root Thane
+    # creates is born signed by the agent, so such a root must list
+    # thane@provenance.local here — and a root that omits it, such as a
+    # core established by an operator, is one the agent cannot
+    # establish or re-establish on its own.
     seed_signers: []
 #
 # (optional) Paths is the legacy directory-mapping block. Replaced by roots:.
