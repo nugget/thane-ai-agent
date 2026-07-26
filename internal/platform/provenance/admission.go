@@ -125,17 +125,33 @@ func attributionHint(ctx context.Context, repoPath, commit string) string {
 }
 
 // rootCommits returns every parentless commit reachable from HEAD.
+//
+// The three ways this can fail are deliberately not collapsed. A repository
+// with no commits yet is a finding the caller states in those words; a
+// directory git cannot read as a work tree is an operational fault; and a
+// rev-list that fails on a readable repository is neither. Reporting the
+// second as "no commit history" would describe a permission or ownership
+// problem as an empty history and send an operator to re-establish a root
+// whose history is perfectly intact — the failure mode is not hypothetical,
+// since a repository owned by another user makes git refuse every command
+// with an error that has nothing to do with commits.
 func rootCommits(ctx context.Context, repoPath string) ([]string, error) {
 	out, err := runGitText(ctx, repoPath, "rev-list", "--max-parents=0", "HEAD")
-	if err != nil {
-		// An unborn HEAD is reported as a finding by the caller, not as an
-		// operational fault, so distinguish it from a broken repository.
-		if _, headErr := runGitText(ctx, repoPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("list root commits of %s: %w", repoPath, err)
+	if err == nil {
+		return nonEmptyLines(out), nil
 	}
-	return nonEmptyLines(out), nil
+
+	inside, repoErr := runGitText(ctx, repoPath, "rev-parse", "--is-inside-work-tree")
+	switch {
+	case repoErr != nil:
+		return nil, fmt.Errorf("read git repository at %s: %w", repoPath, repoErr)
+	case strings.TrimSpace(inside) != "true":
+		return nil, fmt.Errorf("%s is not a git work tree, so it has no history to admit", repoPath)
+	}
+	if _, headErr := runGitText(ctx, repoPath, "rev-parse", "--verify", "HEAD"); headErr != nil {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("list root commits of %s: %w", repoPath, err)
 }
 
 // trustFileCommits returns every commit that created or changed the in-tree

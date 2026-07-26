@@ -360,3 +360,40 @@ func TestVerifyAdmissionIgnoresTheRepositoryOwnTrustFile(t *testing.T) {
 		t.Fatalf("VerifyAdmission() error = %v, want unattributed-birth refusal", err)
 	}
 }
+
+// TestVerifyAdmissionDistinguishesUnreadableFromUnborn keeps a directory git
+// cannot read as a work tree from being reported as an empty history.
+//
+// The two need different repairs and only one of them involves history. An
+// operator told "no commit history" about a root whose commits are intact and
+// merely unreadable — wrong owner, wrong permissions, not a repository at all
+// — is being pointed at a rewrite they must not perform.
+func TestVerifyAdmissionDistinguishesUnreadableFromUnborn(t *testing.T) {
+	t.Parallel()
+	key := newAdmissionKey(t, "operator@example.com")
+
+	t.Run("not a repository", func(t *testing.T) {
+		t.Parallel()
+		_, err := VerifyAdmission(t.Context(), t.TempDir(), []TrustedSigner{key.signer()})
+		if err == nil {
+			t.Fatal("VerifyAdmission() = nil, want a refusal for a non-repository")
+		}
+		if strings.Contains(err.Error(), "no commit history") {
+			t.Fatalf("a directory that is not a repository must not be reported as an empty history: %v", err)
+		}
+		// git exits non-zero rather than printing "false" here, so the
+		// wrapper carries git's own reason through instead of inventing one.
+		if !strings.Contains(err.Error(), "read git repository") {
+			t.Fatalf("VerifyAdmission() error = %v, want it to report a repository that could not be read", err)
+		}
+	})
+
+	t.Run("repository with no commits", func(t *testing.T) {
+		t.Parallel()
+		repo := newAdmissionRepo(t)
+		_, err := VerifyAdmission(t.Context(), repo.dir, []TrustedSigner{key.signer()})
+		if err == nil || !strings.Contains(err.Error(), "no commit history") {
+			t.Fatalf("VerifyAdmission() error = %v, want it to report no commit history", err)
+		}
+	})
+}
