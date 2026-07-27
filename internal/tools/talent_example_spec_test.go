@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/runtime/loop"
 )
 
 // TestTalentExampleSpecValidates decodes the loop spec published in the
@@ -58,6 +60,8 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 		t.Errorf("generated tool = %q, want publish_output_* — the example claims it swaps", got)
 	}
 
+	assertExamplePublishSampleIsValid(t, node[start:], faceted, decoded.Outputs)
+
 	// doc_read is gated behind the documents tag, and the example's own
 	// prose tells the loop to read its document when the injected body is
 	// truncated. A spec can validate perfectly and still describe a task
@@ -70,5 +74,65 @@ func TestTalentExampleSpecValidates(t *testing.T) {
 	}
 	if !hasDocuments {
 		t.Error("a loop that owns documents needs the documents tag to reach doc_read")
+	}
+}
+
+// assertExamplePublishSampleIsValid runs the example's publish payload
+// through the same validation a real call meets.
+//
+// The spec and the sample are taught together, and the sample is what a
+// model copies verbatim, so a sample that would be rejected teaches a
+// call that fails. Argument names are the sharp edge: this file taught a
+// "note" argument the tool spells "notes" for long enough to ship, and
+// the failure is silent — the publish succeeds and the loop's thinking
+// is dropped on the floor.
+func assertExamplePublishSampleIsValid(t *testing.T, section string, output looppkg.OutputSpec, outputs []looppkg.OutputSpec) {
+	t.Helper()
+
+	blocks := regexp.MustCompile("(?s)```json\n(.*?)```").FindAllStringSubmatch(section, -1)
+	if len(blocks) < 2 {
+		t.Fatalf("expected a spec block and a publish block, found %d", len(blocks))
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(blocks[1][1]), &args); err != nil {
+		t.Fatalf("publish sample does not parse: %v", err)
+	}
+
+	// Every declared projection has to be present: a publish carries the
+	// whole payload, so a sample missing one would be rejected in practice.
+	valid := map[string]bool{}
+	for _, field := range output.FacetFields() {
+		valid[field.Key] = true
+		if _, ok := args[field.Key]; !ok {
+			t.Errorf("publish sample is missing the %q argument", field.Key)
+		}
+	}
+	// The notes argument exists only when the loop declared somewhere for
+	// them to land, which this example does — so the sample must show it,
+	// under the name the tool actually reads.
+	var hasNotes bool
+	for _, out := range outputs {
+		if out.Type == looppkg.OutputTypeWorkingNotes {
+			hasNotes = true
+		}
+	}
+	if hasNotes {
+		valid["notes"] = true
+		if _, ok := args["notes"]; !ok {
+			t.Error("the example declares working_notes but its publish sample never passes notes; the argument is how a publish and its thinking stay one call")
+		}
+	}
+	for key := range args {
+		if !valid[key] {
+			t.Errorf("publish sample passes %q, which this loop's publish tool does not accept", key)
+		}
+	}
+
+	payload, err := output.FacetPayloadFromArgs(args)
+	if err != nil {
+		t.Fatalf("publish sample does not decode: %v", err)
+	}
+	if err := output.ValidateFacetPayload(payload); err != nil {
+		t.Fatalf("publish sample would be rejected: %v", err)
 	}
 }

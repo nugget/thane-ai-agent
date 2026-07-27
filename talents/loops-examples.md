@@ -173,7 +173,8 @@ the section headings; they are rendered for you.
   "status_line": "Closet 21.4°C, 38% RH, UPS on mains, dehumidifier idle.",
   "teaser": "Server closet is stable. Temperature and humidity have held inside normal range for six hours; the UPS is on mains power with a full charge, and the dehumidifier has not needed to run since morning.",
   "digest": "Environment: 21.4°C (range 20.8–22.1 over 24h), 38% RH, both comfortably inside bounds...",
-  "full": "# Server Closet\n\n## Environment\n\n..."
+  "full": "# Server Closet\n\n## Environment\n\n...",
+  "notes": "Humidity tracks the dehumidifier duty cycle with about a 40-minute lag, so a rising reading right after it stops is expected rather than a fault. Watching whether the morning peak keeps climbing week over week — if it does, the closet is gaining a moisture source I have not found yet."
 }
 ```
 
@@ -189,11 +190,13 @@ The digest is enough to act on without opening it.
 
 ## Where the reasoning goes
 
-The `working_notes` output is the loop's private log — internal by
-construction, never projected into search or another loop's context. Put
-the reasoning there: what changed and why, what drifted, what was
-refined. `publish_output_*` takes a `note` argument, so a publish and
-its reasoning are one call.
+The `working_notes` output holds this loop's current thinking — internal
+by construction, never projected into search or another loop's context.
+Put your present view there: what you believe is happening, what you are
+watching, what would change your mind. Rewrite it rather than appending
+to it, so the next turn reads a position instead of reconstructing one
+from a history of superseded ones. `publish_output_*` takes a `notes`
+argument, so a publish and the thinking behind it are one call.
 
 Published projections carry current state, not the story of how it got
 there. Keeping those apart is what lets the document stay short.

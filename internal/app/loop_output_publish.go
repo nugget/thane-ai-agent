@@ -61,7 +61,7 @@ func buildFacetPublishTool(store *documents.Store, output looppkg.OutputSpec, no
 			"required":   required,
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			payload, err := facetPayloadFromArgs(output, args)
+			payload, err := output.FacetPayloadFromArgs(args)
 			if err != nil {
 				return "", err
 			}
@@ -116,34 +116,6 @@ func facetPublishDescription(output looppkg.OutputSpec, notes *looppkg.OutputSpe
 		description += " Pass notes to rewrite this loop's private working notes in the same call — what you currently believe, not an entry about this change."
 	}
 	return description
-}
-
-// facetPayloadFromArgs reads the publish arguments into a payload,
-// rejecting a non-string value with the argument name rather than
-// silently treating it as empty.
-func facetPayloadFromArgs(output looppkg.OutputSpec, args map[string]any) (looppkg.FacetPayload, error) {
-	var payload looppkg.FacetPayload
-	for _, field := range output.FacetFields() {
-		raw, present := args[field.Key]
-		if !present {
-			continue
-		}
-		value, ok := raw.(string)
-		if !ok {
-			return looppkg.FacetPayload{}, fmt.Errorf("%s must be a string", field.Key)
-		}
-		switch field.Key {
-		case "status_line":
-			payload.StatusLine = value
-		case "teaser":
-			payload.Teaser = value
-		case "digest":
-			payload.Digest = value
-		case "full":
-			payload.Full = value
-		}
-	}
-	return payload, nil
 }
 
 // writeLoopWorkingNotes replaces a working-notes body, stamping the

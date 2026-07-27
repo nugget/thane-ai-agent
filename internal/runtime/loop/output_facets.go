@@ -375,3 +375,34 @@ func unfence(value string) string {
 	}
 	return strings.TrimSpace(inner)
 }
+
+// FacetPayloadFromArgs reads publish-tool arguments into a payload.
+//
+// It lives with the contract rather than with the tool that calls it,
+// because reading those arguments is the same question as what a facet
+// accepts, and a second reading anywhere else would be a second answer.
+// Keeping it here is also what lets the talent gate check a taught
+// publish sample against the real path instead of a copy of it.
+//
+// A missing argument is left empty rather than rejected, so
+// [OutputSpec.ValidateFacetPayload] reports every omission at once
+// instead of one per attempt.
+func (o OutputSpec) FacetPayloadFromArgs(args map[string]any) (FacetPayload, error) {
+	var payload FacetPayload
+	for _, field := range o.FacetFields() {
+		section, ok := facetSectionByKey(field.Key)
+		if !ok {
+			continue
+		}
+		raw, present := args[field.Key]
+		if !present {
+			continue
+		}
+		value, ok := raw.(string)
+		if !ok {
+			return FacetPayload{}, fmt.Errorf("%s must be a string", field.Key)
+		}
+		*section.value(&payload) = value
+	}
+	return payload, nil
+}
